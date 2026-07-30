@@ -93,6 +93,9 @@ promise of one crate per box:
 | Lab runner | controlled handlers, virtual inputs, scripted faults | a second execution engine |
 | Diagnostics and golden diff | stable human-facing evidence | mutation of execution |
 
+The component-level blueprint refining this table — owned data forms,
+interfaces, dependency direction, and M0 status per component — is
+[`docs/architecture/components.md`](docs/architecture/components.md).
 The working map from specifications to these responsibilities is in
 [`docs/architecture/spec-to-code.md`](docs/architecture/spec-to-code.md).
 
@@ -160,6 +163,9 @@ specification, implementation, and conformance changes can be atomic.
   logical responsibilities inside the executable.
 - [App/Lab effect cycle](docs/architecture/04-app-lab-effect-cycle.svg)
   — the shared semantic step and its two handlers.
+- [Module and type blueprint](docs/architecture/05-rastok-packages.svg)
+  — Rust modules, key types and traits, and build artifacts
+  (indicative, not a public API).
 
 The adjacent `.puml` files are the editable diagram sources. Rendering
 instructions live in [`tools/diagrams/`](tools/diagrams/README.md).

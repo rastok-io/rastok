@@ -1,0 +1,497 @@
+@startuml 05-rastok-packages
+allowmixing
+skinparam shadowing false
+skinparam packageStyle rectangle
+hide empty members
+
+title Rastok M0 — Rust module and type blueprint (indicative, under review)
+
+note as LEGEND
+  **UML for Rust**
+  «trait» = Rust trait ; realization ( ..|> ) = impl Trait for Type
+  «struct» / «enum» as declared ; «mod» = module-level functions
+  *-- = owned field ; ..> = uses / borrows ; inheritance does not exist
+  **Naming** : types are unprefixed and read qualified —
+  cel::Tree, app::Hash, world::Intent ; x::X stutter is idiomatic
+  **Status** : «next» = not built in M0, APIs kept ready ;
+  «guarded» = reachable syntax refuses explicitly ; all else = M0 subset
+  **Omitted for readability** : every module except `cel` may depend on
+  `node`, `envelope`, and `diag` — those arrows are not drawn
+end note
+
+' ================= build artifacts =================
+
+artifact "rastok (bin)\ncheck | run | sim" as A_BIN
+artifact "rastok (lib)\nembeddable library" as A_LIB
+file "app .rkg + lab\nsources" as F_SRC
+file "golden traces\nevidence files" as F_GOLD
+file "deployment profile\nenv() / secret() bindings" as F_PROF <<next>>
+
+' ================= the bootstrap crate =================
+
+package "crate rastok" as CRATE {
+
+  package "node" as P_NODE {
+    class Path <<struct>> {
+      root-relative — enters the id recipes
+    }
+    enum Kind <<enum>> {
+      Operator
+      Connector
+      Graph
+    }
+    class Port <<struct>> {
+      in / out / err + inferred ports
+    }
+    enum EffectClass <<enum>> {
+      Idempotent
+      Compensable
+      Irreversible
+    }
+  }
+
+  package "envelope" as P_ENV {
+    class Envelope <<struct>> {
+      +meta : Meta
+      +data : Value
+      immutable once emitted
+    }
+    class Meta <<struct>> {
+      +sys : MetaSys — runtime-owned, read-only
+      +app / custom namespaces
+    }
+    class MetaSys <<struct>> {
+      the six-field spine (envelope.md §1.1)
+      +id : Id
+      +parent_id : Option<Id>
+      +trigger : Trigger
+    }
+    class Id <<struct>> {
+      128-bit — derived, zero randomness
+    }
+    enum Value <<enum>> {
+      Scalar
+      Struct
+      Array
+      Map
+      Union
+      Variant — the only dynamic payload
+    }
+    enum Trigger <<enum>> {
+      Port(name) — "p:"
+      Lifecycle(kind) — "l:"
+    }
+  }
+
+  package "diag" as P_DIAG {
+    class Diagnostic <<struct>> {
+      +code : stable id (E-* / W-*)
+      +severity : Severity
+      +phase : Phase
+      +spans : Vec<Span>
+      +fields : structured payload
+      +message : String — never stable
+    }
+    enum Severity <<enum>> {
+      Error
+      Warning
+    }
+    enum Phase <<enum>> {
+      Parse ; Assemble ; Check
+      Lower ; Run ; Sim
+    }
+    class Span <<struct>> {
+      +source : SourceId
+      +range : byte range
+    }
+    class Sink <<struct>> {
+      +push(Diagnostic)
+      accumulate — never print, never panic
+    }
+  }
+
+  package "cel" as P_CEL {
+    class "mod cel" as CEL_API <<mod>> {
+      +compile(text, &Signature) : Result<Tree, Vec<Diagnostic>>
+      +eval(&Tree, &dyn Bindings) : Result<Value, Error>
+      +const_eval(&Tree, consts) : Result<Value, Error>
+    }
+    class Signature <<struct>> {
+      visible names → Type
+      never offers now()
+    }
+    class Tree <<struct>> {
+      canonical typed tree — one form :
+      hash input, App form, eval form
+    }
+    enum Type <<enum>> {
+      Bool ; Int ; Uint ; Double
+      Text ; Bytes ; Duration ; Timestamp
+      Optional(T) ; ...
+    }
+    enum Value <<enum>> {
+      mirrors Type
+    }
+    interface Bindings <<trait>> {
+      +get(name : &str) : Option<Value>
+    }
+    class Diagnostic <<struct>> {
+      its OWN type — compiler adapts
+      it into diag::Diagnostic
+    }
+    class Error <<struct>> {
+      value errors only — type errors
+      are impossible after compile
+    }
+  }
+  note bottom of P_CEL
+    depends on **nothing** in Rastok ;
+    the compiler hands it signatures,
+    the vm adapts state + envelope onto Bindings
+  end note
+
+  package "compiler" as P_COMP {
+    class "mod compiler" as COMP_API <<mod>> {
+      +compile(sources) : (app::App, app::Hash, Vec<Diagnostic>)
+      +parse / assemble / check / lower / canonicalize
+    }
+    class SyntaxTree <<struct>> {
+      faithful to the text, sugar intact
+      may hold error nodes — never lowered
+    }
+    class Unit <<struct>> {
+      merged files ; exactly one App
+      lab fragments merged
+    }
+    class CheckedGraph <<struct>> {
+      desugared • resolved • typed
+      spans in side tables, never inside
+    }
+    class NodeDecl <<struct>> {
+      +path : node::Path
+      +kind : node::Kind
+      +effect : Option<EffectClass>
+      +err_set — mandatory
+    }
+    interface GuestFrontend <<trait>> {
+      +check(bytes, signature) : Result<GuestProgram, Vec<Diagnostic>>
+      the host parser never reads a guest body
+    }
+  }
+
+  package "app" as P_APP {
+    class App <<struct>> {
+      the executable form — what ships to hosts
+      +nodes / edges / partitions : tables
+      +handlers : Vec<Handler>
+      serializable data — no closures,
+      no host references
+    }
+    class Handler <<struct>> {
+      +trigger : Trigger
+      +guard : Option<cel::Tree>
+      +body : ordered statements
+      text order = emission_index
+    }
+    class Slot <<struct>> {
+      compile-time resolved reference —
+      runtime resolution errors impossible
+    }
+    class SymbolTable <<struct>> {
+      side table for diagnostics and traces
+    }
+    class GuestProgram <<struct>> {
+      opaque bytes + language
+      + executor version
+    }
+    class Hash <<struct>> {
+      the semantic identity —
+      blake3 of the canonical form
+    }
+    class Version <<struct>> {
+      u64 — append-only, never reused
+    }
+    class Manifest <<struct>> {
+      the ledger : Hash → Versions
+    }
+  }
+
+  package "world" as P_WORLD {
+    interface Ingress <<trait>> {
+      +next() : Option<InboundEvent>
+      bounded — backpressure outward
+    }
+    interface Partner <<trait>> {
+      +execute(&Intent) : Outcome
+      dedup on the stable business key
+    }
+    interface Clock <<trait>> {
+      +advance_to(target) : Vec<DatedEvent>
+      the only source of time
+    }
+    interface Supervisor <<trait>> {
+      +events() : LifecycleEvent
+    }
+    class InboundEvent <<struct>> {
+      +envelope : Envelope
+      +seq : u64
+      +authority : IngressAuthority
+    }
+    class IngressAuthority <<struct>> <<opaque>> {
+      never assumed constant —
+      keeps the multi-host door open
+    }
+    class Intent <<struct>> {
+      +key : stable business key
+      +effect : node::EffectClass
+      journaled open before execution
+    }
+    enum Outcome <<enum>> {
+      Response(Envelope)
+      Timeout
+      Unknown — recovery triages it
+    }
+    class DatedEvent <<struct>> {
+      +at : Timestamp
+      +payload
+    }
+    enum LifecycleEvent <<enum>> {
+      Boot ; Crash ; Restart
+    }
+  }
+  note bottom of P_WORLD
+    in run, the world plays itself ;
+    in sim, the lab plays the world ;
+    the journal keeps its **world-half**
+    (simulation-semantics.md §2)
+  end note
+
+  package "vm" as P_VM {
+    class Vm <<struct>> {
+      THE engine — run and sim alike
+      no I/O, no clock, no randomness
+      +boot(&app::App, journal)
+      +step(event) : transactions + intents
+    }
+    class Scheduler <<struct>> {
+      run-to-completion
+      ONE dated-event queue
+      drain-to-stable
+    }
+    class Mailboxes <<struct>> {
+      per-key FIFO ; bounded
+      arrival order captured in the journal
+    }
+    class TransactionExecutor <<struct>> {
+      atomic : consumed input + state Δ
+      + emissions + records
+      scratch isolation while a handler runs
+    }
+    class PartitionState <<struct>> {
+      state cells per key
+    }
+    class EmissionBuffer <<struct>> {
+      per-port emission_index
+      in text order
+    }
+    interface GuestExecutor <<trait>> {
+      +run(&GuestProgram, value, budget) : Result<Value, GuestError>
+      pure, deterministic, budgeted
+    }
+    class BootEnv <<struct>> <<next>> {
+      env() / secret() bound at boot
+      missing binding = typed refusal
+    }
+    class "Secret<T>" as SecretT <<struct>> <<next>> {
+      Debug prints the name, never the value
+      no Serialize impl — leak = compile error
+    }
+  }
+
+  package "guests" as P_GUESTS {
+    class Jq <<struct>> <<guarded>> {
+      the jq engine — frontend + executor
+    }
+    class Sql <<struct>> <<guarded>> {
+      the SQL guest — frontend + executor
+    }
+  }
+  note bottom of P_GUESTS
+    the pure twin of `connectors` :
+    a guest with I/O belongs behind
+    a Connector, whatever its format
+  end note
+
+  package "journal" as P_J {
+    interface Journal <<trait>> {
+      +append(Record)
+      +iter() : causal order
+      logical API — the physical layout
+      arrives later behind it
+    }
+    class MemJournal <<struct>> {
+      the M0 in-memory implementation
+    }
+    enum Record <<enum>> {
+      Inbound(InboundRecord)
+      Transaction(TransactionRecord)
+      Outbound(OutboundRecord)
+    }
+    class InboundRecord <<struct>> {
+      +seq : u64
+      +envelope : Envelope
+    }
+    class TransactionRecord <<struct>> {
+      +consumed ; +state_delta ; +emissions
+      causal core + observation annotations
+    }
+    class OutboundRecord <<struct>> {
+      +intent : world::Intent
+      +status : OutboundStatus
+    }
+    enum OutboundStatus <<enum>> {
+      Open
+      Closed(response XOR timeout)
+      Abandoned — minted by recovery
+    }
+    class "mod ids" as IDS_API <<mod>> {
+      +root_id(authority, seq) : envelope::Id
+      +emission_id(node, trigger, parent, port, index) : envelope::Id
+      blake3 — injective framing
+    }
+    class Golden <<struct>> {
+      +project(records) : canonical bytes
+      causal cores only ; +diff : Diff
+    }
+    class Diff <<struct>> {
+      first meaningful divergence
+    }
+    class Fold <<struct>> <<next>> {
+      journal → state + dated obligations
+      + open-effect triage
+    }
+  }
+  note bottom of P_J
+    a late reply after closure is a
+    **discarded observation** — recorded,
+    never causal, outside the golden seal
+  end note
+
+  package "connectors" as P_CONN {
+    class Process <<struct>> {
+      spawn + observe a child process
+      typed exit (stdlib.md §3.3 subset)
+    }
+    class "HttpServer, HttpClient, Clock,\nCalendar, Memory, File" as CATALOGUE <<guarded>> {
+      declared contracts only —
+      one file per connector, later
+    }
+  }
+
+  package "lab" as P_LAB {
+    class Runner <<struct>> {
+      the DRIVER, not an engine :
+      inject, advance, expect, golden
+    }
+    class Scenario <<struct>>
+    class Expectation <<struct>> {
+      +quantifier : Quantifier
+      windows read since last action
+    }
+    enum Quantifier <<enum>> {
+      Exists
+      Nothing
+      Count(n)
+    }
+    class Fixture <<struct>> {
+      the pre-written world-half
+    }
+    class Mock <<struct>> {
+      a mocked call still writes OUTBOUND
+    }
+    class VirtualClock <<struct>> {
+      advance = discrete sweep
+    }
+    class Faults <<struct>> <<next>> {
+      crash after ...
+    }
+  }
+
+  package "cli (main.rs, bin target)" as P_CLI {
+    class "mod main" as MAIN_API <<mod>> {
+      parse args ; render diagnostics + diffs
+      owns nothing semantic
+    }
+    enum Command <<enum>> {
+      Check
+      Run
+      Sim — golden bless is explicit
+    }
+  }
+}
+
+' ================= type-level relations =================
+
+Envelope *-- Meta
+Envelope *-- Value
+Meta *-- MetaSys
+
+CheckedGraph *-- NodeDecl
+App *-- Handler
+App *-- GuestProgram
+Handler *-- Tree : guard + expressions
+Manifest *-- Version
+
+Vm *-- Scheduler
+Vm *-- Mailboxes
+Vm *-- TransactionExecutor
+Vm *-- PartitionState
+Vm *-- EmissionBuffer
+
+Record *-- InboundRecord
+Record *-- TransactionRecord
+Record *-- OutboundRecord
+OutboundRecord *-- Intent
+InboundEvent *-- IngressAuthority
+
+MemJournal ..|> Journal
+Process ..|> Partner
+Fixture ..|> Ingress
+Mock ..|> Partner
+VirtualClock ..|> Clock
+Faults ..|> Supervisor
+Jq ..|> GuestExecutor
+Sql ..|> GuestExecutor
+Jq ..|> GuestFrontend
+Sql ..|> GuestFrontend
+
+' ================= module-level dependencies =================
+
+P_COMP ..> P_CEL : compile —\nsignature in, tree out
+P_COMP ..> P_APP : produces the App
+P_VM ..> P_APP : interprets
+P_VM ..> P_WORLD : emits intents,\nconsumes events
+P_VM ..> P_J : appends records
+P_VM ..> P_CEL : eval via Bindings
+P_LAB ..> P_COMP : same parser\nfor scenarios
+P_LAB ..> P_J : golden compare
+P_CLI ..> P_COMP
+P_CLI ..> P_VM
+P_CLI ..> P_LAB
+
+' ================= artifact wiring =================
+
+A_BIN --> A_LIB : links against
+A_BIN ..> F_SRC : reads
+A_BIN ..> F_GOLD : compares ;\n--bless writes
+A_BIN .. P_CLI : bin target
+A_LIB .. CRATE : lib target =\nevery module but cli
+BootEnv ..> F_PROF : binds at boot
+
+note bottom of A_LIB
+  one crate, two targets (crate policy) ;
+  `cel` is the first candidate for
+  promotion to its own crate
+end note
+
+@enduml

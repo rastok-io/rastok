@@ -7,13 +7,18 @@ language or runtime behavior.
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
 - [`m0-slice.md`](m0-slice.md) for the first end-to-end proof;
+- [`components.md`](components.md) for the component blueprint: owned
+  data forms, interfaces, dependency direction, and M0 status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
 - `01-system-context` for the system and its users;
 - `02-rastok-container` for executable and deployment boundaries;
 - `03-rastok-components` for logical responsibilities inside the M0
   executable;
-- `04-app-lab-effect-cycle` for the main runtime interaction.
+- `04-app-lab-effect-cycle` for the main runtime interaction;
+- `05-rastok-packages` for the Rust module and type blueprint —
+  modules, key structs/enums/traits, and build artifacts (indicative,
+  not a public API).
 
 ## Diagram conventions
 
