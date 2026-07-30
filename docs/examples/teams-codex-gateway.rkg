@@ -1,0 +1,427 @@
+// =============================================================================
+// teams-codex-gateway.rkg
+//
+// Teams <-> Codex bridge — larger end-to-end example, current syntax.
+//
+// Demonstrates :
+//   - graph composability : `sessions` = a per-key sub-graph, declared in place
+//   - inference-first ports : Connectors declare none (their type + codec
+//     define them) ; nodes lean on the default in/out/err ; extra ports are
+//     declared by NAME only (types inferred ; annotate `: T` only to pin)
+//   - Connector-property namespaces (env { … }, jwt { … }, auth = … { … })
+//   - handler guards, the `data` payload, meta.sys / meta.app, partitions,
+//     deterministic simulations
+//
+// Syntax reference : docs/spec/grammar.md, docs/examples/dsl-examples.md, WHITEPAPER.md
+// =============================================================================
+
+
+// -----------------------------------------------------------------------------
+// Composable Codex session.
+// Keyed on its own `per session` (like an Operator) → one instance per session.
+// -----------------------------------------------------------------------------
+
+graph sessions per session {          // declaration = instance
+  max_instances = 1000                  // Dispatch knob = body attribute
+  // `per session` → one Process instance per session key (Dispatch).
+  // Single in / out pass-through → uses the default `in` / `out` ports.
+  partition session {
+    key      = meta.app.session_key
+    lifetime = duration("2h")                          // idle TTL → governs instance eviction
+  }
+  // Per-session config, derived from the key, as graph-level `val` :
+  val codex_home = "/var/codex/" + session.key
+  val cwd        = "/workspace/" + session.key
+
+  connector codex : Process {
+    command = "codex"
+    args = ["app-server"]
+    mode = service
+    cwd = cwd                              // graph-level val, by name
+    env {
+      CODEX_HOME = codex_home
+      RUST_LOG   = "info"
+    }
+    codec = "jsonl"
+    protocol = "jsonrpc"
+    effect = idempotent
+    behavior = probabilistic
+    // in / out / err = stdin / stdout / stderr (Process defaults, typed by codec)
+
+    init {
+      message = struct { method = "initialize" }
+      timeout = duration("10s")
+    }
+    kill = process_group
+    restart = on_crash { backoff = "1s..30s", max_attempts = 5 }
+  }
+
+  connector codex_logs : File {
+    path = "/var/codex/" + session.key + "/codex.stderr.log"
+    codec = "text"
+  }
+
+  in        -> codex.in { capacity = 1024, backpressure = block }
+  codex.out -> out
+  codex.err -> codex_logs.in
+}
+
+
+// -----------------------------------------------------------------------------
+// Teams gateway.
+// Owns the HTTP listener and outbound HTTP client → singleton top-level graph,
+// and the DEPLOYMENT ENTRY POINT of the unit (`: App` — exactly one per unit).
+// `app` is pre-bound to it (app.err = root error sink).
+// User isolation is delegated to `sessions` instances keyed by session_key.
+// -----------------------------------------------------------------------------
+
+graph teams_inbound : App {
+  partition turn {
+    key = data.?params.?turn.?id.orValue(data.?params.?turnId.orValue(meta.app.session_key))
+    lifetime = duration("30s")
+  }
+
+  connector teams_in : HttpServer {
+    listen = ":8080/adapters/teams/webhook"
+    codec = "json"
+    protocol = "teams_activity"
+
+    hmac = env("TEAMS_HMAC_SECRET")
+    nonce_ttl = duration("5m")
+    jwt {
+      jwks_url   = "https://login.botframework.com/v1/.well-known/keys"
+      cache_ttl  = duration("24h")
+      audience   = env("TEAMS_BOT_APP_ID")
+      issuer     = "https://api.botframework.com"
+      clock_skew = duration("30s")
+    }
+    // teams_in.out carries the decoded webhook
+  }
+
+  // The fixed allow-list is graph config. A Memory snapshot is readable, but
+  // using an asynchronous store for immutable boot configuration adds no value.
+  val user_map : map<text, text> = map { "abc-123" = "user@example.test" }
+
+  operator auth {
+    // outputs : `out` (authorized) and `rejected`
+
+    on in where data.from.aadObjectId in user_map {
+      meta.app.session_key     = data.from.aadObjectId
+      meta.app.user_id         = user_map[data.from.aadObjectId]
+      meta.app.tenant_id       = data.channelData.tenant.id
+      meta.app.conversation_id = data.conversation.id
+      out = envelope
+    }
+    on in {
+      meta.app.skip_reason = "unknown_user"
+      rejected = envelope
+    }
+  }
+
+  operator to_codex {
+    on in {
+      out = jq {
+        if .data.type == "invoke" then
+          .meta.kind = "jsonrpc.peer_response"
+          | .meta.rpc_id = (.data.value.approval_id | tostring)
+          | .data = {
+              decision: .data.value.verb,
+              approval_id: .data.value.approval_id
+            }
+        elif .data.type == "message" then
+          .data = {
+            method: "turn/start",
+            params: { prompt: .data.text }
+          }
+        else
+          empty
+        end
+      }
+    }
+  }
+
+  operator route_codex_out {
+
+    on in {
+      peer_request = jq { select(.meta.kind == "jsonrpc.peer_request") }
+      delta = jq { select(.meta.method == "item/agentMessage/delta") }
+      flush = jq { select(.meta.method == "turn/completed") }
+      message = jq {
+        select(.meta.kind == "jsonrpc.notification" and .meta.method == "item/agentMessage")
+      }
+    }
+  }
+
+  operator typing_feedback {
+    on in {
+      out = jq { .data = { type: "typing" } }
+    }
+  }
+
+  operator aggregate_reply per turn {
+    var buffer: text = ""
+
+
+    on delta {
+      buffer = jq { $buffer + (.data.params.delta // "") }
+    }
+
+    on flush {
+      out = jq {
+        .meta.kind = "jsonrpc.notification"
+        | .meta.method = "item/agentMessage"
+        | .data = {
+            method: "item/agentMessage",
+            params: { message: $buffer }
+          }
+      }
+      stop
+    }
+  }
+
+  operator to_teams {
+    on in {
+      out = jq {
+        .meta.app.delivery_id = .meta.sys.id
+        | if .meta.kind == "jsonrpc.peer_request" then
+          .data = {
+            type: "message",
+            attachments: [
+              {
+                contentType: "application/vnd.microsoft.card.adaptive",
+                content: {
+                  type: "AdaptiveCard",
+                  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                  version: "1.5",
+                  body: [
+                    {
+                      type: "TextBlock",
+                      text: ("Codex wants to run: " + (.data.params.command // "?")),
+                      wrap: true
+                    }
+                  ],
+                  actions: [
+                    {
+                      type: "Action.Execute",
+                      verb: "approve",
+                      title: "Approve",
+                      data: { approval_id: (.meta.rpc_id // .data.id) }
+                    },
+                    {
+                      type: "Action.Execute",
+                      verb: "reject",
+                      title: "Reject",
+                      data: { approval_id: (.meta.rpc_id // .data.id) }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        elif .meta.kind == "jsonrpc.notification" and .meta.method == "item/agentMessage" then
+          .data = {
+            type: "message",
+            text: .data.params.message
+          }
+        else
+          empty
+        end
+      }
+    }
+  }
+
+  connector teams_out : HttpClient + Loop {
+    base_url = env("TEAMS_SERVICE_URL")
+    path = "/v3/conversations/" + meta.app.conversation_id + "/activities"   // per-call CEL
+    method = "POST"
+    codec = "json"
+    protocol = "teams_activity"
+    effect = irreversible
+    behavior = deterministic
+    idempotency_key = meta.app.delivery_id
+
+    rate_limit = "10/s per meta.app.session_key"
+    // retry = the Loop aspect
+    Loop.variant = measure {
+      initial = 3
+      next = value - 1
+      until = value <= 0
+    }
+    Loop.backoff = exponential { initial = duration("200ms") }
+    on err where err.transient { }
+    auth = oauth2_client_credentials {
+      token_endpoint = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
+      client_id = env("TEAMS_BOT_APP_ID")
+      client_secret = env("TEAMS_BOT_PASSWORD")
+      scope = "https://api.botframework.com/.default"
+      refresh_before = duration("10m")
+    }
+    // teams_out.in (input) / teams_out.out (output)
+  }
+
+  operator delivery_dispatch {
+
+    on in {
+      delivered = jq { select(.data.delivered) }
+      failed = jq { select(.data.delivered | not) }
+    }
+  }
+
+  connector dlq : Memory {
+    cap      = 10_000
+    overflow = reject              // a strict DLQ : overflow is loud (CapacityExceeded)
+  }
+  // Memory is readable through its `read`/`out` snapshot contract. A replay
+  // is a separate run that injects selected entries as new roots; this graph
+  // does not hide a static back-edge.
+
+  teams_in.out -> auth.in
+  auth.out        -> to_codex.in
+  auth.rejected   -> nothing
+  to_codex.out    -> sessions.in
+
+  sessions.out               -> route_codex_out.in
+  route_codex_out.peer_request -> to_teams.in
+  route_codex_out.message      -> to_teams.in
+  route_codex_out.delta        -> typing_feedback.in
+  route_codex_out.delta        -> aggregate_reply.delta
+  route_codex_out.flush        -> aggregate_reply.flush
+
+  typing_feedback.out   -> teams_out.in
+  aggregate_reply.out   -> to_teams.in
+  to_teams.out          -> teams_out.in
+
+  teams_out.out             -> delivery_dispatch.in
+  delivery_dispatch.delivered   -> nothing
+  delivery_dispatch.failed      -> dlq.in
+}
+
+
+// =============================================================================
+// Simulations
+// =============================================================================
+
+lab teams_inbound {
+  simulation teams_gateway on app {
+
+    // The world, shared by the scenarios : codex is scripted per scenario ;
+    // teams_out must be covered wherever it is called (an uncovered call fails loudly).
+
+    scenario plain_message "user sends a plain Teams message" {
+      mock sessions.codex {
+        on in where data.method == "turn/start" {
+          out = envelope {                     // meta is written → long form (the { … } sugar carries data only)
+            meta.app.kind   = "jsonrpc.notification"
+            meta.app.method = "item/agentMessage"
+            data = struct { method = "item/agentMessage", params = struct { message = "Bonjour" } }
+          }
+        }
+      }
+      mock teams_out {
+        on in { out = { delivered = true } }   // long form is envelope { data = struct { delivered = true } }
+      }
+
+      teams_in.out = envelope {
+        meta.app.source = "teams"      // fixtures seed via meta.app — meta.sys is read-only, even in sim
+        data = struct {
+          type = "message"
+          from = struct { aadObjectId = "abc-123" }
+          text = "Bonjour"
+          serviceUrl = "https://smba.trafficmanager.net/emea/"
+          conversation = struct { id = "conv-1" }
+          channelData = struct { tenant = struct { id = "tenant-x" } }
+        }
+      }
+
+      expect "turn/start"     sessions.codex.in where (data.method == "turn/start" && data.params.prompt == "Bonjour")
+      expect "Teams activity" teams_out.in where
+        (data.type == "message" && data.text.contains("Bonjour"))
+    }
+
+    scenario approval_cycle "user approves a Codex tool request" {
+      mock sessions.codex {
+        on in where data.method == "turn/start" {
+          out = envelope {
+            meta.app.kind   = "jsonrpc.peer_request"
+            meta.app.method = "item/commandExecution/requestApproval"
+            meta.app.rpc_id = "42"
+            data = struct { method = "item/commandExecution/requestApproval", id = 42, params = struct { command = "ls" } }
+          }
+        }
+        on in where data.decision == "approve" {
+          out = envelope {
+            meta.app.kind   = "jsonrpc.notification"
+            meta.app.method = "item/agentMessage"
+            data = struct { method = "item/agentMessage", params = struct { message = "completed" } }
+          }
+        }
+      }
+      mock teams_out {
+        on in { out = { delivered = true } }
+      }
+
+      teams_in.out = {
+        type = "message"
+        from = struct { aadObjectId = "abc-123" }
+        text = "list files"
+        serviceUrl = "https://smba.trafficmanager.net/emea/"
+        conversation = struct { id = "conv-1" }
+        channelData = struct { tenant = struct { id = "tenant-x" } }
+      }
+      expect "adaptive card" teams_out.in where (
+         data.attachments[0].contentType == "application/vnd.microsoft.card.adaptive")
+
+      teams_in.out = {
+        type = "invoke"
+        from = struct { aadObjectId = "abc-123" }
+        value = struct { verb = "approve", approval_id = "42" }
+        serviceUrl = "https://smba.trafficmanager.net/emea/"
+        conversation = struct { id = "conv-1" }
+        channelData = struct { tenant = struct { id = "tenant-x" } }
+      }
+      expect "peer response reaches codex" sessions.codex.in where (
+         meta.app.kind == "jsonrpc.peer_response" && meta.app.rpc_id == "42" && data.decision == "approve")
+      expect "final message" teams_out.in where data.text.matches("completed|done")
+    }
+
+    scenario dlq_on_delivery_failure "a Teams API failure lands in the DLQ, loudly" {
+      mock sessions.codex {
+        on in where data.method == "turn/start" {
+          out = envelope {
+            meta.app.kind   = "jsonrpc.notification"
+            meta.app.method = "item/agentMessage"
+            data = struct { method = "item/agentMessage", params = struct { message = "Bonjour" } }
+          }
+        }
+      }
+      mock teams_out {
+        on in { out = { delivered = false, status = 503 } }    // the partner fails
+      }
+
+      teams_in.out = {
+        type = "message"
+        from = struct { aadObjectId = "abc-123" }
+        text = "Bonjour"
+        serviceUrl = "https://smba.trafficmanager.net/emea/"
+        conversation = struct { id = "conv-1" }
+        channelData = struct { tenant = struct { id = "tenant-x" } }
+      }
+
+      expect "delivery attempted" teams_out.in where data.type == "message"
+      expect "failed delivery in DLQ" dlq.in     where data.delivered == false
+    }
+
+    scenario unknown_user "an unknown Teams user is dropped before Codex" {
+      teams_in.out = {
+        type = "message"
+        from = struct { aadObjectId = "intruder-999" }
+        text = "Bonjour"
+        serviceUrl = "https://smba.trafficmanager.net/emea/"
+        conversation = struct { id = "conv-1" }
+        channelData = struct { tenant = struct { id = "tenant-x" } }
+      }
+      expect "unknown user dropped"  auth.rejected where meta.app.skip_reason == "unknown_user"
+      expect nothing sessions.codex.in                       // codex never sees the intruder
+    }
+  }
+}

@@ -1,0 +1,59 @@
+# The Rastok specification
+
+> **Status:** normative corpus under review.
+
+This directory defines the language and runtime contracts that an
+implementation of Rastok must honor. The documents are organized by
+semantic ownership rather than by release layer.
+
+## Documentation rules
+
+1. **One home per decision.** A normative rule lives in exactly one
+   specification document; every other document cites it. If two
+   documents disagree, the designated home wins and the other document
+   is a bug.
+2. **The live corpus is the source of truth.** Open questions and
+   intentionally deferred behavior are stated where they apply. Private
+   design history does not compete with the public contract.
+3. **Simulation is executable specification.** Spec-critical behavior
+   should have a falsifiable artifact: a reference simulation
+   (`../examples/simulations/`), a golden trace, or a conformance test.
+4. **Specification and implementation move together.** A change that
+   affects observable behavior must update its normative home and the
+   corresponding executable evidence in the same change.
+5. **The normative text stands on its own.** Internal work logs,
+   superseded alternatives, and private planning material are deliberately
+   absent from this repository.
+
+## Reader path
+
+`README.md` → `WHITEPAPER.md` (the conceptual model) → this file →
+[grammar.md](grammar.md) (surface + CEL) →
+[envelope.md](envelope.md) (identity, metadata, storage) →
+[execution-model.md](execution-model.md) (transactions, mailboxes, time) →
+[delivery-semantics.md](delivery-semantics.md) (journal, recovery,
+boundaries) → [simulation-semantics.md](simulation-semantics.md) (the
+Lab: scenarios, mocks, golden traces, experiments, and the reserved
+theorem surface) → [identity.md](identity.md) (semantic hash,
+`graph_version`, canonical record form) → [stdlib.md](stdlib.md) (the
+six Connectors and guest languages) →
+[effects-and-sagas.md](effects-and-sagas.md) /
+[aspects.md](aspects.md) / [loop.md](loop.md) (the aspect layer) →
+`../examples/` (canonical graphs and seven reference simulations).
+
+## The map
+
+| Document | Normative home of |
+|---|---|
+| [grammar.md](grammar.md) | surface syntax, keywords, LL(1) productions, CEL positions and delimitation, simulation grammar |
+| [envelope.md](envelope.md) | envelope structure, `meta.sys`, identity framing, storage and wire form, provenance |
+| [execution-model.md](execution-model.md) | node transactions, mailboxes M:N, ordering, dated events, timeouts, windows, `advance` |
+| [delivery-semantics.md](delivery-semantics.md) | journal records, cursors, backpressure, boundary WAL, recovery, sagas × lifecycle |
+| [simulation-semantics.md](simulation-semantics.md) | simulations, scenarios, fixtures, mocks, expectations, golden traces, coverage, production-to-fixture projection |
+| [stdlib.md](stdlib.md) | Connector contracts, the six initial Connectors, `behavior`, pure guest programs, observability, MCP |
+| [effects-and-sagas.md](effects-and-sagas.md) | effect classes, `on compensate`, the Saga aspect |
+| [aspects.md](aspects.md) | the `: T1 + T2` mechanism, admission tests, qualified names |
+| [loop.md](loop.md) | `Loop.variant`, bounded iteration, retry, and theorem mapping |
+| [identity.md](identity.md) | semantic hash, `graph_version` allocation and manifest, canonical record form |
+| [diagnostics.md](diagnostics.md) | diagnostic-code registry, stability contract, lazy assignment |
+| Types *(extraction pending; currently in `WHITEPAPER.md` §2.1 and [grammar.md](grammar.md))* | value-type tree |

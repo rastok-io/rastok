@@ -1,0 +1,23 @@
+@startuml 02-rastok-container
+!include <C4/C4_Container>
+
+LAYOUT_LEFT_RIGHT()
+title Rastok M0 — container view
+
+Person(author, "Graph author", "Checks and exercises an integration graph.")
+Person(operator, "Application operator", "Runs the App path and inspects evidence.")
+
+System_Ext(project, "Project files", ".rkg source, Lab scenarios, and golden artifacts.")
+System_Ext(process, "Host process", "The first real effect boundary exercised by M0.")
+
+System_Boundary(rastok_boundary, "Rastok") {
+  Container(rastok_exec, "rastok executable", "Rust", "Parses, checks, plans, and executes one graph. App and Lab share the same semantic core.")
+}
+
+Rel(author, rastok_exec, "Check, run, simulate", "CLI")
+Rel(operator, rastok_exec, "Run and diagnose", "CLI")
+Rel(rastok_exec, project, "Reads source/scenarios; compares artifacts", "Filesystem")
+Rel(rastok_exec, process, "Starts and observes in App mode", "Process boundary")
+
+SHOW_LEGEND()
+@enduml

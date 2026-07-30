@@ -1,0 +1,458 @@
+# Delivery Semantics — the journal, the transaction, and the boundary
+
+> **Status:** normative — under review.
+> Companion to [envelope.md](envelope.md) (identity ; its §7 journal stub is
+> filled by §6 below) and [execution-model.md](execution-model.md) (the node
+> transaction, ordering, the dated-events queue).
+> Reference simulations 3–4 exercise Loop retry × outbound WAL and saga
+> compensation × crash recovery.
+
+The question this doc answers : **what survives — a crash, a redelivery, a
+slow consumer, a dead process — and what exactly is promised at each
+durability scope ?**
+
+
+## 1. The unit of commit — the transaction record
+
+A [node transaction](execution-model.md) (one triggering envelope → the
+matched handler run to completion) commits **atomically as one journal
+record** :
+
+```
+   transaction record = CAUSAL CORE + OBSERVATION ANNOTATIONS
+
+   causal core   : node, partition key, trigger (p:/l:),
+                   consumed positions   (the cursor advances, §2),
+                   join_inputs          (the buffered envelope ids a join
+                                         consumed from partition state — the
+                                         provenance DAG's other half),
+                   state delta,
+                   emissions            [(port, emission_index, id, envelope)]
+   annotations   : committed_at (UTC in production, virtual in simulation —
+                   the REGULATORY timestamp, commit-authoritative),
+                   … every clock-valued field (e.g. an OUTBOUND's arming t)
+
+   ONE commit covers both. Before it : the transaction never happened.
+                          After it  : it happened entirely.
+
+   THE RULE : clock-valued fields are observation annotations ; causal order
+   is carried by record sequence and ids, never by clock values. The trace
+   FINGERPRINT covers the causal core only (simulation-semantics §6) — which
+   makes two-mode comparison a real, checkable operation.
+```
+
+Delivery is **post-commit and journal-driven** : emissions reach target
+mailboxes only after the record is durable (per scope, §6). The two crash
+worlds close cleanly :
+
+- **Crash before commit** → the transaction never existed ; the input is
+  redelivered (at-least-once from upstream) ; reprocessing derives **the same
+  emission ids** (zero randomness in the recipe) → downstream dedup makes the
+  retry invisible.
+- **Crash after commit** → the emissions are durable facts ; delivery resumes
+  from the journal.
+
+Net observable guarantee **inside the graph : effectively-once** — the
+derived-id recipe is the mechanism (where Kafka needs producer epochs and
+sequence numbers, Rastok's identity recipe *is* the idempotence).
+
+
+## 2. Delivery inside the graph — cursors, not id-sets
+
+Dedup does not remember ids (an unbounded set) ; it remembers **a position**.
+The journal orders each node's emissions ; delivery reads them in order ;
+therefore delivery is **FIFO per (edge × source partition)** — and deduping a
+FIFO stream takes one integer :
+
+```
+   journal of route (alice) :  [ E1@1, E2@2, E3@3, E4@4 ]
+   codex's cursor on the edge : "consumed up to 3"
+   redelivery of E2 ?  2 ≤ 3 → skip.   E4 ?  4 > 3 → consume, cursor := 4.
+```
+
+- **The cursor commits inside the consumer's transaction record** (§1 :
+  "consumed positions") — consumption and its effects are one atomic fact.
+  No second mechanism.
+- **The redelivered id is an integrity seal, not the dedup key** : at a given
+  position, the id must be byte-identical to what the journal knows. A
+  mismatch is **never a silent skip** — and it is **not a graph error**
+  either (the data plane cannot repair corruption) : delivery on that edge
+  **halts**, and an operator alert fires on the observation plane. The same
+  channel serves a §4.2 request-digest mismatch on retry.
+- Dedup state : **O(edges × partitions) integers**. Bounded, trivial.
+
+
+## 3. Bounded everywhere — RAM, flow, disk
+
+Three accumulations, three answers — nothing can grow without limit :
+
+1. **RAM — the mailbox is a window, not a reservoir.** The durable backlog
+   lives in the journal ; the in-memory mailbox is a **bounded prefetch
+   window** over it. Full → stop prefetching. RAM cannot overflow, by
+   construction.
+2. **Flow — bounded lag, pressure to the inbound.** The gap between a
+   producer's journal position and its consumer's cursor is **bounded per
+   edge**. At the bound, the producer stops being served ; the pressure
+   propagates edge by edge back to the inbound Connector, which **translates
+   it into its protocol** : HTTP 429/503 or slowed accepts, a polling source
+   stops polling, a `Process` stops reading stdin. The world sees a slow or
+   limited server — never a dying host.
+   Backpressure changes **pacing only, never semantics** — arrival orders
+   are journaled as they happen ; the journal-relative contract is
+   tempo-insensitive. Window sizes and lag bounds are **runtime
+   configuration, not DSL vocabulary** ; the deferred `RateLimiter`
+   aspect is the candidate explicit per-node policy knob.
+3. **Disk — pruned below the LIVING low-water mark.** A
+   delivery-cursor-only rule is unsafe because it could destroy records
+   still required by live obligations:
+
+   ```
+   LWM = min( delivery cursors,
+              every OPEN saga's floor          (the oldest record of its scope),
+              every open OUTBOUND's floor      (the §4.4 triage needs it),
+              every LIVE instance's state floor )
+   ```
+
+   A bare floor would pin the whole journal (a `persistent` partition = never
+   prunable), so the runtime MAY write **SNAPSHOT records** — the folded
+   state of an instance (vars, join buffers, cursors) or of an open saga (the
+   fold-so-far). A snapshot is **derived, not causal** : it contains no new
+   fact, is always rebuildable from the causal records, is **excluded from
+   golden traces and replay semantics** (the journal-relative contract reads
+   the causal journal only), and its cadence is runtime policy. A floor
+   advances to its owner's latest snapshot ; pruning regains its freedom
+   behind it. Recovery = latest snapshot + the causal suffix — which is what
+   makes the `local` row of §6's table true. Under `none`/`local` pruning is
+   aggressive by default ; under `global`, retention beyond the LWM is a
+   **policy** (provenance, audit, replay). Retention is **capped at
+   two levels** : a global runtime cap and a per-app override that cannot
+   exceed it.
+
+
+## 4. The boundary — outbound records and the unknown outcome
+
+### 4.1 The cursed window
+
+Inside the graph everything is repairable. At the boundary there is an
+instant where **the truth exists nowhere** :
+
+```
+   ① upstream transaction commits (the intent is journaled)
+   ② delivery to the Connector (cursor — §2)
+   ③ the Connector calls the world  ────────►  💳
+   ④ the response returns           ◄────────
+   ⑤ the Connector's transaction commits (response journaled, out emitted)
+
+   💥 crash between ③ and ⑤ : was the request received ? executed ?
+      Nobody knows (two-generals — undecidable, not a bug).
+```
+
+### 4.2 The outbound record — the write-ahead of the call
+
+The journal is the WAL, including the **attempt trace**. Before ③, the
+Connector journals an **outbound record**; the call has exactly one
+closure (the call-closed rule, execution-model §6.3) :
+
+```
+   outbound record :
+     open       { call, idempotency_key, request digest, t }     ← BEFORE the call
+     closed     (response)  XOR  (timeout — the l:timeout event)
+                XOR  (abandoned — written when the §4.4 triage resolves by
+                      OutcomeUnknown : the call is closed-as-unknown)
+     discarded  (late response after closure — observability-visible, graph-invisible)
+```
+
+One call = exactly one closure. The recall rows of §4.4 need no new closure
+kind — a recall is *the same call* re-attempted, and its reply (or timeout)
+closes it through the normal rule.
+
+The request **digest** is the boundary's integrity seal : a retry must
+re-derive a byte-identical request, or the graph changed under the call —
+loud error, never a silent divergence (§2's cousin).
+
+### 4.3 Retry with the byte-same key — and the key-stability rule
+
+On an unknown partner outcome, **retry with the re-derived key** : replaying
+the same transaction re-evaluates the same CEL expression on the same
+envelope → **the key is byte-identical for free**. At-least-once against the
+world ; the partner's dedup makes it effectively-once when the partner
+cooperates.
+
+**The key names the business operation, not the attempt** (the
+Stripe-semantics rule) :
+
+- **Stable business key = the taught norm** for `irreversible` :
+  `idempotency_key = meta.app.payment_id`. Retry after timeout → partner
+  dedups (safe) ; retry after a *processed* failure → the partner replays
+  the failure (correct — a declined payment must not silently re-run).
+- **Per-attempt key = the documented escape** (`… + "#" +
+  string(meta.sys.iter_count)`) for partners that consume the key on
+  failure.
+- **A key must not be required to reference `iter_count` inside a
+  Loop.** Composed with the call-closed rule and Loop re-injection, that
+  requirement would double-pay on the timeout-with-late-success path:
+
+```
+   call #0, key "pay_42#0" ──► the bank executes… slowly
+   t=duration("30s") : timeout → call closed → TimeoutExpired → Loop re-injects
+   iter_count=1 → key "pay_42#1"  ← NEW key → the bank sees a NEW operation
+   💸💸 double payment. Every rule was fine ; the composition was fatal.
+```
+
+  **And the key's converse** : a compensable Connector performs
+  TWO business operations — the forward call and its inverse. One key
+  expression cannot name both : against a key-deduping partner, a
+  compensation reusing the forward key is deduplicated INTO the forward call
+  (the release never executes ; the fold reports a clean `rolled_back`).
+  Rule : an inline `on compensate` on a Connector whose forward path declares
+  `idempotency_key` **must declare its own** (`E-COMPENSATE-KEY`,
+  [effects-and-sagas.md §3.2](effects-and-sagas.md)) — the taught norm names
+  the inverse operation (`…/release`).
+
+  What remains mandatory: an `idempotency_key` on every
+  `irreversible`. This rule also governs [loop.md](loop.md) §7.3/§8
+  and [aspects.md](aspects.md) §7.4.
+
+### 4.4 Recovery — a triage, not a gamble
+
+At restart, `open` outbound records without closure = the set of unknowns :
+
+| Situation | Resolution |
+|---|---|
+| emission delivered, **no** outbound record | the call never left → call now. Trivial. |
+| open + `effect = idempotent` | recall, blindly (safe by declaration) |
+| open + `idempotency_key` present | recall with the **byte-same key** (§4.3) |
+| open + `compensable`, **no key** | do NOT guess : typed err **`OutcomeUnknown`** on the Connector's `err` (trigger **`l:recover`**, parent = the request envelope) **and the record closes as `abandoned`** — no eternal re-triage, no duplicate err. The graph/saga decides : verify at the partner, compensate, park ; a deliberate retry is a NEW call. Loud, never silent. |
+
+**The general principle: recovery rebuilds the dated-events
+queue by the same fold that rebuilds state.** Every dated obligation is
+derivable from (journal, state) : an open call's REMAINING budget (its
+arming `t` annotation + `timeout`), a buffered join half's `within` deadline
+(its buffering annotation + the window), a live instance's lifetime (last
+activity + idle-ttl, or the origin-aligned arithmetic), an open saga's
+`Saga.timeout` (creator record + budget), a Loop's pending backoff.
+At restart each obligation is re-armed for its remainder ; obligations
+already past **fire immediately, in date order** — a call whose budget
+expired during the outage delivers its `TimeoutExpired` late by
+circumstance, never silently ; a join half past its window is evicted
+(`JoinExpired`) on the spot. Two free bonuses : the **audit trail is
+per-attempt** (who called what, when, with which key, how many times —
+journal, not reconstruction), and a fixture can write an unresolved `open`
+record to test this table — the crash becomes an ordinary simulation case.
+
+
+## 5. Unwired ports — nothing silent
+
+Two port families, two gravities :
+
+1. **Data ports : strict, with a written escape.** A data output *used* by a
+   handler but *unwired* = **compile error**. Intentional discard is written :
+   `route.audit -> nothing` (the built-in sink, May vocabulary — its handler
+   twin `out = nothing` is unchanged). The answer to "where did my messages
+   go ?" is always in the text.
+2. **`err` : bubbles lexically, like an exception.** Every node has `err`
+   (the runtime itself emits on it) — mandatory wiring would be boilerplate,
+   silent dropping would be the worst crime. Composition already gives the
+   answer : an unwired `err` **bubbles to the enclosing graph's `err`** ;
+
+   ```
+   app
+   └─ graph sessions                 err unwired → bubbles up
+      └─ graph payment : Saga        ← an err bubbling into a `: Saga` is
+         └─ connector pay               INTERCEPTED here : THE compensation
+              err ───────╯               trigger. Bubbling UNIFIES the err
+                                         channel and saga rollback.
+   app root : never intercepted → the app's default sink :
+   journaled + visible in observability (+ configurable DLQ).
+   (`app` = the pre-bound identifier for the `: App` entry graph ;
+    `app.err` is wirable and assertable.)
+   Explicit wiring (`pay.err -> triage`) cuts the bubble at that level.
+   ```
+3. **Inputs : a warning, not an error.** A declared, required input that is
+   never fed = dead handlers = **compile warning** (work-in-progress graphs
+   are legitimate) ; a `?`-marked optional input may stay unwired silently
+   (its handlers simply never fire).
+
+
+## 6. The journal — three record types (fills envelope.md §7)
+
+The taxonomy collapses by construction : supervision decisions ARE
+transaction records (triggers `l:timeout`, `l:evict`, `l:stop`…) ; clock
+ticks ARE inbound records (Clock roots). Exactly three **causal** types
+remain — plus one **derived** type, the SNAPSHOT (§3 : the folded state of
+an instance or an open saga ; no new facts, rebuildable, excluded from
+traces and replay — an index, not history) :
+
+```
+   ① INBOUND record       the world enters
+        { connector, inbound_seq, envelope, committed_at }
+        inbound_seq committed ATOMICALLY with the accept ;
+        ordering rule : COMMIT-THEN-ACK (the record is durable before the
+        protocol acknowledgement leaves). A crash between the two → the
+        sender may resend → transport-level redelivery yields DISTINCT
+        roots unless the Connector's protocol correlates resends —
+        inbound dedup is a per-protocol duty, declared in the Connector
+        contract (stdlib.md, case 7). Stated, never glossed.
+   ② TRANSACTION record   everything inside the graph          (§1)
+   ③ OUTBOUND record        the graph acts on the world          (§4.2)
+        open { key, digest, t } → closed (response XOR timeout) | discarded
+```
+
+- **Envelopes are stored in the canonical storage form** (envelope.md §5) :
+  `meta` Avro, `data` tagged-bytes **lazy** — no re-encoding, no second
+  format. Immutability pays again : parent and child sharing the same `data`
+  bytes are **stored once, referenced** — a 10 MB passthrough does not cost
+  10 MB per hop.
+- **The write contract, one sentence** : *a record is durable — in the sense
+  of its scope — before its emissions are delivered.* (Group commit and
+  fsync batching remain runtime freedoms : the as-if of durability.)
+
+### The scope table — what each `durability` honestly guarantees
+
+| | `none` | `local` | `global` |
+|---|---|---|---|
+| Medium | bounded RAM | runtime-owned local journal | replicated backend selected by the deployment |
+| Crash-restart, same host | ❌ lost — **at-most-once across the crash : loss, never doubling** (no journal → no retry → no double-execution) | ✅ full recovery : transactions, cursors, outbound triage (§4.4) | ✅ idem |
+| Host loss | ❌ | ❌ | design intent: another host resumes under the clustered contract |
+| Retention | RAM cap | local cap + per-App override | pruning below the low-water mark + retention **policy** (audit, replay) |
+| Sagas | 💥 **not in the domain** (§7.3) | ✅ | design intent: full provenance across hosts |
+| `irreversible`/`compensable` connectors | ⚠️ compile warning : guarantees are process-lifetime | ✅ | ✅ |
+
+
+## 7. Sagas across the process lifecycle
+
+### 7.1 Saga state is a fold, not a fourth record type
+
+The saga's lifecycle (`open → committed / rolling_back → rolled_back /
+rollback_failed`) is **computed from the records of its scope** :
+
+```
+   scope entered      = the instance-creating transaction record   → open
+   steps 1..k sealed  = their transaction records                  → open, k sealed
+   permanent failure  = the err that bubbled into the `: Saga`     → rolling_back
+   compensations sent = the saga node's transactions (l:compensate)→ rolling_back, j/k done
+   compensations acked= their transaction + outbound records         → rolled_back
+   a compensation exhausted its Loop variant                       → rollback_failed
+```
+
+The saga manager stores nothing — it **folds the journal**. (This is
+Temporal's architecture, converged on independently : Event History ↔
+journal, deterministic replay ↔ the fold, stateless worker ↔ recovery.)
+
+### 7.2 Recovery = fold + outbound triage + resume
+
+```
+   ① fold the journal            → the exact state : « rolling_back, 1..j done »
+   ② open outbound records         → the §4.4 triage : recall same key / OutcomeUnknown
+   ③ resume the fold where it was : advance remaining steps, OR continue
+      compensations j+1..n        (idempotent on replay : same derived keys)
+   ④ Saga.timeout re-armed from the journal
+      (opening = the creator record's committed_at — the budget runs on journal time)
+```
+
+A crash *during* rollback is the same mechanics — resume at j+1. No new
+mechanism anywhere ; this is what §§1-6 compose to.
+
+### 7.3 `none` does not exist in a saga's durability domain
+
+Not a forbidden combination — a **domain restriction** : within a `: Saga`
+scope, `durability` ranges over **{ local, global }**. `none` is not a value
+there, the way `on compensate` is not a handler of a pure Operator. A saga is
+**by definition** the construct whose life exceeds the process (long-running,
+compensation guaranteed *whatever happens*) ; a durability that dies with the
+process is not a *weaker* saga durability — it is **not one at all** :
+executed steps would become orphans nobody can compensate.
+
+A saga whose *effective* durability resolves to `none` is a compile error at
+the saga declaration. Effective durability is resolved in this order:
+
+```text
+Node declaration > closest parent Graph > App > none
+```
+
+An explicit child declaration may strengthen or weaken its inherited value.
+A weakening emits `W-DURABILITY-WEAKENED` and appears in the coverage report.
+
+```
+   error [E-SAGA-DURABILITY] : `none` is not a durability of a saga —
+     the compensation guarantee requires a journal that outlives the process.
+     `payment : Saga` resolves to durability = none.
+       fix : set durability = local (a file — still serverless) or global ;
+             or remove `: Saga`.
+       note : simulation tests sagas with no disk at all (the fixture IS the journal).
+```
+
+Precedents agree : Temporal has no per-workflow durability opt-out — no
+history, no workflow ; its in-memory mode is a dev-server store choice, not
+a semantic mode. The consistency is also internal : `compensable` already
+*requires* `on compensate`, `irreversible` already *requires*
+`idempotency_key` — aspects and effects are gated on their preconditions at
+compile time. This closes
+[effects-and-sagas.md](effects-and-sagas.md) §8.6/§8.7.
+
+Outside sagas, `irreversible`/`compensable` under `none` stay legal with a
+**once-per-app compile warning** (guarantees are process-lifetime ; loss,
+never doubling — a near-stateless dev router is legitimate).
+
+
+## 8. The guarantees, summarized
+
+| Where | Guarantee |
+|---|---|
+| Inside the graph | **effectively-once observable** (at-least-once + derived-id dedup by cursor) |
+| At the boundary | at-least-once + byte-same idempotency key → effectively-once when the partner dedups ; `OutcomeUnknown` (loud) when nothing safer exists |
+| Across a crash, `durability ≥ local` | full recovery : cursors, outbound triage, saga fold |
+| Across a crash, `durability = none` | **at-most-once : loss, never doubling** ; sagas refused at compile time |
+| Ordering | FIFO per (edge × source partition) ; cross-edge = journal-relative (envelope.md §2.0) |
+
+
+## 9. Trigger vocabulary
+
+| Transaction | `trigger` | `parent_id` (the cause) | Emitter (`node_path`) |
+|---|---|---|---|
+| Recovery resolution of an unknown outbound (no key) | `l:recover` | the request envelope whose outcome is unknown | the Connector node |
+
+This trigger belongs to the `l:` registry
+([envelope.md](envelope.md) §1.1/§3.1).
+
+
+## 10. Non-goals of this doc (deferred, with homes)
+
+- **Multi-host delivery / shard handoff** — deferred (the `inbound_seq` replica
+  property is already reserved in envelope.md §2).
+- **Prod-incident replay tooling** — deferred (the journal-relative contract
+  already reserves it).
+- **Group-commit / fsync tuning, window & lag bound defaults** — runtime
+  configuration, implementation-validation territory.
+- **DLQ connector catalog** — `Memory` suffices for the reference examples ; the
+  app-root default sink is specified here, its configurable target is the
+  stdlib note.
+- **Cross-app / cross-graph transactions** — reserved words only
+  (execution-model §1 naming rule) ; nothing wider than a node transaction
+  exists in the current contract.
+
+
+## 11. Conformance scenarios
+
+The following reference simulations must stay consistent with this
+contract:
+
+- **Reference simulation 3** (Loop retry × outbound WAL : the double-pay trap
+  of §4.3 exercised both ways — stable key vs per-attempt key ; a crash
+  between call and closure, resolved by §4.4) ;
+- **Reference simulation 4** (saga compensation × crash : fold reconstruction
+  mid-`rolling_back`, one `OutcomeUnknown` path, `Saga.timeout` re-armed) —
+  both hand-derived and consistent with every rule above.
+
+
+## 12. Related docs
+
+- [envelope.md](envelope.md) — identity recipe ; §7 (journal) now points
+  here ; the `l:` registry.
+- [execution-model.md](execution-model.md) — the node transaction (§1
+  naming rule incl. reserved *graph/cascade transaction*), mailboxes,
+  ordering, dated events, `timeout`/`on_timeout`, `JoinExpired`.
+- [effects-and-sagas.md](effects-and-sagas.md) — effect classes, `on
+  compensate`, saga lifecycle ; §8.6/§8.7 closed by §7.3 above.
+- [loop.md](loop.md) — retry composition and the §7.3/§8 key rule.
+- [aspects.md](aspects.md) — aspect-level effect rules.

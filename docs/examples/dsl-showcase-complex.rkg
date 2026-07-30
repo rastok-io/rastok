@@ -1,0 +1,113 @@
+// Illustrative full-surface example. Postgres, File, and the SQL guest are
+// deferred and therefore outside the first executable slice.
+graph agent_gateway : App {
+
+  partition user {
+    key = meta.app.user_id
+    lifetime = persistent
+  }
+
+  connector webhook : HttpServer {
+    listen = "0.0.0.0:8080/inbound"
+    // webhook.out carries the decoded inbound request
+  }
+
+  connector db_history : Postgres {
+    url = env("DATABASE_URL")
+    effect = idempotent
+    behavior = deterministic
+    // query (input) / results (output : array<struct>) are the Postgres ports
+  }
+
+  connector local_ai_agent : Process {
+    command = "codex"
+    args = ["app-server"]
+    codec = "jsonl"
+    effect = idempotent
+    behavior = probabilistic
+    // in = stdin (prompt), out = stdout (answer) — Process defaults
+  }
+
+  connector audit_log : File {
+    path = "/var/log/rastok/audit.jsonl"
+    codec = "jsonl"
+    effect = irreversible
+    idempotency_key = meta.sys.id
+    behavior = deterministic
+  }
+
+  operator normalize_and_lookup {
+
+    on in {
+      val user_id = jq { .data.actor.id }
+      val intent  = jq { .data.message.intent }
+
+      db = jq {
+        select($intent == "deep_work")
+        | {
+            query: "SELECT * FROM user_history WHERE uid = $1",
+            params: [$user_id]
+          }
+      }
+
+      agent = jq {
+        select($intent != "deep_work")
+        | .meta.user_id = $user_id
+        | .meta.needs_history = false
+      }
+    }
+  }
+
+  operator enrich_and_gate per user {
+
+    var total_tokens_used: int = 0
+    var requests_count: int = 0
+
+
+
+    on (req, hist) {
+
+      requests_count = requests_count + 1           // mutate (CEL) ; the audit below reads the new value
+
+      val risk_score = sql(hist.data) {
+        SELECT SUM(flag_weight) FROM data WHERE incident = true
+      }
+
+      // jq(req) names req as the base envelope → the emitted envelope
+      // inherits req's meta (explicit attribution required on a join).
+      rejection = jq(req) {
+        select($risk_score > 50 or $total_tokens_used > 10000)
+        | .data = "Policy Violation: Account locked or Quota exceeded."
+      }
+
+      approval = jq(req) {
+        select($risk_score <= 50 and $total_tokens_used <= 10000)
+        | .data += {
+            context: {
+              previous_interactions: ($hist.data | length),
+              user_standing: "good"
+            }
+          }
+      }
+
+      audit = jq(req) {
+        .data = {
+          user:   .meta.user_id,
+          action: "gateway_evaluation",
+          risk:   $risk_score,
+          state:  { count: $requests_count }        // emit the NEW count
+        }
+      }
+    }
+  }
+
+  webhook.out -> normalize_and_lookup.in
+
+  normalize_and_lookup.db    -> db_history.in
+  normalize_and_lookup.agent -> enrich_and_gate.req
+  db_history.out             -> enrich_and_gate.hist
+
+  enrich_and_gate.audit    -> audit_log.in
+  enrich_and_gate.approval -> local_ai_agent.in
+  enrich_and_gate.rejection -> nothing
+}

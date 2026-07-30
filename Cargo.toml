@@ -1,0 +1,27 @@
+[workspace]
+members = ["crates/rastok"]
+resolver = "3"
+
+[workspace.package]
+# Bootstrap placeholder while publishing is disabled; not a release line.
+version = "0.0.0"
+edition = "2024"
+authors = ["Yoann Pantic"]
+license = "Apache-2.0"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unwrap_used = "warn"

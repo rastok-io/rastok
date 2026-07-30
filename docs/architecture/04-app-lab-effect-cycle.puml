@@ -1,0 +1,37 @@
+@startuml 04-app-lab-effect-cycle
+title Rastok — same semantic step, different effect world
+
+actor Caller
+participant "Rastok entry point" as Entry
+participant "Deterministic\nsemantic core" as Core
+participant "Effect boundary" as Boundary
+participant "App Process\nhandler" as App
+participant "Lab controlled\nhandler" as Lab
+database "Typed journal" as Journal
+
+Caller -> Entry: execute checked plan
+Entry -> Core: step(plan, state, input event)
+Core -> Journal: append input / decision records
+Core --> Entry: new state + Process intent
+Entry -> Boundary: resolve(intent, mode)
+
+alt App mode
+  Boundary -> App: typed Process intent
+  App -> App: perform real host effect
+  App --> Boundary: typed outcome
+else Lab mode
+  Boundary -> Lab: same typed Process intent
+  Lab -> Lab: consume scripted outcome or fault
+  Lab --> Boundary: typed controlled outcome
+end
+
+Boundary -> Journal: append outcome event
+Boundary -> Core: outcome as next event
+Core --> Entry: next state + intents or completion
+Entry --> Caller: result and review evidence
+
+note over Core,Journal
+No wall clock, randomness, environment,
+filesystem, or network enters the core implicitly.
+end note
+@enduml

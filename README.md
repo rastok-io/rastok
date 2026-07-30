@@ -1,0 +1,121 @@
+# Rastok
+
+> Integrate AI faster. Keep production calm.
+
+Rastok is an Apache-2.0 runtime and a dedicated domain-specific
+language (DSL) for stateful, effectful integration graphs. The DSL is
+textual, typed, readable in code review, easy to version in Git, and
+constrained enough for an LLM to generate without hiding the result
+behind a visual low-code format.
+
+A Rastok graph connects existing services, models, tools, data, and
+business processes. It contains three kinds of nodes:
+
+- **Operators** contain pure graph logic. They may update graph state,
+  but they cannot read from or write to the external environment.
+- **Connectors** are explicit, typed boundaries to the external world:
+  APIs, processes, databases, files, brokers, and clocks.
+- **Graphs** compose Operators, Connectors, and other Graphs.
+
+This separation makes effects replaceable. In production, Connectors
+interact with real systems. In a simulation sandbox called the
+**Lab**, controlled handlers replace those external systems while the
+same Operators and the same checked graph continue to run.
+
+The Lab controls inputs, time, boundary outcomes, and faults. A
+production incident can therefore become a local scenario: replay the
+causal path, test a fix, and compare the result without repeating the
+original real-world effects.
+
+## Same program, different world
+
+Rastok separates semantic decisions from effect execution:
+
+```text
+step(plan, state, event) -> (new_state, effect_intents)
+
+App execution  : effect_intents -> real outcomes
+Lab simulation : effect_intents -> controlled outcomes
+```
+
+Boundary outcomes return as typed, journaled events. Rastok does not
+pretend that effects are pure. It makes them visible, isolated, and
+substitutable.
+
+Readers from functional programming may recognize a deterministic core
+surrounded by explicit effect handlers. Rastok does not expose monads
+or require a functional language; it preserves the useful engineering
+property.
+
+## Status
+
+Rastok is at an early experimental stage. Its specification and
+implementation architecture are under active review, and the runtime
+does not yet make a production-readiness claim.
+
+The current target is one continuous mechanical proof:
+
+```text
+Rastok DSL source
+  -> validated executable plan
+  -> deterministic state machine
+  -> state-machine execution in a native in-memory VM
+  -> one real Process boundary
+  -> journaled, auditable Lab scenario with a useful golden diff
+```
+
+## Documentation authority
+
+The repository keeps intent, contract, design, and evidence distinct:
+
+```text
+WHITEPAPER.md             conceptual intent
+        |
+        v
+docs/spec/                normative language and runtime contract
+        |
+        v
+ARCHITECTURE.md
+docs/architecture/        implementation design
+        |
+        v
+crates/ and tests         implementation and executable evidence
+```
+
+Architecture and code do not silently override the specification. A
+semantic change updates the normative rule, affected architecture,
+implementation, and executable evidence together.
+
+## Repository
+
+The stable top-level structure is:
+
+```text
+rastok/
+├── crates/                 Rust implementation workspace
+├── docs/
+│   ├── spec/               normative language and runtime contract
+│   ├── architecture/       implementation views and diagrams
+│   └── examples/           graphs and reference simulations
+├── tools/                  repository development tools
+├── AGENTS.md               engineering rules for humans and agents
+├── ARCHITECTURE.md         canonical implementation blueprint
+├── CODE_OF_CONDUCT.md      expected project conduct
+├── CONTRIBUTING.md         contribution and review policy
+├── GOVERNANCE.md           project decision model
+├── SECURITY.md             vulnerability reporting policy
+├── ROADMAP.md              current evidence gates
+└── WHITEPAPER.md           conceptual model and statement of intent
+```
+
+Compiler and runtime crates stay together in this workspace. New crate
+boundaries are introduced only when the implementation justifies them;
+architecture documents do not pre-create empty subsystems.
+
+`LICENSE`, `OPEN_SOURCE_COMMITMENT.md`, and `TRADEMARKS.md` define the
+project's licensing and identity commitments.
+
+## License
+
+Rastok is licensed under the Apache License 2.0. The Rastok name
+and official artifacts are covered separately by the trademark policy.
