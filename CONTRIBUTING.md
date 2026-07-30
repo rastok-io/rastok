@@ -101,6 +101,17 @@ Assisted-by: <tool and model, if known>
 Human verification: <what was reviewed and tested>
 ```
 
+Commits may carry the same credit as a trailer, in the precise form
+used by this repository (see [AGENTS.md](AGENTS.md)):
+
+```text
+Assisted-by: <company> <model> <version>
+```
+
+The `Signed-off-by` line is always the human contributor's own
+certification — never an assistant's — and every commit carries one
+(`git commit -s`).
+
 Disclosure is contextual information, not a penalty. The same quality
 bar applies to assisted and unassisted work.
 

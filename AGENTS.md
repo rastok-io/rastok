@@ -115,6 +115,26 @@ Rastok's central promise makes hidden nondeterminism a correctness bug.
 - Keep fixtures small enough that a reviewer can understand why every
   field exists.
 
+## Commits
+
+- Write the subject in the imperative mood. The body explains why the
+  change exists and what invariant or result it protects, not which
+  files changed.
+- Sign every commit (`git commit -s`). The sign-off is a human
+  certification under the Developer Certificate of Origin: it carries
+  the committer's own identity, matches the commit author, and is
+  never made in an assistant's name.
+- Credit substantial machine assistance with one trailer per
+  assistant, placed before the sign-off:
+
+  ```text
+  Assisted-by: <company> <model> <version>
+  ```
+
+  Example: `Assisted-by: Anthropic Claude Fable 5`. No email address
+  on this line. The pull-request disclosure rules in
+  [CONTRIBUTING.md](CONTRIBUTING.md) apply unchanged.
+
 ## Agent-specific conduct
 
 - Do not expand the requested scope because adjacent work looks useful.
