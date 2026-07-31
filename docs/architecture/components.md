@@ -60,8 +60,8 @@ canonical record projection ─▶ golden compare
 | HIR | `compiler` (check) | canonicalize, lower | desugared, name-resolved, typed — the hash input ([identity.md §1](../spec/identity.md)); spans live in side tables; **the entire lab is excluded from the hash** |
 | canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
 | `plan::ExecutionPlan` | `compiler` (lower) | `vm`, `lab` | immutable, serializable data — tables plus `cel::Tree`s; no closures, no host references; names resolved to `Slot`s |
-| `world::Intent` (open OUTBOUND) | `vm` | dispatcher → `world::Partner` impls | journaled before any handler runs ([delivery-semantics.md §4](../spec/delivery-semantics.md)) |
-| `world::Response` | `connectors` or `lab::Mock` | `vm` (as an input event) | a partner only ever answers; it never decides a timeout and never mints `OutcomeUnknown` — closure is the runtime's verdict |
+| `world::Intent` (open OUTBOUND) | `vm` | dispatcher → `world::Partner` impls | journaled before any handler runs, carrying the canonical call fields — emitting id, connector path, request digest, optional idempotency key ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
+| `world::Response` | `connectors` or `lab::Mock` | `vm` (as an input event) | returns with the internal `CallRef`, correlated by the *connector's own protocol correlator* — never by the business key; a partner only ever answers: it never decides a timeout and never mints `OutcomeUnknown` |
 | `journal::Record` | **runtime mechanics only** | recovery, `journal::Golden` | adapters and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `diag::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
 | golden projection | `journal::Golden` | evidence compare | deterministic bytes: same scope, same bytes ([simulation-semantics.md §6](../spec/simulation-semantics.md)) |
@@ -70,12 +70,12 @@ canonical record projection ─▶ golden compare
 
 ```text
 crates/rastok/src/
-├── node.rs         # vocabulary : Path, Kind, Port, EffectClass, Behavior, Trigger
+├── node.rs         # vocabulary : Path, Kind, Port, Effect, Behavior, Trigger
 ├── envelope.rs     # Envelope, Meta, MetaSys, Id, Payload (lazy), Value
 ├── diag.rs         # Diagnostic, Severity, Phase, Span, Sink
 ├── cel.rs          # the isolated expression chain — depends on nothing here
 ├── compiler.rs     # parse → assemble → check → lower → canonicalize
-├── plan.rs         # Plan, Handler, Slot, GuestProgram, SemanticHash, Manifest
+├── plan.rs         # ExecutionPlan, Handler, Slot, GuestProgram, SemanticHash
 ├── stdlib.rs       # declarative Connector/guest contracts (the checker's view)
 ├── world.rs        # Ingress, Partner, Clock, Supervisor + Dispatcher, Intent
 ├── vm.rs           # THE engine — run and sim ; GuestExecutor ; BootEnv (next)
@@ -134,13 +134,19 @@ it. Node declarations are an algebraic type,
 
 ```text
 NodeDecl = Operator(OperatorDecl)
-         | Connector(ConnectorDecl { effect, behavior, … })   — both mandatory
+         | Connector(ConnectorDecl { effect : Effect, behavior, … })  — both mandatory
          | Graph(GraphDecl)
+
+Effect   = None | Class(EffectClass)   — `none` is an explicit declared
+                                         value, never an absent field;
+                                         the three effect *classes* stay three
 ```
 
-so "an Operator with an effect" or "a Connector without one" cannot be
-constructed ([effects-and-sagas.md §2.1](../spec/effects-and-sagas.md),
-[stdlib.md §2](../spec/stdlib.md)). The checker reads Connector
+so "an Operator with an effect" or "a Connector without a declaration"
+cannot be constructed, and the stdlib's pre-declared `none` connectors
+(Clock, Calendar, HttpServer) are representable
+([effects-and-sagas.md §2.1–2.2](../spec/effects-and-sagas.md),
+[stdlib.md §2](../spec/stdlib.md), [loop.md](../spec/loop.md)). The checker reads Connector
 contracts from `stdlib` (§3.7), never from adapter code. `Hir` is the
 spec's own name for the checked form ([identity.md §1](../spec/identity.md):
 "blake3(canonical HIR)"), and the hash covers the production graph
@@ -176,7 +182,7 @@ crate.
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
 | **`plan::ExecutionPlan`** | the executable form — the tables and expression trees the VM interprets, and what ships to other hosts | produced by `compiler`, consumed by `vm` and `lab` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
-| **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersion`; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
+| **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `plan::ExecutionPlan` is the whitepaper's term, and the database
 intuition it carries is intended — accurate up to two differences:
@@ -217,32 +223,40 @@ the world plays itself; in sim, the lab plays the world.
 
 | Interface | Owns | Real side | Lab side | Spec | M0 |
 |---|---|---|---|---|---|
-| **`Ingress`** | birth of inbound envelopes and the inbound sequence (`IngressAuthority` stays opaque); bounded, backpressure translated outward | listeners | `lab::Fixture` | [envelope.md §2](../spec/envelope.md); [delivery-semantics.md §3](../spec/delivery-semantics.md) | M0 (minimal) |
-| **`Partner`** | launching journaled `Intent`s and answering with `Response` events, deduplicated on the stable business key | `connectors/*` | `lab::Mock` | [delivery-semantics.md §4](../spec/delivery-semantics.md) | M0 (Process only) |
+| **`Ingress`** | birth of inbound envelopes (`IngressAuthority` stays opaque); bounded, backpressure translated outward — the **sequence is not its to allocate**: `inbound_seq` is committed atomically with acceptance by the journal, commit-then-ack | listeners | `lab::Fixture` | [envelope.md §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md) | M0 (minimal) |
+| **`Partner`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef`; correlation is the **connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a partner deduplicates on the idempotency key only *when it cooperates* | `connectors/*` | `lab::Mock` | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M0 (Process only) |
 | **`Clock`** | the only source of time, delivered **one dated event at a time** — the VM drains to stable between events, which may arm new ones before the target, so a sweep can never be precomputed | wall clock | `lab::VirtualClock` | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (virtual required) |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | `lab::Faults` | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | M0 (boot only); faults `next` |
 
 The **`Dispatcher`** (owned here) is the loop between the journal and
 the partners: it takes OUTBOUND records the VM opened, drives the
-selected `Partner` implementation, correlates answers, and feeds
-`Response` events back to the VM as ordinary inputs.
+selected `Partner` implementation, and settles every answer or timeout
+through `journal::close_outbound(call_ref, …) → Won | AlreadyClosed`.
+Only a `Won` closure becomes an input event for the VM; `AlreadyClosed`
+degrades the late arrival into a discarded observation — the anti-ghost
+rule ([execution-model.md §6.3](../spec/execution-model.md)) as a typed
+race, not a convention.
 
 Ownership rules that the types must make unrepresentable:
 
 - a partner **answers or stays silent** — it never returns a timeout
   (the scheduler's dated event decides that) and never returns
   `OutcomeUnknown` (only recovery mints it, §3.6);
+- call identity is the internal `CallRef`; the business/idempotency
+  key names the *operation* for retries and cooperative partner-side
+  dedup — the two are never conflated;
 - adapters and mocks produce **events**; the runtime mechanics alone
   write records — a mocked call still gets its OUTBOUND record because
   the VM writes it before any partner, real or scripted, is invoked;
-- a late answer after closure is recorded as a **discarded
-  observation**, never a causal fact.
+- response and timeout can race, but **exactly one wins** the closure;
+  the loser is recorded as a **discarded observation**, never a causal
+  fact.
 
 ### 3.6 The journal (`journal`)
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `commit(Transaction)` (atomic), `open_outbound(Intent)` (journal-before-effect), `close_outbound(…)` (exactly once), `append_inbound(…)` (commit-then-ack), ordered `iter()` | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §5](../spec/envelope.md) | M0 |
+| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `commit(Transaction)` (atomic), `open_outbound(Intent)` (journal-before-effect), `close_outbound(call_ref, response XOR timeout) → Won \| AlreadyClosed` (exactly once — the anti-ghost race is typed), `append_inbound(authority, envelope) → committed record` (allocates `inbound_seq` **inside** the accepting transaction, commit-then-ack), ordered `iter()` | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §2, §5](../spec/envelope.md) | M0 |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
 | **`Fold`** | journal → state, dated obligations, open-effect triage — the **only** place `OutcomeUnknown` is minted and an open OUTBOUND becomes `Abandoned`; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
 | **`Golden`** | the canonical record projection; the causal-core / annotation split | records → deterministic bytes | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0 |
@@ -259,8 +273,8 @@ bless, diff rendering) is driven by `lab` and `main`.
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **`ConnectorSpec`** | the declarative contract of each stdlib Connector — ports, effect class, `behavior`, error set, correlator, attributes (the ten-case template) | consumed by the checker and by `main`'s wiring; **never depends on adapter code** | [stdlib.md §1–3](../spec/stdlib.md) | M0 (Process only) |
-| **`GuestSpec`** | the declared guest languages and their executor versions | consumed by the checker and the distribution gate | [stdlib.md §5](../spec/stdlib.md) | guarded |
+| **`ConnectorSpec`** | the declarative contract of each stdlib Connector — **all ten mandatory cases**: role, direction, ports, effect, `behavior`, attributes, correlator, error set, instances, journal/simulation | consumed by the checker and by `main`'s wiring; **never depends on adapter code** | [stdlib.md §1–3](../spec/stdlib.md) | M0 (Process only) |
+| **`GuestSpec`** | the declared guest languages and the **full guest identity the manifest pins**: frontend, executor version, lowering profile, ABI — plus the six-clause purity contract | consumed by the checker and the distribution gate | [stdlib.md §5](../spec/stdlib.md); [identity.md §1](../spec/identity.md) | guarded |
 
 This module answers "how does the compiler know what `Process` is
 without linking tokio": the contracts are data, the adapters implement
@@ -300,8 +314,8 @@ second parser and no second engine.
 
 | Component | Owns | Spec | M0 |
 |---|---|---|---|
-| **`node`** | the shared vocabulary: `Path` (enters the id recipes), `Kind`, `Port`, `EffectClass`, `Behavior` (deterministic \| probabilistic), `Trigger` (`p:` \| `l:` — a transaction property, **not** an envelope field) | [grammar.md](../spec/grammar.md) vocabulary; [effects-and-sagas.md](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | M0 |
-| **`envelope`** | `Envelope { meta, data }` where `meta.sys` is **exactly the six-field spine** (`id`, `parent_id`, `origin_id`, `role`, `graph_version`, `mime_type` — [envelope.md §1.1](../spec/envelope.md)) and `data` is a **lazy `Payload`**: `(encoding_tag ∈ raw \| avro \| arrow-ipc, bytes)`, materialized into `Value` on first structural access, original bytes preserved ([envelope.md §5](../spec/envelope.md)) | [envelope.md](../spec/envelope.md) | M0 |
+| **`node`** | the shared vocabulary: `Path` (enters the id recipes), `Kind`, `Port`, `Effect` (`None \| Class(EffectClass)` — `none` explicit, the three classes stay three), `Behavior` (deterministic \| probabilistic), `Trigger` (`p:` \| `l:` — a transaction property, **not** an envelope field) | [grammar.md](../spec/grammar.md) vocabulary; [effects-and-sagas.md §2.2](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | M0 |
+| **`envelope`** | `Envelope { meta, data }` where `meta.sys` is the **six-field Tier-1 spine** (`id`, `parent_id`, `origin_id`, `role`, `graph_version`, `mime_type`) plus the Tier-2 birth stamps (`saga_*` / `loop_*`) minted only on envelopes born in an aspect scope ([envelope.md §1.1–1.2](../spec/envelope.md)) and `data` is a two-state `Payload`: `Encoded { tag ∈ raw \| avro \| arrow-ipc, bytes, materialized cache }` — original bytes preserved, materialized on first structural access — **or `Materialized(Value)`** for values born in memory from the graph, encoded only at persistence ([envelope.md §5–5.1](../spec/envelope.md)) | [envelope.md](../spec/envelope.md) | M0 |
 | **`diag`** | stable codes, severity, the registry's **phase vocabulary** (`parse`, `resolve`, `check`, `plan`, `run`, `replay`, `sim`), multi-span, structured fields; a check ships with its code, its negative test, and its registry row in the same change | [diagnostics.md](../spec/diagnostics.md) | M0 |
 | **`main`** | the `check` / `run` / `sim` verbs, wiring (adapters, dispatcher, stdlib contracts), rendering; owns nothing semantic | — | M0 |
 
@@ -315,9 +329,10 @@ main (bin)
    └──▶ run wiring (+ stdlib) ───────┘         ▲                │
                                                │                ▼
         connectors ── implement ───────────────┘            journal
-        guests ────── implement GuestExecutor ▶ vm
-                                                                │
-compiler ──▶ plan (the executable plan) ◀── interprets ──────── vm
+        guests ────── implement GuestExecutor ▶ vm             ▲
+        world::Dispatcher ── drives open OUTBOUNDs, closes ────┘
+                                                                
+compiler ──▶ plan (the execution plan) ◀── interprets ───────── vm
     │    └─▶ stdlib (contract sheets)
     ▼
    cel   (signatures in, trees out — knows nothing else)
@@ -331,7 +346,9 @@ Rules, in force from the first commit:
 2. **`cel`** depends on nothing else in Rastok.
 3. **Adapters** (`connectors`, `guests`, the lab's world
    implementations) implement traits; nothing depends on an adapter
-   except `main`'s wiring.
+   except `main`'s wiring. The `Dispatcher` is the only `world`
+   component that touches `journal` — through the `Journal` trait,
+   never a concrete store.
 4. **`stdlib`** is declarative data over the base vocabulary; the
    checker and `main` read it; it depends on no adapter.
 5. **`lab`** depends on `compiler`, the `world` contracts, and

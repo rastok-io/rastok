@@ -50,6 +50,13 @@ package "crate rastok" as CRATE {
       Compensable
       Irreversible
     }
+    enum Effect <<enum>> {
+      None — explicit, pre-declared for
+        Clock / Calendar / HttpServer
+      Class(EffectClass)
+      the declared value ; the three
+      effect CLASSES stay three
+    }
     enum Behavior <<enum>> {
       Deterministic
       Probabilistic
@@ -73,22 +80,26 @@ package "crate rastok" as CRATE {
       +app / custom namespaces
     }
     class MetaSys <<struct>> {
-      EXACTLY the six-field spine (envelope.md §1.1) :
+      Tier 1 — EXACTLY the six-field spine (§1.1) :
       +id : Id
       +parent_id : Option<Id>
       +origin_id : Id — the lineage root
       +role : Role (default | compensate | …)
       +graph_version : u64
       +mime_type : Option<Text>
+      Tier 2 — birth stamps (§1.2) : saga_* / loop_*
+      ONLY on envelopes born in an aspect scope
     }
     class Id <<struct>> {
       128-bit — derived, zero randomness
     }
-    class Payload <<struct>> {
-      +encoding : raw | avro | arrow-ipc
-      +bytes — the persisted = wire form
-      materialized on first structural
-      access ; original bytes preserved
+    enum Payload <<enum>> {
+      Encoded { tag : raw | avro | arrow-ipc,
+        bytes, materialized cache } —
+        original bytes preserved, lazy
+      Materialized(Value) — born in memory
+        from the graph ; encoded only
+        at persistence
     }
     enum Value <<enum>> {
       the MATERIALIZED view :
@@ -193,8 +204,8 @@ package "crate rastok" as CRATE {
     }
     enum NodeDecl <<enum>> {
       Operator(OperatorDecl)
-      Connector(ConnectorDecl — effect
-        AND behavior mandatory)
+      Connector(ConnectorDecl — effect :
+        node::Effect AND behavior mandatory)
       Graph(GraphDecl)
       illegal states unrepresentable
     }
@@ -246,13 +257,16 @@ package "crate rastok" as CRATE {
 
   package "stdlib" as P_STD {
     class ConnectorSpec <<struct>> {
-      the DECLARATIVE contract sheet :
-      ports, effect, behavior, err set,
-      correlator, attributes (10-case template)
+      the DECLARATIVE sheet — ALL ten cases :
+      role, direction, ports, effect,
+      behavior, attributes, correlator,
+      error set, instances, journal/sim
     }
     class GuestSpec <<struct>> {
-      declared guest languages
-      + executor versions
+      declared guest languages + the FULL
+      identity the manifest pins : frontend,
+      executor version, lowering profile, ABI
+      + the six-clause purity contract
     }
   }
   note bottom of P_STD
@@ -265,13 +279,19 @@ package "crate rastok" as CRATE {
   package "world" as P_WORLD {
     interface Ingress <<trait>> {
       +next() : Option<InboundEvent>
+      births envelopes ; the SEQUENCE is
+      allocated by the journal, atomically
+      with acceptance (commit-then-ack)
       bounded — backpressure outward
     }
     interface Partner <<trait>> {
       +start(&Intent) — after OUTBOUND(open)
       +events() : Vec<Response>
       answers or stays silent — NEVER
-      a timeout, NEVER OutcomeUnknown
+      a timeout, NEVER OutcomeUnknown ;
+      correlation = the connector's own
+      protocol correlator ; dedup on the
+      idempotency key only when cooperative
     }
     interface Clock <<trait>> {
       +next_due(target) : Option<DatedEvent>
@@ -284,13 +304,19 @@ package "crate rastok" as CRATE {
     }
     class Dispatcher <<struct>> {
       the loop journal ↔ partners :
-      drives open OUTBOUNDs, correlates,
-      feeds Response back as vm input
+      drives open OUTBOUNDs, settles via
+      close_outbound → Won | AlreadyClosed ;
+      only Won becomes a vm input
+    }
+    class CallRef <<struct>> {
+      the INTERNAL call identity —
+      never conflated with the optional
+      business / idempotency key
     }
     class InboundEvent <<struct>> {
       +envelope : Envelope
-      +seq : u64
       +authority : IngressAuthority
+      no seq — the journal allocates it
     }
     class IngressAuthority <<struct>> <<opaque>> {
       wraps EXACTLY (connector_path, replica)
@@ -298,13 +324,20 @@ package "crate rastok" as CRATE {
       the multi-host door stays open
     }
     class Intent <<struct>> {
-      +key : stable business key
+      the canonical call fields (identity.md §3) :
+      +call_ref : CallRef
+      +emitting_id : envelope::Id
+      +connector_path : node::Path
+      +request_digest
+      +idempotency_key : Option — names the
+        OPERATION, for retry + cooperative dedup
       +effect : node::EffectClass
       journaled open before execution
     }
     class Response <<struct>> {
-      the partner's answer, correlated
-      by the stable key ; late answer
+      +call_ref : CallRef
+      the partner's answer, correlated by
+      the connector's protocol ; late answer
       after closure = discarded observation
     }
     class DatedEvent <<struct>> {
@@ -385,10 +418,17 @@ package "crate rastok" as CRATE {
       SEMANTIC operations, not bare appends :
       +commit(Transaction) — atomic
       +open_outbound(Intent) — journal-before-effect
-      +close_outbound(...) — exactly once
-      +append_inbound(...) — commit-then-ack
+      +close_outbound(call_ref, response XOR timeout) : Won | AlreadyClosed
+      +append_inbound(authority, envelope) : committed record —
+        allocates inbound_seq INSIDE the accepting
+        transaction ; commit-then-ack
       +iter() : causal order
       logical API — physical layout later
+    }
+    enum CloseVerdict <<enum>> {
+      Won — the single causal closure
+      AlreadyClosed — the loser becomes
+        a discarded observation
     }
     class MemJournal <<struct>> {
       the M0 in-memory implementation
@@ -547,6 +587,7 @@ P_VM ..> P_PLAN : interprets
 P_VM ..> P_WORLD : emits intents,\nconsumes events
 P_VM ..> P_J : appends records
 P_VM ..> P_CEL : eval via Bindings
+P_WORLD ..> P_J : Dispatcher drives open\nOUTBOUNDs, settles closures
 P_LAB ..> P_COMP : same parser\nfor scenarios
 P_LAB ..> P_J : golden compare
 P_CLI ..> P_COMP
