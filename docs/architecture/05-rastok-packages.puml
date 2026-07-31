@@ -11,8 +11,10 @@ note as LEGEND
   «trait» = Rust trait ; realization ( ..|> ) = impl Trait for Type
   «struct» / «enum» as declared ; «mod» = module-level functions
   *-- = owned field ; ..> = uses / borrows ; inheritance does not exist
-  **Naming** : types are unprefixed and read qualified —
-  cel::Tree, app::Hash, world::Intent ; x::X stutter is idiomatic
+  **Naming** : M0 working conventions — types unprefixed, read
+  qualified (cel::Tree, world::Intent) ; x::X stutter is idiomatic ;
+  a non-module qualifier carrying the normative term is kept
+  (plan::SemanticHash, plan::GraphVersion)
   **Status** : «next» = not built in M0, APIs kept ready ;
   «guarded» = reachable syntax refuses explicitly ; all else = M0 subset
   **Omitted for readability** : every module except `cel` may depend on
@@ -48,12 +50,22 @@ package "crate rastok" as CRATE {
       Compensable
       Irreversible
     }
+    enum Behavior <<enum>> {
+      Deterministic
+      Probabilistic
+    }
+    enum Trigger <<enum>> {
+      Port(name) — "p:"
+      Lifecycle(kind) — "l:"
+      a TRANSACTION property —
+      never an envelope field
+    }
   }
 
   package "envelope" as P_ENV {
     class Envelope <<struct>> {
       +meta : Meta
-      +data : Value
+      +data : Payload — lazy
       immutable once emitted
     }
     class Meta <<struct>> {
@@ -61,25 +73,27 @@ package "crate rastok" as CRATE {
       +app / custom namespaces
     }
     class MetaSys <<struct>> {
-      the six-field spine (envelope.md §1.1)
+      EXACTLY the six-field spine (envelope.md §1.1) :
       +id : Id
       +parent_id : Option<Id>
-      +trigger : Trigger
+      +origin_id : Id — the lineage root
+      +role : Role (default | compensate | …)
+      +graph_version : u64
+      +mime_type : Option<Text>
     }
     class Id <<struct>> {
       128-bit — derived, zero randomness
     }
-    enum Value <<enum>> {
-      Scalar
-      Struct
-      Array
-      Map
-      Union
-      Variant — the only dynamic payload
+    class Payload <<struct>> {
+      +encoding : raw | avro | arrow-ipc
+      +bytes — the persisted = wire form
+      materialized on first structural
+      access ; original bytes preserved
     }
-    enum Trigger <<enum>> {
-      Port(name) — "p:"
-      Lifecycle(kind) — "l:"
+    enum Value <<enum>> {
+      the MATERIALIZED view :
+      Scalar ; Struct ; Array ; Map
+      Union ; Variant (the only dynamic payload)
     }
   }
 
@@ -97,8 +111,9 @@ package "crate rastok" as CRATE {
       Warning
     }
     enum Phase <<enum>> {
-      Parse ; Assemble ; Check
-      Lower ; Run ; Sim
+      the registry vocabulary :
+      Parse ; Resolve ; Check
+      Plan ; Run ; Replay ; Sim
     }
     class Span <<struct>> {
       +source : SourceId
@@ -122,15 +137,17 @@ package "crate rastok" as CRATE {
     }
     class Tree <<struct>> {
       canonical typed tree — one form :
-      hash input, App form, eval form
+      hash input, plan form, eval form
     }
     enum Type <<enum>> {
+      the CEL domain (uint is CEL's) :
       Bool ; Int ; Uint ; Double
       Text ; Bytes ; Duration ; Timestamp
       Optional(T) ; ...
     }
     enum Value <<enum>> {
-      mirrors Type
+      mirrors Type — bridged to
+      envelope::Value ONLY via Bindings
     }
     interface Bindings <<trait>> {
       +get(name : &str) : Option<Value>
@@ -152,8 +169,14 @@ package "crate rastok" as CRATE {
 
   package "compiler" as P_COMP {
     class "mod compiler" as COMP_API <<mod>> {
-      +compile(sources) : (app::App, app::Hash, Vec<Diagnostic>)
+      +compile(sources) : Result<Compiled, Diagnostics>
       +parse / assemble / check / lower / canonicalize
+    }
+    class Compiled <<struct>> {
+      +plan : plan::Plan
+      +hash : plan::SemanticHash
+      +warnings : Vec<Diagnostic>
+      a plan with ERRORS is unrepresentable
     }
     class SyntaxTree <<struct>> {
       faithful to the text, sugar intact
@@ -163,15 +186,17 @@ package "crate rastok" as CRATE {
       merged files ; exactly one App
       lab fragments merged
     }
-    class CheckedGraph <<struct>> {
-      desugared • resolved • typed
-      spans in side tables, never inside
+    class Hir <<struct>> {
+      identity.md §1's word : desugared,
+      resolved, typed — the hash input ;
+      the LAB is excluded from the hash
     }
-    class NodeDecl <<struct>> {
-      +path : node::Path
-      +kind : node::Kind
-      +effect : Option<EffectClass>
-      +err_set — mandatory
+    enum NodeDecl <<enum>> {
+      Operator(OperatorDecl)
+      Connector(ConnectorDecl — effect
+        AND behavior mandatory)
+      Graph(GraphDecl)
+      illegal states unrepresentable
     }
     interface GuestFrontend <<trait>> {
       +check(bytes, signature) : Result<GuestProgram, Vec<Diagnostic>>
@@ -179,16 +204,16 @@ package "crate rastok" as CRATE {
     }
   }
 
-  package "app" as P_APP {
-    class App <<struct>> {
-      the executable form — what ships to hosts
+  package "plan" as P_PLAN {
+    class Plan <<struct>> {
+      realizes the whitepaper's ExecutablePlan
       +nodes / edges / partitions : tables
       +handlers : Vec<Handler>
       serializable data — no closures,
-      no host references
+      no host references ; what ships to hosts
     }
     class Handler <<struct>> {
-      +trigger : Trigger
+      +trigger : node::Trigger
       +guard : Option<cel::Tree>
       +body : ordered statements
       text order = emission_index
@@ -204,17 +229,37 @@ package "crate rastok" as CRATE {
       opaque bytes + language
       + executor version
     }
-    class Hash <<struct>> {
-      the semantic identity —
-      blake3 of the canonical form
+    class SemanticHash <<struct>> {
+      blake3(canonical HIR) —
+      identity.md's exact term
     }
-    class Version <<struct>> {
+    class GraphVersion <<struct>> {
       u64 — append-only, never reused
     }
     class Manifest <<struct>> {
-      the ledger : Hash → Versions
+      the ledger : SemanticHash → GraphVersions
+      allocated at boot — a ledger is
+      mutable, the Plan is not
     }
   }
+
+  package "stdlib" as P_STD {
+    class ConnectorSpec <<struct>> {
+      the DECLARATIVE contract sheet :
+      ports, effect, behavior, err set,
+      correlator, attributes (10-case template)
+    }
+    class GuestSpec <<struct>> {
+      declared guest languages
+      + executor versions
+    }
+  }
+  note bottom of P_STD
+    how the checker knows what Process is
+    without linking tokio : contracts are
+    data ; adapters implement them ;
+    M0 ships the Process sheet only
+  end note
 
   package "world" as P_WORLD {
     interface Ingress <<trait>> {
@@ -222,15 +267,24 @@ package "crate rastok" as CRATE {
       bounded — backpressure outward
     }
     interface Partner <<trait>> {
-      +execute(&Intent) : Outcome
-      dedup on the stable business key
+      +start(&Intent) — after OUTBOUND(open)
+      +events() : Vec<Response>
+      answers or stays silent — NEVER
+      a timeout, NEVER OutcomeUnknown
     }
     interface Clock <<trait>> {
-      +advance_to(target) : Vec<DatedEvent>
-      the only source of time
+      +next_due(target) : Option<DatedEvent>
+      ONE event at a time — the vm drains
+      between events, which may arm new
+      ones before the target
     }
     interface Supervisor <<trait>> {
       +events() : LifecycleEvent
+    }
+    class Dispatcher <<struct>> {
+      the loop journal ↔ partners :
+      drives open OUTBOUNDs, correlates,
+      feeds Response back as vm input
     }
     class InboundEvent <<struct>> {
       +envelope : Envelope
@@ -238,22 +292,24 @@ package "crate rastok" as CRATE {
       +authority : IngressAuthority
     }
     class IngressAuthority <<struct>> <<opaque>> {
-      never assumed constant —
-      keeps the multi-host door open
+      wraps EXACTLY (connector_path, replica)
+      — opaque so replica is never inlined ;
+      the multi-host door stays open
     }
     class Intent <<struct>> {
       +key : stable business key
       +effect : node::EffectClass
       journaled open before execution
     }
-    enum Outcome <<enum>> {
-      Response(Envelope)
-      Timeout
-      Unknown — recovery triages it
+    class Response <<struct>> {
+      the partner's answer, correlated
+      by the stable key ; late answer
+      after closure = discarded observation
     }
     class DatedEvent <<struct>> {
       +at : Timestamp
-      +payload
+      +payload — includes per-call
+      timeout budgets (scheduler-owned)
     }
     enum LifecycleEvent <<enum>> {
       Boot ; Crash ; Restart
@@ -270,12 +326,13 @@ package "crate rastok" as CRATE {
     class Vm <<struct>> {
       THE engine — run and sim alike
       no I/O, no clock, no randomness
-      +boot(&app::App, journal)
+      +boot(&plan::Plan, journal)
       +step(event) : transactions + intents
     }
     class Scheduler <<struct>> {
       run-to-completion
-      ONE dated-event queue
+      ONE dated-event queue — owns the
+      per-call timeout budgets
       drain-to-stable
     }
     class Mailboxes <<struct>> {
@@ -324,10 +381,13 @@ package "crate rastok" as CRATE {
 
   package "journal" as P_J {
     interface Journal <<trait>> {
-      +append(Record)
+      SEMANTIC operations, not bare appends :
+      +commit(Transaction) — atomic
+      +open_outbound(Intent) — journal-before-effect
+      +close_outbound(...) — exactly once
+      +append_inbound(...) — commit-then-ack
       +iter() : causal order
-      logical API — the physical layout
-      arrives later behind it
+      logical API — physical layout later
     }
     class MemJournal <<struct>> {
       the M0 in-memory implementation
@@ -336,10 +396,14 @@ package "crate rastok" as CRATE {
       Inbound(InboundRecord)
       Transaction(TransactionRecord)
       Outbound(OutboundRecord)
+      written by the RUNTIME MECHANICS only —
+      adapters and mocks supply events
     }
     class InboundRecord <<struct>> {
+      +authority : IngressAuthority
       +seq : u64
       +envelope : Envelope
+      autonomously reconstructs the root id
     }
     class TransactionRecord <<struct>> {
       +consumed ; +state_delta ; +emissions
@@ -352,7 +416,7 @@ package "crate rastok" as CRATE {
     enum OutboundStatus <<enum>> {
       Open
       Closed(response XOR timeout)
-      Abandoned — minted by recovery
+      Abandoned — minted by Fold only
     }
     class "mod ids" as IDS_API <<mod>> {
       +root_id(authority, seq) : envelope::Id
@@ -361,14 +425,16 @@ package "crate rastok" as CRATE {
     }
     class Golden <<struct>> {
       +project(records) : canonical bytes
-      causal cores only ; +diff : Diff
+      causal cores only ; serves prod
+      replay + conformance, not just the lab
     }
     class Diff <<struct>> {
       first meaningful divergence
     }
     class Fold <<struct>> <<next>> {
       journal → state + dated obligations
-      + open-effect triage
+      + open-effect triage — the ONLY
+      minter of OutcomeUnknown / Abandoned
     }
   }
   note bottom of P_J
@@ -383,15 +449,16 @@ package "crate rastok" as CRATE {
       typed exit (stdlib.md §3.3 subset)
     }
     class "HttpServer, HttpClient, Clock,\nCalendar, Memory, File" as CATALOGUE <<guarded>> {
-      declared contracts only —
-      one file per connector, later
+      contract sheets in `stdlib` —
+      one adapter file per connector, later
     }
   }
 
   package "lab" as P_LAB {
     class Runner <<struct>> {
       the DRIVER, not an engine :
-      inject, advance, expect, golden
+      inject, advance, expect,
+      golden compare + explicit bless
     }
     class Scenario <<struct>>
     class Expectation <<struct>> {
@@ -407,10 +474,12 @@ package "crate rastok" as CRATE {
       the pre-written world-half
     }
     class Mock <<struct>> {
-      a mocked call still writes OUTBOUND
+      answers only — the vm still
+      writes the OUTBOUND record
     }
     class VirtualClock <<struct>> {
-      advance = discrete sweep
+      advance = discrete sweep,
+      one due event at a time
     }
     class Faults <<struct>> <<next>> {
       crash after ...
@@ -419,7 +488,8 @@ package "crate rastok" as CRATE {
 
   package "cli (main.rs, bin target)" as P_CLI {
     class "mod main" as MAIN_API <<mod>> {
-      parse args ; render diagnostics + diffs
+      parse args ; wire adapters, dispatcher,
+      stdlib sheets ; render diagnostics + diffs
       owns nothing semantic
     }
     enum Command <<enum>> {
@@ -433,14 +503,15 @@ package "crate rastok" as CRATE {
 ' ================= type-level relations =================
 
 Envelope *-- Meta
-Envelope *-- Value
+Envelope *-- Payload
 Meta *-- MetaSys
 
-CheckedGraph *-- NodeDecl
-App *-- Handler
-App *-- GuestProgram
+Hir *-- NodeDecl
+Plan *-- Handler
+Plan *-- GuestProgram
 Handler *-- Tree : guard + expressions
-Manifest *-- Version
+Manifest *-- GraphVersion
+Compiled *-- Plan
 
 Vm *-- Scheduler
 Vm *-- Mailboxes
@@ -453,6 +524,7 @@ Record *-- TransactionRecord
 Record *-- OutboundRecord
 OutboundRecord *-- Intent
 InboundEvent *-- IngressAuthority
+InboundRecord *-- IngressAuthority
 
 MemJournal ..|> Journal
 Process ..|> Partner
@@ -468,8 +540,9 @@ Sql ..|> GuestFrontend
 ' ================= module-level dependencies =================
 
 P_COMP ..> P_CEL : compile —\nsignature in, tree out
-P_COMP ..> P_APP : produces the App
-P_VM ..> P_APP : interprets
+P_COMP ..> P_PLAN : produces the plan
+P_COMP ..> P_STD : checks declarations\nagainst contract sheets
+P_VM ..> P_PLAN : interprets
 P_VM ..> P_WORLD : emits intents,\nconsumes events
 P_VM ..> P_J : appends records
 P_VM ..> P_CEL : eval via Bindings
@@ -478,6 +551,7 @@ P_LAB ..> P_J : golden compare
 P_CLI ..> P_COMP
 P_CLI ..> P_VM
 P_CLI ..> P_LAB
+P_CLI ..> P_STD : wiring
 
 ' ================= artifact wiring =================
 

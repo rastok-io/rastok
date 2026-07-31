@@ -39,14 +39,14 @@ defined by the form it produces or consumes.
 syntax tree (+ source spans)
   │ assemble, desugar, resolve, type
   ▼
-checked graph ────────────────▶ canonical bytes ─▶ app::Hash
+HIR ──────────────────────────▶ canonical bytes ─▶ plan::SemanticHash
   │ lower                                          (the identity)
   ▼
-executable App (tables + expression trees — data, not code)
+executable plan (tables + expression trees — data, not code)
   │ interpret
   ▼
-envelopes, effect intents, typed outcomes
-  │ record
+envelopes, effect intents, response events
+  │ record (runtime mechanics only)
   ▼
 typed journal records (INBOUND / TRANSACTION / OUTBOUND)
   │ project
@@ -57,12 +57,12 @@ canonical record projection ─▶ golden compare
 | Form | Produced by | Consumed by | Load-bearing invariant |
 |---|---|---|---|
 | syntax tree + spans | `compiler` (parse) | check passes, `diag` | faithful to the text, sugar intact; may contain error nodes; an error node is never lowered |
-| checked graph | `compiler` (check) | canonicalize, lower | desugared (one way to say each thing), names resolved, fully typed; spans live in side tables, never in the canonical form |
-| canonical bytes, `app::Hash` | `compiler` (canonicalize) | `app::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
-| `app::App` | `compiler` (lower) | `vm`, `lab` | immutable, serializable data — tables plus `cel::Tree`s; no closures, no host references; names resolved to `Slot`s, symbols kept in a side table |
-| `world::Intent` (open OUTBOUND) | `vm` | `world::Partner` impls | journaled before any handler runs ([delivery-semantics.md §4](../spec/delivery-semantics.md)) |
-| `world::Outcome` | `connectors` or `lab::Mock` | `vm`, `journal` | one of the sealed closure states; a late reply is an observation, never a causal fact |
-| `journal::Record` | `vm` + world impls | recovery, `journal::Golden` | causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
+| HIR | `compiler` (check) | canonicalize, lower | desugared, name-resolved, typed — the hash input ([identity.md §1](../spec/identity.md)); spans live in side tables; **the entire lab is excluded from the hash** |
+| canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
+| `plan::Plan` | `compiler` (lower) | `vm`, `lab` | immutable, serializable data — tables plus `cel::Tree`s; no closures, no host references; names resolved to `Slot`s |
+| `world::Intent` (open OUTBOUND) | `vm` | dispatcher → `world::Partner` impls | journaled before any handler runs ([delivery-semantics.md §4](../spec/delivery-semantics.md)) |
+| `world::Response` | `connectors` or `lab::Mock` | `vm` (as an input event) | a partner only ever answers; it never decides a timeout and never mints `OutcomeUnknown` — closure is the runtime's verdict |
+| `journal::Record` | **runtime mechanics only** | recovery, `journal::Golden` | adapters and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `diag::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
 | golden projection | `journal::Golden` | evidence compare | deterministic bytes: same scope, same bytes ([simulation-semantics.md §6](../spec/simulation-semantics.md)) |
 
@@ -70,30 +70,35 @@ canonical record projection ─▶ golden compare
 
 ```text
 crates/rastok/src/
-├── node.rs         # structural vocabulary : Path, Kind, Port, EffectClass
-├── envelope.rs     # Envelope, Meta, MetaSys, Id, Value, Trigger
+├── node.rs         # vocabulary : Path, Kind, Port, EffectClass, Behavior, Trigger
+├── envelope.rs     # Envelope, Meta, MetaSys, Id, Payload (lazy), Value
 ├── diag.rs         # Diagnostic, Severity, Phase, Span, Sink
 ├── cel.rs          # the isolated expression chain — depends on nothing here
 ├── compiler.rs     # parse → assemble → check → lower → canonicalize
-├── app.rs          # App, Handler, Slot, GuestProgram, Hash, Version, Manifest
-├── world.rs        # Ingress, Partner, Clock, Supervisor + Intent, Outcome
+├── plan.rs         # Plan, Handler, Slot, GuestProgram, SemanticHash, Manifest
+├── stdlib.rs       # declarative Connector/guest contracts (the checker's view)
+├── world.rs        # Ingress, Partner, Clock, Supervisor + Dispatcher, Intent
 ├── vm.rs           # THE engine — run and sim ; GuestExecutor ; BootEnv (next)
 ├── guests.rs       # jq / sql engines (guarded) — the pure twin of connectors
-├── journal.rs      # Journal trait, Record, ids, Golden, fold (next)
+├── journal.rs      # Journal trait, records, ids, Golden, Fold (next)
 ├── connectors.rs   # one file per connector ; Process first
 ├── lab.rs          # Runner + Fixture / Mock / VirtualClock / Faults
 └── main.rs         # thin bin : check | run | sim
 ```
 
-Naming rules, fixed for the whole crate:
+Naming rules — **M0 working conventions**, revisited at crate
+promotion (the final layout stays open per `ARCHITECTURE.md`):
 
-1. **Spec-first names.** A module carries the name of the specification
-   concept that owns its invariant when one exists (`envelope`,
-   `journal`, `lab`, `node`, `app`); purely internal machinery takes
-   plain engineering names (`compiler`, `vm`, `cel`).
-2. **Unprefixed types, qualified paths.** `cel::Tree`, `app::Hash`,
-   `world::Intent` — never `CelTree`. The `x::X` stutter is idiomatic
-   and assumed: `app::App`, `vm::Vm`, `journal::Journal`.
+1. **Spec-first names.** A module carries the name of the concept that
+   owns its invariant in the normative corpus (`envelope`, `journal`,
+   `lab`, `node`, `stdlib`) or in the whitepaper (`plan` — the
+   executable plan); purely internal machinery takes plain engineering
+   names (`compiler`, `vm`, `cel`).
+2. **Unprefixed types, qualified paths.** `cel::Tree`, `world::Intent`
+   — never `CelTree`. The `x::X` stutter is idiomatic and assumed:
+   `plan::Plan`, `vm::Vm`, `journal::Journal`. A qualifier that is not
+   the module name is kept when it carries the normative term:
+   `plan::SemanticHash`, `plan::GraphVersion`.
 3. **Blessed abbreviations only**, used consistently everywhere:
    `diag`, `vm`. Nothing ad hoc.
 4. **Flat, depth ≤ 2.** A directory exists for exactly two reasons — a
@@ -116,18 +121,37 @@ data out, the governing spec, and M0 status.
 | **Parser** | grammar surface, spans, error recovery | source bytes → syntax tree + diagnostics | [grammar.md](../spec/grammar.md) | M0 subset |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | envelope and data types, mandatory err sets, variant narrowing, aspect and effect admission | core-form graph → `CheckedGraph` + diagnostics | [grammar.md](../spec/grammar.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M0 subset |
-| **Canonicalizer** | the canonical byte form of the checked graph; the semantic hash | `CheckedGraph` → canonical bytes + `app::Hash` | [identity.md §1](../spec/identity.md) | M0 |
-| **Lowering** | node/edge/partition/handler tables, expression trees, `Slot` resolution | `CheckedGraph` → `app::App` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
-| **Guest frontends** | `GuestFrontend` trait — check an opaque guest body against its signature; the host parser never reads it | guest bytes → `app::GuestProgram` | [stdlib.md §5](../spec/stdlib.md) | guarded |
+| **Type checker** | envelope and data types, mandatory err sets, variant narrowing, aspect admission; node declarations as an ADT so illegal states are unrepresentable | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M0 subset |
+| **Canonicalizer** | the canonical byte form of the HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0 |
+| **Lowering** | node/edge/partition/handler tables, expression trees, `Slot` resolution | `Hir` → `plan::Plan` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
+| **Guest frontends** | `GuestFrontend` trait — check an opaque guest body against its signature; the host parser never reads it | guest bytes → `plan::GuestProgram` | [stdlib.md §5](../spec/stdlib.md) | guarded |
+
+The facade returns `Result<Compiled, Diagnostics>` with
+`Compiled { plan, hash, warnings }`: **a plan with errors is
+unrepresentable** — warnings ride the success value, errors preclude
+it. Node declarations are an algebraic type,
+
+```text
+NodeDecl = Operator(OperatorDecl)
+         | Connector(ConnectorDecl { effect, behavior, … })   — both mandatory
+         | Graph(GraphDecl)
+```
+
+so "an Operator with an effect" or "a Connector without one" cannot be
+constructed ([effects-and-sagas.md §2.1](../spec/effects-and-sagas.md),
+[stdlib.md §2](../spec/stdlib.md)). The checker reads Connector
+contracts from `stdlib` (§3.7), never from adapter code. `Hir` is the
+spec's own name for the checked form ([identity.md §1](../spec/identity.md):
+"blake3(canonical HIR)"), and the hash covers the production graph
+only — the lab never enters it.
 
 Two compiler rules with consequences elsewhere:
 
 1. **The CEL chain is isolable** (§3.2): the checker hands it a
    *signature*, never an envelope or node.
 2. **Desugaring is provable.** Because identity hashes the desugared
-   checked graph, "sugared and long forms hash identically" is a free,
-   mechanical test for every sugar in the table.
+   HIR, "sugared and long forms hash identically" is a free, mechanical
+   test for every sugar in the table.
 
 ### 3.2 The CEL chain (`cel`)
 
@@ -139,19 +163,33 @@ Two compiler rules with consequences elsewhere:
 `cel::Diagnostic` (the compiler adapts it into `diag::Diagnostic`).
 The *signature* — the typed names visible at one expression position —
 is the entire interface, which keeps the chain independently
-conformance-testable against the upstream CEL specification. It is the
-first candidate for promotion to its own crate.
+conformance-testable against the upstream CEL specification. Its value
+domain is CEL's (`cel::Type` includes `uint` because CEL has one);
+`envelope::Value` is Rastok's data domain — two deliberate domains,
+bridged in exactly one place: the `Bindings` adapter the runtime
+implements. `cel` is the first candidate for promotion to its own
+crate.
 
-### 3.3 The executable App (`app`)
+### 3.3 The executable plan (`plan`)
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **`app::App`** | the executable form — the tables and expression trees the VM interprets, and what ships to other hosts | produced by `compiler`, consumed by `vm` and `lab` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
-| **`app::Manifest`** | the append-only ledger `Hash → Version`; a version is never renumbered, never reused | `app::Hash` → `app::Version` | [identity.md §2](../spec/identity.md) | M0 (minimal) |
+| **`plan::Plan`** | the executable form — the tables and expression trees the VM interprets, and what ships to other hosts | produced by `compiler`, consumed by `vm` and `lab` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
+| **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersion`; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
-The App ships unresolved: `env()` and `secret()` stay expression nodes
-in the tables, and boot binds them in memory — the same artifact runs
-on a laptop and in production.
+`plan::Plan` realizes the whitepaper's **`ExecutablePlan`** — the
+type keeps the short name, the path says the rest. The database
+intuition is intended and accurate up to two differences: like a query
+plan, it is an immutable operator graph — data an engine interprets,
+inspects, and ships in fragments to workers; unlike one, it is the
+output of a *faithful* lowering (no cost-based rewriting — the written
+topology is the executed topology, sealed by the hash) and it is
+long-lived: stateful, journaled, versioned, upgraded — closer to a
+streaming engine's job graph than to a query's throwaway plan.
+
+The plan ships unresolved: `env()` and `secret()` stay expression
+nodes in the tables, and boot binds them in memory — the same artifact
+runs on a laptop and in production.
 
 ### 3.4 The VM (`vm`)
 
@@ -161,13 +199,13 @@ The same engine runs `rastok run` and `rastok sim`.
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **Scheduler** | run-to-completion firing; the single dated-event queue; virtual-time `advance`; drain-to-stable | App + ordered events → transaction firings | [execution-model.md §1, §5, §8](../spec/execution-model.md) | M0 (single worker) |
+| **Scheduler** | run-to-completion firing; the single dated-event queue — including the **per-call timeout budgets** (a timeout is the scheduler's dated event, never a partner's answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
 | **Mailboxes** | per-key FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered per-key delivery | [execution-model.md §2–3](../spec/execution-model.md) | M0 |
-| **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction record + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
+| **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
 | **Error routing** | typed err values; lexical bubbling to `app.err`; nothing silent | err emissions → routed envelopes | [delivery-semantics.md §5](../spec/delivery-semantics.md) | M0 |
-| **`GuestExecutor`** | the trait guest engines implement: run(program, value, budget) — pure, deterministic, budgeted, inside the node transaction | `app::GuestProgram` → value or typed error | [stdlib.md §5](../spec/stdlib.md) | guarded |
-| **`BootEnv`** | `env()` / `secret()` resolution and constant positions, evaluated at boot; a missing or ill-typed binding is a typed refusal, never a default; `Secret<T>` is redacted by type | App + deployment profile → bound constants | [grammar.md](../spec/grammar.md) initializer positions | next |
+| **`GuestExecutor`** | the trait guest engines implement: run(program, value, budget) — pure, deterministic, budgeted, inside the node transaction | `plan::GuestProgram` → value or typed error | [stdlib.md §5](../spec/stdlib.md) | guarded |
+| **`BootEnv`** | `env()` / `secret()` resolution and constant positions, evaluated at boot; a missing or ill-typed binding is a typed refusal, never a default; `Secret<T>` is redacted by type | plan + deployment profile → bound constants | [grammar.md](../spec/grammar.md) initializer positions | next |
 
 ### 3.5 The world seam (`world`) — the four host interfaces
 
@@ -179,20 +217,56 @@ the world plays itself; in sim, the lab plays the world.
 | Interface | Owns | Real side | Lab side | Spec | M0 |
 |---|---|---|---|---|---|
 | **`Ingress`** | birth of inbound envelopes and the inbound sequence (`IngressAuthority` stays opaque); bounded, backpressure translated outward | listeners | `lab::Fixture` | [envelope.md §2](../spec/envelope.md); [delivery-semantics.md §3](../spec/delivery-semantics.md) | M0 (minimal) |
-| **`Partner`** | executing open `Intent`s; typed `Outcome`s; retry deduplication on the stable business key | `connectors/*` | `lab::Mock` | [delivery-semantics.md §4](../spec/delivery-semantics.md) | M0 (Process only) |
-| **`Clock`** | the only source of time, delivered as dated events | wall clock | `lab::VirtualClock` | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (virtual required) |
+| **`Partner`** | launching journaled `Intent`s and answering with `Response` events, deduplicated on the stable business key | `connectors/*` | `lab::Mock` | [delivery-semantics.md §4](../spec/delivery-semantics.md) | M0 (Process only) |
+| **`Clock`** | the only source of time, delivered **one dated event at a time** — the VM drains to stable between events, which may arm new ones before the target, so a sweep can never be precomputed | wall clock | `lab::VirtualClock` | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (virtual required) |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | `lab::Faults` | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | M0 (boot only); faults `next` |
+
+The **`Dispatcher`** (owned here) is the loop between the journal and
+the partners: it takes OUTBOUND records the VM opened, drives the
+selected `Partner` implementation, correlates answers, and feeds
+`Response` events back to the VM as ordinary inputs.
+
+Ownership rules that the types must make unrepresentable:
+
+- a partner **answers or stays silent** — it never returns a timeout
+  (the scheduler's dated event decides that) and never returns
+  `OutcomeUnknown` (only recovery mints it, §3.6);
+- adapters and mocks produce **events**; the runtime mechanics alone
+  write records — a mocked call still gets its OUTBOUND record because
+  the VM writes it before any partner, real or scripted, is invoked;
+- a late answer after closure is recorded as a **discarded
+  observation**, never a causal fact.
 
 ### 3.6 The journal (`journal`)
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | append / ordered read | [delivery-semantics.md §6](../spec/delivery-semantics.md); [envelope.md §5](../spec/envelope.md) | M0 |
+| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `commit(Transaction)` (atomic), `open_outbound(Intent)` (journal-before-effect), `close_outbound(…)` (exactly once), `append_inbound(…)` (commit-then-ack), ordered `iter()` | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §5](../spec/envelope.md) | M0 |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
-| **`Fold`** | journal → state, dated obligations, open-effect triage; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
-| **`Golden`** | the canonical record form; the causal-core / annotation split; compare with explicit bless | records → deterministic bytes; two runs → first meaningful divergence | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0 |
+| **`Fold`** | journal → state, dated obligations, open-effect triage — the **only** place `OutcomeUnknown` is minted and an open OUTBOUND becomes `Abandoned`; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
+| **`Golden`** | the canonical record projection; the causal-core / annotation split | records → deterministic bytes | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0 |
 
-### 3.7 Connectors and guests (`connectors`, `guests`)
+`InboundRecord` carries the full root recipe — the opaque
+`IngressAuthority` (wrapping exactly the normative `(connector_path,
+replica)` pair) plus the sequence — so a record autonomously
+reconstructs its root id ([identity.md §3](../spec/identity.md)). The
+projection lives here because it also serves production replay and
+cross-runtime conformance; the golden *workflow* (compare, explicit
+bless, diff rendering) is driven by `lab` and `main`.
+
+### 3.7 The stdlib contracts (`stdlib`)
+
+| Component | Owns | Interface | Spec | M0 |
+|---|---|---|---|---|
+| **`ConnectorSpec`** | the declarative contract of each stdlib Connector — ports, effect class, `behavior`, error set, correlator, attributes (the ten-case template) | consumed by the checker and by `main`'s wiring; **never depends on adapter code** | [stdlib.md §1–3](../spec/stdlib.md) | M0 (Process only) |
+| **`GuestSpec`** | the declared guest languages and their executor versions | consumed by the checker and the distribution gate | [stdlib.md §5](../spec/stdlib.md) | guarded |
+
+This module answers "how does the compiler know what `Process` is
+without linking tokio": the contracts are data, the adapters implement
+them, and the checker validates declarations against the spec sheet
+alone.
+
+### 3.8 Connectors and guests (`connectors`, `guests`)
 
 The effectful and the pure halves of extension, on mirrored seams: a
 `connectors/*` adapter implements `world::Partner`; a `guests/*` engine
@@ -203,31 +277,32 @@ format.
 | Component | Owns | Spec | M0 |
 |---|---|---|---|
 | **`connectors::Process`** | the first real partner: spawn, observe, typed exit | [stdlib.md §3.3](../spec/stdlib.md) | M0 subset |
-| **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory) | declared contracts only as far as the checker needs them | [stdlib.md §3](../spec/stdlib.md) | guarded |
+| **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory) | declared contracts only (see §3.7) | [stdlib.md §3](../spec/stdlib.md) | guarded |
 | **`guests::Jq`, `guests::Sql`** | pure guest engines under the six-clause contract | [stdlib.md §5](../spec/stdlib.md) | guarded |
 
-### 3.8 The lab (`lab`)
+### 3.9 The lab (`lab`)
 
 An adapter set plus a driver — never a second engine.
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **`Runner`** | driving the VM through a scenario: inject, advance, expect, golden; observation windows; the three expectation quantifiers | scenario → run + verdicts | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0 |
-| **World implementations** | `Fixture` (Ingress), `Mock` (Partner — a mocked call still writes OUTBOUND), `VirtualClock` (Clock), `Faults` (Supervisor, `next`) | scripted world behind the same four traits | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0 |
-| **Coverage** | the statically enumerable failure-space checklist | App + scenarios → coverage report | [simulation-semantics.md §7](../spec/simulation-semantics.md) | later |
+| **`Runner`** | driving the VM through a scenario: inject, advance, expect, golden compare and explicit bless; observation windows; the three expectation quantifiers | scenario → run + verdicts | [simulation-semantics.md §2, §5–6](../spec/simulation-semantics.md) | M0 |
+| **World implementations** | `Fixture` (Ingress), `Mock` (Partner — answers only; the VM still writes the OUTBOUND), `VirtualClock` (Clock), `Faults` (Supervisor, `next`) | scripted world behind the same four traits | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0 |
+| **Coverage** | the statically enumerable failure-space checklist | plan + scenarios → coverage report | [simulation-semantics.md §7](../spec/simulation-semantics.md) | later |
 | **Unsupported surfaces** | `integration`, `theorem`, `experiment`: parse, then refuse explicitly | reachable syntax → `unsupported` diagnostic | [simulation-semantics.md §10–11](../spec/simulation-semantics.md) | guarded |
 
 Scenarios are parsed by the same `compiler` front end as graphs — the
 simulation grammar is the graph grammar mirrored — so the lab owns no
 second parser and no second engine.
 
-### 3.9 Cross-cutting (`node`, `diag`, `main`)
+### 3.10 Cross-cutting (`node`, `envelope`, `diag`, `main`)
 
 | Component | Owns | Spec | M0 |
 |---|---|---|---|
-| **`node`** | the structural vocabulary every layer shares: `Path` (enters the id recipes), `Kind`, `Port`, `EffectClass` | [grammar.md](../spec/grammar.md) vocabulary; [effects-and-sagas.md](../spec/effects-and-sagas.md) | M0 |
-| **`diag`** | stable codes, severity, phase, multi-span, structured fields; a check ships with its code, its negative test, and its registry row in the same change | [diagnostics.md](../spec/diagnostics.md) | M0 |
-| **`main`** | the `check` / `run` / `sim` verbs, golden bless, rendering; owns nothing semantic | — | M0 |
+| **`node`** | the shared vocabulary: `Path` (enters the id recipes), `Kind`, `Port`, `EffectClass`, `Behavior` (deterministic \| probabilistic), `Trigger` (`p:` \| `l:` — a transaction property, **not** an envelope field) | [grammar.md](../spec/grammar.md) vocabulary; [effects-and-sagas.md](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | M0 |
+| **`envelope`** | `Envelope { meta, data }` where `meta.sys` is **exactly the six-field spine** (`id`, `parent_id`, `origin_id`, `role`, `graph_version`, `mime_type` — [envelope.md §1.1](../spec/envelope.md)) and `data` is a **lazy `Payload`**: `(encoding_tag ∈ raw \| avro \| arrow-ipc, bytes)`, materialized into `Value` on first structural access, original bytes preserved ([envelope.md §5](../spec/envelope.md)) | [envelope.md](../spec/envelope.md) | M0 |
+| **`diag`** | stable codes, severity, the registry's **phase vocabulary** (`parse`, `resolve`, `check`, `plan`, `run`, `replay`, `sim`), multi-span, structured fields; a check ships with its code, its negative test, and its registry row in the same change | [diagnostics.md](../spec/diagnostics.md) | M0 |
+| **`main`** | the `check` / `run` / `sim` verbs, wiring (adapters, dispatcher, stdlib contracts), rendering; owns nothing semantic | — | M0 |
 
 ## 4. Dependency direction
 
@@ -236,31 +311,33 @@ main (bin)
    │
    ├──▶ lab (Runner + world impls) ──┐
    │                                 ├──▶ world contracts ──▶ vm
-   └──▶ run wiring ──────────────────┘         ▲                │
+   └──▶ run wiring (+ stdlib) ───────┘         ▲                │
                                                │                ▼
         connectors ── implement ───────────────┘            journal
         guests ────── implement GuestExecutor ▶ vm
                                                                 │
-compiler ──▶ app (the executable App) ◀── interprets ────────── vm
-    │
+compiler ──▶ plan (the executable plan) ◀── interprets ──────── vm
+    │    └─▶ stdlib (contract sheets)
     ▼
    cel   (signatures in, trees out — knows nothing else)
 ```
 
 Rules, in force from the first commit:
 
-1. **`vm`** depends only on `app`, the `node`/`envelope` value types,
+1. **`vm`** depends only on `plan`, the `node`/`envelope` value types,
    the `world` contracts it emits into, and the `journal` trait — never
    on an adapter, the lab, or the compiler.
 2. **`cel`** depends on nothing else in Rastok.
 3. **Adapters** (`connectors`, `guests`, the lab's world
    implementations) implement traits; nothing depends on an adapter
    except `main`'s wiring.
-4. **`lab`** depends on `compiler`, the `world` contracts, and
+4. **`stdlib`** is declarative data over the base vocabulary; the
+   checker and `main` read it; it depends on no adapter.
+5. **`lab`** depends on `compiler`, the `world` contracts, and
    `journal`. It never patches or introspects `vm` internals.
-5. **`node`, `envelope`, `diag`** are the base layer: depended on
+6. **`node`, `envelope`, `diag`** are the base layer: depended on
    everywhere, depending on nothing (except `envelope` on `node`).
-6. **`journal::Golden`** reads the journal, not the VM.
+7. **`journal::Golden`** reads the journal, not the VM.
 
 Within one crate these rules are held by review, not by Cargo — module
 cycles are legal in Rust. Promotion to crates (per the crate policy)
@@ -271,19 +348,19 @@ is what will eventually make them mechanical.
 M0 builds none of the following capabilities, but its APIs must not
 foreclose them. These are obligations on M0 code, not features.
 
-- **Logical journal, physical later.** `journal::Journal` exposes typed
-  records and their order. Segment files, snapshots-on-disk, and
-  retention arrive later behind the same trait
+- **Logical journal, physical later.** `journal::Journal` exposes
+  semantic operations over typed records. Segment files,
+  snapshots-on-disk, and retention arrive later behind the same trait
   (`ARCHITECTURE.md`, boundary rule 5).
-- **Opaque origin authorities.** `world::IngressAuthority` — and any
-  future edge cursor — are opaque types from the start. M0 code never
-  assumes the replica component of an id recipe is a constant it may
-  inline ([identity.md §3](../spec/identity.md), the INBOUND key
-  table). This keeps the multi-host door open without building
-  anything behind it.
-- **One canonical encoder.** Every canonical form — checked graph,
-  App, record projection — uses the same deterministic encoding
-  discipline with per-form, extend-only key tables
+- **Opaque origin authorities.** `world::IngressAuthority` wraps
+  exactly the normative `(connector_path, replica)` pair
+  ([identity.md §3](../spec/identity.md)) but stays opaque: M0 code
+  never assumes the replica component is a constant it may inline.
+  This keeps the multi-host door open without building anything behind
+  it.
+- **One canonical encoder.** Every canonical form — HIR, plan, record
+  projection — uses the same deterministic encoding discipline with
+  per-form, extend-only key tables
   ([identity.md §3](../spec/identity.md)). New features add keys; they
   never renumber.
 - **Core versus annotation, everywhere.** Every record keeps the split
@@ -301,12 +378,12 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Slice stage | Exercised |
 |---|---|
 | Parse | `compiler` (parse), `diag` |
-| Check | `compiler` (assemble, desugar, check), `cel` (compile) |
-| Plan | `compiler` (canonicalize, lower), `app::Manifest` |
+| Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `cel` (compile) |
+| Plan | `compiler` (canonicalize, lower), `plan::Manifest` |
 | Step | `vm` (Scheduler, Mailboxes, TransactionExecutor, EmissionBuffer, error routing) |
-| Handle | `world::Partner`; `connectors::Process` (App) or `lab::Mock` (Lab) |
-| Record | `journal` (records, id derivation) |
-| Compare | `journal::Golden`, `main` |
+| Handle | `world::Dispatcher` + `world::Partner`; `connectors::Process` (App) or `lab::Mock` (Lab) |
+| Record | `journal` (semantic operations, id derivation) |
+| Compare | `journal::Golden` projection, `lab`/`main` workflow |
 
 Deliberately without M0 code: `journal::Fold` and `lab::Faults`
 (`next` — the record API already carries their inputs), `vm::BootEnv`
