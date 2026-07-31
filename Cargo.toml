@@ -10,6 +10,11 @@ authors = ["Yoann Pantic"]
 license = "Apache-2.0"
 publish = false
 
+[workspace.dependencies]
+# Fixed by the identity contract (docs/spec/envelope.md §2.0): changing the
+# hash would change every derived id and break replay.
+blake3 = "1"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"

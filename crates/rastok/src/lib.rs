@@ -4,4 +4,5 @@
 //! The build sequence is documented in `docs/architecture/build-order.md`.
 
 pub mod diagnostics;
+pub mod envelope;
 pub mod node;
