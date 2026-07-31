@@ -166,6 +166,9 @@ specification, implementation, and conformance changes can be atomic.
 - [Module and type blueprint](docs/architecture/05-rastok-packages.svg)
   — Rust modules, key types and traits, and build artifacts
   (indicative, not a public API).
+- [Module overview](docs/architecture/06-rastok-modules-overview.svg)
+  — the bird's-eye companion: every module and type with a one-line
+  description, module-level dependencies only.
 
 The adjacent `.puml` files are the editable diagram sources. Rendering
 instructions live in [`tools/diagrams/`](tools/diagrams/README.md).

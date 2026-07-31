@@ -10,7 +10,9 @@ builds. It adds no language or runtime semantics; on any conflict,
 [`docs/spec/`](../spec/README.md) wins. The
 [C4 component view](03-rastok-components.svg) remains the coarse visual;
 the [module and type blueprint](05-rastok-packages.svg) draws the full
-type-level projection of this inventory.
+type-level projection of this inventory, and the
+[module overview](06-rastok-modules-overview.svg) is its bird's-eye
+companion.
 
 ## How to read this
 

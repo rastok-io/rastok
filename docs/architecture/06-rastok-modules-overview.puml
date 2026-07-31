@@ -1,0 +1,262 @@
+@startuml 06-rastok-modules-overview
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+title Rastok M0 — bird's-eye module overview (companion to 05, no members)
+
+note as LEGEND
+  One line per type ; no fields, no methods, no type-level arrows.
+  Arrows are module-level **uses** only.
+  Base modules `node`, `envelope`, `diag` are used by every module
+  except `cel` — those arrows are omitted.
+  «next» = APIs kept ready, not built in M0 ;
+  «guarded» = reachable syntax refuses explicitly.
+end note
+
+package "node" as P_NODE {
+  class Path <<struct>>
+  Path : node address — enters the id recipes
+  enum Kind <<enum>>
+  Kind : Operator | Connector | Graph
+  class Port <<struct>>
+  Port : in / out / err and inferred ports
+  enum Effect <<enum>>
+  Effect : declared effect — none is explicit
+  enum EffectClass <<enum>>
+  EffectClass : idempotent | compensable | irreversible
+  enum Behavior <<enum>>
+  Behavior : deterministic | probabilistic
+  enum Trigger <<enum>>
+  Trigger : what fired a transaction — p: or l:
+}
+
+package "envelope" as P_ENV {
+  class Envelope <<struct>>
+  Envelope : the immutable message
+  class Meta <<struct>>
+  Meta : system + app namespaces
+  class MetaSys <<struct>>
+  MetaSys : runtime-owned spine + birth stamps
+  class Id <<struct>>
+  Id : derived 128-bit identity — zero randomness
+  enum Payload <<enum>>
+  Payload : lazy encoded bytes, or a value born in memory
+  enum "Value" as ENV_Value <<enum>>
+  ENV_Value : the materialized data view
+}
+
+package "diag" as P_DIAG {
+  class "Diagnostic" as DIAG_Diagnostic <<struct>>
+  DIAG_Diagnostic : stable-coded user-facing diagnostic
+  enum Severity <<enum>>
+  Severity : error | warning
+  enum Phase <<enum>>
+  Phase : where it was born — parse … sim
+  class Span <<struct>>
+  Span : a source location
+  class Sink <<struct>>
+  Sink : accumulates diagnostics — never prints
+}
+
+package "cel" as P_CEL {
+  class "mod cel" as CEL_API <<mod>>
+  CEL_API : compile, eval, const-eval
+  class Signature <<struct>>
+  Signature : the names visible at one position
+  class Tree <<struct>>
+  Tree : the canonical typed expression
+  enum "Type" as CEL_Type <<enum>>
+  CEL_Type : the CEL type domain
+  enum "Value" as CEL_Value <<enum>>
+  CEL_Value : a CEL runtime value
+  interface Bindings <<trait>>
+  Bindings : name lookup the runtime adapts onto
+  class "Diagnostic" as CEL_Diagnostic <<struct>>
+  CEL_Diagnostic : cel's own — adapted by the compiler
+  class "Error" as CEL_Error <<struct>>
+  CEL_Error : an evaluation value error
+}
+
+package "compiler" as P_COMP {
+  class "mod compiler" as COMP_API <<mod>>
+  COMP_API : the source → plan pipeline
+  class Compiled <<struct>>
+  Compiled : plan + hash + warnings — never errors
+  class SyntaxTree <<struct>>
+  SyntaxTree : the faithful parse, sugar intact
+  class Unit <<struct>>
+  Unit : the assembled multi-file unit
+  class Hir <<struct>>
+  Hir : desugared, resolved, typed — the hash input
+  enum NodeDecl <<enum>>
+  NodeDecl : per-kind declaration — illegal states impossible
+  interface GuestFrontend <<trait>>
+  GuestFrontend : checks an opaque guest body
+}
+
+package "plan" as P_PLAN {
+  class ExecutionPlan <<struct>>
+  ExecutionPlan : the compiled operator graph the VM interprets
+  class Handler <<struct>>
+  Handler : trigger + guard + ordered body
+  class Slot <<struct>>
+  Slot : a compile-time resolved reference
+  class SymbolTable <<struct>>
+  SymbolTable : names kept aside for diagnostics
+  class GuestProgram <<struct>>
+  GuestProgram : an opaque guest payload + identity
+  class SemanticHash <<struct>>
+  SemanticHash : blake3 of the canonical HIR
+  class GraphVersion <<struct>>
+  GraphVersion : monotone build number — never reused
+  class Manifest <<struct>>
+  Manifest : the hash → versions ledger
+}
+
+package "stdlib" as P_STD {
+  class ConnectorSpec <<struct>>
+  ConnectorSpec : a Connector's ten-case contract sheet
+  class GuestSpec <<struct>>
+  GuestSpec : a guest's pinned identity + purity contract
+}
+
+package "world" as P_WORLD {
+  interface Ingress <<trait>>
+  Ingress : births inbound drafts — never envelopes
+  interface Partner <<trait>>
+  Partner : executes calls ; answers or stays silent
+  interface Clock <<trait>>
+  Clock : the only source of time, one event at a time
+  interface Supervisor <<trait>>
+  Supervisor : boot, crash, restart
+  class Dispatcher <<struct>>
+  Dispatcher : the journal ↔ partner loop
+  class CallRef <<struct>>
+  CallRef : internal call identity — derived, not stored
+  class InboundEvent <<struct>>
+  InboundEvent : a draft + authority + sequence request
+  class IngressAuthority <<struct>>
+  IngressAuthority : the opaque origin — multi-host door
+  class Intent <<struct>>
+  Intent : one open call, canonical fields
+  class Response <<struct>>
+  Response : a partner's correlated answer
+  class DatedEvent <<struct>>
+  DatedEvent : a scheduled moment
+  enum LifecycleEvent <<enum>>
+  LifecycleEvent : boot | crash | restart
+}
+
+package "vm" as P_VM {
+  class Vm <<struct>>
+  Vm : THE engine — run and sim alike
+  class Scheduler <<struct>>
+  Scheduler : run-to-completion + the dated-event queue
+  class Mailboxes <<struct>>
+  Mailboxes : bounded per-key FIFO delivery
+  class TransactionExecutor <<struct>>
+  TransactionExecutor : the atomic node transaction
+  class PartitionState <<struct>>
+  PartitionState : state cells per key
+  class EmissionBuffer <<struct>>
+  EmissionBuffer : emissions in text order
+  interface GuestExecutor <<trait>>
+  GuestExecutor : runs a pure guest, budgeted
+  class BootEnv <<struct>> <<next>>
+  BootEnv : env() / secret() bound at boot
+  class "Secret<T>" as SecretT <<struct>> <<next>>
+  SecretT : a value that cannot leak
+}
+
+package "guests" as P_GUESTS {
+  class Jq <<struct>> <<guarded>>
+  Jq : the jq engine
+  class Sql <<struct>> <<guarded>>
+  Sql : the SQL guest
+}
+
+package "journal" as P_J {
+  interface Journal <<trait>>
+  Journal : semantic record operations — logical API
+  class MemJournal <<struct>>
+  MemJournal : the M0 in-memory implementation
+  enum Record <<enum>>
+  Record : inbound | transaction | outbound
+  class InboundRecord <<struct>>
+  InboundRecord : the world entered — root recipe complete
+  class TransactionRecord <<struct>>
+  TransactionRecord : one atomic firing
+  class OutboundRecord <<struct>>
+  OutboundRecord : one external call's WAL entry
+  enum OutboundStatus <<enum>>
+  OutboundStatus : open | closed | abandoned
+  enum CloseVerdict <<enum>>
+  CloseVerdict : Won | AlreadyClosed — the anti-ghost race
+  class CommittedInbound <<struct>>
+  CommittedInbound : the envelope, born in the accept
+  class "mod ids" as IDS_API <<mod>>
+  IDS_API : the blake3 id recipes
+  class Golden <<struct>>
+  Golden : the canonical causal projection
+  class Diff <<struct>>
+  Diff : the first meaningful divergence
+  class Fold <<struct>> <<next>>
+  Fold : recovery — replays the journal into state
+}
+
+package "connectors" as P_CONN {
+  class Process <<struct>>
+  Process : the first real partner — child processes
+  class "HttpServer, HttpClient, Clock,\nCalendar, Memory, File" as CATALOGUE <<guarded>>
+  CATALOGUE : the declared catalogue, adapters later
+}
+
+package "lab" as P_LAB {
+  class Runner <<struct>>
+  Runner : drives the VM through a scenario
+  class Scenario <<struct>>
+  Scenario : an executable specification
+  class Expectation <<struct>>
+  Expectation : what must be observed
+  enum Quantifier <<enum>>
+  Quantifier : exists | nothing | count
+  class Fixture <<struct>>
+  Fixture : the scripted ingress
+  class Mock <<struct>>
+  Mock : the scripted partner
+  class VirtualClock <<struct>>
+  VirtualClock : discrete, controlled time
+  class Faults <<struct>> <<next>>
+  Faults : scripted crashes
+}
+
+package "cli (main.rs)" as P_CLI {
+  class "mod main" as MAIN_API <<mod>>
+  MAIN_API : wiring and rendering only
+  enum Command <<enum>>
+  Command : check | run | sim
+}
+
+' ===== module-level uses =====
+
+P_COMP ..> P_CEL : uses
+P_COMP ..> P_PLAN : uses
+P_COMP ..> P_STD : uses
+P_VM ..> P_PLAN : uses
+P_VM ..> P_WORLD : uses
+P_VM ..> P_J : uses
+P_VM ..> P_CEL : uses
+P_WORLD ..> P_J : uses
+P_GUESTS ..> P_VM : uses
+P_GUESTS ..> P_COMP : uses
+P_CONN ..> P_WORLD : uses
+P_LAB ..> P_COMP : uses
+P_LAB ..> P_WORLD : uses
+P_LAB ..> P_J : uses
+P_CLI ..> P_COMP : uses
+P_CLI ..> P_VM : uses
+P_CLI ..> P_LAB : uses
+P_CLI ..> P_STD : uses
+P_CLI ..> P_CONN : uses
+
+@enduml

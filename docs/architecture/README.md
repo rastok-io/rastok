@@ -18,7 +18,10 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - `04-app-lab-effect-cycle` for the main runtime interaction;
 - `05-rastok-packages` for the Rust module and type blueprint —
   modules, key structs/enums/traits, and build artifacts (indicative,
-  not a public API).
+  not a public API);
+- `06-rastok-modules-overview` for the bird's-eye companion — every
+  module and type with a one-line description, module-level
+  dependencies only.
 
 ## Diagram conventions
 

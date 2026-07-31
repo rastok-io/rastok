@@ -101,7 +101,7 @@ package "crate rastok" as CRATE {
         from the graph ; encoded only
         at persistence
     }
-    enum Value <<enum>> {
+    enum "Value" as ENV_Value <<enum>> {
       the MATERIALIZED view :
       Scalar ; Struct ; Array ; Map
       Union ; Variant (the only dynamic payload)
@@ -109,7 +109,7 @@ package "crate rastok" as CRATE {
   }
 
   package "diag" as P_DIAG {
-    class Diagnostic <<struct>> {
+    class "Diagnostic" as DIAG_Diagnostic <<struct>> {
       +code : stable id (E-* / W-*)
       +severity : Severity
       +phase : Phase
@@ -156,14 +156,14 @@ package "crate rastok" as CRATE {
       Text ; Bytes ; Duration ; Timestamp
       Optional(T) ; ...
     }
-    enum Value <<enum>> {
+    enum "Value" as CEL_Value <<enum>> {
       mirrors Type — bridged to
       envelope::Value ONLY via Bindings
     }
     interface Bindings <<trait>> {
       +get(name : &str) : Option<Value>
     }
-    class Diagnostic <<struct>> {
+    class "Diagnostic" as CEL_Diagnostic <<struct>> {
       its OWN type — compiler adapts
       it into diag::Diagnostic
     }
@@ -556,6 +556,7 @@ package "crate rastok" as CRATE {
 
 Envelope *-- Meta
 Envelope *-- Payload
+Payload *-- ENV_Value : materialized
 Meta *-- MetaSys
 
 Hir *-- NodeDecl
