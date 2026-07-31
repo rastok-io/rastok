@@ -12,7 +12,7 @@ note as LEGEND
   «struct» / «enum» as declared ; «mod» = module-level functions
   *-- = owned field ; ..> = uses / borrows ; inheritance does not exist
   **Naming** : M0 working conventions — types unprefixed, read
-  qualified (cel::Tree, world::Intent) ; x::X stutter is idiomatic ;
+  qualified (cel::Tree, boundary::Intent) ; x::X stutter is idiomatic ;
   the corpus term outranks the rule
   (plan::ExecutionPlan, plan::SemanticHash)
   **Status** : «next» = not built in M0, APIs kept ready ;
@@ -57,9 +57,11 @@ package "crate rastok" as CRATE {
       the declared value ; the three
       effect CLASSES stay three
     }
-    enum Behavior <<enum>> {
+    enum Determinism <<enum>> {
       Deterministic
       Probabilistic
+      carried by the DSL attribute
+      `behavior` (normative spelling)
     }
     enum Trigger <<enum>> {
       Port(name) — "p:"
@@ -72,7 +74,7 @@ package "crate rastok" as CRATE {
   package "envelope" as P_ENV {
     class Envelope <<struct>> {
       +meta : Meta
-      +data : Payload — lazy
+      +data : Data
       immutable once emitted
     }
     class Meta <<struct>> {
@@ -93,13 +95,20 @@ package "crate rastok" as CRATE {
     class Id <<struct>> {
       128-bit — derived, zero randomness
     }
-    enum Payload <<enum>> {
-      Encoded { tag : raw | avro | arrow-ipc,
-        bytes, materialized cache } —
-        original bytes preserved, lazy
+    enum Data <<enum>> {
+      the normative field's two states :
+      Encoded { encoding : Encoding, bytes,
+        value_cache } — original bytes
+        preserved ; cache lazy, never
+        causal, never serialized
       Materialized(Value) — born in memory
         from the graph ; encoded only
         at persistence
+    }
+    enum Encoding <<enum>> {
+      Raw
+      Avro
+      ArrowIpc
     }
     enum "Value" as ENV_Value <<enum>> {
       the MATERIALIZED view :
@@ -108,7 +117,7 @@ package "crate rastok" as CRATE {
     }
   }
 
-  package "diag" as P_DIAG {
+  package "diagnostics" as P_DIAG {
     class "Diagnostic" as DIAG_Diagnostic <<struct>> {
       +code : stable id (E-* / W-*)
       +severity : Severity
@@ -165,7 +174,7 @@ package "crate rastok" as CRATE {
     }
     class "Diagnostic" as CEL_Diagnostic <<struct>> {
       its OWN type — compiler adapts
-      it into diag::Diagnostic
+      it into diagnostics::Diagnostic
     }
     class Error <<struct>> {
       value errors only — type errors
@@ -175,7 +184,7 @@ package "crate rastok" as CRATE {
   note bottom of P_CEL
     depends on **nothing** in Rastok ;
     the compiler hands it signatures,
-    the vm adapts state + envelope onto Bindings
+    the runtime adapts state + envelope onto Bindings
   end note
 
   package "compiler" as P_COMP {
@@ -256,13 +265,13 @@ package "crate rastok" as CRATE {
   }
 
   package "stdlib" as P_STD {
-    class ConnectorSpec <<struct>> {
+    class ConnectorContract <<struct>> {
       the DECLARATIVE sheet — ALL ten cases :
       role, direction, ports, effect,
       behavior, attributes, correlator,
       error set, instances, journal/sim
     }
-    class GuestSpec <<struct>> {
+    class GuestContract <<struct>> {
       declared guest languages + the FULL
       identity the manifest pins : frontend,
       executor version, lowering profile, ABI
@@ -276,9 +285,9 @@ package "crate rastok" as CRATE {
     M0 ships the Process sheet only
   end note
 
-  package "world" as P_WORLD {
+  package "boundary" as P_WORLD {
     interface Ingress <<trait>> {
-      +next() : Option<InboundEvent>
+      +next() : Option<InboundSubmission>
       births DRAFTS, never envelopes —
       a root envelope cannot pre-exist its
       seq (root id ← inbound_seq ;
@@ -296,7 +305,7 @@ package "crate rastok" as CRATE {
     }
     interface Clock <<trait>> {
       +next_due(target) : Option<DatedEvent>
-      ONE event at a time — the vm drains
+      ONE event at a time — the VM drains
       between events, which may arm new
       ones before the target
     }
@@ -307,7 +316,7 @@ package "crate rastok" as CRATE {
       the loop journal ↔ partners :
       drives open OUTBOUNDs, settles via
       close_outbound → Won | AlreadyClosed ;
-      only Won becomes a vm input
+      only Won becomes a VM input
     }
     class CallRef <<struct>> {
       the INTERNAL call identity — a
@@ -316,7 +325,7 @@ package "crate rastok" as CRATE {
       serialized causal field ; never
       conflated with the business key
     }
-    class InboundEvent <<struct>> {
+    class InboundSubmission <<struct>> {
       +authority : IngressAuthority
       +draft : payload + birth metadata
       +sequence : Next | Explicit(u64)
@@ -360,7 +369,7 @@ package "crate rastok" as CRATE {
     (simulation-semantics.md §2)
   end note
 
-  package "vm" as P_VM {
+  package "runtime" as P_VM {
     class Vm <<struct>> {
       THE engine — run and sim alike
       no I/O, no clock, no randomness
@@ -395,8 +404,9 @@ package "crate rastok" as CRATE {
       +run(&GuestProgram, value, budget) : Result<Value, GuestError>
       pure, deterministic, budgeted
     }
-    class BootEnv <<struct>> <<next>> {
-      env() / secret() bound at boot
+    class BootBindings <<struct>> <<next>> {
+      deployment bindings — env() /
+      secret() resolved at boot ;
       missing binding = typed refusal
     }
     class "Secret<T>" as SecretT <<struct>> <<next>> {
@@ -405,7 +415,7 @@ package "crate rastok" as CRATE {
     }
   }
 
-  package "guests" as P_GUESTS {
+  package "guest_engines" as P_GUESTS {
     class Jq <<struct>> <<guarded>> {
       the jq engine — frontend + executor
     }
@@ -425,7 +435,7 @@ package "crate rastok" as CRATE {
       +commit(Transaction) — atomic
       +open_outbound(Intent) — journal-before-effect
       +close_outbound(call_ref, response XOR timeout) : Won | AlreadyClosed
-      +append_inbound(InboundEvent) : CommittedInbound —
+      +append_inbound(InboundSubmission) : CommittedInbound —
         ONE accepting transaction : allocate/validate seq,
         derive root id, mint MetaSys (parent_id = null,
         origin_id = id), build the envelope, commit —
@@ -464,20 +474,20 @@ package "crate rastok" as CRATE {
       causal core + observation annotations
     }
     class OutboundRecord <<struct>> {
-      +intent : world::Intent
+      +intent : boundary::Intent
       +status : OutboundStatus
     }
     enum OutboundStatus <<enum>> {
       Open
       Closed(response XOR timeout)
-      Abandoned — minted by Fold only
+      Abandoned — minted by RecoveryFold only
     }
     class "mod ids" as IDS_API <<mod>> {
       +root_id(authority, seq) : envelope::Id
       +emission_id(node, trigger, parent, port, index) : envelope::Id
       blake3 — injective framing
     }
-    class Golden <<struct>> {
+    class GoldenProjection <<struct>> {
       +project(records) : canonical bytes
       causal cores only ; serves prod
       replay + conformance, not just the lab
@@ -485,7 +495,7 @@ package "crate rastok" as CRATE {
     class Diff <<struct>> {
       first meaningful divergence
     }
-    class Fold <<struct>> <<next>> {
+    class RecoveryFold <<struct>> <<next>> {
       journal → state + dated obligations
       + open-effect triage — the ONLY
       minter of OutcomeUnknown / Abandoned
@@ -509,7 +519,7 @@ package "crate rastok" as CRATE {
   }
 
   package "lab" as P_LAB {
-    class Runner <<struct>> {
+    class ScenarioRunner <<struct>> {
       the DRIVER, not an engine :
       inject, advance, expect,
       golden compare + explicit bless
@@ -527,15 +537,15 @@ package "crate rastok" as CRATE {
     class Fixture <<struct>> {
       the pre-written world-half
     }
-    class Mock <<struct>> {
-      answers only — the vm still
+    class PartnerMock <<struct>> {
+      answers only — the VM still
       writes the OUTBOUND record
     }
     class VirtualClock <<struct>> {
       advance = discrete sweep,
       one due event at a time
     }
-    class Faults <<struct>> <<next>> {
+    class FaultInjector <<struct>> <<next>> {
       crash after ...
     }
   }
@@ -557,8 +567,8 @@ package "crate rastok" as CRATE {
 ' ================= type-level relations =================
 
 Envelope *-- Meta
-Envelope *-- Payload
-Payload *-- ENV_Value : materialized
+Envelope *-- Data
+Data *-- ENV_Value : materialized
 Meta *-- MetaSys
 
 Hir *-- NodeDecl
@@ -578,15 +588,15 @@ Record *-- InboundRecord
 Record *-- TransactionRecord
 Record *-- OutboundRecord
 OutboundRecord *-- Intent
-InboundEvent *-- IngressAuthority
+InboundSubmission *-- IngressAuthority
 InboundRecord *-- IngressAuthority
 
 MemJournal ..|> Journal
 Process ..|> Partner
 Fixture ..|> Ingress
-Mock ..|> Partner
+PartnerMock ..|> Partner
 VirtualClock ..|> Clock
-Faults ..|> Supervisor
+FaultInjector ..|> Supervisor
 Jq ..|> GuestExecutor
 Sql ..|> GuestExecutor
 Jq ..|> GuestFrontend
@@ -616,7 +626,7 @@ A_BIN ..> F_SRC : reads
 A_BIN ..> F_GOLD : compares ;\n--bless writes
 A_BIN .. P_CLI : bin target
 A_LIB .. CRATE : lib target =\nevery module but cli
-BootEnv ..> F_PROF : binds at boot
+BootBindings ..> F_PROF : binds at boot
 
 note bottom of A_LIB
   one crate, two targets (crate policy) ;
