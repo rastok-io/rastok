@@ -80,8 +80,8 @@ package "cel" as P_CEL {
 package "compiler" as P_COMP {
   class "mod compiler" as COMP_API <<mod>>
   COMP_API : the source → plan pipeline
-  class Compiled <<struct>>
-  Compiled : plan + hash + warnings — never errors
+  class Compilation <<struct>>
+  Compilation : plan + hash + warnings — never errors
   class SyntaxTree <<struct>>
   SyntaxTree : the faithful parse, sugar intact
   class Unit <<struct>>
@@ -149,7 +149,7 @@ package "world" as P_WORLD {
 
 package "vm" as P_VM {
   class Vm <<struct>>
-  Vm : THE engine — run and sim alike
+  Vm : THE engine — boot, step, drain
   class Scheduler <<struct>>
   Scheduler : run-to-completion + the dated-event queue
   class Mailboxes <<struct>>

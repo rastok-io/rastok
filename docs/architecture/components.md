@@ -129,8 +129,8 @@ data out, the governing spec, and M0 status.
 | **Lowering** | node/edge/partition/handler tables, expression trees, `Slot` resolution | `Hir` → `plan::ExecutionPlan` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
 | **Guest frontends** | `GuestFrontend` trait — check an opaque guest body against its signature; the host parser never reads it | guest bytes → `plan::GuestProgram` | [stdlib.md §5](../spec/stdlib.md) | guarded |
 
-The facade returns `Result<Compiled, Diagnostics>` with
-`Compiled { plan, hash, warnings }`: **a plan with errors is
+The facade returns `Result<Compilation, Diagnostics>` with
+`Compilation { plan, hash, warnings }`: **a plan with errors is
 unrepresentable** — warnings ride the success value, errors preclude
 it. Node declarations are an algebraic type,
 
@@ -204,7 +204,13 @@ runs on a laptop and in production.
 
 Deterministic by construction: no I/O, no clock reads, no randomness.
 Everything nondeterministic enters through the `world` traits (§3.5).
-The same engine runs `rastok run` and `rastok sim`.
+The same engine runs `rastok run` and `rastok sim`, through a
+debugger-shaped surface: `Vm::boot(&plan, journal)` (construct and
+recover, once), `step(event)` (exactly one node transaction), and
+`drain()` (run to the stable state — the spec's drain-to-stable). The
+lab's Runner is literally a stepper over this surface, which is what
+makes single-stepping and journal-relative time travel structural
+rather than features.
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|

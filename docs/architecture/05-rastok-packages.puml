@@ -180,10 +180,10 @@ package "crate rastok" as CRATE {
 
   package "compiler" as P_COMP {
     class "mod compiler" as COMP_API <<mod>> {
-      +compile(sources) : Result<Compiled, Diagnostics>
+      +compile(sources) : Result<Compilation, Diagnostics>
       +parse / assemble / check / lower / canonicalize
     }
-    class Compiled <<struct>> {
+    class Compilation <<struct>> {
       +plan : plan::ExecutionPlan
       +hash : plan::SemanticHash
       +warnings : Vec<Diagnostic>
@@ -364,8 +364,10 @@ package "crate rastok" as CRATE {
     class Vm <<struct>> {
       THE engine — run and sim alike
       no I/O, no clock, no randomness
-      +boot(&plan::ExecutionPlan, journal)
-      +step(event) : transactions + intents
+      the debugger-shaped surface :
+      +boot(&plan::ExecutionPlan, journal) — once, recovers
+      +step(event) — exactly ONE node transaction
+      +drain() — run to the stable state
     }
     class Scheduler <<struct>> {
       run-to-completion
@@ -564,7 +566,7 @@ ExecutionPlan *-- Handler
 ExecutionPlan *-- GuestProgram
 Handler *-- Tree : guard + expressions
 Manifest *-- GraphVersion
-Compiled *-- ExecutionPlan
+Compilation *-- ExecutionPlan
 
 Vm *-- Scheduler
 Vm *-- Mailboxes
