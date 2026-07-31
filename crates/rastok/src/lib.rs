@@ -3,4 +3,5 @@
 //! The first executable slice will define this crate's public surface.
 //! The build sequence is documented in `docs/architecture/build-order.md`.
 
+pub mod diagnostics;
 pub mod node;
