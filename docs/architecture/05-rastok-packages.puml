@@ -13,8 +13,8 @@ note as LEGEND
   *-- = owned field ; ..> = uses / borrows ; inheritance does not exist
   **Naming** : M0 working conventions — types unprefixed, read
   qualified (cel::Tree, world::Intent) ; x::X stutter is idiomatic ;
-  a non-module qualifier carrying the normative term is kept
-  (plan::SemanticHash, plan::GraphVersion)
+  the corpus term outranks the rule
+  (plan::ExecutionPlan, plan::SemanticHash)
   **Status** : «next» = not built in M0, APIs kept ready ;
   «guarded» = reachable syntax refuses explicitly ; all else = M0 subset
   **Omitted for readability** : every module except `cel` may depend on
@@ -173,7 +173,7 @@ package "crate rastok" as CRATE {
       +parse / assemble / check / lower / canonicalize
     }
     class Compiled <<struct>> {
-      +plan : plan::Plan
+      +plan : plan::ExecutionPlan
       +hash : plan::SemanticHash
       +warnings : Vec<Diagnostic>
       a plan with ERRORS is unrepresentable
@@ -205,8 +205,9 @@ package "crate rastok" as CRATE {
   }
 
   package "plan" as P_PLAN {
-    class Plan <<struct>> {
-      realizes the whitepaper's ExecutablePlan
+    class ExecutionPlan <<struct>> {
+      the whitepaper's term — a compiled
+      operator graph, in the database sense
       +nodes / edges / partitions : tables
       +handlers : Vec<Handler>
       serializable data — no closures,
@@ -239,7 +240,7 @@ package "crate rastok" as CRATE {
     class Manifest <<struct>> {
       the ledger : SemanticHash → GraphVersions
       allocated at boot — a ledger is
-      mutable, the Plan is not
+      mutable, the ExecutionPlan is not
     }
   }
 
@@ -326,7 +327,7 @@ package "crate rastok" as CRATE {
     class Vm <<struct>> {
       THE engine — run and sim alike
       no I/O, no clock, no randomness
-      +boot(&plan::Plan, journal)
+      +boot(&plan::ExecutionPlan, journal)
       +step(event) : transactions + intents
     }
     class Scheduler <<struct>> {
@@ -507,11 +508,11 @@ Envelope *-- Payload
 Meta *-- MetaSys
 
 Hir *-- NodeDecl
-Plan *-- Handler
-Plan *-- GuestProgram
+ExecutionPlan *-- Handler
+ExecutionPlan *-- GuestProgram
 Handler *-- Tree : guard + expressions
 Manifest *-- GraphVersion
-Compiled *-- Plan
+Compiled *-- ExecutionPlan
 
 Vm *-- Scheduler
 Vm *-- Mailboxes

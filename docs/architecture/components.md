@@ -59,7 +59,7 @@ canonical record projection ─▶ golden compare
 | syntax tree + spans | `compiler` (parse) | check passes, `diag` | faithful to the text, sugar intact; may contain error nodes; an error node is never lowered |
 | HIR | `compiler` (check) | canonicalize, lower | desugared, name-resolved, typed — the hash input ([identity.md §1](../spec/identity.md)); spans live in side tables; **the entire lab is excluded from the hash** |
 | canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
-| `plan::Plan` | `compiler` (lower) | `vm`, `lab` | immutable, serializable data — tables plus `cel::Tree`s; no closures, no host references; names resolved to `Slot`s |
+| `plan::ExecutionPlan` | `compiler` (lower) | `vm`, `lab` | immutable, serializable data — tables plus `cel::Tree`s; no closures, no host references; names resolved to `Slot`s |
 | `world::Intent` (open OUTBOUND) | `vm` | dispatcher → `world::Partner` impls | journaled before any handler runs ([delivery-semantics.md §4](../spec/delivery-semantics.md)) |
 | `world::Response` | `connectors` or `lab::Mock` | `vm` (as an input event) | a partner only ever answers; it never decides a timeout and never mints `OutcomeUnknown` — closure is the runtime's verdict |
 | `journal::Record` | **runtime mechanics only** | recovery, `journal::Golden` | adapters and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
@@ -96,9 +96,10 @@ promotion (the final layout stays open per `ARCHITECTURE.md`):
    names (`compiler`, `vm`, `cel`).
 2. **Unprefixed types, qualified paths.** `cel::Tree`, `world::Intent`
    — never `CelTree`. The `x::X` stutter is idiomatic and assumed:
-   `plan::Plan`, `vm::Vm`, `journal::Journal`. A qualifier that is not
-   the module name is kept when it carries the normative term:
-   `plan::SemanticHash`, `plan::GraphVersion`.
+   `vm::Vm`, `journal::Journal`. The corpus term outranks the rule: a
+   type keeps it even when it overlaps the module word or adds a
+   qualifier — `plan::ExecutionPlan`, `plan::SemanticHash`,
+   `plan::GraphVersion`.
 3. **Blessed abbreviations only**, used consistently everywhere:
    `diag`, `vm`. Nothing ad hoc.
 4. **Flat, depth ≤ 2.** A directory exists for exactly two reasons — a
@@ -123,7 +124,7 @@ data out, the governing spec, and M0 status.
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
 | **Type checker** | envelope and data types, mandatory err sets, variant narrowing, aspect admission; node declarations as an ADT so illegal states are unrepresentable | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M0 subset |
 | **Canonicalizer** | the canonical byte form of the HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0 |
-| **Lowering** | node/edge/partition/handler tables, expression trees, `Slot` resolution | `Hir` → `plan::Plan` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
+| **Lowering** | node/edge/partition/handler tables, expression trees, `Slot` resolution | `Hir` → `plan::ExecutionPlan` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
 | **Guest frontends** | `GuestFrontend` trait — check an opaque guest body against its signature; the host parser never reads it | guest bytes → `plan::GuestProgram` | [stdlib.md §5](../spec/stdlib.md) | guarded |
 
 The facade returns `Result<Compiled, Diagnostics>` with
@@ -174,18 +175,18 @@ crate.
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **`plan::Plan`** | the executable form — the tables and expression trees the VM interprets, and what ships to other hosts | produced by `compiler`, consumed by `vm` and `lab` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
+| **`plan::ExecutionPlan`** | the executable form — the tables and expression trees the VM interprets, and what ships to other hosts | produced by `compiler`, consumed by `vm` and `lab` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md) | M0 |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersion`; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
-`plan::Plan` realizes the whitepaper's **`ExecutablePlan`** — the
-type keeps the short name, the path says the rest. The database
-intuition is intended and accurate up to two differences: like a query
-plan, it is an immutable operator graph — data an engine interprets,
-inspects, and ships in fragments to workers; unlike one, it is the
-output of a *faithful* lowering (no cost-based rewriting — the written
-topology is the executed topology, sealed by the hash) and it is
-long-lived: stateful, journaled, versioned, upgraded — closer to a
-streaming engine's job graph than to a query's throwaway plan.
+`plan::ExecutionPlan` is the whitepaper's term, and the database
+intuition it carries is intended — accurate up to two differences:
+like a query plan, it is an immutable operator graph — data an engine
+interprets, inspects, and ships in fragments to workers; unlike one,
+it is the output of a *faithful* lowering (no cost-based rewriting —
+the written topology is the executed topology, sealed by the hash)
+and it is long-lived: stateful, journaled, versioned, upgraded —
+closer to a streaming engine's job graph than to a query's throwaway
+plan.
 
 The plan ships unresolved: `env()` and `secret()` stay expression
 nodes in the tables, and boot binds them in memory — the same artifact

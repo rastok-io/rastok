@@ -662,13 +662,13 @@ languages a handler computes with (§2.5), the topology that connects nodes
 (§2.6), and the place where the real world's loops are absorbed (§2.7).
 
 A Rastok App is a graph that compiles into a target-neutral
-`ExecutablePlan`. The plan is an immutable description of a state
+`ExecutionPlan`. The plan is an immutable description of a state
 machine. The Rastok runtime interprets that state machine in its virtual
 machine.
 
 The first runtime is native: it is written in Rust and compiled for the
 underlying operating system and hardware. "Virtual machine" describes
-the interpreter for the `ExecutablePlan`; it does not mean that the
+the interpreter for the `ExecutionPlan`; it does not mean that the
 runtime itself is interpreted or requires a separate managed runtime.
 
 The plan boundary leaves room for future execution forms:
@@ -1206,7 +1206,7 @@ errors — a guest program may never hang the graph).
 
 The execution format is orthogonal to the source language. JavaScript, Rust
 or another future guest may compile to Wasm before entering the
-`ExecutablePlan`; a precompiled Wasm module may enter directly. A Wasm guest
+`ExecutionPlan`; a precompiled Wasm module may enter directly. A Wasm guest
 with no I/O imports may execute inside an Operator. A Wasm program with
 network, filesystem, process, clock or other external I/O executes behind a
 Connector. Wasm provides a sandbox and ABI, not purity by itself.

@@ -17,9 +17,9 @@
   prototype. The designated homes disagree:
   [identity.md §1](identity.md) defines the checked form as the
   canonical HIR, and `WHITEPAPER.md` §2 names the compilation target
-  the `ExecutablePlan`.
+  the `ExecutionPlan`.
 - **Resolution direction:** rewrite the section to state that the
-  parser feeds the pipeline `AST → HIR → ExecutablePlan`; no Rust
+  parser feeds the pipeline `AST → HIR → ExecutionPlan`; no Rust
   builder API is part of the contract.
 - **Found by:** adversarial architecture review, 2026-07-31.
 
