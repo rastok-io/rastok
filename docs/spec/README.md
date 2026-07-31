@@ -57,3 +57,6 @@ six Connectors and guest languages) →
 | [identity.md](identity.md) | semantic hash, `graph_version` allocation and manifest, canonical record form |
 | [diagnostics.md](diagnostics.md) | diagnostic-code registry, stability contract, lazy assignment |
 | Types *(extraction pending; currently in `WHITEPAPER.md` §2.1 and [grammar.md](grammar.md))* | value-type tree |
+
+Known internal contradictions awaiting a spec-side fix are tracked in
+[errata.md](errata.md).
