@@ -29,6 +29,12 @@ impl std::error::Error for InvalidName {}
 
 /// Stable root-relative node address.
 ///
+/// A node is addressed by the chain of declaration names from the `: App`
+/// root graph down to itself: a `codex` connector declared inside a
+/// `sessions` graph is `sessions.codex`. The address names the node in
+/// the composition tree — it is not a wiring route; edges connect
+/// `(Path, Port)` endpoints.
+///
 /// The dotted rendering enters the identity recipes, so it must be
 /// injective: segments may not be empty or contain `.`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
