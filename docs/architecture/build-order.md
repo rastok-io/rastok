@@ -40,7 +40,7 @@ ports.
 
 ### Stage 2 — `diagnostics`
 
-`Span`, `Severity`, `Phase`, `Diagnostic`, `Sink`, and a stable
+`Span`, `Severity`, `Phase`, `Diagnostic`, `Bag`, and a stable
 rendering.
 
 Exit: one rendered diagnostic asserted byte-for-byte, per

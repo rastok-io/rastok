@@ -254,15 +254,15 @@ impl fmt::Display for Diagnostic {
     }
 }
 
-/// Accumulating diagnostic destination. A sink never prints and never
+/// Accumulating diagnostic destination. A bag never prints and never
 /// panics; rendering and process exit decisions belong to the caller.
 #[derive(Debug, Default)]
-pub struct Sink {
+pub struct Bag {
     diagnostics: Vec<Diagnostic>,
 }
 
-impl Sink {
-    /// Starts an empty sink.
+impl Bag {
+    /// Starts an empty bag.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -287,7 +287,7 @@ impl Sink {
         &self.diagnostics
     }
 
-    /// Consumes the sink and hands the diagnostics over.
+    /// Consumes the bag and hands the diagnostics over.
     #[must_use]
     pub fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.diagnostics
@@ -334,14 +334,14 @@ mod tests {
     }
 
     #[test]
-    fn sink_accumulates_in_emission_order() {
-        let mut sink = Sink::new();
-        assert!(!sink.has_errors());
-        sink.push(Diagnostic::new(TEST_WARNING, Phase::Resolve, "first"));
-        assert!(!sink.has_errors());
-        sink.push(Diagnostic::new(TEST_ERROR, Phase::Check, "second"));
-        assert!(sink.has_errors());
-        let codes: Vec<_> = sink
+    fn bag_accumulates_in_emission_order() {
+        let mut bag = Bag::new();
+        assert!(!bag.has_errors());
+        bag.push(Diagnostic::new(TEST_WARNING, Phase::Resolve, "first"));
+        assert!(!bag.has_errors());
+        bag.push(Diagnostic::new(TEST_ERROR, Phase::Check, "second"));
+        assert!(bag.has_errors());
+        let codes: Vec<_> = bag
             .diagnostics()
             .iter()
             .map(|diagnostic| diagnostic.code())

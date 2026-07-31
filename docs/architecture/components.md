@@ -74,7 +74,7 @@ canonical record projection ─▶ golden compare
 crates/rastok/src/
 ├── node.rs           # vocabulary : Path, Kind, Port, Effect, Behavior, Trigger
 ├── envelope.rs       # Envelope, Meta, MetaSys, Id, Data, Encoding, Value
-├── diagnostics.rs    # Diagnostic, Severity, Phase, Span, Sink
+├── diagnostics.rs    # Diagnostic, Severity, Phase, Span, Bag
 ├── cel.rs            # the isolated expression chain — depends on nothing here
 ├── compiler.rs       # parse → assemble → check → lower → canonicalize
 ├── plan.rs           # ExecutionPlan, Handler, Slot, GuestProgram, SemanticHash

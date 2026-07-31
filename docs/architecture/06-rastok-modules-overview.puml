@@ -57,8 +57,8 @@ package "diagnostics — structured diagnostics shared across phases" as P_DIAG 
   Phase : parse, resolve, check, plan, run, replay, or simulation
   class Span <<struct>>
   Span : source byte range
-  class Sink <<struct>>
-  Sink : accumulating diagnostic destination
+  class Bag <<struct>>
+  Bag : accumulating diagnostic destination
 }
 
 package "cel — isolated CEL compilation and evaluation domain" as P_CEL {

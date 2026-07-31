@@ -139,7 +139,7 @@ package "crate rastok" as CRATE {
       +source : SourceId
       +range : byte range
     }
-    class Sink <<struct>> {
+    class Bag <<struct>> {
       +push(Diagnostic)
       accumulate — never print, never panic
     }
