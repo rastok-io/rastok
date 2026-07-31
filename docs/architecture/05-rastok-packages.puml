@@ -279,9 +279,10 @@ package "crate rastok" as CRATE {
   package "world" as P_WORLD {
     interface Ingress <<trait>> {
       +next() : Option<InboundEvent>
-      births envelopes ; the SEQUENCE is
-      allocated by the journal, atomically
-      with acceptance (commit-then-ack)
+      births DRAFTS, never envelopes —
+      a root envelope cannot pre-exist its
+      seq (root id ← inbound_seq ;
+      origin_id = id ; meta.sys runtime-owned)
       bounded — backpressure outward
     }
     interface Partner <<trait>> {
@@ -309,14 +310,17 @@ package "crate rastok" as CRATE {
       only Won becomes a vm input
     }
     class CallRef <<struct>> {
-      the INTERNAL call identity —
-      never conflated with the optional
-      business / idempotency key
+      the INTERNAL call identity — a
+      deterministic DERIVATION of the
+      canonical call fields, never a new
+      serialized causal field ; never
+      conflated with the business key
     }
     class InboundEvent <<struct>> {
-      +envelope : Envelope
       +authority : IngressAuthority
-      no seq — the journal allocates it
+      +draft : payload + birth metadata
+      +sequence : Next | Explicit(u64)
+        — fixtures replay explicit seqs
     }
     class IngressAuthority <<struct>> <<opaque>> {
       wraps EXACTLY (connector_path, replica)
@@ -419,11 +423,18 @@ package "crate rastok" as CRATE {
       +commit(Transaction) — atomic
       +open_outbound(Intent) — journal-before-effect
       +close_outbound(call_ref, response XOR timeout) : Won | AlreadyClosed
-      +append_inbound(authority, envelope) : committed record —
-        allocates inbound_seq INSIDE the accepting
-        transaction ; commit-then-ack
+      +append_inbound(InboundEvent) : CommittedInbound —
+        ONE accepting transaction : allocate/validate seq,
+        derive root id, mint MetaSys (parent_id = null,
+        origin_id = id), build the envelope, commit —
+        only then the ACK (commit-then-ack)
       +iter() : causal order
       logical API — physical layout later
+    }
+    class CommittedInbound <<struct>> {
+      +seq : u64
+      +envelope : Envelope — born HERE
+      +record : InboundRecord
     }
     enum CloseVerdict <<enum>> {
       Won — the single causal closure

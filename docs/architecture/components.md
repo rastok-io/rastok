@@ -223,7 +223,7 @@ the world plays itself; in sim, the lab plays the world.
 
 | Interface | Owns | Real side | Lab side | Spec | M0 |
 |---|---|---|---|---|---|
-| **`Ingress`** | birth of inbound envelopes (`IngressAuthority` stays opaque); bounded, backpressure translated outward — the **sequence is not its to allocate**: `inbound_seq` is committed atomically with acceptance by the journal, commit-then-ack | listeners | `lab::Fixture` | [envelope.md §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md) | M0 (minimal) |
+| **`Ingress`** | birth of inbound **drafts** — payload, birth metadata, `IngressAuthority` (opaque), and a sequence request `Next \| Explicit(seq)` (a fixture replays a production slice with explicit sequences); bounded, backpressure translated outward. It never births an envelope: a root envelope **cannot pre-exist its sequence** — the root id derives from `inbound_seq` and `origin_id = id` — so only the journal's accepting transaction mints it | listeners | `lab::Fixture` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) fixtures | M0 (minimal) |
 | **`Partner`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef`; correlation is the **connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a partner deduplicates on the idempotency key only *when it cooperates* | `connectors/*` | `lab::Mock` | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M0 (Process only) |
 | **`Clock`** | the only source of time, delivered **one dated event at a time** — the VM drains to stable between events, which may arm new ones before the target, so a sweep can never be precomputed | wall clock | `lab::VirtualClock` | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (virtual required) |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | `lab::Faults` | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | M0 (boot only); faults `next` |
@@ -242,9 +242,14 @@ Ownership rules that the types must make unrepresentable:
 - a partner **answers or stays silent** — it never returns a timeout
   (the scheduler's dated event decides that) and never returns
   `OutcomeUnknown` (only recovery mints it, §3.6);
-- call identity is the internal `CallRef`; the business/idempotency
-  key names the *operation* for retries and cooperative partner-side
-  dedup — the two are never conflated;
+- call identity is the internal `CallRef` — a **deterministic
+  derivation of the canonical call fields**, never a new serialized
+  causal field; the business/idempotency key names the *operation* for
+  retries and cooperative partner-side dedup — the two are never
+  conflated;
+- an inbound envelope is **born inside the accepting transaction**:
+  Ingress supplies a draft; only the journal can mint a root id
+  (the envelope is immutable and `meta.sys` runtime-owned);
 - adapters and mocks produce **events**; the runtime mechanics alone
   write records — a mocked call still gets its OUTBOUND record because
   the VM writes it before any partner, real or scripted, is invoked;
@@ -256,7 +261,7 @@ Ownership rules that the types must make unrepresentable:
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `commit(Transaction)` (atomic), `open_outbound(Intent)` (journal-before-effect), `close_outbound(call_ref, response XOR timeout) → Won \| AlreadyClosed` (exactly once — the anti-ghost race is typed), `append_inbound(authority, envelope) → committed record` (allocates `inbound_seq` **inside** the accepting transaction, commit-then-ack), ordered `iter()` | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §2, §5](../spec/envelope.md) | M0 |
+| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `commit(Transaction)` (atomic), `open_outbound(Intent)` (journal-before-effect), `close_outbound(call_ref, response XOR timeout) → Won \| AlreadyClosed` (exactly once — the anti-ghost race is typed), `append_inbound(InboundEvent) → CommittedInbound { seq, envelope, record }` (in one accepting transaction: allocate or validate the sequence, derive the root id, mint the root `MetaSys` — `parent_id = null`, `origin_id = id` —, build the immutable envelope, commit; only then may the ACK flow), ordered `iter()` | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §2, §5](../spec/envelope.md) | M0 |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
 | **`Fold`** | journal → state, dated obligations, open-effect triage — the **only** place `OutcomeUnknown` is minted and an open OUTBOUND becomes `Abandoned`; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
 | **`Golden`** | the canonical record projection; the causal-core / annotation split | records → deterministic bytes | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0 |
