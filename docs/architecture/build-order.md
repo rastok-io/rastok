@@ -33,7 +33,7 @@ fresh clone.
 ### Stage 1 — `node`
 
 The shared graph vocabulary: `Path`, `Kind`, `Port`, `EffectClass`,
-`Effect`, `Determinism`, `Trigger`.
+`Effect`, `Behavior`, `Trigger`.
 
 Exit: unit tests for construction, equality, and ordering of paths and
 ports.

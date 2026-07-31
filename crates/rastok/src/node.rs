@@ -186,14 +186,14 @@ impl fmt::Display for Effect {
 
 /// Behavior declared by the DSL attribute `behavior`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Determinism {
+pub enum Behavior {
     /// Same inputs, same outputs — replayable by re-execution.
     Deterministic,
     /// Outcome may vary — replayable only from the journal.
     Probabilistic,
 }
 
-impl fmt::Display for Determinism {
+impl fmt::Display for Behavior {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Deterministic => "deterministic",
@@ -325,6 +325,6 @@ mod tests {
             Effect::Class(EffectClass::Compensable).to_string(),
             "compensable"
         );
-        assert_eq!(Determinism::Probabilistic.to_string(), "probabilistic");
+        assert_eq!(Behavior::Probabilistic.to_string(), "probabilistic");
     }
 }

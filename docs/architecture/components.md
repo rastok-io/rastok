@@ -72,7 +72,7 @@ canonical record projection ─▶ golden compare
 
 ```text
 crates/rastok/src/
-├── node.rs           # vocabulary : Path, Kind, Port, Effect, Determinism, Trigger
+├── node.rs           # vocabulary : Path, Kind, Port, Effect, Behavior, Trigger
 ├── envelope.rs       # Envelope, Meta, MetaSys, Id, Data, Encoding, Value
 ├── diagnostics.rs    # Diagnostic, Severity, Phase, Span, Sink
 ├── cel.rs            # the isolated expression chain — depends on nothing here
@@ -141,7 +141,7 @@ it. Node declarations are an algebraic type,
 ```text
 NodeDecl = Operator(OperatorDecl)
          | Connector(ConnectorDecl { effect : Effect,
-                                     behavior : Determinism, … })  — both mandatory
+                                     behavior : Behavior, … })  — both mandatory
          | Graph(GraphDecl)
 
 Effect   = None | Class(EffectClass)   — `none` is an explicit declared
@@ -338,7 +338,7 @@ second parser and no second engine.
 
 | Component | Owns | Spec | M0 |
 |---|---|---|---|
-| **`node`** | the shared vocabulary: `Path` (enters the id recipes), `Kind`, `Port`, `Effect` (`None \| Class(EffectClass)` — `none` explicit, the three classes stay three), `Determinism` (deterministic \| probabilistic — carried by the DSL attribute `behavior`, whose normative spelling is unchanged), `Trigger` (`p:` \| `l:` — a transaction property, **not** an envelope field) | [grammar.md](../spec/grammar.md) vocabulary; [effects-and-sagas.md §2.2](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | M0 |
+| **`node`** | the shared vocabulary: `Path` (enters the id recipes), `Kind`, `Port`, `Effect` (`None \| Class(EffectClass)` — `none` explicit, the three classes stay three), `Behavior` (deterministic \| probabilistic — the DSL attribute of the same name), `Trigger` (`p:` \| `l:` — a transaction property, **not** an envelope field) | [grammar.md](../spec/grammar.md) vocabulary; [effects-and-sagas.md §2.2](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | M0 |
 | **`envelope`** | `Envelope { meta, data }` where `meta.sys` is the **six-field Tier-1 spine** (`id`, `parent_id`, `origin_id`, `role`, `graph_version`, `mime_type`) plus the Tier-2 birth stamps (`saga_*` / `loop_*`) minted only on envelopes born in an aspect scope ([envelope.md §1.1–1.2](../spec/envelope.md)) and `data` is a two-state `Data` (matching the normative field name): `Encoded { encoding: Encoding (Raw \| Avro \| ArrowIpc), bytes, value_cache }` — original bytes preserved, materialized into `Value` once on first structural access, the cache neither causal nor serialized — **or `Materialized(Value)`** for values born in memory from the graph, encoded only at persistence ([envelope.md §5–5.1](../spec/envelope.md)) | [envelope.md](../spec/envelope.md) | M0 |
 | **`diagnostics`** | stable codes, severity, the registry's **phase vocabulary** (`parse`, `resolve`, `check`, `plan`, `run`, `replay`, `sim`), multi-span, structured fields; a check ships with its code, its negative test, and its registry row in the same change | [diagnostics.md](../spec/diagnostics.md) | M0 |
 | **`main`** | the `check` / `run` / `sim` verbs, wiring (adapters, dispatcher, stdlib contracts), rendering; owns nothing semantic | — | M0 |

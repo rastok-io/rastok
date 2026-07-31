@@ -25,8 +25,8 @@ package "node — shared graph and execution vocabulary" as P_NODE {
   EffectClass : external-effect risk category
   enum Effect <<enum>>
   Effect : absence or declared class of effect
-  enum Determinism <<enum>>
-  Determinism : deterministic or probabilistic behavior
+  enum Behavior <<enum>>
+  Behavior : deterministic or probabilistic execution
   enum Trigger <<enum>>
   Trigger : port or lifecycle transaction trigger
 }

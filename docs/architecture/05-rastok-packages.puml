@@ -57,11 +57,11 @@ package "crate rastok" as CRATE {
       the declared value ; the three
       effect CLASSES stay three
     }
-    enum Determinism <<enum>> {
+    enum Behavior <<enum>> {
       Deterministic
       Probabilistic
-      carried by the DSL attribute
-      `behavior` (normative spelling)
+      named after the DSL
+      attribute `behavior`
     }
     enum Trigger <<enum>> {
       Port(name) — "p:"
