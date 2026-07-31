@@ -7,6 +7,8 @@ language or runtime behavior.
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
 - [`m0-slice.md`](m0-slice.md) for the first end-to-end proof;
+- [`build-order.md`](build-order.md) for the dependency-driven stage
+  sequence used to build the M0 modules;
 - [`components.md`](components.md) for the component blueprint: owned
   data forms, interfaces, dependency direction, and M0 status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
