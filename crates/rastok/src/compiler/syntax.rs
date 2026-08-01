@@ -1,0 +1,742 @@
+//! Source-faithful syntax tree for `.rkg` files.
+//!
+//! The tree mirrors the productions of `grammar.md` with sugar intact:
+//! nothing is desugared, resolved, or typed here — that is the HIR's
+//! job. Error nodes mark holes left by parse recovery; a tree holding
+//! one is never lowered. CEL expressions and guest bodies are opaque
+//! spans of text: the host tree never interprets them.
+//!
+//! Nodes are owned plain data with public fields; spans ride along for
+//! diagnostics and are never part of any canonical identity.
+
+use crate::diagnostics::Span;
+
+/// Spanned word: an identifier, keyword, or tag, as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Name {
+    /// The word, exactly as in the source.
+    pub text: String,
+    /// Where it was written.
+    pub span: Span,
+}
+
+/// Spanned integer literal, kept as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntLit {
+    /// The literal text, sign included.
+    pub text: String,
+    /// Where it was written.
+    pub span: Span,
+}
+
+/// Opaque CEL expression span, handed untouched to the CEL chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CelExpr {
+    /// The expression text, exactly as delimited.
+    pub text: String,
+    /// Where it was written.
+    pub span: Span,
+}
+
+/// Hole left where parsing failed and recovery resynchronized. A tree
+/// containing one never produces a plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorNode {
+    /// The skipped region.
+    pub span: Span,
+}
+
+/// One parsed `.rkg` file: `file ::= top_decl*`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SyntaxTree {
+    /// Top-level declarations in source order.
+    pub decls: Vec<TopDecl>,
+}
+
+/// Top-level declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TopDecl {
+    /// `graph … { … }`, including the `: App` entry graph.
+    Graph(GraphDecl),
+    /// `val … = …`
+    Val(ValDecl),
+    /// `lab … { … }` — recognized and skipped until the scenario
+    /// stage; the body is not represented yet.
+    Lab(LabStub),
+    /// Parse-recovery hole.
+    Error(ErrorNode),
+}
+
+/// `lab <name>` whose body was skipped with an explicit diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabStub {
+    /// The lab name, binding to the App of the same name.
+    pub name: Name,
+    /// The whole skipped declaration.
+    pub span: Span,
+}
+
+/// `graph IDENT ( ":" annotation )? per? "{" body "}"`
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphDecl {
+    /// The declared instance name.
+    pub name: Name,
+    /// `+`-joined stdlib symbols; classification is the checker's job.
+    pub annotation: Option<Annotation>,
+    /// Keyed replication clause.
+    pub per: Option<PerClause>,
+    /// Body items in source order.
+    pub body: Vec<GraphItem>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// `: IDENT ( "+" IDENT )*` — trait, role, and aspect symbols, in
+/// written order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Annotation {
+    /// The symbols, in written order.
+    pub symbols: Vec<Name>,
+}
+
+/// One item of a graph body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GraphItem {
+    /// `input x` / `output x`
+    Port(PortDecl),
+    /// `partition IDENT { … }`
+    Partition(PartitionDecl),
+    /// `operator IDENT … { … }`
+    Operator(OperatorDecl),
+    /// `connector IDENT : T … { … }`
+    Connector(ConnectorDecl),
+    /// `val …`
+    Val(ValDecl),
+    /// Wiring: `a -> b.in`, chains, branches, `<->`.
+    Edge(EdgeDecl),
+    /// Nested `graph … { … }`.
+    Graph(GraphDecl),
+    /// `defaults { … }`
+    Defaults(StructBody),
+    /// Graph-level attribute, aspect attributes included.
+    Attribute(Attribute),
+    /// Graph-level handler.
+    Handler(HandlerDecl),
+    /// Parse-recovery hole.
+    Error(ErrorNode),
+}
+
+/// `operator IDENT ( ":" annotation )? per? { body }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperatorDecl {
+    /// The declared instance name.
+    pub name: Name,
+    /// Optional stdlib alias and aspects.
+    pub annotation: Option<Annotation>,
+    /// Keyed replication clause.
+    pub per: Option<PerClause>,
+    /// Body items in source order.
+    pub body: Vec<OperatorItem>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// `connector IDENT ":" annotation per? { body }` — the annotation is
+/// syntactically mandatory: an external boundary is explicit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectorDecl {
+    /// The declared instance name.
+    pub name: Name,
+    /// The mandatory trait, plus optional aspects.
+    pub annotation: Annotation,
+    /// Keyed replication clause.
+    pub per: Option<PerClause>,
+    /// Body items in source order.
+    pub body: Vec<OperatorItem>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// One item of an operator or connector body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OperatorItem {
+    /// `input x` / `output x`
+    Port(PortDecl),
+    /// `val …`
+    Val(ValDecl),
+    /// `var …`
+    Var(VarDecl),
+    /// `on … { … }`
+    Handler(HandlerDecl),
+    /// `name = value`, dotted keys included.
+    Attribute(Attribute),
+    /// `env { … }` and other named sub-blocks.
+    SubBlock(SubBlock),
+    /// Parse-recovery hole.
+    Error(ErrorNode),
+}
+
+/// Port direction keyword.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortDirection {
+    /// `input`
+    Input,
+    /// `output`
+    Output,
+}
+
+/// `( "input" | "output" ) IDENT ( ":" type_ref )?`
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortDecl {
+    /// Declared direction.
+    pub direction: PortDirection,
+    /// The port name.
+    pub name: Name,
+    /// Optional pinned type; absent means inferred.
+    pub ty: Option<TypeRef>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// `val IDENT ( ":" type_ref )? "=" value` — immutable by position.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValDecl {
+    /// The binding name.
+    pub name: Name,
+    /// Optional pinned type.
+    pub ty: Option<TypeRef>,
+    /// The bound value.
+    pub value: Value,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// `var IDENT ":" type_ref ( "=" value )?` — mutable operator state.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VarDecl {
+    /// The state cell name.
+    pub name: Name,
+    /// The mandatory state type.
+    pub ty: TypeRef,
+    /// Optional initializer.
+    pub value: Option<Value>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// `partition IDENT { key = … ; lifetime = … }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartitionDecl {
+    /// The partition name.
+    pub name: Name,
+    /// Body fields in source order.
+    pub fields: Vec<PartitionField>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// One field of a partition body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PartitionField {
+    /// `key = <cel_expr>`
+    Key(CelExpr),
+    /// `lifetime = <lifetime_value>`
+    Lifetime(LifetimeValue),
+}
+
+/// The `lifetime` vocabulary.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LifetimeValue {
+    /// Bare duration value — idle-ttl.
+    Expr(CelExpr),
+    /// `persistent`
+    Persistent(Span),
+    /// `single_pass`
+    SinglePass(Span),
+    /// `fixed <duration>`
+    Fixed(CelExpr),
+    /// `window <duration> (tumbling | sliding)`
+    Window {
+        /// The window duration.
+        duration: CelExpr,
+        /// The window mode.
+        mode: WindowMode,
+    },
+}
+
+/// Window advancement mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowMode {
+    /// `tumbling`
+    Tumbling,
+    /// `sliding`
+    Sliding,
+}
+
+/// `per` clause: named partition references or an inline anonymous
+/// partition.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PerClause {
+    /// `per a, b` — references to declared partitions; a tuple when
+    /// several.
+    Named(Vec<Name>),
+    /// `per { … }` / `per (key = …)` — private anonymous partition.
+    Inline(Vec<PartitionField>),
+}
+
+/// `on trigger guard* body?` — a body-less handler is the Loop
+/// base-case declaration; legality is the checker's judgment.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HandlerDecl {
+    /// What fires the handler.
+    pub trigger: Trigger,
+    /// Guard clauses in written order.
+    pub guards: Vec<Guard>,
+    /// The statements, or `None` for a body-less declaration.
+    pub body: Option<Vec<Statement>>,
+    /// The whole handler.
+    pub span: Span,
+}
+
+/// Syntactic handler trigger, as written.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Trigger {
+    /// `on start`
+    Start(Span),
+    /// `on stop`
+    Stop(Span),
+    /// `on compensate`
+    Compensate(Span),
+    /// `on <Aspect>.start` / `on <Aspect>.stop`
+    Aspect {
+        /// The qualifying aspect name.
+        aspect: Name,
+        /// The qualified lifecycle event.
+        event: AspectEvent,
+    },
+    /// `on (a, b)` — presence join.
+    Join(Vec<Name>),
+    /// `on <port>`
+    Port(Name),
+}
+
+/// Aspect-qualified lifecycle event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AspectEvent {
+    /// `.start`
+    Start,
+    /// `.stop`
+    Stop,
+}
+
+/// One guard clause of a handler.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Guard {
+    /// `where <cel_expr>` — content predicate.
+    Where(CelExpr),
+    /// `having <cel_expr>` — aggregate predicate.
+    Having(CelExpr),
+    /// `by <cel_expr>` — join-key override.
+    By(CelExpr),
+    /// `within <cel_expr>` — join time window.
+    Within(CelExpr),
+    /// `last INT` — join count bound.
+    Last(IntLit),
+}
+
+/// One statement of a handler body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Statement {
+    /// `val …` — handler-local binding.
+    Val(ValDecl),
+    /// `lvalue ( ":" type_ref )? "=" value`
+    Assign {
+        /// The assignment target.
+        target: LValue,
+        /// Optional pinned type.
+        ty: Option<TypeRef>,
+        /// The assigned value.
+        value: Value,
+    },
+    /// `err = Kind { … }` — typed-error emission.
+    ErrEmit {
+        /// The error kind, from the node's declared error set.
+        kind: Name,
+        /// Optional typed fields.
+        body: Option<StructBody>,
+    },
+    /// `(a, b) = …` — atomic multi-emit, tuple or broadcast.
+    MultiEmit {
+        /// The targets, in written order.
+        targets: Vec<LValue>,
+        /// One value per target, or one broadcast value.
+        values: Vec<Value>,
+    },
+    /// Implicit yield: a bare value where a single output exists.
+    Yield(Value),
+    /// `stop IDENT?` — lifecycle action.
+    Stop(Option<Name>),
+    /// Parse-recovery hole.
+    Error(ErrorNode),
+}
+
+/// Dotted assignment target or reference path, as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LValue {
+    /// The path segments; reserved words may appear after the first.
+    pub segments: Vec<Name>,
+    /// The whole path.
+    pub span: Span,
+}
+
+/// A value position: builders by prefix, CEL for everything scalar.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    /// Opaque CEL expression.
+    Cel(CelExpr),
+    /// `envelope { … }` — patches the input; bare `envelope` is
+    /// identity.
+    Envelope(Option<StructBody>),
+    /// `{ … }` — sugar for a full-data struct replacement, legal only
+    /// in envelope positions. Kept distinct: sugar stays intact.
+    EnvelopeSugar(StructBody),
+    /// `struct { … }` literal.
+    Struct(StructBody),
+    /// `map { … }` literal.
+    Map(StructBody),
+    /// `nothing` — emit nothing.
+    Nothing(Span),
+    /// `jq { … }`, `bounded(64)`, `exponential { … }`, …
+    Tagged(TaggedValue),
+}
+
+/// `TAG_KW ( "(" args ")" )? ( "{" body "}" )?`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaggedValue {
+    /// The tag word.
+    pub tag: Name,
+    /// Parenthesized arguments, possibly empty.
+    pub args: Vec<Value>,
+    /// The optional block body.
+    pub body: Option<TaggedBody>,
+}
+
+/// Body of a tagged value — tag-dependent.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TaggedBody {
+    /// Raw guest text, never read by the host parser.
+    Raw {
+        /// The body text, braces excluded.
+        text: String,
+        /// Where it was written.
+        span: Span,
+    },
+    /// Structured body for configuration tags.
+    Struct(StructBody),
+}
+
+/// `{ attr_or_block ( ","? attr_or_block )* }`
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StructBody {
+    /// Entries in source order.
+    pub entries: Vec<StructEntry>,
+}
+
+/// One entry of a struct-shaped body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructEntry {
+    /// `key = value`, dotted keys allowed.
+    Field {
+        /// The dotted key.
+        key: LValue,
+        /// The value.
+        value: Value,
+    },
+    /// `name { … }` nested sub-block.
+    Block {
+        /// The block name.
+        name: Name,
+        /// The nested body.
+        body: StructBody,
+    },
+}
+
+/// `name = value` at declaration level.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attribute {
+    /// The dotted attribute key.
+    pub target: LValue,
+    /// The attribute value.
+    pub value: Value,
+    /// The whole attribute.
+    pub span: Span,
+}
+
+/// `IDENT { … }` named sub-block inside a node body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubBlock {
+    /// The block name.
+    pub name: Name,
+    /// The block body.
+    pub body: StructBody,
+    /// The whole block.
+    pub span: Span,
+}
+
+/// One wiring declaration; chains generalize the single edge.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeDecl {
+    /// Two or more endpoints joined by arrows, in written order.
+    pub endpoints: Vec<EdgeEndpoint>,
+    /// `<->` instead of `->`; syntactically a two-endpoint form.
+    pub bidirectional: bool,
+    /// `when <cel_expr>` boolean edge guard.
+    pub guard: Option<CelExpr>,
+    /// `{ … }` trailing edge configuration.
+    pub config: Option<StructBody>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// One endpoint of an edge.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EdgeEndpoint {
+    /// A port reference.
+    Ref(PortRef),
+    /// `{ a ; b }` fan-out or fan-in branch.
+    Branch(Vec<PortRef>),
+    /// `nothing` — explicit discard sink.
+    Nothing(Span),
+}
+
+/// `node`, `node.port`, a composed path, or the graph boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortRef {
+    /// Whether the reference starts at the graph's own boundary
+    /// (leading `.`): bare `.` has no segments, `.foo` has one.
+    pub boundary: bool,
+    /// The path segments after the anchor.
+    pub segments: Vec<Name>,
+    /// The whole reference.
+    pub span: Span,
+}
+
+/// `type_ref ::= union_type "?"?` — alternatives plus optionality.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeRef {
+    /// The `|`-joined alternatives, one when not a union.
+    pub alternatives: Vec<BaseType>,
+    /// Trailing `?` — shorthand for `| null`.
+    pub optional: bool,
+    /// The whole type expression.
+    pub span: Span,
+}
+
+/// One base type of a union.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BaseType {
+    /// A scalar physical or logical type.
+    Scalar(ScalarType),
+    /// `variant` — the dynamic top type.
+    Variant,
+    /// `struct { a: T, .. }` — typed record, possibly open.
+    Struct {
+        /// The declared fields, in written order.
+        fields: Vec<FieldDecl>,
+        /// Whether `..` closes the record as open.
+        open: bool,
+    },
+    /// `map<K, V>`
+    Map(Box<TypeRef>, Box<TypeRef>),
+    /// `array<T>`
+    Array(Box<TypeRef>),
+    /// `table<T>` — alias for `array<struct>`.
+    Table(Box<TypeRef>),
+    /// `enum { A, B }`
+    Enum(Vec<Name>),
+    /// A named type, schema, or declared enum/union.
+    Named(Name),
+}
+
+/// One field of a struct type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldDecl {
+    /// The field name; type words are allowed here.
+    pub name: Name,
+    /// The field type.
+    pub ty: TypeRef,
+}
+
+/// The scalar type vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarType {
+    /// `bool`
+    Bool,
+    /// `int`
+    Int,
+    /// `long`
+    Long,
+    /// `float`
+    Float,
+    /// `double`
+    Double,
+    /// `number`
+    Number,
+    /// `bytes`
+    Bytes,
+    /// `text`
+    Text,
+    /// `null`
+    Null,
+    /// `decimal(p, s)`
+    Decimal {
+        /// Total digits.
+        precision: u32,
+        /// Fractional digits.
+        scale: u32,
+    },
+    /// `date`
+    Date,
+    /// `timestamp`
+    Timestamp,
+    /// `timestamp_ntz`
+    TimestampNtz,
+    /// `time`
+    Time,
+    /// `uuid`
+    Uuid,
+    /// `duration`
+    Duration,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::SourceId;
+
+    fn span(range: std::ops::Range<usize>) -> Span {
+        Span::new(SourceId::new(0), range)
+    }
+
+    fn name(text: &str, range: std::ops::Range<usize>) -> Name {
+        Name {
+            text: String::from(text),
+            span: span(range),
+        }
+    }
+
+    #[test]
+    fn a_minimal_app_graph_is_representable() {
+        // graph m0 : App { . -> shout -> . }
+        let tree = SyntaxTree {
+            decls: vec![TopDecl::Graph(GraphDecl {
+                name: name("m0", 6..8),
+                annotation: Some(Annotation {
+                    symbols: vec![name("App", 11..14)],
+                }),
+                per: None,
+                body: vec![GraphItem::Edge(EdgeDecl {
+                    endpoints: vec![
+                        EdgeEndpoint::Ref(PortRef {
+                            boundary: true,
+                            segments: vec![],
+                            span: span(17..18),
+                        }),
+                        EdgeEndpoint::Ref(PortRef {
+                            boundary: false,
+                            segments: vec![name("shout", 22..27)],
+                            span: span(22..27),
+                        }),
+                        EdgeEndpoint::Ref(PortRef {
+                            boundary: true,
+                            segments: vec![],
+                            span: span(31..32),
+                        }),
+                    ],
+                    bidirectional: false,
+                    guard: None,
+                    config: None,
+                    span: span(17..32),
+                })],
+                span: span(0..34),
+            })],
+        };
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected a graph");
+        };
+        assert_eq!(graph.annotation.as_ref().unwrap().symbols[0].text, "App");
+        assert_eq!(graph.body.len(), 1);
+    }
+
+    #[test]
+    fn sugar_stays_distinct_from_its_expansion() {
+        // `{ n = 1 }` and `envelope { data = struct { n = 1 } }` must
+        // not collapse into one representation at this stage.
+        let body = StructBody {
+            entries: vec![StructEntry::Field {
+                key: LValue {
+                    segments: vec![name("n", 2..3)],
+                    span: span(2..3),
+                },
+                value: Value::Cel(CelExpr {
+                    text: String::from("1"),
+                    span: span(6..7),
+                }),
+            }],
+        };
+        assert_ne!(
+            Value::EnvelopeSugar(body.clone()),
+            Value::Envelope(Some(body))
+        );
+    }
+
+    #[test]
+    fn recursive_types_nest_through_boxes() {
+        // map<text, array<int>>?
+        let ty = TypeRef {
+            alternatives: vec![BaseType::Map(
+                Box::new(TypeRef {
+                    alternatives: vec![BaseType::Scalar(ScalarType::Text)],
+                    optional: false,
+                    span: span(4..8),
+                }),
+                Box::new(TypeRef {
+                    alternatives: vec![BaseType::Array(Box::new(TypeRef {
+                        alternatives: vec![BaseType::Scalar(ScalarType::Int)],
+                        optional: false,
+                        span: span(16..19),
+                    }))],
+                    optional: false,
+                    span: span(10..20),
+                }),
+            )],
+            optional: true,
+            span: span(0..22),
+        };
+        assert!(ty.optional);
+        let BaseType::Map(_, values) = &ty.alternatives[0] else {
+            panic!("expected a map");
+        };
+        assert!(matches!(values.alternatives[0], BaseType::Array(_)));
+    }
+
+    #[test]
+    fn error_nodes_are_first_class_holes() {
+        let tree = SyntaxTree {
+            decls: vec![
+                TopDecl::Error(ErrorNode { span: span(0..9) }),
+                TopDecl::Val(ValDecl {
+                    name: name("x", 14..15),
+                    ty: None,
+                    value: Value::Cel(CelExpr {
+                        text: String::from("1"),
+                        span: span(18..19),
+                    }),
+                    span: span(10..19),
+                }),
+            ],
+        };
+        assert!(matches!(tree.decls[0], TopDecl::Error(_)));
+        assert!(matches!(tree.decls[1], TopDecl::Val(_)));
+    }
+}
