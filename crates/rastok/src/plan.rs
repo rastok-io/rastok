@@ -35,7 +35,11 @@ impl Slot {
 pub struct ExecutionPlan {
     /// The nodes, in canonical order; [`Slot`]s index this table.
     pub nodes: Vec<Node>,
-    /// The wiring, desugared to explicit pairs.
+    /// Boundary ports declared on the graph, in canonical order; the
+    /// defaults `in` and `out` exist implicitly.
+    pub boundary: Vec<(node::Port, node::Direction)>,
+    /// The wiring, desugared to explicit pairs, in canonical order —
+    /// the same order the semantic hash sees.
     pub edges: Vec<Edge>,
     /// Every handler of every node, in per-node declaration order.
     pub handlers: Vec<Handler>,

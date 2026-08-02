@@ -17,14 +17,7 @@ pub struct Hir {
     pub app: Graph,
 }
 
-/// Semantic port direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Direction {
-    /// The port receives envelopes.
-    Input,
-    /// The port emits envelopes.
-    Output,
-}
+pub use crate::node::Direction;
 
 /// One checked graph.
 #[derive(Debug, Clone, PartialEq)]

@@ -27,6 +27,12 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
         hasher: blake3::Hasher::new(),
     };
     writer.str(&hir.app.name);
+    let boundary = sorted_boundary(hir);
+    writer.count(boundary.len());
+    for (port, direction) in &boundary {
+        writer.str(port.name());
+        writer.direction(*direction);
+    }
     let mut vals: Vec<_> = hir.app.vals.iter().collect();
     vals.sort_by(|a, b| a.name.cmp(&b.name));
     writer.count(vals.len());
@@ -39,7 +45,27 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     for node in &mut nodes {
         writer.node(node);
     }
-    let mut edges: Vec<String> = hir
+    let edges = sorted_edges(hir);
+    writer.count(edges.len());
+    for (text, _) in edges {
+        writer.str(&text);
+    }
+    let mut bytes = [0u8; 32];
+    writer.hasher.finalize_xof().fill(&mut bytes);
+    SemanticHash::from_bytes(bytes)
+}
+
+/// Boundary ports in canonical order.
+fn sorted_boundary(hir: &Hir) -> Vec<(node::Port, Direction)> {
+    let mut boundary = hir.app.boundary.clone();
+    boundary.sort();
+    boundary
+}
+
+/// Edges in canonical order, keyed by their endpoint rendering — the
+/// one order both the hash and the shipped plan use.
+fn sorted_edges(hir: &Hir) -> Vec<(String, &crate::compiler::hir::Edge)> {
+    let mut edges: Vec<_> = hir
         .app
         .edges
         .iter()
@@ -48,17 +74,11 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
                 EdgeTarget::Port(endpoint) => endpoint_text(endpoint),
                 EdgeTarget::Discard => String::from("!discard"),
             };
-            format!("{}>{to}", endpoint_text(&edge.from))
+            (format!("{}>{to}", endpoint_text(&edge.from)), edge)
         })
         .collect();
-    edges.sort();
-    writer.count(edges.len());
-    for edge in edges {
-        writer.str(&edge);
-    }
-    let mut bytes = [0u8; 32];
-    writer.hasher.finalize_xof().fill(&mut bytes);
-    SemanticHash::from_bytes(bytes)
+    edges.sort_by(|a, b| a.0.cmp(&b.0));
+    edges
 }
 
 /// Lowers a checked graph into the shipped plan and its symbol table.
@@ -78,6 +98,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
     };
     let mut plan = ExecutionPlan {
         nodes: Vec::new(),
+        boundary: sorted_boundary(hir),
         edges: Vec::new(),
         handlers: Vec::new(),
     };
@@ -158,7 +179,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
             });
         }
     }
-    for edge in &hir.app.edges {
+    for (_, edge) in sorted_edges(hir) {
         let endpoint = |end: &crate::compiler::hir::Endpoint| EndpointRef {
             node: end.node.as_ref().map(&slot_of),
             port: end.port.clone(),
@@ -309,6 +330,38 @@ impl Writer {
         self.hasher.update(text.as_bytes());
     }
 
+    fn direction(&mut self, direction: Direction) {
+        self.tag(match direction {
+            Direction::Input => 1,
+            Direction::Output => 2,
+        });
+    }
+
+    /// Stable domain tags for the CEL type vocabulary — never a Rust
+    /// `Debug` rendering, which renames could silently change.
+    fn ty(&mut self, ty: &cel::Type) {
+        match ty {
+            cel::Type::Bool => self.tag(1),
+            cel::Type::Int => self.tag(2),
+            cel::Type::Uint => self.tag(3),
+            cel::Type::Double => self.tag(4),
+            cel::Type::Text => self.tag(5),
+            cel::Type::Bytes => self.tag(6),
+            cel::Type::Duration => self.tag(7),
+            cel::Type::Timestamp => self.tag(8),
+            cel::Type::Null => self.tag(9),
+            cel::Type::Dyn => self.tag(10),
+            cel::Type::List(element) => {
+                self.tag(11);
+                self.ty(element);
+            }
+            cel::Type::Map(values) => {
+                self.tag(12);
+                self.ty(values);
+            }
+        }
+    }
+
     fn node(&mut self, node: &HirNode) {
         self.tag(match node.kind {
             node::Kind::Operator => 1,
@@ -351,7 +404,7 @@ impl Writer {
         self.count(vars.len());
         for var in vars {
             self.str(&var.name);
-            self.str(&format!("{:?}", var.ty));
+            self.ty(&var.ty);
             match &var.init {
                 None => self.tag(0),
                 Some(init) => {
@@ -446,12 +499,29 @@ impl Writer {
             }
             cel::Expr::Unary { op, expr } => {
                 self.tag(3);
-                self.str(&format!("{op:?}"));
+                self.tag(match op {
+                    cel::UnaryOp::Not => 1,
+                    cel::UnaryOp::Neg => 2,
+                });
                 self.expr(expr);
             }
             cel::Expr::Binary { op, left, right } => {
                 self.tag(4);
-                self.str(&format!("{op:?}"));
+                self.tag(match op {
+                    cel::BinaryOp::Mul => 1,
+                    cel::BinaryOp::Div => 2,
+                    cel::BinaryOp::Rem => 3,
+                    cel::BinaryOp::Add => 4,
+                    cel::BinaryOp::Sub => 5,
+                    cel::BinaryOp::Eq => 6,
+                    cel::BinaryOp::Ne => 7,
+                    cel::BinaryOp::Lt => 8,
+                    cel::BinaryOp::Le => 9,
+                    cel::BinaryOp::Gt => 10,
+                    cel::BinaryOp::Ge => 11,
+                    cel::BinaryOp::And => 12,
+                    cel::BinaryOp::Or => 13,
+                });
                 self.expr(left);
                 self.expr(right);
             }
@@ -472,7 +542,11 @@ impl Writer {
             }
             cel::Expr::Call { function, args } => {
                 self.tag(7);
-                self.str(&format!("{function:?}"));
+                self.tag(match function {
+                    cel::Function::Duration => 1,
+                    cel::Function::Timestamp => 2,
+                    cel::Function::Size => 3,
+                });
                 self.count(args.len());
                 for arg in args {
                     self.expr(arg);
@@ -487,8 +561,12 @@ impl Writer {
             }
             cel::Expr::MapLit(entries) => {
                 self.tag(9);
-                self.count(entries.len());
-                for (key, value) in entries {
+                // Maps are semantically unordered; the canonical form
+                // sorts keys (duplicates are rejected at compilation).
+                let mut sorted: Vec<_> = entries.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                self.count(sorted.len());
+                for (key, value) in sorted {
                     self.str(key);
                     self.expr(value);
                 }
@@ -657,6 +735,42 @@ graph m0_probe : App {
             original,
             "a CEL expression is identity material"
         );
+    }
+
+    #[test]
+    fn the_semantic_hash_is_pinned_byte_for_byte() {
+        // The frozen identity of the M0 probe. If this test fails, the
+        // canonical form changed: that is an identity-contract change
+        // and must be deliberate, reviewed, and re-blessed.
+        let hash = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
+        assert_eq!(
+            hash.to_string(),
+            "9b2c2767965fa216a7f7c9ed60b0f3ea8f512427f9cc3106af9e8ef41a0eb42b"
+        );
+    }
+
+    #[test]
+    fn boundary_ports_are_identity_material() {
+        let bare = "graph g : App {\n  operator o { on in { out = envelope } }\n  . -> o -> .\n}\n";
+        let with_port = "graph g : App {\n  input feed\n  operator o { on in { out = envelope } }\n  . -> o -> .\n}\n";
+        let bare_hash = compile(&[bare], &Registry::m0()).unwrap().hash;
+        let ported = compile(&[with_port], &Registry::m0()).unwrap();
+        assert_ne!(
+            ported.hash, bare_hash,
+            "a declared boundary port is identity"
+        );
+        assert_eq!(ported.plan.boundary.len(), 1);
+        assert_eq!(ported.plan.boundary[0].0.name(), "feed");
+    }
+
+    #[test]
+    fn the_plan_and_the_hash_share_one_edge_order() {
+        let forward = "graph g : App {\n  operator a { on in { out = envelope } }\n  operator b { on in { out = envelope } }\n  . -> a -> b -> .\n}\n";
+        let reordered = "graph g : App {\n  operator a { on in { out = envelope } }\n  operator b { on in { out = envelope } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
+        let one = compile(&[forward], &Registry::m0()).unwrap();
+        let two = compile(&[reordered], &Registry::m0()).unwrap();
+        assert_eq!(one.hash, two.hash);
+        assert_eq!(one.plan.edges, two.plan.edges);
     }
 
     #[test]

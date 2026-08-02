@@ -123,6 +123,15 @@ impl fmt::Display for Port {
     }
 }
 
+/// Semantic direction of a port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Direction {
+    /// The port receives envelopes.
+    Input,
+    /// The port emits envelopes.
+    Output,
+}
+
 /// Category of a node declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {

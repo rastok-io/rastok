@@ -533,12 +533,19 @@ impl<'src> Parser<'src, '_> {
     fn boundary_ref(&mut self) -> PortRef {
         let dot = self.bump();
         let start = dot.span.range().start;
-        let segments = match self.peek().kind {
-            TokenKind::Ident => match self.name("a boundary port name") {
+        // `.foo` requires the name to touch the dot: span adjacency
+        // stands in for the newline the lexer dropped, so `b -> .`
+        // followed by `a -> …` on the next line never reads as `.a`.
+        let next = self.peek();
+        let adjacent =
+            next.kind == TokenKind::Ident && next.span.range().start == dot.span.range().end;
+        let segments = if adjacent {
+            match self.name("a boundary port name") {
                 Some(name) => vec![name],
                 None => vec![],
-            },
-            _ => vec![],
+            }
+        } else {
+            vec![]
         };
         PortRef {
             boundary: true,
@@ -1089,7 +1096,15 @@ impl<'src> Parser<'src, '_> {
         let first = self.name("a name")?;
         let start = first.span.range().start;
         let mut segments = vec![first];
-        while self.eat(TokenKind::Dot).is_some() {
+        // A continuation dot must touch the previous segment: span
+        // adjacency stands in for the newline the lexer dropped, so
+        // `a -> b` followed by `. -> c` never reads as `b.`.
+        loop {
+            let dot = self.peek();
+            if dot.kind != TokenKind::Dot || dot.span.range().start != self.last_end {
+                break;
+            }
+            self.bump();
             segments.push(self.name("a path segment")?);
         }
         Some(LValue {
@@ -1697,6 +1712,44 @@ graph m0_probe : App {
         };
         assert_eq!(cel.text, "count + doubled");
         assert!(matches!(&statements[4], Statement::Stop(None)));
+    }
+
+    #[test]
+    fn boundary_and_path_dots_respect_line_separation() {
+        // `b -> .` then `a -> .` on the next line: the dots must not
+        // swallow the identifiers across the dropped newlines.
+        let source = "graph g : App {\n  . -> a -> .\n  b -> .\n}\n";
+        let tree = parse_clean(source);
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected a graph");
+        };
+        assert_eq!(graph.body.len(), 2, "two separate edges: {graph:#?}");
+        let GraphItem::Edge(first) = &graph.body[0] else {
+            panic!("expected the first edge");
+        };
+        assert!(matches!(
+            &first.endpoints[2],
+            EdgeEndpoint::Ref(port) if port.boundary && port.segments.is_empty()
+        ));
+        let GraphItem::Edge(second) = &graph.body[1] else {
+            panic!("expected the second edge");
+        };
+        assert!(matches!(
+            &second.endpoints[0],
+            EdgeEndpoint::Ref(port) if !port.boundary && port.segments[0].text == "b"
+        ));
+        // Adjacency still admits tight forms on one line.
+        let tight = parse_clean("graph g : App {\n  .feed -> x.in\n  output feed\n}\n");
+        let TopDecl::Graph(graph) = &tight.decls[0] else {
+            panic!("expected a graph");
+        };
+        let GraphItem::Edge(edge) = &graph.body[0] else {
+            panic!("expected the edge");
+        };
+        assert!(matches!(
+            &edge.endpoints[0],
+            EdgeEndpoint::Ref(port) if port.boundary && port.segments[0].text == "feed"
+        ));
     }
 
     #[test]
