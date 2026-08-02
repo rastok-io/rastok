@@ -52,5 +52,8 @@ causal core. They live in their home specs, not here.
 | E-META-SYS-READONLY | error | check | [envelope.md](envelope.md) | a write reaching the read-only `meta.sys` namespace (§6: there is no write) |
 | E-CEL-EXPR | error | check | [grammar.md](grammar.md) | a CEL expression fault, adapted from the CEL chain; field `detail` |
 | E-CHECK-DEFERRED | error | check | [grammar.md](grammar.md) | grammar admitted but outside the executable subset of this build; field `construct` |
+| E-CONNECTOR-UNAVAILABLE | error | check | [stdlib.md](stdlib.md) | a connector type with no adapter in this build — declared catalogue or unknown; field `type` |
+| E-CONTRACT-ATTR | error | check | [stdlib.md](stdlib.md) | an attribute violating its connector contract sheet; fields `attribute`, `detail` |
+| E-CONTRACT-REQUIRED | error | check | [stdlib.md](stdlib.md) | a mandatory contract attribute left undeclared; field `attribute` |
 | W-DEAD-GRAPH | warning | resolve | [grammar.md](grammar.md) | a top-level graph reachable from no App composition |
 | W-DURABILITY-WEAKENED | warning | plan | [delivery-semantics.md](delivery-semantics.md) | a Node or nested Graph explicitly selects a weaker scope than its closest inherited value |

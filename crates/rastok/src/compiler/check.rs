@@ -19,6 +19,7 @@ use crate::compiler::syntax::{
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 use crate::node;
+use crate::stdlib;
 use std::collections::BTreeMap;
 
 /// Diagnostic for a unit without exactly one `: App` graph.
@@ -35,6 +36,12 @@ pub const E_META_SYS_READONLY: Code = Code::new("E-META-SYS-READONLY");
 pub const E_CEL_EXPR: Code = Code::new("E-CEL-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
 pub const E_CHECK_DEFERRED: Code = Code::new("E-CHECK-DEFERRED");
+/// Diagnostic for a connector type without an adapter in this build.
+pub const E_CONNECTOR_UNAVAILABLE: Code = Code::new("E-CONNECTOR-UNAVAILABLE");
+/// Diagnostic for an attribute violating its contract sheet.
+pub const E_CONTRACT_ATTR: Code = Code::new("E-CONTRACT-ATTR");
+/// Diagnostic for a mandatory contract attribute left undeclared.
+pub const E_CONTRACT_REQUIRED: Code = Code::new("E-CONTRACT-REQUIRED");
 
 /// The pre-bound default ports, usable without declaration.
 const DEFAULT_PORTS: &[&str] = &["in", "out", "err"];
@@ -47,11 +54,12 @@ pub struct Unit {
     pub files: Vec<(SourceId, SyntaxTree)>,
 }
 
-/// Checks a unit into HIR. Diagnostics accumulate in `bag`; `None`
-/// means the unit has no single `: App` graph to check. A returned
-/// HIR is meaningful only when the bag holds no errors.
+/// Checks a unit into HIR against a contract registry. Diagnostics
+/// accumulate in `bag`; `None` means the unit has no single `: App`
+/// graph to check. A returned HIR is meaningful only when the bag
+/// holds no errors.
 #[must_use]
-pub fn check(unit: &Unit, bag: &mut Bag) -> Option<Hir> {
+pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<Hir> {
     let mut apps = Vec::new();
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
@@ -84,17 +92,18 @@ pub fn check(unit: &Unit, bag: &mut Bag) -> Option<Hir> {
         return None;
     }
     let app = apps[0];
-    let mut checker = Checker { bag };
+    let mut checker = Checker { bag, registry };
     Some(Hir {
         app: checker.graph(app),
     })
 }
 
-struct Checker<'bag> {
+struct Checker<'bag, 'registry> {
     bag: &'bag mut Bag,
+    registry: &'registry stdlib::Registry,
 }
 
-impl Checker<'_> {
+impl Checker<'_, '_> {
     fn deferred(&mut self, construct: &'static str, span: Span) {
         self.bag.push(
             Diagnostic::new(
@@ -316,7 +325,167 @@ impl Checker<'_> {
             handlers: Vec::new(),
         };
         self.node_body(&decl.body, &mut node, graph_signature, graph_consts, true);
+        self.contract(&node, decl);
         Some(node)
+    }
+
+    /// Validates a connector declaration against its contract sheet.
+    fn contract(&mut self, node: &Node, decl: &ConnectorDecl) {
+        let symbol = &decl.annotation.symbols[0];
+        let contract = match self.registry.connector(&symbol.text) {
+            stdlib::Availability::Available(contract) => contract,
+            stdlib::Availability::Declared => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONNECTOR_UNAVAILABLE,
+                        Phase::Check,
+                        format!(
+                            "`{}` is declared in the catalogue; its adapter is not in this build",
+                            symbol.text
+                        ),
+                    )
+                    .with_span(symbol.span)
+                    .with_field("type", symbol.text.clone()),
+                );
+                return;
+            }
+            stdlib::Availability::Unknown => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONNECTOR_UNAVAILABLE,
+                        Phase::Check,
+                        format!("`{}` is not a known connector type", symbol.text),
+                    )
+                    .with_span(symbol.span)
+                    .with_field("type", symbol.text.clone()),
+                );
+                return;
+            }
+        };
+        let span_of = |name: &str| {
+            decl.body
+                .iter()
+                .find_map(|item| match item {
+                    OperatorItem::Attribute(attribute)
+                        if attribute.target.segments.len() == 1
+                            && attribute.target.segments[0].text == name =>
+                    {
+                        Some(attribute.span)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(decl.span)
+        };
+        // Sheet-forbidden attributes refuse on the declaration itself,
+        // before any value evaluation.
+        for item in &decl.body {
+            let OperatorItem::Attribute(attribute) = item else {
+                continue;
+            };
+            if attribute.target.segments.len() != 1 {
+                continue;
+            }
+            let name = &attribute.target.segments[0].text;
+            if let Some(stdlib::AttributeSpec {
+                domain: stdlib::AttrDomain::Forbidden(reason),
+                ..
+            }) = contract.attribute(name)
+            {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONTRACT_ATTR,
+                        Phase::Check,
+                        format!("`{name}` violates the {} sheet: {reason}", contract.name),
+                    )
+                    .with_span(attribute.span)
+                    .with_field("attribute", name.clone())
+                    .with_field("detail", *reason),
+                );
+            }
+        }
+        for attribute in &node.attributes {
+            if matches!(
+                contract.attribute(&attribute.name),
+                Some(stdlib::AttributeSpec {
+                    domain: stdlib::AttrDomain::Forbidden(_),
+                    ..
+                })
+            ) {
+                continue;
+            }
+            let span = span_of(&attribute.name);
+            let Some(spec) = contract.attribute(&attribute.name) else {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONTRACT_ATTR,
+                        Phase::Check,
+                        format!(
+                            "`{}` is not on the {} contract sheet",
+                            attribute.name, contract.name
+                        ),
+                    )
+                    .with_span(span)
+                    .with_field("attribute", attribute.name.clone()),
+                );
+                continue;
+            };
+            let fault: Option<String> = match (&spec.domain, &attribute.value) {
+                (stdlib::AttrDomain::Forbidden(reason), _) => Some((*reason).to_string()),
+                (stdlib::AttrDomain::Word(words), AttrValue::Word(word)) => {
+                    if words.contains(&word.as_str()) {
+                        if attribute.name == "mode" && word == "service" {
+                            self.deferred("the Process service mode", span);
+                        }
+                        None
+                    } else {
+                        Some(format!("expected one of {words:?}, got `{word}`"))
+                    }
+                }
+                (stdlib::AttrDomain::Text, AttrValue::Const(cel::Value::Text(_))) => None,
+                (stdlib::AttrDomain::TextList, AttrValue::Const(cel::Value::List(items))) => {
+                    if items.iter().all(|item| matches!(item, cel::Value::Text(_))) {
+                        None
+                    } else {
+                        Some(String::from("expected a list of text values"))
+                    }
+                }
+                (stdlib::AttrDomain::Duration, AttrValue::Const(cel::Value::Duration(_))) => None,
+                (domain, _) => Some(format!("the value does not fit the {domain:?} domain")),
+            };
+            if let Some(detail) = fault {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONTRACT_ATTR,
+                        Phase::Check,
+                        format!(
+                            "`{}` violates the {} sheet: {detail}",
+                            attribute.name, contract.name
+                        ),
+                    )
+                    .with_span(span)
+                    .with_field("attribute", attribute.name.clone())
+                    .with_field("detail", detail),
+                );
+            }
+        }
+        for spec in contract.attributes {
+            if spec.required
+                && !node
+                    .attributes
+                    .iter()
+                    .any(|attribute| attribute.name == spec.name)
+            {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONTRACT_REQUIRED,
+                        Phase::Check,
+                        format!("the {} sheet requires `{}`", contract.name, spec.name),
+                    )
+                    .with_span(decl.span)
+                    .with_field("attribute", spec.name),
+                );
+            }
+        }
     }
 
     fn node_path(&mut self, name: &str, span: Span) -> Option<node::Path> {
@@ -889,8 +1058,15 @@ mod tests {
         let unit = Unit {
             files: vec![(SourceId::new(0), tree)],
         };
-        let hir = check(&unit, &mut bag);
+        let hir = check(&unit, &stdlib::Registry::m0(), &mut bag);
         (hir, bag)
+    }
+
+    fn diagnostic_codes(bag: &Bag) -> Vec<Code> {
+        bag.diagnostics()
+            .iter()
+            .map(crate::diagnostics::Diagnostic::code)
+            .collect()
     }
 
     fn check_clean(source: &str) -> Hir {
@@ -1039,6 +1215,57 @@ graph m0_probe : App {
         let span = diagnostic.spans()[0];
         let range = span.range();
         assert_eq!(&source[range], "mystery > 0");
+    }
+
+    #[test]
+    fn a_missing_mandatory_axis_violates_the_sheet() {
+        let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+        let (_, bag) = check_source(source);
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code() == E_CONTRACT_REQUIRED)
+            .expect("the missing-effect refusal");
+        assert_eq!(diagnostic.fields()[0].1, "effect");
+    }
+
+    #[test]
+    fn a_domain_violation_names_the_sheet() {
+        let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = utf16\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+        let (_, bag) = check_source(source);
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR)
+            .expect("the codec refusal");
+        assert!(diagnostic.message().contains("Process sheet"));
+    }
+
+    #[test]
+    fn correlate_on_a_job_carries_the_sheet_reason() {
+        let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n    correlate = data.id\n  }\n  . -> c -> .\n}\n";
+        let (_, bag) = check_source(source);
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR)
+            .expect("the correlate refusal");
+        assert!(diagnostic.message().contains("process boundary"));
+    }
+
+    #[test]
+    fn unavailable_and_unknown_connector_types_split() {
+        let declared = "graph g : App {\n  connector h : HttpServer { }\n  . -> h -> .\n}\n";
+        let (_, bag) = check_source(declared);
+        assert!(diagnostic_codes(&bag).contains(&E_CONNECTOR_UNAVAILABLE));
+        assert!(bag.diagnostics()[0].message().contains("catalogue"));
+        let unknown = "graph g : App {\n  connector d : Postgres { }\n  . -> d -> .\n}\n";
+        let (_, bag) = check_source(unknown);
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.message().contains("not a known connector type"))
+        );
     }
 
     #[test]
