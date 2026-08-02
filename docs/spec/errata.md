@@ -36,3 +36,22 @@
   a reserved surface and refused with `unsupported`; carries no
   executable semantics in this corpus".
 - **Found by:** adversarial architecture review, 2026-07-31.
+
+## E-2026-08-03-1 — `envelope.md` §5.1 is silent on failed decodes
+
+- **Where:** [envelope.md §5.1](envelope.md), lazy rule 2 ("Access →
+  transcode once").
+- **Gap:** the rule fixes the cost of a *successful* materialization
+  — one transcode, cached — but does not say what a *failed* decode
+  does: whether the typed decode error is memoized like a value, or
+  whether a later access may retry. The two policies diverge
+  observably (a retried decoder may succeed after its codec set
+  changes).
+- **Interim behavior (implementation):** a failed decode caches
+  nothing; the typed error reaches the caller intact and a later
+  access may retry. "Transcode once" reads as "at most one successful
+  transcode".
+- **Resolution direction:** state the failure policy in §5.1. If
+  decode is declared pure and deterministic, memoize the failure with
+  a domain `DecodeError`; if retry is intended, say so explicitly.
+- **Found by:** external code review (second pass), 2026-08-03.

@@ -1155,7 +1155,7 @@ impl Checker<'_, '_> {
                     let Ok(port) = node::Port::new(name.text.clone()) else {
                         continue;
                     };
-                    if let Some(emit) = self.emit_value(value, &signature) {
+                    if let Some(emit) = self.emit_value(value, &signature, name.span) {
                         statements.push(Statement::Emit { port, value: emit });
                     }
                 }
@@ -1189,7 +1189,12 @@ impl Checker<'_, '_> {
         );
     }
 
-    fn emit_value(&mut self, value: &SynValue, signature: &cel::Signature) -> Option<EmitValue> {
+    fn emit_value(
+        &mut self,
+        value: &SynValue,
+        signature: &cel::Signature,
+        at: Span,
+    ) -> Option<EmitValue> {
         match value {
             SynValue::Envelope(None) => Some(EmitValue::Identity),
             SynValue::Envelope(Some(body)) => {
@@ -1208,7 +1213,7 @@ impl Checker<'_, '_> {
                         StructEntry::Field { key, .. } => key.span,
                         StructEntry::Block { name, .. } => name.span,
                     })
-                    .unwrap_or_else(|| Span::new(SourceId::new(0), 0..0));
+                    .unwrap_or(at);
                 self.deferred("a struct or map literal emission", span);
                 None
             }
