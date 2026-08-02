@@ -8,8 +8,12 @@
 //!
 //! [`grammar.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/grammar.md
 
+pub mod check;
+pub mod hir;
 pub mod lexer;
 pub mod parser;
 pub mod syntax;
 
+pub use check::Unit;
+pub use hir::Hir;
 pub use syntax::SyntaxTree;
