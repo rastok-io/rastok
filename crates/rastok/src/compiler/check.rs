@@ -42,6 +42,12 @@ pub const E_CONNECTOR_UNAVAILABLE: Code = Code::new("E-CONNECTOR-UNAVAILABLE");
 pub const E_CONTRACT_ATTR: Code = Code::new("E-CONTRACT-ATTR");
 /// Diagnostic for a mandatory contract attribute left undeclared.
 pub const E_CONTRACT_REQUIRED: Code = Code::new("E-CONTRACT-REQUIRED");
+/// Diagnostic for a binding name that collides with a visible binding
+/// or a reserved handler name — shadowing is refused, which is also
+/// what makes compile-time constant substitution sound.
+pub const E_DUP_BINDING: Code = Code::new("E-DUP-BINDING");
+/// Diagnostic for a top-level graph no App composition reaches.
+pub const W_DEAD_GRAPH: Code = Code::new("W-DEAD-GRAPH");
 
 /// The pre-bound default ports, usable without declaration.
 const DEFAULT_PORTS: &[&str] = &["in", "out", "err"];
@@ -93,6 +99,32 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
     }
     let app = apps[0];
     let mut checker = Checker { bag, registry };
+    // No top-level declaration is silently ignored: graphs outside the
+    // App composition warn per the registry, everything else defers.
+    for (_, tree) in &unit.files {
+        for decl in &tree.decls {
+            match decl {
+                TopDecl::Graph(graph) if !std::ptr::eq(app, graph) => {
+                    checker.bag.push(
+                        Diagnostic::new(
+                            W_DEAD_GRAPH,
+                            Phase::Resolve,
+                            format!(
+                                "the graph `{}` is reachable from no App composition",
+                                graph.name.text
+                            ),
+                        )
+                        .with_span(graph.name.span)
+                        .with_field("name", graph.name.text.clone()),
+                    );
+                }
+                TopDecl::Val(val) => {
+                    checker.deferred("a top-level val", val.span);
+                }
+                _ => {}
+            }
+        }
+    }
     Some(Hir {
         app: checker.graph(app),
     })
@@ -194,7 +226,9 @@ impl Checker<'_, '_> {
                     }
                 }
                 GraphItem::Val(val) => {
-                    if let Some(value) = self.graph_val(val, &signature, &consts) {
+                    if self.bindable(&val.name, &signature)
+                        && let Some(value) = self.graph_val(val, &signature, &consts)
+                    {
                         signature = signature.with(val.name.text.clone(), value_type(&value.value));
                         consts.insert(val.name.text.clone(), value.value.clone());
                         graph.vals.push(Val {
@@ -293,6 +327,7 @@ impl Checker<'_, '_> {
             kind: node::Kind::Operator,
             connector_trait: None,
             attributes: Vec::new(),
+            vals: Vec::new(),
             vars: Vec::new(),
             declared_ports: Vec::new(),
             handlers: Vec::new(),
@@ -321,6 +356,7 @@ impl Checker<'_, '_> {
             kind: node::Kind::Connector,
             connector_trait,
             attributes: Vec::new(),
+            vals: Vec::new(),
             vars: Vec::new(),
             declared_ports: Vec::new(),
             handlers: Vec::new(),
@@ -538,13 +574,21 @@ impl Checker<'_, '_> {
                     }
                 }
                 OperatorItem::Val(val) => {
-                    if let Some(value) = self.graph_val(val, &signature, &consts) {
+                    if self.bindable(&val.name, &signature)
+                        && let Some(value) = self.graph_val(val, &signature, &consts)
+                    {
                         signature = signature.with(val.name.text.clone(), value_type(&value.value));
-                        consts.insert(val.name.text.clone(), value.value);
+                        consts.insert(val.name.text.clone(), value.value.clone());
+                        node.vals.push(Val {
+                            name: val.name.text.clone(),
+                            value,
+                        });
                     }
                 }
                 OperatorItem::Var(var) => {
-                    if let Some(cell) = self.var(var, &signature, &consts) {
+                    if self.bindable(&var.name, &signature)
+                        && let Some(cell) = self.var(var, &signature, &consts)
+                    {
                         signature = signature.with(cell.name.clone(), cell.ty.clone());
                         node.vars.push(cell);
                     }
@@ -596,7 +640,26 @@ impl Checker<'_, '_> {
         let ty = self.state_type(&decl.ty)?;
         let init = match &decl.value {
             None => None,
-            Some(SynValue::Cel(expr)) => Some(self.constant(expr, signature, consts)?),
+            Some(SynValue::Cel(expr)) => {
+                let constant = self.constant(expr, signature, consts)?;
+                let init_ty = value_type(&constant.value);
+                if init_ty != ty && init_ty != cel::Type::Dyn && ty != cel::Type::Dyn {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CEL_EXPR,
+                            Phase::Check,
+                            format!(
+                                "`{}` is declared {ty:?}, its initializer is a {init_ty:?}",
+                                decl.name.text
+                            ),
+                        )
+                        .with_span(expr.span)
+                        .with_field("detail", format!("{init_ty:?} does not fit {ty:?}")),
+                    );
+                    return None;
+                }
+                Some(constant)
+            }
             Some(_) => {
                 self.deferred("a non-expression var initializer", decl.span);
                 return None;
@@ -607,6 +670,38 @@ impl Checker<'_, '_> {
             ty,
             init,
         })
+    }
+
+    /// Whether `name` may introduce a binding here: reserved handler
+    /// names and shadowing are refused — which is also what keeps
+    /// compile-time constant substitution sound.
+    fn bindable(
+        &mut self,
+        name: &crate::compiler::syntax::Name,
+        signature: &cel::Signature,
+    ) -> bool {
+        let collision = if matches!(name.text.as_str(), "data" | "meta") {
+            Some("a reserved handler name")
+        } else if signature.get(&name.text).is_some() {
+            Some("an already visible binding")
+        } else {
+            None
+        };
+        match collision {
+            None => true,
+            Some(reason) => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_DUP_BINDING,
+                        Phase::Check,
+                        format!("`{}` shadows {reason}", name.text),
+                    )
+                    .with_span(name.span)
+                    .with_field("name", name.text.clone()),
+                );
+                false
+            }
+        }
     }
 
     fn state_type(&mut self, ty: &TypeRef) -> Option<cel::Type> {
@@ -721,7 +816,9 @@ impl Checker<'_, '_> {
             match statement {
                 SynStatement::Val(val) => match &val.value {
                     SynValue::Cel(expr) => {
-                        if let Some(tree) = self.cel(expr, &signature) {
+                        if self.bindable(&val.name, &signature)
+                            && let Some(tree) = self.cel(expr, &signature)
+                        {
                             signature = signature.with(val.name.text.clone(), tree.ty.clone());
                             statements.push(Statement::Let {
                                 name: val.name.text.clone(),
@@ -843,7 +940,18 @@ impl Checker<'_, '_> {
             }
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
             SynValue::Cel(expr) => self.cel(expr, signature).map(EmitValue::Data),
-            SynValue::Struct(_) | SynValue::Map(_) => None,
+            SynValue::Struct(body) | SynValue::Map(body) => {
+                let span = body
+                    .entries
+                    .first()
+                    .map(|entry| match entry {
+                        StructEntry::Field { key, .. } => key.span,
+                        StructEntry::Block { name, .. } => name.span,
+                    })
+                    .unwrap_or_else(|| Span::new(SourceId::new(0), 0..0));
+                self.deferred("a struct or map literal emission", span);
+                None
+            }
             SynValue::Tagged(tagged) => {
                 self.deferred("a guest or tagged emission", tagged.tag.span);
                 None
@@ -1278,6 +1386,61 @@ graph m0_probe : App {
                 .iter()
                 .any(|diagnostic| diagnostic.message().contains("not a known connector type"))
         );
+    }
+
+    #[test]
+    fn a_struct_emission_is_no_longer_silently_dropped() {
+        let source = "graph g : App {\n  operator o {\n    on in { out = struct { n = 1 } }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(
+            bag.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code() == E_CHECK_DEFERRED
+                    && diagnostic.fields()[0].1 == "a struct or map literal emission"
+            }),
+            "the emission must refuse, not vanish: {:#?}",
+            bag.diagnostics()
+        );
+    }
+
+    #[test]
+    fn no_top_level_declaration_is_silently_ignored() {
+        let source = "graph main : App { }\ngraph orphan { }\nval loose = 1\n";
+        let (_, bag) = check_source(source);
+        let codes = diagnostic_codes(&bag);
+        assert!(codes.contains(&W_DEAD_GRAPH));
+        assert!(codes.contains(&E_CHECK_DEFERRED));
+        assert!(!bag.has_errors() || codes.contains(&E_CHECK_DEFERRED));
+        let dead = bag
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code() == W_DEAD_GRAPH)
+            .unwrap();
+        assert_eq!(dead.severity(), crate::diagnostics::Severity::Warning);
+    }
+
+    #[test]
+    fn a_var_initializer_must_fit_its_declared_type() {
+        let source = "graph g : App {\n  operator o {\n    var count : int = \"oops\"\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(source);
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code() == E_CEL_EXPR)
+            .expect("the type mismatch");
+        assert!(diagnostic.message().contains("declared Int"));
+    }
+
+    #[test]
+    fn shadowing_and_reserved_names_are_refused() {
+        let source = "graph g : App {\n  val limit = 1\n  operator o {\n    var limit : int = 0\n    var data : int = 0\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(source);
+        let shadows: Vec<&str> = bag
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == E_DUP_BINDING)
+            .map(|diagnostic| diagnostic.fields()[0].1.as_str())
+            .collect();
+        assert_eq!(shadows, ["limit", "data"]);
     }
 
     #[test]

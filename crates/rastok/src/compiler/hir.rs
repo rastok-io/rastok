@@ -61,6 +61,9 @@ pub struct Node {
     pub connector_trait: Option<String>,
     /// Checked attributes, in declaration order.
     pub attributes: Vec<Attribute>,
+    /// Node-local constant bindings — identity material, substituted
+    /// into shipped expressions at lowering.
+    pub vals: Vec<Val>,
     /// Mutable state cells, in declaration order.
     pub vars: Vec<Var>,
     /// Ports declared explicitly on the node.

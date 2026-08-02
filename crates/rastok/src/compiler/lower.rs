@@ -119,26 +119,39 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
     }
     for hir_node in &nodes {
         let slot = slot_of(&hir_node.path);
+        // The plan must carry its whole semantics: every constant a
+        // handler references is substituted into the shipped trees, so
+        // no binding is left behind in the compiler.
+        let mut consts: std::collections::BTreeMap<String, cel::Value> = hir
+            .app
+            .vals
+            .iter()
+            .map(|val| (val.name.clone(), val.value.value.clone()))
+            .collect();
+        for val in &hir_node.vals {
+            consts.insert(val.name.clone(), val.value.value.clone());
+        }
+        let subst = |tree: &cel::Tree| substitute_tree(tree, &consts);
         for handler in &hir_node.handlers {
             plan.handlers.push(Handler {
                 node: slot,
                 trigger: handler.trigger.clone(),
-                guard: handler.guard.clone(),
+                guard: handler.guard.as_ref().map(&subst),
                 body: handler
                     .body
                     .iter()
                     .map(|statement| match statement {
                         HirStatement::Let { name, value } => Step::Let {
                             name: name.clone(),
-                            expr: value.clone(),
+                            expr: subst(value),
                         },
                         HirStatement::SetVar { name, value } => Step::SetVar {
                             name: name.clone(),
-                            expr: value.clone(),
+                            expr: subst(value),
                         },
                         HirStatement::Emit { port, value } => Step::Emit {
                             port: port.clone(),
-                            value: lower_emission(value),
+                            value: lower_emission(value, &subst),
                         },
                     })
                     .collect(),
@@ -161,13 +174,13 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
     (plan, symbols)
 }
 
-fn lower_emission(value: &EmitValue) -> Emission {
+fn lower_emission(value: &EmitValue, subst: &impl Fn(&cel::Tree) -> cel::Tree) -> Emission {
     let writes = |fields: &[crate::compiler::hir::FieldWrite]| {
         fields
             .iter()
             .map(|write| FieldWrite {
                 path: write.path.clone(),
-                expr: write.value.clone(),
+                expr: subst(&write.value),
             })
             .collect()
     };
@@ -175,8 +188,79 @@ fn lower_emission(value: &EmitValue) -> Emission {
         EmitValue::Identity => Emission::Identity,
         EmitValue::Patch(fields) => Emission::Patch(writes(fields)),
         EmitValue::Replace(fields) => Emission::Replace(writes(fields)),
-        EmitValue::Data(tree) => Emission::Data(tree.clone()),
+        EmitValue::Data(tree) => Emission::Data(subst(tree)),
         EmitValue::Nothing => Emission::Nothing,
+    }
+}
+
+/// Rewrites every constant reference into its literal value; member
+/// access on a constant becomes evaluable indexing. Sound because
+/// shadowing is refused at check time.
+fn substitute_tree(
+    tree: &cel::Tree,
+    consts: &std::collections::BTreeMap<String, cel::Value>,
+) -> cel::Tree {
+    cel::Tree {
+        root: substitute(&tree.root, consts),
+        ty: tree.ty.clone(),
+    }
+}
+
+fn substitute(
+    expr: &cel::Expr,
+    consts: &std::collections::BTreeMap<String, cel::Value>,
+) -> cel::Expr {
+    let recurse = |inner: &cel::Expr| Box::new(substitute(inner, consts));
+    match expr {
+        cel::Expr::Path(segments) => match consts.get(&segments[0]) {
+            None => expr.clone(),
+            Some(value) => {
+                let mut result = cel::Expr::Literal(value.clone());
+                for segment in &segments[1..] {
+                    result = cel::Expr::Index {
+                        base: Box::new(result),
+                        index: Box::new(cel::Expr::Literal(cel::Value::Text(segment.clone()))),
+                    };
+                }
+                result
+            }
+        },
+        cel::Expr::Literal(_) => expr.clone(),
+        cel::Expr::Unary { op, expr } => cel::Expr::Unary {
+            op: *op,
+            expr: recurse(expr),
+        },
+        cel::Expr::Binary { op, left, right } => cel::Expr::Binary {
+            op: *op,
+            left: recurse(left),
+            right: recurse(right),
+        },
+        cel::Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => cel::Expr::Ternary {
+            cond: recurse(cond),
+            then: recurse(then),
+            otherwise: recurse(otherwise),
+        },
+        cel::Expr::Index { base, index } => cel::Expr::Index {
+            base: recurse(base),
+            index: recurse(index),
+        },
+        cel::Expr::Call { function, args } => cel::Expr::Call {
+            function: *function,
+            args: args.iter().map(|arg| substitute(arg, consts)).collect(),
+        },
+        cel::Expr::List(items) => {
+            cel::Expr::List(items.iter().map(|item| substitute(item, consts)).collect())
+        }
+        cel::Expr::MapLit(entries) => cel::Expr::MapLit(
+            entries
+                .iter()
+                .map(|(key, value)| (key.clone(), substitute(value, consts)))
+                .collect(),
+        ),
     }
 }
 
@@ -238,6 +322,13 @@ impl Writer {
                 self.tag(1);
                 self.str(name);
             }
+        }
+        let mut vals: Vec<_> = node.vals.iter().collect();
+        vals.sort_by(|a, b| a.name.cmp(&b.name));
+        self.count(vals.len());
+        for val in vals {
+            self.str(&val.name);
+            self.expr(&val.value.tree.root);
         }
         let mut attributes: Vec<_> = node.attributes.iter().collect();
         attributes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -558,6 +649,28 @@ graph m0_probe : App {
             original,
             "a CEL expression is identity material"
         );
+    }
+
+    #[test]
+    fn constants_reach_both_the_hash_and_the_plan() {
+        let with_val = |n: &str| {
+            format!(
+                "graph g : App {{\n  operator o {{\n    val threshold = {n}\n    on in where data.n > threshold {{ out = envelope }}\n  }}\n  . -> o -> .\n}}\n"
+            )
+        };
+        let five = compile(&[with_val("5").as_str()], &Registry::m0()).unwrap();
+        let six = compile(&[with_val("6").as_str()], &Registry::m0()).unwrap();
+        // A local constant is identity material...
+        assert_ne!(five.hash, six.hash);
+        // ...and the shipped guard carries its value: no free
+        // `threshold` binding survives in the plan.
+        let guard = five.plan.handlers[0].guard.as_ref().unwrap();
+        let rendered = format!("{guard:?}");
+        assert!(
+            !rendered.contains("threshold"),
+            "the constant must be substituted: {rendered}"
+        );
+        assert!(rendered.contains("Int(5)"));
     }
 
     #[test]
