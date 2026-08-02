@@ -6,16 +6,17 @@
 //! [`ErrorNode`] hole, and keeps parsing — healthy declarations of a
 //! faulty file still reach the tree.
 //!
-//! Handlers, statements, and wiring edges are the next slice: their
-//! syntax is recognized and refused explicitly for now. `lab` bodies
-//! are skipped whole until the scenario stage.
+//! The parsed subset covers declarations, handlers, statements, and
+//! wiring. `lab` bodies are recognized and skipped whole until the
+//! scenario stage.
 
 use crate::compiler::lexer::{Lexer, TerminatorSet, Token, TokenKind};
 use crate::compiler::syntax::{
-    Annotation, Attribute, BaseType, CelExpr, ConnectorDecl, ErrorNode, FieldDecl, GraphDecl,
-    GraphItem, LValue, LabStub, LifetimeValue, Name, OperatorDecl, OperatorItem, PartitionDecl,
-    PartitionField, PerClause, PortDecl, PortDirection, ScalarType, StructBody, StructEntry,
-    SubBlock, SyntaxTree, TaggedBody, TaggedValue, TopDecl, TypeRef, ValDecl, Value, VarDecl,
+    Annotation, AspectEvent, Attribute, BaseType, CelExpr, ConnectorDecl, EdgeDecl, EdgeEndpoint,
+    ErrorNode, FieldDecl, GraphDecl, GraphItem, Guard, HandlerDecl, IntLit, LValue, LabStub,
+    LifetimeValue, Name, OperatorDecl, OperatorItem, PartitionDecl, PartitionField, PerClause,
+    PortDecl, PortDirection, PortRef, ScalarType, Statement, StructBody, StructEntry, SubBlock,
+    SyntaxTree, TaggedBody, TaggedValue, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
     WindowMode,
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
@@ -55,6 +56,14 @@ const WINDOW_POSITION: TerminatorSet = TerminatorSet {
     newline: true,
     arrow: false,
     keywords: &["tumbling", "sliding"],
+};
+
+/// Terminators for guard positions, per the delimitation rules.
+const GUARD_POSITION: TerminatorSet = TerminatorSet {
+    bytes: b"{",
+    newline: true,
+    arrow: true,
+    keywords: &["where", "having", "by", "within", "last", "when"],
 };
 
 /// Declaration keywords the recovery resynchronizes on.
@@ -389,17 +398,22 @@ impl<'src> Parser<'src, '_> {
                             None => GraphItem::Error(self.recover(start)),
                         });
                     }
-                    "on" => {
-                        self.bump();
-                        self.deferred("handler", token.span);
-                        items.push(GraphItem::Error(self.recover(start)));
-                    }
+                    "on" => items.push(match self.handler_decl() {
+                        Some(handler) => GraphItem::Handler(handler),
+                        None => GraphItem::Error(self.recover(start)),
+                    }),
                     _ => items.push(self.graph_attribute_or_edge(start)),
                 },
                 TokenKind::Dot | TokenKind::LBrace => {
-                    self.bump();
-                    self.deferred("edge", token.span);
-                    items.push(GraphItem::Error(self.recover(start)));
+                    items.push(
+                        match self
+                            .leading_endpoint()
+                            .and_then(|first| self.edge_decl(start, first))
+                        {
+                            Some(edge) => GraphItem::Edge(edge),
+                            None => GraphItem::Error(self.recover(start)),
+                        },
+                    );
                 }
                 _ => {
                     self.error_expected("a graph body item");
@@ -411,8 +425,7 @@ impl<'src> Parser<'src, '_> {
         items
     }
 
-    /// An IDENT-led graph item: attribute, or a wiring edge — the
-    /// latter still deferred to the next slice.
+    /// An IDENT-led graph item: attribute, or a wiring edge.
     fn graph_attribute_or_edge(&mut self, start: usize) -> GraphItem {
         let Some(target) = self.lvalue() else {
             return GraphItem::Error(self.recover(start));
@@ -429,15 +442,134 @@ impl<'src> Parser<'src, '_> {
                 })
             }
             TokenKind::Arrow | TokenKind::BiArrow => {
-                self.bump();
-                self.deferred("edge", token.span);
-                GraphItem::Error(self.recover(start))
+                let span = target.span;
+                let first = EdgeEndpoint::Ref(PortRef {
+                    boundary: false,
+                    segments: target.segments,
+                    span,
+                });
+                match self.edge_decl(start, first) {
+                    Some(edge) => GraphItem::Edge(edge),
+                    None => GraphItem::Error(self.recover(start)),
+                }
             }
             _ => {
                 self.error_expected("`=` or a wiring arrow");
                 GraphItem::Error(self.recover(start))
             }
         }
+    }
+
+    // ----- wiring edges -----
+
+    /// A `.`- or `{`-led first endpoint of an edge.
+    fn leading_endpoint(&mut self) -> Option<EdgeEndpoint> {
+        match self.peek().kind {
+            TokenKind::Dot => Some(EdgeEndpoint::Ref(self.boundary_ref())),
+            _ => Some(EdgeEndpoint::Branch(self.branch_refs()?)),
+        }
+    }
+
+    /// The rest of an edge after its first endpoint: arrows, guard,
+    /// and configuration.
+    fn edge_decl(&mut self, start: usize, first: EdgeEndpoint) -> Option<EdgeDecl> {
+        let mut endpoints = vec![first];
+        let bidirectional = self.peek().kind == TokenKind::BiArrow;
+        if bidirectional {
+            self.bump();
+            endpoints.push(self.edge_endpoint()?);
+        } else {
+            self.expect(TokenKind::Arrow, "`->`")?;
+            endpoints.push(self.edge_endpoint()?);
+            while self.eat(TokenKind::Arrow).is_some() {
+                endpoints.push(self.edge_endpoint()?);
+            }
+        }
+        let guard = if self.at_word("when") {
+            self.bump();
+            Some(self.cel(&GUARD_POSITION))
+        } else {
+            None
+        };
+        let config = if self.peek().kind == TokenKind::LBrace {
+            self.struct_body()
+        } else {
+            None
+        };
+        Some(EdgeDecl {
+            endpoints,
+            bidirectional,
+            guard,
+            config,
+            span: self.span_from(start),
+        })
+    }
+
+    fn edge_endpoint(&mut self) -> Option<EdgeEndpoint> {
+        let token = self.peek();
+        match token.kind {
+            TokenKind::Dot => Some(EdgeEndpoint::Ref(self.boundary_ref())),
+            TokenKind::LBrace => Some(EdgeEndpoint::Branch(self.branch_refs()?)),
+            TokenKind::Ident if token.text == "nothing" => {
+                self.bump();
+                Some(EdgeEndpoint::Nothing(token.span))
+            }
+            TokenKind::Ident => {
+                let path = self.lvalue()?;
+                Some(EdgeEndpoint::Ref(PortRef {
+                    boundary: false,
+                    segments: path.segments,
+                    span: path.span,
+                }))
+            }
+            _ => {
+                self.error_expected("an edge endpoint");
+                None
+            }
+        }
+    }
+
+    /// `.` or `.foo` — the current graph's boundary.
+    fn boundary_ref(&mut self) -> PortRef {
+        let dot = self.bump();
+        let start = dot.span.range().start;
+        let segments = match self.peek().kind {
+            TokenKind::Ident => match self.name("a boundary port name") {
+                Some(name) => vec![name],
+                None => vec![],
+            },
+            _ => vec![],
+        };
+        PortRef {
+            boundary: true,
+            segments,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `{ a ; b }` — a fan-out or fan-in branch.
+    fn branch_refs(&mut self) -> Option<Vec<PortRef>> {
+        self.expect(TokenKind::LBrace, "`{`")?;
+        let mut refs = Vec::new();
+        loop {
+            match self.peek().kind {
+                TokenKind::RBrace | TokenKind::Eof => break,
+                TokenKind::Semi => {
+                    self.bump();
+                }
+                TokenKind::Dot => refs.push(self.boundary_ref()),
+                _ => {
+                    let path = self.lvalue()?;
+                    refs.push(PortRef {
+                        boundary: false,
+                        segments: path.segments,
+                        span: path.span,
+                    });
+                }
+            }
+        }
+        self.expect(TokenKind::RBrace, "`}`")?;
+        Some(refs)
     }
 
     fn operator_decl(&mut self) -> Option<OperatorDecl> {
@@ -500,11 +632,10 @@ impl<'src> Parser<'src, '_> {
                         Some(var) => OperatorItem::Var(var),
                         None => OperatorItem::Error(self.recover(start)),
                     }),
-                    "on" => {
-                        self.bump();
-                        self.deferred("handler", token.span);
-                        items.push(OperatorItem::Error(self.recover(start)));
-                    }
+                    "on" => items.push(match self.handler_decl() {
+                        Some(handler) => OperatorItem::Handler(handler),
+                        None => OperatorItem::Error(self.recover(start)),
+                    }),
                     _ => items.push(self.attribute_or_sub_block(start)),
                 },
                 _ => {
@@ -552,6 +683,220 @@ impl<'src> Parser<'src, '_> {
                 OperatorItem::Error(self.recover(start))
             }
         }
+    }
+
+    // ----- handlers -----
+
+    /// `on trigger guard* body?` — a body-less handler is the Loop
+    /// base-case declaration; its legality is the checker's judgment.
+    fn handler_decl(&mut self) -> Option<HandlerDecl> {
+        let start = self.peek().span.range().start;
+        self.bump();
+        let trigger = self.trigger()?;
+        let mut guards = Vec::new();
+        loop {
+            let token = self.peek();
+            if token.kind != TokenKind::Ident {
+                break;
+            }
+            match token.text {
+                "where" => {
+                    self.bump();
+                    guards.push(Guard::Where(self.cel(&GUARD_POSITION)));
+                }
+                "having" => {
+                    self.bump();
+                    guards.push(Guard::Having(self.cel(&GUARD_POSITION)));
+                }
+                "by" => {
+                    self.bump();
+                    guards.push(Guard::By(self.cel(&GUARD_POSITION)));
+                }
+                "within" => {
+                    self.bump();
+                    guards.push(Guard::Within(self.cel(&GUARD_POSITION)));
+                }
+                "last" => {
+                    self.bump();
+                    let token = self.expect(TokenKind::Int, "a count")?;
+                    guards.push(Guard::Last(IntLit {
+                        text: String::from(token.text),
+                        span: token.span,
+                    }));
+                }
+                _ => break,
+            }
+        }
+        let body = if self.peek().kind == TokenKind::LBrace {
+            Some(self.statements()?)
+        } else {
+            None
+        };
+        Some(HandlerDecl {
+            trigger,
+            guards,
+            body,
+            span: self.span_from(start),
+        })
+    }
+
+    fn trigger(&mut self) -> Option<Trigger> {
+        let token = self.peek();
+        match token.kind {
+            TokenKind::LParen => {
+                self.bump();
+                let mut ports = vec![self.name("a port name")?];
+                while self.eat(TokenKind::Comma).is_some() {
+                    ports.push(self.name("a port name")?);
+                }
+                self.expect(TokenKind::RParen, "`)`")?;
+                Some(Trigger::Join(ports))
+            }
+            TokenKind::Ident => {
+                let first = self.bump();
+                if self.eat(TokenKind::Dot).is_some() {
+                    let aspect = Name {
+                        text: String::from(first.text),
+                        span: first.span,
+                    };
+                    let event = self.name("`start` or `stop`")?;
+                    let event = match event.text.as_str() {
+                        "start" => AspectEvent::Start,
+                        "stop" => AspectEvent::Stop,
+                        _ => {
+                            self.error_expected("`start` or `stop`");
+                            return None;
+                        }
+                    };
+                    return Some(Trigger::Aspect { aspect, event });
+                }
+                Some(match first.text {
+                    "start" => Trigger::Start(first.span),
+                    "stop" => Trigger::Stop(first.span),
+                    "compensate" => Trigger::Compensate(first.span),
+                    _ => Trigger::Port(Name {
+                        text: String::from(first.text),
+                        span: first.span,
+                    }),
+                })
+            }
+            _ => {
+                self.error_expected("a handler trigger");
+                None
+            }
+        }
+    }
+
+    /// `"{" ( statement )* "}"`
+    fn statements(&mut self) -> Option<Vec<Statement>> {
+        self.expect(TokenKind::LBrace, "`{`")?;
+        let mut statements = Vec::new();
+        loop {
+            let token = self.peek();
+            let start = token.span.range().start;
+            match token.kind {
+                TokenKind::RBrace | TokenKind::Eof => break,
+                TokenKind::Semi => {
+                    self.bump();
+                }
+                TokenKind::Ident if token.text == "val" => match self.val_decl() {
+                    Some(val) => statements.push(Statement::Val(val)),
+                    None => statements.push(Statement::Error(self.recover(start))),
+                },
+                TokenKind::Ident if token.text == "stop" => {
+                    self.bump();
+                    let target = match self.peek().kind {
+                        TokenKind::Ident => self.name("a node name"),
+                        _ => None,
+                    };
+                    statements.push(Statement::Stop(target));
+                }
+                TokenKind::LParen => match self.multi_emit(start) {
+                    Some(statement) => statements.push(statement),
+                    None => statements.push(Statement::Error(self.recover(start))),
+                },
+                TokenKind::Ident => statements.push(self.assign_or_yield(start)),
+                _ => statements.push(Statement::Yield(self.value(&ATTR_POSITION))),
+            }
+        }
+        self.expect(TokenKind::RBrace, "`}`")?;
+        Some(statements)
+    }
+
+    /// An IDENT-led statement: assignment, typed-error emission, or an
+    /// implicit yield whose expression starts with a path.
+    fn assign_or_yield(&mut self, start: usize) -> Statement {
+        let Some(target) = self.lvalue() else {
+            return Statement::Error(self.recover(start));
+        };
+        match self.peek().kind {
+            TokenKind::Eq if target.segments.len() == 1 && target.segments[0].text == "err" => {
+                self.bump();
+                match self.name("an error kind") {
+                    Some(kind) => {
+                        let body = if self.peek().kind == TokenKind::LBrace {
+                            self.struct_body()
+                        } else {
+                            None
+                        };
+                        Statement::ErrEmit { kind, body }
+                    }
+                    None => Statement::Error(self.recover(start)),
+                }
+            }
+            TokenKind::Eq => {
+                self.bump();
+                Statement::Assign {
+                    target,
+                    ty: None,
+                    value: self.value(&ATTR_POSITION),
+                }
+            }
+            TokenKind::Colon => {
+                self.bump();
+                let Some(ty) = self.type_ref() else {
+                    return Statement::Error(self.recover(start));
+                };
+                if self.expect(TokenKind::Eq, "`=`").is_none() {
+                    return Statement::Error(self.recover(start));
+                }
+                Statement::Assign {
+                    target,
+                    ty: Some(ty),
+                    value: self.value(&ATTR_POSITION),
+                }
+            }
+            _ => {
+                // Not an assignment: the path was the start of a bare
+                // value. Hand every consumed token back and rescan.
+                self.peeked = None;
+                self.lexer.rewind(start);
+                self.last_end = start;
+                Statement::Yield(self.value(&ATTR_POSITION))
+            }
+        }
+    }
+
+    /// `( a, b ) = tuple_or_broadcast` — atomic multi-emit.
+    fn multi_emit(&mut self, _start: usize) -> Option<Statement> {
+        self.bump();
+        let mut targets = vec![self.lvalue()?];
+        while self.eat(TokenKind::Comma).is_some() {
+            targets.push(self.lvalue()?);
+        }
+        self.expect(TokenKind::RParen, "`)`")?;
+        self.expect(TokenKind::Eq, "`=`")?;
+        let values = if self.eat(TokenKind::LParen).is_some() {
+            let mut values = vec![self.value(&PAREN_POSITION)];
+            while self.eat(TokenKind::Comma).is_some() {
+                values.push(self.value(&PAREN_POSITION));
+            }
+            self.expect(TokenKind::RParen, "`)`")?;
+            values
+        } else {
+            vec![self.value(&ATTR_POSITION)]
+        };
+        Some(Statement::MultiEmit { targets, values })
     }
 
     fn port_decl(&mut self) -> Option<PortDecl> {
@@ -1237,22 +1582,151 @@ graph m0_probe : App {
         assert!(matches!(tree.decls[1], TopDecl::Val(_)));
     }
 
+    const M0_PROBE: &str = r#"
+graph m0_probe : App {
+  connector echo : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator shout {
+    on in where data.text != "" {
+      out = envelope { data.text = data.text }
+    }
+  }
+
+  . -> shout -> echo -> .
+}
+"#;
+
     #[test]
-    fn handlers_and_edges_are_refused_explicitly_for_now() {
-        let mut bag = Bag::new();
-        let source = "graph g : App {\n  operator o {\n    on in { }\n  }\n  a -> b.in\n}\n";
-        parse(SourceId::new(0), source, &mut bag);
-        let codes: Vec<_> = bag
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| diagnostic.code())
-            .collect();
-        assert_eq!(codes, [E_PARSE_DEFERRED, E_PARSE_DEFERRED]);
-        let constructs: Vec<&str> = bag
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| diagnostic.fields()[0].1.as_str())
-            .collect();
-        assert_eq!(constructs, ["handler", "edge"]);
+    fn the_m0_probe_fixture_parses_end_to_end() {
+        let tree = parse_clean(M0_PROBE);
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected the app graph");
+        };
+        let GraphItem::Operator(shout) = &graph.body[1] else {
+            panic!("expected the operator");
+        };
+        let OperatorItem::Handler(handler) = &shout.body[0] else {
+            panic!("expected the handler");
+        };
+        assert!(matches!(&handler.trigger, Trigger::Port(port) if port.text == "in"));
+        let Guard::Where(guard) = &handler.guards[0] else {
+            panic!("expected the where guard");
+        };
+        assert_eq!(guard.text, "data.text != \"\"");
+        let statements = handler.body.as_ref().unwrap();
+        let Statement::Assign { target, value, .. } = &statements[0] else {
+            panic!("expected the emission");
+        };
+        assert_eq!(target.segments[0].text, "out");
+        assert!(matches!(value, Value::Envelope(Some(_))));
+        let GraphItem::Edge(edge) = &graph.body[2] else {
+            panic!("expected the wiring chain");
+        };
+        assert_eq!(edge.endpoints.len(), 4);
+        assert!(matches!(
+            &edge.endpoints[0],
+            EdgeEndpoint::Ref(port) if port.boundary && port.segments.is_empty()
+        ));
+        assert!(matches!(
+            &edge.endpoints[2],
+            EdgeEndpoint::Ref(port) if !port.boundary && port.segments[0].text == "echo"
+        ));
+    }
+
+    #[test]
+    fn ring_two_handler_forms_parse_faithfully() {
+        let source = "graph g : App {\n  operator o {\n    on (a, b) where a.x > 0 having count(a) >= 2 by a.key within duration(\"5m\") last 3 { }\n    on start { }\n    on Loop.stop\n  }\n}\n";
+        let tree = parse_clean(source);
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected a graph");
+        };
+        let GraphItem::Operator(operator) = &graph.body[0] else {
+            panic!("expected the operator");
+        };
+        let OperatorItem::Handler(join) = &operator.body[0] else {
+            panic!("expected the join handler");
+        };
+        assert!(matches!(&join.trigger, Trigger::Join(ports) if ports.len() == 2));
+        assert_eq!(join.guards.len(), 5);
+        assert!(matches!(&join.guards[4], Guard::Last(count) if count.text == "3"));
+        let OperatorItem::Handler(start) = &operator.body[1] else {
+            panic!("expected the start handler");
+        };
+        assert!(matches!(start.trigger, Trigger::Start(_)));
+        let OperatorItem::Handler(base_case) = &operator.body[2] else {
+            panic!("expected the base-case handler");
+        };
+        assert!(matches!(
+            &base_case.trigger,
+            Trigger::Aspect { aspect, event: AspectEvent::Stop } if aspect.text == "Loop"
+        ));
+        assert!(base_case.body.is_none());
+    }
+
+    #[test]
+    fn statements_cover_the_grammar_forms() {
+        let source = "graph g : App {\n  operator o {\n    on in {\n      val doubled = data.n * 2\n      (out, audit) = (envelope, envelope)\n      err = PaymentDeclined { transient = false }\n      count + doubled\n      stop\n    }\n  }\n}\n";
+        let tree = parse_clean(source);
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected a graph");
+        };
+        let GraphItem::Operator(operator) = &graph.body[0] else {
+            panic!("expected the operator");
+        };
+        let OperatorItem::Handler(handler) = &operator.body[0] else {
+            panic!("expected the handler");
+        };
+        let statements = handler.body.as_ref().unwrap();
+        assert!(matches!(&statements[0], Statement::Val(val) if val.name.text == "doubled"));
+        let Statement::MultiEmit { targets, values } = &statements[1] else {
+            panic!("expected the multi-emit");
+        };
+        assert_eq!(targets.len(), 2);
+        assert_eq!(values.len(), 2);
+        let Statement::ErrEmit { kind, body } = &statements[2] else {
+            panic!("expected the typed-error emission");
+        };
+        assert_eq!(kind.text, "PaymentDeclined");
+        assert!(body.is_some());
+        let Statement::Yield(Value::Cel(cel)) = &statements[3] else {
+            panic!("expected the implicit yield");
+        };
+        assert_eq!(cel.text, "count + doubled");
+        assert!(matches!(&statements[4], Statement::Stop(None)));
+    }
+
+    #[test]
+    fn wiring_covers_branches_guards_and_discard() {
+        let source = "graph g : App {\n  route -> { audit.in ; billing.in }\n  route -> nothing\n  a.out -> b.in when data.kind == \"approval\"\n  c <-> d\n}\n";
+        let tree = parse_clean(source);
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected a graph");
+        };
+        let GraphItem::Edge(fan_out) = &graph.body[0] else {
+            panic!("expected the fan-out edge");
+        };
+        assert!(matches!(
+            &fan_out.endpoints[1],
+            EdgeEndpoint::Branch(refs) if refs.len() == 2
+        ));
+        let GraphItem::Edge(discard) = &graph.body[1] else {
+            panic!("expected the discard edge");
+        };
+        assert!(matches!(&discard.endpoints[1], EdgeEndpoint::Nothing(_)));
+        let GraphItem::Edge(guarded) = &graph.body[2] else {
+            panic!("expected the guarded edge");
+        };
+        assert_eq!(
+            guarded.guard.as_ref().unwrap().text,
+            "data.kind == \"approval\""
+        );
+        let GraphItem::Edge(duplex) = &graph.body[3] else {
+            panic!("expected the duplex edge");
+        };
+        assert!(duplex.bidirectional);
     }
 }
