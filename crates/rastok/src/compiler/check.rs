@@ -46,10 +46,11 @@ pub const E_CONTRACT_REQUIRED: Code = Code::new("E-CONTRACT-REQUIRED");
 /// or a reserved handler name — shadowing is refused, which is also
 /// what makes compile-time constant substitution sound.
 pub const E_DUP_BINDING: Code = Code::new("E-DUP-BINDING");
-/// Diagnostic for a top-level graph no App composition reaches.
-pub const W_DEAD_GRAPH: Code = Code::new("W-DEAD-GRAPH");
 /// Diagnostic for a port used against its direction.
 pub const E_PORT_DIRECTION: Code = Code::new("E-PORT-DIRECTION");
+/// Diagnostic for a port name declared or inferred with conflicting
+/// roles.
+pub const E_PORT_CONFLICT: Code = Code::new("E-PORT-CONFLICT");
 /// Diagnostic for a wiring cycle — edges form a DAG.
 pub const E_GRAPH_CYCLE: Code = Code::new("E-GRAPH-CYCLE");
 /// Diagnostic for a static literal with two keys canonicalizing equal.
@@ -102,24 +103,16 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
     }
     let app = apps[0];
     let mut checker = Checker { bag, registry };
-    // No top-level declaration is silently ignored: graphs outside the
-    // App composition warn per the registry, everything else defers.
+    // No top-level declaration is silently ignored, and none is
+    // silently dropped either: until unit composition and a real
+    // liveness analysis exist, every additional top-level declaration
+    // defers explicitly. W-DEAD-GRAPH belongs to that future analysis
+    // and is deliberately not emitted before it.
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
             match decl {
                 TopDecl::Graph(graph) if !std::ptr::eq(app, graph) => {
-                    checker.bag.push(
-                        Diagnostic::new(
-                            W_DEAD_GRAPH,
-                            Phase::Resolve,
-                            format!(
-                                "the graph `{}` is reachable from no App composition",
-                                graph.name.text
-                            ),
-                        )
-                        .with_span(graph.name.span)
-                        .with_field("name", graph.name.text.clone()),
-                    );
+                    checker.deferred("a top-level graph outside the App", graph.name.span);
                 }
                 TopDecl::Val(val) => {
                     checker.deferred("a top-level val", val.span);
@@ -238,6 +231,25 @@ impl Checker<'_, '_> {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
                     };
+                    if graph
+                        .boundary
+                        .iter()
+                        .any(|(existing, _)| existing.name() == port.name.text)
+                    {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_PORT_CONFLICT,
+                                Phase::Check,
+                                format!(
+                                    "the boundary port `{}` is already declared",
+                                    port.name.text
+                                ),
+                            )
+                            .with_span(port.name.span)
+                            .with_field("port", port.name.text.clone()),
+                        );
+                        continue;
+                    }
                     match node::Port::new(port.name.text.clone()) {
                         Ok(declared) => graph.boundary.push((declared, direction)),
                         Err(invalid) => self.bag.push(
@@ -639,9 +651,28 @@ impl Checker<'_, '_> {
     ) {
         let mut signature = graph_signature.clone();
         let mut consts = graph_consts.clone();
+        // Pass one: everything except handlers, so the port table and
+        // the visible bindings are complete before any handler checks.
         for item in body {
             match item {
                 OperatorItem::Port(port) => {
+                    if is_connector {
+                        // A connector's type defines its ports; the
+                        // declaration itself is the fault.
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_PORT_CONFLICT,
+                                Phase::Check,
+                                format!(
+                                    "`{}`: a connector never declares ports — its type defines them",
+                                    port.name.text
+                                ),
+                            )
+                            .with_span(port.span)
+                            .with_field("port", port.name.text.clone()),
+                        );
+                        continue;
+                    }
                     if port.ty.is_some() {
                         self.deferred("a typed port", port.span);
                     }
@@ -649,13 +680,7 @@ impl Checker<'_, '_> {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
                     };
-                    match node::Port::new(port.name.text.clone()) {
-                        Ok(declared) => node.declared_ports.push((declared, direction)),
-                        Err(invalid) => self.bag.push(
-                            Diagnostic::new(E_PORT_UNKNOWN, Phase::Check, invalid.to_string())
-                                .with_span(port.name.span),
-                        ),
-                    }
+                    self.add_port(node, &port.name, direction, "declared");
                 }
                 OperatorItem::Val(val) => {
                     if self.bindable(&val.name, &signature)
@@ -703,14 +728,113 @@ impl Checker<'_, '_> {
                 OperatorItem::SubBlock(block) => {
                     self.deferred("a connector namespace block", block.span);
                 }
-                OperatorItem::Handler(handler) => {
-                    if is_connector {
-                        self.deferred("a connector handler", handler.span);
-                    } else if let Some(checked) = self.handler(handler, &signature, node) {
-                        node.handlers.push(checked);
-                    }
-                }
+                OperatorItem::Handler(_) => {}
                 OperatorItem::Error(_) => {}
+            }
+        }
+        // Pass two, operators only: handler triggers and emission
+        // targets declare ports implicitly — `input`/`output` exist to
+        // pin a type or publish an interface, not as a prerequisite.
+        if !is_connector {
+            self.infer_ports(body, node);
+        }
+        // Pass three: handlers, checked against the complete table.
+        for item in body {
+            if let OperatorItem::Handler(handler) = item {
+                if is_connector {
+                    self.deferred("a connector handler", handler.span);
+                } else if let Some(checked) = self.handler(handler, &signature, node) {
+                    node.handlers.push(checked);
+                }
+            }
+        }
+    }
+
+    /// Adds one port to a node's semantic table, refusing conflicting
+    /// roles. Default ports are implicit and never added; a matching
+    /// explicit or inferred use of a default name is checked against
+    /// the default direction instead.
+    fn add_port(
+        &mut self,
+        node: &mut Node,
+        name: &crate::compiler::syntax::Name,
+        direction: Direction,
+        origin: &str,
+    ) {
+        let default_direction = match name.text.as_str() {
+            "in" => Some(Direction::Input),
+            "out" | "err" => Some(Direction::Output),
+            _ => None,
+        };
+        let existing = default_direction.or_else(|| {
+            node.declared_ports
+                .iter()
+                .find(|(port, _)| port.name() == name.text)
+                .map(|(_, direction)| *direction)
+        });
+        match existing {
+            Some(known) if known != direction => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_PORT_CONFLICT,
+                        Phase::Check,
+                        format!(
+                            "`{}` is already {} port; it cannot also be {} ({origin})",
+                            name.text,
+                            direction_words(known),
+                            direction_words(direction),
+                        ),
+                    )
+                    .with_span(name.span)
+                    .with_field("port", name.text.clone()),
+                );
+            }
+            Some(_) => {}
+            None => {
+                if let Ok(port) = node::Port::new(name.text.clone()) {
+                    node.declared_ports.push((port, direction));
+                } else {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_PORT_UNKNOWN,
+                            Phase::Check,
+                            format!("`{}` is not a valid port name", name.text),
+                        )
+                        .with_span(name.span),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Infers the ports a node's handlers imply: a trigger names an
+    /// input, an emission target names an output. State cells and
+    /// constants are not ports.
+    fn infer_ports(&mut self, body: &[OperatorItem], node: &mut Node) {
+        for item in body {
+            let OperatorItem::Handler(handler) = item else {
+                continue;
+            };
+            if let crate::compiler::syntax::Trigger::Port(name) = &handler.trigger {
+                self.add_port(node, name, Direction::Input, "fired by a handler");
+            }
+            let Some(statements) = &handler.body else {
+                continue;
+            };
+            for statement in statements {
+                let SynStatement::Assign { target, .. } = statement else {
+                    continue;
+                };
+                if target.segments.len() != 1 {
+                    continue;
+                }
+                let name = &target.segments[0];
+                let is_state = node.vars.iter().any(|var| var.name == name.text)
+                    || node.vals.iter().any(|val| val.name == name.text)
+                    || name.text == "err";
+                if !is_state {
+                    self.add_port(node, name, Direction::Output, "an emission target");
+                }
             }
         }
     }
@@ -721,11 +845,26 @@ impl Checker<'_, '_> {
         signature: &cel::Signature,
         consts: &BTreeMap<String, cel::Value>,
     ) -> Option<Var> {
-        let ty = self.state_type(&decl.ty)?;
+        let (ty, int_bounded) = self.state_type(&decl.ty)?;
         let init = match &decl.value {
             None => None,
             Some(SynValue::Cel(expr)) => {
                 let constant = self.constant(expr, signature, consts)?;
+                if int_bounded
+                    && let cel::Value::Int(value) = constant.value
+                    && i32::try_from(value).is_err()
+                {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CEL_EXPR,
+                            Phase::Check,
+                            format!("`{value}` does not fit `int` (32-bit)"),
+                        )
+                        .with_span(expr.span)
+                        .with_field("detail", "out of the 32-bit int range"),
+                    );
+                    return None;
+                }
                 let init_ty = value_type(&constant.value);
                 if init_ty != ty && init_ty != cel::Type::Dyn && ty != cel::Type::Dyn {
                     self.bag.push(
@@ -788,20 +927,32 @@ impl Checker<'_, '_> {
         }
     }
 
-    fn state_type(&mut self, ty: &TypeRef) -> Option<cel::Type> {
+    /// Maps a declared state type onto the CEL domain. Returns the
+    /// type and whether it carries the 32-bit `int` bound. `long` and
+    /// `float` defer explicitly: the CEL domain does not represent
+    /// them distinctly yet, and a silent merge would corrupt identity.
+    fn state_type(&mut self, ty: &TypeRef) -> Option<(cel::Type, bool)> {
         if ty.optional || ty.alternatives.len() != 1 {
             self.deferred("an optional or union state type", ty.span);
             return None;
         }
         let mapped = match &ty.alternatives[0] {
-            BaseType::Scalar(ScalarType::Bool) => cel::Type::Bool,
-            BaseType::Scalar(ScalarType::Int | ScalarType::Long) => cel::Type::Int,
-            BaseType::Scalar(ScalarType::Float | ScalarType::Double) => cel::Type::Double,
-            BaseType::Scalar(ScalarType::Text) => cel::Type::Text,
-            BaseType::Scalar(ScalarType::Bytes) => cel::Type::Bytes,
-            BaseType::Scalar(ScalarType::Duration) => cel::Type::Duration,
-            BaseType::Scalar(ScalarType::Timestamp) => cel::Type::Timestamp,
-            BaseType::Variant => cel::Type::Dyn,
+            BaseType::Scalar(ScalarType::Bool) => (cel::Type::Bool, false),
+            BaseType::Scalar(ScalarType::Int) => (cel::Type::Int, true),
+            BaseType::Scalar(ScalarType::Long) => {
+                self.deferred("the long state type", ty.span);
+                return None;
+            }
+            BaseType::Scalar(ScalarType::Float) => {
+                self.deferred("the float state type", ty.span);
+                return None;
+            }
+            BaseType::Scalar(ScalarType::Double) => (cel::Type::Double, false),
+            BaseType::Scalar(ScalarType::Text) => (cel::Type::Text, false),
+            BaseType::Scalar(ScalarType::Bytes) => (cel::Type::Bytes, false),
+            BaseType::Scalar(ScalarType::Duration) => (cel::Type::Duration, false),
+            BaseType::Scalar(ScalarType::Timestamp) => (cel::Type::Timestamp, false),
+            BaseType::Variant => (cel::Type::Dyn, false),
             _ => {
                 self.deferred("this state type", ty.span);
                 return None;
@@ -1330,6 +1481,13 @@ fn is_bare_word(text: &str) -> bool {
         && !matches!(text, "true" | "false" | "null")
 }
 
+fn direction_words(direction: Direction) -> &'static str {
+    match direction {
+        Direction::Input => "an input",
+        Direction::Output => "an output",
+    }
+}
+
 fn value_type(value: &cel::Value) -> cel::Type {
     match value {
         cel::Value::Bool(_) => cel::Type::Bool,
@@ -1583,18 +1741,20 @@ graph m0_probe : App {
 
     #[test]
     fn no_top_level_declaration_is_silently_ignored() {
+        // Until unit composition and real liveness exist, an extra
+        // top-level graph is an explicit deferral — an ERROR, so its
+        // unchecked content can never ride along silently.
         let source = "graph main : App { }\ngraph orphan { }\nval loose = 1\n";
         let (_, bag) = check_source(source);
-        let codes = diagnostic_codes(&bag);
-        assert!(codes.contains(&W_DEAD_GRAPH));
-        assert!(codes.contains(&E_CHECK_DEFERRED));
-        assert!(!bag.has_errors() || codes.contains(&E_CHECK_DEFERRED));
-        let dead = bag
+        assert!(bag.has_errors());
+        let constructs: Vec<&str> = bag
             .diagnostics()
             .iter()
-            .find(|diagnostic| diagnostic.code() == W_DEAD_GRAPH)
-            .unwrap();
-        assert_eq!(dead.severity(), crate::diagnostics::Severity::Warning);
+            .filter(|diagnostic| diagnostic.code() == E_CHECK_DEFERRED)
+            .map(|diagnostic| diagnostic.fields()[0].1.as_str())
+            .collect();
+        assert!(constructs.contains(&"a top-level graph outside the App"));
+        assert!(constructs.contains(&"a top-level val"));
     }
 
     #[test]
@@ -1620,6 +1780,70 @@ graph m0_probe : App {
             .map(|diagnostic| diagnostic.fields()[0].1.as_str())
             .collect();
         assert_eq!(shadows, ["limit", "data"]);
+    }
+
+    #[test]
+    fn handler_and_emission_ports_are_inferred() {
+        // The reviewer's reproduction: `on event` implies an input,
+        // `result = envelope` implies an output — no declaration
+        // needed. This program is conforming and must check cleanly.
+        let source = "graph g : App {\n  input feed\n  output sink\n\n  operator o {\n    on event {\n      result = envelope\n    }\n  }\n\n  .feed -> o.event\n  o.result -> .sink\n}\n";
+        let hir = check_clean(source);
+        let ports = &hir.app.nodes[0].declared_ports;
+        assert!(
+            ports
+                .iter()
+                .any(|(port, d)| port.name() == "event" && *d == Direction::Input)
+        );
+        assert!(
+            ports
+                .iter()
+                .any(|(port, d)| port.name() == "result" && *d == Direction::Output)
+        );
+    }
+
+    #[test]
+    fn conflicting_port_roles_are_refused() {
+        // The same name inferred as input and output.
+        let source = "graph g : App {\n  operator o {\n    on chan {\n      chan = envelope\n    }\n  }\n  . -> o.chan -> .\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(diagnostic_codes(&bag).contains(&E_PORT_CONFLICT));
+        // Explicit double declaration at the boundary.
+        let source = "graph g : App {\n  input feed\n  output feed\n  operator o { on in { out = envelope } }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(diagnostic_codes(&bag).contains(&E_PORT_CONFLICT));
+    }
+
+    #[test]
+    fn a_connector_never_declares_ports() {
+        let source = "graph g : App {\n  connector c : Process {\n    input extra\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+        let (_, bag) = check_source(source);
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code() == E_PORT_CONFLICT)
+            .expect("the connector port refusal");
+        assert!(diagnostic.message().contains("its type defines them"));
+    }
+
+    #[test]
+    fn physical_integer_types_are_not_silently_merged() {
+        let long = "graph g : App {\n  operator o {\n    var n : long = 0\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(long);
+        let constructs: Vec<&str> = bag
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == E_CHECK_DEFERRED)
+            .map(|diagnostic| diagnostic.fields()[0].1.as_str())
+            .collect();
+        assert!(constructs.contains(&"the long state type"));
+        let overflow = "graph g : App {\n  operator o {\n    var n : int = 2147483648\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(overflow);
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.message().contains("does not fit `int`"))
+        );
     }
 
     #[test]

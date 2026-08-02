@@ -1371,44 +1371,29 @@ fn parse_duration(text: &str) -> Result<i64, Error> {
 /// since the Unix epoch.
 fn parse_timestamp(text: &str) -> Result<i64, Error> {
     let bad = || fault(format!("`{text}` is not a valid UTC timestamp"));
+    // RFC 3339 has fixed widths; checking them first also bounds every
+    // component before any arithmetic, so nothing below can overflow.
+    let field = |part: Option<&str>, width: usize| -> Result<i64, Error> {
+        let part = part.ok_or_else(bad)?;
+        if part.len() != width || !part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(bad());
+        }
+        part.parse().map_err(|_| bad())
+    };
     let rest = text.strip_suffix('Z').ok_or_else(bad)?;
     let (date, time) = rest.split_once('T').ok_or_else(bad)?;
     let mut date_parts = date.splitn(3, '-');
-    let year: i64 = date_parts
-        .next()
-        .ok_or_else(bad)?
-        .parse()
-        .map_err(|_| bad())?;
-    let month: i64 = date_parts
-        .next()
-        .ok_or_else(bad)?
-        .parse()
-        .map_err(|_| bad())?;
-    let day: i64 = date_parts
-        .next()
-        .ok_or_else(bad)?
-        .parse()
-        .map_err(|_| bad())?;
+    let year = field(date_parts.next(), 4)?;
+    let month = field(date_parts.next(), 2)?;
+    let day = field(date_parts.next(), 2)?;
     let (clock, fraction) = match time.split_once('.') {
         Some((clock, fraction)) => (clock, Some(fraction)),
         None => (time, None),
     };
     let mut clock_parts = clock.splitn(3, ':');
-    let hour: i64 = clock_parts
-        .next()
-        .ok_or_else(bad)?
-        .parse()
-        .map_err(|_| bad())?;
-    let minute: i64 = clock_parts
-        .next()
-        .ok_or_else(bad)?
-        .parse()
-        .map_err(|_| bad())?;
-    let second: i64 = clock_parts
-        .next()
-        .ok_or_else(bad)?
-        .parse()
-        .map_err(|_| bad())?;
+    let hour = field(clock_parts.next(), 2)?;
+    let minute = field(clock_parts.next(), 2)?;
+    let second = field(clock_parts.next(), 2)?;
     if !(1..=12).contains(&month)
         || !(0..24).contains(&hour)
         || !(0..60).contains(&minute)
@@ -1636,6 +1621,21 @@ mod tests {
     fn duplicate_map_keys_are_refused_statically() {
         let diagnostics = compile("{'a': 1, 'a': 2}", &Signature::new()).unwrap_err();
         assert!(diagnostics[0].message.starts_with("duplicate map key"));
+    }
+
+    #[test]
+    fn timestamps_have_fixed_widths_and_never_panic() {
+        // RFC 3339 widths are fixed; and no user string may panic the
+        // evaluator — the extreme year is a value error, not an abort.
+        for bad in [
+            "9223372036854775807-01-01T00:00:00Z",
+            "2026-2-3T4:5:6Z",
+            "26-01-01T00:00:00Z",
+            "2026-01-01T00:00:00",
+        ] {
+            let tree = compile_ok(&format!("timestamp(\"{bad}\")"), &Signature::new());
+            assert!(eval(&tree, &BTreeMap::new()).is_err(), "{bad} must refuse");
+        }
     }
 
     #[test]
