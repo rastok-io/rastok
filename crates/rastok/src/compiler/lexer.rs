@@ -20,6 +20,8 @@ pub const E_LEX_CHAR: Code = Code::new("E-LEX-CHAR");
 pub const E_LEX_UNTERMINATED_STRING: Code = Code::new("E-LEX-UNTERMINATED-STRING");
 /// Diagnostic for a block comment that never closes.
 pub const E_LEX_UNTERMINATED_COMMENT: Code = Code::new("E-LEX-UNTERMINATED-COMMENT");
+/// Diagnostic for a raw guest block whose braces never balance.
+pub const E_LEX_UNTERMINATED_BLOCK: Code = Code::new("E-LEX-UNTERMINATED-BLOCK");
 
 /// Kind of one lexical token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,6 +74,8 @@ pub enum TokenKind {
     BiArrow,
     /// Opaque CEL expression span, produced only by [`Lexer::cel_expr`].
     CelExpr,
+    /// Opaque raw guest text, produced only by [`Lexer::raw_block`].
+    RawText,
     /// Lexically invalid input; a diagnostic was pushed.
     Error,
     /// End of input, returned indefinitely once reached.
@@ -218,6 +222,59 @@ impl<'a> Lexer<'a> {
             text: &self.source[start..end],
             span: Span::new(self.source_id, start..end),
         }
+    }
+
+    /// Raw guest text after an already-consumed `{`, scanned to the
+    /// matching `}` under the frozen balanced-brace delimitation; the
+    /// closing brace is consumed, the text excludes it. The host never
+    /// reads the content — quoted strings are skipped opaquely.
+    pub fn raw_block(&mut self, bag: &mut Bag) -> Token<'a> {
+        let start = self.pos;
+        let mut depth: u32 = 0;
+        loop {
+            match self.peek_byte() {
+                None => {
+                    bag.push(
+                        Diagnostic::new(
+                            E_LEX_UNTERMINATED_BLOCK,
+                            Phase::Parse,
+                            "this raw block never closes",
+                        )
+                        .with_span(Span::new(self.source_id, start..self.pos)),
+                    );
+                    break;
+                }
+                Some(b'{') => {
+                    depth += 1;
+                    self.pos += 1;
+                }
+                Some(b'}') => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                    self.pos += 1;
+                }
+                Some(quote @ (b'"' | b'\'')) => self.skip_quoted(bag, quote),
+                Some(_) => self.pos += 1,
+            }
+        }
+        let token = Token {
+            kind: TokenKind::RawText,
+            text: &self.source[start..self.pos],
+            span: Span::new(self.source_id, start..self.pos),
+        };
+        if self.peek_byte() == Some(b'}') {
+            self.pos += 1;
+        }
+        token
+    }
+
+    /// Repositions the scanner at an absolute byte offset. Used by the
+    /// parser to hand a peeked token back before an opaque-span scan.
+    pub fn rewind(&mut self, pos: usize) {
+        debug_assert!(pos <= self.source.len());
+        self.pos = pos;
     }
 
     fn at_terminator(&self, byte: u8, terminators: &TerminatorSet) -> bool {

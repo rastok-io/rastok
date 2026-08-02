@@ -9,6 +9,7 @@
 //! [`grammar.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/grammar.md
 
 pub mod lexer;
+pub mod parser;
 pub mod syntax;
 
 pub use syntax::SyntaxTree;
