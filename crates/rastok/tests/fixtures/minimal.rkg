@@ -1,0 +1,6 @@
+graph hello : App {
+  operator greet {
+    on in { out = envelope }
+  }
+  . -> greet -> .
+}

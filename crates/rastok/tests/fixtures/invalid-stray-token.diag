@@ -1,0 +1,4 @@
+error[E-PARSE-EXPECTED] (parse): expected a graph body item, found `42`
+  --> source#0 @ 41..43
+  expected = a graph body item
+  found = `42`

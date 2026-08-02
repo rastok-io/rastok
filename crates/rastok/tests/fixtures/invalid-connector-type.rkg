@@ -1,0 +1,6 @@
+graph broken : App {
+  connector c {
+    mode = job
+  }
+  val survivor = 1
+}

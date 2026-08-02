@@ -1,0 +1,17 @@
+// The M0 mechanical-proof program: one operator between the world and
+// one Process connector.
+graph m0_probe : App {
+  connector echo : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator shout {
+    on in where data.text != "" {
+      out = envelope { data.text = data.text }
+    }
+  }
+
+  . -> shout -> echo -> .
+}

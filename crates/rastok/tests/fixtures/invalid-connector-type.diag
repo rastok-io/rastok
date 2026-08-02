@@ -1,0 +1,4 @@
+error[E-PARSE-EXPECTED] (parse): expected `:` — a connector declares its type, found `{`
+  --> source#0 @ 35..36
+  expected = `:` — a connector declares its type
+  found = `{`

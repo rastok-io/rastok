@@ -1,0 +1,190 @@
+SyntaxTree {
+    decls: [
+        Graph(
+            GraphDecl {
+                name: Name {
+                    text: "hello",
+                    span: Span {
+                        source: SourceId(
+                            0,
+                        ),
+                        start: 6,
+                        end: 11,
+                    },
+                },
+                annotation: Some(
+                    Annotation {
+                        symbols: [
+                            Name {
+                                text: "App",
+                                span: Span {
+                                    source: SourceId(
+                                        0,
+                                    ),
+                                    start: 14,
+                                    end: 17,
+                                },
+                            },
+                        ],
+                    },
+                ),
+                per: None,
+                body: [
+                    Operator(
+                        OperatorDecl {
+                            name: Name {
+                                text: "greet",
+                                span: Span {
+                                    source: SourceId(
+                                        0,
+                                    ),
+                                    start: 31,
+                                    end: 36,
+                                },
+                            },
+                            annotation: None,
+                            per: None,
+                            body: [
+                                Handler(
+                                    HandlerDecl {
+                                        trigger: Port(
+                                            Name {
+                                                text: "in",
+                                                span: Span {
+                                                    source: SourceId(
+                                                        0,
+                                                    ),
+                                                    start: 46,
+                                                    end: 48,
+                                                },
+                                            },
+                                        ),
+                                        guards: [],
+                                        body: Some(
+                                            [
+                                                Assign {
+                                                    target: LValue {
+                                                        segments: [
+                                                            Name {
+                                                                text: "out",
+                                                                span: Span {
+                                                                    source: SourceId(
+                                                                        0,
+                                                                    ),
+                                                                    start: 51,
+                                                                    end: 54,
+                                                                },
+                                                            },
+                                                        ],
+                                                        span: Span {
+                                                            source: SourceId(
+                                                                0,
+                                                            ),
+                                                            start: 51,
+                                                            end: 54,
+                                                        },
+                                                    },
+                                                    ty: None,
+                                                    value: Envelope(
+                                                        None,
+                                                    ),
+                                                },
+                                            ],
+                                        ),
+                                        span: Span {
+                                            source: SourceId(
+                                                0,
+                                            ),
+                                            start: 43,
+                                            end: 67,
+                                        },
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                source: SourceId(
+                                    0,
+                                ),
+                                start: 22,
+                                end: 71,
+                            },
+                        },
+                    ),
+                    Edge(
+                        EdgeDecl {
+                            endpoints: [
+                                Ref(
+                                    PortRef {
+                                        boundary: true,
+                                        segments: [],
+                                        span: Span {
+                                            source: SourceId(
+                                                0,
+                                            ),
+                                            start: 74,
+                                            end: 75,
+                                        },
+                                    },
+                                ),
+                                Ref(
+                                    PortRef {
+                                        boundary: false,
+                                        segments: [
+                                            Name {
+                                                text: "greet",
+                                                span: Span {
+                                                    source: SourceId(
+                                                        0,
+                                                    ),
+                                                    start: 79,
+                                                    end: 84,
+                                                },
+                                            },
+                                        ],
+                                        span: Span {
+                                            source: SourceId(
+                                                0,
+                                            ),
+                                            start: 79,
+                                            end: 84,
+                                        },
+                                    },
+                                ),
+                                Ref(
+                                    PortRef {
+                                        boundary: true,
+                                        segments: [],
+                                        span: Span {
+                                            source: SourceId(
+                                                0,
+                                            ),
+                                            start: 88,
+                                            end: 89,
+                                        },
+                                    },
+                                ),
+                            ],
+                            bidirectional: false,
+                            guard: None,
+                            config: None,
+                            span: Span {
+                                source: SourceId(
+                                    0,
+                                ),
+                                start: 74,
+                                end: 89,
+                            },
+                        },
+                    ),
+                ],
+                span: Span {
+                    source: SourceId(
+                        0,
+                    ),
+                    start: 0,
+                    end: 91,
+                },
+            },
+        ),
+    ],
+}
