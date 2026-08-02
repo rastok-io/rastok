@@ -12,7 +12,7 @@
 
 use crate::cel;
 use crate::compiler::hir::{
-    AttrValue, EdgeTarget, EmitValue, Hir, Node as HirNode, Statement as HirStatement,
+    AttrValue, Direction, EdgeTarget, EmitValue, Hir, Node as HirNode, Statement as HirStatement,
 };
 use crate::node;
 use crate::plan::{
@@ -360,11 +360,19 @@ impl Writer {
                 }
             }
         }
-        let mut ports: Vec<_> = node.declared_ports.iter().map(node::Port::name).collect();
+        let mut ports: Vec<_> = node
+            .declared_ports
+            .iter()
+            .map(|(port, direction)| (port.name(), *direction))
+            .collect();
         ports.sort_unstable();
         self.count(ports.len());
-        for port in ports {
+        for (port, direction) in ports {
             self.str(port);
+            self.tag(match direction {
+                Direction::Input => 1,
+                Direction::Output => 2,
+            });
         }
         self.count(node.handlers.len());
         for handler in &node.handlers {

@@ -9,8 +9,8 @@
 
 use crate::cel;
 use crate::compiler::hir::{
-    AttrValue, Attribute, Const, Edge, EdgeTarget, EmitValue, Endpoint, FieldWrite, Graph, Handler,
-    Hir, Node, Statement, Val, Var,
+    AttrValue, Attribute, Const, Direction, Edge, EdgeTarget, EmitValue, Endpoint, FieldWrite,
+    Graph, Handler, Hir, Node, Statement, Val, Var,
 };
 use crate::compiler::syntax::{
     BaseType, CelExpr, ConnectorDecl, EdgeDecl, EdgeEndpoint, GraphDecl, GraphItem, OperatorDecl,
@@ -48,9 +48,10 @@ pub const E_CONTRACT_REQUIRED: Code = Code::new("E-CONTRACT-REQUIRED");
 pub const E_DUP_BINDING: Code = Code::new("E-DUP-BINDING");
 /// Diagnostic for a top-level graph no App composition reaches.
 pub const W_DEAD_GRAPH: Code = Code::new("W-DEAD-GRAPH");
-
-/// The pre-bound default ports, usable without declaration.
-const DEFAULT_PORTS: &[&str] = &["in", "out", "err"];
+/// Diagnostic for a port used against its direction.
+pub const E_PORT_DIRECTION: Code = Code::new("E-PORT-DIRECTION");
+/// Diagnostic for a wiring cycle — edges form a DAG.
+pub const E_GRAPH_CYCLE: Code = Code::new("E-GRAPH-CYCLE");
 
 /// Merged sources of one compilation: the application files. Lab
 /// fragments join at the scenario stage.
@@ -209,20 +210,30 @@ impl Checker<'_, '_> {
         }
         let mut graph = Graph {
             name: decl.name.text.clone(),
+            boundary: Vec::new(),
             vals: Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
         };
         let mut consts = BTreeMap::new();
         let mut signature = cel::Signature::new();
-        let mut boundary_ports = Vec::new();
         let mut edges = Vec::new();
         for item in &decl.body {
             match item {
                 GraphItem::Port(port) => {
-                    boundary_ports.push(port.name.text.clone());
                     if port.ty.is_some() {
                         self.deferred("a typed boundary port", port.span);
+                    }
+                    let direction = match port.direction {
+                        crate::compiler::syntax::PortDirection::Input => Direction::Input,
+                        crate::compiler::syntax::PortDirection::Output => Direction::Output,
+                    };
+                    match node::Port::new(port.name.text.clone()) {
+                        Ok(declared) => graph.boundary.push((declared, direction)),
+                        Err(invalid) => self.bag.push(
+                            Diagnostic::new(E_PORT_UNKNOWN, Phase::Check, invalid.to_string())
+                                .with_span(port.name.span),
+                        ),
                     }
                 }
                 GraphItem::Val(val) => {
@@ -261,11 +272,69 @@ impl Checker<'_, '_> {
             }
         }
         for edge in edges {
-            if let Some(resolved) = self.edge(edge, &graph, &boundary_ports) {
+            if let Some(resolved) = self.edge(edge, &graph) {
                 graph.edges.extend(resolved);
             }
         }
+        self.reject_cycles(&graph, decl.span);
         graph
+    }
+
+    /// Wiring is a DAG (`grammar.md`): a cycle among nodes refuses.
+    fn reject_cycles(&mut self, graph: &Graph, span: Span) {
+        let index_of = |path: &node::Path| {
+            graph
+                .nodes
+                .iter()
+                .position(|candidate| &candidate.path == path)
+        };
+        let mut successors = vec![Vec::new(); graph.nodes.len()];
+        for edge in &graph.edges {
+            if let (Some(from), EdgeTarget::Port(to)) = (&edge.from.node, &edge.to)
+                && let (Some(from), Some(to)) = (
+                    from.segments().first().and_then(|_| index_of(from)),
+                    to.node.as_ref().and_then(&index_of),
+                )
+            {
+                successors[from].push(to);
+            }
+        }
+        // Iterative three-state DFS: 0 unvisited, 1 on the stack, 2 done.
+        let mut state = vec![0u8; graph.nodes.len()];
+        for start in 0..graph.nodes.len() {
+            if state[start] != 0 {
+                continue;
+            }
+            let mut stack = vec![(start, 0usize)];
+            state[start] = 1;
+            while let Some((current, next_child)) = stack.pop() {
+                if let Some(&child) = successors[current].get(next_child) {
+                    stack.push((current, next_child + 1));
+                    match state[child] {
+                        0 => {
+                            state[child] = 1;
+                            stack.push((child, 0));
+                        }
+                        1 => {
+                            let name = graph.nodes[child].path.to_string();
+                            self.bag.push(
+                                Diagnostic::new(
+                                    E_GRAPH_CYCLE,
+                                    Phase::Check,
+                                    format!("the wiring cycles through `{name}`; edges form a DAG"),
+                                )
+                                .with_span(span)
+                                .with_field("node", name),
+                            );
+                            return;
+                        }
+                        _ => {}
+                    }
+                } else {
+                    state[current] = 2;
+                }
+            }
+        }
     }
 
     fn push_node(&mut self, graph: &mut Graph, node: Node, span: Span) {
@@ -565,8 +634,12 @@ impl Checker<'_, '_> {
                     if port.ty.is_some() {
                         self.deferred("a typed port", port.span);
                     }
+                    let direction = match port.direction {
+                        crate::compiler::syntax::PortDirection::Input => Direction::Input,
+                        crate::compiler::syntax::PortDirection::Output => Direction::Output,
+                    };
                     match node::Port::new(port.name.text.clone()) {
-                        Ok(declared) => node.declared_ports.push(declared),
+                        Ok(declared) => node.declared_ports.push((declared, direction)),
                         Err(invalid) => self.bag.push(
                             Diagnostic::new(E_PORT_UNKNOWN, Phase::Check, invalid.to_string())
                                 .with_span(port.name.span),
@@ -752,16 +825,33 @@ impl Checker<'_, '_> {
         node: &Node,
     ) -> Option<Handler> {
         let trigger = match &decl.trigger {
-            SynTrigger::Port(name) => match node::Port::new(name.text.clone()) {
-                Ok(port) => node::Trigger::Port(port),
-                Err(invalid) => {
+            SynTrigger::Port(name) => {
+                let Some(direction) = self.node_port_direction(node, &name.text) else {
                     self.bag.push(
-                        Diagnostic::new(E_PORT_UNKNOWN, Phase::Check, invalid.to_string())
-                            .with_span(name.span),
+                        Diagnostic::new(
+                            E_PORT_UNKNOWN,
+                            Phase::Check,
+                            format!("this node exposes no port named `{}`", name.text),
+                        )
+                        .with_span(name.span)
+                        .with_field("port", name.text.clone()),
+                    );
+                    return None;
+                };
+                if direction != Direction::Input {
+                    self.wrong_direction(
+                        name.span,
+                        &name.text,
+                        direction,
+                        "a handler listens on an input port",
                     );
                     return None;
                 }
-            },
+                match node::Port::new(name.text.clone()) {
+                    Ok(port) => node::Trigger::Port(port),
+                    Err(_) => return None,
+                }
+            }
             SynTrigger::Start(_) => node::Trigger::Lifecycle(node::Lifecycle::Start),
             SynTrigger::Stop(_) => node::Trigger::Lifecycle(node::Lifecycle::Stop),
             SynTrigger::Compensate(span) => {
@@ -872,12 +962,7 @@ impl Checker<'_, '_> {
                         }
                         continue;
                     }
-                    let is_port = DEFAULT_PORTS.contains(&name.text.as_str())
-                        || node
-                            .declared_ports
-                            .iter()
-                            .any(|port| port.name() == name.text);
-                    if !is_port {
+                    let Some(direction) = self.node_port_direction(node, &name.text) else {
                         self.bag.push(
                             Diagnostic::new(
                                 E_RESOLVE_UNKNOWN,
@@ -889,6 +974,15 @@ impl Checker<'_, '_> {
                             )
                             .with_span(name.span)
                             .with_field("name", name.text.clone()),
+                        );
+                        continue;
+                    };
+                    if direction != Direction::Output {
+                        self.wrong_direction(
+                            name.span,
+                            &name.text,
+                            direction,
+                            "an emission targets an output port",
                         );
                         continue;
                     }
@@ -996,12 +1090,7 @@ impl Checker<'_, '_> {
         Some(writes)
     }
 
-    fn edge(
-        &mut self,
-        decl: &EdgeDecl,
-        graph: &Graph,
-        boundary_ports: &[String],
-    ) -> Option<Vec<Edge>> {
+    fn edge(&mut self, decl: &EdgeDecl, graph: &Graph) -> Option<Vec<Edge>> {
         if decl.bidirectional {
             self.deferred("a bidirectional edge", decl.span);
             return None;
@@ -1016,10 +1105,10 @@ impl Checker<'_, '_> {
         }
         let mut resolved = Vec::new();
         for pair in decl.endpoints.windows(2) {
-            let from = self.endpoint(&pair[0], graph, boundary_ports, true)?;
+            let from = self.endpoint(&pair[0], graph, true)?;
             let to = match &pair[1] {
                 EdgeEndpoint::Nothing(_) => EdgeTarget::Discard,
-                other => EdgeTarget::Port(self.endpoint(other, graph, boundary_ports, false)?),
+                other => EdgeTarget::Port(self.endpoint(other, graph, false)?),
             };
             resolved.push(Edge { from, to });
         }
@@ -1030,7 +1119,6 @@ impl Checker<'_, '_> {
         &mut self,
         endpoint: &EdgeEndpoint,
         graph: &Graph,
-        boundary_ports: &[String],
         is_source: bool,
     ) -> Option<Endpoint> {
         let reference = match endpoint {
@@ -1048,17 +1136,75 @@ impl Checker<'_, '_> {
                 return None;
             }
         };
-        self.port_ref(reference, graph, boundary_ports, is_source)
+        self.port_ref(reference, graph, is_source)
+    }
+
+    /// The direction a port has on a node: declared ports first, then
+    /// the connector contract's port sheet, then the pre-bound
+    /// defaults. `None` means the node exposes no such port.
+    fn node_port_direction(&self, target: &Node, port_name: &str) -> Option<Direction> {
+        if let Some((_, direction)) = target
+            .declared_ports
+            .iter()
+            .find(|(port, _)| port.name() == port_name)
+        {
+            return Some(*direction);
+        }
+        if let Some(trait_name) = &target.connector_trait
+            && let stdlib::Availability::Available(contract) = self.registry.connector(trait_name)
+        {
+            if contract.input_ports.contains(&port_name) {
+                return Some(Direction::Input);
+            }
+            if contract.output_ports.contains(&port_name) {
+                return Some(Direction::Output);
+            }
+            return None;
+        }
+        match port_name {
+            "in" => Some(Direction::Input),
+            "out" | "err" => Some(Direction::Output),
+            _ => None,
+        }
+    }
+
+    fn wrong_direction(&mut self, span: Span, port: &str, direction: Direction, required: &str) {
+        let have = match direction {
+            Direction::Input => "an input",
+            Direction::Output => "an output",
+        };
+        self.bag.push(
+            Diagnostic::new(
+                E_PORT_DIRECTION,
+                Phase::Check,
+                format!("`{port}` is {have} port; {required}"),
+            )
+            .with_span(span)
+            .with_field("port", port)
+            .with_field(
+                "direction",
+                match direction {
+                    Direction::Input => "input",
+                    Direction::Output => "output",
+                },
+            ),
+        );
     }
 
     fn port_ref(
         &mut self,
         reference: &PortRef,
         graph: &Graph,
-        boundary_ports: &[String],
         is_source: bool,
     ) -> Option<Endpoint> {
         if reference.boundary {
+            // As a source the boundary feeds the graph (an input port
+            // of the graph); as a target it drains it (an output).
+            let expected = if is_source {
+                Direction::Input
+            } else {
+                Direction::Output
+            };
             let port_name = match reference.segments.first() {
                 None => {
                     if is_source {
@@ -1068,7 +1214,11 @@ impl Checker<'_, '_> {
                     }
                 }
                 Some(name) => {
-                    if !boundary_ports.contains(&name.text) {
+                    let Some((_, direction)) = graph
+                        .boundary
+                        .iter()
+                        .find(|(port, _)| port.name() == name.text)
+                    else {
                         self.bag.push(
                             Diagnostic::new(
                                 E_PORT_UNKNOWN,
@@ -1078,6 +1228,15 @@ impl Checker<'_, '_> {
                             .with_span(name.span)
                             .with_field("port", name.text.clone()),
                         );
+                        return None;
+                    };
+                    if *direction != expected {
+                        let required = if is_source {
+                            "a boundary edge source must be an input of the graph"
+                        } else {
+                            "a boundary edge target must be an output of the graph"
+                        };
+                        self.wrong_direction(name.span, &name.text, *direction, required);
                         return None;
                     }
                     name.text.as_str()
@@ -1118,12 +1277,7 @@ impl Checker<'_, '_> {
                 return None;
             }
         };
-        let known = DEFAULT_PORTS.contains(&port_name)
-            || target
-                .declared_ports
-                .iter()
-                .any(|port| port.name() == port_name);
-        if !known {
+        let Some(direction) = self.node_port_direction(target, port_name) else {
             self.bag.push(
                 Diagnostic::new(
                     E_PORT_UNKNOWN,
@@ -1133,6 +1287,20 @@ impl Checker<'_, '_> {
                 .with_span(reference.span)
                 .with_field("port", port_name),
             );
+            return None;
+        };
+        let expected = if is_source {
+            Direction::Output
+        } else {
+            Direction::Input
+        };
+        if direction != expected {
+            let required = if is_source {
+                "an edge source must be an output of its node"
+            } else {
+                "an edge target must be an input of its node"
+            };
+            self.wrong_direction(reference.span, port_name, direction, required);
             return None;
         }
         node::Port::new(port_name).ok().map(|port| Endpoint {
@@ -1441,6 +1609,57 @@ graph m0_probe : App {
             .map(|diagnostic| diagnostic.fields()[0].1.as_str())
             .collect();
         assert_eq!(shadows, ["limit", "data"]);
+    }
+
+    #[test]
+    fn ports_are_used_with_their_direction() {
+        // `o.in` as an edge source, a handler on `out`, and an
+        // emission into `in` all refuse.
+        let source =
+            "graph g : App {\n  operator o {\n    on out { in = envelope }\n  }\n  o.in -> o\n}\n";
+        let (_, bag) = check_source(source);
+        let directions = bag
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == E_PORT_DIRECTION)
+            .count();
+        assert_eq!(
+            directions,
+            2,
+            "handler + edge source: {:#?}",
+            bag.diagnostics()
+        );
+        let emission =
+            "graph g : App {\n  operator o {\n    on in { in = envelope }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(emission);
+        assert!(diagnostic_codes(&bag).contains(&E_PORT_DIRECTION));
+    }
+
+    #[test]
+    fn boundary_ports_carry_direction() {
+        let source = "graph g : App {\n  input feed\n  operator o { on in { out = envelope } }\n  o.out -> .feed\n}\n";
+        let (_, bag) = check_source(source);
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code() == E_PORT_DIRECTION)
+            .expect("an input boundary port cannot drain the graph");
+        assert!(diagnostic.message().contains("boundary edge target"));
+    }
+
+    #[test]
+    fn wiring_cycles_are_refused() {
+        let source = "graph g : App {\n  operator a { on in { out = envelope } }\n  operator b { on in { out = envelope } }\n  a -> b\n  b -> a\n}\n";
+        let (_, bag) = check_source(source);
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|diagnostic| diagnostic.code() == E_GRAPH_CYCLE)
+            .expect("the cycle must refuse");
+        assert!(diagnostic.message().contains("DAG"));
+        let chain = "graph g : App {\n  operator a { on in { out = envelope } }\n  operator b { on in { out = envelope } }\n  . -> a -> b -> .\n}\n";
+        let (_, bag) = check_source(chain);
+        assert!(!diagnostic_codes(&bag).contains(&E_GRAPH_CYCLE));
     }
 
     #[test]

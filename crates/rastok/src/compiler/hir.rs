@@ -17,11 +17,23 @@ pub struct Hir {
     pub app: Graph,
 }
 
+/// Semantic port direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Direction {
+    /// The port receives envelopes.
+    Input,
+    /// The port emits envelopes.
+    Output,
+}
+
 /// One checked graph.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Graph {
     /// The graph's declared name; excluded from descendant identity.
     pub name: String,
+    /// Boundary ports declared on the graph itself; the defaults `in`
+    /// and `out` exist implicitly. Identity material.
+    pub boundary: Vec<(node::Port, Direction)>,
     /// Graph-level constant bindings, in declaration order.
     pub vals: Vec<Val>,
     /// The graph's nodes, in declaration order.
@@ -66,8 +78,8 @@ pub struct Node {
     pub vals: Vec<Val>,
     /// Mutable state cells, in declaration order.
     pub vars: Vec<Var>,
-    /// Ports declared explicitly on the node.
-    pub declared_ports: Vec<node::Port>,
+    /// Ports declared explicitly on the node, with their direction.
+    pub declared_ports: Vec<(node::Port, Direction)>,
     /// Checked handlers, in declaration order.
     pub handlers: Vec<Handler>,
 }

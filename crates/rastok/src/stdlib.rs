@@ -25,8 +25,10 @@ pub enum Availability<'registry> {
 pub struct ConnectorContract {
     /// The NodeType name (`Process`).
     pub name: &'static str,
-    /// The envelope ports the type defines.
-    pub ports: &'static [&'static str],
+    /// The envelope ports the type defines as inputs.
+    pub input_ports: &'static [&'static str],
+    /// The envelope ports the type defines as outputs.
+    pub output_ports: &'static [&'static str],
     /// The attribute sheet.
     pub attributes: &'static [AttributeSpec],
     /// The typed error set; every member reaches the `err` port.
@@ -90,7 +92,8 @@ pub struct Registry {
 /// mode: `mode = service` is deferred separately by the checker.
 pub const PROCESS: ConnectorContract = ConnectorContract {
     name: "Process",
-    ports: &["in", "out", "err"],
+    input_ports: &["in"],
+    output_ports: &["out", "err"],
     attributes: &[
         AttributeSpec {
             name: "command",
