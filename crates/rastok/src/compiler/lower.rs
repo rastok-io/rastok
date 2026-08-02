@@ -1,0 +1,580 @@
+//! Canonicalization and lowering: HIR to `SemanticHash` and
+//! `ExecutionPlan`.
+//!
+//! The canonical byte form follows `identity.md` §1: insensitive to
+//! formatting, file order, and declaration order — nodes, vals,
+//! attributes, vars, ports, and edges are sorted before hashing —
+//! sensitive to topology, statement order inside a handler, every CEL
+//! expression as its canonical tree, and `var` defaults. Constants
+//! hash as the expressions they were written as, before const-eval;
+//! spans never enter the bytes. The plan then ships the reduced
+//! values.
+
+use crate::cel;
+use crate::compiler::hir::{
+    AttrValue, EdgeTarget, EmitValue, Hir, Node as HirNode, Statement as HirStatement,
+};
+use crate::node;
+use crate::plan::{
+    AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
+    Node, SemanticHash, Slot, Step, SymbolTable, VarCell,
+};
+
+/// Computes the semantic hash of a checked graph.
+#[must_use]
+pub fn semantic_hash(hir: &Hir) -> SemanticHash {
+    let mut writer = Writer {
+        hasher: blake3::Hasher::new(),
+    };
+    writer.str(&hir.app.name);
+    let mut vals: Vec<_> = hir.app.vals.iter().collect();
+    vals.sort_by(|a, b| a.name.cmp(&b.name));
+    writer.count(vals.len());
+    for val in vals {
+        writer.str(&val.name);
+        writer.expr(&val.value.tree.root);
+    }
+    let mut nodes: Vec<_> = sorted_nodes(hir);
+    writer.count(nodes.len());
+    for node in &mut nodes {
+        writer.node(node);
+    }
+    let mut edges: Vec<String> = hir
+        .app
+        .edges
+        .iter()
+        .map(|edge| {
+            let to = match &edge.to {
+                EdgeTarget::Port(endpoint) => endpoint_text(endpoint),
+                EdgeTarget::Discard => String::from("!discard"),
+            };
+            format!("{}>{to}", endpoint_text(&edge.from))
+        })
+        .collect();
+    edges.sort();
+    writer.count(edges.len());
+    for edge in edges {
+        writer.str(&edge);
+    }
+    let mut bytes = [0u8; 32];
+    writer.hasher.finalize_xof().fill(&mut bytes);
+    SemanticHash::from_bytes(bytes)
+}
+
+/// Lowers a checked graph into the shipped plan and its symbol table.
+#[must_use]
+pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
+    let nodes = sorted_nodes(hir);
+    let slot_of = |path: &node::Path| {
+        Slot::new(
+            u32::try_from(
+                nodes
+                    .iter()
+                    .position(|candidate| &candidate.path == path)
+                    .unwrap_or_else(|| unreachable!("edges resolved against these nodes")),
+            )
+            .unwrap_or_else(|_| unreachable!("node count fits u32")),
+        )
+    };
+    let mut plan = ExecutionPlan {
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        handlers: Vec::new(),
+    };
+    let mut symbols = SymbolTable { nodes: Vec::new() };
+    for hir_node in &nodes {
+        symbols.nodes.push(hir_node.path.to_string());
+        plan.nodes.push(Node {
+            path: hir_node.path.clone(),
+            kind: hir_node.kind,
+            connector: hir_node
+                .connector_trait
+                .as_ref()
+                .map(|contract| ConnectorSpec {
+                    contract: contract.clone(),
+                    attributes: hir_node
+                        .attributes
+                        .iter()
+                        .map(|attribute| {
+                            let setting = match &attribute.value {
+                                AttrValue::Word(word) => AttrSetting::Word(word.clone()),
+                                AttrValue::Const(constant) => {
+                                    AttrSetting::Value(constant.value.clone())
+                                }
+                            };
+                            (attribute.name.clone(), setting)
+                        })
+                        .collect(),
+                }),
+            vars: hir_node
+                .vars
+                .iter()
+                .map(|var| VarCell {
+                    name: var.name.clone(),
+                    ty: var.ty.clone(),
+                    init: var.init.as_ref().map(|init| init.value.clone()),
+                })
+                .collect(),
+        });
+    }
+    for hir_node in &nodes {
+        let slot = slot_of(&hir_node.path);
+        for handler in &hir_node.handlers {
+            plan.handlers.push(Handler {
+                node: slot,
+                trigger: handler.trigger.clone(),
+                guard: handler.guard.clone(),
+                body: handler
+                    .body
+                    .iter()
+                    .map(|statement| match statement {
+                        HirStatement::Let { name, value } => Step::Let {
+                            name: name.clone(),
+                            expr: value.clone(),
+                        },
+                        HirStatement::SetVar { name, value } => Step::SetVar {
+                            name: name.clone(),
+                            expr: value.clone(),
+                        },
+                        HirStatement::Emit { port, value } => Step::Emit {
+                            port: port.clone(),
+                            value: lower_emission(value),
+                        },
+                    })
+                    .collect(),
+            });
+        }
+    }
+    for edge in &hir.app.edges {
+        let endpoint = |end: &crate::compiler::hir::Endpoint| EndpointRef {
+            node: end.node.as_ref().map(&slot_of),
+            port: end.port.clone(),
+        };
+        plan.edges.push(Edge {
+            from: endpoint(&edge.from),
+            to: match &edge.to {
+                EdgeTarget::Port(end) => Some(endpoint(end)),
+                EdgeTarget::Discard => None,
+            },
+        });
+    }
+    (plan, symbols)
+}
+
+fn lower_emission(value: &EmitValue) -> Emission {
+    let writes = |fields: &[crate::compiler::hir::FieldWrite]| {
+        fields
+            .iter()
+            .map(|write| FieldWrite {
+                path: write.path.clone(),
+                expr: write.value.clone(),
+            })
+            .collect()
+    };
+    match value {
+        EmitValue::Identity => Emission::Identity,
+        EmitValue::Patch(fields) => Emission::Patch(writes(fields)),
+        EmitValue::Replace(fields) => Emission::Replace(writes(fields)),
+        EmitValue::Data(tree) => Emission::Data(tree.clone()),
+        EmitValue::Nothing => Emission::Nothing,
+    }
+}
+
+/// Nodes in canonical order: (kind, path), per `identity.md` §1's
+/// sorted top-level declarations. Slots index this order.
+fn sorted_nodes(hir: &Hir) -> Vec<&HirNode> {
+    let mut nodes: Vec<_> = hir.app.nodes.iter().collect();
+    nodes.sort_by_key(|node| (kind_rank(node.kind), node.path.to_string()));
+    nodes
+}
+
+fn kind_rank(kind: node::Kind) -> u8 {
+    match kind {
+        node::Kind::Operator => 0,
+        node::Kind::Connector => 1,
+        node::Kind::Graph => 2,
+    }
+}
+
+fn endpoint_text(endpoint: &crate::compiler::hir::Endpoint) -> String {
+    match &endpoint.node {
+        Some(path) => format!("{path}.{}", endpoint.port),
+        None => format!(".{}", endpoint.port),
+    }
+}
+
+/// Deterministic canonical byte writer feeding blake3. Every variable
+/// datum is length- or count-prefixed; every variant carries a tag —
+/// the same injectivity discipline as the id framing.
+struct Writer {
+    hasher: blake3::Hasher,
+}
+
+impl Writer {
+    fn tag(&mut self, tag: u8) {
+        self.hasher.update(&[tag]);
+    }
+
+    fn count(&mut self, count: usize) {
+        let count = u32::try_from(count).unwrap_or_else(|_| unreachable!("canonical counts fit"));
+        self.hasher.update(&count.to_le_bytes());
+    }
+
+    fn str(&mut self, text: &str) {
+        self.count(text.len());
+        self.hasher.update(text.as_bytes());
+    }
+
+    fn node(&mut self, node: &HirNode) {
+        self.tag(match node.kind {
+            node::Kind::Operator => 1,
+            node::Kind::Connector => 2,
+            node::Kind::Graph => 3,
+        });
+        self.str(&node.path.to_string());
+        match &node.connector_trait {
+            None => self.tag(0),
+            Some(name) => {
+                self.tag(1);
+                self.str(name);
+            }
+        }
+        let mut attributes: Vec<_> = node.attributes.iter().collect();
+        attributes.sort_by(|a, b| a.name.cmp(&b.name));
+        self.count(attributes.len());
+        for attribute in attributes {
+            self.str(&attribute.name);
+            match &attribute.value {
+                AttrValue::Word(word) => {
+                    self.tag(1);
+                    self.str(word);
+                }
+                AttrValue::Const(constant) => {
+                    self.tag(2);
+                    self.expr(&constant.tree.root);
+                }
+            }
+        }
+        let mut vars: Vec<_> = node.vars.iter().collect();
+        vars.sort_by(|a, b| a.name.cmp(&b.name));
+        self.count(vars.len());
+        for var in vars {
+            self.str(&var.name);
+            self.str(&format!("{:?}", var.ty));
+            match &var.init {
+                None => self.tag(0),
+                Some(init) => {
+                    self.tag(1);
+                    self.expr(&init.tree.root);
+                }
+            }
+        }
+        let mut ports: Vec<_> = node.declared_ports.iter().map(node::Port::name).collect();
+        ports.sort_unstable();
+        self.count(ports.len());
+        for port in ports {
+            self.str(port);
+        }
+        self.count(node.handlers.len());
+        for handler in &node.handlers {
+            self.str(&handler.trigger.to_string());
+            match &handler.guard {
+                None => self.tag(0),
+                Some(guard) => {
+                    self.tag(1);
+                    self.expr(&guard.root);
+                }
+            }
+            self.count(handler.body.len());
+            for statement in &handler.body {
+                match statement {
+                    HirStatement::Let { name, value } => {
+                        self.tag(1);
+                        self.str(name);
+                        self.expr(&value.root);
+                    }
+                    HirStatement::Emit { port, value } => {
+                        self.tag(2);
+                        self.str(port.name());
+                        self.emission(value);
+                    }
+                    HirStatement::SetVar { name, value } => {
+                        self.tag(3);
+                        self.str(name);
+                        self.expr(&value.root);
+                    }
+                }
+            }
+        }
+    }
+
+    fn emission(&mut self, value: &EmitValue) {
+        match value {
+            EmitValue::Identity => self.tag(1),
+            EmitValue::Patch(writes) => {
+                self.tag(2);
+                self.field_writes(writes);
+            }
+            EmitValue::Replace(writes) => {
+                self.tag(3);
+                self.field_writes(writes);
+            }
+            EmitValue::Data(tree) => {
+                self.tag(4);
+                self.expr(&tree.root);
+            }
+            EmitValue::Nothing => self.tag(5),
+        }
+    }
+
+    fn field_writes(&mut self, writes: &[crate::compiler::hir::FieldWrite]) {
+        self.count(writes.len());
+        for write in writes {
+            self.str(&write.path.join("."));
+            self.expr(&write.value.root);
+        }
+    }
+
+    fn expr(&mut self, expr: &cel::Expr) {
+        match expr {
+            cel::Expr::Literal(value) => {
+                self.tag(1);
+                self.value(value);
+            }
+            cel::Expr::Path(segments) => {
+                self.tag(2);
+                self.str(&segments.join("."));
+            }
+            cel::Expr::Unary { op, expr } => {
+                self.tag(3);
+                self.str(&format!("{op:?}"));
+                self.expr(expr);
+            }
+            cel::Expr::Binary { op, left, right } => {
+                self.tag(4);
+                self.str(&format!("{op:?}"));
+                self.expr(left);
+                self.expr(right);
+            }
+            cel::Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.tag(5);
+                self.expr(cond);
+                self.expr(then);
+                self.expr(otherwise);
+            }
+            cel::Expr::Index { base, index } => {
+                self.tag(6);
+                self.expr(base);
+                self.expr(index);
+            }
+            cel::Expr::Call { function, args } => {
+                self.tag(7);
+                self.str(&format!("{function:?}"));
+                self.count(args.len());
+                for arg in args {
+                    self.expr(arg);
+                }
+            }
+            cel::Expr::List(items) => {
+                self.tag(8);
+                self.count(items.len());
+                for item in items {
+                    self.expr(item);
+                }
+            }
+            cel::Expr::MapLit(entries) => {
+                self.tag(9);
+                self.count(entries.len());
+                for (key, value) in entries {
+                    self.str(key);
+                    self.expr(value);
+                }
+            }
+        }
+    }
+
+    fn value(&mut self, value: &cel::Value) {
+        match value {
+            cel::Value::Bool(b) => {
+                self.tag(1);
+                self.tag(u8::from(*b));
+            }
+            cel::Value::Int(i) => {
+                self.tag(2);
+                self.hasher.update(&i.to_le_bytes());
+            }
+            cel::Value::Uint(u) => {
+                self.tag(3);
+                self.hasher.update(&u.to_le_bytes());
+            }
+            cel::Value::Double(d) => {
+                self.tag(4);
+                self.hasher.update(&d.to_bits().to_le_bytes());
+            }
+            cel::Value::Text(text) => {
+                self.tag(5);
+                self.str(text);
+            }
+            cel::Value::Bytes(bytes) => {
+                self.tag(6);
+                self.count(bytes.len());
+                self.hasher.update(bytes);
+            }
+            cel::Value::Duration(nanos) => {
+                self.tag(7);
+                self.hasher.update(&nanos.to_le_bytes());
+            }
+            cel::Value::Timestamp(nanos) => {
+                self.tag(8);
+                self.hasher.update(&nanos.to_le_bytes());
+            }
+            cel::Value::Null => self.tag(9),
+            cel::Value::List(items) => {
+                self.tag(10);
+                self.count(items.len());
+                for item in items {
+                    self.value(item);
+                }
+            }
+            cel::Value::Map(map) => {
+                self.tag(11);
+                self.count(map.len());
+                for (key, item) in map {
+                    self.str(key);
+                    self.value(item);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::compiler::compile;
+    use crate::plan::{AttrSetting, Emission, GraphVersion, Manifest, Step};
+    use crate::stdlib::Registry;
+    use crate::{cel, node};
+
+    const M0_PROBE: &str = r#"
+graph m0_probe : App {
+  connector echo : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator shout {
+    on in where data.text != "" {
+      out = envelope { data.text = data.text }
+    }
+  }
+
+  . -> shout -> echo -> .
+}
+"#;
+
+    #[test]
+    fn the_m0_probe_compiles_to_a_plan() {
+        let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
+        assert!(compilation.warnings.is_empty());
+        let plan = &compilation.plan;
+        assert_eq!(plan.nodes.len(), 2);
+        // Canonical order: operators before connectors.
+        assert_eq!(plan.nodes[0].path.to_string(), "shout");
+        assert_eq!(plan.nodes[1].path.to_string(), "echo");
+        let spec = plan.nodes[1].connector.as_ref().expect("a connector spec");
+        assert_eq!(spec.contract, "Process");
+        assert_eq!(
+            spec.attribute("command"),
+            Some(&AttrSetting::Value(cel::Value::Text(String::from("cat"))))
+        );
+        assert_eq!(plan.handlers.len(), 1);
+        let handler = &plan.handlers[0];
+        assert_eq!(handler.node.index(), 0);
+        assert_eq!(
+            handler.trigger,
+            node::Trigger::Port(node::Port::new("in").unwrap())
+        );
+        assert!(matches!(
+            &handler.body[0],
+            Step::Emit {
+                value: Emission::Patch(_),
+                ..
+            }
+        ));
+        assert_eq!(plan.edges.len(), 3);
+        assert_eq!(compilation.symbols.nodes, ["shout", "echo"]);
+    }
+
+    #[test]
+    fn the_hash_ignores_formatting_and_declaration_order() {
+        let original = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
+        let same = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
+        assert_eq!(original, same);
+        // Same program: comments added, attributes spaced differently,
+        // operator declared before the connector.
+        let reordered = r#"
+// a comment that must not enter the identity
+graph m0_probe : App {
+  operator shout {
+    on in where data.text != "" {
+      out = envelope { data.text = data.text }
+    }
+  }
+
+  connector echo : Process {
+    mode  =  job
+    command = "cat"
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
+  }
+
+  . -> shout -> echo -> .
+}
+"#;
+        assert_eq!(
+            compile(&[reordered], &Registry::m0()).unwrap().hash,
+            original
+        );
+    }
+
+    #[test]
+    fn the_hash_is_sensitive_to_meaning() {
+        let original = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
+        let renamed = M0_PROBE.replace("shout", "whisper");
+        assert_ne!(
+            compile(&[renamed.as_str()], &Registry::m0()).unwrap().hash,
+            original,
+            "renaming a node is an identity change - no alpha-equivalence"
+        );
+        let regexed = M0_PROBE.replace("data.text != \"\"", "data.text != \"x\"");
+        assert_ne!(
+            compile(&[regexed.as_str()], &Registry::m0()).unwrap().hash,
+            original,
+            "a CEL expression is identity material"
+        );
+    }
+
+    #[test]
+    fn a_plan_with_errors_is_unrepresentable() {
+        let bag = compile(
+            &["graph g : App {\n  connector c : Process { }\n  . -> c -> .\n}\n"],
+            &Registry::m0(),
+        )
+        .expect_err("missing mandatory attributes must refuse");
+        assert!(bag.has_errors());
+    }
+
+    #[test]
+    fn versions_alias_the_hash_through_the_manifest() {
+        let hash = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
+        let mut manifest = Manifest::embedded();
+        assert_eq!(manifest.allocate(hash), GraphVersion(1));
+        assert_eq!(manifest.hash_of(GraphVersion(1)), Some(hash));
+    }
+}

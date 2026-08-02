@@ -30,13 +30,24 @@ pub struct Graph {
     pub edges: Vec<Edge>,
 }
 
-/// One constant binding, reduced at compile time.
+/// A constant position: the expression it was written as — the
+/// identity material, hashed before const-eval per `identity.md` §1 —
+/// and its reduced value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Const {
+    /// The expression as compiled; enters the semantic hash.
+    pub tree: cel::Tree,
+    /// The boot-time reduction; never identity material.
+    pub value: cel::Value,
+}
+
+/// One constant binding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Val {
     /// The binding name.
     pub name: String,
-    /// The reduced constant value.
-    pub value: cel::Value,
+    /// The bound constant.
+    pub value: Const,
 }
 
 /// One checked node declaration.
@@ -72,8 +83,8 @@ pub struct Attribute {
 pub enum AttrValue {
     /// A bare enum-like keyword (`job`, `lines`, `idempotent`).
     Word(String),
-    /// A constant, reduced at compile time.
-    Const(cel::Value),
+    /// A constant expression with its reduction.
+    Const(Const),
 }
 
 /// One mutable state cell.
@@ -83,8 +94,9 @@ pub struct Var {
     pub name: String,
     /// The cell's CEL-facing type.
     pub ty: cel::Type,
-    /// The initial value, when declared.
-    pub init: Option<cel::Value>,
+    /// The initial value, when declared; identity material — the
+    /// recovery fold reads defaults.
+    pub init: Option<Const>,
 }
 
 /// One checked handler.

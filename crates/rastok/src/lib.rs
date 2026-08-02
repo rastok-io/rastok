@@ -8,4 +8,5 @@ pub mod compiler;
 pub mod diagnostics;
 pub mod envelope;
 pub mod node;
+pub mod plan;
 pub mod stdlib;

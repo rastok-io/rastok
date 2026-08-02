@@ -9,8 +9,8 @@
 
 use crate::cel;
 use crate::compiler::hir::{
-    AttrValue, Attribute, Edge, EdgeTarget, EmitValue, Endpoint, FieldWrite, Graph, Handler, Hir,
-    Node, Statement, Val, Var,
+    AttrValue, Attribute, Const, Edge, EdgeTarget, EmitValue, Endpoint, FieldWrite, Graph, Handler,
+    Hir, Node, Statement, Val, Var,
 };
 use crate::compiler::syntax::{
     BaseType, CelExpr, ConnectorDecl, EdgeDecl, EdgeEndpoint, GraphDecl, GraphItem, OperatorDecl,
@@ -138,16 +138,17 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Compiles and reduces a constant expression.
+    /// Compiles and reduces a constant expression, keeping both the
+    /// identity-bearing tree and its reduction.
     fn constant(
         &mut self,
         expr: &CelExpr,
         signature: &cel::Signature,
         consts: &BTreeMap<String, cel::Value>,
-    ) -> Option<cel::Value> {
+    ) -> Option<Const> {
         let tree = self.cel(expr, signature)?;
         match cel::const_eval(&tree, consts) {
-            Ok(value) => Some(value),
+            Ok(value) => Some(Const { tree, value }),
             Err(error) => {
                 self.bag.push(
                     Diagnostic::new(
@@ -194,8 +195,8 @@ impl Checker<'_, '_> {
                 }
                 GraphItem::Val(val) => {
                     if let Some(value) = self.graph_val(val, &signature, &consts) {
-                        signature = signature.with(val.name.text.clone(), value_type(&value));
-                        consts.insert(val.name.text.clone(), value.clone());
+                        signature = signature.with(val.name.text.clone(), value_type(&value.value));
+                        consts.insert(val.name.text.clone(), value.value.clone());
                         graph.vals.push(Val {
                             name: val.name.text.clone(),
                             value,
@@ -259,7 +260,7 @@ impl Checker<'_, '_> {
         val: &ValDecl,
         signature: &cel::Signature,
         consts: &BTreeMap<String, cel::Value>,
-    ) -> Option<cel::Value> {
+    ) -> Option<Const> {
         if val.ty.is_some() {
             self.deferred("a typed val", val.span);
         }
@@ -441,15 +442,26 @@ impl Checker<'_, '_> {
                         Some(format!("expected one of {words:?}, got `{word}`"))
                     }
                 }
-                (stdlib::AttrDomain::Text, AttrValue::Const(cel::Value::Text(_))) => None,
-                (stdlib::AttrDomain::TextList, AttrValue::Const(cel::Value::List(items))) => {
-                    if items.iter().all(|item| matches!(item, cel::Value::Text(_))) {
-                        None
-                    } else {
-                        Some(String::from("expected a list of text values"))
+                (stdlib::AttrDomain::Text, AttrValue::Const(constant))
+                    if matches!(constant.value, cel::Value::Text(_)) =>
+                {
+                    None
+                }
+                (stdlib::AttrDomain::TextList, AttrValue::Const(constant)) => {
+                    match &constant.value {
+                        cel::Value::List(items)
+                            if items.iter().all(|item| matches!(item, cel::Value::Text(_))) =>
+                        {
+                            None
+                        }
+                        _ => Some(String::from("expected a list of text values")),
                     }
                 }
-                (stdlib::AttrDomain::Duration, AttrValue::Const(cel::Value::Duration(_))) => None,
+                (stdlib::AttrDomain::Duration, AttrValue::Const(constant))
+                    if matches!(constant.value, cel::Value::Duration(_)) =>
+                {
+                    None
+                }
                 (domain, _) => Some(format!("the value does not fit the {domain:?} domain")),
             };
             if let Some(detail) = fault {
@@ -527,8 +539,8 @@ impl Checker<'_, '_> {
                 }
                 OperatorItem::Val(val) => {
                     if let Some(value) = self.graph_val(val, &signature, &consts) {
-                        signature = signature.with(val.name.text.clone(), value_type(&value));
-                        consts.insert(val.name.text.clone(), value);
+                        signature = signature.with(val.name.text.clone(), value_type(&value.value));
+                        consts.insert(val.name.text.clone(), value.value);
                     }
                 }
                 OperatorItem::Var(var) => {
@@ -1115,10 +1127,10 @@ graph m0_probe : App {
             echo.attributes[0].value,
             AttrValue::Word(String::from("job"))
         );
-        assert_eq!(
-            echo.attributes[1].value,
-            AttrValue::Const(cel::Value::Text(String::from("cat")))
-        );
+        let AttrValue::Const(command) = &echo.attributes[1].value else {
+            panic!("expected a constant attribute");
+        };
+        assert_eq!(command.value, cel::Value::Text(String::from("cat")));
         let shout = &hir.app.nodes[1];
         assert_eq!(shout.kind, node::Kind::Operator);
         assert_eq!(shout.vars[0].ty, cel::Type::Int);
