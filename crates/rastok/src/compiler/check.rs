@@ -152,13 +152,12 @@ impl Checker<'_, '_> {
             Err(diagnostics) => {
                 let base = expr.span.range().start;
                 for diagnostic in diagnostics {
-                    // The registry owns the codes: a static duplicate
-                    // key carries E-DUP-KEY, everything else adapts
-                    // under the generic expression code.
-                    let code = if diagnostic.message.starts_with("duplicate map key") {
-                        E_DUP_KEY
-                    } else {
-                        E_CEL_EXPR
+                    // The registry owns the codes, and the CEL chain's
+                    // typed kind chooses them — never the human text,
+                    // which is free to change.
+                    let code = match diagnostic.kind {
+                        cel::DiagnosticKind::DuplicateMapKey => E_DUP_KEY,
+                        cel::DiagnosticKind::General => E_CEL_EXPR,
                     };
                     self.bag.push(
                         Diagnostic::new(code, Phase::Check, diagnostic.message.clone())
@@ -1045,7 +1044,8 @@ impl Checker<'_, '_> {
                                 Phase::Check,
                                 "a where guard must be a bool",
                             )
-                            .with_span(expr.span),
+                            .with_span(expr.span)
+                            .with_field("detail", "the guard type is not bool"),
                         );
                         return None;
                     }
@@ -1110,7 +1110,11 @@ impl Checker<'_, '_> {
                                                     name.text, var.ty, tree.ty
                                                 ),
                                             )
-                                            .with_span(expr.span),
+                                            .with_span(expr.span)
+                                            .with_field(
+                                                "detail",
+                                                format!("{:?} does not fit {:?}", tree.ty, var.ty),
+                                            ),
                                         );
                                         continue;
                                     }

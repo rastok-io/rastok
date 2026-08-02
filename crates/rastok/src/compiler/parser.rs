@@ -253,7 +253,13 @@ impl<'src> Parser<'src, '_> {
     }
 
     fn cel(&mut self, terminators: &TerminatorSet) -> CelExpr {
-        self.unpeek();
+        if self.peeked.is_some() {
+            self.unpeek();
+        } else {
+            // Same-line comments before a value are trivia; a bare
+            // newline is not — it still reads as an empty expression.
+            self.lexer.advance_within_line(self.bag);
+        }
         let token = self.lexer.cel_expr(terminators, self.bag);
         self.last_end = token.span.range().end;
         CelExpr {
@@ -533,13 +539,13 @@ impl<'src> Parser<'src, '_> {
     fn boundary_ref(&mut self) -> PortRef {
         let dot = self.bump();
         let start = dot.span.range().start;
-        // `.foo` requires the name to touch the dot: span adjacency
-        // stands in for the newline the lexer dropped, so `b -> .`
-        // followed by `a -> …` on the next line never reads as `.a`.
+        // A boundary name belongs to its dot only on the same line:
+        // the token's newline flag is the separation signal, so `b ->
+        // .` followed by `a -> …` on the next line never reads as
+        // `.a`, while spaces and comments stay ordinary trivia.
         let next = self.peek();
-        let adjacent =
-            next.kind == TokenKind::Ident && next.span.range().start == dot.span.range().end;
-        let segments = if adjacent {
+        let same_line = next.kind == TokenKind::Ident && !next.newline_before;
+        let segments = if same_line {
             match self.name("a boundary port name") {
                 Some(name) => vec![name],
                 None => vec![],
@@ -1133,12 +1139,12 @@ impl<'src> Parser<'src, '_> {
         let first = self.name("a name")?;
         let start = first.span.range().start;
         let mut segments = vec![first];
-        // A continuation dot must touch the previous segment: span
-        // adjacency stands in for the newline the lexer dropped, so
-        // `a -> b` followed by `. -> c` never reads as `b.`.
+        // A continuation dot belongs to its path only on the same
+        // line: the newline flag separates `a -> b` from a `. -> c`
+        // that follows, while spaces and comments stay trivia.
         loop {
             let dot = self.peek();
-            if dot.kind != TokenKind::Dot || dot.span.range().start != self.last_end {
+            if dot.kind != TokenKind::Dot || dot.newline_before {
                 break;
             }
             self.bump();
@@ -1828,6 +1834,52 @@ graph m0_probe : App {
             &edge.endpoints[0],
             EdgeEndpoint::Ref(port) if port.boundary && port.segments[0].text == "feed"
         ));
+    }
+
+    #[test]
+    fn spaces_and_comments_around_dots_stay_trivia() {
+        // Same line: spacing and comments must not change the parse.
+        let spaced = parse_clean(
+            "graph g : App {\n  output feed\n  o . out -> . feed\n  operator o { on in { out = envelope } }\n}\n",
+        );
+        let TopDecl::Graph(graph) = &spaced.decls[0] else {
+            panic!("expected a graph");
+        };
+        let GraphItem::Edge(edge) = &graph.body[1] else {
+            panic!("expected the edge");
+        };
+        assert!(matches!(
+            &edge.endpoints[0],
+            EdgeEndpoint::Ref(port) if port.segments.len() == 2 && port.segments[1].text == "out"
+        ));
+        assert!(matches!(
+            &edge.endpoints[1],
+            EdgeEndpoint::Ref(port) if port.boundary && port.segments[0].text == "feed"
+        ));
+        let commented = parse_clean(
+            "graph g : App {\n  output feed\n  o.out -> ./* target */feed\n  operator o { on in { out = envelope } }\n}\n",
+        );
+        let TopDecl::Graph(graph) = &commented.decls[0] else {
+            panic!("expected a graph");
+        };
+        assert!(matches!(&graph.body[1], GraphItem::Edge(_)));
+    }
+
+    #[test]
+    fn a_same_line_comment_before_a_value_is_trivia() {
+        let tree = parse_clean(
+            "graph g : App {\n  operator o {\n    val enabled = /* toggled */ !false\n  }\n}\n",
+        );
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected a graph");
+        };
+        let GraphItem::Operator(operator) = &graph.body[0] else {
+            panic!("expected the operator");
+        };
+        let OperatorItem::Val(val) = &operator.body[0] else {
+            panic!("expected the val");
+        };
+        assert!(matches!(&val.value, Value::Cel(cel) if cel.text == "!false"));
     }
 
     #[test]

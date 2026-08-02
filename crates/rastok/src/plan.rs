@@ -54,7 +54,11 @@ pub struct Node {
     pub kind: node::Kind,
     /// The connector configuration, when a connector.
     pub connector: Option<ConnectorSpec>,
-    /// Declared state cells with their boot-time defaults.
+    /// The node's semantic port table — declared and inferred, in
+    /// canonical order; the defaults `in`, `out`, `err` are implicit.
+    pub ports: Vec<(node::Port, node::Direction)>,
+    /// Declared state cells with their boot-time defaults, in
+    /// canonical order.
     pub vars: Vec<VarCell>,
 }
 

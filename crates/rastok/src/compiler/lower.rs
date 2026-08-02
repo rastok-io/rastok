@@ -105,6 +105,32 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
     let mut symbols = SymbolTable { nodes: Vec::new() };
     for hir_node in &nodes {
         symbols.nodes.push(hir_node.path.to_string());
+        // Declaratively unordered collections ship in canonical order,
+        // so equal hashes always mean equal plans.
+        let mut attributes: Vec<_> = hir_node
+            .attributes
+            .iter()
+            .map(|attribute| {
+                let setting = match &attribute.value {
+                    AttrValue::Word(word) => AttrSetting::Word(word.clone()),
+                    AttrValue::Const(constant) => AttrSetting::Value(constant.value.clone()),
+                };
+                (attribute.name.clone(), setting)
+            })
+            .collect();
+        attributes.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut ports = hir_node.declared_ports.clone();
+        ports.sort();
+        let mut vars: Vec<_> = hir_node
+            .vars
+            .iter()
+            .map(|var| VarCell {
+                name: var.name.clone(),
+                ty: var.ty.clone(),
+                init: var.init.as_ref().map(|init| init.value.clone()),
+            })
+            .collect();
+        vars.sort_by(|a, b| a.name.cmp(&b.name));
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
             kind: hir_node.kind,
@@ -113,29 +139,10 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
                 .as_ref()
                 .map(|contract| ConnectorSpec {
                     contract: contract.clone(),
-                    attributes: hir_node
-                        .attributes
-                        .iter()
-                        .map(|attribute| {
-                            let setting = match &attribute.value {
-                                AttrValue::Word(word) => AttrSetting::Word(word.clone()),
-                                AttrValue::Const(constant) => {
-                                    AttrSetting::Value(constant.value.clone())
-                                }
-                            };
-                            (attribute.name.clone(), setting)
-                        })
-                        .collect(),
+                    attributes,
                 }),
-            vars: hir_node
-                .vars
-                .iter()
-                .map(|var| VarCell {
-                    name: var.name.clone(),
-                    ty: var.ty.clone(),
-                    init: var.init.as_ref().map(|init| init.value.clone()),
-                })
-                .collect(),
+            ports,
+            vars,
         });
     }
     for hir_node in &nodes {
@@ -771,6 +778,50 @@ graph m0_probe : App {
         let two = compile(&[reordered], &Registry::m0()).unwrap();
         assert_eq!(one.hash, two.hash);
         assert_eq!(one.plan.edges, two.plan.edges);
+    }
+
+    #[test]
+    fn unordered_collections_ship_canonically() {
+        let with_attrs = |attrs: &str| {
+            format!(
+                "graph g : App {{\n  connector c : Process {{\n{attrs}  }}\n  . -> c -> .\n}}\n"
+            )
+        };
+        let one = compile(
+            &[with_attrs("    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n").as_str()],
+            &Registry::m0(),
+        )
+        .unwrap();
+        let two = compile(
+            &[with_attrs("    behavior = deterministic ; effect = idempotent\n    codec = lines ; command = \"cat\"\n").as_str()],
+            &Registry::m0(),
+        )
+        .unwrap();
+        assert_eq!(one.hash, two.hash);
+        assert_eq!(
+            one.plan, two.plan,
+            "attribute order must not leak into the plan"
+        );
+        // Map literals: one canonical form for hash, plan, and eval.
+        let with_map = |map: &str| {
+            format!(
+                "graph g : App {{\n  operator o {{\n    on in where size({map}) > 0 {{ out = envelope }}\n  }}\n  . -> o -> .\n}}\n"
+            )
+        };
+        let forward = compile(&[with_map("{'a': 1, 'b': 2}").as_str()], &Registry::m0()).unwrap();
+        let reversed = compile(&[with_map("{'b': 2, 'a': 1}").as_str()], &Registry::m0()).unwrap();
+        assert_eq!(forward.hash, reversed.hash);
+        assert_eq!(forward.plan, reversed.plan);
+    }
+
+    #[test]
+    fn inferred_ports_travel_in_the_plan() {
+        let source = "graph g : App {\n  input feed\n  output sink\n  operator o {\n    on event { result = envelope }\n  }\n  .feed -> o.event\n  o.result -> .sink\n}\n";
+        let compilation = compile(&[source], &Registry::m0()).unwrap();
+        let ports = &compilation.plan.nodes[0].ports;
+        assert_eq!(ports.len(), 2);
+        assert!(ports.iter().any(|(port, _)| port.name() == "event"));
+        assert!(ports.iter().any(|(port, _)| port.name() == "result"));
     }
 
     #[test]

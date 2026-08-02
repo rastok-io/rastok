@@ -91,6 +91,10 @@ pub struct Token<'a> {
     pub text: &'a str,
     /// Where the slice sits in the source.
     pub span: Span,
+    /// Whether the trivia before this token crossed a line break —
+    /// the separation signal the parser uses where the grammar makes
+    /// the newline meaningful, so spaces and comments stay trivia.
+    pub newline_before: bool,
 }
 
 /// Terminators ending a CEL expression span at bracket depth 0, chosen
@@ -115,6 +119,7 @@ pub struct Lexer<'a> {
     source: &'a str,
     source_id: SourceId,
     pos: usize,
+    newline_before: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -125,6 +130,7 @@ impl<'a> Lexer<'a> {
             source,
             source_id,
             pos: 0,
+            newline_before: false,
         }
     }
 
@@ -221,6 +227,7 @@ impl<'a> Lexer<'a> {
             kind: TokenKind::CelExpr,
             text: &self.source[start..end],
             span: Span::new(self.source_id, start..end),
+            newline_before: false,
         }
     }
 
@@ -263,6 +270,7 @@ impl<'a> Lexer<'a> {
             kind: TokenKind::RawText,
             text: &self.source[start..self.pos],
             span: Span::new(self.source_id, start..self.pos),
+            newline_before: false,
         };
         if self.peek_byte() == Some(b'}') {
             self.pos += 1;
@@ -283,6 +291,23 @@ impl<'a> Lexer<'a> {
     /// newline separating two statements is not part of either.
     pub fn advance_to_significant(&mut self, bag: &mut Bag) {
         self.skip_trivia(bag);
+    }
+
+    /// Consumes horizontal trivia — spaces and comments — up to the
+    /// next newline outside a comment. A value scan starts past its
+    /// same-line trivia, while a bare newline still reads as an empty
+    /// expression, per the delimitation rules.
+    pub fn advance_within_line(&mut self, bag: &mut Bag) {
+        loop {
+            match self.peek_byte() {
+                Some(b' ' | b'\t' | b'\r') => self.pos += 1,
+                Some(b'/') if self.peek_byte_at(1) == Some(b'/') => {
+                    self.eat_while(|byte| byte != b'\n');
+                }
+                Some(b'/') if self.peek_byte_at(1) == Some(b'*') => self.skip_block_comment(bag),
+                _ => return,
+            }
+        }
     }
 
     /// The first significant byte ahead, past trivia, without consuming
@@ -402,31 +427,37 @@ impl<'a> Lexer<'a> {
     }
 
     fn skip_trivia(&mut self, bag: &mut Bag) {
+        let run_start = self.pos;
         loop {
             match self.peek_byte() {
                 Some(b' ' | b'\t' | b'\r' | b'\n') => self.pos += 1,
                 Some(b'/') if self.peek_byte_at(1) == Some(b'/') => {
                     self.eat_while(|byte| byte != b'\n');
                 }
-                Some(b'/') if self.peek_byte_at(1) == Some(b'*') => {
-                    let start = self.pos;
-                    self.pos += 2;
-                    match self.source[self.pos..].find("*/") {
-                        Some(offset) => self.pos += offset + 2,
-                        None => {
-                            self.pos = self.source.len();
-                            bag.push(
-                                Diagnostic::new(
-                                    E_LEX_UNTERMINATED_COMMENT,
-                                    Phase::Parse,
-                                    "this block comment never closes",
-                                )
-                                .with_span(Span::new(self.source_id, start..self.pos)),
-                            );
-                        }
-                    }
+                Some(b'/') if self.peek_byte_at(1) == Some(b'*') => self.skip_block_comment(bag),
+                _ => {
+                    self.newline_before = self.source[run_start..self.pos].contains('\n');
+                    return;
                 }
-                _ => return,
+            }
+        }
+    }
+
+    fn skip_block_comment(&mut self, bag: &mut Bag) {
+        let start = self.pos;
+        self.pos += 2;
+        match self.source[self.pos..].find("*/") {
+            Some(offset) => self.pos += offset + 2,
+            None => {
+                self.pos = self.source.len();
+                bag.push(
+                    Diagnostic::new(
+                        E_LEX_UNTERMINATED_COMMENT,
+                        Phase::Parse,
+                        "this block comment never closes",
+                    )
+                    .with_span(Span::new(self.source_id, start..self.pos)),
+                );
             }
         }
     }
@@ -455,6 +486,7 @@ impl<'a> Lexer<'a> {
             kind,
             text: &self.source[start..self.pos],
             span: Span::new(self.source_id, start..self.pos),
+            newline_before: self.newline_before,
         }
     }
 

@@ -121,9 +121,21 @@ impl Bindings for BTreeMap<String, Value> {
     }
 }
 
+/// What a compiler diagnostic is about, machine-readably. Messages
+/// are never stable; kinds are — callers key on them, never on text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticKind {
+    /// Any fault without a dedicated kind yet.
+    General,
+    /// A static map literal carrying the same key twice.
+    DuplicateMapKey,
+}
+
 /// Native CEL compiler diagnostic; the caller adapts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
+    /// The stable machine-readable discriminant.
+    pub kind: DiagnosticKind,
     /// What is wrong.
     pub message: String,
     /// Byte range inside the compiled expression text.
@@ -278,11 +290,13 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
             && *word == "as"
         {
             return Err(vec![Diagnostic {
+                kind: DiagnosticKind::General,
                 message: String::from("`as` narrowing is outside this build's subset"),
                 range: token.range.clone(),
             }]);
         }
         return Err(vec![Diagnostic {
+            kind: DiagnosticKind::General,
             message: String::from("unexpected trailing input"),
             range: token.range.clone(),
         }]);
@@ -379,6 +393,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                     "null" => Tok::Null,
                     "in" => {
                         return Err(vec![Diagnostic {
+                            kind: DiagnosticKind::General,
                             message: String::from("`in` is outside this build's subset"),
                             range: start..pos,
                         }]);
@@ -393,6 +408,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                 if pos < bytes.len() && bytes[pos] == b'u' {
                     let value = text[start..pos].parse().map_err(|_| {
                         vec![Diagnostic {
+                            kind: DiagnosticKind::General,
                             message: String::from("uint literal out of range"),
                             range: start..pos,
                         }]
@@ -409,6 +425,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                     }
                     let value = text[start..pos].parse().map_err(|_| {
                         vec![Diagnostic {
+                            kind: DiagnosticKind::General,
                             message: String::from("malformed double literal"),
                             range: start..pos,
                         }]
@@ -417,6 +434,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                 } else {
                     let value = text[start..pos].parse().map_err(|_| {
                         vec![Diagnostic {
+                            kind: DiagnosticKind::General,
                             message: String::from("int literal out of range"),
                             range: start..pos,
                         }]
@@ -430,6 +448,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                 loop {
                     if pos >= bytes.len() {
                         return Err(vec![Diagnostic {
+                            kind: DiagnosticKind::General,
                             message: String::from("unterminated string"),
                             range: start..pos,
                         }]);
@@ -443,6 +462,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                         pos += 1;
                         let escaped = *bytes.get(pos).ok_or_else(|| {
                             vec![Diagnostic {
+                                kind: DiagnosticKind::General,
                                 message: String::from("unterminated escape"),
                                 range: start..pos,
                             }]
@@ -456,6 +476,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                             b'"' => '"',
                             other => {
                                 return Err(vec![Diagnostic {
+                                    kind: DiagnosticKind::General,
                                     message: format!(
                                         "unsupported escape `\\{}`",
                                         char::from(other)
@@ -484,6 +505,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
             b'.' => {
                 if bytes.get(pos + 1) == Some(&b'?') {
                     return Err(vec![Diagnostic {
+                        kind: DiagnosticKind::General,
                         message: String::from(
                             "optional access `.?` is outside this build's subset",
                         ),
@@ -512,6 +534,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                     Tok::EqEq
                 } else {
                     return Err(vec![Diagnostic {
+                        kind: DiagnosticKind::General,
                         message: String::from("assignment is not an expression"),
                         range: pos..pos + 1,
                     }]);
@@ -539,6 +562,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                     Tok::AndAnd
                 } else {
                     return Err(vec![Diagnostic {
+                        kind: DiagnosticKind::General,
                         message: String::from("`&` is not a CEL operator"),
                         range: pos..pos + 1,
                     }]);
@@ -550,6 +574,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                     Tok::OrOr
                 } else {
                     return Err(vec![Diagnostic {
+                        kind: DiagnosticKind::General,
                         message: String::from("`|` is not a CEL operator"),
                         range: pos..pos + 1,
                     }]);
@@ -558,6 +583,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
             _ => {
                 let character = text[pos..].chars().next().unwrap_or('\u{fffd}');
                 return Err(vec![Diagnostic {
+                    kind: DiagnosticKind::General,
                     message: format!("the character `{character}` is not part of CEL"),
                     range: pos..pos + character.len_utf8(),
                 }]);
@@ -614,6 +640,7 @@ impl<'a> ExprParser<'_, 'a> {
                 token.range.clone()
             });
         Diagnostic {
+            kind: DiagnosticKind::General,
             message: message.into(),
             range,
         }
@@ -799,6 +826,7 @@ impl<'a> ExprParser<'_, 'a> {
                         // Stable message prefix: callers key on
                         // "duplicate map key" to assign E-DUP-KEY.
                         return Err(Diagnostic {
+                            kind: DiagnosticKind::DuplicateMapKey,
                             message: format!("duplicate map key `{key}`"),
                             range,
                         });
@@ -810,6 +838,9 @@ impl<'a> ExprParser<'_, 'a> {
                     }
                 }
                 self.expect(&Tok::RBrace, "`}`")?;
+                // Maps are semantically unordered: ONE canonical form
+                // serves hashing, planning, and evaluation alike.
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
                 Ok(Expr::MapLit(entries))
             }
             Tok::Ident(word) => {
@@ -821,6 +852,7 @@ impl<'a> ExprParser<'_, 'a> {
                         "size" => Function::Size,
                         "now" => {
                             return Err(Diagnostic {
+                                kind: DiagnosticKind::General,
                                 message: String::from(
                                     "there is no `now()`: time enters only as data or constants",
                                 ),
@@ -829,6 +861,7 @@ impl<'a> ExprParser<'_, 'a> {
                         }
                         other if UNSUPPORTED_FUNCTIONS.contains(&other) => {
                             return Err(Diagnostic {
+                                kind: DiagnosticKind::General,
                                 message: format!(
                                     "the `{other}` macro is outside this build's subset"
                                 ),
@@ -837,6 +870,7 @@ impl<'a> ExprParser<'_, 'a> {
                         }
                         other => {
                             return Err(Diagnostic {
+                                kind: DiagnosticKind::General,
                                 message: format!("unknown function `{other}`"),
                                 range: token.range,
                             });
@@ -855,6 +889,7 @@ impl<'a> ExprParser<'_, 'a> {
                 Ok(Expr::Path(vec![String::from(word)]))
             }
             _ => Err(Diagnostic {
+                kind: DiagnosticKind::General,
                 message: String::from("expected an expression"),
                 range: token.range,
             }),
@@ -875,6 +910,7 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnostic> {
     let whole = 0..text.len();
     let fail = |message: String| Diagnostic {
+        kind: DiagnosticKind::General,
         message,
         range: whole.clone(),
     };

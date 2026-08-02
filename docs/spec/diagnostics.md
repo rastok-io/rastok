@@ -37,7 +37,7 @@ causal core. They live in their home specs, not here.
 | E-SAGA-DURABILITY | error | plan | [effects-and-sagas.md](effects-and-sagas.md) | a Saga whose effective durability resolves to `none` |
 | E-COMPENSATE-KEY | error | plan | [effects-and-sagas.md](effects-and-sagas.md) | compensation without a stable business key |
 | E-REPLAY-VERSION-MISMATCH | error | replay | [identity.md](identity.md) | journal segment hash ≠ loaded graph hash ; replay refused |
-| E-DUP-KEY | error | check | [identity.md](identity.md) | a STATIC map/struct literal with two keys that canonicalize equal; a runtime collision is instead a typed language error, not a tool diagnostic |
+| E-DUP-KEY | error | check | [identity.md](identity.md) | a STATIC map/struct literal with two keys that canonicalize equal; a runtime collision is instead a typed language error, not a tool diagnostic; field `detail` |
 | E-UNION-OVERLAP | error | check | [identity.md](identity.md) | a `union` with overlapping or identical branches (`int \| int`, `int \| long`, `number \| long`) — no canonical `branch_index` |
 | E-LEX-CHAR | error | parse | [grammar.md](grammar.md) | a character outside the lexical grammar; field `character` |
 | E-LEX-UNTERMINATED-STRING | error | parse | [grammar.md](grammar.md) | a string literal that never closes |
