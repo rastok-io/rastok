@@ -786,14 +786,23 @@ impl<'a> ExprParser<'_, 'a> {
                 Ok(Expr::List(items))
             }
             Tok::LBrace => {
-                let mut entries = Vec::new();
+                let mut entries: Vec<(String, Expr)> = Vec::new();
                 while self.peek() != Some(&Tok::RBrace) {
-                    let key = match self.bump().cloned() {
+                    let (key, range) = match self.bump().cloned() {
                         Some(Spanned {
-                            tok: Tok::Str(key), ..
-                        }) => key,
+                            tok: Tok::Str(key),
+                            range,
+                        }) => (key, range),
                         _ => return Err(self.fail("map keys are string literals in this subset")),
                     };
+                    if entries.iter().any(|(existing, _)| existing == &key) {
+                        // Stable message prefix: callers key on
+                        // "duplicate map key" to assign E-DUP-KEY.
+                        return Err(Diagnostic {
+                            message: format!("duplicate map key `{key}`"),
+                            range,
+                        });
+                    }
                     self.expect(&Tok::Colon, "`:`")?;
                     entries.push((key, self.ternary()?));
                     if !self.eat(&Tok::Comma) {
@@ -1401,11 +1410,27 @@ fn parse_timestamp(text: &str) -> Result<i64, Error> {
         .parse()
         .map_err(|_| bad())?;
     if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
         || !(0..24).contains(&hour)
         || !(0..60).contains(&minute)
         || !(0..60).contains(&second)
     {
+        return Err(bad());
+    }
+    // A timestamp-shaped string is not yet a timestamp: the calendar
+    // must agree (no February 31st).
+    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    let days_in_month = match month {
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 31,
+    };
+    if !(1..=days_in_month).contains(&day) {
         return Err(bad());
     }
     let nanos_fraction: i64 = match fraction {
@@ -1605,6 +1630,28 @@ mod tests {
                 "`{text}` → {diagnostics:?}"
             );
         }
+    }
+
+    #[test]
+    fn duplicate_map_keys_are_refused_statically() {
+        let diagnostics = compile("{'a': 1, 'a': 2}", &Signature::new()).unwrap_err();
+        assert!(diagnostics[0].message.starts_with("duplicate map key"));
+    }
+
+    #[test]
+    fn timestamps_respect_the_calendar() {
+        for bad in [
+            "2026-02-31T00:00:00Z",
+            "2026-04-31T00:00:00Z",
+            "2025-02-29T00:00:00Z",
+        ] {
+            let tree = compile_ok(&format!("timestamp(\"{bad}\")"), &Signature::new());
+            assert!(eval(&tree, &BTreeMap::new()).is_err(), "{bad} must refuse");
+        }
+        assert_eq!(
+            eval_const("timestamp(\"2024-02-29T00:00:00Z\")"),
+            eval_const("timestamp(\"2024-02-28T00:00:00Z\") + duration(\"24h\")")
+        );
     }
 
     #[test]

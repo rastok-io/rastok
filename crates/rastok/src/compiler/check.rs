@@ -52,6 +52,8 @@ pub const W_DEAD_GRAPH: Code = Code::new("W-DEAD-GRAPH");
 pub const E_PORT_DIRECTION: Code = Code::new("E-PORT-DIRECTION");
 /// Diagnostic for a wiring cycle — edges form a DAG.
 pub const E_GRAPH_CYCLE: Code = Code::new("E-GRAPH-CYCLE");
+/// Diagnostic for a static literal with two keys canonicalizing equal.
+pub const E_DUP_KEY: Code = Code::new("E-DUP-KEY");
 
 /// Merged sources of one compilation: the application files. Lab
 /// fragments join at the scenario stage.
@@ -157,8 +159,16 @@ impl Checker<'_, '_> {
             Err(diagnostics) => {
                 let base = expr.span.range().start;
                 for diagnostic in diagnostics {
+                    // The registry owns the codes: a static duplicate
+                    // key carries E-DUP-KEY, everything else adapts
+                    // under the generic expression code.
+                    let code = if diagnostic.message.starts_with("duplicate map key") {
+                        E_DUP_KEY
+                    } else {
+                        E_CEL_EXPR
+                    };
                     self.bag.push(
-                        Diagnostic::new(E_CEL_EXPR, Phase::Check, diagnostic.message.clone())
+                        Diagnostic::new(code, Phase::Check, diagnostic.message.clone())
                             .with_span(Span::new(
                                 expr.span.source(),
                                 base + diagnostic.range.start..base + diagnostic.range.end,
@@ -531,7 +541,8 @@ impl Checker<'_, '_> {
                         ),
                     )
                     .with_span(span)
-                    .with_field("attribute", attribute.name.clone()),
+                    .with_field("attribute", attribute.name.clone())
+                    .with_field("detail", "not on the contract sheet"),
                 );
                 continue;
             };

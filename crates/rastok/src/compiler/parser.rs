@@ -795,10 +795,47 @@ impl<'src> Parser<'src, '_> {
     }
 
     /// `"{" ( statement )* "}"`
+    /// The first significant byte ahead — the dispatch probe for
+    /// positions that may hold CEL text. CEL never passes through this
+    /// parser's lexer: anything that does not shape like a Rastok
+    /// construct is handed to the CEL chain untouched.
+    fn shape(&mut self) -> Option<u8> {
+        match &self.peeked {
+            Some(token) if token.kind == TokenKind::Eof => None,
+            Some(token) => token.text.bytes().next(),
+            None => self.lexer.first_significant_byte(),
+        }
+    }
+
     fn statements(&mut self) -> Option<Vec<Statement>> {
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut statements = Vec::new();
         loop {
+            // Probe by shape first: a bare CEL yield (`!done`, `-x`,
+            // `'txt'`) must not be tokenized — or rejected — here.
+            let statement_shaped = matches!(
+                self.shape(),
+                None | Some(b'}' | b';' | b'(' | b'a'..=b'z' | b'A'..=b'Z' | b'_')
+            );
+            if !statement_shaped {
+                // The separating newline is trivia; the yield's own
+                // scan must start past it.
+                if self.peeked.is_none() {
+                    self.lexer.advance_to_significant(self.bag);
+                }
+                let value = self.value(&ATTR_POSITION);
+                if matches!(&value, Value::Cel(cel) if cel.text.is_empty()) {
+                    // Guaranteed progress: an empty scan consumed
+                    // nothing, so report and step over the byte.
+                    let start = self.peek().span.range().start;
+                    self.error_expected("a statement");
+                    self.bump();
+                    statements.push(Statement::Error(self.recover(start)));
+                } else {
+                    statements.push(Statement::Yield(value));
+                }
+                continue;
+            }
             let token = self.peek();
             let start = token.span.range().start;
             match token.kind {
@@ -1117,6 +1154,13 @@ impl<'src> Parser<'src, '_> {
 
     /// A value position; `position` chooses the CEL terminators.
     fn value(&mut self, position: &TerminatorSet) -> Value {
+        // Probe by shape before touching the token stream: CEL text
+        // may open with bytes this lexer rejects (`!`, `'`, `-(`), so
+        // only builder-shaped input is tokenized here.
+        let builder_shaped = matches!(self.shape(), Some(b'{' | b'a'..=b'z' | b'A'..=b'Z' | b'_'));
+        if !builder_shaped {
+            return Value::Cel(self.cel(position));
+        }
         let token = self.peek();
         match (token.kind, token.text) {
             (TokenKind::LBrace, _) => match self.struct_body() {
@@ -1712,6 +1756,40 @@ graph m0_probe : App {
         };
         assert_eq!(cel.text, "count + doubled");
         assert!(matches!(&statements[4], Statement::Stop(None)));
+    }
+
+    #[test]
+    fn cel_openings_never_meet_the_host_lexer() {
+        // `!`, a single quote, and `-(` are not Rastok tokens, but they
+        // open valid CEL: they must reach the CEL chain untouched.
+        let source = "graph g : App {\n  operator o {\n    val a = !false\n    val b = 'hello'\n    val c = -(1)\n    on in {\n      !done\n    }\n  }\n}\n";
+        let tree = parse_clean(source);
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("expected a graph");
+        };
+        let GraphItem::Operator(operator) = &graph.body[0] else {
+            panic!("expected the operator");
+        };
+        let texts: Vec<&str> = operator
+            .body
+            .iter()
+            .take(3)
+            .map(|item| match item {
+                OperatorItem::Val(val) => match &val.value {
+                    Value::Cel(cel) => cel.text.as_str(),
+                    other => panic!("expected CEL, got {other:?}"),
+                },
+                other => panic!("expected a val, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(texts, ["!false", "'hello'", "-(1)"]);
+        let OperatorItem::Handler(handler) = &operator.body[3] else {
+            panic!("expected the handler");
+        };
+        assert!(matches!(
+            &handler.body.as_ref().unwrap()[0],
+            Statement::Yield(Value::Cel(cel)) if cel.text == "!done"
+        ));
     }
 
     #[test]

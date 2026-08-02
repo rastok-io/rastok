@@ -277,6 +277,40 @@ impl<'a> Lexer<'a> {
         self.pos = pos;
     }
 
+    /// Consumes trivia so an opaque scan starts at significant input.
+    /// Needed before a shape-dispatched CEL scan: the scan itself
+    /// treats a leading newline as an empty expression, but the
+    /// newline separating two statements is not part of either.
+    pub fn advance_to_significant(&mut self, bag: &mut Bag) {
+        self.skip_trivia(bag);
+    }
+
+    /// The first significant byte ahead, past trivia, without consuming
+    /// anything and without diagnosing. The parser's dispatch probe for
+    /// value positions: CEL text must reach the CEL chain untouched,
+    /// never partially interpreted — or rejected — by this lexer.
+    #[must_use]
+    pub fn first_significant_byte(&self) -> Option<u8> {
+        let bytes = self.source.as_bytes();
+        let mut pos = self.pos;
+        loop {
+            match *bytes.get(pos)? {
+                b' ' | b'\t' | b'\r' | b'\n' => pos += 1,
+                b'/' if bytes.get(pos + 1) == Some(&b'/') => {
+                    while pos < bytes.len() && bytes[pos] != b'\n' {
+                        pos += 1;
+                    }
+                }
+                b'/' if bytes.get(pos + 1) == Some(&b'*') => {
+                    pos = self.source[pos + 2..]
+                        .find("*/")
+                        .map(|end| pos + 2 + end + 2)?;
+                }
+                byte => return Some(byte),
+            }
+        }
+    }
+
     fn at_terminator(&self, byte: u8, terminators: &TerminatorSet) -> bool {
         if terminators.bytes.contains(&byte) {
             return true;

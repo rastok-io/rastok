@@ -172,16 +172,31 @@ impl Data {
 
     /// The materialized view, decoding through `decode` on first
     /// structural access — the transcode-once rule of `envelope.md`
-    /// §5.1. `decode` runs at most once per envelope; a born-in-memory
-    /// value never decodes.
-    pub fn materialize_with(&self, decode: impl FnOnce(Encoding, &[u8]) -> Value) -> &Value {
+    /// §5.1. A born-in-memory value never decodes; a successful decode
+    /// caches at most once. A failed decode caches nothing: the typed
+    /// error reaches the caller, and a later attempt may retry.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `decode` reports — the decode error stays typed, never
+    /// flattened or swallowed.
+    pub fn materialize_with<E>(
+        &self,
+        decode: impl FnOnce(Encoding, &[u8]) -> Result<Value, E>,
+    ) -> Result<&Value, E> {
         match self {
-            Self::Materialized(value) => value,
+            Self::Materialized(value) => Ok(value),
             Self::Encoded {
                 encoding,
                 bytes,
                 value_cache,
-            } => value_cache.get_or_init(|| decode(*encoding, bytes)),
+            } => {
+                if let Some(value) = value_cache.get() {
+                    return Ok(value);
+                }
+                let value = decode(*encoding, bytes)?;
+                Ok(value_cache.get_or_init(|| value))
+            }
         }
     }
 }
@@ -476,11 +491,17 @@ mod tests {
         assert!(!hop_two.is_root());
     }
 
+    /// The test decoders' error type; any typed error travels intact.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct DecodeFault(&'static str);
+
     #[test]
     fn data_equality_is_causal_and_ignores_the_cache() {
         let plain = Data::encoded(Encoding::Raw, *b"{\"n\":1}");
         let cached = Data::encoded(Encoding::Raw, *b"{\"n\":1}");
-        cached.materialize_with(|_, _| Value::Scalar(Scalar::Int(1)));
+        cached
+            .materialize_with(|_, _| Ok::<_, DecodeFault>(Value::Scalar(Scalar::Int(1))))
+            .unwrap();
         assert_eq!(plain, cached);
         assert_ne!(plain, Data::encoded(Encoding::Avro, *b"{\"n\":1}"));
     }
@@ -491,12 +512,14 @@ mod tests {
         assert_eq!(data.materialized_value(), None);
         let mut decode_runs = 0;
         for _ in 0..3 {
-            let value = data.materialize_with(|encoding, bytes| {
-                decode_runs += 1;
-                assert_eq!(encoding, Encoding::Raw);
-                assert_eq!(bytes, b"7");
-                Value::Scalar(Scalar::Int(7))
-            });
+            let value = data
+                .materialize_with(|encoding, bytes| {
+                    decode_runs += 1;
+                    assert_eq!(encoding, Encoding::Raw);
+                    assert_eq!(bytes, b"7");
+                    Ok::<_, DecodeFault>(Value::Scalar(Scalar::Int(7)))
+                })
+                .unwrap();
             assert_eq!(value, &Value::Scalar(Scalar::Int(7)));
         }
         assert_eq!(decode_runs, 1);
@@ -507,9 +530,27 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_decode_stays_typed_and_caches_nothing() {
+        let data = Data::encoded(Encoding::Raw, *b"not json");
+        let fault = data
+            .materialize_with(|_, _| Err::<Value, _>(DecodeFault("malformed document")))
+            .unwrap_err();
+        assert_eq!(fault, DecodeFault("malformed document"));
+        // The failure poisoned nothing: no cache, and a later decode
+        // may succeed.
+        assert_eq!(data.materialized_value(), None);
+        let value = data
+            .materialize_with(|_, _| Ok::<_, DecodeFault>(Value::Scalar(Scalar::Int(1))))
+            .unwrap();
+        assert_eq!(value, &Value::Scalar(Scalar::Int(1)));
+    }
+
+    #[test]
     fn a_born_in_memory_value_never_decodes() {
         let data = Data::materialized(Value::Scalar(Scalar::Text(String::from("hi"))));
-        let value = data.materialize_with(|_, _| unreachable!("no bytes to decode"));
+        let value = data
+            .materialize_with(|_, _| unreachable!("no bytes to decode"))
+            .unwrap_or_else(|_: DecodeFault| unreachable!());
         assert_eq!(value, &Value::Scalar(Scalar::Text(String::from("hi"))));
     }
 
