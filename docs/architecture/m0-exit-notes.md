@@ -22,11 +22,6 @@ its normative home and its planned resolution.
   depends on the adapter module. Carrying prepared bytes in the
   boundary vocabulary removes the dependency and the double
   computation; planned with the service-mode rework.
-- **Budget arming on a double edge**: two edges from one emission to
-  the SAME connector collapse to one sealed budget obligation
-  (`timers` dedup) while the scheduler arms per delivery. Reachable
-  only in a degenerate wiring; resolved when multi-port connector
-  requests are specified.
 
 ## Structural debt (no semantic impact)
 

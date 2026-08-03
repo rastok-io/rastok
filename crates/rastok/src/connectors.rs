@@ -86,6 +86,7 @@ struct Run {
     out_eof: bool,
     err_eof: bool,
     exit: Option<std::process::ExitStatus>,
+    group_killed: bool,
 }
 
 /// One drained slice of a pipe, or its end-of-stream marker — the
@@ -214,6 +215,7 @@ impl<'plan> Process<'plan> {
             out_eof: false,
             err_eof: false,
             exit: None,
+            group_killed: false,
         })
     }
 }
@@ -224,8 +226,12 @@ fn kill_group(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         // `kill -- -PGID` without libc: forbid(unsafe_code) holds.
+        // Stderr is discarded — signalling a group whose leader is
+        // already a zombie is a normal race, noisy on macOS.
         let _ = Command::new("kill")
             .args(["-9", "--", &format!("-{}", child.id())])
+            .stderr(Stdio::null())
+            .stdout(Stdio::null())
             .status();
     }
     let _ = child.kill();
@@ -395,11 +401,19 @@ impl Partner for Process<'_> {
             match run.exit {
                 // Complete by protocol: exit seen and both EOFs in.
                 Some(status) if run.finished() => answers.push(run.settle(status)),
-                // Exited, EOFs withheld — a descendant holds the
-                // pipes. The stragglers' window is the caller's
-                // polling; the run stays until its markers arrive or
-                // the group is killed by a cancel.
-                _ => still_running.push(run),
+                Some(_) => {
+                    // The leader exited: "stdout complete at exit"
+                    // means the job is OVER — any descendant still
+                    // holding the pipes dies with the group now, so
+                    // the EOF markers are guaranteed to arrive on a
+                    // later poll. Deterministic, no timeout needed.
+                    if !run.group_killed {
+                        run.group_killed = true;
+                        kill_group(&mut run.child);
+                    }
+                    still_running.push(run);
+                }
+                None => still_running.push(run),
             }
         }
         self.runs = still_running;
@@ -649,8 +663,9 @@ graph missing : App {
 
     #[test]
     fn a_mute_child_is_killed_at_its_declared_budget() {
-        // The machine's virtual clock cannot reach a blocked host:
-        // the adapter itself enforces the wall-clock deadline.
+        // The harness maps the wall clock onto the virtual clock, so
+        // the scheduler's budget expires for real and cancel kills
+        // the mute child.
         let source = r#"
 graph mute : App {
   connector hang : Process {
@@ -690,6 +705,42 @@ graph mute : App {
             Record::Outbound(o)
                 if matches!(o.status, OutboundStatus::Closed(crate::journal::Closure::Timeout))
         )));
+    }
+
+    #[test]
+    fn a_leaders_exit_terminates_its_group_without_any_timeout() {
+        // The eighth review's repro: the leader exits immediately, a
+        // background descendant inherits the pipes, and NO budget is
+        // declared. "stdout complete at exit" means the job is over —
+        // the group dies at the exit and the reply arrives without
+        // waiting on anyone.
+        let source = r#"
+graph orphaning : App {
+  connector fork : Process {
+    mode = job ; command = "sh"
+    args = ["-c", "echo done; sleep 30 & exit 0"]
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator shout {
+    on in { out = data.text }
+  }
+
+  . -> shout -> fork -> .
+}
+"#;
+        let started = std::time::Instant::now();
+        let (_, outputs, errors) = run(source, "salut");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            outputs[0].data(),
+            &Data::materialized(Value::Scalar(Scalar::Text(String::from("done\n"))))
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the group died at the leader's exit; nothing waited on the descendant"
+        );
     }
 
     #[test]

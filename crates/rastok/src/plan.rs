@@ -45,6 +45,23 @@ pub struct ExecutionPlan {
     pub handlers: Vec<Handler>,
 }
 
+impl ExecutionPlan {
+    /// The canonical text of one edge — the same rendering the
+    /// consumed cursors and the budget obligations seal.
+    #[must_use]
+    pub fn edge_text(&self, edge: &Edge) -> String {
+        let end = |endpoint: &EndpointRef| match endpoint.node {
+            Some(slot) => format!("{}.{}", self.nodes[slot.index()].path, endpoint.port),
+            None => format!(".{}", endpoint.port),
+        };
+        let to = match &edge.to {
+            Some(endpoint) => end(endpoint),
+            None => String::from("!discard"),
+        };
+        format!("{}>{to}", end(&edge.from))
+    }
+}
+
 /// What a planned node is — the valid states, and only those: an
 /// operator never carries a connector spec, a connector never lacks
 /// one.

@@ -181,15 +181,19 @@ impl Scheduler {
         self.arm_seq = self.arm_seq.wrapping_add(1);
     }
 
-    /// Removes and returns the next dated event due at or before
-    /// `target`, if any.
-    fn due(&mut self, target: i64) -> Option<(i64, DatedPayload)> {
-        let key = self
-            .dated
+    /// The next dated event due at or before `target`, WITHOUT
+    /// removing it — the reservation: an expiry that fails to commit
+    /// stays armed and replays.
+    fn peek_due(&self, target: i64) -> Option<((i64, u64), DatedPayload)> {
+        self.dated
             .first_key_value()
             .filter(|((at, _), _)| *at <= target)
-            .map(|(key, _)| *key)?;
-        self.dated.remove(&key).map(|payload| (key.0, payload))
+            .map(|(key, payload)| (*key, payload.clone()))
+    }
+
+    /// Acknowledges a resolved expiry.
+    fn ack(&mut self, key: (i64, u64)) {
+        self.dated.remove(&key);
     }
 }
 
@@ -358,15 +362,18 @@ impl<'plan> Vm<'plan> {
         partner: &mut dyn Partner,
         target: i64,
     ) -> Result<(), VmError> {
-        while let Some((at, payload)) = self.scheduler.due(target) {
-            self.now = at;
+        while let Some((key, payload)) = self.scheduler.peek_due(target) {
+            self.now = key.0;
             // Every expiry OF THIS INSTANT fires before the machine
             // drains: the drain happens between jumps of the clock,
             // never between simultaneous events — a same-instant
             // budget must not see the world advanced by its sibling.
+            // A failed expiry stays armed: reserve, resolve, ack.
             self.expire(journal, partner, payload)?;
-            while let Some((_, sibling)) = self.scheduler.due(at) {
+            self.scheduler.ack(key);
+            while let Some((sibling_key, sibling)) = self.scheduler.peek_due(key.0) {
                 self.expire(journal, partner, sibling)?;
+                self.scheduler.ack(sibling_key);
             }
             self.drain(journal)?;
         }
@@ -383,16 +390,17 @@ impl<'plan> Vm<'plan> {
     ) -> Result<(), VmError> {
         let DatedPayload::DeliveryBudget {
             connector,
+            edge,
             delivery,
         } = payload;
-        // An open call for THIS obligation — connector and delivery
-        // both: a fan-out of one envelope arms one budget per
-        // connector, and each expires its own call.
+        // An open call for THIS obligation — the delivered edge and
+        // envelope both: a fan-out of one envelope arms one budget
+        // per receiving edge, and each expires its own call.
         if let Some(call_ref) = self
             .pending
             .iter()
             .find(|(_, held)| {
-                held.connector == connector && held.delivery.envelope.meta().sys().id() == delivery
+                held.delivery.edge == edge && held.delivery.envelope.meta().sys().id() == delivery
             })
             .map(|(call_ref, _)| *call_ref)
         {
@@ -488,15 +496,18 @@ impl<'plan> Vm<'plan> {
                 let call_ref = intent.call_ref;
                 let connector_path = intent.connector_path.clone();
                 let emitting_id = intent.emitting_id;
-                journal.open_outbound(intent).map_err(VmError::Journal)?;
+                // Idempotent open: a replay after a refused close
+                // finds its own open fact and proceeds to close it.
+                if journal.find_call(&call_ref).is_none() {
+                    journal.open_outbound(intent).map_err(VmError::Journal)?;
+                }
                 match journal
                     .close_outbound(&call_ref, crate::journal::Closure::Timeout)
                     .map_err(VmError::Journal)?
                 {
                     crate::journal::CloseVerdict::Won => {}
-                    crate::journal::CloseVerdict::AlreadyClosed => {
-                        unreachable!("the call was opened one fact ago")
-                    }
+                    // A replay can find its own earlier closure.
+                    crate::journal::CloseVerdict::AlreadyClosed => {}
                 }
                 // The facts hold; only now does the delivery leave
                 // the queue and join the settled path.
@@ -856,6 +867,7 @@ impl<'plan> Vm<'plan> {
                                 self.now.saturating_add(*budget),
                                 DatedPayload::DeliveryBudget {
                                     connector: self.plan.nodes[target.index()].path.clone(),
+                                    edge: self.plan.edge_text(&edge),
                                     delivery: envelope.meta().sys().id(),
                                 },
                             );
@@ -870,15 +882,7 @@ impl<'plan> Vm<'plan> {
     /// The canonical edge rendering — the same text the consumed
     /// cursor seals.
     fn edge_text(&self, edge: &Edge) -> String {
-        let end = |endpoint: &EndpointRef| match endpoint.node {
-            Some(slot) => format!("{}.{}", self.plan.nodes[slot.index()].path, endpoint.port),
-            None => format!(".{}", endpoint.port),
-        };
-        let to = match &edge.to {
-            Some(endpoint) => end(endpoint),
-            None => String::from("!discard"),
-        };
-        format!("{}>{to}", end(&edge.from))
+        self.plan.edge_text(edge)
     }
 }
 
@@ -1144,6 +1148,19 @@ graph g : App {
     struct FlakyJournal {
         inner: MemJournal,
         refuse_commits: bool,
+        refuse_opens: bool,
+        refuse_closes: bool,
+    }
+
+    impl FlakyJournal {
+        fn healthy(version: GraphVersion) -> Self {
+            Self {
+                inner: MemJournal::new(version),
+                refuse_commits: false,
+                refuse_opens: false,
+                refuse_closes: false,
+            }
+        }
     }
 
     impl Journal for FlakyJournal {
@@ -1163,6 +1180,9 @@ graph g : App {
             self.inner.commit(transaction)
         }
         fn open_outbound(&mut self, intent: Intent) -> Result<(), crate::journal::Error> {
+            if self.refuse_opens {
+                return Err(crate::journal::Error::Storage(String::from("scripted")));
+            }
             self.inner.open_outbound(intent)
         }
         fn close_outbound(
@@ -1170,6 +1190,9 @@ graph g : App {
             call_ref: &crate::boundary::CallRef,
             closure: crate::journal::Closure,
         ) -> Result<crate::journal::CloseVerdict, crate::journal::Error> {
+            if self.refuse_closes {
+                return Err(crate::journal::Error::Storage(String::from("scripted")));
+            }
             self.inner.close_outbound(call_ref, closure)
         }
         fn find_envelope(&self, id: crate::envelope::Id) -> Option<Envelope> {
@@ -1187,8 +1210,8 @@ graph g : App {
     fn a_refused_commit_leaves_the_delivery_replayable() {
         let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
         let mut journal = FlakyJournal {
-            inner: MemJournal::new(GraphVersion(1)),
             refuse_commits: true,
+            ..FlakyJournal::healthy(GraphVersion(1))
         };
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(&mut journal, submission("salut")).unwrap();
@@ -1441,6 +1464,81 @@ graph fanout : App {
         assert_eq!(report.settled, 0);
         assert_eq!(report.discarded.len(), 1, "the late answer is visible");
         assert!(report.uncorrelated.is_empty());
+    }
+
+    #[test]
+    fn a_refused_expiry_stays_armed_and_replays() {
+        // The eighth review's invariant: after any refusal, the
+        // obligation and its delivery are either fully resolved or
+        // replayable — never half-consumed, never duplicated.
+        // Case: the pending call's Timeout closure is refused.
+        let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+        let mut journal = FlakyJournal {
+            refuse_closes: true,
+            ..FlakyJournal::healthy(GraphVersion(1))
+        };
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = EchoWorld::default();
+        vm.inject(&mut journal, submission("salut")).unwrap();
+        vm.drain(&mut journal).unwrap();
+        assert!(
+            vm.advance(&mut journal, &mut world, 5_000_000_000).is_err(),
+            "the refused closure surfaces"
+        );
+        // Heal and replay: the timer was never acked.
+        journal.refuse_closes = false;
+        vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
+        assert!(vm.is_stable());
+        assert_eq!(
+            vm.errors().len(),
+            1,
+            "exactly one typed timeout — no duplicate fact"
+        );
+    }
+
+    #[test]
+    fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
+        // Case: the queued delivery's open fact is refused at expiry.
+        let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+        let mut journal = FlakyJournal::healthy(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = EchoWorld::default();
+        vm.inject(&mut journal, submission("un")).unwrap();
+        vm.inject(&mut journal, submission("deux")).unwrap();
+        vm.drain(&mut journal).unwrap();
+        assert_eq!(journal.inner.open_calls().len(), 1, "one open, one queued");
+        journal.refuse_opens = true;
+        assert!(vm.advance(&mut journal, &mut world, 5_000_000_000).is_err());
+        journal.refuse_opens = false;
+        vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
+        assert!(vm.is_stable());
+        assert_eq!(vm.errors().len(), 2, "both expired exactly once");
+    }
+
+    #[test]
+    fn a_refused_commit_on_an_unframeable_expiry_loses_nothing() {
+        // Case: the queued delivery cannot be framed and the decode
+        // transaction's commit is refused — the delivery must stay.
+        let compilation = compile(
+            &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = envelope }\n  }\n  . -> wrap -> echo -> nothing\n}\n"],
+            &Registry::m0(),
+        )
+        .expect("a valid plan");
+        let mut journal = FlakyJournal::healthy(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = EchoWorld::default();
+        vm.inject(&mut journal, submission("salut")).unwrap();
+        // wrap re-emits the MAP; the delivery to echo is unframeable,
+        // so it refuses at the head with a typed DecodeError… unless
+        // it is still QUEUED behind nothing — drive only the wrap
+        // transaction, then expire while queued.
+        vm.step(&mut journal).unwrap();
+        journal.refuse_commits = true;
+        assert!(vm.advance(&mut journal, &mut world, 5_000_000_000).is_err());
+        journal.refuse_commits = false;
+        vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
+        vm.drain(&mut journal).unwrap();
+        assert!(vm.is_stable());
     }
 
     #[test]

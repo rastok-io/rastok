@@ -147,3 +147,16 @@ fn simulate_blesses_then_verifies_a_golden_directory() {
         "the diff names the key: {stdout}"
     );
 }
+
+#[test]
+fn bless_without_golden_is_a_usage_error() {
+    let output = rastok()
+        .args(["simulate"])
+        .arg(example())
+        .args(["--bless"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--bless requires --golden"), "{stderr}");
+}

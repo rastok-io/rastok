@@ -215,9 +215,13 @@ pub enum DatedPayload {
     /// envelope's id, resolvable whether the call is still queued or
     /// already open.
     DeliveryBudget {
-        /// The connector whose budget this is.
+        /// The connector whose budget this is (the mailbox to search).
         connector: node::Path,
-        /// The delivered envelope's id — the obligation's causal ref.
+        /// The canonical edge the envelope traveled — with the id,
+        /// the obligation's identity: two ports of one connector are
+        /// two obligations.
+        edge: String,
+        /// The delivered envelope's id.
         delivery: envelope::Id,
     },
 }

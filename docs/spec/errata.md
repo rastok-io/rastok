@@ -145,3 +145,21 @@
   namespace — or drop the bare alias entirely and require the
   explicit form.
 - **Found by:** external code review (seventh pass), 2026-08-04.
+
+## E-2026-08-04-2 — the timer ref of key 37 needs its own recipe
+
+- **Where:** [identity.md §3](identity.md), `timers` sub-form: `ref`
+  is described as "the obligation's causal id (a 16-byte
+  envelope/instance id)".
+- **Gap:** a call-budget obligation is not an envelope: one delivered
+  envelope fanned out to two budgeted edges is two obligations, and
+  an envelope id cannot name them apart. No normative recipe exists.
+- **Interim behavior (implementation):** the obligation's identity is
+  `derive(0x20, canonical_edge_text, envelope_id)` — one obligation
+  per receiving edge, two ports of one connector included. Domain
+  `0x20` extends the id-domain registry; the recipe is pinned
+  byte-for-byte in the id tests.
+- **Resolution direction:** formalize the BudgetRef recipe and the
+  `0x20` domain in identity.md §2/§3, or re-key `timers` by an
+  identity the spec already owns.
+- **Found by:** external code review (eighth pass), 2026-08-04.

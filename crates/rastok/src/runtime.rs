@@ -516,7 +516,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     timers.push((
                         1,
                         ids::budget_ref(
-                            &self.plan.nodes[target.index()].path,
+                            &self.plan.edge_text(edge),
                             emission.envelope.meta().sys().id(),
                         ),
                     ));
@@ -524,7 +524,6 @@ impl<'plan> TransactionExecutor<'plan> {
             }
         }
         timers.sort();
-        timers.dedup();
         timers
     }
 

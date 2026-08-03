@@ -83,15 +83,16 @@ pub mod ids {
         )
     }
 
-    /// The identity of one armed call budget: derived from the
-    /// budgeted connector and the delivered envelope, so a fan-out of
-    /// one envelope to two connectors arms two distinct obligations.
-    /// This is what `timers` (identity.md §3 key 37) seals and what
-    /// the scheduler resolves.
+    /// The identity of one armed call budget, from the CANONICAL EDGE
+    /// the envelope traveled and the envelope's id — so a fan-out of
+    /// one envelope arms one distinct obligation per receiving edge,
+    /// two ports of one connector included. This is what `timers`
+    /// (identity.md §3 key 37) seals and what the scheduler resolves;
+    /// the recipe is recorded as erratum E-2026-08-04-2 pending its
+    /// formalization in identity.md.
     #[must_use]
-    pub fn budget_ref(connector: &node::Path, delivery: Id) -> Id {
-        let path = connector.to_string();
-        Id::derive(BUDGET, &[path.as_bytes(), delivery.as_bytes()])
+    pub fn budget_ref(edge: &str, delivery: Id) -> Id {
+        Id::derive(BUDGET, &[edge.as_bytes(), delivery.as_bytes()])
     }
 
     /// The internal identity of an outbound call, derived from its
@@ -564,6 +565,20 @@ mod tests {
             idempotency_key: Some(String::from("op-1")),
             effect: node::EffectClass::Idempotent,
         }
+    }
+
+    #[test]
+    fn the_budget_ref_recipe_is_pinned_byte_for_byte() {
+        // Erratum E-2026-08-04-2: the budget obligation's identity is
+        // derive(0x20, canonical_edge, envelope_id). Any drift here
+        // silently unseals every golden's key 37.
+        let delivery = Id::from_bytes([7; 16]);
+        let reference = ids::budget_ref("shout.out>echo.in", delivery);
+        assert_eq!(
+            reference.to_string(),
+            "301cd0af333f760b8f5dc13738b821ec",
+            "the pinned obligation identity"
+        );
     }
 
     #[test]

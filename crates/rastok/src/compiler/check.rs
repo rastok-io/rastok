@@ -69,7 +69,12 @@ pub const E_SIM_TARGET: Code = Code::new("E-SIM-TARGET");
 
 /// Two simulations of one lab sharing a name — fragments merge, but
 /// homonyms would shadow silently.
-pub const E_DUP_SIMULATION: Code = Code::new("E-DUP-SIMULATION");
+pub const E_DUP_LAB_IDENTITY: Code = Code::new("E-DUP-LAB-IDENTITY");
+
+/// The same source endpoint wired twice to the same target — a
+/// compile error per `envelope.md`: the two deliveries would derive
+/// one call ref and collide in the journal.
+pub const E_DUP_EDGE: Code = Code::new("E-DUP-EDGE");
 
 /// Merged sources of one compilation: the application files. Lab
 /// fragments join at the scenario stage.
@@ -156,7 +161,7 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
                             {
                                 checker.bag.push(
                                     Diagnostic::new(
-                                        E_DUP_SIMULATION,
+                                        E_DUP_LAB_IDENTITY,
                                         Phase::Resolve,
                                         format!(
                                             "the simulation `{}` is already declared in lab `{}`",
@@ -287,7 +292,7 @@ impl Checker<'_, '_> {
             {
                 self.bag.push(
                     Diagnostic::new(
-                        E_DUP_SIMULATION,
+                        E_DUP_LAB_IDENTITY,
                         Phase::Resolve,
                         format!(
                             "the simulation `{}` is already declared in this lab",
@@ -333,7 +338,7 @@ impl Checker<'_, '_> {
                 {
                     self.bag.push(
                         Diagnostic::new(
-                            E_DUP_SIMULATION,
+                            E_DUP_LAB_IDENTITY,
                             Phase::Resolve,
                             "this connector is already mocked at this level".to_string(),
                         )
@@ -353,7 +358,7 @@ impl Checker<'_, '_> {
                 {
                     self.bag.push(
                         Diagnostic::new(
-                            E_DUP_SIMULATION,
+                            E_DUP_LAB_IDENTITY,
                             Phase::Resolve,
                             format!(
                                 "the scenario `{}` is already declared in this simulation",
@@ -475,7 +480,7 @@ impl Checker<'_, '_> {
                     if mocked.contains(&name) {
                         self.bag.push(
                             Diagnostic::new(
-                                E_DUP_SIMULATION,
+                                E_DUP_LAB_IDENTITY,
                                 Phase::Resolve,
                                 "this connector is already mocked in this scenario".to_string(),
                             )
@@ -827,8 +832,26 @@ impl Checker<'_, '_> {
             }
         }
         for edge in edges {
-            if let Some(resolved) = self.edge(edge, &graph) {
-                graph.edges.extend(resolved);
+            let Some(resolved) = self.edge(edge, &graph) else {
+                continue;
+            };
+            for candidate in resolved {
+                // Duplicates are compared AFTER desugaring and
+                // resolution: `relay -> sink` and
+                // `relay.out -> sink.in` are one pair of endpoints.
+                if graph.edges.contains(&candidate) {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_DUP_EDGE,
+                            Phase::Check,
+                            "this wiring already exists; two identical edges would derive one call ref",
+                        )
+                        .with_span(edge.span)
+                        .with_field("edge", format!("{candidate:?}")),
+                    );
+                    continue;
+                }
+                graph.edges.push(candidate);
             }
         }
         self.reject_cycles(&graph, decl.span);
@@ -2572,7 +2595,7 @@ graph m0_probe : App {
         assert_eq!(hir.labs[0].simulations.len(), 2);
         // …and the homonym refused by name.
         assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_DUP_SIMULATION && diagnostic.fields()[0].1 == "a"
+            diagnostic.code() == E_DUP_LAB_IDENTITY && diagnostic.fields()[0].1 == "a"
         }));
     }
 
@@ -2593,6 +2616,25 @@ graph m0_probe : App {
     }
 
     #[test]
+    fn a_duplicated_edge_refuses_whatever_its_spelling() {
+        // Textually identical, and sugar-vs-explicit: both resolve to
+        // one endpoint pair and the second refuses with its own span.
+        for second in ["o -> p", "o.out -> p.in"] {
+            let source = format!(
+                "graph g : App {{\n  operator o {{\n    on in {{ out = envelope }}\n  }}\n  operator p {{\n    on in {{ out = envelope }}\n  }}\n  . -> o -> p -> .\n  {second}\n}}\n"
+            );
+            let (_, bag) = check_source(&source);
+            assert!(
+                bag.diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code() == E_DUP_EDGE),
+                "`{second}` must refuse: {:#?}",
+                bag.diagnostics()
+            );
+        }
+    }
+
+    #[test]
     fn duplicate_mocks_refuse_at_both_levels() {
         let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  operator o {\n    on in { out = data.text }\n  }\n  . -> o -> shell -> .\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
         let simulation_level = base.replace(
@@ -2607,7 +2649,7 @@ graph m0_probe : App {
             let (_, bag) = check_source(&source);
             assert!(
                 bag.diagnostics().iter().any(|diagnostic| {
-                    diagnostic.code() == E_DUP_SIMULATION && diagnostic.fields()[0].1 == "shell"
+                    diagnostic.code() == E_DUP_LAB_IDENTITY && diagnostic.fields()[0].1 == "shell"
                 }),
                 "the duplicate mock must refuse: {:#?}",
                 bag.diagnostics()
