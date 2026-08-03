@@ -9,6 +9,7 @@ pub mod compiler;
 pub mod connectors;
 pub mod diagnostics;
 pub mod envelope;
+pub mod golden;
 pub mod journal;
 pub mod lab;
 pub mod node;

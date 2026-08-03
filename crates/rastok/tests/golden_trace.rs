@@ -1,0 +1,162 @@
+//! The golden seal of the M0 probe: the canonical projection of a
+//! full run, pinned byte for byte. `RASTOK_BLESS=1 cargo test` blesses
+//! a new golden after an intentional behavior change — the diff in
+//! the failure message names what moved, so blessing is a reviewed
+//! decision, never a reflex.
+
+use rastok::boundary::{
+    CallOutcome, Draft, InboundSubmission, IngressAuthority, Intent, Partner, Response,
+    SubmissionSequence,
+};
+use rastok::compiler::compile;
+use rastok::envelope::{Data, Encoding, Envelope, Namespace, Scalar, Value};
+use rastok::golden::{diff, project};
+use rastok::journal::{MemJournal, Record};
+use rastok::node;
+use rastok::plan::GraphVersion;
+use rastok::runtime::vm::Vm;
+use rastok::stdlib::Registry;
+use std::path::Path;
+
+const M0_PROBE: &str = r#"
+graph m0_probe : App {
+  connector echo : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator shout {
+    var count : int = 0
+    on in where data.text != "" {
+      count = count + 1
+      out = envelope { data.text = data.text }
+    }
+  }
+
+  . -> shout -> echo -> .
+}
+"#;
+
+/// The scripted world half: echoes every request, like `cat`.
+#[derive(Default)]
+struct EchoWorld {
+    answers: Vec<Response>,
+}
+
+impl Partner for EchoWorld {
+    fn start(&mut self, intent: &Intent, _request: &Envelope) {
+        self.answers.push(Response {
+            call_ref: intent.call_ref,
+            outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"salut")),
+        });
+    }
+
+    fn events(&mut self) -> Vec<Response> {
+        std::mem::take(&mut self.answers)
+    }
+}
+
+// A test harness helper: failure here is a broken fixture, and a
+// panic is its correct report. (`allow-unwrap-in-tests` covers only
+// `#[test]` bodies.)
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+fn run(source: &str) -> Vec<Record> {
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
+    let mut data = std::collections::BTreeMap::new();
+    data.insert(
+        String::from("text"),
+        Value::Scalar(Scalar::Text(String::from("salut"))),
+    );
+    vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+            draft: Draft {
+                data: Data::materialized(Value::Map(data)),
+                mime_type: None,
+                app: Namespace::new(),
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    )
+    .unwrap();
+    vm.drain(&mut journal).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.drain(&mut journal).unwrap();
+    assert!(vm.is_stable());
+    journal.records().to_vec()
+}
+
+/// Renders a trace for the golden file: one hex line per canonical
+/// record, then the seal.
+#[allow(clippy::unwrap_used)]
+fn render(records: &[Record]) -> String {
+    let trace = project(records);
+    let mut out = String::new();
+    for index in 0..trace.len() {
+        let bytes = trace.record_bytes(index).unwrap();
+        for byte in bytes {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        out.push('\n');
+    }
+    out.push_str("seal ");
+    out.push_str(&trace.seal_hex());
+    out.push('\n');
+    out
+}
+
+#[test]
+fn the_m0_probe_trace_matches_its_golden() {
+    let records = run(M0_PROBE);
+    let rendered = render(&records);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/m0-probe.trace");
+    if std::env::var("RASTOK_BLESS").is_ok() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &rendered).unwrap();
+        return;
+    }
+    let golden = std::fs::read_to_string(&path)
+        .expect("no golden trace; run once with RASTOK_BLESS=1 to bless");
+    if golden != rendered {
+        // Explain before failing: the first semantic divergence, by
+        // record and key path — never a wall of hex.
+        let blessed_records = run(M0_PROBE);
+        let divergence = diff(&project(&records), &project(&blessed_records));
+        panic!(
+            "the trace diverged from its golden.\n\
+             re-run divergence (flaky machine?): {divergence:?}\n\
+             if the change is intentional, bless: RASTOK_BLESS=1 cargo test"
+        );
+    }
+}
+
+#[test]
+fn an_intentional_change_is_named_by_the_diff() {
+    let records = run(M0_PROBE);
+    let changed = run(&M0_PROBE.replace("count = count + 1", "count = count + 2"));
+    let divergence = diff(&project(&records), &project(&changed)).expect("the behaviors differ");
+    // The first divergence is semantic and located: the operator's
+    // transaction, its state delta — not an opaque byte offset.
+    assert_eq!(divergence.record, 1, "the shout transaction");
+    assert!(
+        divergence.path.contains("state_delta"),
+        "the diff names the changed table: {divergence}"
+    );
+    assert!(
+        divergence.to_string().contains('≠'),
+        "renders both sides: {divergence}"
+    );
+}
+
+#[test]
+fn identical_runs_share_one_seal() {
+    let once = project(&run(M0_PROBE));
+    let twice = project(&run(M0_PROBE));
+    assert_eq!(once.seal(), twice.seal());
+    assert!(diff(&once, &twice).is_none());
+}
