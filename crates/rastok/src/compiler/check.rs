@@ -279,6 +279,26 @@ impl Checker<'_, '_> {
         }
         let mut simulations = Vec::new();
         for simulation in &decl.simulations {
+            if decl
+                .simulations
+                .iter()
+                .take_while(|earlier| !std::ptr::eq(*earlier, simulation))
+                .any(|earlier| earlier.name.text == simulation.name.text)
+            {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_DUP_SIMULATION,
+                        Phase::Resolve,
+                        format!(
+                            "the simulation `{}` is already declared in this lab",
+                            simulation.name.text
+                        ),
+                    )
+                    .with_span(simulation.name.span)
+                    .with_field("name", simulation.name.text.clone()),
+                );
+                continue;
+            }
             let target: Vec<&str> = simulation
                 .target
                 .iter()
@@ -297,9 +317,47 @@ impl Checker<'_, '_> {
                 );
                 continue;
             }
+            for mock in &simulation.mocks {
+                if simulation
+                    .mocks
+                    .iter()
+                    .take_while(|earlier| !std::ptr::eq(*earlier, mock))
+                    .any(|earlier| earlier.path == mock.path)
+                {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_DUP_SIMULATION,
+                            Phase::Resolve,
+                            "this connector is already mocked at this level".to_string(),
+                        )
+                        .with_span(mock.span)
+                        .with_field("name", mock.path[0].text.clone()),
+                    );
+                }
+            }
             let mocks = self.mocks(&simulation.mocks, app);
             let mut scenarios = Vec::new();
             for scenario in &simulation.scenarios {
+                if simulation
+                    .scenarios
+                    .iter()
+                    .take_while(|earlier| !std::ptr::eq(*earlier, scenario))
+                    .any(|earlier| earlier.name.text == scenario.name.text)
+                {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_DUP_SIMULATION,
+                            Phase::Resolve,
+                            format!(
+                                "the scenario `{}` is already declared in this simulation",
+                                scenario.name.text
+                            ),
+                        )
+                        .with_span(scenario.name.span)
+                        .with_field("name", scenario.name.text.clone()),
+                    );
+                    continue;
+                }
                 scenarios.push(self.scenario(scenario, app));
             }
             simulations.push(crate::compiler::hir::Simulation {
@@ -359,6 +417,24 @@ impl Checker<'_, '_> {
                         self.deferred("a mock err reply", handler.span);
                         continue;
                     }
+                    // A reply carries data only: its envelope is
+                    // minted by the connector's own transaction —
+                    // the verdict lands here, not mid-simulation.
+                    let writes_meta = checked.body.iter().any(|statement| {
+                        let Statement::Emit { value, .. } = statement else {
+                            return false;
+                        };
+                        let (EmitValue::Patch(writes) | EmitValue::Replace(writes)) = value else {
+                            return false;
+                        };
+                        writes.iter().any(|write| {
+                            !matches!(write.target, crate::envelope::WriteTarget::Data(_))
+                        })
+                    });
+                    if writes_meta {
+                        self.deferred("a mock reply metadata write", handler.span);
+                        continue;
+                    }
                     handlers.push(checked);
                 }
             }
@@ -405,6 +481,17 @@ impl Checker<'_, '_> {
                     };
                     if matches!(value, EmitValue::Identity) {
                         self.deferred("an identity injection (there is no input)", target.span);
+                        continue;
+                    }
+                    // What a draft cannot carry refuses HERE — an
+                    // accepted scenario never discovers a restriction
+                    // mid-simulation.
+                    if let EmitValue::Patch(writes) | EmitValue::Replace(writes) = &value
+                        && writes.iter().any(|write| {
+                            matches!(write.target, crate::envelope::WriteTarget::CustomMeta(..))
+                        })
+                    {
+                        self.deferred("a custom namespace injection", target.span);
                         continue;
                     }
                     let seq = match seq {
@@ -529,10 +616,36 @@ impl Checker<'_, '_> {
                             continue;
                         }
                     };
+                    if expect.nothing && expect.count.is_some() {
+                        // Two quantifiers on one expectation is an
+                        // ambiguous form; refusing beats letting one
+                        // win silently.
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_CEL_EXPR,
+                                Phase::Check,
+                                "`nothing` and `count` are two quantifiers; pick one",
+                            )
+                            .with_span(expect.span)
+                            .with_field("detail", "ambiguous quantifier"),
+                        );
+                        continue;
+                    }
                     let quantifier = if expect.nothing {
                         Quantifier::Nothing
                     } else if let Some((op, int)) = &expect.count {
                         let Ok(count) = int.text.parse::<i64>() else {
+                            // A count too wide to represent is a
+                            // refusal, never a dropped expectation.
+                            self.bag.push(
+                                Diagnostic::new(
+                                    E_CEL_EXPR,
+                                    Phase::Check,
+                                    "this count does not fit a 64-bit integer",
+                                )
+                                .with_span(int.span)
+                                .with_field("detail", int.text.clone()),
+                            );
                             continue;
                         };
                         let cmp = match op {

@@ -229,6 +229,20 @@ fn lower_emission(value: &EmitValue, subst: &impl Fn(&cel::Tree) -> cel::Tree) -
     }
 }
 
+/// The canonical spelling of a resolved write target — what the
+/// semantic hash seals, alias-free.
+fn canonical_target(target: &crate::envelope::WriteTarget) -> String {
+    match target {
+        crate::envelope::WriteTarget::Data(path) if path.is_empty() => String::from("data"),
+        crate::envelope::WriteTarget::Data(path) => format!("data.{}", path.join(".")),
+        crate::envelope::WriteTarget::AppMeta(field) => format!("meta.app.{field}"),
+        crate::envelope::WriteTarget::CustomMeta(namespace, field) => {
+            format!("meta.{namespace}.{field}")
+        }
+        crate::envelope::WriteTarget::MimeType => String::from("mime_type"),
+    }
+}
+
 /// Rewrites every constant reference into its literal value; member
 /// access on a constant becomes evaluable indexing. Sound because
 /// shadowing is refused at check time.
@@ -542,7 +556,10 @@ impl Writer {
     fn field_writes(&mut self, writes: &[crate::compiler::hir::FieldWrite]) {
         self.count(writes.len());
         for write in writes {
-            self.str(&write.path.join("."));
+            // The RESOLVED target is identity material — identity.md
+            // makes the hash sugar-spelling-insensitive, so
+            // `meta.flag` and `meta.app.flag` seal identically.
+            self.str(&canonical_target(&write.target));
             self.expr(&write.value.root);
         }
     }

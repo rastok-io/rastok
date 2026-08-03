@@ -636,20 +636,26 @@ fn value_tagged(value: &envelope::Value) -> Cbor {
                 ),
             ])
         }
-        Value::Map(entries) => Cbor::Array(vec![
-            Cbor::Uint(18),
-            Cbor::Array(
-                entries
-                    .iter()
-                    .map(|(key, value)| {
-                        Cbor::Array(vec![
-                            Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(key.clone())]),
-                            value_tagged(value),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ]),
+        Value::Map(entries) => {
+            // Sorted by the KEY'S canonical tagged bytes, not by
+            // Rust's string order — CBOR text encodes its length
+            // first, so "b" precedes "aa".
+            let mut pairs: Vec<(Vec<u8>, Cbor)> = entries
+                .iter()
+                .map(|(key, value)| {
+                    let tagged_key = Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(key.clone())]);
+                    (
+                        encode(&tagged_key),
+                        Cbor::Array(vec![tagged_key, value_tagged(value)]),
+                    )
+                })
+                .collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            Cbor::Array(vec![
+                Cbor::Uint(18),
+                Cbor::Array(pairs.into_iter().map(|(_, pair)| pair).collect()),
+            ])
+        }
         Value::Array(items) => Cbor::Array(vec![
             Cbor::Uint(19),
             Cbor::Array(items.iter().map(value_tagged).collect()),
@@ -673,20 +679,23 @@ fn cel_tagged(value: &cel::Value) -> Cbor {
             Cbor::Uint(19),
             Cbor::Array(items.iter().map(cel_tagged).collect()),
         ]),
-        cel::Value::Map(entries) => Cbor::Array(vec![
-            Cbor::Uint(18),
-            Cbor::Array(
-                entries
-                    .iter()
-                    .map(|(key, value)| {
-                        Cbor::Array(vec![
-                            Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(key.clone())]),
-                            cel_tagged(value),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ]),
+        cel::Value::Map(entries) => {
+            let mut pairs: Vec<(Vec<u8>, Cbor)> = entries
+                .iter()
+                .map(|(key, value)| {
+                    let tagged_key = Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(key.clone())]);
+                    (
+                        encode(&tagged_key),
+                        Cbor::Array(vec![tagged_key, cel_tagged(value)]),
+                    )
+                })
+                .collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            Cbor::Array(vec![
+                Cbor::Uint(18),
+                Cbor::Array(pairs.into_iter().map(|(_, pair)| pair).collect()),
+            ])
+        }
     }
 }
 
@@ -890,6 +899,39 @@ mod tests {
         for (value, expected) in cases {
             assert_eq!(encode(&value), expected, "{value:?}");
         }
+    }
+
+    /// Map keys sort by their canonical tagged bytes — CBOR text
+    /// encodes its length first, so `"b"` precedes `"aa"`, against
+    /// Rust's string order.
+    #[test]
+    fn map_keys_sort_by_canonical_bytes_not_string_order() {
+        let mut entries = std::collections::BTreeMap::new();
+        entries.insert(
+            String::from("aa"),
+            crate::envelope::Value::Scalar(Scalar::Bool(true)),
+        );
+        entries.insert(
+            String::from("b"),
+            crate::envelope::Value::Scalar(Scalar::Bool(false)),
+        );
+        let Cbor::Array(parts) = value_tagged(&crate::envelope::Value::Map(entries)) else {
+            panic!("a tagged value");
+        };
+        let Cbor::Array(pairs) = &parts[1] else {
+            panic!("the pair list");
+        };
+        let Cbor::Array(first) = &pairs[0] else {
+            panic!("a pair");
+        };
+        let Cbor::Array(key) = &first[0] else {
+            panic!("a tagged key");
+        };
+        assert_eq!(
+            key[1],
+            Cbor::Text(String::from("b")),
+            "shorter text is byte-smaller"
+        );
     }
 
     /// The profile's stated deviations from shortest-form: doubles

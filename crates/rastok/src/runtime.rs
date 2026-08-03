@@ -400,22 +400,15 @@ impl<'plan> TransactionExecutor<'plan> {
                 Step::SetVar { name, expr } => {
                     let env = bindings(&scratch, &lets)?;
                     let value = cel::eval(expr, &env).map_err(Fault::Eval)?;
-                    // The DSL's `int` is 32-bit; CEL's carrier is
-                    // wider. The declared bound holds at every write,
-                    // not just the initializer — an overflow is a
-                    // typed error, never a silent widening.
-                    if let cel::Value::Int(candidate) = value
-                        && node
-                            .vars
-                            .iter()
-                            .any(|cell| &cell.name == name && cell.ty == cel::Type::Int)
-                        && i32::try_from(candidate).is_err()
+                    // A state cell holds its DECLARED type at every
+                    // write, not just at the initializer: a dynamic
+                    // value of the wrong shape — or an int leaving
+                    // the 32-bit range — is a typed error, never a
+                    // silent coercion.
+                    if let Some(cell) = node.vars.iter().find(|cell| &cell.name == name)
+                        && let Some(message) = conformance_fault(name, &cell.ty, &value)
                     {
-                        return Err(Fault::Eval(cel::Error {
-                            message: format!(
-                                "`{name}` is an int; {candidate} leaves the 32-bit range"
-                            ),
-                        }));
+                        return Err(Fault::Eval(cel::Error { message }));
                     }
                     scratch.insert(name.clone(), value);
                 }
@@ -760,6 +753,45 @@ fn emitted_content(
     }
 }
 
+/// Judges a runtime value against a declared cell type; `None` means
+/// it conforms. `Dyn` admits anything — the dynamic escape is chosen
+/// in the declaration, not discovered at the write.
+fn conformance_fault(name: &str, declared: &cel::Type, value: &cel::Value) -> Option<String> {
+    let mismatch = |got: &str| {
+        Some(format!(
+            "`{name}` is declared {declared:?}; a {got} cannot enter it"
+        ))
+    };
+    match (declared, value) {
+        (cel::Type::Dyn, _) => None,
+        (cel::Type::Int, cel::Value::Int(candidate)) => {
+            if i32::try_from(*candidate).is_err() {
+                Some(format!(
+                    "`{name}` is an int; {candidate} leaves the 32-bit range"
+                ))
+            } else {
+                None
+            }
+        }
+        (cel::Type::Bool, cel::Value::Bool(_))
+        | (cel::Type::Text, cel::Value::Text(_))
+        | (cel::Type::Bytes, cel::Value::Bytes(_))
+        | (cel::Type::Double, cel::Value::Double(_))
+        | (cel::Type::Duration, cel::Value::Duration(_))
+        | (cel::Type::Timestamp, cel::Value::Timestamp(_)) => None,
+        (_, cel::Value::Bool(_)) => mismatch("bool"),
+        (_, cel::Value::Int(_) | cel::Value::Uint(_)) => mismatch("number"),
+        (_, cel::Value::Double(_)) => mismatch("double"),
+        (_, cel::Value::Text(_)) => mismatch("text"),
+        (_, cel::Value::Bytes(_)) => mismatch("bytes"),
+        (_, cel::Value::Duration(_)) => mismatch("duration"),
+        (_, cel::Value::Timestamp(_)) => mismatch("timestamp"),
+        (_, cel::Value::Null) => mismatch("null"),
+        (_, cel::Value::List(_)) => mismatch("list"),
+        (_, cel::Value::Map(_)) => mismatch("map"),
+    }
+}
+
 /// Applies one payload write along its path; the empty path replaces
 /// the whole value.
 pub(crate) fn apply_data_write(data: &mut cel::Value, path: &[String], value: cel::Value) {
@@ -847,8 +879,10 @@ pub(crate) fn meta_value(meta: &Meta) -> cel::Value {
     );
     let mut root = BTreeMap::new();
     // The read alias mirrors the write alias: `meta.x` reads
-    // `meta.app.x` — app fields surface at the meta root unless a
-    // reserved or custom name shadows them.
+    // `meta.app.x` — app fields surface at the meta root. Precedence
+    // on a name collision: `sys`, `app`, and custom NAMESPACES shadow
+    // the alias (they are inserted after), and the shadowed app field
+    // stays reachable at its unambiguous `meta.app.x` address.
     for (field, value) in &app {
         root.insert(field.clone(), value.clone());
     }
@@ -1108,6 +1142,37 @@ graph m0_probe : App {
         // Their canonical renderings coincide today — that string is
         // semantic-hash material and pins the byte compatibility.
         assert_eq!(activation.to_string(), outcome.record.trigger.to_string());
+    }
+
+    #[test]
+    fn a_custom_namespace_shadows_the_app_alias_at_the_root() {
+        let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+        let mut app = envelope::Namespace::new();
+        app.insert(
+            String::from("audit"),
+            envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("app-value"))),
+        );
+        let mut audit = envelope::Namespace::new();
+        audit.insert(
+            String::from("origin"),
+            envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("custom"))),
+        );
+        let meta = Meta::new(MetaSys::root(id, 1))
+            .with_app(app)
+            .with_custom("audit", audit);
+        let cel::Value::Map(root) = meta_value(&meta) else {
+            panic!("a map projection");
+        };
+        // The namespace wins the root name; the shadowed app field
+        // keeps its unambiguous address.
+        assert!(matches!(root.get("audit"), Some(cel::Value::Map(_))));
+        let Some(cel::Value::Map(app)) = root.get("app") else {
+            panic!("the app namespace projects");
+        };
+        assert_eq!(
+            app.get("audit"),
+            Some(&cel::Value::Text(String::from("app-value")))
+        );
     }
 
     #[test]

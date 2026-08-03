@@ -380,7 +380,26 @@ impl MockPartner<'_> {
         for handler in &mock.handlers {
             let passes = match &handler.guard {
                 None => true,
-                Some(guard) => matches!(cel::eval(guard, &env), Ok(cel::Value::Bool(true))),
+                Some(guard) => match cel::eval(guard, &env) {
+                    Ok(cel::Value::Bool(passes)) => passes,
+                    // A faulting or non-boolean guard is a fault of
+                    // the scenario, never a silent fall-through to
+                    // the next branch.
+                    Ok(other) => {
+                        self.faults.push(format!(
+                            "a mock guard of `{}` is not a bool (got {other:?})",
+                            intent.connector_path
+                        ));
+                        return None;
+                    }
+                    Err(error) => {
+                        self.faults.push(format!(
+                            "a mock guard of `{}` faulted: {error}",
+                            intent.connector_path
+                        ));
+                        return None;
+                    }
+                },
             };
             if !passes {
                 continue;

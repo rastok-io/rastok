@@ -18,7 +18,7 @@ use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok <check|run|simulate> <file.rkg>...";
+const USAGE: &str = "usage: rastok <check|run> <file.rkg>...\n       rastok simulate <file.rkg>... [--golden <dir>] [--bless]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,7 +32,26 @@ fn main() -> ExitCode {
     match command {
         "check" => check(paths),
         "run" => run(paths),
-        "simulate" => simulate(paths),
+        "simulate" => {
+            let mut files = Vec::new();
+            let mut golden_dir: Option<std::path::PathBuf> = None;
+            let mut bless = false;
+            let mut rest = paths.iter();
+            while let Some(argument) = rest.next() {
+                match argument.as_str() {
+                    "--golden" => match rest.next() {
+                        Some(dir) => golden_dir = Some(std::path::PathBuf::from(dir)),
+                        None => {
+                            eprintln!("{USAGE}");
+                            return ExitCode::from(2);
+                        }
+                    },
+                    "--bless" => bless = true,
+                    _ => files.push(argument.clone()),
+                }
+            }
+            simulate(&files, golden_dir.as_deref(), bless)
+        }
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -177,7 +196,7 @@ fn run(paths: &[String]) -> ExitCode {
 
 /// Runs every lab of the unit; one line per scenario, non-zero exit
 /// on any red.
-fn simulate(paths: &[String]) -> ExitCode {
+fn simulate(paths: &[String], golden_dir: Option<&std::path::Path>, bless: bool) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
     };
@@ -191,7 +210,43 @@ fn simulate(paths: &[String]) -> ExitCode {
         for run in lab::run(&compilation.plan, GraphVersion(1), lab_decl) {
             let report = &run.report;
             total += 1;
-            let verdict = if report.passed() { "PASS" } else { "FAIL" };
+            // The golden seam: a completed run projects to its
+            // canonical trace, compared against — or blessing — the
+            // stored one.
+            let mut golden_failures = Vec::new();
+            if let Some(dir) = golden_dir {
+                let trace = rastok::golden::project(&run.records);
+                let rendered = render_trace(&trace);
+                let path = dir.join(format!("{}.{}.trace", report.simulation, report.scenario));
+                if bless {
+                    if let Err(error) =
+                        std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&path, &rendered))
+                    {
+                        eprintln!("error: cannot bless `{}`: {error}", path.display());
+                        return ExitCode::FAILURE;
+                    }
+                } else {
+                    match std::fs::read_to_string(&path) {
+                        Err(_) => golden_failures.push(format!(
+                            "no golden at `{}`; bless with --bless",
+                            path.display()
+                        )),
+                        Ok(stored) if stored != rendered => {
+                            let divergence = parse_stored(&stored)
+                                .and_then(|stored| rastok::golden::diff(&trace, &stored));
+                            golden_failures.push(match divergence {
+                                Some(divergence) => format!("golden divergence: {divergence}"),
+                                None => {
+                                    String::from("the stored golden is unreadable by this build")
+                                }
+                            });
+                        }
+                        Ok(_) => {}
+                    }
+                }
+            }
+            let passed = report.passed() && golden_failures.is_empty();
+            let verdict = if passed { "PASS" } else { "FAIL" };
             match &report.label {
                 Some(label) => {
                     println!(
@@ -201,9 +256,9 @@ fn simulate(paths: &[String]) -> ExitCode {
                 }
                 None => println!("{verdict} {}.{}", report.simulation, report.scenario),
             }
-            if !report.passed() {
+            if !passed {
                 failed += 1;
-                for failure in &report.failures {
+                for failure in report.failures.iter().chain(&golden_failures) {
                     println!("     {failure}");
                 }
             }
@@ -215,6 +270,42 @@ fn simulate(paths: &[String]) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// One hex line per canonical record, then the seal — the stored
+/// golden shape.
+fn render_trace(trace: &rastok::golden::Trace) -> String {
+    let mut out = String::new();
+    for index in 0..trace.len() {
+        if let Some(bytes) = trace.record_bytes(index) {
+            for byte in bytes {
+                out.push_str(&format!("{byte:02x}"));
+            }
+            out.push('\n');
+        }
+    }
+    out.push_str("seal ");
+    out.push_str(&trace.seal_hex());
+    out.push('\n');
+    out
+}
+
+/// Parses a stored golden back into a trace, if this build reads it.
+fn parse_stored(rendered: &str) -> Option<rastok::golden::Trace> {
+    let mut records = Vec::new();
+    for line in rendered.lines() {
+        if line.starts_with("seal ") || line.is_empty() {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        let mut at = 0;
+        while at + 2 <= line.len() {
+            bytes.push(u8::from_str_radix(&line[at..at + 2], 16).ok()?);
+            at += 2;
+        }
+        records.push(bytes);
+    }
+    rastok::golden::Trace::from_stored(&records)
 }
 
 /// A boundary envelope for a terminal: text prints bare, raw bytes

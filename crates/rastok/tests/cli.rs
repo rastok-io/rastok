@@ -102,3 +102,48 @@ fn simulate_fails_loudly_on_a_broken_expectation() {
     assert!(stdout.contains("FAIL smoke.roundtrip"), "{stdout}");
     assert!(stdout.contains("the echo"), "the label names it: {stdout}");
 }
+
+#[test]
+fn simulate_blesses_then_verifies_a_golden_directory() {
+    let dir = std::env::temp_dir().join("rastok-cli-golden");
+    let _ = std::fs::remove_dir_all(&dir);
+    // Bless…
+    let output = rastok()
+        .args(["simulate"])
+        .arg(example())
+        .args(["--golden"])
+        .arg(&dir)
+        .args(["--bless"])
+        .output()
+        .expect("the binary runs");
+    assert!(output.status.success(), "{output:?}");
+    assert!(dir.join("smoke.roundtrip.trace").exists());
+    // …verify…
+    let output = rastok()
+        .args(["simulate"])
+        .arg(example())
+        .args(["--golden"])
+        .arg(&dir)
+        .output()
+        .expect("the binary runs");
+    assert!(output.status.success(), "{output:?}");
+    // …and a staled golden is named, not hex-dumped.
+    let path = dir.join("smoke.roundtrip.trace");
+    let stored = std::fs::read_to_string(&path).expect("the blessed trace");
+    std::fs::write(&path, stored.replace("73616c7574", "6175747265")).expect("the alteration");
+    let output = rastok()
+        .args(["simulate"])
+        .arg(example())
+        .args(["--golden"])
+        .arg(&dir)
+        .output()
+        .expect("the binary runs");
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("FAIL smoke.roundtrip"), "{stdout}");
+    assert!(stdout.contains("golden divergence"), "{stdout}");
+    assert!(
+        stdout.contains("data(8)"),
+        "the diff names the key: {stdout}"
+    );
+}
