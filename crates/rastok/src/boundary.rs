@@ -209,8 +209,17 @@ pub struct DatedEvent {
 /// with their stages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DatedPayload {
-    /// A call's timeout budget expired.
-    CallTimeout(CallRef),
+    /// A delivery's call budget expired. The budget runs from the
+    /// DELIVERY into the connector's mailbox (execution-model §8) —
+    /// queue time counts — so the reference is the delivered
+    /// envelope's id, resolvable whether the call is still queued or
+    /// already open.
+    DeliveryBudget {
+        /// The connector whose budget this is.
+        connector: node::Path,
+        /// The delivered envelope's id — the obligation's causal ref.
+        delivery: envelope::Id,
+    },
 }
 
 /// Boot, crash, or restart — supervision facts entering the run.
@@ -236,6 +245,13 @@ pub trait Ingress {
 /// outcome: budgets belong to the scheduler, triage to the recovery
 /// fold. Correlation uses the connector's own protocol.
 pub trait Partner {
+    /// Withdraws an open call: the machine closed it (a won timeout)
+    /// and any in-flight work should stop. Default: nothing — a
+    /// scripted world has nothing to stop.
+    fn cancel(&mut self, call_ref: &CallRef) {
+        let _ = call_ref;
+    }
+
     /// Executes the effect of an already-journaled open call. The
     /// request envelope rides along because the intent seals only the
     /// digest of the request, not its bytes.

@@ -329,28 +329,68 @@ impl<'plan> Vm<'plan> {
         })
     }
 
-    /// Advances the virtual date to `target`, firing each armed call
+    /// Advances the virtual date to `target`, firing each armed
     /// budget in expiry order — the discrete advance: time moves in
-    /// jumps, and the machine drains between them. A budget whose
-    /// call already settled loses the closure race and fires nothing;
-    /// a won expiry closes the call with a Timeout fact and becomes
-    /// the connector's `l:timeout` transaction, a TimeoutExpired on
-    /// `err`.
+    /// jumps, and the machine drains between them. Only the machine
+    /// mints a timeout — a partner answers or stays silent, never
+    /// times itself out. A budget runs from the DELIVERY, so an
+    /// expiry resolves wherever the obligation lives: a call still
+    /// open closes with a Timeout fact (and the partner is told to
+    /// cancel the in-flight work); a delivery still queued is
+    /// consumed with the typed error before any call opens; an
+    /// obligation already settled loses the race and fires nothing.
     ///
     /// # Errors
     ///
     /// Journal refusals and faulting steps, as in [`Self::drain`].
-    pub fn advance(&mut self, journal: &mut dyn Journal, target: i64) -> Result<(), VmError> {
+    pub fn advance(
+        &mut self,
+        journal: &mut dyn Journal,
+        partner: &mut dyn Partner,
+        target: i64,
+    ) -> Result<(), VmError> {
         while let Some((at, payload)) = self.scheduler.due(target) {
             self.now = at;
-            let DatedPayload::CallTimeout(call_ref) = payload;
+            // Every expiry OF THIS INSTANT fires before the machine
+            // drains: the drain happens between jumps of the clock,
+            // never between simultaneous events — a same-instant
+            // budget must not see the world advanced by its sibling.
+            self.expire(journal, partner, payload)?;
+            while let Some((_, sibling)) = self.scheduler.due(at) {
+                self.expire(journal, partner, sibling)?;
+            }
+            self.drain(journal)?;
+        }
+        self.now = self.now.max(target);
+        Ok(())
+    }
+
+    /// Resolves one expired budget wherever the obligation lives.
+    fn expire(
+        &mut self,
+        journal: &mut dyn Journal,
+        partner: &mut dyn Partner,
+        payload: DatedPayload,
+    ) -> Result<(), VmError> {
+        let DatedPayload::DeliveryBudget {
+            connector,
+            delivery,
+        } = payload;
+        // An open call for this delivery: race the closure.
+        if let Some(call_ref) = self
+            .pending
+            .iter()
+            .find(|(_, held)| held.envelope.meta().sys().id() == delivery)
+            .map(|(call_ref, _)| *call_ref)
+        {
             match journal
                 .close_outbound(&call_ref, crate::journal::Closure::Timeout)
                 .map_err(VmError::Journal)?
             {
-                crate::journal::CloseVerdict::AlreadyClosed => continue,
+                crate::journal::CloseVerdict::AlreadyClosed => return Ok(()),
                 crate::journal::CloseVerdict::Won => {}
             }
+            partner.cancel(&call_ref);
             let intent = journal
                 .find_call(&call_ref)
                 .unwrap_or_else(|| unreachable!("a closed call is journaled"));
@@ -368,9 +408,27 @@ impl<'plan> Vm<'plan> {
                 },
                 trigger: node::Trigger::Lifecycle(node::Lifecycle::Timeout),
             });
-            self.drain(journal)?;
+            return Ok(());
         }
-        self.now = self.now.max(target);
+        // Still queued: the queue time consumed the whole budget —
+        // the delivery is consumed with the typed error and no call
+        // ever opens.
+        let slot = self.slot_of(&connector);
+        if let Some(queued) = self.scheduler.mailboxes.remove_by_id(slot, "", delivery) {
+            let executor = TransactionExecutor::new(self.plan, self.graph_version);
+            let outcome = executor.typed_error_transaction(
+                slot,
+                &queued,
+                "TimeoutExpired",
+                "the call budget expired in the mailbox",
+            );
+            self.reserve_emissions(slot, &outcome.record)?;
+            journal
+                .commit(outcome.record.clone())
+                .map_err(VmError::Journal)?;
+            self.route_emissions(slot, &outcome.record);
+        }
+        // Otherwise: already settled — the budget lost the race.
         Ok(())
     }
 
@@ -546,16 +604,6 @@ impl<'plan> Vm<'plan> {
             .unwrap_or_else(|| unreachable!("the reserved head is still there"));
         self.pending.insert(call_ref, delivery);
         self.scheduler.mailboxes.claim(slot, key);
-        // A declared budget arms the machine's dated queue; expiry is
-        // a discrete event, not a wall-clock race.
-        if let Some(crate::plan::AttrSetting::Value(crate::cel::Value::Duration(budget))) =
-            spec.attribute("timeout")
-        {
-            self.scheduler.arm(
-                self.now.saturating_add(*budget),
-                DatedPayload::CallTimeout(call_ref),
-            );
-        }
         Ok(())
     }
 
@@ -689,6 +737,24 @@ impl<'plan> Vm<'plan> {
                             port: to.port.clone(),
                             envelope: envelope.clone(),
                         });
+                        // The budget runs from THIS moment — queue
+                        // time counts (execution-model §8). What is
+                        // armed here is exactly what the committed
+                        // record sealed as its timers.
+                        if let Some(crate::plan::AttrSetting::Value(crate::cel::Value::Duration(
+                            budget,
+                        ))) = self.plan.nodes[target.index()]
+                            .connector()
+                            .and_then(|spec| spec.attribute("timeout"))
+                        {
+                            self.scheduler.arm(
+                                self.now.saturating_add(*budget),
+                                DatedPayload::DeliveryBudget {
+                                    connector: self.plan.nodes[target.index()].path.clone(),
+                                    delivery: envelope.meta().sys().id(),
+                                },
+                            );
+                        }
                     }
                 },
             }
@@ -1066,7 +1132,8 @@ graph timed : App {
         vm.drain(&mut journal).unwrap();
         assert!(vm.has_open_obligations());
         // Nobody answers; the budget expires at the discrete advance.
-        vm.advance(&mut journal, 5_000_000_000).unwrap();
+        vm.advance(&mut journal, &mut EchoWorld::default(), 5_000_000_000)
+            .unwrap();
         assert!(vm.is_stable(), "the expiry released the machine");
         assert_eq!(vm.now(), 5_000_000_000);
         // The closure is a Timeout fact and the outcome transaction
@@ -1095,6 +1162,46 @@ graph timed : App {
     }
 
     #[test]
+    fn a_budget_runs_from_delivery_and_covers_queue_time() {
+        // The claim serializes the connector: the second request
+        // waits in the mailbox behind the open call. Its budget runs
+        // anyway — queue time counts (execution-model §8) — so the
+        // expiry consumes it IN the queue, with no open fact ever
+        // journaled for it.
+        let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = EchoWorld::default();
+        vm.inject(&mut journal, submission("un")).unwrap();
+        vm.inject(&mut journal, submission("deux")).unwrap();
+        vm.drain(&mut journal).unwrap();
+        assert_eq!(journal.open_calls().len(), 1, "one open, one queued");
+        // Nobody answers; both budgets expire at the same sweep.
+        vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
+        assert!(vm.is_stable());
+        assert_eq!(vm.errors().len(), 2, "both requests expired, typed");
+        let opens = journal
+            .records()
+            .iter()
+            .filter(|record| {
+                matches!(record, Record::Outbound(o) if matches!(o.status, OutboundStatus::Open))
+            })
+            .count();
+        assert_eq!(opens, 1, "the queued request never opened a call");
+        // The sealed timers name the obligations the transactions
+        // armed — one per budgeted delivery.
+        let sealed: usize = journal
+            .records()
+            .iter()
+            .filter_map(|record| match record {
+                Record::Transaction(t) => Some(t.timers.len()),
+                _ => None,
+            })
+            .sum();
+        assert_eq!(sealed, 2);
+    }
+
+    #[test]
     fn an_answer_and_an_expiry_race_to_a_single_closure() {
         let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -1106,7 +1213,8 @@ graph timed : App {
         // one closure fact, one outcome transaction, no duplicate.
         vm.pump(&mut journal, &mut world).unwrap();
         vm.drain(&mut journal).unwrap();
-        vm.advance(&mut journal, 5_000_000_000).unwrap();
+        vm.advance(&mut journal, &mut EchoWorld::default(), 5_000_000_000)
+            .unwrap();
         assert!(vm.is_stable());
         let closures = journal
             .records()
@@ -1132,7 +1240,8 @@ graph timed : App {
         vm.drain(&mut journal).unwrap();
         let call_ref = journal.open_calls()[0].call_ref;
         // The budget expires first…
-        vm.advance(&mut journal, 5_000_000_000).unwrap();
+        vm.advance(&mut journal, &mut EchoWorld::default(), 5_000_000_000)
+            .unwrap();
         // …then the world answers a closed call.
         let mut late = ScriptedWorld {
             answers: vec![Response {

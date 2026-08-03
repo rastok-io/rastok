@@ -55,11 +55,13 @@ fn parse_size(text: &str) -> Option<usize> {
 /// carries the codec-framed request; the complete stdout at exit
 /// becomes the one reply. The process boundary is the correlation.
 ///
-/// The `timeout` attribute is enforced twice, once per world: the
-/// machine's discrete clock arms the journal-side budget, and this
-/// adapter holds the same value as a wall-clock deadline — a child
-/// alive past it is killed and answers with the typed TimeoutExpired.
-/// Close-once arbitrates if both fire.
+/// The adapter is asynchronous, as the Partner contract demands: a
+/// partner answers or stays silent — it never times itself out. Only
+/// the scheduler mints TimeoutExpired; when the machine closes a
+/// call, [`Partner::cancel`] kills the child. Every pipe drains on
+/// its own detached thread through a channel, so a descendant that
+/// inherits the pipes can never hang this process: readers are never
+/// joined, only drained.
 ///
 /// Job-mode stderr travels inside `ExecFailed` on failure; on a
 /// successful exit it is dropped in this build — `StderrLine` events
@@ -67,7 +69,26 @@ fn parse_size(text: &str) -> Option<usize> {
 #[derive(Debug)]
 pub struct Process<'plan> {
     plan: &'plan ExecutionPlan,
+    runs: Vec<Run>,
     answers: Vec<Response>,
+}
+
+/// One in-flight child.
+#[derive(Debug)]
+struct Run {
+    call_ref: crate::boundary::CallRef,
+    child: std::process::Child,
+    chunks: std::sync::mpsc::Receiver<Chunk>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    max_output: usize,
+}
+
+/// One drained slice of a pipe.
+#[derive(Debug)]
+enum Chunk {
+    Out(Vec<u8>),
+    Err(Vec<u8>),
 }
 
 impl<'plan> Process<'plan> {
@@ -76,11 +97,12 @@ impl<'plan> Process<'plan> {
     pub fn new(plan: &'plan ExecutionPlan) -> Self {
         Self {
             plan,
+            runs: Vec::new(),
             answers: Vec::new(),
         }
     }
 
-    fn run(&self, intent: &Intent, request: &Envelope) -> CallOutcome {
+    fn launch(&mut self, intent: &Intent, request: &Envelope) -> Result<Run, CallOutcome> {
         let Some(spec) = self
             .plan
             .nodes
@@ -91,19 +113,16 @@ impl<'plan> Process<'plan> {
                 NodeKind::Operator => None,
             })
         else {
-            // A journaled intent for an unplanned node cannot happen
-            // through the dispatcher; answer with a typed spawn
-            // failure rather than trusting that.
-            return failure(
+            return Err(failure(
                 "SpawnFailed",
                 "the intent names no planned connector".to_string(),
-            );
+            ));
         };
         let Some(AttrSetting::Value(cel::Value::Text(command))) = spec.attribute("command") else {
-            return failure(
+            return Err(failure(
                 "SpawnFailed",
                 "the command attribute is not text".to_string(),
-            );
+            ));
         };
         let args: Vec<String> = match spec.attribute("args") {
             Some(AttrSetting::Value(cel::Value::List(items))) => items
@@ -117,22 +136,19 @@ impl<'plan> Process<'plan> {
         };
         let framed = match prepare(spec, request.data()) {
             Ok(bytes) => bytes,
-            Err(message) => return failure("DecodeError", message),
+            Err(message) => return Err(failure("DecodeError", message)),
         };
         let max_output = match spec.attribute("max_output") {
             Some(AttrSetting::Value(cel::Value::Text(text))) => match parse_size(text) {
                 Some(size) => size,
                 None => {
-                    return failure("SpawnFailed", format!("max_output `{text}` is not a size"));
+                    return Err(failure(
+                        "SpawnFailed",
+                        format!("max_output `{text}` is not a size"),
+                    ));
                 }
             },
             _ => DEFAULT_MAX_OUTPUT,
-        };
-        let deadline = match spec.attribute("timeout") {
-            Some(AttrSetting::Value(cel::Value::Duration(nanos))) => u64::try_from(*nanos)
-                .ok()
-                .map(|nanos| std::time::Instant::now() + std::time::Duration::from_nanos(nanos)),
-            _ => None,
         };
         let mut child = match Command::new(command)
             .args(&args)
@@ -142,92 +158,88 @@ impl<'plan> Process<'plan> {
             .spawn()
         {
             Ok(child) => child,
-            Err(error) => return failure("SpawnFailed", error.to_string()),
+            Err(error) => return Err(failure("SpawnFailed", error.to_string())),
         };
-        // Pipes are drained concurrently or they deadlock: a child
-        // may block on stderr before closing stdout, or on stdout
-        // before reading stdin. Every pipe gets its own thread; the
-        // parent only watches the exit and the clock.
+        // Detached pipe pumps: chunks flow through the channel; the
+        // threads die with their pipes and are never waited on.
         let stdin = child.stdin.take();
-        let writer = std::thread::spawn(move || {
+        std::thread::spawn(move || {
             if let Some(mut stdin) = stdin {
                 // A child that exits without draining stdin is a
                 // broken pipe, not a fault.
                 let _ = stdin.write_all(&framed);
             }
         });
-        let cap = u64::try_from(max_output)
-            .unwrap_or(u64::MAX)
-            .saturating_add(1);
-        let stdout_reader = child.stdout.take().map(|pipe| {
-            std::thread::spawn(move || {
-                let mut buffer = Vec::new();
-                let _ = pipe.take(cap).read_to_end(&mut buffer);
-                buffer
-            })
-        });
-        let stderr_reader = child.stderr.take().map(|pipe| {
-            std::thread::spawn(move || {
-                let mut buffer = Vec::new();
-                let _ = pipe.take(cap).read_to_end(&mut buffer);
-                buffer
-            })
-        });
-        let join_pipes =
-            |writer: std::thread::JoinHandle<()>,
-             stdout_reader: Option<std::thread::JoinHandle<Vec<u8>>>,
-             stderr_reader: Option<std::thread::JoinHandle<Vec<u8>>>| {
-                let _ = writer.join();
-                let stdout = stdout_reader
-                    .and_then(|handle| handle.join().ok())
-                    .unwrap_or_default();
-                let stderr = stderr_reader
-                    .and_then(|handle| handle.join().ok())
-                    .unwrap_or_default();
-                (stdout, stderr)
-            };
-        // Watch the exit against the declared budget: a mute child is
-        // killed at the deadline and answers with the typed timeout —
-        // the machine's virtual budget cannot reach a blocked host.
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    if let Some(deadline) = deadline
-                        && std::time::Instant::now() >= deadline
-                    {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        let _ = join_pipes(writer, stdout_reader, stderr_reader);
-                        return CallOutcome::Failure(TypedError {
-                            kind: String::from("TimeoutExpired"),
-                            data: Data::materialized(Value::Map(BTreeMap::new())),
-                        });
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                }
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = join_pipes(writer, stdout_reader, stderr_reader);
-                    return failure("ExecFailed", error.to_string());
+        let (sender, chunks) = std::sync::mpsc::channel();
+        if let Some(pipe) = child.stdout.take() {
+            let sender = sender.clone();
+            std::thread::spawn(move || pump_pipe(pipe, sender, Chunk::Out));
+        }
+        if let Some(pipe) = child.stderr.take() {
+            std::thread::spawn(move || pump_pipe(pipe, sender, Chunk::Err));
+        }
+        Ok(Run {
+            call_ref: intent.call_ref,
+            child,
+            chunks,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            max_output,
+        })
+    }
+}
+
+/// Reads one pipe to its end in bounded chunks, sending each through
+/// the channel; a closed receiver ends the pump.
+fn pump_pipe<P: Read>(
+    mut pipe: P,
+    sender: std::sync::mpsc::Sender<Chunk>,
+    wrap: fn(Vec<u8>) -> Chunk,
+) {
+    let mut buffer = [0u8; 8192];
+    loop {
+        match pipe.read(&mut buffer) {
+            Ok(0) | Err(_) => return,
+            Ok(read) => {
+                if sender.send(wrap(buffer[..read].to_vec())).is_err() {
+                    return;
                 }
             }
-        };
-        let (stdout, stderr_bytes) = join_pipes(writer, stdout_reader, stderr_reader);
-        if stdout.len() > max_output {
+        }
+    }
+}
+
+impl Run {
+    /// Drains arrived chunks; `true` when the output cap is tripped.
+    fn collect(&mut self) -> bool {
+        for chunk in self.chunks.try_iter() {
+            match chunk {
+                Chunk::Out(bytes) => self.stdout.extend_from_slice(&bytes),
+                Chunk::Err(bytes) => self.stderr.extend_from_slice(&bytes),
+            }
+        }
+        self.stdout.len() > self.max_output
+    }
+
+    /// The reply of a finished run.
+    fn settle(mut self, status: std::process::ExitStatus) -> Response {
+        // A short grace drain: chunks written before the exit may
+        // still be in flight from the pump threads.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let overflowed = self.collect();
+        let outcome = if overflowed {
             let mut payload = BTreeMap::new();
             payload.insert(
                 String::from("size"),
-                Value::Scalar(Scalar::Int(i64::try_from(stdout.len()).unwrap_or(i64::MAX))),
+                Value::Scalar(Scalar::Int(
+                    i64::try_from(self.stdout.len()).unwrap_or(i64::MAX),
+                )),
             );
-            return CallOutcome::Failure(TypedError {
+            CallOutcome::Failure(TypedError {
                 kind: String::from("OutputOverflow"),
                 data: Data::materialized(Value::Map(payload)),
-            });
-        }
-        let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
-        if !status.success() {
+            })
+        } else if !status.success() {
             let mut payload = BTreeMap::new();
             payload.insert(
                 String::from("exit_code"),
@@ -237,31 +249,96 @@ impl<'plan> Process<'plan> {
                     None => Value::Scalar(Scalar::Int(-1)),
                 },
             );
-            payload.insert(String::from("stderr"), Value::Scalar(Scalar::Text(stderr)));
-            return CallOutcome::Failure(TypedError {
+            payload.insert(
+                String::from("stderr"),
+                Value::Scalar(Scalar::Text(
+                    String::from_utf8_lossy(&self.stderr).into_owned(),
+                )),
+            );
+            CallOutcome::Failure(TypedError {
                 kind: String::from("ExecFailed"),
                 data: Data::materialized(Value::Map(payload)),
-            });
-        }
-        // `codec = lines`, job mode: the whole stdout, one text blob.
-        match String::from_utf8(stdout) {
-            Ok(text) => CallOutcome::Success(Data::materialized(Value::Scalar(Scalar::Text(text)))),
-            Err(_) => failure("DecodeError", "stdout is not valid UTF-8".to_string()),
+            })
+        } else {
+            // `codec = lines`, job mode: the whole stdout, one blob.
+            match String::from_utf8(std::mem::take(&mut self.stdout)) {
+                Ok(text) => {
+                    CallOutcome::Success(Data::materialized(Value::Scalar(Scalar::Text(text))))
+                }
+                Err(_) => failure("DecodeError", "stdout is not valid UTF-8".to_string()),
+            }
+        };
+        Response {
+            call_ref: self.call_ref,
+            outcome,
         }
     }
 }
 
 impl Partner for Process<'_> {
     fn start(&mut self, intent: &Intent, request: &Envelope) {
-        let outcome = self.run(intent, request);
-        self.answers.push(Response {
-            call_ref: intent.call_ref,
-            outcome,
-        });
+        match self.launch(intent, request) {
+            Ok(run) => self.runs.push(run),
+            Err(outcome) => self.answers.push(Response {
+                call_ref: intent.call_ref,
+                outcome,
+            }),
+        }
     }
 
     fn events(&mut self) -> Vec<Response> {
-        std::mem::take(&mut self.answers)
+        let mut answers = std::mem::take(&mut self.answers);
+        let mut still_running = Vec::new();
+        for mut run in self.runs.drain(..) {
+            if run.collect() {
+                // The cap is a hard guarantee: tripped mid-run, the
+                // child dies now — descendants holding the pipes
+                // cannot extend it.
+                let _ = run.child.kill();
+                let _ = run.child.wait();
+                let mut payload = BTreeMap::new();
+                payload.insert(
+                    String::from("size"),
+                    Value::Scalar(Scalar::Int(
+                        i64::try_from(run.stdout.len()).unwrap_or(i64::MAX),
+                    )),
+                );
+                answers.push(Response {
+                    call_ref: run.call_ref,
+                    outcome: CallOutcome::Failure(TypedError {
+                        kind: String::from("OutputOverflow"),
+                        data: Data::materialized(Value::Map(payload)),
+                    }),
+                });
+                continue;
+            }
+            match run.child.try_wait() {
+                Ok(Some(status)) => answers.push(run.settle(status)),
+                Ok(None) => still_running.push(run),
+                Err(error) => {
+                    let call_ref = run.call_ref;
+                    let _ = run.child.kill();
+                    let _ = run.child.wait();
+                    answers.push(Response {
+                        call_ref,
+                        outcome: failure("ExecFailed", error.to_string()),
+                    });
+                }
+            }
+        }
+        self.runs = still_running;
+        answers
+    }
+
+    fn cancel(&mut self, call_ref: &crate::boundary::CallRef) {
+        if let Some(position) = self.runs.iter().position(|run| &run.call_ref == call_ref) {
+            let mut run = self.runs.swap_remove(position);
+            // Kill the direct child and reap it; detached pump
+            // threads die with their pipes — or outlive a descendant
+            // holding them, unjoined either way.
+            let _ = run.child.kill();
+            let _ = run.child.wait();
+        }
     }
 }
 
@@ -364,16 +441,34 @@ graph real : App {
         }
     }
 
+    /// Drives one submission to stability against real children: the
+    /// wall clock maps onto the virtual clock in small steps, so
+    /// declared budgets expire for real and the scheduler — never
+    /// the adapter — mints the timeouts.
     fn run(source: &str, text: &str) -> (MemJournal, Vec<Envelope>, Vec<Envelope>) {
         let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         let mut world = Process::new(&compilation.plan);
         vm.inject(&mut journal, submission(text)).unwrap();
-        vm.drain(&mut journal).unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
-        vm.drain(&mut journal).unwrap();
-        assert!(vm.is_stable());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            vm.drain(&mut journal).unwrap();
+            let report = vm.pump(&mut journal, &mut world).unwrap();
+            vm.drain(&mut journal).unwrap();
+            if vm.is_stable() {
+                break;
+            }
+            if report.settled == 0 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the run wedged: neither settled nor expired"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                vm.advance(&mut journal, &mut world, vm.now() + 10_000_000)
+                    .unwrap();
+            }
+        }
         (journal, vm.outputs().to_vec(), vm.errors().to_vec())
     }
 
@@ -499,7 +594,7 @@ graph mute : App {
 }
 "#;
         let started = std::time::Instant::now();
-        let (_, outputs, errors) = run(source, "salut");
+        let (journal, outputs, errors) = run(source, "salut");
         assert!(outputs.is_empty());
         assert_eq!(errors.len(), 1);
         let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
@@ -511,7 +606,53 @@ graph mute : App {
         );
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
-            "the deadline actually fired"
+            "the budget actually fired"
+        );
+        // The scheduler minted it: the closure is a Timeout fact,
+        // never a partner-fabricated failure response.
+        assert!(journal.records().iter().any(|record| matches!(
+            record,
+            Record::Outbound(o)
+                if matches!(o.status, OutboundStatus::Closed(crate::journal::Closure::Timeout))
+        )));
+    }
+
+    #[test]
+    fn a_descendant_holding_the_pipes_cannot_wedge_the_cap() {
+        // The sixth review's hang: the direct child dies, its
+        // descendant keeps the pipes open. The cap must fire from
+        // the collected bytes without waiting on any pipe.
+        let source = r#"
+graph wedge : App {
+  connector leaky : Process {
+    mode = job ; command = "sh"
+    args = ["-c", "head -c 51 /dev/zero; sleep 30"]
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+    max_output = "50B"
+    timeout = duration("15s")
+  }
+
+  operator shout {
+    on in { out = data.text }
+  }
+
+  . -> shout -> leaky -> .
+}
+"#;
+        let started = std::time::Instant::now();
+        let (_, outputs, errors) = run(source, "salut");
+        assert!(outputs.is_empty());
+        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
+            panic!("expected the typed error payload");
+        };
+        assert_eq!(
+            payload.get("kind"),
+            Some(&Value::Scalar(Scalar::Text(String::from("OutputOverflow"))))
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the cap is a hard guarantee, not a hope"
         );
     }
 

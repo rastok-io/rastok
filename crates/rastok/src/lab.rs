@@ -127,7 +127,7 @@ fn run_scenario(
             ScenarioStep::Advance { nanos } => {
                 window_start = vm.observations().len();
                 let target = vm.now().saturating_add(*nanos);
-                if let Err(error) = vm.advance(&mut journal, target) {
+                if let Err(error) = vm.advance(&mut journal, &mut partner, target) {
                     failures.push(format!("the advance faulted: {error}"));
                 }
                 settle(&mut vm, &mut journal, &mut partner, &mut failures);

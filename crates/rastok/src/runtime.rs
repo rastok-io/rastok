@@ -211,6 +211,21 @@ impl Mailboxes {
             })
     }
 
+    /// Removes one specific queued delivery by its envelope id — the
+    /// expired-in-queue path; FIFO order among the survivors holds.
+    pub fn remove_by_id(
+        &mut self,
+        slot: Slot,
+        key: &str,
+        id: crate::envelope::Id,
+    ) -> Option<Delivery> {
+        let queue = self.queues.get_mut(&(slot, Key::from(key)))?;
+        let position = queue
+            .iter()
+            .position(|delivery| delivery.envelope.meta().sys().id() == id)?;
+        queue.remove(position)
+    }
+
     /// Removes the head of a mailbox — only after the transaction
     /// that consumes it is committed.
     pub fn pop(&mut self, slot: Slot, key: &str) -> Option<Delivery> {
@@ -364,6 +379,7 @@ impl<'plan> TransactionExecutor<'plan> {
                             consumed: vec![consumed],
                             state_delta: vec![],
                             emissions: vec![],
+                            timers: vec![],
                         },
                     });
                 }
@@ -458,15 +474,48 @@ impl<'plan> TransactionExecutor<'plan> {
             .filter(|(name, value)| state.get(*name) != Some(value))
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
+        let emissions = buffer.into_emissions();
+        let timers = self.armed_budgets(slot, &emissions);
         Ok(TransactionOutcome {
             record: TransactionRecord {
                 node_path: node.path.clone(),
                 trigger: trigger.clone(),
                 consumed: vec![consumed],
                 state_delta,
-                emissions: buffer.into_emissions(),
+                emissions,
+                timers,
             },
         })
+    }
+
+    /// The dated obligations this record's emissions arm: a delivery
+    /// reaching a connector with a declared `timeout` starts its
+    /// budget AT DELIVERY — queue time counts (execution-model §8).
+    /// Statically derivable from the plan, so the record can seal
+    /// what the machine then arms, identically.
+    fn armed_budgets(&self, slot: Slot, emissions: &[Emission]) -> Vec<(u8, envelope::Id)> {
+        let mut timers = Vec::new();
+        for emission in emissions {
+            for edge in self
+                .plan
+                .edges
+                .iter()
+                .filter(|edge| edge.from.node == Some(slot) && edge.from.port == emission.port)
+            {
+                let Some(to) = &edge.to else { continue };
+                let Some(target) = to.node else { continue };
+                let budgeted = self.plan.nodes[target.index()]
+                    .connector()
+                    .and_then(|spec| spec.attribute("timeout"))
+                    .is_some();
+                if budgeted {
+                    timers.push((1, emission.envelope.meta().sys().id()));
+                }
+            }
+        }
+        timers.sort();
+        timers.dedup();
+        timers
     }
 
     /// The typed-error transaction for a faulted handler: the input
@@ -521,6 +570,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     seq: delivery.seq,
                 }],
                 state_delta: vec![],
+                timers: vec![],
                 emissions: vec![Emission {
                     port: err,
                     index: 0,
@@ -591,6 +641,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 trigger: trigger.clone(),
                 consumed: vec![consumed],
                 state_delta: vec![],
+                timers: vec![],
                 emissions: vec![Emission {
                     port: event.port.clone(),
                     index: 0,

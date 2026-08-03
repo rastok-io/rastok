@@ -135,7 +135,20 @@ fn run(paths: &[String]) -> ExitCode {
                         eprintln!("err: a reply was refused before closure: {reason}");
                     }
                     if report.settled == 0 {
-                        break;
+                        if !vm.has_open_obligations() {
+                            break;
+                        }
+                        // Open calls against real children: the wall
+                        // clock maps onto the virtual clock so
+                        // declared budgets expire for real. Only the
+                        // scheduler mints a timeout.
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        if let Err(error) =
+                            vm.advance(&mut journal, &mut world, vm.now() + 10_000_000)
+                        {
+                            eprintln!("error: {error}");
+                            return ExitCode::FAILURE;
+                        }
                     }
                 }
                 Err(error) => {

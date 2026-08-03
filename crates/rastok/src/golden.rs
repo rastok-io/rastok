@@ -455,6 +455,24 @@ fn record_tree(record: &Record) -> Cbor {
                         .collect(),
                 ),
             ));
+            if !transaction.timers.is_empty() {
+                let mut timers: Vec<_> = transaction.timers.iter().collect();
+                timers.sort();
+                pairs.push((
+                    37,
+                    Cbor::Array(
+                        timers
+                            .into_iter()
+                            .map(|(kind, reference)| {
+                                Cbor::Array(vec![
+                                    Cbor::Uint(u64::from(*kind)),
+                                    Cbor::Bytes(reference.as_bytes().to_vec()),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ));
+            }
             Cbor::Map(pairs)
         }
         Record::Outbound(outbound) => {

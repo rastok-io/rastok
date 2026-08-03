@@ -165,6 +165,11 @@ pub struct TransactionRecord {
     pub state_delta: Vec<(String, cel::Value)>,
     /// The emissions, in text/emission-index order.
     pub emissions: Vec<Emission>,
+    /// The dated obligations this firing arms — `(timer_kind, ref)`
+    /// per identity.md §3 key 37: kind 1 = call budget, ref = the
+    /// delivered envelope's id. Sorted at commit; the due instant is
+    /// never sealed.
+    pub timers: Vec<(u8, crate::envelope::Id)>,
 }
 
 /// One fact of a call's WAL (`delivery-semantics.md` §4): the open
@@ -759,6 +764,7 @@ mod tests {
                     (String::from("a"), cel::Value::Int(2)),
                 ],
                 emissions: vec![],
+                timers: vec![],
             })
             .unwrap();
         let Record::Transaction(transaction) = &journal.records()[0] else {
@@ -788,6 +794,7 @@ mod tests {
                     index: 0,
                     envelope: committed.envelope.clone(),
                 }],
+                timers: vec![],
             })
             .unwrap();
         journal.open_outbound(intent("echo", 1)).unwrap();
