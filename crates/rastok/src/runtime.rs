@@ -11,6 +11,8 @@
 //!
 //! [`execution-model.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/execution-model.md
 
+pub mod vm;
+
 use crate::boundary::{BoundaryEvent, CallOutcome};
 use crate::cel;
 use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue};
