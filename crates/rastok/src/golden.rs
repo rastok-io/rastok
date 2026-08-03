@@ -101,6 +101,112 @@ impl Trace {
     }
 }
 
+impl Trace {
+    /// Rebuilds a trace from stored canonical record bytes — how a
+    /// blessed golden re-enters the diff. Returns `None` on bytes
+    /// outside the tables' subset; a golden this build cannot read
+    /// is itself a divergence worth failing on.
+    #[must_use]
+    pub fn from_stored(records: &[Vec<u8>]) -> Option<Self> {
+        let mut out = Vec::new();
+        for bytes in records {
+            let (tree, used) = decode(bytes)?;
+            if used != bytes.len() {
+                return None;
+            }
+            out.push(CanonicalRecord {
+                tree,
+                bytes: bytes.clone(),
+            });
+        }
+        Some(Self { records: out })
+    }
+}
+
+/// Decodes one canonical value; returns the tree and the bytes
+/// consumed. Only the subset the tables emit is accepted.
+fn decode(bytes: &[u8]) -> Option<(Cbor, usize)> {
+    let first = *bytes.first()?;
+    let major = first >> 5;
+    match (major, first) {
+        (_, 0xf4) => Some((Cbor::Bool(false), 1)),
+        (_, 0xf5) => Some((Cbor::Bool(true), 1)),
+        (_, 0xf6) => Some((Cbor::Null, 1)),
+        (_, 0xfb) => {
+            let raw: [u8; 8] = bytes.get(1..9)?.try_into().ok()?;
+            Some((Cbor::Double(f64::from_bits(u64::from_be_bytes(raw))), 9))
+        }
+        (0, _) => {
+            let (value, used) = argument(bytes)?;
+            Some((Cbor::Uint(value), used))
+        }
+        (1, _) => {
+            let (value, used) = argument(bytes)?;
+            Some((Cbor::Int(-1 - i64::try_from(value).ok()?), used))
+        }
+        (2, _) => {
+            let (length, used) = argument(bytes)?;
+            let length = usize::try_from(length).ok()?;
+            let payload = bytes.get(used..used + length)?;
+            Some((Cbor::Bytes(payload.to_vec()), used + length))
+        }
+        (3, _) => {
+            let (length, used) = argument(bytes)?;
+            let length = usize::try_from(length).ok()?;
+            let payload = bytes.get(used..used + length)?;
+            Some((
+                Cbor::Text(String::from_utf8(payload.to_vec()).ok()?),
+                used + length,
+            ))
+        }
+        (4, _) => {
+            let (count, mut used) = argument(bytes)?;
+            let mut items = Vec::new();
+            for _ in 0..count {
+                let (item, item_used) = decode(bytes.get(used..)?)?;
+                items.push(item);
+                used += item_used;
+            }
+            Some((Cbor::Array(items), used))
+        }
+        (5, _) => {
+            let (count, mut used) = argument(bytes)?;
+            let mut pairs = Vec::new();
+            for _ in 0..count {
+                let (key, key_used) = decode(bytes.get(used..)?)?;
+                used += key_used;
+                let Cbor::Uint(key) = key else {
+                    return None;
+                };
+                let (value, value_used) = decode(bytes.get(used..)?)?;
+                used += value_used;
+                pairs.push((key, value));
+            }
+            Some((Cbor::Map(pairs), used))
+        }
+        _ => None,
+    }
+}
+
+/// A shortest-form head's argument and consumed length.
+fn argument(bytes: &[u8]) -> Option<(u64, usize)> {
+    let info = bytes.first()? & 0x1f;
+    match info {
+        0..=23 => Some((u64::from(info), 1)),
+        24 => Some((u64::from(*bytes.get(1)?), 2)),
+        25 => Some((
+            u64::from(u16::from_be_bytes(bytes.get(1..3)?.try_into().ok()?)),
+            3,
+        )),
+        26 => Some((
+            u64::from(u32::from_be_bytes(bytes.get(1..5)?.try_into().ok()?)),
+            5,
+        )),
+        27 => Some((u64::from_be_bytes(bytes.get(1..9)?.try_into().ok()?), 9)),
+        _ => None,
+    }
+}
+
 /// Projects a journal's records into their canonical form.
 #[must_use]
 pub fn project(records: &[Record]) -> Trace {

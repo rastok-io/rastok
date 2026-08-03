@@ -423,10 +423,34 @@ impl Checker<'_, '_> {
                         .collect();
                     let target = match segments.as_slice() {
                         ["app", "err"] => ExpectTarget::RootErr,
-                        ["app", port] => match node::Port::new((*port).to_string()) {
-                            Ok(port) => ExpectTarget::Boundary(port),
-                            Err(_) => continue,
-                        },
+                        ["app", port] => {
+                            // A boundary observation watches what
+                            // leaves the App: `out` plus any declared
+                            // boundary port. A typo must refuse — it
+                            // would make `expect nothing` a false
+                            // green.
+                            let known = *port == "out"
+                                || app
+                                    .boundary
+                                    .iter()
+                                    .any(|(declared, _)| declared.name() == *port);
+                            if !known {
+                                self.bag.push(
+                                    Diagnostic::new(
+                                        E_PORT_UNKNOWN,
+                                        Phase::Check,
+                                        format!("the App boundary exposes no port named `{port}`"),
+                                    )
+                                    .with_span(expect.target.span)
+                                    .with_field("port", (*port).to_string()),
+                                );
+                                continue;
+                            }
+                            match node::Port::new((*port).to_string()) {
+                                Ok(port) => ExpectTarget::Boundary(port),
+                                Err(_) => continue,
+                            }
+                        }
                         [name, port] => {
                             let Some(node) = app.nodes.iter().find(|node| {
                                 node.path.segments().len() == 1 && node.path.segments()[0] == *name
@@ -442,6 +466,23 @@ impl Checker<'_, '_> {
                                 );
                                 continue;
                             };
+                            let known = matches!(*port, "in" | "out" | "err")
+                                || node
+                                    .ports
+                                    .iter()
+                                    .any(|(declared, _)| declared.name() == *port);
+                            if !known {
+                                self.bag.push(
+                                    Diagnostic::new(
+                                        E_PORT_UNKNOWN,
+                                        Phase::Check,
+                                        format!("`{name}` exposes no port named `{port}`"),
+                                    )
+                                    .with_span(expect.target.span)
+                                    .with_field("port", (*port).to_string()),
+                                );
+                                continue;
+                            }
                             match node::Port::new((*port).to_string()) {
                                 Ok(port) => ExpectTarget::Node {
                                     path: node.path.clone(),
@@ -480,7 +521,24 @@ impl Checker<'_, '_> {
                                 .with("data", cel::Type::Dyn)
                                 .with("meta", cel::Type::Dyn);
                             match self.cel(expr, &signature) {
-                                Some(tree) => Some(tree),
+                                Some(tree) => {
+                                    if !matches!(tree.ty, cel::Type::Bool | cel::Type::Dyn) {
+                                        self.bag.push(
+                                            Diagnostic::new(
+                                                E_CEL_EXPR,
+                                                Phase::Check,
+                                                "an expectation predicate must be a bool",
+                                            )
+                                            .with_span(expr.span)
+                                            .with_field(
+                                                "detail",
+                                                "the predicate type is not bool".to_string(),
+                                            ),
+                                        );
+                                        continue;
+                                    }
+                                    Some(tree)
+                                }
                                 None => continue,
                             }
                         }
@@ -2234,6 +2292,29 @@ graph m0_probe : App {
         assert!(bag.diagnostics().iter().any(|diagnostic| {
             diagnostic.code() == E_CHECK_DEFERRED && diagnostic.fields()[0].1 == "the jsonl codec"
         }));
+    }
+
+    #[test]
+    fn a_misspelled_expectation_target_refuses() {
+        // The exact false-green shapes of the fifth review: a typo'd
+        // node port, a typo'd boundary port, a non-boolean predicate.
+        let base = "graph g : App {\n  operator relay {\n    on in { out = envelope }\n  }\n  . -> relay -> .\n}\n\nlab g {\n  simulation s on app {\n    scenario sc {\n      app.in = { text = \"x\" }\n      EXPECT\n    }\n  }\n}\n";
+        let cases = [
+            ("expect nothing relay.typo", E_PORT_UNKNOWN),
+            ("expect nothing app.typo", E_PORT_UNKNOWN),
+            ("expect nothing app.out where 42", E_CEL_EXPR),
+        ];
+        for (expect, code) in cases {
+            let source = base.replace("EXPECT", expect);
+            let (_, bag) = check_source(&source);
+            assert!(
+                bag.diagnostics()
+                    .iter()
+                    .any(|diagnostic| diagnostic.code() == code),
+                "`{expect}` must refuse with {code:?}: {:#?}",
+                bag.diagnostics()
+            );
+        }
     }
 
     #[test]

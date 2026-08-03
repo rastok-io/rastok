@@ -15,7 +15,7 @@ use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
 };
 use crate::envelope::{Data, Envelope, Namespace};
-use crate::journal::MemJournal;
+use crate::journal::{MemJournal, Record};
 use crate::plan::{ExecutionPlan, GraphVersion};
 use crate::runtime::vm::{Observed, Vm};
 use crate::{cel, node, runtime};
@@ -43,11 +43,21 @@ impl ScenarioReport {
     }
 }
 
+/// One executed scenario: its verdict and the journal it produced —
+/// the trace half is what the golden workflow projects and compares.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScenarioRun {
+    /// The verdict.
+    pub report: ScenarioReport,
+    /// The causal records of the run, in commit order.
+    pub records: Vec<Record>,
+}
+
 /// Runs every scenario of a checked lab against its plan. Each
 /// scenario gets a fresh journal and a fresh machine — scenarios
 /// share nothing but the graph.
 #[must_use]
-pub fn run(plan: &ExecutionPlan, graph_version: GraphVersion, lab: &Lab) -> Vec<ScenarioReport> {
+pub fn run(plan: &ExecutionPlan, graph_version: GraphVersion, lab: &Lab) -> Vec<ScenarioRun> {
     let mut reports = Vec::new();
     for simulation in &lab.simulations {
         for scenario in &simulation.scenarios {
@@ -69,7 +79,7 @@ fn run_scenario(
     simulation: &str,
     shared_mocks: &[Mock],
     scenario: &Scenario,
-) -> ScenarioReport {
+) -> ScenarioRun {
     // Nearest wins, whole-mock replacement: a scenario mock for a
     // connector shadows the simulation-level one entirely.
     let mut mocks: BTreeMap<node::Path, &Mock> = BTreeMap::new();
@@ -131,11 +141,14 @@ fn run_scenario(
             }
         }
     }
-    ScenarioReport {
-        simulation: String::from(simulation),
-        scenario: scenario.name.clone(),
-        label: scenario.label.clone(),
-        failures,
+    ScenarioRun {
+        report: ScenarioReport {
+            simulation: String::from(simulation),
+            scenario: scenario.name.clone(),
+            label: scenario.label.clone(),
+            failures,
+        },
+        records: journal.records().to_vec(),
     }
 }
 
@@ -148,22 +161,31 @@ fn settle(
     partner: &mut MockPartner<'_>,
     failures: &mut Vec<String>,
 ) {
+    let mut rested = false;
     for _ in 0..64 {
         if let Err(error) = vm.drain(journal) {
             failures.push(format!("a step faulted: {error}"));
-            break;
+            return;
         }
         let report = match vm.pump(journal, partner) {
             Ok(report) => report,
             Err(error) => {
                 failures.push(format!("the boundary round faulted: {error}"));
-                break;
+                return;
             }
         };
         failures.append(&mut partner.faults);
         if report.settled == 0 {
+            rested = true;
             break;
         }
+    }
+    if !rested {
+        // Never a silent truncation: a machine still settling after
+        // the cap is a failed scenario, not a shrugged one.
+        failures.push(String::from(
+            "the machine did not settle within 64 boundary rounds",
+        ));
     }
     if let Err(error) = vm.drain(journal) {
         failures.push(format!("a step faulted: {error}"));
@@ -181,27 +203,48 @@ fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<S
             }
         })
         .collect();
-    let matches = deliveries
-        .iter()
-        .filter(|observed| match &expectation.predicate {
-            None => true,
+    let name = expectation
+        .label
+        .clone()
+        .unwrap_or_else(|| format!("{:?}", expectation.target));
+    let mut matches = 0usize;
+    for observed in &deliveries {
+        match &expectation.predicate {
+            None => matches += 1,
             Some(tree) => {
                 let mut env = BTreeMap::new();
-                if let Ok(data) = runtime::data_value(observed.envelope.data()) {
-                    env.insert(String::from("data"), data);
+                match runtime::data_value(observed.envelope.data()) {
+                    Ok(data) => {
+                        env.insert(String::from("data"), data);
+                    }
+                    Err(fault) => {
+                        return Some(format!(
+                            "expect {name}: a delivery's data is unreadable: {fault}"
+                        ));
+                    }
                 }
                 env.insert(
                     String::from("meta"),
                     runtime::meta_value(observed.envelope.meta()),
                 );
-                matches!(cel::eval(tree, &env), Ok(cel::Value::Bool(true)))
+                // A faulting or non-boolean predicate fails the
+                // expectation itself — "did not match" would be a
+                // false green with the void quantifier.
+                match cel::eval(tree, &env) {
+                    Ok(cel::Value::Bool(true)) => matches += 1,
+                    Ok(cel::Value::Bool(false)) => {}
+                    Ok(other) => {
+                        return Some(format!(
+                            "expect {name}: the predicate is not a bool (got {other:?})"
+                        ));
+                    }
+                    Err(error) => {
+                        return Some(format!("expect {name}: the predicate faulted: {error}"));
+                    }
+                }
             }
-        })
-        .count();
-    let name = expectation
-        .label
-        .clone()
-        .unwrap_or_else(|| format!("{:?}", expectation.target));
+        }
+    }
     let held = match &expectation.quantifier {
         Quantifier::Exists => matches >= 1,
         // The void quantifier counts deliveries, predicate-filtered
@@ -482,6 +525,9 @@ lab m0_probe {
         let compilation = compile(&[PROBE_WITH_LAB], &Registry::m0()).expect("a valid unit");
         assert_eq!(compilation.labs.len(), 1);
         run(&compilation.plan, GraphVersion(1), &compilation.labs[0])
+            .into_iter()
+            .map(|run| run.report)
+            .collect()
     }
 
     #[test]
@@ -505,11 +551,47 @@ lab m0_probe {
     }
 
     #[test]
+    fn an_emission_is_observable_at_its_source_port() {
+        // `expect relay.out` watches departures — the fifth review
+        // showed a real emission invisible to its own port.
+        let source = PROBE_WITH_LAB.replace(
+            "expect \"the echo came back\" app.out count == 1 where data.echoed == true",
+            "expect \"the departure\" shout.out count == 1 where data.text == \"salut\"",
+        );
+        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+        let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        assert!(
+            runs[0].report.passed(),
+            "the source port sees its own emission: {:#?}",
+            runs[0].report.failures
+        );
+    }
+
+    #[test]
+    fn a_faulting_predicate_fails_the_expectation_loudly() {
+        // `data.echoed` faults on the failure envelope of the mute
+        // scenario? No — build it directly: a predicate reading a
+        // field the delivery does not carry must fail, not shrug.
+        let source = PROBE_WITH_LAB.replace(
+            "where data.echoed == true",
+            "where data.missing_field == true",
+        );
+        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+        let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        assert!(!runs[0].report.passed());
+        assert!(
+            runs[0].report.failures[0].contains("faulted"),
+            "the fault is named, never a silent non-match: {:#?}",
+            runs[0].report.failures
+        );
+    }
+
+    #[test]
     fn a_broken_expectation_fails_loudly_not_silently() {
         let source = PROBE_WITH_LAB.replace("data.echoed == true", "data.echoed == false");
         let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
-        let reports = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
-        let roundtrip = &reports[0];
+        let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        let roundtrip = &runs[0].report;
         assert!(!roundtrip.passed());
         assert!(roundtrip.failures[0].contains("the echo came back"));
     }
@@ -540,8 +622,8 @@ lab m0_probe {
 }
 "#;
         let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
-        let reports = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
-        assert!(!reports[0].passed());
-        assert!(reports[0].failures[0].contains("uncovered call"));
+        let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        assert!(!runs[0].report.passed());
+        assert!(runs[0].report.failures[0].contains("uncovered call"));
     }
 }

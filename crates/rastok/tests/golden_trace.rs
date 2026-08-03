@@ -10,7 +10,7 @@ use rastok::boundary::{
 };
 use rastok::compiler::compile;
 use rastok::envelope::{Data, Encoding, Envelope, Namespace, Scalar, Value};
-use rastok::golden::{diff, project};
+use rastok::golden::{Trace, diff, project};
 use rastok::journal::{MemJournal, Record};
 use rastok::node;
 use rastok::plan::GraphVersion;
@@ -110,6 +110,23 @@ fn render(records: &[Record]) -> String {
     out
 }
 
+/// Parses a blessed golden file back into a trace: one hex line per
+/// record, the trailing `seal` line ignored (it is derived).
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+fn stored_trace(rendered: &str) -> Trace {
+    let records: Vec<Vec<u8>> = rendered
+        .lines()
+        .filter(|line| !line.starts_with("seal ") && !line.is_empty())
+        .map(|line| {
+            (0..line.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(&line[at..at + 2], 16).expect("hex"))
+                .collect()
+        })
+        .collect();
+    Trace::from_stored(&records).expect("a golden this build can read")
+}
+
 #[test]
 fn the_m0_probe_trace_matches_its_golden() {
     let records = run(M0_PROBE);
@@ -123,16 +140,79 @@ fn the_m0_probe_trace_matches_its_golden() {
     let golden = std::fs::read_to_string(&path)
         .expect("no golden trace; run once with RASTOK_BLESS=1 to bless");
     if golden != rendered {
-        // Explain before failing: the first semantic divergence, by
-        // record and key path — never a wall of hex.
-        let blessed_records = run(M0_PROBE);
-        let divergence = diff(&project(&records), &project(&blessed_records));
+        // Explain before failing: the first semantic divergence
+        // against the STORED golden, by record and key path — never
+        // a wall of hex.
+        let divergence = diff(&project(&records), &stored_trace(&golden));
         panic!(
             "the trace diverged from its golden.\n\
-             re-run divergence (flaky machine?): {divergence:?}\n\
+             {divergence:?}\n\
              if the change is intentional, bless: RASTOK_BLESS=1 cargo test"
         );
     }
+}
+
+/// The Compare seam of the M0 slice: a completed Lab run — the DSL
+/// scenario itself, not a hand-driven re-enactment — projects to a
+/// canonical trace and matches its stored golden or explains why not.
+#[test]
+fn the_lab_scenario_matches_its_stored_golden() {
+    let source = std::fs::read_to_string(example()).expect("the example reads");
+    let compilation =
+        rastok::compiler::compile(&[source.as_str()], &rastok::stdlib::Registry::m0())
+            .expect("a valid unit");
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    let roundtrip = runs
+        .iter()
+        .find(|run| run.report.scenario == "roundtrip")
+        .expect("the roundtrip scenario");
+    assert!(
+        roundtrip.report.passed(),
+        "{:#?}",
+        roundtrip.report.failures
+    );
+    let rendered = render(&roundtrip.records);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo-roundtrip.trace");
+    if std::env::var("RASTOK_BLESS").is_ok() {
+        std::fs::write(&path, &rendered).expect("a writable golden dir");
+        return;
+    }
+    let golden = std::fs::read_to_string(&path)
+        .expect("no golden trace; run once with RASTOK_BLESS=1 to bless");
+    if golden != rendered {
+        let divergence = diff(&project(&roundtrip.records), &stored_trace(&golden));
+        panic!(
+            "the lab trace diverged from its golden.\n\
+             {divergence:?}\n\
+             if the change is intentional, bless: RASTOK_BLESS=1 cargo test"
+        );
+    }
+}
+
+/// A deliberately stale golden is named by the diff — the workflow
+/// the blessing decision rests on, exercised end to end against a
+/// STORED trace, not a second live run.
+#[test]
+fn a_stale_stored_golden_is_named_by_the_diff() {
+    let records = run(M0_PROBE);
+    let rendered = render(&records);
+    // Age the stored golden: the inbound payload said something else.
+    let stale = rendered.replace("73616c7574", "6175747265"); // "salut" -> "autre"
+    assert_ne!(stale, rendered, "the alteration took");
+    let divergence = diff(&project(&records), &stored_trace(&stale)).expect("the traces differ");
+    assert_eq!(divergence.record, 0, "the inbound record");
+    assert!(
+        divergence.path.contains("data(8)"),
+        "the diff names the payload key: {divergence}"
+    );
+}
+
+fn example() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/echo.rkg")
 }
 
 #[test]

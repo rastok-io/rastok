@@ -169,7 +169,8 @@ fn simulate(paths: &[String]) -> ExitCode {
     let mut failed = 0usize;
     let mut total = 0usize;
     for lab_decl in &compilation.labs {
-        for report in lab::run(&compilation.plan, GraphVersion(1), lab_decl) {
+        for run in lab::run(&compilation.plan, GraphVersion(1), lab_decl) {
+            let report = &run.report;
             total += 1;
             let verdict = if report.passed() { "PASS" } else { "FAIL" };
             match &report.label {

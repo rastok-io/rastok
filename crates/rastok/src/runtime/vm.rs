@@ -586,6 +586,13 @@ impl<'plan> Vm<'plan> {
     /// was reserved before the commit.
     fn route_emissions(&mut self, slot: Slot, record: &crate::runtime::TransactionRecord) {
         for emission in &record.emissions {
+            // The emission itself is observable at its source port —
+            // `expect relay.out` watches departures, not arrivals.
+            self.observed.push(Observed {
+                node: Some(self.plan.nodes[slot.index()].path.clone()),
+                port: emission.port.clone(),
+                envelope: emission.envelope.clone(),
+            });
             let from = EndpointRef {
                 node: Some(slot),
                 port: emission.port.clone(),
