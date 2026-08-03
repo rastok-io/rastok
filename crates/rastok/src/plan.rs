@@ -189,8 +189,8 @@ pub enum Emission {
 /// One writable field assignment inside an emission.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldWrite {
-    /// The dotted writable path.
-    pub path: Vec<String>,
+    /// The checked landing site.
+    pub target: crate::envelope::WriteTarget,
     /// The expression.
     pub expr: cel::Tree,
 }

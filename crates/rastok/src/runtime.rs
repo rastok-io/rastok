@@ -388,7 +388,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 }
                 Step::Emit { port, value } => {
                     let env = bindings(&scratch, &lets)?;
-                    if let Some(data_and_app) = emitted_content(value, input, &env)? {
+                    if let Some(built) = emitted_content(value, input, &env)? {
                         let index = buffer.next_index(port);
                         let id = ids::emission_id(
                             &node.path,
@@ -399,21 +399,32 @@ impl<'plan> TransactionExecutor<'plan> {
                         );
                         let mut sys =
                             MetaSys::emission(id, input.meta().sys(), self.graph_version.0);
-                        let (data, app) = data_and_app;
-                        // The identity emission re-ships the input's
-                        // content, so its content-type hint still
-                        // holds; recomputed data drops it.
-                        if matches!(value, PlanEmission::Identity)
-                            && let Some(mime) = input.meta().sys().mime_type()
-                        {
-                            sys = sys.with_mime_type(mime);
-                        }
-                        // Writable namespaces are inherited whole; a
-                        // single-input handler never silently drops
-                        // what the ancestry attached.
-                        let mut meta = Meta::new(sys).with_app(app);
-                        for (name, namespace) in input.meta().customs() {
-                            meta = meta.with_custom(name.clone(), namespace.clone());
+                        // The content-type hint: an explicit write
+                        // wins; unchanged content keeps the input's;
+                        // rebuilt content carries none.
+                        let data = match built.data {
+                            BuiltData::Unchanged => {
+                                if let Some(mime) = built
+                                    .mime
+                                    .as_deref()
+                                    .or_else(|| input.meta().sys().mime_type())
+                                {
+                                    sys = sys.with_mime_type(mime);
+                                }
+                                input.data().clone()
+                            }
+                            BuiltData::Value(value) => {
+                                if let Some(mime) = &built.mime {
+                                    sys = sys.with_mime_type(mime.clone());
+                                }
+                                Data::materialized(to_envelope_value(&value)?)
+                            }
+                        };
+                        // Writable namespaces travel whole — the
+                        // builder's overlays are already folded in.
+                        let mut meta = Meta::new(sys).with_app(built.app);
+                        for (name, namespace) in built.customs {
+                            meta = meta.with_custom(name, namespace);
                         }
                         buffer.push(Emission {
                             port: port.clone(),
@@ -574,75 +585,109 @@ impl<'plan> TransactionExecutor<'plan> {
     }
 }
 
-/// What one emission builds: the data and the outgoing `meta.app`
-/// namespace. `None` means `nothing` — no emission on this port.
-type EmittedContent = Option<(Data, envelope::Namespace)>;
+/// What one emission carries out of its builder. `data` stays
+/// [`BuiltData::Unchanged`] when no payload write touched it — the
+/// original representation (encoded bytes included) and its
+/// content-type hint survive, per the "no structural read, no
+/// transcode" rule.
+pub(crate) struct Built {
+    /// The payload outcome.
+    pub(crate) data: BuiltData,
+    /// The outgoing application namespace.
+    pub(crate) app: envelope::Namespace,
+    /// The outgoing custom namespaces.
+    pub(crate) customs: BTreeMap<String, envelope::Namespace>,
+    /// An explicit `mime_type =` write, when present.
+    pub(crate) mime: Option<String>,
+}
+
+/// A builder's payload verdict.
+pub(crate) enum BuiltData {
+    /// No payload write ran: the input's representation ships as-is.
+    Unchanged,
+    /// The payload was (re)built.
+    Value(cel::Value),
+}
 
 fn emitted_content(
     emission: &PlanEmission,
     input: &Envelope,
     env: &BTreeMap<String, cel::Value>,
-) -> Result<EmittedContent, Fault> {
+) -> Result<Option<Built>, Fault> {
+    let inherited = |data: BuiltData| Built {
+        data,
+        app: input.meta().app().clone(),
+        customs: input
+            .meta()
+            .customs()
+            .map(|(name, namespace)| (name.clone(), namespace.clone()))
+            .collect(),
+        mime: None,
+    };
     match emission {
         PlanEmission::Nothing => Ok(None),
-        PlanEmission::Identity => Ok(Some((input.data().clone(), input.meta().app().clone()))),
+        PlanEmission::Identity => Ok(Some(inherited(BuiltData::Unchanged))),
         PlanEmission::Data(expr) => {
             let value = cel::eval(expr, env).map_err(Fault::Eval)?;
-            Ok(Some((
-                Data::materialized(to_envelope_value(&value)?),
-                input.meta().app().clone(),
-            )))
+            Ok(Some(inherited(BuiltData::Value(value))))
         }
-        PlanEmission::Patch(writes) => {
-            let mut data = data_value(input.data())?;
-            let mut app = input.meta().app().clone();
+        PlanEmission::Patch(writes) | PlanEmission::Replace(writes) => {
+            let replace = matches!(emission, PlanEmission::Replace(_));
+            let mut built = inherited(BuiltData::Unchanged);
+            let mut data: Option<cel::Value> = if replace {
+                Some(cel::Value::Map(BTreeMap::new()))
+            } else {
+                None
+            };
             for write in writes {
                 let value = cel::eval(&write.expr, env).map_err(Fault::Eval)?;
-                apply_write(&mut data, &mut app, &write.path, value)?;
+                match &write.target {
+                    envelope::WriteTarget::Data(path) => {
+                        // Materialize lazily: a metadata-only patch
+                        // never touches the payload bytes.
+                        let current = match &mut data {
+                            Some(current) => current,
+                            None => data.insert(data_value(input.data())?),
+                        };
+                        apply_data_write(current, path, value);
+                    }
+                    envelope::WriteTarget::AppMeta(field) => {
+                        built.app.insert(field.clone(), to_meta_value(&value)?);
+                    }
+                    envelope::WriteTarget::CustomMeta(namespace, field) => {
+                        built
+                            .customs
+                            .entry(namespace.clone())
+                            .or_default()
+                            .insert(field.clone(), to_meta_value(&value)?);
+                    }
+                    envelope::WriteTarget::MimeType => match value {
+                        cel::Value::Text(mime) => built.mime = Some(mime),
+                        other => {
+                            return Err(Fault::Unrepresentable(format!(
+                                "mime_type takes text, got {other:?}"
+                            )));
+                        }
+                    },
+                }
             }
-            Ok(Some((Data::materialized(to_envelope_value(&data)?), app)))
-        }
-        PlanEmission::Replace(writes) => {
-            let mut data = cel::Value::Map(BTreeMap::new());
-            let mut app = input.meta().app().clone();
-            for write in writes {
-                let value = cel::eval(&write.expr, env).map_err(Fault::Eval)?;
-                apply_write(&mut data, &mut app, &write.path, value)?;
+            if let Some(value) = data {
+                built.data = BuiltData::Value(value);
             }
-            Ok(Some((Data::materialized(to_envelope_value(&data)?), app)))
+            Ok(Some(built))
         }
     }
 }
 
-/// Applies one field write. `data.x` and bare `x` land in the data
-/// value; `meta.app.x` and `meta.<custom>.x` land in metadata —
-/// custom namespaces are deferred with the checker, so only `app`
-/// arrives here.
-pub(crate) fn apply_write(
-    data: &mut cel::Value,
-    app: &mut envelope::Namespace,
-    path: &[String],
-    value: cel::Value,
-) -> Result<(), Fault> {
-    let (root, rest): (&str, &[String]) = match path.first().map(String::as_str) {
-        Some("data") => ("data", &path[1..]),
-        Some("meta") => ("meta", &path[1..]),
-        _ => ("data", path),
-    };
-    if root == "meta" {
-        // The checker admits meta.app.* only.
-        let field = rest
-            .get(1)
-            .ok_or_else(|| Fault::Unrepresentable(String::from("a bare meta write")))?;
-        app.insert(field.clone(), to_meta_value(&value)?);
-        return Ok(());
-    }
-    if rest.is_empty() {
+/// Applies one payload write along its path; the empty path replaces
+/// the whole value.
+pub(crate) fn apply_data_write(data: &mut cel::Value, path: &[String], value: cel::Value) {
+    if path.is_empty() {
         *data = value;
-        return Ok(());
+        return;
     }
     let mut current = data;
-    for segment in &rest[..rest.len() - 1] {
+    for segment in &path[..path.len() - 1] {
         if !matches!(current, cel::Value::Map(_)) {
             *current = cel::Value::Map(BTreeMap::new());
         }
@@ -659,8 +704,7 @@ pub(crate) fn apply_write(
     let cel::Value::Map(map) = current else {
         unreachable!("just ensured a map");
     };
-    map.insert(rest[rest.len() - 1].clone(), value);
-    Ok(())
+    map.insert(path[path.len() - 1].clone(), value);
 }
 
 /// The handler-facing view of an envelope's data.
@@ -721,6 +765,12 @@ pub(crate) fn meta_value(meta: &Meta) -> cel::Value {
         },
     );
     let mut root = BTreeMap::new();
+    // The read alias mirrors the write alias: `meta.x` reads
+    // `meta.app.x` — app fields surface at the meta root unless a
+    // reserved or custom name shadows them.
+    for (field, value) in &app {
+        root.insert(field.clone(), value.clone());
+    }
     root.insert(String::from("app"), cel::Value::Map(app));
     root.insert(String::from("sys"), cel::Value::Map(sys));
     for (name, namespace) in meta.customs() {
@@ -797,7 +847,7 @@ pub(crate) fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, F
     })
 }
 
-fn to_meta_value(value: &cel::Value) -> Result<MetaValue, Fault> {
+pub(crate) fn to_meta_value(value: &cel::Value) -> Result<MetaValue, Fault> {
     Ok(match value {
         cel::Value::Bool(v) => MetaValue::Scalar(envelope::Scalar::Bool(*v)),
         cel::Value::Int(v) => MetaValue::Scalar(envelope::Scalar::Int(*v)),
@@ -977,6 +1027,66 @@ graph m0_probe : App {
         // Their canonical renderings coincide today — that string is
         // semantic-hash material and pins the byte compatibility.
         assert_eq!(activation.to_string(), outcome.record.trigger.to_string());
+    }
+
+    #[test]
+    fn metadata_writes_land_where_the_spec_says() {
+        // The fifth review's confirmed misroutes: `meta.flag` faulted
+        // instead of aliasing `meta.app.flag`; `meta.audit.flag`
+        // silently wrote into app; `mime_type` became a data field;
+        // a metadata-only patch transcoded the payload.
+        let source = "graph g : App {\n  operator o {\n    on in {\n      out = envelope {\n        meta.flag = \"yes\"\n        meta.audit.origin = \"trace\"\n        mime_type = \"text/x-rastok\"\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+        let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+        let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
+        let slot = Slot::new(0);
+        let state = PartitionState::new().cell(&compilation.plan, slot, "");
+        let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+        let delivery = Delivery {
+            port: node::Port::new("in").unwrap(),
+            edge: String::from(".in>o.in"),
+            seq: 1,
+            envelope: Envelope::new(
+                Meta::new(MetaSys::root(id, 1)),
+                Data::encoded(Encoding::Raw, *b"payload"),
+            ),
+        };
+        let outcome = executor.fire(slot, &delivery, &state).unwrap();
+        let emitted = &outcome.record.emissions[0].envelope;
+        // The alias: meta.flag is meta.app.flag.
+        assert_eq!(
+            emitted.meta().app().get("flag"),
+            Some(&envelope::MetaValue::Scalar(envelope::Scalar::Text(
+                String::from("yes")
+            )))
+        );
+        // The custom namespace is its own, never folded into app.
+        assert!(emitted.meta().app().get("origin").is_none());
+        assert_eq!(
+            emitted
+                .meta()
+                .custom("audit")
+                .and_then(|namespace| namespace.get("origin")),
+            Some(&envelope::MetaValue::Scalar(envelope::Scalar::Text(
+                String::from("trace")
+            )))
+        );
+        // mime_type feeds the spine hint, not a data field.
+        assert_eq!(emitted.meta().sys().mime_type(), Some("text/x-rastok"));
+        // A metadata-only patch never transcodes: the encoded bytes
+        // ship untouched.
+        assert_eq!(
+            emitted.data(),
+            &Data::encoded(Encoding::Raw, *b"payload"),
+            "no structural read, no transcode"
+        );
+        // And the read alias mirrors the write alias.
+        let cel::Value::Map(root) = meta_value(emitted.meta()) else {
+            panic!("a map projection");
+        };
+        assert_eq!(
+            root.get("flag"),
+            Some(&cel::Value::Text(String::from("yes")))
+        );
     }
 
     #[test]

@@ -361,6 +361,22 @@ pub enum MetaValue {
 /// One writable, flat `meta` namespace.
 pub type Namespace = BTreeMap<String, MetaValue>;
 
+/// Where an envelope-builder write lands — resolved at check, never
+/// re-interpreted from strings at run time. The checker owns the
+/// aliasing rules (`meta.x` ≡ `meta.app.x`, `meta.sys` refused); the
+/// runtime only executes a verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteTarget {
+    /// A payload write; the empty path replaces `data` whole.
+    Data(Vec<String>),
+    /// A field of the writable application namespace.
+    AppMeta(String),
+    /// A field of a custom writable namespace.
+    CustomMeta(String, String),
+    /// The content-type hint (`meta.sys.mime_type`'s one legal door).
+    MimeType,
+}
+
 /// Runtime and application metadata: the reserved `sys` spine, the
 /// default writable `app` namespace, and custom namespaces.
 #[derive(Debug, Clone, PartialEq)]

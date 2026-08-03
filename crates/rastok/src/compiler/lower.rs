@@ -219,7 +219,7 @@ fn lower_emission(value: &EmitValue, subst: &impl Fn(&cel::Tree) -> cel::Tree) -
         fields
             .iter()
             .map(|write| FieldWrite {
-                path: write.path.clone(),
+                target: write.target.clone(),
                 expr: subst(&write.value),
             })
             .collect()

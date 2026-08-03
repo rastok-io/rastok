@@ -14,7 +14,7 @@ use crate::boundary::{
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
 };
-use crate::envelope::{Data, Envelope, Namespace};
+use crate::envelope::{Data, Envelope, Namespace, WriteTarget};
 use crate::journal::{MemJournal, Record};
 use crate::plan::{ExecutionPlan, GraphVersion};
 use crate::runtime::vm::{Observed, Vm};
@@ -295,18 +295,42 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
         EmitValue::Replace(writes) | EmitValue::Patch(writes) => {
             let mut data = cel::Value::Map(BTreeMap::new());
             let mut app = Namespace::new();
+            let mut mime = None;
             for write in writes {
                 let value = cel::eval(&write.value, &empty)
                     .map_err(|error| format!("the injection: {error}"))?;
-                runtime::apply_write(&mut data, &mut app, &write.path, value)
-                    .map_err(|fault| format!("the injection: {fault}"))?;
+                match &write.target {
+                    WriteTarget::Data(path) => {
+                        runtime::apply_data_write(&mut data, path, value);
+                    }
+                    WriteTarget::AppMeta(field) => {
+                        app.insert(
+                            field.clone(),
+                            runtime::to_meta_value(&value)
+                                .map_err(|fault| format!("the injection: {fault}"))?,
+                        );
+                    }
+                    WriteTarget::MimeType => match value {
+                        cel::Value::Text(text) => mime = Some(text),
+                        other => {
+                            return Err(format!(
+                                "the injection: mime_type takes text, got {other:?}"
+                            ));
+                        }
+                    },
+                    WriteTarget::CustomMeta(..) => {
+                        return Err(String::from(
+                            "the injection: a draft has no custom namespaces yet",
+                        ));
+                    }
+                }
             }
             Ok(Draft {
                 data: Data::materialized(
                     runtime::to_envelope_value(&data)
                         .map_err(|fault| format!("the injection: {fault}"))?,
                 ),
-                mime_type: None,
+                mime_type: mime,
                 app,
             })
         }
@@ -428,12 +452,21 @@ impl MockPartner<'_> {
                 } else {
                     cel::Value::Map(BTreeMap::new())
                 };
-                let mut app = request.meta().app().clone();
                 for write in writes {
                     let evaluated = cel::eval(&write.value, env)
                         .map_err(|error| format!("the mock faulted: {error}"))?;
-                    runtime::apply_write(&mut data, &mut app, &write.path, evaluated)
-                        .map_err(|fault| format!("the mock faulted: {fault}"))?;
+                    match &write.target {
+                        WriteTarget::Data(path) => {
+                            runtime::apply_data_write(&mut data, path, evaluated);
+                        }
+                        // A reply carries data only: its envelope is
+                        // minted by the connector's own transaction.
+                        other => {
+                            return Err(format!(
+                                "the mock faulted: a reply cannot write {other:?}"
+                            ));
+                        }
+                    }
                 }
                 Ok(Some(Data::materialized(
                     runtime::to_envelope_value(&data)

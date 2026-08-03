@@ -1702,16 +1702,64 @@ impl Checker<'_, '_> {
                         .iter()
                         .map(|segment| segment.text.clone())
                         .collect();
-                    if path.first().map(String::as_str) == Some("meta")
-                        && path.get(1).map(String::as_str) == Some("sys")
-                    {
-                        self.meta_sys_write(key.span);
-                        continue;
-                    }
+                    let segments: Vec<&str> = path.iter().map(String::as_str).collect();
+                    // The writable surface, resolved here once: the
+                    // runtime executes a verdict, never re-reads a
+                    // string. `meta.x` is the specified alias of
+                    // `meta.app.x`; `meta.sys` has no write.
+                    let target = match segments.as_slice() {
+                        ["data", rest @ ..] => crate::envelope::WriteTarget::Data(
+                            rest.iter().map(ToString::to_string).collect(),
+                        ),
+                        ["mime_type"] => crate::envelope::WriteTarget::MimeType,
+                        ["meta", "sys", ..] => {
+                            self.meta_sys_write(key.span);
+                            continue;
+                        }
+                        ["meta"] | ["meta", "app"] => {
+                            self.deferred("a whole-namespace meta write", key.span);
+                            continue;
+                        }
+                        ["meta", "app", field] => {
+                            crate::envelope::WriteTarget::AppMeta((*field).to_string())
+                        }
+                        ["meta", field] => {
+                            crate::envelope::WriteTarget::AppMeta((*field).to_string())
+                        }
+                        ["meta", namespace, field] => crate::envelope::WriteTarget::CustomMeta(
+                            (*namespace).to_string(),
+                            (*field).to_string(),
+                        ),
+                        ["meta", ..] => {
+                            self.deferred("a nested metadata write", key.span);
+                            continue;
+                        }
+                        bare => crate::envelope::WriteTarget::Data(
+                            bare.iter().map(ToString::to_string).collect(),
+                        ),
+                    };
                     match value {
                         SynValue::Cel(expr) => {
                             if let Some(tree) = self.cel(expr, signature) {
-                                writes.push(FieldWrite { path, value: tree });
+                                if matches!(target, crate::envelope::WriteTarget::MimeType)
+                                    && !matches!(tree.ty, cel::Type::Text | cel::Type::Dyn)
+                                {
+                                    self.bag.push(
+                                        Diagnostic::new(
+                                            E_CEL_EXPR,
+                                            Phase::Check,
+                                            "mime_type takes text",
+                                        )
+                                        .with_span(key.span)
+                                        .with_field("detail", "the value type is not text"),
+                                    );
+                                    continue;
+                                }
+                                writes.push(FieldWrite {
+                                    path,
+                                    target,
+                                    value: tree,
+                                });
                             }
                         }
                         _ => self.deferred("a nested envelope builder", key.span),

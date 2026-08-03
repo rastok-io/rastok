@@ -211,8 +211,11 @@ pub enum EmitValue {
 /// One writable field assignment inside an envelope builder.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldWrite {
-    /// The dotted writable path (`data.text`, `meta.app.label`).
+    /// The dotted path as written — identity material: the semantic
+    /// hash seals the author's spelling, aliases included.
     pub path: Vec<String>,
+    /// The checked landing site — what the runtime executes.
+    pub target: crate::envelope::WriteTarget,
     /// The compiled expression.
     pub value: cel::Tree,
 }
