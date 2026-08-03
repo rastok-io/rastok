@@ -217,11 +217,11 @@ pub enum DatedPayload {
     DeliveryBudget {
         /// The connector whose budget this is (the mailbox to search).
         connector: node::Path,
-        /// The canonical edge the envelope traveled — with the id,
-        /// the obligation's identity: two ports of one connector are
-        /// two obligations.
+        /// Half of the obligation's reference: the canonical edge the
+        /// envelope traveled. `(edge, delivery)` IS the identity —
+        /// two ports of one connector are two obligations.
         edge: String,
-        /// The delivered envelope's id.
+        /// The other half: the delivered envelope's id.
         delivery: envelope::Id,
     },
 }

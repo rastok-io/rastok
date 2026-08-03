@@ -290,9 +290,9 @@ impl Run {
     }
 
     /// Whether the reply is final: the child exited and both streams
-    /// marked EOF — a protocol, not a grace delay. A descendant that
-    /// keeps the pipes open withholds the markers; the caller decides
-    /// when to stop waiting for a truncated tail.
+    /// marked EOF — a protocol, not a grace delay. The markers are
+    /// guaranteed: at the leader's exit [`Process::events`] kills the
+    /// remaining group, so the pipes close and the EOFs follow.
     fn finished(&self) -> bool {
         self.exit.is_some() && self.out_eof && self.err_eof
     }

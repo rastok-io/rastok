@@ -87,11 +87,11 @@ pub struct PumpReport {
 }
 
 /// One held request: the delivery whose cursor the outcome
-/// transaction will consume, and the connector it was delivered to —
-/// the pair a budget obligation resolves against.
+/// transaction will consume. A budget obligation resolves against
+/// its reference — the canonical edge and the envelope id, both on
+/// the delivery itself.
 #[derive(Debug, Clone, PartialEq)]
 struct PendingCall {
-    connector: node::Path,
     delivery: Delivery,
 }
 
@@ -349,9 +349,10 @@ impl<'plan> Vm<'plan> {
     /// times itself out. A budget runs from the DELIVERY, so an
     /// expiry resolves wherever the obligation lives: a call still
     /// open closes with a Timeout fact (and the partner is told to
-    /// cancel the in-flight work); a delivery still queued is
-    /// consumed with the typed error before any call opens; an
-    /// obligation already settled loses the race and fires nothing.
+    /// cancel the in-flight work); a delivery still queued follows
+    /// the call-closed rule — its call opens and closes at the
+    /// expiry, back to back; an obligation already settled loses the
+    /// race and fires nothing.
     ///
     /// # Errors
     ///
@@ -440,7 +441,11 @@ impl<'plan> Vm<'plan> {
         // they hold, so a refusal loses nothing.
         let slot = self.slot_of(&connector);
         let queued_id = {
-            let Some(queued) = self.scheduler.mailboxes.find_by_id(slot, "", delivery) else {
+            let Some(queued) = self
+                .scheduler
+                .mailboxes
+                .find_by_ref(slot, "", &edge, delivery)
+            else {
                 // Already settled — the budget lost the race.
                 return Ok(());
             };
@@ -474,22 +479,33 @@ impl<'plan> Vm<'plan> {
         match queued_id {
             None => {
                 // Unframeable AND expired: the decode refusal wins —
-                // the call could never have been attempted.
-                let Some(queued) = self.scheduler.mailboxes.remove_by_id(slot, "", delivery) else {
-                    return Ok(());
+                // the call could never have been attempted. Facts
+                // first: the delivery leaves the queue only after
+                // the commit holds, so a refusal replays with
+                // nothing lost.
+                let outcome = {
+                    let Some(queued) = self
+                        .scheduler
+                        .mailboxes
+                        .find_by_ref(slot, "", &edge, delivery)
+                    else {
+                        return Ok(());
+                    };
+                    let executor = TransactionExecutor::new(self.plan, self.graph_version);
+                    executor.typed_error_transaction(
+                        slot,
+                        queued,
+                        "DecodeError",
+                        "the request cannot be framed",
+                    )
                 };
-                let executor = TransactionExecutor::new(self.plan, self.graph_version);
-                let outcome = executor.typed_error_transaction(
-                    slot,
-                    &queued,
-                    "DecodeError",
-                    "the request cannot be framed",
-                );
                 self.reserve_emissions(slot, &outcome.record)?;
                 journal
                     .commit(outcome.record.clone())
                     .map_err(VmError::Journal)?;
-                self.scheduler.mailboxes.remove_by_id(slot, "", delivery);
+                self.scheduler
+                    .mailboxes
+                    .remove_by_ref(slot, "", &edge, delivery);
                 self.route_emissions(slot, &outcome.record);
             }
             Some(intent) => {
@@ -514,15 +530,10 @@ impl<'plan> Vm<'plan> {
                 let queued = self
                     .scheduler
                     .mailboxes
-                    .remove_by_id(slot, "", delivery)
+                    .remove_by_ref(slot, "", &edge, delivery)
                     .unwrap_or_else(|| unreachable!("found above; nothing ran since"));
-                self.pending.insert(
-                    call_ref,
-                    PendingCall {
-                        connector: connector.clone(),
-                        delivery: queued,
-                    },
-                );
+                self.pending
+                    .insert(call_ref, PendingCall { delivery: queued });
                 self.settled.push_back(SettledEntry {
                     event: BoundaryEvent {
                         call_ref,
@@ -712,13 +723,7 @@ impl<'plan> Vm<'plan> {
             .mailboxes
             .pop(slot, key)
             .unwrap_or_else(|| unreachable!("the reserved head is still there"));
-        self.pending.insert(
-            call_ref,
-            PendingCall {
-                connector: planned.path.clone(),
-                delivery,
-            },
-        );
+        self.pending.insert(call_ref, PendingCall { delivery });
         self.scheduler.mailboxes.claim(slot, key);
         Ok(())
     }
@@ -1533,12 +1538,36 @@ graph fanout : App {
         // it is still QUEUED behind nothing — drive only the wrap
         // transaction, then expire while queued.
         vm.step(&mut journal).unwrap();
+        let facts_before = journal.inner.records().len();
         journal.refuse_commits = true;
         assert!(vm.advance(&mut journal, &mut world, 5_000_000_000).is_err());
+        assert_eq!(
+            journal.inner.records().len(),
+            facts_before,
+            "a refused commit adds no fact"
+        );
+        // Heal and replay: the delivery was never removed, the timer
+        // never acked — exactly one typed error results.
         journal.refuse_commits = false;
         vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
         vm.drain(&mut journal).unwrap();
         assert!(vm.is_stable());
+        assert_eq!(vm.errors().len(), 1, "one DecodeError, no duplicate");
+        let decode_transactions: Vec<_> = journal
+            .inner
+            .records()
+            .iter()
+            .filter_map(|record| match record {
+                Record::Transaction(t) if t.node_path.to_string() == "echo" => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            decode_transactions.len(),
+            1,
+            "exactly one transaction consumed the delivery"
+        );
+        assert_eq!(decode_transactions[0].consumed.len(), 1);
     }
 
     #[test]

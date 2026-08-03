@@ -211,29 +211,38 @@ impl Mailboxes {
             })
     }
 
-    /// Finds one specific queued delivery by its envelope id, without
-    /// removing it — the reservation half of the expired-in-queue
-    /// path.
+    /// Finds one specific queued delivery by its full reference —
+    /// the canonical edge it traveled AND its envelope id — without
+    /// removing it: the reservation half of the expired-in-queue
+    /// path. Two ports of one connector are two references.
     #[must_use]
-    pub fn find_by_id(&self, slot: Slot, key: &str, id: crate::envelope::Id) -> Option<&Delivery> {
+    pub fn find_by_ref(
+        &self,
+        slot: Slot,
+        key: &str,
+        edge: &str,
+        id: crate::envelope::Id,
+    ) -> Option<&Delivery> {
         self.queues
             .get(&(slot, Key::from(key)))?
             .iter()
-            .find(|delivery| delivery.envelope.meta().sys().id() == id)
+            .find(|delivery| delivery.edge == edge && delivery.envelope.meta().sys().id() == id)
     }
 
-    /// Removes one specific queued delivery by its envelope id — the
-    /// expired-in-queue path; FIFO order among the survivors holds.
-    pub fn remove_by_id(
+    /// Removes one specific queued delivery by its full reference —
+    /// only after the facts consuming it hold; FIFO order among the
+    /// survivors holds.
+    pub fn remove_by_ref(
         &mut self,
         slot: Slot,
         key: &str,
+        edge: &str,
         id: crate::envelope::Id,
     ) -> Option<Delivery> {
         let queue = self.queues.get_mut(&(slot, Key::from(key)))?;
-        let position = queue
-            .iter()
-            .position(|delivery| delivery.envelope.meta().sys().id() == id)?;
+        let position = queue.iter().position(|delivery| {
+            delivery.edge == edge && delivery.envelope.meta().sys().id() == id
+        })?;
         queue.remove(position)
     }
 

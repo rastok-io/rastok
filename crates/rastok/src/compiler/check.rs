@@ -841,13 +841,9 @@ impl Checker<'_, '_> {
                 // `relay.out -> sink.in` are one pair of endpoints.
                 if graph.edges.contains(&candidate) {
                     self.bag.push(
-                        Diagnostic::new(
-                            E_DUP_EDGE,
-                            Phase::Check,
-                            "this wiring already exists; two identical edges would derive one call ref",
-                        )
-                        .with_span(edge.span)
-                        .with_field("edge", format!("{candidate:?}")),
+                        Diagnostic::new(E_DUP_EDGE, Phase::Check, "this edge is already declared")
+                            .with_span(edge.span)
+                            .with_field("edge", edge_display(&candidate)),
                     );
                     continue;
                 }
@@ -2211,6 +2207,20 @@ impl Checker<'_, '_> {
             port,
         })
     }
+}
+
+/// The canonical text of one checked edge — the human face of
+/// E-DUP-EDGE, mirroring the plan's rendering.
+fn edge_display(edge: &Edge) -> String {
+    let end = |endpoint: &Endpoint| match &endpoint.node {
+        Some(path) => format!("{path}.{}", endpoint.port),
+        None => format!(".{}", endpoint.port),
+    };
+    let to = match &edge.to {
+        EdgeTarget::Port(endpoint) => end(endpoint),
+        EdgeTarget::Discard => String::from("!discard"),
+    };
+    format!("{}>{to}", end(&edge.from))
 }
 
 fn is_bare_word(text: &str) -> bool {
