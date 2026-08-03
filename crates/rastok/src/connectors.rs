@@ -82,13 +82,21 @@ struct Run {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     max_output: usize,
+    overflowed: bool,
+    out_eof: bool,
+    err_eof: bool,
+    exit: Option<std::process::ExitStatus>,
 }
 
-/// One drained slice of a pipe.
+/// One drained slice of a pipe, or its end-of-stream marker — the
+/// deterministic completion protocol: a reply is final when both
+/// streams have marked EOF, not after a scheduling-dependent grace.
 #[derive(Debug)]
 enum Chunk {
     Out(Vec<u8>),
     Err(Vec<u8>),
+    OutEof,
+    ErrEof,
 }
 
 impl<'plan> Process<'plan> {
@@ -150,13 +158,17 @@ impl<'plan> Process<'plan> {
             },
             _ => DEFAULT_MAX_OUTPUT,
         };
-        let mut child = match Command::new(command)
+        let mut builder = Command::new(command);
+        builder
             .args(&args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
+            .stderr(Stdio::piped());
+        // Its own process group: a kill reaches every descendant, so
+        // no orphan can keep the pipes — or a pump thread — alive.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut builder, 0);
+        let mut child = match builder.spawn() {
             Ok(child) => child,
             Err(error) => return Err(failure("SpawnFailed", error.to_string())),
         };
@@ -170,13 +182,26 @@ impl<'plan> Process<'plan> {
                 let _ = stdin.write_all(&framed);
             }
         });
-        let (sender, chunks) = std::sync::mpsc::channel();
-        if let Some(pipe) = child.stdout.take() {
-            let sender = sender.clone();
-            std::thread::spawn(move || pump_pipe(pipe, sender, Chunk::Out));
+        // Bounded channel: the pumps block when the collector lags,
+        // so an unread flood costs at most the channel's window —
+        // the cap is a memory bound, not just a reply bound.
+        let (sender, chunks) = std::sync::mpsc::sync_channel(64);
+        match child.stdout.take() {
+            Some(pipe) => {
+                let sender = sender.clone();
+                std::thread::spawn(move || pump_pipe(pipe, &sender, Chunk::Out, Chunk::OutEof));
+            }
+            None => {
+                let _ = sender.send(Chunk::OutEof);
+            }
         }
-        if let Some(pipe) = child.stderr.take() {
-            std::thread::spawn(move || pump_pipe(pipe, sender, Chunk::Err));
+        match child.stderr.take() {
+            Some(pipe) => {
+                std::thread::spawn(move || pump_pipe(pipe, &sender, Chunk::Err, Chunk::ErrEof));
+            }
+            None => {
+                let _ = sender.send(Chunk::ErrEof);
+            }
         }
         Ok(Run {
             call_ref: intent.call_ref,
@@ -185,21 +210,44 @@ impl<'plan> Process<'plan> {
             stdout: Vec::new(),
             stderr: Vec::new(),
             max_output,
+            overflowed: false,
+            out_eof: false,
+            err_eof: false,
+            exit: None,
         })
     }
 }
 
+/// Kills a child and, on Unix, its whole process group — the group
+/// id is the child's pid, set at spawn.
+fn kill_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // `kill -- -PGID` without libc: forbid(unsafe_code) holds.
+        let _ = Command::new("kill")
+            .args(["-9", "--", &format!("-{}", child.id())])
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Reads one pipe to its end in bounded chunks, sending each through
-/// the channel; a closed receiver ends the pump.
+/// the channel and closing with the EOF marker; a closed receiver
+/// ends the pump.
 fn pump_pipe<P: Read>(
     mut pipe: P,
-    sender: std::sync::mpsc::Sender<Chunk>,
+    sender: &std::sync::mpsc::SyncSender<Chunk>,
     wrap: fn(Vec<u8>) -> Chunk,
+    eof: Chunk,
 ) {
     let mut buffer = [0u8; 8192];
     loop {
         match pipe.read(&mut buffer) {
-            Ok(0) | Err(_) => return,
+            Ok(0) | Err(_) => {
+                let _ = sender.send(eof);
+                return;
+            }
             Ok(read) => {
                 if sender.send(wrap(buffer[..read].to_vec())).is_err() {
                     return;
@@ -210,23 +258,42 @@ fn pump_pipe<P: Read>(
 }
 
 impl Run {
-    /// Drains arrived chunks; `true` when the output cap is tripped.
+    /// Drains arrived chunks, checking the cap per chunk; past the
+    /// cap nothing more is stored — the bound is enforced at intake.
     fn collect(&mut self) -> bool {
         for chunk in self.chunks.try_iter() {
             match chunk {
-                Chunk::Out(bytes) => self.stdout.extend_from_slice(&bytes),
-                Chunk::Err(bytes) => self.stderr.extend_from_slice(&bytes),
+                Chunk::Out(bytes) => {
+                    if !self.overflowed {
+                        self.stdout.extend_from_slice(&bytes);
+                        if self.stdout.len() > self.max_output {
+                            self.overflowed = true;
+                        }
+                    }
+                }
+                Chunk::Err(bytes) => {
+                    if self.stderr.len() < self.max_output {
+                        self.stderr.extend_from_slice(&bytes);
+                    }
+                }
+                Chunk::OutEof => self.out_eof = true,
+                Chunk::ErrEof => self.err_eof = true,
             }
         }
-        self.stdout.len() > self.max_output
+        self.overflowed
+    }
+
+    /// Whether the reply is final: the child exited and both streams
+    /// marked EOF — a protocol, not a grace delay. A descendant that
+    /// keeps the pipes open withholds the markers; the caller decides
+    /// when to stop waiting for a truncated tail.
+    fn finished(&self) -> bool {
+        self.exit.is_some() && self.out_eof && self.err_eof
     }
 
     /// The reply of a finished run.
     fn settle(mut self, status: std::process::ExitStatus) -> Response {
-        // A short grace drain: chunks written before the exit may
-        // still be in flight from the pump threads.
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        let overflowed = self.collect();
+        let overflowed = self.collect() || self.overflowed;
         let outcome = if overflowed {
             let mut payload = BTreeMap::new();
             payload.insert(
@@ -291,11 +358,9 @@ impl Partner for Process<'_> {
         let mut still_running = Vec::new();
         for mut run in self.runs.drain(..) {
             if run.collect() {
-                // The cap is a hard guarantee: tripped mid-run, the
-                // child dies now — descendants holding the pipes
-                // cannot extend it.
-                let _ = run.child.kill();
-                let _ = run.child.wait();
+                // The cap is a hard guarantee: tripped at intake, the
+                // whole process group dies now.
+                kill_group(&mut run.child);
                 let mut payload = BTreeMap::new();
                 payload.insert(
                     String::from("size"),
@@ -312,18 +377,29 @@ impl Partner for Process<'_> {
                 });
                 continue;
             }
-            match run.child.try_wait() {
-                Ok(Some(status)) => answers.push(run.settle(status)),
-                Ok(None) => still_running.push(run),
-                Err(error) => {
-                    let call_ref = run.call_ref;
-                    let _ = run.child.kill();
-                    let _ = run.child.wait();
-                    answers.push(Response {
-                        call_ref,
-                        outcome: failure("ExecFailed", error.to_string()),
-                    });
+            if run.exit.is_none() {
+                match run.child.try_wait() {
+                    Ok(Some(status)) => run.exit = Some(status),
+                    Ok(None) => {}
+                    Err(error) => {
+                        let call_ref = run.call_ref;
+                        kill_group(&mut run.child);
+                        answers.push(Response {
+                            call_ref,
+                            outcome: failure("ExecFailed", error.to_string()),
+                        });
+                        continue;
+                    }
                 }
+            }
+            match run.exit {
+                // Complete by protocol: exit seen and both EOFs in.
+                Some(status) if run.finished() => answers.push(run.settle(status)),
+                // Exited, EOFs withheld — a descendant holds the
+                // pipes. The stragglers' window is the caller's
+                // polling; the run stays until its markers arrive or
+                // the group is killed by a cancel.
+                _ => still_running.push(run),
             }
         }
         self.runs = still_running;
@@ -333,11 +409,10 @@ impl Partner for Process<'_> {
     fn cancel(&mut self, call_ref: &crate::boundary::CallRef) {
         if let Some(position) = self.runs.iter().position(|run| &run.call_ref == call_ref) {
             let mut run = self.runs.swap_remove(position);
-            // Kill the direct child and reap it; detached pump
-            // threads die with their pipes — or outlive a descendant
-            // holding them, unjoined either way.
-            let _ = run.child.kill();
-            let _ = run.child.wait();
+            // The whole process GROUP dies: descendants inherited the
+            // pipes with the group, and the group takes them down —
+            // the pump threads then see EOF and exit.
+            kill_group(&mut run.child);
         }
     }
 }

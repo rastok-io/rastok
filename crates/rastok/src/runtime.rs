@@ -211,6 +211,17 @@ impl Mailboxes {
             })
     }
 
+    /// Finds one specific queued delivery by its envelope id, without
+    /// removing it — the reservation half of the expired-in-queue
+    /// path.
+    #[must_use]
+    pub fn find_by_id(&self, slot: Slot, key: &str, id: crate::envelope::Id) -> Option<&Delivery> {
+        self.queues
+            .get(&(slot, Key::from(key)))?
+            .iter()
+            .find(|delivery| delivery.envelope.meta().sys().id() == id)
+    }
+
     /// Removes one specific queued delivery by its envelope id — the
     /// expired-in-queue path; FIFO order among the survivors holds.
     pub fn remove_by_id(
@@ -502,7 +513,13 @@ impl<'plan> TransactionExecutor<'plan> {
                     .and_then(|spec| spec.attribute("timeout"))
                     .is_some();
                 if budgeted {
-                    timers.push((1, emission.envelope.meta().sys().id()));
+                    timers.push((
+                        1,
+                        ids::budget_ref(
+                            &self.plan.nodes[target.index()].path,
+                            emission.envelope.meta().sys().id(),
+                        ),
+                    ));
                 }
             }
         }

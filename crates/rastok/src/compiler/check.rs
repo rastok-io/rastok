@@ -322,7 +322,14 @@ impl Checker<'_, '_> {
                     .mocks
                     .iter()
                     .take_while(|earlier| !std::ptr::eq(*earlier, mock))
-                    .any(|earlier| earlier.path == mock.path)
+                    .any(|earlier| {
+                        earlier.path.len() == mock.path.len()
+                            && earlier
+                                .path
+                                .iter()
+                                .zip(&mock.path)
+                                .all(|(a, b)| a.text == b.text)
+                    })
                 {
                     self.bag.push(
                         Diagnostic::new(
@@ -454,10 +461,30 @@ impl Checker<'_, '_> {
         use crate::compiler::hir::{Cmp, ExpectTarget, Expectation, Quantifier, ScenarioStep};
         use crate::compiler::syntax::{CmpOp, ScenarioItem};
         let mut mocks = Vec::new();
+        let mut mocked: Vec<String> = Vec::new();
         let mut steps = Vec::new();
         for item in &decl.body {
             match item {
                 ScenarioItem::Mock(mock) => {
+                    let name = mock
+                        .path
+                        .iter()
+                        .map(|segment| segment.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    if mocked.contains(&name) {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_DUP_SIMULATION,
+                                Phase::Resolve,
+                                "this connector is already mocked in this scenario".to_string(),
+                            )
+                            .with_span(mock.span)
+                            .with_field("name", name),
+                        );
+                        continue;
+                    }
+                    mocked.push(name);
                     mocks.extend(self.mocks(std::slice::from_ref(mock), app));
                 }
                 ScenarioItem::Injection { target, value, seq } => {
@@ -2563,6 +2590,29 @@ graph m0_probe : App {
             "{:#?}",
             bag.diagnostics()
         );
+    }
+
+    #[test]
+    fn duplicate_mocks_refuse_at_both_levels() {
+        let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  operator o {\n    on in { out = data.text }\n  }\n  . -> o -> shell -> .\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
+        let simulation_level = base.replace(
+            "BODY",
+            "    mock shell { on in { out = envelope } }\n    mock shell { on in { out = envelope } }\n",
+        );
+        let scenario_level = base.replace(
+            "BODY",
+            "    scenario x {\n      mock shell { on in { out = envelope } }\n      mock shell { on in { out = envelope } }\n      app.in = \"y\"\n    }\n",
+        );
+        for source in [simulation_level, scenario_level] {
+            let (_, bag) = check_source(&source);
+            assert!(
+                bag.diagnostics().iter().any(|diagnostic| {
+                    diagnostic.code() == E_DUP_SIMULATION && diagnostic.fields()[0].1 == "shell"
+                }),
+                "the duplicate mock must refuse: {:#?}",
+                bag.diagnostics()
+            );
+        }
     }
 
     #[test]

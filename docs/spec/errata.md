@@ -126,3 +126,22 @@
   `[1, reply-data]`, or closures are re-specified to reference the
   outcome transaction's emission by id.
 - **Found by:** external code review (fifth pass), 2026-08-03.
+
+## E-2026-08-04-1 — the bare-meta alias collides with custom namespaces
+
+- **Where:** [grammar.md](grammar.md) (`meta.<field>` ≡
+  `meta.app.<field>`, stated without exception) vs
+  [envelope.md](envelope.md) (custom writable namespaces addressed
+  `meta.<namespace>.<field>`).
+- **Contradiction:** taken literally, the alias makes every custom
+  namespace unreadable by its own path — `meta.audit.origin` would
+  resolve to `meta.app.audit.origin`. Both rules cannot be absolute.
+- **Interim behavior (implementation):** at the projection root a
+  custom NAMESPACE name shadows the app alias; the shadowed app
+  field stays reachable at its unambiguous `meta.app.<field>`
+  address. Tested.
+- **Resolution direction:** scope the alias — `meta.<field>` reads
+  `meta.app.<field>` only when `<field>` names no declared custom
+  namespace — or drop the bare alias entirely and require the
+  explicit form.
+- **Found by:** external code review (seventh pass), 2026-08-04.

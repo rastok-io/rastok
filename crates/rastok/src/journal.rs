@@ -41,6 +41,8 @@ pub mod ids {
     /// the envelope id domains (`0x01`–`0x04` are reserved by the
     /// spec); a call ref is never an envelope id.
     const CALL: u8 = 0x10;
+    /// Domain tag of a dated budget obligation.
+    const BUDGET: u8 = 0x20;
 
     /// The root id of an inbound envelope:
     /// `blake3(connector_path ‖ inbound_seq)`. The single-process
@@ -79,6 +81,17 @@ pub mod ids {
                 &index.to_le_bytes(),
             ],
         )
+    }
+
+    /// The identity of one armed call budget: derived from the
+    /// budgeted connector and the delivered envelope, so a fan-out of
+    /// one envelope to two connectors arms two distinct obligations.
+    /// This is what `timers` (identity.md §3 key 37) seals and what
+    /// the scheduler resolves.
+    #[must_use]
+    pub fn budget_ref(connector: &node::Path, delivery: Id) -> Id {
+        let path = connector.to_string();
+        Id::derive(BUDGET, &[path.as_bytes(), delivery.as_bytes()])
     }
 
     /// The internal identity of an outbound call, derived from its

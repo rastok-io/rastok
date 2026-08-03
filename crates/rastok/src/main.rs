@@ -50,6 +50,10 @@ fn main() -> ExitCode {
                     _ => files.push(argument.clone()),
                 }
             }
+            if bless && golden_dir.is_none() {
+                eprintln!("error: --bless requires --golden <dir>");
+                return ExitCode::from(2);
+            }
             simulate(&files, golden_dir.as_deref(), bless)
         }
         _ => {

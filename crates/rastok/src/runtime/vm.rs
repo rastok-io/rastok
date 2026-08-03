@@ -86,6 +86,15 @@ pub struct PumpReport {
     pub rejected: Vec<(Response, String)>,
 }
 
+/// One held request: the delivery whose cursor the outcome
+/// transaction will consume, and the connector it was delivered to —
+/// the pair a budget obligation resolves against.
+#[derive(Debug, Clone, PartialEq)]
+struct PendingCall {
+    connector: node::Path,
+    delivery: Delivery,
+}
+
 /// The plan-backed outcome gate: a failure kind must belong to the
 /// calling connector's sealed error set. Timeout-minted failures
 /// never pass here — the machine, not a partner, makes those.
@@ -196,7 +205,7 @@ pub struct Vm<'plan> {
     /// Requests delivered to a connector, held until their call
     /// settles: the outcome transaction consumes this cursor, and the
     /// connector's mailbox stays claimed the whole time.
-    pending: BTreeMap<CallRef, Delivery>,
+    pending: BTreeMap<CallRef, PendingCall>,
     /// Won closures awaiting their outcome transaction — replayable:
     /// an entry leaves this queue only when its transaction commits.
     settled: VecDeque<SettledEntry>,
@@ -376,11 +385,15 @@ impl<'plan> Vm<'plan> {
             connector,
             delivery,
         } = payload;
-        // An open call for this delivery: race the closure.
+        // An open call for THIS obligation — connector and delivery
+        // both: a fan-out of one envelope arms one budget per
+        // connector, and each expires its own call.
         if let Some(call_ref) = self
             .pending
             .iter()
-            .find(|(_, held)| held.envelope.meta().sys().id() == delivery)
+            .find(|(_, held)| {
+                held.connector == connector && held.delivery.envelope.meta().sys().id() == delivery
+            })
             .map(|(call_ref, _)| *call_ref)
         {
             match journal
@@ -410,25 +423,111 @@ impl<'plan> Vm<'plan> {
             });
             return Ok(());
         }
-        // Still queued: the queue time consumed the whole budget —
-        // the delivery is consumed with the typed error and no call
-        // ever opens.
+        // Still queued: the queue time consumed the whole budget.
+        // The call-closed rule applies even to a call that expires
+        // before it started (execution-model §8): the call OPENS and
+        // CLOSES with a Timeout fact, and the outcome transaction
+        // fires under `l:timeout` — the same causality as any expiry.
+        // Journal facts come first; the mailbox is touched only after
+        // they hold, so a refusal loses nothing.
         let slot = self.slot_of(&connector);
-        if let Some(queued) = self.scheduler.mailboxes.remove_by_id(slot, "", delivery) {
-            let executor = TransactionExecutor::new(self.plan, self.graph_version);
-            let outcome = executor.typed_error_transaction(
-                slot,
-                &queued,
-                "TimeoutExpired",
-                "the call budget expired in the mailbox",
-            );
-            self.reserve_emissions(slot, &outcome.record)?;
-            journal
-                .commit(outcome.record.clone())
-                .map_err(VmError::Journal)?;
-            self.route_emissions(slot, &outcome.record);
+        let queued_id = {
+            let Some(queued) = self.scheduler.mailboxes.find_by_id(slot, "", delivery) else {
+                // Already settled — the budget lost the race.
+                return Ok(());
+            };
+            let planned = &self.plan.nodes[slot.index()];
+            let NodeKind::Connector(spec) = &planned.kind else {
+                unreachable!("budgets arm connectors only")
+            };
+            let effect = match spec.effect {
+                node::Effect::Class(class) => class,
+                node::Effect::None => unreachable!("an effectless connector opens no calls"),
+            };
+            match crate::connectors::prepare(spec, queued.envelope.data()) {
+                Err(_) => None,
+                Ok(bytes) => {
+                    let mut hasher = blake3::Hasher::new();
+                    hasher.update(&bytes);
+                    let mut digest = [0u8; 32];
+                    hasher.finalize_xof().fill(&mut digest);
+                    let emitting_id = queued.envelope.meta().sys().id();
+                    Some(Intent {
+                        call_ref: ids::call_ref(emitting_id, &planned.path, &digest),
+                        emitting_id,
+                        connector_path: planned.path.clone(),
+                        request_digest: digest,
+                        idempotency_key: None,
+                        effect,
+                    })
+                }
+            }
+        };
+        match queued_id {
+            None => {
+                // Unframeable AND expired: the decode refusal wins —
+                // the call could never have been attempted.
+                let Some(queued) = self.scheduler.mailboxes.remove_by_id(slot, "", delivery) else {
+                    return Ok(());
+                };
+                let executor = TransactionExecutor::new(self.plan, self.graph_version);
+                let outcome = executor.typed_error_transaction(
+                    slot,
+                    &queued,
+                    "DecodeError",
+                    "the request cannot be framed",
+                );
+                self.reserve_emissions(slot, &outcome.record)?;
+                journal
+                    .commit(outcome.record.clone())
+                    .map_err(VmError::Journal)?;
+                self.scheduler.mailboxes.remove_by_id(slot, "", delivery);
+                self.route_emissions(slot, &outcome.record);
+            }
+            Some(intent) => {
+                let call_ref = intent.call_ref;
+                let connector_path = intent.connector_path.clone();
+                let emitting_id = intent.emitting_id;
+                journal.open_outbound(intent).map_err(VmError::Journal)?;
+                match journal
+                    .close_outbound(&call_ref, crate::journal::Closure::Timeout)
+                    .map_err(VmError::Journal)?
+                {
+                    crate::journal::CloseVerdict::Won => {}
+                    crate::journal::CloseVerdict::AlreadyClosed => {
+                        unreachable!("the call was opened one fact ago")
+                    }
+                }
+                // The facts hold; only now does the delivery leave
+                // the queue and join the settled path.
+                let queued = self
+                    .scheduler
+                    .mailboxes
+                    .remove_by_id(slot, "", delivery)
+                    .unwrap_or_else(|| unreachable!("found above; nothing ran since"));
+                self.pending.insert(
+                    call_ref,
+                    PendingCall {
+                        connector: connector.clone(),
+                        delivery: queued,
+                    },
+                );
+                self.settled.push_back(SettledEntry {
+                    event: BoundaryEvent {
+                        call_ref,
+                        connector_path,
+                        emitting_id,
+                        port: node::Port::new("err")
+                            .unwrap_or_else(|_| unreachable!("`err` is a valid port")),
+                        outcome: CallOutcome::Failure(crate::boundary::TypedError {
+                            kind: String::from("TimeoutExpired"),
+                            data: Data::materialized(crate::envelope::Value::Map(BTreeMap::new())),
+                        }),
+                    },
+                    trigger: node::Trigger::Lifecycle(node::Lifecycle::Timeout),
+                });
+            }
         }
-        // Otherwise: already settled — the budget lost the race.
         Ok(())
     }
 
@@ -483,7 +582,7 @@ impl<'plan> Vm<'plan> {
             .cloned()
             .unwrap_or_else(|| unreachable!("guarded by the caller"));
         let slot = self.slot_of(&event.connector_path);
-        let Some(request) = self.pending.get(&event.call_ref) else {
+        let Some(request) = self.pending.get(&event.call_ref).map(|held| &held.delivery) else {
             return Err(VmError::MissingPending(event.call_ref));
         };
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
@@ -602,7 +701,13 @@ impl<'plan> Vm<'plan> {
             .mailboxes
             .pop(slot, key)
             .unwrap_or_else(|| unreachable!("the reserved head is still there"));
-        self.pending.insert(call_ref, delivery);
+        self.pending.insert(
+            call_ref,
+            PendingCall {
+                connector: planned.path.clone(),
+                delivery,
+            },
+        );
         self.scheduler.mailboxes.claim(slot, key);
         Ok(())
     }
@@ -1165,9 +1270,10 @@ graph timed : App {
     fn a_budget_runs_from_delivery_and_covers_queue_time() {
         // The claim serializes the connector: the second request
         // waits in the mailbox behind the open call. Its budget runs
-        // anyway — queue time counts (execution-model §8) — so the
-        // expiry consumes it IN the queue, with no open fact ever
-        // journaled for it.
+        // anyway — queue time counts (execution-model §8) — and the
+        // call-closed rule applies even to a call that expires
+        // before it started: the queued request's call opens and
+        // closes at the expiry, back to back.
         let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
@@ -1180,14 +1286,47 @@ graph timed : App {
         vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
         assert!(vm.is_stable());
         assert_eq!(vm.errors().len(), 2, "both requests expired, typed");
-        let opens = journal
+        let statuses: Vec<&OutboundStatus> = journal
+            .records()
+            .iter()
+            .filter_map(|record| match record {
+                Record::Outbound(o) => Some(&o.status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|status| matches!(status, OutboundStatus::Open))
+                .count(),
+            2,
+            "both calls opened — the queued one at its expiry"
+        );
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|status| matches!(
+                    status,
+                    OutboundStatus::Closed(crate::journal::Closure::Timeout)
+                ))
+                .count(),
+            2,
+            "both closed by the machine's Timeout fact"
+        );
+        // Both outcome transactions fired under the timeout
+        // lifecycle, never a port trigger.
+        let timeout_transactions = journal
             .records()
             .iter()
             .filter(|record| {
-                matches!(record, Record::Outbound(o) if matches!(o.status, OutboundStatus::Open))
+                matches!(
+                    record,
+                    Record::Transaction(t)
+                        if t.trigger == node::Trigger::Lifecycle(node::Lifecycle::Timeout)
+                )
             })
             .count();
-        assert_eq!(opens, 1, "the queued request never opened a call");
+        assert_eq!(timeout_transactions, 2);
         // The sealed timers name the obligations the transactions
         // armed — one per budgeted delivery.
         let sealed: usize = journal
@@ -1199,6 +1338,55 @@ graph timed : App {
             })
             .sum();
         assert_eq!(sealed, 2);
+    }
+
+    #[test]
+    fn a_fan_out_expires_its_own_call_not_a_siblings() {
+        // The seventh review's counter-example: one envelope fans out
+        // to two budgeted connectors; the shorter budget must expire
+        // ITS call — the obligation is (connector, delivery), never
+        // the delivery alone.
+        let source = r#"
+graph fanout : App {
+  connector alpha : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("500ms")
+  }
+
+  connector beta : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("100ms")
+  }
+
+  operator shout {
+    on in { out = data.text }
+  }
+
+  . -> shout
+  shout -> alpha -> nothing
+  shout -> beta -> nothing
+}
+"#;
+        let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = EchoWorld::default();
+        vm.inject(&mut journal, submission("salut")).unwrap();
+        vm.drain(&mut journal).unwrap();
+        assert_eq!(journal.open_calls().len(), 2, "both calls opened");
+        // Only beta's budget is due at 100ms.
+        vm.advance(&mut journal, &mut world, 100_000_000).unwrap();
+        let open = journal.open_calls();
+        assert_eq!(open.len(), 1);
+        assert_eq!(
+            open[0].connector_path.to_string(),
+            "alpha",
+            "alpha's call survived its sibling's expiry"
+        );
     }
 
     #[test]
