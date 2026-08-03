@@ -14,5 +14,6 @@ pub mod journal;
 pub mod lab;
 pub mod node;
 pub mod plan;
+pub mod render;
 pub mod runtime;
 pub mod stdlib;

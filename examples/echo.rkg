@@ -1,0 +1,49 @@
+// The M0 evidence app: a text line enters, a real `cat` echoes it,
+// the echo leaves. One operator, one connector, and the lab that
+// proves the graph without the world.
+
+graph echo : App {
+  connector shell : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("5s")
+  }
+
+  operator relay {
+    on in where data != "" {
+      out = data
+    }
+  }
+
+  . -> relay -> shell -> .
+}
+
+lab echo {
+  simulation smoke on app {
+    mock shell {
+      on in { out = envelope }
+    }
+
+    scenario roundtrip "a line echoes back" {
+      app.in = "salut"
+      expect "the echo" app.out count == 1 where data == "salut"
+      expect nothing app.err
+    }
+
+    scenario filtered "an empty line never reaches the shell" {
+      app.in = ""
+      expect nothing shell.in
+      expect nothing app.out
+    }
+
+    scenario silence_expires "a mute shell times out" {
+      mock shell {
+        on in { out = nothing }
+      }
+      app.in = "salut"
+      advance duration("5s")
+      expect "the typed timeout" app.err where data.kind == "TimeoutExpired"
+    }
+  }
+}
