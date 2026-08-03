@@ -95,6 +95,9 @@ pub struct ConnectorSpec {
     /// The remaining declared attributes, reduced; the typed axes
     /// above are not repeated here.
     pub attributes: Vec<(String, AttrSetting)>,
+    /// The contract's typed error kinds — the runtime validates every
+    /// settled failure against this set, so no partner can invent one.
+    pub error_set: Vec<String>,
 }
 
 impl ConnectorSpec {

@@ -566,6 +566,13 @@ impl Checker<'_, '_> {
                         if attribute.name == "mode" && word == "service" {
                             self.deferred("the Process service mode", span);
                         }
+                        // The runtime companions — idempotency keys
+                        // and `on compensate` — are not executable in
+                        // this subset; admitting the words without
+                        // their invariants would be a silent lie.
+                        if attribute.name == "effect" && word != "idempotent" {
+                            self.deferred("compensable and irreversible effects", span);
+                        }
                         None
                     } else {
                         Some(format!("expected one of {words:?}, got `{word}`"))
@@ -1777,6 +1784,27 @@ graph m0_probe : App {
             "the emission must refuse, not vanish: {:#?}",
             bag.diagnostics()
         );
+    }
+
+    #[test]
+    fn non_idempotent_effects_are_deferred_until_their_invariants_run() {
+        // `compensable` demands an executable `on compensate` and
+        // `irreversible` an idempotency key; neither companion exists
+        // in this subset, so the words refuse instead of lying.
+        for word in ["compensable", "irreversible"] {
+            let source = format!(
+                "graph g : App {{\n  connector c : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = {word} ; behavior = deterministic\n  }}\n  . -> c -> .\n}}\n"
+            );
+            let (_, bag) = check_source(&source);
+            assert!(
+                bag.diagnostics().iter().any(|diagnostic| {
+                    diagnostic.code() == E_CHECK_DEFERRED
+                        && diagnostic.fields()[0].1 == "compensable and irreversible effects"
+                }),
+                "`effect = {word}` must refuse: {:#?}",
+                bag.diagnostics()
+            );
+        }
     }
 
     #[test]

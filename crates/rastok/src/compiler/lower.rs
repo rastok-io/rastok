@@ -20,6 +20,7 @@ use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
     Node, NodeKind, SemanticHash, Slot, Step, SymbolTable, VarCell,
 };
+use crate::stdlib;
 
 /// Computes the semantic hash of a checked graph.
 #[must_use]
@@ -83,8 +84,10 @@ fn sorted_edges(hir: &Hir) -> Vec<(String, &crate::compiler::hir::Edge)> {
 }
 
 /// Lowers a checked graph into the shipped plan and its symbol table.
+/// The registry supplies the contract facts the plan must carry to be
+/// self-sufficient at runtime — the error sets.
 #[must_use]
-pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
+pub fn lower(hir: &Hir, registry: &stdlib::Registry) -> (ExecutionPlan, SymbolTable) {
     let nodes = sorted_nodes(hir);
     let slot_of = |path: &node::Path| {
         Slot::new(
@@ -141,6 +144,12 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
                     effect: typed_effect(hir_node),
                     behavior: typed_behavior(hir_node),
                     attributes,
+                    error_set: match registry.connector(trait_name) {
+                        stdlib::Availability::Available(contract) => {
+                            contract.error_set.iter().map(ToString::to_string).collect()
+                        }
+                        _ => Vec::new(),
+                    },
                 }),
                 NodeRole::Operator => NodeKind::Operator,
             },

@@ -119,6 +119,9 @@ impl PartitionState {
 /// One delivery waiting in a mailbox.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Delivery {
+    /// The arrival port — part of the delivery, because one node
+    /// mailbox carries every port in one FIFO.
+    pub port: node::Port,
     /// The canonical edge text the envelope traveled.
     pub edge: String,
     /// The position on that edge — the consumed cursor.
@@ -127,13 +130,16 @@ pub struct Delivery {
     pub envelope: Envelope,
 }
 
-/// Bounded per-`(node, port)` FIFO queues. Delivery order is captured
-/// by the per-edge sequence; a full mailbox refuses — backpressure is
-/// a signal, never a silent drop.
+/// Bounded per-`(node, key)` FIFO queues — one mailbox per node
+/// instance, all ports in arrival order, per the execution model.
+/// A claimed mailbox stays claimed while its node awaits an external
+/// call: the worker is free, the mailbox is not. A full mailbox
+/// refuses — backpressure is a signal, never a silent drop.
 #[derive(Debug)]
 pub struct Mailboxes {
     capacity: usize,
-    queues: BTreeMap<(Slot, node::Port), VecDeque<Delivery>>,
+    queues: BTreeMap<(Slot, Key), VecDeque<Delivery>>,
+    claimed: std::collections::BTreeSet<(Slot, Key)>,
     edge_seq: BTreeMap<String, u64>,
 }
 
@@ -144,31 +150,46 @@ impl Mailboxes {
         Self {
             capacity,
             queues: BTreeMap::new(),
+            claimed: std::collections::BTreeSet::new(),
             edge_seq: BTreeMap::new(),
         }
     }
 
-    /// Delivers an envelope along an edge into a node's port queue,
-    /// assigning the next per-edge sequence.
+    /// Whether one more delivery fits the `(slot, key)` queue after
+    /// `already` reservations against it — the pre-commit capacity
+    /// check.
+    #[must_use]
+    pub fn has_room(&self, slot: Slot, key: &str, already: usize) -> bool {
+        let queued = self
+            .queues
+            .get(&(slot, Key::from(key)))
+            .map_or(0, VecDeque::len);
+        queued + already < self.capacity
+    }
+
+    /// Delivers into a node's single FIFO, assigning the next
+    /// per-edge sequence. Callers pre-check capacity; a full queue
+    /// still refuses.
     ///
     /// # Errors
     ///
-    /// The delivery back, boxed, when the queue is full —
-    /// backpressure.
+    /// The delivery's envelope back, boxed, when the queue is full.
     pub fn deliver(
         &mut self,
         slot: Slot,
+        key: &str,
         port: node::Port,
         edge: String,
         envelope: Envelope,
     ) -> Result<(), Box<Envelope>> {
-        let queue = self.queues.entry((slot, port)).or_default();
+        let queue = self.queues.entry((slot, Key::from(key))).or_default();
         if queue.len() >= self.capacity {
             return Err(Box::new(envelope));
         }
         let seq = self.edge_seq.entry(edge.clone()).or_insert(0);
         *seq += 1;
         queue.push_back(Delivery {
+            port,
             edge,
             seq: *seq,
             envelope,
@@ -176,11 +197,36 @@ impl Mailboxes {
         Ok(())
     }
 
-    /// Takes the oldest delivery for a node port, FIFO.
-    pub fn take(&mut self, slot: Slot, port: &node::Port) -> Option<Delivery> {
+    /// The first unclaimed non-empty mailbox and a copy of its head —
+    /// the reservation: nothing is removed until [`Self::pop`].
+    #[must_use]
+    pub fn peek_next(&self) -> Option<(Slot, Key, Delivery)> {
         self.queues
-            .get_mut(&(slot, port.clone()))
+            .iter()
+            .find(|((slot, key), queue)| {
+                !queue.is_empty() && !self.claimed.contains(&(*slot, key.clone()))
+            })
+            .and_then(|((slot, key), queue)| {
+                queue.front().map(|head| (*slot, key.clone(), head.clone()))
+            })
+    }
+
+    /// Removes the head of a mailbox — only after the transaction
+    /// that consumes it is committed.
+    pub fn pop(&mut self, slot: Slot, key: &str) -> Option<Delivery> {
+        self.queues
+            .get_mut(&(slot, Key::from(key)))
             .and_then(VecDeque::pop_front)
+    }
+
+    /// Claims a mailbox for the duration of an external call.
+    pub fn claim(&mut self, slot: Slot, key: &str) {
+        self.claimed.insert((slot, Key::from(key)));
+    }
+
+    /// Releases a claim after the call settled.
+    pub fn release(&mut self, slot: Slot, key: &str) {
+        self.claimed.remove(&(slot, Key::from(key)));
     }
 
     /// Whether any delivery is waiting anywhere.
@@ -189,15 +235,10 @@ impl Mailboxes {
         self.queues.values().all(VecDeque::is_empty)
     }
 
-    /// The queues holding at least one delivery, in deterministic
-    /// order.
+    /// Whether any unclaimed mailbox has work.
     #[must_use]
-    pub fn ready(&self) -> Vec<(Slot, node::Port)> {
-        self.queues
-            .iter()
-            .filter(|(_, queue)| !queue.is_empty())
-            .map(|(key, _)| key.clone())
-            .collect()
+    pub fn has_ready(&self) -> bool {
+        self.peek_next().is_some()
     }
 }
 
@@ -236,15 +277,13 @@ impl EmissionBuffer {
     }
 }
 
-/// The result of one atomic transaction: the commit packet, the state
-/// to apply, and nothing else — the caller journals, applies, and
-/// routes, in that order.
+/// The result of one atomic transaction: the commit packet and
+/// nothing else — its `state_delta` is the single source of truth
+/// the caller journals, applies, and routes from, in that order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransactionOutcome {
     /// The commit packet for the journal.
     pub record: TransactionRecord,
-    /// The full new cell values to apply on commit.
-    pub state: Vec<(String, cel::Value)>,
 }
 
 /// Atomic node-transaction executor: scratch isolation while a
@@ -275,11 +314,11 @@ impl<'plan> TransactionExecutor<'plan> {
     pub fn fire(
         &self,
         slot: Slot,
-        trigger: &node::Trigger,
         delivery: &Delivery,
         state: &BTreeMap<String, cel::Value>,
     ) -> Result<TransactionOutcome, Fault> {
         let node = &self.plan.nodes[slot.index()];
+        let trigger = &node::Trigger::Port(delivery.port.clone());
         let handler = self
             .plan
             .handlers
@@ -321,7 +360,6 @@ impl<'plan> TransactionExecutor<'plan> {
                             state_delta: vec![],
                             emissions: vec![],
                         },
-                        state: vec![],
                     });
                 }
                 other => {
@@ -371,17 +409,66 @@ impl<'plan> TransactionExecutor<'plan> {
             .filter(|(name, value)| state.get(*name) != Some(value))
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
-        let emissions = buffer.into_emissions();
         Ok(TransactionOutcome {
             record: TransactionRecord {
                 node_path: node.path.clone(),
                 trigger: trigger.clone(),
                 consumed: vec![consumed],
-                state_delta: state_delta.clone(),
-                emissions: emissions.clone(),
+                state_delta,
+                emissions: buffer.into_emissions(),
             },
-            state: state_delta,
         })
+    }
+
+    /// The typed-error transaction for a faulted handler: the input
+    /// is consumed causally and the fault leaves on `err` as a typed
+    /// payload — a machine never swallows an envelope.
+    #[must_use]
+    pub fn fault_transaction(
+        &self,
+        slot: Slot,
+        delivery: &Delivery,
+        fault: &Fault,
+    ) -> TransactionOutcome {
+        let node = &self.plan.nodes[slot.index()];
+        let trigger = node::Trigger::Port(delivery.port.clone());
+        let err = node::Port::new("err").unwrap_or_else(|_| unreachable!("`err` is a valid port"));
+        let id = ids::emission_id(
+            &node.path,
+            &trigger,
+            delivery.envelope.meta().sys().id(),
+            &err,
+            0,
+        );
+        let sys = MetaSys::emission(id, delivery.envelope.meta().sys(), self.graph_version.0);
+        let mut payload = BTreeMap::new();
+        payload.insert(
+            String::from("kind"),
+            envelope::Value::Scalar(envelope::Scalar::Text(String::from("RuntimeFault"))),
+        );
+        payload.insert(
+            String::from("message"),
+            envelope::Value::Scalar(envelope::Scalar::Text(fault.to_string())),
+        );
+        TransactionOutcome {
+            record: TransactionRecord {
+                node_path: node.path.clone(),
+                trigger,
+                consumed: vec![ConsumedPosition {
+                    edge: delivery.edge.clone(),
+                    seq: delivery.seq,
+                }],
+                state_delta: vec![],
+                emissions: vec![Emission {
+                    port: err,
+                    index: 0,
+                    envelope: Envelope::new(
+                        Meta::new(sys),
+                        Data::materialized(envelope::Value::Map(payload)),
+                    ),
+                }],
+            },
+        }
     }
 
     /// The connector's outcome transaction for a settled call: one
@@ -412,7 +499,30 @@ impl<'plan> TransactionExecutor<'plan> {
         let sys = MetaSys::emission(id, request_sys, self.graph_version.0);
         let data = match &event.outcome {
             CallOutcome::Success(data) => data.clone(),
-            CallOutcome::Failure(error) => error.data.clone(),
+            CallOutcome::Failure(error) => {
+                // The kind survives into the graph: err handlers test
+                // `err.kind`, so a failure envelope carries it beside
+                // the payload.
+                let mut payload = BTreeMap::new();
+                payload.insert(
+                    String::from("kind"),
+                    envelope::Value::Scalar(envelope::Scalar::Text(error.kind.clone())),
+                );
+                if let Data::Encoded {
+                    encoding: envelope::Encoding::Raw,
+                    bytes,
+                    ..
+                } = &error.data
+                {
+                    payload.insert(
+                        String::from("detail"),
+                        envelope::Value::Scalar(envelope::Scalar::Bytes(bytes.clone())),
+                    );
+                } else if let Data::Materialized(value) = &error.data {
+                    payload.insert(String::from("detail"), value.clone());
+                }
+                Data::materialized(envelope::Value::Map(payload))
+            }
         };
         let envelope = Envelope::new(Meta::new(sys), data);
         TransactionOutcome {
@@ -427,7 +537,6 @@ impl<'plan> TransactionExecutor<'plan> {
                     envelope,
                 }],
             },
-            state: vec![],
         }
     }
 
@@ -705,6 +814,7 @@ graph m0_probe : App {
         );
         let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
         Delivery {
+            port: node::Port::new("in").unwrap(),
             edge: String::from(".in>shout.in"),
             seq: 1,
             envelope: Envelope::new(
@@ -725,9 +835,7 @@ graph m0_probe : App {
         let state = PartitionState::new().cell(&plan, slot, "");
         assert_eq!(state.get("count"), Some(&cel::Value::Int(0)));
         let delivery = input("salut");
-        let outcome = executor
-            .fire(slot, &trigger_in(), &delivery, &state)
-            .unwrap();
+        let outcome = executor.fire(slot, &delivery, &state).unwrap();
         // The commit packet: consumed cursor, state delta, emission.
         assert_eq!(outcome.record.consumed[0].edge, ".in>shout.in");
         assert_eq!(outcome.record.consumed[0].seq, 1);
@@ -761,12 +869,8 @@ graph m0_probe : App {
         let executor = TransactionExecutor::new(&plan, GraphVersion(1));
         let state = PartitionState::new().cell(&plan, slot, "");
         let delivery = input("salut");
-        let once = executor
-            .fire(slot, &trigger_in(), &delivery, &state)
-            .unwrap();
-        let twice = executor
-            .fire(slot, &trigger_in(), &delivery, &state)
-            .unwrap();
+        let once = executor.fire(slot, &delivery, &state).unwrap();
+        let twice = executor.fire(slot, &delivery, &state).unwrap();
         assert_eq!(once, twice, "same inputs, same transaction, same ids");
     }
 
@@ -775,9 +879,7 @@ graph m0_probe : App {
         let (plan, slot) = probe();
         let executor = TransactionExecutor::new(&plan, GraphVersion(1));
         let state = PartitionState::new().cell(&plan, slot, "");
-        let outcome = executor
-            .fire(slot, &trigger_in(), &input(""), &state)
-            .unwrap();
+        let outcome = executor.fire(slot, &input(""), &state).unwrap();
         assert!(outcome.record.emissions.is_empty());
         assert!(outcome.record.state_delta.is_empty());
         assert_eq!(
@@ -795,6 +897,7 @@ graph m0_probe : App {
         // Avro payloads cannot be materialized in this build: the
         // handler faults, and the caller applies nothing.
         let delivery = Delivery {
+            port: node::Port::new("in").unwrap(),
             edge: String::from(".in>shout.in"),
             seq: 1,
             envelope: Envelope::new(
@@ -802,9 +905,7 @@ graph m0_probe : App {
                 Data::encoded(Encoding::Avro, *b"opaque"),
             ),
         };
-        let fault = executor
-            .fire(slot, &trigger_in(), &delivery, &state)
-            .unwrap_err();
+        let fault = executor.fire(slot, &delivery, &state).unwrap_err();
         assert!(matches!(fault, Fault::Opaque(_)));
         assert_eq!(state.get("count"), Some(&cel::Value::Int(0)), "untouched");
     }
@@ -838,23 +939,65 @@ graph m0_probe : App {
         let port = node::Port::new("in").unwrap();
         let envelope = input("a").envelope;
         mailboxes
-            .deliver(slot, port.clone(), String::from("e"), envelope.clone())
+            .deliver(slot, "", port.clone(), String::from("e"), envelope.clone())
             .unwrap();
         mailboxes
-            .deliver(slot, port.clone(), String::from("e"), envelope.clone())
+            .deliver(slot, "", port.clone(), String::from("e"), envelope.clone())
             .unwrap();
         // Bounded: the third delivery is refused, not dropped.
+        assert!(!mailboxes.has_room(slot, "", 0));
         assert!(
             mailboxes
-                .deliver(slot, port.clone(), String::from("e"), envelope.clone())
+                .deliver(slot, "", port.clone(), String::from("e"), envelope.clone())
                 .is_err()
         );
-        let first = mailboxes.take(slot, &port).unwrap();
-        let second = mailboxes.take(slot, &port).unwrap();
+        // Peek reserves without removing; pop removes.
+        let head = mailboxes.peek_next().unwrap();
+        assert_eq!(head.2.seq, 1);
+        let first = mailboxes.pop(slot, "").unwrap();
+        let second = mailboxes.pop(slot, "").unwrap();
         assert_eq!(first.seq, 1);
         assert_eq!(second.seq, 2, "per-edge sequence, FIFO order");
-        assert!(mailboxes.take(slot, &port).is_none());
+        assert!(mailboxes.pop(slot, "").is_none());
         assert!(mailboxes.is_empty());
+    }
+
+    #[test]
+    fn one_node_mailbox_keeps_arrival_order_across_ports() {
+        let (plan, slot) = probe();
+        let _ = &plan;
+        let mut mailboxes = Mailboxes::new(8);
+        let z = node::Port::new("z").unwrap();
+        let a = node::Port::new("a").unwrap();
+        let envelope = input("x").envelope;
+        mailboxes
+            .deliver(slot, "", z.clone(), String::from("ez"), envelope.clone())
+            .unwrap();
+        mailboxes
+            .deliver(slot, "", a.clone(), String::from("ea"), envelope.clone())
+            .unwrap();
+        // One FIFO per node instance: `z` arrived first, `z` fires
+        // first — the port never reorders shared-state work.
+        assert_eq!(mailboxes.pop(slot, "").unwrap().port, z);
+        assert_eq!(mailboxes.pop(slot, "").unwrap().port, a);
+    }
+
+    #[test]
+    fn a_claimed_mailbox_is_skipped_until_released() {
+        let (plan, slot) = probe();
+        let _ = &plan;
+        let mut mailboxes = Mailboxes::new(8);
+        let port = node::Port::new("in").unwrap();
+        mailboxes
+            .deliver(slot, "", port, String::from("e"), input("x").envelope)
+            .unwrap();
+        mailboxes.claim(slot, "");
+        assert!(
+            mailboxes.peek_next().is_none(),
+            "a suspended call keeps its mailbox claimed"
+        );
+        mailboxes.release(slot, "");
+        assert!(mailboxes.peek_next().is_some());
     }
 
     #[test]

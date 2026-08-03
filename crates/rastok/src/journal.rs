@@ -243,6 +243,9 @@ pub enum Error {
     /// An intent whose call ref does not derive from its own
     /// canonical fields — a forged or corrupted causal fact.
     CorruptIntent,
+    /// The backing store failed to commit — the durable-journal
+    /// escape hatch; the in-memory journal never raises it.
+    Storage(String),
 }
 
 impl fmt::Display for Error {
@@ -257,6 +260,7 @@ impl fmt::Display for Error {
             Self::CorruptIntent => {
                 f.write_str("the call ref does not derive from the intent's canonical fields")
             }
+            Self::Storage(detail) => write!(f, "the journal store failed: {detail}"),
         }
     }
 }
