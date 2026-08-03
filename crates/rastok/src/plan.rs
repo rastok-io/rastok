@@ -87,7 +87,13 @@ impl Node {
 pub struct ConnectorSpec {
     /// The contract sheet name (`Process`).
     pub contract: String,
-    /// The declared attributes, reduced.
+    /// The declared effect — typed at the HIR/plan frontier, where
+    /// distinctions become irrevocable.
+    pub effect: node::Effect,
+    /// The declared behavior, likewise typed.
+    pub behavior: node::Behavior,
+    /// The remaining declared attributes, reduced; the typed axes
+    /// above are not repeated here.
     pub attributes: Vec<(String, AttrSetting)>,
 }
 

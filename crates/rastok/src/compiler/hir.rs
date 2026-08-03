@@ -2,7 +2,8 @@
 //! the planner's input.
 //!
 //! The HIR carries only what survived every check: names are resolved,
-//! default ports are explicit, envelope sugar is normalized into its
+//! the port table is complete — declared and inferred, defaults
+//! implicit — envelope sugar is normalized into its
 //! semantic form, and every expression is a compiled CEL tree. Spans
 //! and other diagnostic material stay in side tables owned by later
 //! stages; nothing here is hashed with positions in it.
@@ -55,26 +56,68 @@ pub struct Val {
     pub value: Const,
 }
 
+/// What a checked node is — one source of truth, no duplicated
+/// discriminant: an operator never carries a trait or attributes, a
+/// connector always carries both.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeRole {
+    /// Pure graph-internal computation.
+    Operator,
+    /// External-effect adapter under a contract sheet.
+    Connector {
+        /// The trait symbol (`Process`).
+        trait_name: String,
+        /// Checked attributes, in declaration order.
+        attributes: Vec<Attribute>,
+    },
+}
+
 /// One checked node declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     /// Root-relative address; single-segment in the flat M0 subset.
     pub path: node::Path,
-    /// Operator or connector.
-    pub kind: node::Kind,
-    /// The connector's trait symbol (`Process`), when a connector.
-    pub connector_trait: Option<String>,
-    /// Checked attributes, in declaration order.
-    pub attributes: Vec<Attribute>,
+    /// What the node is.
+    pub role: NodeRole,
     /// Node-local constant bindings — identity material, substituted
     /// into shipped expressions at lowering.
     pub vals: Vec<Val>,
     /// Mutable state cells, in declaration order.
     pub vars: Vec<Var>,
-    /// Ports declared explicitly on the node, with their direction.
-    pub declared_ports: Vec<(node::Port, Direction)>,
+    /// The semantic port table — declared and inferred, with
+    /// directions; the defaults `in`, `out`, `err` stay implicit.
+    pub ports: Vec<(node::Port, Direction)>,
     /// Checked handlers, in declaration order.
     pub handlers: Vec<Handler>,
+}
+
+impl Node {
+    /// The node vocabulary category of this role.
+    #[must_use]
+    pub fn category(&self) -> node::Kind {
+        match self.role {
+            NodeRole::Operator => node::Kind::Operator,
+            NodeRole::Connector { .. } => node::Kind::Connector,
+        }
+    }
+
+    /// The connector's trait symbol, when a connector.
+    #[must_use]
+    pub fn connector_trait(&self) -> Option<&str> {
+        match &self.role {
+            NodeRole::Connector { trait_name, .. } => Some(trait_name),
+            NodeRole::Operator => None,
+        }
+    }
+
+    /// The checked attributes; an operator has none.
+    #[must_use]
+    pub fn attributes(&self) -> &[Attribute] {
+        match &self.role {
+            NodeRole::Connector { attributes, .. } => attributes,
+            NodeRole::Operator => &[],
+        }
+    }
 }
 
 /// One checked attribute.

@@ -12,7 +12,8 @@
 
 use crate::cel;
 use crate::compiler::hir::{
-    AttrValue, Direction, EdgeTarget, EmitValue, Hir, Node as HirNode, Statement as HirStatement,
+    AttrValue, Direction, EdgeTarget, EmitValue, Hir, Node as HirNode, NodeRole,
+    Statement as HirStatement,
 };
 use crate::node;
 use crate::plan::{
@@ -108,8 +109,9 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         // Declaratively unordered collections ship in canonical order,
         // so equal hashes always mean equal plans.
         let mut attributes: Vec<_> = hir_node
-            .attributes
+            .attributes()
             .iter()
+            .filter(|attribute| !matches!(attribute.name.as_str(), "effect" | "behavior"))
             .map(|attribute| {
                 let setting = match &attribute.value {
                     AttrValue::Word(word) => AttrSetting::Word(word.clone()),
@@ -119,7 +121,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
             })
             .collect();
         attributes.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut ports = hir_node.declared_ports.clone();
+        let mut ports = hir_node.ports.clone();
         ports.sort();
         let mut vars: Vec<_> = hir_node
             .vars
@@ -133,12 +135,14 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         vars.sort_by(|a, b| a.name.cmp(&b.name));
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
-            kind: match &hir_node.connector_trait {
-                Some(contract) => NodeKind::Connector(ConnectorSpec {
-                    contract: contract.clone(),
+            kind: match &hir_node.role {
+                NodeRole::Connector { trait_name, .. } => NodeKind::Connector(ConnectorSpec {
+                    contract: trait_name.clone(),
+                    effect: typed_effect(hir_node),
+                    behavior: typed_behavior(hir_node),
                     attributes,
                 }),
-                None => NodeKind::Operator,
+                NodeRole::Operator => NodeKind::Operator,
             },
             ports,
             vars,
@@ -295,8 +299,38 @@ fn substitute(
 /// sorted top-level declarations. Slots index this order.
 fn sorted_nodes(hir: &Hir) -> Vec<&HirNode> {
     let mut nodes: Vec<_> = hir.app.nodes.iter().collect();
-    nodes.sort_by_key(|node| (kind_rank(node.kind), node.path.to_string()));
+    nodes.sort_by_key(|node| (kind_rank(node.category()), node.path.to_string()));
     nodes
+}
+
+/// The checker guarantees the mandatory axes exist with valid words
+/// before any plan is built; the plan makes them irrevocable types.
+fn typed_effect(node: &HirNode) -> node::Effect {
+    let word = attribute_word(node, "effect");
+    match word {
+        "idempotent" => node::Effect::Class(node::EffectClass::Idempotent),
+        "compensable" => node::Effect::Class(node::EffectClass::Compensable),
+        "irreversible" => node::Effect::Class(node::EffectClass::Irreversible),
+        other => unreachable!("the contract sheet admitted `{other}`"),
+    }
+}
+
+fn typed_behavior(node: &HirNode) -> node::Behavior {
+    match attribute_word(node, "behavior") {
+        "deterministic" => node::Behavior::Deterministic,
+        "probabilistic" => node::Behavior::Probabilistic,
+        other => unreachable!("the contract sheet admitted `{other}`"),
+    }
+}
+
+fn attribute_word<'hir>(node: &'hir HirNode, name: &str) -> &'hir str {
+    node.attributes()
+        .iter()
+        .find_map(|attribute| match (&attribute.name, &attribute.value) {
+            (attr, AttrValue::Word(word)) if attr == name => Some(word.as_str()),
+            _ => None,
+        })
+        .unwrap_or_else(|| unreachable!("the contract sheet requires `{name}`"))
 }
 
 fn kind_rank(kind: node::Kind) -> u8 {
@@ -369,13 +403,13 @@ impl Writer {
     }
 
     fn node(&mut self, node: &HirNode) {
-        self.tag(match node.kind {
+        self.tag(match node.category() {
             node::Kind::Operator => 1,
             node::Kind::Connector => 2,
             node::Kind::Graph => 3,
         });
         self.str(&node.path.to_string());
-        match &node.connector_trait {
+        match node.connector_trait() {
             None => self.tag(0),
             Some(name) => {
                 self.tag(1);
@@ -389,7 +423,7 @@ impl Writer {
             self.str(&val.name);
             self.expr(&val.value.tree.root);
         }
-        let mut attributes: Vec<_> = node.attributes.iter().collect();
+        let mut attributes: Vec<_> = node.attributes().iter().collect();
         attributes.sort_by(|a, b| a.name.cmp(&b.name));
         self.count(attributes.len());
         for attribute in attributes {
@@ -420,7 +454,7 @@ impl Writer {
             }
         }
         let mut ports: Vec<_> = node
-            .declared_ports
+            .ports
             .iter()
             .map(|(port, direction)| (port.name(), *direction))
             .collect();
@@ -691,6 +725,20 @@ graph m0_probe : App {
         ));
         assert_eq!(plan.edges.len(), 3);
         assert_eq!(compilation.symbols.nodes, ["shout", "echo"]);
+    }
+
+    #[test]
+    fn the_mandatory_axes_ship_typed() {
+        let compilation = compile(&[M0_PROBE], &Registry::m0()).unwrap();
+        let spec = compilation.plan.nodes[1].connector().unwrap();
+        assert_eq!(
+            spec.effect,
+            crate::node::Effect::Class(crate::node::EffectClass::Idempotent)
+        );
+        assert_eq!(spec.behavior, crate::node::Behavior::Deterministic);
+        // The typed axes are not repeated in the attribute bag.
+        assert!(spec.attribute("effect").is_none());
+        assert!(spec.attribute("behavior").is_none());
     }
 
     #[test]

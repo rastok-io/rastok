@@ -10,7 +10,7 @@
 use crate::cel;
 use crate::compiler::hir::{
     AttrValue, Attribute, Const, Direction, Edge, EdgeTarget, EmitValue, Endpoint, FieldWrite,
-    Graph, Handler, Hir, Node, Statement, Val, Var,
+    Graph, Handler, Hir, Node, NodeRole, Statement, Val, Var,
 };
 use crate::compiler::syntax::{
     BaseType, CelExpr, ConnectorDecl, EdgeDecl, EdgeEndpoint, GraphDecl, GraphItem, OperatorDecl,
@@ -414,12 +414,10 @@ impl Checker<'_, '_> {
         let path = self.node_path(&decl.name.text, decl.name.span)?;
         let mut node = Node {
             path,
-            kind: node::Kind::Operator,
-            connector_trait: None,
-            attributes: Vec::new(),
+            role: NodeRole::Operator,
             vals: Vec::new(),
             vars: Vec::new(),
-            declared_ports: Vec::new(),
+            ports: Vec::new(),
             handlers: Vec::new(),
         };
         self.node_body(&decl.body, &mut node, graph_signature, graph_consts, false);
@@ -433,7 +431,10 @@ impl Checker<'_, '_> {
         graph_consts: &BTreeMap<String, cel::Value>,
     ) -> Option<Node> {
         let mut symbols = decl.annotation.symbols.iter();
-        let connector_trait = symbols.next().map(|symbol| symbol.text.clone());
+        let trait_name = symbols
+            .next()
+            .map(|symbol| symbol.text.clone())
+            .unwrap_or_else(|| unreachable!("the parser mandates a connector annotation"));
         for aspect in symbols {
             self.deferred("a connector aspect", aspect.span);
         }
@@ -443,12 +444,13 @@ impl Checker<'_, '_> {
         let path = self.node_path(&decl.name.text, decl.name.span)?;
         let mut node = Node {
             path,
-            kind: node::Kind::Connector,
-            connector_trait,
-            attributes: Vec::new(),
+            role: NodeRole::Connector {
+                trait_name,
+                attributes: Vec::new(),
+            },
             vals: Vec::new(),
             vars: Vec::new(),
-            declared_ports: Vec::new(),
+            ports: Vec::new(),
             handlers: Vec::new(),
         };
         self.node_body(&decl.body, &mut node, graph_signature, graph_consts, true);
@@ -530,7 +532,7 @@ impl Checker<'_, '_> {
                 );
             }
         }
-        for attribute in &node.attributes {
+        for attribute in node.attributes() {
             if matches!(
                 contract.attribute(&attribute.name),
                 Some(stdlib::AttributeSpec {
@@ -610,7 +612,7 @@ impl Checker<'_, '_> {
         for spec in contract.attributes {
             if spec.required
                 && !node
-                    .attributes
+                    .attributes()
                     .iter()
                     .any(|attribute| attribute.name == spec.name)
             {
@@ -650,6 +652,8 @@ impl Checker<'_, '_> {
     ) {
         let mut signature = graph_signature.clone();
         let mut consts = graph_consts.clone();
+        let mut declared_names: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
         // Pass one: everything except handlers, so the port table and
         // the visible bindings are complete before any handler checks.
         for item in body {
@@ -679,6 +683,21 @@ impl Checker<'_, '_> {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
                     };
+                    // An explicit redeclaration is a conflict even
+                    // when the direction agrees; an inferred repeat
+                    // is not.
+                    if !declared_names.insert(port.name.text.clone()) {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_PORT_CONFLICT,
+                                Phase::Check,
+                                format!("the port `{}` is already declared", port.name.text),
+                            )
+                            .with_span(port.name.span)
+                            .with_field("port", port.name.text.clone()),
+                        );
+                        continue;
+                    }
                     self.add_port(node, &port.name, direction, "declared");
                 }
                 OperatorItem::Val(val) => {
@@ -702,26 +721,38 @@ impl Checker<'_, '_> {
                     }
                 }
                 OperatorItem::Attribute(attribute) => {
-                    if is_connector {
-                        if let Some(checked) = self.attribute_value(
-                            &attribute.value,
-                            &signature,
-                            &consts,
-                            attribute.span,
-                        ) {
-                            node.attributes.push(Attribute {
-                                name: attribute
-                                    .target
-                                    .segments
-                                    .iter()
-                                    .map(|segment| segment.text.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join("."),
-                                value: checked,
-                            });
-                        }
-                    } else {
+                    let name = attribute
+                        .target
+                        .segments
+                        .iter()
+                        .map(|segment| segment.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    if node.connector_trait().is_none() {
                         self.deferred("an operator attribute", attribute.span);
+                    } else if node
+                        .attributes()
+                        .iter()
+                        .any(|existing| existing.name == name)
+                    {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_CONTRACT_ATTR,
+                                Phase::Check,
+                                format!("`{name}` is declared twice; a repeat would win silently"),
+                            )
+                            .with_span(attribute.span)
+                            .with_field("attribute", name)
+                            .with_field("detail", "repeated attribute"),
+                        );
+                    } else if let Some(checked) =
+                        self.attribute_value(&attribute.value, &signature, &consts, attribute.span)
+                        && let NodeRole::Connector { attributes, .. } = &mut node.role
+                    {
+                        attributes.push(Attribute {
+                            name,
+                            value: checked,
+                        });
                     }
                 }
                 OperatorItem::SubBlock(block) => {
@@ -766,7 +797,7 @@ impl Checker<'_, '_> {
             _ => None,
         };
         let existing = default_direction.or_else(|| {
-            node.declared_ports
+            node.ports
                 .iter()
                 .find(|(port, _)| port.name() == name.text)
                 .map(|(_, direction)| *direction)
@@ -791,7 +822,7 @@ impl Checker<'_, '_> {
             Some(_) => {}
             None => {
                 if let Ok(port) = node::Port::new(name.text.clone()) {
-                    node.declared_ports.push((port, direction));
+                    node.ports.push((port, direction));
                 } else {
                     self.bag.push(
                         Diagnostic::new(
@@ -1315,13 +1346,13 @@ impl Checker<'_, '_> {
     /// defaults. `None` means the node exposes no such port.
     fn node_port_direction(&self, target: &Node, port_name: &str) -> Option<Direction> {
         if let Some((_, direction)) = target
-            .declared_ports
+            .ports
             .iter()
             .find(|(port, _)| port.name() == port_name)
         {
             return Some(*direction);
         }
-        if let Some(trait_name) = &target.connector_trait
+        if let Some(trait_name) = target.connector_trait()
             && let stdlib::Availability::Available(contract) = self.registry.connector(trait_name)
         {
             if contract.input_ports.contains(&port_name) {
@@ -1574,19 +1605,19 @@ graph m0_probe : App {
         assert_eq!(hir.app.vals[0].name, "greeting");
         assert_eq!(hir.app.nodes.len(), 2);
         let echo = &hir.app.nodes[0];
-        assert_eq!(echo.kind, node::Kind::Connector);
-        assert_eq!(echo.connector_trait.as_deref(), Some("Process"));
-        assert_eq!(echo.attributes.len(), 5);
+        assert_eq!(echo.category(), node::Kind::Connector);
+        assert_eq!(echo.connector_trait(), Some("Process"));
+        assert_eq!(echo.attributes().len(), 5);
         assert_eq!(
-            echo.attributes[0].value,
+            echo.attributes()[0].value,
             AttrValue::Word(String::from("job"))
         );
-        let AttrValue::Const(command) = &echo.attributes[1].value else {
+        let AttrValue::Const(command) = &echo.attributes()[1].value else {
             panic!("expected a constant attribute");
         };
         assert_eq!(command.value, cel::Value::Text(String::from("cat")));
         let shout = &hir.app.nodes[1];
-        assert_eq!(shout.kind, node::Kind::Operator);
+        assert_eq!(shout.category(), node::Kind::Operator);
         assert_eq!(shout.vars[0].ty, cel::Type::Int);
         let handler = &shout.handlers[0];
         assert_eq!(
@@ -1798,7 +1829,7 @@ graph m0_probe : App {
         // needed. This program is conforming and must check cleanly.
         let source = "graph g : App {\n  input feed\n  output sink\n\n  operator o {\n    on event {\n      result = envelope\n    }\n  }\n\n  .feed -> o.event\n  o.result -> .sink\n}\n";
         let hir = check_clean(source);
-        let ports = &hir.app.nodes[0].declared_ports;
+        let ports = &hir.app.nodes[0].ports;
         assert!(
             ports
                 .iter()
@@ -1904,6 +1935,26 @@ graph m0_probe : App {
         let chain = "graph g : App {\n  operator a { on in { out = envelope } }\n  operator b { on in { out = envelope } }\n  . -> a -> b -> .\n}\n";
         let (_, bag) = check_source(chain);
         assert!(!diagnostic_codes(&bag).contains(&E_GRAPH_CYCLE));
+    }
+
+    #[test]
+    fn repeated_attributes_and_port_declarations_are_refused() {
+        let repeated_attr = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; command = \"false\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+        let (_, bag) = check_source(repeated_attr);
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR
+                    && diagnostic.message().contains("twice"))
+        );
+        let repeated_port = "graph g : App {\n  operator o {\n    input event\n    input event\n    on event { out = envelope }\n  }\n  .feed -> o.event\n  input feed\n  o -> .\n}\n";
+        let (_, bag) = check_source(repeated_port);
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code() == E_PORT_CONFLICT
+                    && diagnostic.message().contains("already declared"))
+        );
     }
 
     #[test]
