@@ -16,10 +16,40 @@ use std::io::Read;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-/// The stdout cap for a job run, per the contract sheet's
-/// `max_output = 8MiB` default. Declared sizes join with the size
-/// parser.
-const MAX_OUTPUT: usize = 8 * 1024 * 1024;
+/// The default stdout cap for a job run, per the contract sheet's
+/// `max_output = 8MiB` default.
+const DEFAULT_MAX_OUTPUT: usize = 8 * 1024 * 1024;
+
+/// Prepares the exact protocol bytes of a request under a connector's
+/// contract — pure, shared by the machine and the adapter: the digest
+/// the journal seals and the bytes the child receives come from this
+/// one function, so they cannot diverge. `codec = lines` frames text
+/// as a single line (one trailing newline ensured) and passes raw
+/// bytes verbatim; anything else refuses before any effect.
+///
+/// # Errors
+///
+/// The typed-decode reason when the data cannot be framed.
+pub fn prepare(spec: &crate::plan::ConnectorSpec, data: &Data) -> Result<Vec<u8>, String> {
+    let _ = spec; // one codec exists in this build; jsonl defers at check
+    frame_request(data)
+}
+
+/// Parses a declared size ("8MiB", "512KiB", "100B", bare bytes).
+fn parse_size(text: &str) -> Option<usize> {
+    let text = text.trim();
+    let split = text.find(|c: char| !c.is_ascii_digit())?;
+    let (digits, suffix) = text.split_at(split);
+    let base: usize = digits.parse().ok()?;
+    let factor = match suffix.trim() {
+        "B" => 1,
+        "KiB" => 1024,
+        "MiB" => 1024 * 1024,
+        "GiB" => 1024 * 1024 * 1024,
+        _ => return None,
+    };
+    base.checked_mul(factor)
+}
 
 /// The `Process` adapter, job mode: one envelope, one spawn. stdin
 /// carries the codec-framed request; the complete stdout at exit
@@ -85,9 +115,24 @@ impl<'plan> Process<'plan> {
                 .collect(),
             _ => Vec::new(),
         };
-        let framed = match frame_request(request.data()) {
+        let framed = match prepare(spec, request.data()) {
             Ok(bytes) => bytes,
             Err(message) => return failure("DecodeError", message),
+        };
+        let max_output = match spec.attribute("max_output") {
+            Some(AttrSetting::Value(cel::Value::Text(text))) => match parse_size(text) {
+                Some(size) => size,
+                None => {
+                    return failure("SpawnFailed", format!("max_output `{text}` is not a size"));
+                }
+            },
+            _ => DEFAULT_MAX_OUTPUT,
+        };
+        let deadline = match spec.attribute("timeout") {
+            Some(AttrSetting::Value(cel::Value::Duration(nanos))) => u64::try_from(*nanos)
+                .ok()
+                .map(|nanos| std::time::Instant::now() + std::time::Duration::from_nanos(nanos)),
+            _ => None,
         };
         let mut child = match Command::new(command)
             .args(&args)
@@ -99,30 +144,78 @@ impl<'plan> Process<'plan> {
             Ok(child) => child,
             Err(error) => return failure("SpawnFailed", error.to_string()),
         };
-        // A pipe writes and reads concurrently or deadlocks: the
-        // child may block writing stdout while we block writing
-        // stdin. The writer gets its own thread; a child that exits
-        // without draining stdin is a broken pipe, not a fault.
+        // Pipes are drained concurrently or they deadlock: a child
+        // may block on stderr before closing stdout, or on stdout
+        // before reading stdin. Every pipe gets its own thread; the
+        // parent only watches the exit and the clock.
         let stdin = child.stdin.take();
         let writer = std::thread::spawn(move || {
             if let Some(mut stdin) = stdin {
+                // A child that exits without draining stdin is a
+                // broken pipe, not a fault.
                 let _ = stdin.write_all(&framed);
             }
         });
-        let mut stdout = Vec::new();
-        if let Some(pipe) = child.stdout.take() {
-            let cap = u64::try_from(MAX_OUTPUT).unwrap_or(u64::MAX);
-            if let Err(error) = pipe.take(cap.saturating_add(1)).read_to_end(&mut stdout) {
-                let _ = child.kill();
-                let _ = child.wait();
+        let cap = u64::try_from(max_output)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let stdout_reader = child.stdout.take().map(|pipe| {
+            std::thread::spawn(move || {
+                let mut buffer = Vec::new();
+                let _ = pipe.take(cap).read_to_end(&mut buffer);
+                buffer
+            })
+        });
+        let stderr_reader = child.stderr.take().map(|pipe| {
+            std::thread::spawn(move || {
+                let mut buffer = Vec::new();
+                let _ = pipe.take(cap).read_to_end(&mut buffer);
+                buffer
+            })
+        });
+        let join_pipes =
+            |writer: std::thread::JoinHandle<()>,
+             stdout_reader: Option<std::thread::JoinHandle<Vec<u8>>>,
+             stderr_reader: Option<std::thread::JoinHandle<Vec<u8>>>| {
                 let _ = writer.join();
-                return failure("ExecFailed", error.to_string());
+                let stdout = stdout_reader
+                    .and_then(|handle| handle.join().ok())
+                    .unwrap_or_default();
+                let stderr = stderr_reader
+                    .and_then(|handle| handle.join().ok())
+                    .unwrap_or_default();
+                (stdout, stderr)
+            };
+        // Watch the exit against the declared budget: a mute child is
+        // killed at the deadline and answers with the typed timeout —
+        // the machine's virtual budget cannot reach a blocked host.
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if let Some(deadline) = deadline
+                        && std::time::Instant::now() >= deadline
+                    {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = join_pipes(writer, stdout_reader, stderr_reader);
+                        return CallOutcome::Failure(TypedError {
+                            kind: String::from("TimeoutExpired"),
+                            data: Data::materialized(Value::Map(BTreeMap::new())),
+                        });
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = join_pipes(writer, stdout_reader, stderr_reader);
+                    return failure("ExecFailed", error.to_string());
+                }
             }
-        }
-        if stdout.len() > MAX_OUTPUT {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = writer.join();
+        };
+        let (stdout, stderr_bytes) = join_pipes(writer, stdout_reader, stderr_reader);
+        if stdout.len() > max_output {
             let mut payload = BTreeMap::new();
             payload.insert(
                 String::from("size"),
@@ -133,16 +226,7 @@ impl<'plan> Process<'plan> {
                 data: Data::materialized(Value::Map(payload)),
             });
         }
-        let status = child.wait();
-        let _ = writer.join();
-        let mut stderr = String::new();
-        if let Some(mut pipe) = child.stderr.take() {
-            let _ = pipe.read_to_string(&mut stderr);
-        }
-        let status = match status {
-            Ok(status) => status,
-            Err(error) => return failure("ExecFailed", error.to_string()),
-        };
+        let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
         if !status.success() {
             let mut payload = BTreeMap::new();
             payload.insert(
@@ -394,9 +478,108 @@ graph missing : App {
     }
 
     #[test]
-    fn an_unframeable_request_is_a_decode_error_without_a_spawn() {
-        // The operator ships the whole map; the lines codec frames
-        // text — the refusal is typed and no child ever runs.
+    fn a_mute_child_is_killed_at_its_declared_budget() {
+        // The machine's virtual clock cannot reach a blocked host:
+        // the adapter itself enforces the wall-clock deadline.
+        let source = r#"
+graph mute : App {
+  connector hang : Process {
+    mode = job ; command = "sh"
+    args = ["-c", "sleep 30"]
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("200ms")
+  }
+
+  operator shout {
+    on in { out = data.text }
+  }
+
+  . -> shout -> hang -> .
+}
+"#;
+        let started = std::time::Instant::now();
+        let (_, outputs, errors) = run(source, "salut");
+        assert!(outputs.is_empty());
+        assert_eq!(errors.len(), 1);
+        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
+            panic!("expected the typed error payload");
+        };
+        assert_eq!(
+            payload.get("kind"),
+            Some(&Value::Scalar(Scalar::Text(String::from("TimeoutExpired"))))
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the deadline actually fired"
+        );
+    }
+
+    #[test]
+    fn a_stderr_flood_cannot_deadlock_the_pipes() {
+        // 200 KiB of stderr overflows the OS pipe buffer: without a
+        // concurrent drain the child blocks before closing stdout.
+        let source = r#"
+graph flood : App {
+  connector noisy : Process {
+    mode = job ; command = "sh"
+    args = ["-c", "head -c 200000 /dev/zero >&2; echo done"]
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("30s")
+  }
+
+  operator shout {
+    on in { out = data.text }
+  }
+
+  . -> shout -> noisy -> .
+}
+"#;
+        let (_, outputs, errors) = run(source, "salut");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            outputs[0].data(),
+            &Data::materialized(Value::Scalar(Scalar::Text(String::from("done\n"))))
+        );
+    }
+
+    #[test]
+    fn the_declared_output_cap_is_enforced() {
+        let source = r#"
+graph capped : App {
+  connector wide : Process {
+    mode = job ; command = "sh"
+    args = ["-c", "head -c 100 /dev/zero"]
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+    max_output = "50B"
+  }
+
+  operator shout {
+    on in { out = data.text }
+  }
+
+  . -> shout -> wide -> .
+}
+"#;
+        let (_, outputs, errors) = run(source, "salut");
+        assert!(outputs.is_empty());
+        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
+            panic!("expected the typed error payload");
+        };
+        assert_eq!(
+            payload.get("kind"),
+            Some(&Value::Scalar(Scalar::Text(String::from("OutputOverflow"))))
+        );
+    }
+
+    #[test]
+    fn an_unframeable_request_never_opens_a_call() {
+        // The prepared request is sealed before the open fact: an
+        // unframeable payload refuses as a typed decode error with
+        // NO outbound record — the journal never promises an effect
+        // that cannot be attempted.
         let source = r#"
 graph unframeable : App {
   connector echo : Process {
@@ -412,15 +595,21 @@ graph unframeable : App {
   . -> shout -> echo -> .
 }
 "#;
-        let (_, outputs, errors) = run(source, "salut");
+        let (journal, outputs, errors) = run(source, "salut");
         assert!(outputs.is_empty());
-        assert_eq!(errors.len(), 1);
         let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
             panic!("expected the typed error payload");
         };
         assert_eq!(
             payload.get("kind"),
             Some(&Value::Scalar(Scalar::Text(String::from("DecodeError"))))
+        );
+        assert!(
+            !journal
+                .records()
+                .iter()
+                .any(|record| matches!(record, Record::Outbound(_))),
+            "no open fact for an unattemptable effect"
         );
     }
 

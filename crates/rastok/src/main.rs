@@ -130,8 +130,14 @@ fn run(paths: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             }
             match vm.pump(&mut journal, &mut world) {
-                Ok(report) if report.settled == 0 => break,
-                Ok(_) => {}
+                Ok(report) => {
+                    for (_, reason) in &report.rejected {
+                        eprintln!("err: a reply was refused before closure: {reason}");
+                    }
+                    if report.settled == 0 {
+                        break;
+                    }
+                }
                 Err(error) => {
                     eprintln!("error: {error}");
                     return ExitCode::FAILURE;

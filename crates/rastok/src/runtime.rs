@@ -462,6 +462,19 @@ impl<'plan> TransactionExecutor<'plan> {
         delivery: &Delivery,
         fault: &Fault,
     ) -> TransactionOutcome {
+        self.typed_error_transaction(slot, delivery, "RuntimeFault", &fault.to_string())
+    }
+
+    /// A transaction consuming `delivery` with a typed error on
+    /// `err` — the shape every non-happy consumption shares.
+    #[must_use]
+    pub fn typed_error_transaction(
+        &self,
+        slot: Slot,
+        delivery: &Delivery,
+        kind: &str,
+        message: &str,
+    ) -> TransactionOutcome {
         let node = &self.plan.nodes[slot.index()];
         let trigger = node::Trigger::Port(delivery.port.clone());
         let err = node::Port::new("err").unwrap_or_else(|_| unreachable!("`err` is a valid port"));
@@ -476,11 +489,11 @@ impl<'plan> TransactionExecutor<'plan> {
         let mut payload = BTreeMap::new();
         payload.insert(
             String::from("kind"),
-            envelope::Value::Scalar(envelope::Scalar::Text(String::from("RuntimeFault"))),
+            envelope::Value::Scalar(envelope::Scalar::Text(String::from(kind))),
         );
         payload.insert(
             String::from("message"),
-            envelope::Value::Scalar(envelope::Scalar::Text(fault.to_string())),
+            envelope::Value::Scalar(envelope::Scalar::Text(String::from(message))),
         );
         TransactionOutcome {
             record: TransactionRecord {

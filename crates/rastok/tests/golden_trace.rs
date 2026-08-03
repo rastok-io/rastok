@@ -30,7 +30,7 @@ graph m0_probe : App {
     var count : int = 0
     on in where data.text != "" {
       count = count + 1
-      out = envelope { data.text = data.text }
+      out = data.text
     }
   }
 

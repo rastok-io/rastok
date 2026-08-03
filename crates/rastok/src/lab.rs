@@ -175,6 +175,12 @@ fn settle(
             }
         };
         failures.append(&mut partner.faults);
+        for (response, reason) in &report.rejected {
+            failures.push(format!(
+                "a reply to {:?} was refused before closure: {reason}",
+                response.call_ref
+            ));
+        }
         if report.settled == 0 {
             rested = true;
             break;
@@ -513,7 +519,7 @@ graph m0_probe : App {
     var count : int = 0
     on in where data.text != "" {
       count = count + 1
-      out = envelope { data.text = data.text }
+      out = data.text
     }
   }
 
@@ -523,7 +529,7 @@ graph m0_probe : App {
 lab m0_probe {
   simulation smoke on app {
     mock echo {
-      on in where data.text == "salut" {
+      on in where data == "salut" {
         out = { text = "salut", echoed = true }
       }
       on in { out = envelope }
@@ -589,7 +595,7 @@ lab m0_probe {
         // showed a real emission invisible to its own port.
         let source = PROBE_WITH_LAB.replace(
             "expect \"the echo came back\" app.out count == 1 where data.echoed == true",
-            "expect \"the departure\" shout.out count == 1 where data.text == \"salut\"",
+            "expect \"the departure\" shout.out count == 1 where data == \"salut\"",
         );
         let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
@@ -640,7 +646,7 @@ graph m0_probe : App {
   }
 
   operator shout {
-    on in { out = envelope }
+    on in { out = data.text }
   }
 
   . -> shout -> echo -> .

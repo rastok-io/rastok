@@ -118,6 +118,29 @@ pub struct TypedError {
     pub data: envelope::Data,
 }
 
+/// Judges a partner's outcome against the calling connector's
+/// contract before it may become a causal fact. The plan owns the
+/// error sets; the dispatcher only asks.
+pub trait OutcomeGate {
+    /// `Ok` to admit; `Err(reason)` to refuse the closure.
+    ///
+    /// # Errors
+    ///
+    /// The refusal reason, surfaced with the rejected response.
+    fn admit(&self, connector: &node::Path, outcome: &CallOutcome) -> Result<(), String>;
+}
+
+/// The gate that admits everything — for worlds whose outcomes are
+/// validated elsewhere, and for tests of the dispatch mechanics.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenGate;
+
+impl OutcomeGate for OpenGate {
+    fn admit(&self, _: &node::Path, _: &CallOutcome) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 /// One routable boundary fact for the VM: which connector, which
 /// port, which cause. The VM owns what follows — the connector's
 /// transaction builds the outcome envelope under the emission recipe;
@@ -247,6 +270,10 @@ pub struct PumpBatch {
     /// Answers correlating with no journaled call — correlation
     /// faults to surface.
     pub uncorrelated: Vec<Response>,
+    /// Answers the outcome gate refused, with the reason. The call
+    /// stays OPEN — an invalid reply never becomes a causal fact,
+    /// and the timeout machinery can still settle the call honestly.
+    pub rejected: Vec<(Response, String)>,
 }
 
 /// A dispatcher fault — loud, never a skipped iteration.
@@ -327,6 +354,7 @@ impl Dispatcher {
         &mut self,
         journal: &mut dyn Journal,
         partner: &mut dyn Partner,
+        gate: &dyn OutcomeGate,
     ) -> Result<PumpBatch, DispatchError> {
         // Start phase: every open call not yet started.
         for intent in journal.open_calls() {
@@ -355,6 +383,13 @@ impl Dispatcher {
                 }
                 continue;
             };
+            // Validation BEFORE the causal fact: a reply the contract
+            // refuses must never close the call — journaled garbage
+            // would leave an unclosable obligation.
+            if let Err(reason) = gate.admit(&intent.connector_path, &response.outcome) {
+                batch.rejected.push((response, reason));
+                continue;
+            }
             let closure = Closure::Response(response.outcome.clone());
             match journal
                 .close_outbound(&response.call_ref, closure)
@@ -448,11 +483,15 @@ mod tests {
         let (mut journal, intent) = seeded_journal();
         let mut partner = Scripted::default();
         let mut dispatcher = Dispatcher::new();
-        dispatcher.pump(&mut journal, &mut partner).unwrap();
+        dispatcher
+            .pump(&mut journal, &mut partner, &OpenGate)
+            .unwrap();
         assert_eq!(partner.started.len(), 1);
         assert_eq!(partner.started[0].0.call_ref, intent.call_ref);
         // A second pump never re-starts an already-started call.
-        dispatcher.pump(&mut journal, &mut partner).unwrap();
+        dispatcher
+            .pump(&mut journal, &mut partner, &OpenGate)
+            .unwrap();
         assert_eq!(partner.started.len(), 1);
     }
 
@@ -463,7 +502,9 @@ mod tests {
         // Restart over an existing journal: the open call counts as
         // started; re-calls are the recovery fold's decision.
         let mut dispatcher = Dispatcher::resume(&journal);
-        dispatcher.pump(&mut journal, &mut partner).unwrap();
+        dispatcher
+            .pump(&mut journal, &mut partner, &OpenGate)
+            .unwrap();
         assert!(partner.started.is_empty());
     }
 
@@ -472,7 +513,9 @@ mod tests {
         let (mut journal, intent) = seeded_journal();
         let mut partner = Scripted::default();
         let mut dispatcher = Dispatcher::new();
-        dispatcher.pump(&mut journal, &mut partner).unwrap();
+        dispatcher
+            .pump(&mut journal, &mut partner, &OpenGate)
+            .unwrap();
         partner.replies = vec![
             Response {
                 call_ref: intent.call_ref,
@@ -484,7 +527,9 @@ mod tests {
                 outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"LATE")),
             },
         ];
-        let batch = dispatcher.pump(&mut journal, &mut partner).unwrap();
+        let batch = dispatcher
+            .pump(&mut journal, &mut partner, &OpenGate)
+            .unwrap();
         assert_eq!(batch.events.len(), 1, "only the won closure feeds the VM");
         assert_eq!(batch.discarded.len(), 1, "the loser stays visible");
         assert!(batch.uncorrelated.is_empty());
@@ -504,7 +549,9 @@ mod tests {
         let (mut journal, intent) = seeded_journal();
         let mut partner = Scripted::default();
         let mut dispatcher = Dispatcher::new();
-        dispatcher.pump(&mut journal, &mut partner).unwrap();
+        dispatcher
+            .pump(&mut journal, &mut partner, &OpenGate)
+            .unwrap();
         partner.replies = vec![Response {
             call_ref: intent.call_ref,
             outcome: CallOutcome::Failure(TypedError {
@@ -512,7 +559,9 @@ mod tests {
                 data: Data::encoded(Encoding::Raw, *b"exit 1"),
             }),
         }];
-        let batch = dispatcher.pump(&mut journal, &mut partner).unwrap();
+        let batch = dispatcher
+            .pump(&mut journal, &mut partner, &OpenGate)
+            .unwrap();
         assert_eq!(batch.events.len(), 1);
         assert_eq!(batch.events[0].port.name(), "err");
         assert!(
@@ -533,7 +582,9 @@ mod tests {
             ),
             outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"?")),
         }];
-        let batch = dispatcher.pump(&mut journal, &mut partner).unwrap();
+        let batch = dispatcher
+            .pump(&mut journal, &mut partner, &OpenGate)
+            .unwrap();
         assert!(batch.events.is_empty());
         assert_eq!(batch.uncorrelated.len(), 1, "correlation faults surface");
     }

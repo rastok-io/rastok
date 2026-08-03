@@ -49,14 +49,6 @@ pub enum VmError {
     /// A causal closure arrived for a call this machine holds no
     /// pending request for — an integrity breach, never a silence.
     MissingPending(CallRef),
-    /// A partner produced an error kind outside the connector's
-    /// contract error set.
-    UnknownErrorKind {
-        /// The connector whose contract was violated.
-        connector: node::Path,
-        /// The kind the partner invented.
-        kind: String,
-    },
 }
 
 impl fmt::Display for VmError {
@@ -70,9 +62,6 @@ impl fmt::Display for VmError {
             }
             Self::MissingPending(_) => {
                 f.write_str("a closure settled a call with no pending request")
-            }
-            Self::UnknownErrorKind { connector, kind } => {
-                write!(f, "`{kind}` is not in the error set of `{connector}`")
             }
         }
     }
@@ -92,6 +81,43 @@ pub struct PumpReport {
     pub discarded: Vec<Response>,
     /// Answers matching no journaled call at all.
     pub uncorrelated: Vec<Response>,
+    /// Answers the contract refused before closure, with reasons —
+    /// the call stays open for the timeout machinery.
+    pub rejected: Vec<(Response, String)>,
+}
+
+/// The plan-backed outcome gate: a failure kind must belong to the
+/// calling connector's sealed error set. Timeout-minted failures
+/// never pass here — the machine, not a partner, makes those.
+struct PlanGate<'plan> {
+    plan: &'plan ExecutionPlan,
+}
+
+impl crate::boundary::OutcomeGate for PlanGate<'_> {
+    fn admit(
+        &self,
+        connector: &node::Path,
+        outcome: &crate::boundary::CallOutcome,
+    ) -> Result<(), String> {
+        let CallOutcome::Failure(error) = outcome else {
+            return Ok(());
+        };
+        let known = self
+            .plan
+            .nodes
+            .iter()
+            .find(|node| &node.path == connector)
+            .and_then(crate::plan::Node::connector)
+            .is_some_and(|spec| spec.error_set.iter().any(|kind| kind == &error.kind));
+        if known {
+            Ok(())
+        } else {
+            Err(format!(
+                "`{}` is not in the error set of `{connector}`",
+                error.kind
+            ))
+        }
+    }
 }
 
 /// One observed delivery — the debugger-shaped observation surface:
@@ -282,9 +308,10 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         partner: &mut dyn Partner,
     ) -> Result<PumpReport, VmError> {
+        let gate = PlanGate { plan: self.plan };
         let batch = self
             .dispatcher
-            .pump(journal, partner)
+            .pump(journal, partner, &gate)
             .map_err(VmError::Dispatch)?;
         let settled = batch.events.len();
         let in_port =
@@ -298,6 +325,7 @@ impl<'plan> Vm<'plan> {
             settled,
             discarded: batch.discarded,
             uncorrelated: batch.uncorrelated,
+            rejected: batch.rejected,
         })
     }
 
@@ -400,17 +428,6 @@ impl<'plan> Vm<'plan> {
         let Some(request) = self.pending.get(&event.call_ref) else {
             return Err(VmError::MissingPending(event.call_ref));
         };
-        if let CallOutcome::Failure(error) = &event.outcome {
-            let spec = self.plan.nodes[slot.index()]
-                .connector()
-                .unwrap_or_else(|| unreachable!("closures settle connectors"));
-            if !spec.error_set.iter().any(|kind| kind == &error.kind) {
-                return Err(VmError::UnknownErrorKind {
-                    connector: event.connector_path.clone(),
-                    kind: error.kind.clone(),
-                });
-            }
-        }
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
         let outcome = executor.connector_outcome(
             &event,
@@ -484,12 +501,37 @@ impl<'plan> Vm<'plan> {
             }
         };
         let emitting_id = delivery.envelope.meta().sys().id();
-        let request_digest = request_digest(delivery.envelope.data());
+        // The digest seals the EXACT protocol bytes: preparation is
+        // the same pure function the adapter uses, so what is sealed
+        // and what is sent cannot diverge. An unframeable request is
+        // a typed decode error before any open fact exists.
+        let request_digest = match crate::connectors::prepare(spec, delivery.envelope.data()) {
+            Ok(bytes) => {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(&bytes);
+                let mut digest = [0u8; 32];
+                hasher.finalize_xof().fill(&mut digest);
+                digest
+            }
+            Err(message) => {
+                let executor = TransactionExecutor::new(self.plan, self.graph_version);
+                let outcome =
+                    executor.typed_error_transaction(slot, delivery, "DecodeError", &message);
+                self.reserve_emissions(slot, &outcome.record)?;
+                journal
+                    .commit(outcome.record.clone())
+                    .map_err(VmError::Journal)?;
+                self.scheduler.mailboxes.pop(slot, key);
+                self.route_emissions(slot, &outcome.record);
+                return Ok(());
+            }
+        };
         let intent = Intent {
             call_ref: ids::call_ref(emitting_id, &planned.path, &request_digest),
             emitting_id,
             connector_path: planned.path.clone(),
             request_digest,
+
             // The checker admits only `idempotent` in this subset; a
             // keyed irreversible intent arrives with its invariants.
             idempotency_key: None,
@@ -669,93 +711,6 @@ impl<'plan> Vm<'plan> {
     }
 }
 
-/// The integrity seal over the request content: blake3 of the tagged
-/// payload bytes. Encoded data seals its original bytes; materialized
-/// data seals a canonical framing of its value.
-fn request_digest(data: &Data) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    match data {
-        Data::Encoded {
-            encoding, bytes, ..
-        } => {
-            hasher.update(&[1, encoding_tag(*encoding)]);
-            hasher.update(bytes);
-        }
-        Data::Materialized(value) => {
-            hasher.update(&[2]);
-            hash_value(&mut hasher, value);
-        }
-    }
-    let mut digest = [0u8; 32];
-    hasher.finalize_xof().fill(&mut digest);
-    digest
-}
-
-fn encoding_tag(encoding: crate::envelope::Encoding) -> u8 {
-    match encoding {
-        crate::envelope::Encoding::Raw => 1,
-        crate::envelope::Encoding::Avro => 2,
-        crate::envelope::Encoding::ArrowIpc => 3,
-    }
-}
-
-/// A minimal injective framing of a materialized value — tags and
-/// length prefixes, the same discipline as the id recipes.
-fn hash_value(hasher: &mut blake3::Hasher, value: &crate::envelope::Value) {
-    use crate::envelope::{Scalar, Value};
-    let write_len = |hasher: &mut blake3::Hasher, len: usize| {
-        hasher.update(&u32::try_from(len).unwrap_or(u32::MAX).to_le_bytes());
-    };
-    match value {
-        Value::Scalar(Scalar::Bool(v)) => {
-            hasher.update(&[1, u8::from(*v)]);
-        }
-        Value::Scalar(Scalar::Int(v)) => {
-            hasher.update(&[2]);
-            hasher.update(&v.to_le_bytes());
-        }
-        Value::Scalar(Scalar::Double(v)) => {
-            hasher.update(&[3]);
-            hasher.update(&v.to_bits().to_le_bytes());
-        }
-        Value::Scalar(Scalar::Text(v)) => {
-            hasher.update(&[4]);
-            write_len(hasher, v.len());
-            hasher.update(v.as_bytes());
-        }
-        Value::Scalar(Scalar::Bytes(v)) => {
-            hasher.update(&[5]);
-            write_len(hasher, v.len());
-            hasher.update(v);
-        }
-        Value::Struct(fields) => {
-            hasher.update(&[6]);
-            write_len(hasher, fields.len());
-            for (name, field) in fields {
-                write_len(hasher, name.len());
-                hasher.update(name.as_bytes());
-                hash_value(hasher, field);
-            }
-        }
-        Value::Array(items) => {
-            hasher.update(&[7]);
-            write_len(hasher, items.len());
-            for item in items {
-                hash_value(hasher, item);
-            }
-        }
-        Value::Map(map) => {
-            hasher.update(&[8]);
-            write_len(hasher, map.len());
-            for (key, item) in map {
-                write_len(hasher, key.len());
-                hasher.update(key.as_bytes());
-                hash_value(hasher, item);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -779,7 +734,7 @@ graph m0_probe : App {
     var count : int = 0
     on in where data.text != "" {
       count = count + 1
-      out = envelope { data.text = data.text }
+      out = data.text
     }
   }
 
@@ -954,9 +909,16 @@ graph m0_probe : App {
                 }),
             }],
         };
-        vm.pump(&mut journal, &mut world).unwrap();
-        let error = vm.drain(&mut journal).unwrap_err();
-        assert!(matches!(error, VmError::UnknownErrorKind { ref kind, .. } if kind == "MadeUp"));
+        let report = vm.pump(&mut journal, &mut world).unwrap();
+        // Refused BEFORE the causal fact: the reply is rejected with
+        // its reason, and the call stays open — the timeout machinery
+        // can still settle it honestly.
+        assert_eq!(report.settled, 0);
+        assert_eq!(report.rejected.len(), 1);
+        assert!(report.rejected[0].1.contains("MadeUp"));
+        assert_eq!(journal.open_calls().len(), 1, "no garbage closure");
+        vm.drain(&mut journal).unwrap();
+        assert!(!vm.is_stable(), "the obligation is still open");
     }
 
     /// A world answering from a script, for integrity tests.
@@ -1087,7 +1049,7 @@ graph timed : App {
     var count : int = 0
     on in where data.text != "" {
       count = count + 1
-      out = envelope { data.text = data.text }
+      out = data.text
     }
   }
 
