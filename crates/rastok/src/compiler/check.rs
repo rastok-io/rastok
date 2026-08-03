@@ -602,6 +602,11 @@ impl Checker<'_, '_> {
                         if attribute.name == "mode" && word == "service" {
                             self.deferred("the Process service mode", span);
                         }
+                        // Decoding jsonl demands a JSON chain this
+                        // build does not carry.
+                        if attribute.name == "codec" && word == "jsonl" {
+                            self.deferred("the jsonl codec", span);
+                        }
                         // The runtime companions — idempotency keys
                         // and `on compensate` — are not executable in
                         // this subset; admitting the words without
@@ -1921,6 +1926,15 @@ graph m0_probe : App {
             "an accepted plan must not fault on a normal emission: {:#?}",
             bag.diagnostics()
         );
+    }
+
+    #[test]
+    fn the_jsonl_codec_is_deferred_with_the_json_chain() {
+        let source = "graph g : App {\n  connector c : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> c -> .\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == E_CHECK_DEFERRED && diagnostic.fields()[0].1 == "the jsonl codec"
+        }));
     }
 
     #[test]

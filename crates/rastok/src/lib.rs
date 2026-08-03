@@ -6,6 +6,7 @@
 pub mod boundary;
 pub mod cel;
 pub mod compiler;
+pub mod connectors;
 pub mod diagnostics;
 pub mod envelope;
 pub mod journal;
