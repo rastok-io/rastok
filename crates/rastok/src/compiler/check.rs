@@ -824,7 +824,7 @@ impl Checker<'_, '_> {
                     if node
                         .handlers
                         .iter()
-                        .any(|existing| existing.trigger == checked.trigger)
+                        .any(|existing| existing.activation == checked.activation)
                     {
                         self.deferred("a second handler for one trigger", handler.span);
                     } else {
@@ -1071,7 +1071,7 @@ impl Checker<'_, '_> {
         node_signature: &cel::Signature,
         node: &Node,
     ) -> Option<Handler> {
-        let trigger = match &decl.trigger {
+        let activation = match &decl.trigger {
             SynTrigger::Port(name) => {
                 let Some(direction) = self.node_port_direction(node, &name.text) else {
                     self.bag.push(
@@ -1095,7 +1095,7 @@ impl Checker<'_, '_> {
                     return None;
                 }
                 match node::Port::new(name.text.clone()) {
-                    Ok(port) => node::Trigger::Port(port),
+                    Ok(port) => node::HandlerActivation::Port(port),
                     Err(_) => return None,
                 }
             }
@@ -1264,7 +1264,7 @@ impl Checker<'_, '_> {
             }
         }
         Some(Handler {
-            trigger,
+            activation,
             guard,
             body: statements,
         })
@@ -1692,8 +1692,8 @@ graph m0_probe : App {
         assert_eq!(shout.vars[0].ty, cel::Type::Int);
         let handler = &shout.handlers[0];
         assert_eq!(
-            handler.trigger,
-            node::Trigger::Port(node::Port::new("in").unwrap())
+            handler.activation,
+            node::HandlerActivation::Port(node::Port::new("in").unwrap())
         );
         assert!(handler.guard.is_some());
         assert!(matches!(&handler.body[0], Statement::SetVar { name, .. } if name == "count"));

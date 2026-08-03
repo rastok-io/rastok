@@ -269,6 +269,40 @@ impl fmt::Display for Trigger {
     }
 }
 
+/// What a handler declares it fires on — the *activation pattern* —
+/// as distinct from [`Trigger`], the *cause* a committed transaction
+/// records. The two coincide for a single-port handler, and diverge
+/// the moment joins exist: `on (a, b)` will activate on the pair
+/// while the causal trigger of its transaction remains the port of
+/// the last-arrived envelope.
+///
+/// Join groundwork — invariants fixed now so the variant lands
+/// without reshaping this seam:
+///
+/// - a join *wait* must not hold the node's mailbox claimed; claims
+///   are for open external calls only, and partial arrivals keep
+///   consuming;
+/// - partial join inputs live in durable internal state owned by the
+///   runtime, never in the CEL-visible variable space;
+/// - the canonical order of a join's inputs is the port order
+///   declared in the handler, and every derived form (ids, hashes,
+///   bindings) reads them in that order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandlerActivation {
+    /// Arrival on a single port — the whole executable subset today.
+    Port(Port),
+}
+
+impl fmt::Display for HandlerActivation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            // Renders exactly as the port trigger it coincides with:
+            // this string is semantic-hash material and must not move.
+            Self::Port(port) => write!(f, "p:{port}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

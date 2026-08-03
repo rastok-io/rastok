@@ -318,12 +318,17 @@ impl<'plan> TransactionExecutor<'plan> {
         state: &BTreeMap<String, cel::Value>,
     ) -> Result<TransactionOutcome, Fault> {
         let node = &self.plan.nodes[slot.index()];
+        // Two distinct facts share one port here: the handler is
+        // *selected* by its activation pattern, while the committed
+        // record carries the *causal* trigger. They coincide for a
+        // single-port activation and will not for a join.
+        let activation = node::HandlerActivation::Port(delivery.port.clone());
         let trigger = &node::Trigger::Port(delivery.port.clone());
         let handler = self
             .plan
             .handlers
             .iter()
-            .find(|handler| handler.node == slot && handler.trigger == *trigger)
+            .find(|handler| handler.node == slot && handler.activation == activation)
             .ok_or(Fault::MissingHandler)?;
         let consumed = ConsumedPosition {
             edge: delivery.edge.clone(),
@@ -554,14 +559,18 @@ impl<'plan> TransactionExecutor<'plan> {
         }
     }
 
-    /// The handler registered for a trigger, if any — the scheduler
-    /// asks before consuming a delivery.
+    /// The handler registered for an activation pattern, if any — the
+    /// scheduler asks before consuming a delivery.
     #[must_use]
-    pub fn handler_for(&self, slot: Slot, trigger: &node::Trigger) -> Option<&'plan Handler> {
+    pub fn handler_for(
+        &self,
+        slot: Slot,
+        activation: &node::HandlerActivation,
+    ) -> Option<&'plan Handler> {
         self.plan
             .handlers
             .iter()
-            .find(|handler| handler.node == slot && handler.trigger == *trigger)
+            .find(|handler| handler.node == slot && handler.activation == *activation)
     }
 }
 
@@ -945,6 +954,29 @@ graph m0_probe : App {
             panic!("custom namespaces project");
         };
         assert_eq!(tenant["org"], cel::Value::Text(String::from("acme")));
+    }
+
+    #[test]
+    fn the_activation_pattern_is_not_the_causal_trigger() {
+        let (plan, slot) = probe();
+        let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+        let state = PartitionState::new().cell(&plan, slot, "");
+        // A handler is *selected* by its declared activation pattern…
+        let activation = node::HandlerActivation::Port(node::Port::new("in").unwrap());
+        assert!(executor.handler_for(slot, &activation).is_some());
+        // …while the committed record carries the *causal* trigger —
+        // a different vocabulary that merely coincides on one port.
+        // (The connector timeout transaction is the existing proof of
+        // divergence: no activation declares `l:timeout`, yet the
+        // record fires under it.)
+        let outcome = executor.fire(slot, &input("salut"), &state).unwrap();
+        assert_eq!(
+            outcome.record.trigger,
+            node::Trigger::Port(node::Port::new("in").unwrap())
+        );
+        // Their canonical renderings coincide today — that string is
+        // semantic-hash material and pins the byte compatibility.
+        assert_eq!(activation.to_string(), outcome.record.trigger.to_string());
     }
 
     #[test]

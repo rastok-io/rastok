@@ -175,7 +175,7 @@ pub fn lower(hir: &Hir, registry: &stdlib::Registry) -> (ExecutionPlan, SymbolTa
         for handler in &hir_node.handlers {
             plan.handlers.push(Handler {
                 node: slot,
-                trigger: handler.trigger.clone(),
+                activation: handler.activation.clone(),
                 guard: handler.guard.as_ref().map(&subst),
                 body: handler
                     .body
@@ -478,7 +478,9 @@ impl Writer {
         }
         self.count(node.handlers.len());
         for handler in &node.handlers {
-            self.str(&handler.trigger.to_string());
+            // Hash material: renders `p:<port>` — byte-identical to
+            // the pre-activation encoding, pinned by the golden hash.
+            self.str(&handler.activation.to_string());
             match &handler.guard {
                 None => self.tag(0),
                 Some(guard) => {
@@ -722,8 +724,8 @@ graph m0_probe : App {
         let handler = &plan.handlers[0];
         assert_eq!(handler.node.index(), 0);
         assert_eq!(
-            handler.trigger,
-            node::Trigger::Port(node::Port::new("in").unwrap())
+            handler.activation,
+            node::HandlerActivation::Port(node::Port::new("in").unwrap())
         );
         assert!(matches!(
             &handler.body[0],

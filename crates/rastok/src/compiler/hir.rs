@@ -153,8 +153,9 @@ pub struct Var {
 /// One checked handler.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
-    /// What fires the handler, in the semantic vocabulary.
-    pub trigger: node::Trigger,
+    /// The declared activation pattern — not the causal trigger a
+    /// transaction records; see [`node::HandlerActivation`].
+    pub activation: node::HandlerActivation,
     /// The compiled `where` guard, when present.
     pub guard: Option<cel::Tree>,
     /// The body, in text order — the order that fixes emission

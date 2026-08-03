@@ -136,8 +136,9 @@ pub struct VarCell {
 pub struct Handler {
     /// The owning node.
     pub node: Slot,
-    /// What fires it.
-    pub trigger: node::Trigger,
+    /// The declared activation pattern — not the causal trigger a
+    /// transaction records; see [`node::HandlerActivation`].
+    pub activation: node::HandlerActivation,
     /// The compiled guard, when present.
     pub guard: Option<cel::Tree>,
     /// The steps, in text order — the order fixing emission indices.

@@ -18,7 +18,8 @@
 //! the commit, nothing can fail.
 
 use crate::boundary::{
-    BoundaryEvent, CallOutcome, CallRef, Dispatcher, InboundSubmission, Intent, Partner, Response,
+    BoundaryEvent, CallOutcome, CallRef, DatedPayload, Dispatcher, InboundSubmission, Intent,
+    Partner, Response,
 };
 use crate::envelope::{Data, Envelope, Id};
 use crate::journal::{ConsumedPosition, Journal, ids};
@@ -108,10 +109,11 @@ struct SettledEntry {
 #[derive(Debug)]
 pub struct Scheduler {
     mailboxes: Mailboxes,
-    /// Armed call budgets, ordered by expiry — the machine's one
-    /// dated-event queue. The arm sequence breaks date ties
-    /// deterministically.
-    dated: BTreeMap<(i64, u64), CallRef>,
+    /// The machine's one dated-event queue, ordered by due date; the
+    /// arm sequence breaks ties deterministically. Typed on the
+    /// boundary vocabulary so every future obligation (join windows,
+    /// lifetimes) crosses the same frontier as call budgets.
+    dated: BTreeMap<(i64, u64), DatedPayload>,
     arm_seq: u64,
 }
 
@@ -124,20 +126,20 @@ impl Scheduler {
         }
     }
 
-    fn arm(&mut self, at: i64, call_ref: CallRef) {
-        self.dated.insert((at, self.arm_seq), call_ref);
+    fn arm(&mut self, at: i64, payload: DatedPayload) {
+        self.dated.insert((at, self.arm_seq), payload);
         self.arm_seq = self.arm_seq.wrapping_add(1);
     }
 
-    /// Removes and returns the next armed expiry at or before
+    /// Removes and returns the next dated event due at or before
     /// `target`, if any.
-    fn due(&mut self, target: i64) -> Option<(i64, CallRef)> {
+    fn due(&mut self, target: i64) -> Option<(i64, DatedPayload)> {
         let key = self
             .dated
             .first_key_value()
             .filter(|((at, _), _)| *at <= target)
             .map(|(key, _)| *key)?;
-        self.dated.remove(&key).map(|call_ref| (key.0, call_ref))
+        self.dated.remove(&key).map(|payload| (key.0, payload))
     }
 }
 
@@ -294,8 +296,9 @@ impl<'plan> Vm<'plan> {
     ///
     /// Journal refusals and faulting steps, as in [`Self::drain`].
     pub fn advance(&mut self, journal: &mut dyn Journal, target: i64) -> Result<(), VmError> {
-        while let Some((at, call_ref)) = self.scheduler.due(target) {
+        while let Some((at, payload)) = self.scheduler.due(target) {
             self.now = at;
+            let DatedPayload::CallTimeout(call_ref) = payload;
             match journal
                 .close_outbound(&call_ref, crate::journal::Closure::Timeout)
                 .map_err(VmError::Journal)?
@@ -482,8 +485,10 @@ impl<'plan> Vm<'plan> {
         if let Some(crate::plan::AttrSetting::Value(crate::cel::Value::Duration(budget))) =
             spec.attribute("timeout")
         {
-            self.scheduler
-                .arm(self.now.saturating_add(*budget), call_ref);
+            self.scheduler.arm(
+                self.now.saturating_add(*budget),
+                DatedPayload::CallTimeout(call_ref),
+            );
         }
         Ok(())
     }
