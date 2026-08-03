@@ -10,7 +10,7 @@
 //! [`delivery-semantics.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/delivery-semantics.md
 
 use crate::envelope::{self, Envelope};
-use crate::journal::{CloseVerdict, Closure, Journal, OutboundStatus, Record, ids};
+use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -95,8 +95,45 @@ pub struct Response {
     /// The call this answers, correlated by the connector's own
     /// protocol.
     pub call_ref: CallRef,
-    /// The answer payload.
+    /// What the partner reports — success or a typed failure.
+    pub outcome: CallOutcome,
+}
+
+/// What a call produced: the boundary can say failure, because every
+/// connector contract has an error set beside its reply.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallOutcome {
+    /// The reply payload, bound for the connector's `out` port.
+    Success(envelope::Data),
+    /// A member of the connector's typed error set, bound for `err`.
+    Failure(TypedError),
+}
+
+/// One member of a connector's declared error set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedError {
+    /// The error kind, from the contract sheet's error set.
+    pub kind: String,
+    /// The typed payload of the error.
     pub data: envelope::Data,
+}
+
+/// One routable boundary fact for the VM: which connector, which
+/// port, which cause. The VM owns what follows — the connector's
+/// transaction builds the outcome envelope under the emission recipe;
+/// the dispatcher never mints envelopes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundaryEvent {
+    /// The settled call.
+    pub call_ref: CallRef,
+    /// The connector node that owns the coming transaction.
+    pub connector_path: node::Path,
+    /// The request envelope's id — the transaction's parent.
+    pub emitting_id: envelope::Id,
+    /// `out` for a success, `err` for a typed failure.
+    pub port: node::Port,
+    /// What the call produced.
+    pub outcome: CallOutcome,
 }
 
 /// How a submission's sequence number is chosen.
@@ -198,129 +235,160 @@ pub trait Supervisor {
     fn next_event(&mut self) -> Option<LifecycleEvent>;
 }
 
+/// One settled pump round: what may enter the VM, and what may not —
+/// visibly, never silently.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PumpBatch {
+    /// The won closures, routable to the VM.
+    pub events: Vec<BoundaryEvent>,
+    /// Answers that lost the close race — non-causal observations,
+    /// invisible to the graph but never to the system.
+    pub discarded: Vec<Response>,
+    /// Answers correlating with no journaled call — correlation
+    /// faults to surface.
+    pub uncorrelated: Vec<Response>,
+}
+
+/// A dispatcher fault — loud, never a skipped iteration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DispatchError {
+    /// A journaled intent whose request envelope cannot be found:
+    /// an integrity fault in the causal history.
+    MissingRequest(CallRef),
+    /// The journal refused an operation.
+    Journal(crate::journal::Error),
+}
+
+impl fmt::Display for DispatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingRequest(call_ref) => {
+                write!(
+                    f,
+                    "no journaled envelope for the request of call {call_ref}"
+                )
+            }
+            Self::Journal(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for DispatchError {}
+
 /// The loop between the journal and the partners. It starts every
 /// journaled open call exactly once — journal-before-effect: the
 /// record always exists before the partner hears — and settles
-/// closures through the journal's close-once race. Mocks replace the
-/// partner, never this bookkeeping.
+/// closures through the journal's close-once race into routable
+/// [`BoundaryEvent`]s. The VM owns everything after: the connector's
+/// transaction builds the outcome envelope; the dispatcher never
+/// mints one. Mocks replace the partner, never this bookkeeping.
+///
+/// Restart discipline: re-calling a partner is a recovery decision
+/// (idempotent or keyed calls may be re-called, a compensable call
+/// without a key may not — that triage belongs to the recovery fold).
+/// A dispatcher over an existing journal is therefore built with
+/// [`Dispatcher::resume`], which treats every already-open call as
+/// started and re-calls nothing.
 #[derive(Debug, Default)]
 pub struct Dispatcher {
     started: BTreeSet<CallRef>,
 }
 
 impl Dispatcher {
-    /// A dispatcher with no started calls.
+    /// A dispatcher for a fresh run: nothing started yet.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Drives one round: starts newly journaled open calls, collects
-    /// the partner's answers, builds each response's outcome envelope
-    /// — emitted by the connector node under `p:in`, parented on the
-    /// request, inheriting its origin — and settles the close race.
-    /// Returns the outcome envelopes that won; a losing or
-    /// uncorrelated answer is a discarded observation.
-    pub fn pump(&mut self, journal: &mut dyn Journal, partner: &mut dyn Partner) -> Vec<Envelope> {
-        // Start phase: every open record not yet started.
-        let pending: Vec<Intent> = journal
-            .records()
-            .iter()
-            .filter_map(|record| match record {
-                Record::Outbound(outbound)
-                    if outbound.status == OutboundStatus::Open
-                        && !self.started.contains(&outbound.intent.call_ref) =>
-                {
-                    Some(outbound.intent.clone())
-                }
-                _ => None,
-            })
-            .collect();
-        for intent in pending {
-            let Some(request) = find_envelope(journal, intent.emitting_id) else {
+    /// A dispatcher over an existing journal: every currently open
+    /// call counts as started, so nothing is blindly re-called; the
+    /// recovery fold — not the dispatcher — decides re-calls.
+    #[must_use]
+    pub fn resume(journal: &dyn Journal) -> Self {
+        Self {
+            started: journal
+                .open_calls()
+                .into_iter()
+                .map(|intent| intent.call_ref)
+                .collect(),
+        }
+    }
+
+    /// Drives one round: starts newly journaled open calls, then
+    /// settles the partner's answers through the close-once race.
+    ///
+    /// # Errors
+    ///
+    /// [`DispatchError::MissingRequest`] when the causal history lacks
+    /// a journaled request — an integrity fault; journal refusals are
+    /// propagated, never absorbed.
+    pub fn pump(
+        &mut self,
+        journal: &mut dyn Journal,
+        partner: &mut dyn Partner,
+    ) -> Result<PumpBatch, DispatchError> {
+        // Start phase: every open call not yet started.
+        for intent in journal.open_calls() {
+            if self.started.contains(&intent.call_ref) {
                 continue;
-            };
-            let request = request.clone();
+            }
+            let request = journal
+                .find_envelope(intent.emitting_id)
+                .ok_or(DispatchError::MissingRequest(intent.call_ref))?;
             self.started.insert(intent.call_ref);
             partner.start(&intent, &request);
         }
-        // Settle phase: only a won closure becomes a VM input.
-        let mut outcomes = Vec::new();
+        // Settle phase: won closures become routable events; losers
+        // and strays stay visible.
+        let mut batch = PumpBatch::default();
+        let open = journal.open_calls();
         for response in partner.events() {
-            let Some(intent) = open_intent(journal, &response.call_ref) else {
-                continue; // uncorrelated or already settled: discarded observation
-            };
-            let Some(request) = find_envelope(journal, intent.emitting_id) else {
+            let Some(intent) = open
+                .iter()
+                .find(|intent| intent.call_ref == response.call_ref)
+            else {
+                if journal.find_call(&response.call_ref).is_some() {
+                    batch.discarded.push(response);
+                } else {
+                    batch.uncorrelated.push(response);
+                }
                 continue;
             };
-            let trigger = node::Trigger::Port(
-                node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
-            );
-            let port =
-                node::Port::new("out").unwrap_or_else(|_| unreachable!("`out` is a valid port"));
-            let id = ids::emission_id(
-                &intent.connector_path,
-                &trigger,
-                intent.emitting_id,
-                &port,
-                0,
-            );
-            let sys = envelope::MetaSys::emission(
-                id,
-                request.meta().sys(),
-                request.meta().sys().graph_version(),
-            );
-            let outcome = Envelope::new(envelope::Meta::new(sys), response.data);
-            if journal.close_outbound(&response.call_ref, Closure::Response(outcome.clone()))
-                == Ok(CloseVerdict::Won)
+            let closure = Closure::Response(response.outcome.clone());
+            match journal
+                .close_outbound(&response.call_ref, closure)
+                .map_err(DispatchError::Journal)?
             {
-                outcomes.push(outcome);
+                CloseVerdict::Won => {
+                    let port_name = match &response.outcome {
+                        CallOutcome::Success(_) => "out",
+                        CallOutcome::Failure(_) => "err",
+                    };
+                    let port = node::Port::new(port_name)
+                        .unwrap_or_else(|_| unreachable!("default port names are valid"));
+                    self.started.remove(&response.call_ref);
+                    batch.events.push(BoundaryEvent {
+                        call_ref: response.call_ref,
+                        connector_path: intent.connector_path.clone(),
+                        emitting_id: intent.emitting_id,
+                        port,
+                        outcome: response.outcome,
+                    });
+                }
+                CloseVerdict::AlreadyClosed => batch.discarded.push(response),
             }
         }
-        outcomes
+        Ok(batch)
     }
-}
-
-/// The envelope carrying `id`, wherever the journal recorded it.
-fn find_envelope(journal: &dyn Journal, id: envelope::Id) -> Option<&Envelope> {
-    journal.records().iter().find_map(|record| match record {
-        Record::Inbound(inbound) if inbound.envelope.meta().sys().id() == id => {
-            Some(&inbound.envelope)
-        }
-        Record::Transaction(transaction) => transaction
-            .emissions
-            .iter()
-            .map(|emission| &emission.envelope)
-            .find(|envelope| envelope.meta().sys().id() == id),
-        Record::Outbound(outbound) => match &outbound.status {
-            OutboundStatus::Closed(Closure::Response(envelope))
-                if envelope.meta().sys().id() == id =>
-            {
-                Some(envelope)
-            }
-            _ => None,
-        },
-        Record::Inbound(_) => None,
-    })
-}
-
-/// The intent of a still-open call.
-fn open_intent(journal: &dyn Journal, call_ref: &CallRef) -> Option<Intent> {
-    journal.records().iter().find_map(|record| match record {
-        Record::Outbound(outbound)
-            if outbound.intent.call_ref == *call_ref && outbound.status == OutboundStatus::Open =>
-        {
-            Some(outbound.intent.clone())
-        }
-        _ => None,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::envelope::{Data, Encoding, Namespace};
-    use crate::journal::MemJournal;
+    use crate::journal::{MemJournal, ids};
+    use crate::plan::GraphVersion;
 
     #[test]
     fn the_authority_stays_opaque_but_answers_the_recipes() {
@@ -348,7 +416,7 @@ mod tests {
     }
 
     fn seeded_journal() -> (MemJournal, Intent) {
-        let mut journal = MemJournal::new(1);
+        let mut journal = MemJournal::new(GraphVersion(1));
         let committed = journal
             .append_inbound(InboundSubmission {
                 authority: IngressAuthority::single(node::Path::new(["inbound"]).unwrap()),
@@ -380,50 +448,80 @@ mod tests {
         let (mut journal, intent) = seeded_journal();
         let mut partner = Scripted::default();
         let mut dispatcher = Dispatcher::new();
-        dispatcher.pump(&mut journal, &mut partner);
+        dispatcher.pump(&mut journal, &mut partner).unwrap();
         assert_eq!(partner.started.len(), 1);
         assert_eq!(partner.started[0].0.call_ref, intent.call_ref);
         // A second pump never re-starts an already-started call.
-        dispatcher.pump(&mut journal, &mut partner);
+        dispatcher.pump(&mut journal, &mut partner).unwrap();
         assert_eq!(partner.started.len(), 1);
     }
 
     #[test]
-    fn a_won_closure_becomes_the_only_vm_input() {
+    fn a_resumed_dispatcher_re_calls_nothing() {
+        let (mut journal, _) = seeded_journal();
+        let mut partner = Scripted::default();
+        // Restart over an existing journal: the open call counts as
+        // started; re-calls are the recovery fold's decision.
+        let mut dispatcher = Dispatcher::resume(&journal);
+        dispatcher.pump(&mut journal, &mut partner).unwrap();
+        assert!(partner.started.is_empty());
+    }
+
+    #[test]
+    fn won_closures_become_routable_events() {
         let (mut journal, intent) = seeded_journal();
         let mut partner = Scripted::default();
         let mut dispatcher = Dispatcher::new();
-        dispatcher.pump(&mut journal, &mut partner);
+        dispatcher.pump(&mut journal, &mut partner).unwrap();
         partner.replies = vec![
             Response {
                 call_ref: intent.call_ref,
-                data: Data::encoded(Encoding::Raw, *b"SALUT"),
+                outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"SALUT")),
             },
             // A duplicate answer for the same call: the race loser.
             Response {
                 call_ref: intent.call_ref,
-                data: Data::encoded(Encoding::Raw, *b"LATE"),
+                outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"LATE")),
             },
         ];
-        let outcomes = dispatcher.pump(&mut journal, &mut partner);
-        assert_eq!(outcomes.len(), 1, "only the won closure feeds the VM");
-        let outcome = &outcomes[0];
-        // The outcome is the connector's emission under p:in, parented
-        // on the request, inheriting its origin.
-        let expected_id = ids::emission_id(
-            &intent.connector_path,
-            &node::Trigger::Port(node::Port::new("in").unwrap()),
-            intent.emitting_id,
-            &node::Port::new("out").unwrap(),
-            0,
-        );
-        assert_eq!(outcome.meta().sys().id(), expected_id);
-        assert_eq!(outcome.meta().sys().parent_id(), Some(intent.emitting_id));
-        assert_eq!(outcome.meta().sys().origin_id(), intent.emitting_id);
+        let batch = dispatcher.pump(&mut journal, &mut partner).unwrap();
+        assert_eq!(batch.events.len(), 1, "only the won closure feeds the VM");
+        assert_eq!(batch.discarded.len(), 1, "the loser stays visible");
+        assert!(batch.uncorrelated.is_empty());
+        let event = &batch.events[0];
+        assert_eq!(event.connector_path.to_string(), "echo");
+        assert_eq!(event.emitting_id, intent.emitting_id);
+        assert_eq!(event.port.name(), "out");
+        assert!(matches!(&event.outcome, CallOutcome::Success(_)));
+        // The dispatcher minted no envelope: the journal's closure
+        // fact carries the raw outcome, and the connector's own
+        // transaction will build the envelope.
+        assert!(journal.open_calls().is_empty());
     }
 
     #[test]
-    fn an_uncorrelated_answer_is_a_discarded_observation() {
+    fn a_typed_failure_routes_to_err() {
+        let (mut journal, intent) = seeded_journal();
+        let mut partner = Scripted::default();
+        let mut dispatcher = Dispatcher::new();
+        dispatcher.pump(&mut journal, &mut partner).unwrap();
+        partner.replies = vec![Response {
+            call_ref: intent.call_ref,
+            outcome: CallOutcome::Failure(TypedError {
+                kind: String::from("ExecFailed"),
+                data: Data::encoded(Encoding::Raw, *b"exit 1"),
+            }),
+        }];
+        let batch = dispatcher.pump(&mut journal, &mut partner).unwrap();
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.events[0].port.name(), "err");
+        assert!(
+            matches!(&batch.events[0].outcome, CallOutcome::Failure(error) if error.kind == "ExecFailed")
+        );
+    }
+
+    #[test]
+    fn an_uncorrelated_answer_is_a_visible_fault() {
         let (mut journal, _) = seeded_journal();
         let mut partner = Scripted::default();
         let mut dispatcher = Dispatcher::new();
@@ -433,9 +531,10 @@ mod tests {
                 &node::Path::new(["ghost"]).unwrap(),
                 &[0; 32],
             ),
-            data: Data::encoded(Encoding::Raw, *b"?"),
+            outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"?")),
         }];
-        let outcomes = dispatcher.pump(&mut journal, &mut partner);
-        assert!(outcomes.is_empty());
+        let batch = dispatcher.pump(&mut journal, &mut partner).unwrap();
+        assert!(batch.events.is_empty());
+        assert_eq!(batch.uncorrelated.len(), 1, "correlation faults surface");
     }
 }

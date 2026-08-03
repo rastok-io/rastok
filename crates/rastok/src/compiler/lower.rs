@@ -859,7 +859,7 @@ graph m0_probe : App {
     fn versions_alias_the_hash_through_the_manifest() {
         let hash = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
         let mut manifest = Manifest::embedded();
-        assert_eq!(manifest.allocate(hash), GraphVersion(1));
+        assert_eq!(manifest.allocate(hash), Some(GraphVersion(1)));
         assert_eq!(manifest.hash_of(GraphVersion(1)), Some(hash));
     }
 }

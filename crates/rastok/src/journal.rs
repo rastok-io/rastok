@@ -4,21 +4,27 @@
 //! Governing rules: [`delivery-semantics.md`] for the three causal
 //! record kinds and the outbound WAL, [`envelope.md`] §2 for the id
 //! recipes, [`identity.md`] §3 for the fields each record seals. This
-//! module exposes the *logical* journal API — typed records, ordering,
-//! and semantic operations; a physical layout comes later and must
-//! never leak into these types.
+//! module exposes the *logical* journal API — typed records and
+//! semantic queries; a physical layout comes later and must never
+//! leak into these types. The record slice itself is an
+//! implementation detail of [`MemJournal`], for tests and goldens —
+//! consumers of the trait ask semantic questions instead.
 //!
-//! Records are written by the runtime mechanics only; adapters and
-//! mocks supply events, never records.
+//! The journal is append-only: closing a call adds a new fact, it
+//! never rewrites the open one. Records are written by the runtime
+//! mechanics only; adapters and mocks supply events, never records.
 //!
 //! [`delivery-semantics.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/delivery-semantics.md
 //! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
 //! [`identity.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/identity.md
 
-use crate::boundary::{CallRef, InboundSubmission, IngressAuthority, Intent, SubmissionSequence};
+use crate::boundary::{
+    CallOutcome, CallRef, InboundSubmission, IngressAuthority, Intent, SubmissionSequence,
+};
 use crate::cel;
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::node;
+use crate::plan::GraphVersion;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -102,7 +108,8 @@ pub enum Record {
     Inbound(InboundRecord),
     /// One node fired: the atomic commit packet.
     Transaction(TransactionRecord),
-    /// The graph acted on the world: one external call's WAL record.
+    /// The graph acted on the world: one fact of a call's WAL — the
+    /// open, then separately its closure. The past never rewrites.
     Outbound(OutboundRecord),
 }
 
@@ -122,7 +129,7 @@ pub struct InboundRecord {
 /// One consumed input position — the cursor is per
 /// `(graph edge × source partition)`, not per port: several edges can
 /// feed one port. The M0 single-cell slice omits the partition.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsumedPosition {
     /// The graph edge the input arrived on, canonically rendered.
     pub edge: String,
@@ -143,28 +150,30 @@ pub struct Emission {
 
 /// The atomic commit packet of one node firing (`identity.md` §3,
 /// keys 30–37): consumed input, state delta, and emissions commit
-/// together or not at all.
+/// together or not at all. [`Journal::commit`] canonicalizes the
+/// sorted collections; emission order is text order and stays as
+/// given.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransactionRecord {
     /// The firing node.
     pub node_path: node::Path,
     /// What fired it.
     pub trigger: node::Trigger,
-    /// The consumed input positions, sorted by `(edge, seq)`.
+    /// The consumed input positions; canonically sorted at commit.
     pub consumed: Vec<ConsumedPosition>,
-    /// The state changes, a sorted pair list by field path.
+    /// The state changes; canonically sorted by field at commit.
     pub state_delta: Vec<(String, cel::Value)>,
     /// The emissions, in text/emission-index order.
     pub emissions: Vec<Emission>,
 }
 
-/// One external call's WAL record: journaled open before the effect
-/// executes (`delivery-semantics.md` §4).
+/// One fact of a call's WAL (`delivery-semantics.md` §4): the open
+/// fact, or its closure — two records, never one rewritten.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutboundRecord {
     /// The canonical call fields.
     pub intent: Intent,
-    /// The sealed causal state.
+    /// Which fact this record states.
     pub status: OutboundStatus,
 }
 
@@ -181,11 +190,13 @@ pub enum OutboundStatus {
     Abandoned,
 }
 
-/// What closed a call — a response or the timeout, exactly one.
+/// What closed a call — the partner's outcome or the timeout,
+/// exactly one. The outcome carries the raw reply or typed error;
+/// the connector's own transaction builds the envelope.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Closure {
-    /// The partner answered; the response envelope is the closure.
-    Response(Envelope),
+    /// The partner answered — with a reply or a typed failure.
+    Response(CallOutcome),
     /// The scheduler's budget expired first.
     Timeout,
 }
@@ -222,10 +233,16 @@ pub enum Error {
         /// What the submission carried.
         got: u64,
     },
-    /// A call ref matching no open or closed outbound record.
+    /// A per-authority sequence exhausted its range; monotonicity
+    /// cannot continue.
+    SequenceOverflow,
+    /// A call ref matching no journaled call.
     UnknownCall,
     /// An intent whose call ref is already journaled.
     DuplicateOpen,
+    /// An intent whose call ref does not derive from its own
+    /// canonical fields — a forged or corrupted causal fact.
+    CorruptIntent,
 }
 
 impl fmt::Display for Error {
@@ -234,16 +251,21 @@ impl fmt::Display for Error {
             Self::SequenceMismatch { expected, got } => {
                 write!(f, "expected inbound seq {expected}, got {got}")
             }
+            Self::SequenceOverflow => f.write_str("the inbound sequence range is exhausted"),
             Self::UnknownCall => f.write_str("no outbound record for this call"),
             Self::DuplicateOpen => f.write_str("this call is already journaled"),
+            Self::CorruptIntent => {
+                f.write_str("the call ref does not derive from the intent's canonical fields")
+            }
         }
     }
 }
 
 impl std::error::Error for Error {}
 
-/// Semantic journal operations — never bare appends. The API is
-/// logical: typed records and ordering, no physical layout.
+/// Semantic journal operations and queries — never bare appends, and
+/// no exposure of a physical record layout: a durable implementation
+/// may hold anything on disk as long as it answers these questions.
 pub trait Journal {
     /// The one accepting transaction of an inbound submission:
     /// allocate or validate the sequence, derive the root id, mint
@@ -254,23 +276,34 @@ pub trait Journal {
     /// # Errors
     ///
     /// [`Error::SequenceMismatch`] when an explicit sequence diverges
-    /// from the journal.
+    /// from the journal; [`Error::SequenceOverflow`] when monotonicity
+    /// cannot continue.
     fn append_inbound(&mut self, submission: InboundSubmission) -> Result<CommittedInbound, Error>;
 
-    /// Commits one atomic transaction record.
-    fn commit(&mut self, transaction: TransactionRecord);
+    /// Commits one atomic transaction record, canonicalizing its
+    /// sorted collections. Durable-before-delivered: a failed commit
+    /// must be an error, never a silence.
+    ///
+    /// # Errors
+    ///
+    /// Implementation faults; the in-memory journal has none today.
+    fn commit(&mut self, transaction: TransactionRecord) -> Result<(), Error>;
 
     /// Journals an outbound intent as open — before the effect
     /// executes, never after.
     ///
     /// # Errors
     ///
-    /// [`Error::DuplicateOpen`] when the call is already journaled.
+    /// [`Error::DuplicateOpen`] when the call is already journaled;
+    /// [`Error::CorruptIntent`] when the call ref does not derive from
+    /// the intent's own canonical fields.
     fn open_outbound(&mut self, intent: Intent) -> Result<(), Error>;
 
-    /// Settles the race to close a call: the first closure wins and
-    /// becomes causal; every later one is told [`CloseVerdict::AlreadyClosed`]
-    /// and must treat its event as a discarded observation.
+    /// Settles the race to close a call by appending the closure
+    /// fact: the first closure wins and becomes causal; every later
+    /// one is told [`CloseVerdict::AlreadyClosed`] and must treat its
+    /// event as a discarded observation. The open fact is never
+    /// rewritten.
     ///
     /// # Errors
     ///
@@ -281,16 +314,23 @@ pub trait Journal {
         closure: Closure,
     ) -> Result<CloseVerdict, Error>;
 
-    /// The records in causal order.
-    fn records(&self) -> &[Record];
+    /// The envelope carrying `id`, wherever the history recorded it.
+    fn find_envelope(&self, id: Id) -> Option<Envelope>;
+
+    /// The intent of a journaled call, settled or not.
+    fn find_call(&self, call_ref: &CallRef) -> Option<Intent>;
+
+    /// The calls whose open fact has no closure fact yet, in open
+    /// order.
+    fn open_calls(&self) -> Vec<Intent>;
 }
 
 /// The M0 in-memory journal. It preserves the logical boundaries a
 /// durable implementation needs — typed records, per-authority
-/// sequences, close-once — with no claim about files.
-#[derive(Debug, Default)]
+/// sequences, append-only closure — with no claim about files.
+#[derive(Debug)]
 pub struct MemJournal {
-    graph_version: u64,
+    graph_version: GraphVersion,
     records: Vec<Record>,
     next_seq: BTreeMap<IngressAuthority, u64>,
 }
@@ -300,12 +340,29 @@ impl MemJournal {
     /// Embedded mode re-seeds the manifest at boot, so simulations
     /// deterministically run as version 1.
     #[must_use]
-    pub fn new(graph_version: u64) -> Self {
+    pub fn new(graph_version: GraphVersion) -> Self {
         Self {
             graph_version,
             records: Vec::new(),
             next_seq: BTreeMap::new(),
         }
+    }
+
+    /// The records in causal order — an implementation detail of the
+    /// in-memory journal, for tests and the golden projection; the
+    /// trait exposes semantic queries instead.
+    #[must_use]
+    pub fn records(&self) -> &[Record] {
+        &self.records
+    }
+
+    fn statuses_of(&self, call_ref: &CallRef) -> impl Iterator<Item = &OutboundStatus> {
+        self.records.iter().filter_map(move |record| match record {
+            Record::Outbound(outbound) if outbound.intent.call_ref == *call_ref => {
+                Some(&outbound.status)
+            }
+            _ => None,
+        })
     }
 }
 
@@ -326,8 +383,9 @@ impl Journal for MemJournal {
                 });
             }
         };
+        let following = seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
         let id = ids::root_id(&submission.authority, seq);
-        let mut sys = MetaSys::root(id, self.graph_version);
+        let mut sys = MetaSys::root(id, self.graph_version.0);
         if let Some(mime_type) = submission.draft.mime_type {
             sys = sys.with_mime_type(mime_type);
         }
@@ -340,7 +398,7 @@ impl Journal for MemJournal {
             seq,
             envelope: envelope.clone(),
         };
-        self.next_seq.insert(submission.authority, seq + 1);
+        self.next_seq.insert(submission.authority, following);
         self.records.push(Record::Inbound(record.clone()));
         Ok(CommittedInbound {
             seq,
@@ -349,15 +407,25 @@ impl Journal for MemJournal {
         })
     }
 
-    fn commit(&mut self, transaction: TransactionRecord) {
+    fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
+        // Canonicalize the declaratively sorted collections so an
+        // invalid ordering is not constructible through the journal.
+        transaction.consumed.sort();
+        transaction.state_delta.sort_by(|a, b| a.0.cmp(&b.0));
         self.records.push(Record::Transaction(transaction));
+        Ok(())
     }
 
     fn open_outbound(&mut self, intent: Intent) -> Result<(), Error> {
-        let duplicate = self.records.iter().any(|record| {
-            matches!(record, Record::Outbound(outbound) if outbound.intent.call_ref == intent.call_ref)
-        });
-        if duplicate {
+        let derived = ids::call_ref(
+            intent.emitting_id,
+            &intent.connector_path,
+            &intent.request_digest,
+        );
+        if derived != intent.call_ref {
+            return Err(Error::CorruptIntent);
+        }
+        if self.statuses_of(&intent.call_ref).next().is_some() {
             return Err(Error::DuplicateOpen);
         }
         self.records.push(Record::Outbound(OutboundRecord {
@@ -372,33 +440,78 @@ impl Journal for MemJournal {
         call_ref: &CallRef,
         closure: Closure,
     ) -> Result<CloseVerdict, Error> {
-        for record in &mut self.records {
+        let mut intent = None;
+        for record in &self.records {
             let Record::Outbound(outbound) = record else {
                 continue;
             };
             if outbound.intent.call_ref != *call_ref {
                 continue;
             }
-            return Ok(match outbound.status {
-                OutboundStatus::Open => {
-                    outbound.status = OutboundStatus::Closed(closure);
-                    CloseVerdict::Won
+            match outbound.status {
+                OutboundStatus::Open => intent = Some(outbound.intent.clone()),
+                OutboundStatus::Closed(_) | OutboundStatus::Abandoned => {
+                    return Ok(CloseVerdict::AlreadyClosed);
                 }
-                _ => CloseVerdict::AlreadyClosed,
-            });
+            }
         }
-        Err(Error::UnknownCall)
+        let Some(intent) = intent else {
+            return Err(Error::UnknownCall);
+        };
+        // Append the closure as a new fact; the open fact stays
+        // byte-identical — the attempt trace survives.
+        self.records.push(Record::Outbound(OutboundRecord {
+            intent,
+            status: OutboundStatus::Closed(closure),
+        }));
+        Ok(CloseVerdict::Won)
     }
 
-    fn records(&self) -> &[Record] {
-        &self.records
+    fn find_envelope(&self, id: Id) -> Option<Envelope> {
+        self.records.iter().find_map(|record| match record {
+            Record::Inbound(inbound) if inbound.envelope.meta().sys().id() == id => {
+                Some(inbound.envelope.clone())
+            }
+            Record::Transaction(transaction) => transaction
+                .emissions
+                .iter()
+                .map(|emission| &emission.envelope)
+                .find(|envelope| envelope.meta().sys().id() == id)
+                .cloned(),
+            _ => None,
+        })
+    }
+
+    fn find_call(&self, call_ref: &CallRef) -> Option<Intent> {
+        self.records.iter().find_map(|record| match record {
+            Record::Outbound(outbound) if outbound.intent.call_ref == *call_ref => {
+                Some(outbound.intent.clone())
+            }
+            _ => None,
+        })
+    }
+
+    fn open_calls(&self) -> Vec<Intent> {
+        let mut open: Vec<Intent> = Vec::new();
+        for record in &self.records {
+            let Record::Outbound(outbound) = record else {
+                continue;
+            };
+            match outbound.status {
+                OutboundStatus::Open => open.push(outbound.intent.clone()),
+                OutboundStatus::Closed(_) | OutboundStatus::Abandoned => {
+                    open.retain(|intent| intent.call_ref != outbound.intent.call_ref);
+                }
+            }
+        }
+        open
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::{Draft, Response};
+    use crate::boundary::Draft;
     use crate::envelope::{Data, Encoding, Namespace};
 
     fn authority(path: &str) -> IngressAuthority {
@@ -417,8 +530,8 @@ mod tests {
         }
     }
 
-    fn intent(journal_path: &str, digest: u8) -> Intent {
-        let connector_path = node::Path::new([journal_path]).unwrap();
+    fn intent(connector: &str, digest: u8) -> Intent {
+        let connector_path = node::Path::new([connector]).unwrap();
         let emitting_id = Id::derive(0x02, &[b"cause"]);
         let request_digest = [digest; 32];
         Intent {
@@ -498,7 +611,7 @@ mod tests {
 
     #[test]
     fn an_accepted_inbound_is_its_own_origin() {
-        let mut journal = MemJournal::new(1);
+        let mut journal = MemJournal::new(GraphVersion(1));
         let committed = journal
             .append_inbound(submission("inbound", SubmissionSequence::Next))
             .unwrap();
@@ -513,7 +626,7 @@ mod tests {
 
     #[test]
     fn sequences_are_monotone_per_authority() {
-        let mut journal = MemJournal::new(1);
+        let mut journal = MemJournal::new(GraphVersion(1));
         for expected in 0..3 {
             let committed = journal
                 .append_inbound(submission("inbound", SubmissionSequence::Next))
@@ -528,7 +641,7 @@ mod tests {
 
     #[test]
     fn explicit_sequences_replay_or_refuse() {
-        let mut journal = MemJournal::new(1);
+        let mut journal = MemJournal::new(GraphVersion(1));
         journal
             .append_inbound(submission("inbound", SubmissionSequence::Explicit(0)))
             .unwrap();
@@ -555,74 +668,124 @@ mod tests {
                 .sys()
                 .id()
         };
-        assert_eq!(run(MemJournal::new(1)), run(MemJournal::new(1)));
+        assert_eq!(
+            run(MemJournal::new(GraphVersion(1))),
+            run(MemJournal::new(GraphVersion(1)))
+        );
     }
 
     #[test]
-    fn a_call_closes_exactly_once() {
-        let mut journal = MemJournal::new(1);
+    fn closing_appends_a_fact_and_never_rewrites_the_open() {
+        let mut journal = MemJournal::new(GraphVersion(1));
         let intent = intent("echo", 7);
         let call = intent.call_ref;
         journal.open_outbound(intent.clone()).unwrap();
+        let open_before = journal.records()[0].clone();
         assert_eq!(
-            journal.open_outbound(intent).unwrap_err(),
-            Error::DuplicateOpen
-        );
-        let response = Closure::Timeout;
-        assert_eq!(
-            journal.close_outbound(&call, response).unwrap(),
+            journal.close_outbound(&call, Closure::Timeout).unwrap(),
             CloseVerdict::Won
         );
-        // The loser becomes a discarded observation.
-        let late = Closure::Response(
-            MemJournal::new(1)
-                .append_inbound(submission("late", SubmissionSequence::Next))
-                .unwrap()
-                .envelope,
-        );
+        // The normative sequence: two consecutive facts, open first,
+        // byte-identical to what it was before the closure.
+        assert_eq!(journal.records().len(), 2);
+        assert_eq!(journal.records()[0], open_before);
+        let Record::Outbound(open) = &journal.records()[0] else {
+            panic!("expected the open fact");
+        };
+        assert_eq!(open.status, OutboundStatus::Open);
+        let Record::Outbound(closed) = &journal.records()[1] else {
+            panic!("expected the closure fact");
+        };
+        assert_eq!(closed.status, OutboundStatus::Closed(Closure::Timeout));
+        assert_eq!(closed.intent.call_ref, call);
+        // The fold answers "open?" correctly.
+        assert!(journal.open_calls().is_empty());
+        // The race: every later closure loses and appends nothing.
         assert_eq!(
-            journal.close_outbound(&call, late).unwrap(),
+            journal.close_outbound(&call, Closure::Timeout).unwrap(),
             CloseVerdict::AlreadyClosed
         );
-        let Record::Outbound(record) = &journal.records()[0] else {
-            panic!("expected the outbound record");
-        };
-        assert_eq!(record.status, OutboundStatus::Closed(Closure::Timeout));
-        // A response for an unknown call is a fault, not a silence.
-        let ghost = Response {
-            call_ref: ids::call_ref(
-                Id::from_bytes([9; 16]),
-                &node::Path::new(["ghost"]).unwrap(),
-                &[0; 32],
-            ),
-            data: Data::encoded(Encoding::Raw, *b"?"),
-        };
+        assert_eq!(journal.records().len(), 2);
+        // A closure for an unknown call is a fault, not a silence.
+        let ghost = ids::call_ref(
+            Id::from_bytes([9; 16]),
+            &node::Path::new(["ghost"]).unwrap(),
+            &[0; 32],
+        );
         assert_eq!(
-            journal.close_outbound(&ghost.call_ref, Closure::Timeout),
+            journal.close_outbound(&ghost, Closure::Timeout),
             Err(Error::UnknownCall)
         );
     }
 
     #[test]
+    fn a_forged_intent_is_refused() {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut forged = intent("echo", 7);
+        forged.call_ref = ids::call_ref(
+            Id::from_bytes([9; 16]),
+            &node::Path::new(["other"]).unwrap(),
+            &[1; 32],
+        );
+        assert_eq!(
+            journal.open_outbound(forged).unwrap_err(),
+            Error::CorruptIntent
+        );
+    }
+
+    #[test]
+    fn commit_canonicalizes_the_sorted_collections() {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        journal
+            .commit(TransactionRecord {
+                node_path: node::Path::new(["shout"]).unwrap(),
+                trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
+                consumed: vec![
+                    ConsumedPosition {
+                        edge: String::from("b"),
+                        seq: 1,
+                    },
+                    ConsumedPosition {
+                        edge: String::from("a"),
+                        seq: 2,
+                    },
+                ],
+                state_delta: vec![
+                    (String::from("z"), cel::Value::Int(1)),
+                    (String::from("a"), cel::Value::Int(2)),
+                ],
+                emissions: vec![],
+            })
+            .unwrap();
+        let Record::Transaction(transaction) = &journal.records()[0] else {
+            panic!("expected the transaction");
+        };
+        assert_eq!(transaction.consumed[0].edge, "a");
+        assert_eq!(transaction.state_delta[0].0, "a");
+    }
+
+    #[test]
     fn records_keep_causal_order() {
-        let mut journal = MemJournal::new(1);
+        let mut journal = MemJournal::new(GraphVersion(1));
         let committed = journal
             .append_inbound(submission("inbound", SubmissionSequence::Next))
             .unwrap();
-        journal.commit(TransactionRecord {
-            node_path: node::Path::new(["shout"]).unwrap(),
-            trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
-            consumed: vec![ConsumedPosition {
-                edge: String::from(".in>shout.in"),
-                seq: 0,
-            }],
-            state_delta: vec![(String::from("count"), cel::Value::Int(1))],
-            emissions: vec![Emission {
-                port: node::Port::new("out").unwrap(),
-                index: 0,
-                envelope: committed.envelope.clone(),
-            }],
-        });
+        journal
+            .commit(TransactionRecord {
+                node_path: node::Path::new(["shout"]).unwrap(),
+                trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
+                consumed: vec![ConsumedPosition {
+                    edge: String::from(".in>shout.in"),
+                    seq: 0,
+                }],
+                state_delta: vec![(String::from("count"), cel::Value::Int(1))],
+                emissions: vec![Emission {
+                    port: node::Port::new("out").unwrap(),
+                    index: 0,
+                    envelope: committed.envelope.clone(),
+                }],
+            })
+            .unwrap();
         journal.open_outbound(intent("echo", 1)).unwrap();
         let kinds: Vec<u8> = journal
             .records()
@@ -634,5 +797,13 @@ mod tests {
             })
             .collect();
         assert_eq!(kinds, [1, 2, 3]);
+        // The semantic queries answer without exposing the slice.
+        assert!(
+            journal
+                .find_envelope(committed.envelope.meta().sys().id())
+                .is_some()
+        );
+        assert!(journal.find_call(&intent("echo", 1).call_ref).is_some());
+        assert_eq!(journal.open_calls().len(), 1);
     }
 }

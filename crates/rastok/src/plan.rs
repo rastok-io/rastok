@@ -262,10 +262,14 @@ impl Manifest {
 
     /// Allocates the next version for a deployment of `hash`: always
     /// `max + 1`, append-only — a rollback receives a new number.
-    pub fn allocate(&mut self, hash: SemanticHash) -> GraphVersion {
-        let next = GraphVersion(self.rows.last().map_or(1, |(version, _)| version.0 + 1));
+    /// `None` when the range is exhausted; monotonicity never wraps.
+    pub fn allocate(&mut self, hash: SemanticHash) -> Option<GraphVersion> {
+        let next = GraphVersion(match self.rows.last() {
+            None => 1,
+            Some((version, _)) => version.0.checked_add(1)?,
+        });
         self.rows.push((next, hash));
-        next
+        Some(next)
     }
 
     /// The hash a version points at, if allocated.
@@ -288,11 +292,11 @@ mod tests {
         let first = manifest.allocate(SemanticHash::from_bytes([1; 32]));
         let second = manifest.allocate(SemanticHash::from_bytes([2; 32]));
         let rollback = manifest.allocate(SemanticHash::from_bytes([1; 32]));
-        assert_eq!(first, GraphVersion(1));
-        assert_eq!(second, GraphVersion(2));
-        assert_eq!(rollback, GraphVersion(3));
+        assert_eq!(first, Some(GraphVersion(1)));
+        assert_eq!(second, Some(GraphVersion(2)));
+        assert_eq!(rollback, Some(GraphVersion(3)));
         assert_eq!(
-            manifest.hash_of(rollback),
+            manifest.hash_of(rollback.unwrap()),
             Some(SemanticHash::from_bytes([1; 32]))
         );
     }
