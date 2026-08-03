@@ -601,17 +601,23 @@ fn value_tagged(value: &envelope::Value) -> Cbor {
         Value::Scalar(Scalar::Double(v)) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Double(*v)]),
         Value::Scalar(Scalar::Text(v)) => Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(v.clone())]),
         Value::Scalar(Scalar::Bytes(v)) => Cbor::Array(vec![Cbor::Uint(7), Cbor::Bytes(v.clone())]),
-        Value::Struct(fields) => Cbor::Array(vec![
-            Cbor::Uint(17),
-            Cbor::Array(
-                fields
-                    .iter()
-                    .map(|(field, value)| {
-                        Cbor::Array(vec![Cbor::Text(field.clone()), value_tagged(value)])
-                    })
-                    .collect(),
-            ),
-        ]),
+        Value::Struct(fields) => {
+            // Canonical sorted pairs — construction order is not
+            // identity material.
+            let mut sorted: Vec<_> = fields.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            Cbor::Array(vec![
+                Cbor::Uint(17),
+                Cbor::Array(
+                    sorted
+                        .into_iter()
+                        .map(|(field, value)| {
+                            Cbor::Array(vec![Cbor::Text(field.clone()), value_tagged(value)])
+                        })
+                        .collect(),
+                ),
+            ])
+        }
         Value::Map(entries) => Cbor::Array(vec![
             Cbor::Uint(18),
             Cbor::Array(

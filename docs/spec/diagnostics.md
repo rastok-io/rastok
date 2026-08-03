@@ -59,6 +59,7 @@ causal core. They live in their home specs, not here.
 | E-PORT-DIRECTION | error | check | [grammar.md](grammar.md) | a port used against its direction — edge, handler, or emission side; fields `port`, `direction` |
 | E-GRAPH-CYCLE | error | check | [grammar.md](grammar.md) | a wiring cycle among nodes — edges form a DAG; field `node` |
 | E-PORT-CONFLICT | error | check | [grammar.md](grammar.md) | a port name declared or inferred with conflicting roles, redeclared, or declared on a connector; field `port` |
+| E-DUP-SIMULATION | error | resolve | [simulation-semantics.md](simulation-semantics.md) | two simulations of one lab corpus sharing a name — fragments merge, homonyms refuse; field `name` |
 | W-DEAD-GRAPH | warning | resolve | [grammar.md](grammar.md) | a top-level graph reachable from no App composition |
 | W-UNWIRED-OUTPUT | warning | check | [delivery-semantics.md](delivery-semantics.md) | a non-`err` node output wired to no edge and not discarded with `-> nothing`; `err` is exempt — it bubbles to the root error sink; fields `node`, `port` (severity divergence recorded as erratum E-2026-08-03-2) |
 | W-DURABILITY-WEAKENED | warning | plan | [delivery-semantics.md](delivery-semantics.md) | a Node or nested Graph explicitly selects a weaker scope than its closest inherited value |

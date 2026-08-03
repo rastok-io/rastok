@@ -67,6 +67,10 @@ pub const E_LAB_NO_APP: Code = Code::new("E-LAB-NO-APP");
 /// executable target today.
 pub const E_SIM_TARGET: Code = Code::new("E-SIM-TARGET");
 
+/// Two simulations of one lab sharing a name — fragments merge, but
+/// homonyms would shadow silently.
+pub const E_DUP_SIMULATION: Code = Code::new("E-DUP-SIMULATION");
+
 /// Merged sources of one compilation: the application files. Lab
 /// fragments join at the scenario stage.
 #[derive(Debug, Clone, Default)]
@@ -133,13 +137,42 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
         }
     }
     let checked_app = checker.graph(app);
-    let mut labs = Vec::new();
+    // A lab is a logical corpus: fragments sharing a name merge into
+    // one; a duplicate simulation name inside the merged corpus
+    // refuses — it would shadow silently.
+    let mut labs: Vec<crate::compiler::hir::Lab> = Vec::new();
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
             if let TopDecl::Lab(lab) = decl
                 && let Some(checked) = checker.lab(lab, &checked_app)
             {
-                labs.push(checked);
+                match labs.iter_mut().find(|merged| merged.name == checked.name) {
+                    Some(merged) => {
+                        for simulation in checked.simulations {
+                            if merged
+                                .simulations
+                                .iter()
+                                .any(|existing| existing.name == simulation.name)
+                            {
+                                checker.bag.push(
+                                    Diagnostic::new(
+                                        E_DUP_SIMULATION,
+                                        Phase::Resolve,
+                                        format!(
+                                            "the simulation `{}` is already declared in lab `{}`",
+                                            simulation.name, merged.name
+                                        ),
+                                    )
+                                    .with_span(lab.name.span)
+                                    .with_field("name", simulation.name.clone()),
+                                );
+                                continue;
+                            }
+                            merged.simulations.push(simulation);
+                        }
+                    }
+                    None => labs.push(checked),
+                }
             }
         }
     }
@@ -668,8 +701,26 @@ impl Checker<'_, '_> {
     /// `err` is exempt: unwired errors bubble to the root sink.
     fn warn_unwired_outputs(&mut self, graph: &Graph) {
         for node in &graph.nodes {
-            for (port, direction) in &node.ports {
-                if *direction != Direction::Output || port.name() == "err" {
+            // The default ports never enter the declared table, but
+            // an emission on them leaks all the same: sweep the
+            // handlers' emitted ports beside the declared outputs.
+            let mut outputs: Vec<node::Port> = node
+                .ports
+                .iter()
+                .filter(|(_, direction)| *direction == Direction::Output)
+                .map(|(port, _)| port.clone())
+                .collect();
+            for handler in &node.handlers {
+                for statement in &handler.body {
+                    if let Statement::Emit { port, .. } = statement
+                        && !outputs.contains(port)
+                    {
+                        outputs.push(port.clone());
+                    }
+                }
+            }
+            for port in &outputs {
+                if port.name() == "err" {
                     continue;
                 }
                 let wired = graph.edges.iter().any(|edge| {
@@ -838,6 +889,12 @@ impl Checker<'_, '_> {
         let mut node = Node {
             path,
             role: NodeRole::Connector {
+                error_set: match self.registry.connector(&trait_name) {
+                    stdlib::Availability::Available(contract) => {
+                        contract.error_set.iter().map(ToString::to_string).collect()
+                    }
+                    _ => Vec::new(),
+                },
                 trait_name,
                 attributes: Vec::new(),
             },
@@ -2363,6 +2420,36 @@ graph m0_probe : App {
                 bag.diagnostics()
             );
         }
+    }
+
+    #[test]
+    fn lab_fragments_merge_and_homonym_simulations_refuse() {
+        let source = "graph g : App {\n  operator o {\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n\nlab g {\n  simulation a on app { }\n}\n\nlab g {\n  simulation b on app { }\n}\n\nlab g {\n  simulation a on app { }\n}\n";
+        let (hir, bag) = check_source(source);
+        // Fragments merged into one corpus of two simulations…
+        let hir = hir.expect("the unit checks");
+        assert_eq!(hir.labs.len(), 1);
+        assert_eq!(hir.labs[0].simulations.len(), 2);
+        // …and the homonym refused by name.
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == E_DUP_SIMULATION && diagnostic.fields()[0].1 == "a"
+        }));
+    }
+
+    #[test]
+    fn an_implicit_unwired_output_still_warns() {
+        // `out` never enters the declared port table; the leak must
+        // surface anyway — the errata's interim floor is visibility.
+        let source =
+            "graph g : App {\n  operator o {\n    on in { out = envelope }\n  }\n  . -> o\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(
+            bag.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code() == W_UNWIRED_OUTPUT && diagnostic.fields()[1].1 == "out"
+            }),
+            "{:#?}",
+            bag.diagnostics()
+        );
     }
 
     #[test]

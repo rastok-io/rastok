@@ -1,8 +1,12 @@
 # Rust crates
 
-Rastok's compiler and runtime live in this Cargo workspace.
+Rastok's compiler and runtime live in this Cargo workspace, as one
+bootstrap crate.
 
-The initial `rastok` crate is deliberately empty: it gives the repository
-a valid build root without pre-empting the implementation blueprint.
-Additional crates should be introduced only when a real dependency or
-compilation boundary justifies them.
+`rastok` carries the whole M0 slice — lexer through checker and
+planner, the CEL chain, the journal and transactional VM, the real
+`Process` adapter, the lab runner, the canonical trace projection,
+and the `rastok` binary (`check` / `run` / `simulate`). The seams the
+architecture names (compiler, runtime, boundary, lab, golden) are
+modules of this crate; additional crates should be introduced only
+when a real dependency or compilation boundary justifies them.

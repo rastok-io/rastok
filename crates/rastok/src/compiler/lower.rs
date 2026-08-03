@@ -20,7 +20,6 @@ use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
     Node, NodeKind, SemanticHash, Slot, Step, SymbolTable, VarCell,
 };
-use crate::stdlib;
 
 /// Computes the semantic hash of a checked graph.
 #[must_use]
@@ -84,10 +83,8 @@ fn sorted_edges(hir: &Hir) -> Vec<(String, &crate::compiler::hir::Edge)> {
 }
 
 /// Lowers a checked graph into the shipped plan and its symbol table.
-/// The registry supplies the contract facts the plan must carry to be
-/// self-sufficient at runtime — the error sets.
 #[must_use]
-pub fn lower(hir: &Hir, registry: &stdlib::Registry) -> (ExecutionPlan, SymbolTable) {
+pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
     let nodes = sorted_nodes(hir);
     let slot_of = |path: &node::Path| {
         Slot::new(
@@ -139,17 +136,16 @@ pub fn lower(hir: &Hir, registry: &stdlib::Registry) -> (ExecutionPlan, SymbolTa
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
             kind: match &hir_node.role {
-                NodeRole::Connector { trait_name, .. } => NodeKind::Connector(ConnectorSpec {
+                NodeRole::Connector {
+                    trait_name,
+                    error_set,
+                    ..
+                } => NodeKind::Connector(ConnectorSpec {
                     contract: trait_name.clone(),
                     effect: typed_effect(hir_node),
                     behavior: typed_behavior(hir_node),
                     attributes,
-                    error_set: match registry.connector(trait_name) {
-                        stdlib::Availability::Available(contract) => {
-                            contract.error_set.iter().map(ToString::to_string).collect()
-                        }
-                        _ => Vec::new(),
-                    },
+                    error_set: error_set.clone(),
                 }),
                 NodeRole::Operator => NodeKind::Operator,
             },
@@ -418,11 +414,24 @@ impl Writer {
             node::Kind::Graph => 3,
         });
         self.str(&node.path.to_string());
-        match node.connector_trait() {
-            None => self.tag(0),
-            Some(name) => {
+        match &node.role {
+            crate::compiler::hir::NodeRole::Operator => self.tag(0),
+            crate::compiler::hir::NodeRole::Connector {
+                trait_name,
+                error_set,
+                ..
+            } => {
                 self.tag(1);
-                self.str(name);
+                self.str(trait_name);
+                // The resolved contract is identity material: two
+                // sheet revisions with different error sets must not
+                // share a hash.
+                let mut kinds: Vec<&String> = error_set.iter().collect();
+                kinds.sort();
+                self.count(kinds.len());
+                for kind in kinds {
+                    self.str(kind);
+                }
             }
         }
         let mut vals: Vec<_> = node.vals.iter().collect();
@@ -810,7 +819,7 @@ graph m0_probe : App {
         let hash = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
         assert_eq!(
             hash.to_string(),
-            "9b2c2767965fa216a7f7c9ed60b0f3ea8f512427f9cc3106af9e8ef41a0eb42b"
+            "60d911720258efd717e66c86b87e55aba8ff94f97ca9bc90f078a1587bd9cee3"
         );
     }
 

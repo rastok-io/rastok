@@ -384,6 +384,23 @@ impl<'plan> TransactionExecutor<'plan> {
                 Step::SetVar { name, expr } => {
                     let env = bindings(&scratch, &lets)?;
                     let value = cel::eval(expr, &env).map_err(Fault::Eval)?;
+                    // The DSL's `int` is 32-bit; CEL's carrier is
+                    // wider. The declared bound holds at every write,
+                    // not just the initializer — an overflow is a
+                    // typed error, never a silent widening.
+                    if let cel::Value::Int(candidate) = value
+                        && node
+                            .vars
+                            .iter()
+                            .any(|cell| &cell.name == name && cell.ty == cel::Type::Int)
+                        && i32::try_from(candidate).is_err()
+                    {
+                        return Err(Fault::Eval(cel::Error {
+                            message: format!(
+                                "`{name}` is an int; {candidate} leaves the 32-bit range"
+                            ),
+                        }));
+                    }
                     scratch.insert(name.clone(), value);
                 }
                 Step::Emit { port, value } => {

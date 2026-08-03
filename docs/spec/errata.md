@@ -92,3 +92,37 @@
   that sheets extend the base attribute set implicitly defined by
   the effect classes.
 - **Found by:** external code review (fourth pass), 2026-08-03.
+
+## E-2026-08-03-4 — no canonical byte form for materialized data
+
+- **Where:** [identity.md §3](identity.md), spine key 8 (`data` =
+  `[encoding_tag, bytes]`, "opaque, compared as bytes, never
+  re-encoded").
+- **Gap:** an in-memory (materialized) value has no storage bytes,
+  and the spec names no canonical codec for producing them — key 8
+  is unprojectable for the most common M0 payload.
+- **Interim behavior (implementation):** a materialized value seals
+  as its own `tagged_value` deterministic CBOR under `raw` —
+  injective and byte-stable, documented at the projection site.
+- **Resolution direction:** either bless that rule in §3, or require
+  every sealed envelope to carry an encoded representation.
+- **Found by:** external code review (fifth pass), 2026-08-03.
+
+## E-2026-08-03-5 — the response closure wants an envelope that does not exist yet
+
+- **Where:** [identity.md §3](identity.md), OUTBOUND key 45
+  (`[1, envelope]` for a response closure) vs the ownership rule of
+  [sim-05](simulation-semantics.md) and delivery-semantics: the
+  dispatcher never mints envelopes — the outcome envelope is born in
+  the connector's own transaction, AFTER the closure fact.
+- **Contradiction:** the normative closure shape presupposes an
+  envelope at close time; the causal model creates it one record
+  later. Both cannot hold as written.
+- **Interim behavior (implementation):** the closure seals a
+  data-only spine (key 8 alone) carrying the raw reply; the full
+  envelope appears in the outcome transaction's emission, where it
+  is minted.
+- **Resolution direction:** either the closure shape becomes
+  `[1, reply-data]`, or closures are re-specified to reference the
+  outcome transaction's emission by id.
+- **Found by:** external code review (fifth pass), 2026-08-03.

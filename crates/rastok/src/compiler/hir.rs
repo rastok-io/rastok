@@ -73,6 +73,11 @@ pub enum NodeRole {
         trait_name: String,
         /// Checked attributes, in declaration order.
         attributes: Vec<Attribute>,
+        /// The resolved contract's error kinds — a snapshot taken at
+        /// check: the plan and the semantic hash both derive from
+        /// this one object, so a sheet evolution can never produce
+        /// two differently-validating plans under one hash.
+        error_set: Vec<String>,
     },
 }
 

@@ -1,7 +1,10 @@
-//! Rastok compiler and runtime.
+//! Rastok compiler and runtime — the M0 slice: one `.rkg` unit in,
+//! a checked plan, a journaled run against real adapters, a lab of
+//! scripted worlds, and a canonical trace out.
 //!
-//! The first executable slice will define this crate's public surface.
-//! The build sequence is documented in `docs/architecture/build-order.md`.
+//! The build sequence is documented in
+//! `docs/architecture/build-order.md`; the spec under `docs/spec/` is
+//! normative.
 
 pub mod boundary;
 pub mod cel;

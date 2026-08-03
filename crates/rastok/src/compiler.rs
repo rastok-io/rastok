@@ -63,7 +63,7 @@ pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilat
         return Err(bag);
     }
     let hash = lower::semantic_hash(&hir);
-    let (plan, symbols) = lower::lower(&hir, registry);
+    let (plan, symbols) = lower::lower(&hir);
     Ok(Compilation {
         plan,
         symbols,

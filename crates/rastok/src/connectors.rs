@@ -55,11 +55,11 @@ fn parse_size(text: &str) -> Option<usize> {
 /// carries the codec-framed request; the complete stdout at exit
 /// becomes the one reply. The process boundary is the correlation.
 ///
-/// The run is synchronous: a job either exits or trips its output
-/// cap. Wall-clock budget enforcement stays with the machine's
-/// discrete clock — the `timeout` attribute arms the journal-side
-/// budget, and a hung child is bounded by `max_output`, not killed
-/// mid-run by this adapter yet.
+/// The `timeout` attribute is enforced twice, once per world: the
+/// machine's discrete clock arms the journal-side budget, and this
+/// adapter holds the same value as a wall-clock deadline — a child
+/// alive past it is killed and answers with the typed TimeoutExpired.
+/// Close-once arbitrates if both fire.
 ///
 /// Job-mode stderr travels inside `ExecFailed` on failure; on a
 /// successful exit it is dropped in this build — `StderrLine` events

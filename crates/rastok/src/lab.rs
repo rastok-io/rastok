@@ -636,6 +636,41 @@ lab m0_probe {
     }
 
     #[test]
+    fn a_declared_int_cannot_silently_become_a_long() {
+        // The fifth review's repro: count = i32::MAX, then + 1 —
+        // previously widened silently and sealed as a long.
+        let source = r#"
+graph m0_probe : App {
+  operator wide {
+    var count : int = 2147483647
+    on in {
+      count = count + 1
+      out = data.text
+    }
+  }
+  . -> wide -> .
+}
+
+lab m0_probe {
+  simulation s on app {
+    scenario overflow {
+      app.in = { text = "x" }
+      expect nothing app.out
+      expect "the overflow is typed" app.err where data.kind == "RuntimeFault"
+    }
+  }
+}
+"#;
+        let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+        let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        assert!(
+            runs[0].report.passed(),
+            "the overflow leaves as a typed error: {:#?}",
+            runs[0].report.failures
+        );
+    }
+
+    #[test]
     fn an_uncovered_call_fails_the_scenario_loudly() {
         let source = r#"
 graph m0_probe : App {
