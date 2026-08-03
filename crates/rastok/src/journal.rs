@@ -181,8 +181,9 @@ pub struct TransactionRecord {
     pub emissions: Vec<Emission>,
     /// The dated obligations this firing arms — `(timer_kind, ref)`
     /// per identity.md §3 key 37: kind 1 = call budget, ref = the
-    /// delivered envelope's id. Sorted at commit; the due instant is
-    /// never sealed.
+    /// derived budget identity `budget_ref(edge, envelope_id)`
+    /// (erratum E-2026-08-04-2). Sorted at commit; the due instant
+    /// is never sealed.
     pub timers: Vec<(u8, crate::envelope::Id)>,
 }
 

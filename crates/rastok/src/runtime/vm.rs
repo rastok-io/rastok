@@ -1552,7 +1552,17 @@ graph fanout : App {
         vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
         vm.drain(&mut journal).unwrap();
         assert!(vm.is_stable());
-        assert_eq!(vm.errors().len(), 1, "one DecodeError, no duplicate");
+        assert_eq!(vm.errors().len(), 1, "one typed error, no duplicate");
+        let Data::Materialized(crate::envelope::Value::Map(payload)) = vm.errors()[0].data() else {
+            panic!("expected the typed error payload");
+        };
+        assert_eq!(
+            payload.get("kind"),
+            Some(&crate::envelope::Value::Scalar(
+                crate::envelope::Scalar::Text(String::from("DecodeError"))
+            )),
+            "the kind survived the replay"
+        );
         let decode_transactions: Vec<_> = journal
             .inner
             .records()

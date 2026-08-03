@@ -1395,6 +1395,36 @@ graph m0_probe : App {
     }
 
     #[test]
+    fn the_delivery_reference_selects_among_same_envelope_deliveries() {
+        // One envelope, two edges into one node: (edge, id) is the
+        // reference — find and remove touch only their own delivery.
+        let (plan, slot) = probe();
+        let _ = &plan;
+        let mut mailboxes = Mailboxes::new(8);
+        let envelope = input("x").envelope;
+        let id = envelope.meta().sys().id();
+        let a = node::Port::new("a").unwrap();
+        let b = node::Port::new("b").unwrap();
+        mailboxes
+            .deliver(slot, "", a, String::from("s.out>n.a"), envelope.clone())
+            .unwrap();
+        mailboxes
+            .deliver(slot, "", b, String::from("s.out>n.b"), envelope.clone())
+            .unwrap();
+        assert!(mailboxes.find_by_ref(slot, "", "s.out>n.b", id).is_some());
+        let removed = mailboxes
+            .remove_by_ref(slot, "", "s.out>n.b", id)
+            .expect("the b delivery");
+        assert_eq!(removed.edge, "s.out>n.b");
+        // The sibling on edge a is untouched.
+        let survivor = mailboxes
+            .find_by_ref(slot, "", "s.out>n.a", id)
+            .expect("the a delivery survives");
+        assert_eq!(survivor.edge, "s.out>n.a");
+        assert!(mailboxes.remove_by_ref(slot, "", "s.out>n.b", id).is_none());
+    }
+
+    #[test]
     fn one_node_mailbox_keeps_arrival_order_across_ports() {
         let (plan, slot) = probe();
         let _ = &plan;

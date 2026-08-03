@@ -23,6 +23,18 @@ its normative home and its planned resolution.
   boundary vocabulary removes the dependency and the double
   computation; planned with the service-mode rework.
 
+- **CallRef does not yet see the delivery reference**
+  ([identity.md §3](../spec/identity.md), OUTBOUND keys 40–43): the
+  mailbox and the budget obligations are keyed by
+  `(edge, envelope_id)`, but `call_ref` still derives from
+  `(emitting_id, connector_path, request_digest)` — two ports of one
+  connector receiving one envelope with identical bytes would derive
+  one call. Unreachable with the single-input Process of M0. The fix
+  is spec-first, BEFORE any multiport connector ships: formalize the
+  delivery reference, seal it in the OUTBOUND record, and derive
+  `call_ref` from it — never by salting `request_digest`, whose
+  definition (the exact sent bytes) must not move.
+
 ## Structural debt (no semantic impact)
 
 - `check.rs`, `runtime.rs`, `vm.rs`, and `golden.rs` have outgrown
