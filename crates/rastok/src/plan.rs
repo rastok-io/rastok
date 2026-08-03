@@ -45,21 +45,41 @@ pub struct ExecutionPlan {
     pub handlers: Vec<Handler>,
 }
 
+/// What a planned node is — the valid states, and only those: an
+/// operator never carries a connector spec, a connector never lacks
+/// one.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeKind {
+    /// Pure graph-internal computation.
+    Operator,
+    /// External-effect adapter under a contract sheet.
+    Connector(ConnectorSpec),
+}
+
 /// One planned node.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     /// Root-relative address — id-recipe material.
     pub path: node::Path,
-    /// Operator or connector.
-    pub kind: node::Kind,
-    /// The connector configuration, when a connector.
-    pub connector: Option<ConnectorSpec>,
+    /// What the node is.
+    pub kind: NodeKind,
     /// The node's semantic port table — declared and inferred, in
     /// canonical order; the defaults `in`, `out`, `err` are implicit.
     pub ports: Vec<(node::Port, node::Direction)>,
     /// Declared state cells with their boot-time defaults, in
     /// canonical order.
     pub vars: Vec<VarCell>,
+}
+
+impl Node {
+    /// The connector configuration, when the node is a connector.
+    #[must_use]
+    pub fn connector(&self) -> Option<&ConnectorSpec> {
+        match &self.kind {
+            NodeKind::Connector(spec) => Some(spec),
+            NodeKind::Operator => None,
+        }
+    }
 }
 
 /// A connector's planned configuration.

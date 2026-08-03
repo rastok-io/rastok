@@ -17,7 +17,7 @@ use crate::compiler::hir::{
 use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
-    Node, SemanticHash, Slot, Step, SymbolTable, VarCell,
+    Node, NodeKind, SemanticHash, Slot, Step, SymbolTable, VarCell,
 };
 
 /// Computes the semantic hash of a checked graph.
@@ -133,14 +133,13 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         vars.sort_by(|a, b| a.name.cmp(&b.name));
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
-            kind: hir_node.kind,
-            connector: hir_node
-                .connector_trait
-                .as_ref()
-                .map(|contract| ConnectorSpec {
+            kind: match &hir_node.connector_trait {
+                Some(contract) => NodeKind::Connector(ConnectorSpec {
                     contract: contract.clone(),
                     attributes,
                 }),
+                None => NodeKind::Operator,
+            },
             ports,
             vars,
         });
@@ -670,7 +669,7 @@ graph m0_probe : App {
         // Canonical order: operators before connectors.
         assert_eq!(plan.nodes[0].path.to_string(), "shout");
         assert_eq!(plan.nodes[1].path.to_string(), "echo");
-        let spec = plan.nodes[1].connector.as_ref().expect("a connector spec");
+        let spec = plan.nodes[1].connector().expect("a connector spec");
         assert_eq!(spec.contract, "Process");
         assert_eq!(
             spec.attribute("command"),
