@@ -10,6 +10,34 @@
 //! over the concatenated records. [`diff`] exists to *explain* a
 //! broken seal: the first record, and the first key path inside it,
 //! where two traces disagree.
+//!
+//! # Why CBOR, and why no library
+//!
+//! A trace is *evidence*, read by parties who are not this codebase —
+//! auditors, second implementations, conformance tooling. A standard
+//! substrate keeps that evidence legible without our code (any CBOR
+//! inspector decodes a golden line today), and the extend-only table
+//! discipline — append keys, never renumber, absent = omitted — works
+//! precisely because CBOR maps are navigable without a schema. A
+//! fully bespoke byte format would still need every line of this
+//! encoder, plus its own byte-grammar specification and versioning
+//! machinery, minus decades of review; RFC 8949 is IETF STD 94 and
+//! will not move under us. (Bytes that are written but never read
+//! back — the id framings — are rightly bespoke: injectivity is
+//! their only contract. Bytes only we read back — the durable
+//! journal — are free to choose either way.)
+//!
+//! No encoding library is used because conformance is not the
+//! requirement — *byte identity under this profile* is. The standard
+//! admits many valid encodings of one value; §4.2 is a recommended
+//! profile; and identity.md deviates from even that where it must
+//! (float width is fixed by the type tag, never shortest-form, so a
+//! `1.5` cannot silently narrow). A conformant library implements
+//! *its* choices among the legal encodings and may revise them at
+//! any version — each revision a broken seal for a non-semantic
+//! reason. This encoder covers the closed subset the tables need,
+//! encode-only (decoding, where CBOR's complexity and attack surface
+//! live, never happens here), and changes only when the spec does.
 
 use crate::envelope::{Data, Encoding, Envelope, Role, Scalar};
 use crate::journal::{Closure, OutboundStatus, Record};
@@ -666,5 +694,95 @@ fn head(major: u8, argument: u64, out: &mut Vec<u8>) {
     } else {
         out.push(major | 27);
         out.extend_from_slice(&argument.to_be_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RFC 8949 Appendix A vectors, restricted to the subset the
+    /// tables use — the encoder is pinned to the standard
+    /// independently of any trace.
+    #[test]
+    fn the_encoder_matches_the_rfc_8949_vectors() {
+        let cases: Vec<(Cbor, &[u8])> = vec![
+            (Cbor::Uint(0), &[0x00]),
+            (Cbor::Uint(23), &[0x17]),
+            (Cbor::Uint(24), &[0x18, 0x18]),
+            (Cbor::Uint(100), &[0x18, 0x64]),
+            (Cbor::Uint(1000), &[0x19, 0x03, 0xe8]),
+            (Cbor::Uint(1_000_000), &[0x1a, 0x00, 0x0f, 0x42, 0x40]),
+            (
+                Cbor::Uint(1_000_000_000_000),
+                &[0x1b, 0x00, 0x00, 0x00, 0xe8, 0xd4, 0xa5, 0x10, 0x00],
+            ),
+            (Cbor::Int(-1), &[0x20]),
+            (Cbor::Int(-10), &[0x29]),
+            (Cbor::Int(-100), &[0x38, 0x63]),
+            (Cbor::Int(-1000), &[0x39, 0x03, 0xe7]),
+            (Cbor::Bool(false), &[0xf4]),
+            (Cbor::Bool(true), &[0xf5]),
+            (Cbor::Null, &[0xf6]),
+            (
+                Cbor::Double(1.1),
+                &[0xfb, 0x3f, 0xf1, 0x99, 0x99, 0x99, 0x99, 0x99, 0x9a],
+            ),
+            (
+                Cbor::Double(-4.1),
+                &[0xfb, 0xc0, 0x10, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66],
+            ),
+            (Cbor::Bytes(vec![]), &[0x40]),
+            (
+                Cbor::Bytes(vec![0x01, 0x02, 0x03, 0x04]),
+                &[0x44, 0x01, 0x02, 0x03, 0x04],
+            ),
+            (Cbor::Text(String::new()), &[0x60]),
+            (
+                Cbor::Text(String::from("IETF")),
+                &[0x64, 0x49, 0x45, 0x54, 0x46],
+            ),
+            (
+                Cbor::Text(String::from("\u{20ac}")),
+                &[0x63, 0xe2, 0x82, 0xac],
+            ),
+            (Cbor::Array(vec![]), &[0x80]),
+            (
+                Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(2), Cbor::Uint(3)]),
+                &[0x83, 0x01, 0x02, 0x03],
+            ),
+            (Cbor::Map(vec![]), &[0xa0]),
+            (
+                Cbor::Map(vec![(1, Cbor::Uint(2)), (3, Cbor::Uint(4))]),
+                &[0xa2, 0x01, 0x02, 0x03, 0x04],
+            ),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(encode(&value), expected, "{value:?}");
+        }
+    }
+
+    /// The profile's stated deviations from shortest-form: doubles
+    /// hold binary64 regardless of value, and NaN is the one
+    /// canonical quiet NaN.
+    #[test]
+    fn floats_hold_their_fixed_width_and_canonical_nan() {
+        // 1.5 is exactly representable in binary16; the profile
+        // still seals binary64.
+        assert_eq!(
+            encode(&Cbor::Double(1.5)),
+            [0xfb, 0x3f, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        );
+        let payload_nan = f64::from_bits(0x7ff8_0000_0000_1234);
+        assert_eq!(
+            encode(&Cbor::Double(payload_nan)),
+            [0xfb, 0x7f, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            "every NaN seals as the canonical quiet NaN"
+        );
+        assert_eq!(
+            encode(&Cbor::Double(-0.0)),
+            [0xfb, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            "-0.0 stays distinct from +0.0"
+        );
     }
 }
