@@ -408,6 +408,12 @@ impl Meta {
         &self.app
     }
 
+    /// Every custom namespace, in name order — what emission
+    /// inheritance walks.
+    pub fn customs(&self) -> impl Iterator<Item = (&String, &Namespace)> {
+        self.custom.iter()
+    }
+
     /// A custom namespace by name.
     #[must_use]
     pub fn custom(&self, name: &str) -> Option<&Namespace> {

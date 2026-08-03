@@ -56,6 +56,10 @@ pub const E_GRAPH_CYCLE: Code = Code::new("E-GRAPH-CYCLE");
 /// Diagnostic for a static literal with two keys canonicalizing equal.
 pub const E_DUP_KEY: Code = Code::new("E-DUP-KEY");
 
+/// A node output port no edge consumes; `err` is exempt — it bubbles
+/// to the root error sink.
+pub const W_UNWIRED_OUTPUT: Code = Code::new("W-UNWIRED-OUTPUT");
+
 /// Merged sources of one compilation: the application files. Lab
 /// fragments join at the scenario stage.
 #[derive(Debug, Clone, Default)]
@@ -298,7 +302,39 @@ impl Checker<'_, '_> {
             }
         }
         self.reject_cycles(&graph, decl.span);
+        self.warn_unwired_outputs(&graph);
         graph
+    }
+
+    /// Every non-`err` output either reaches an edge or is discarded
+    /// in writing (`-> nothing`); a port that just leaks gets flagged.
+    /// `err` is exempt: unwired errors bubble to the root sink.
+    fn warn_unwired_outputs(&mut self, graph: &Graph) {
+        for node in &graph.nodes {
+            for (port, direction) in &node.ports {
+                if *direction != Direction::Output || port.name() == "err" {
+                    continue;
+                }
+                let wired = graph.edges.iter().any(|edge| {
+                    edge.from.node.as_ref() == Some(&node.path) && edge.from.port == *port
+                });
+                if !wired {
+                    self.bag.push(
+                        Diagnostic::new(
+                            W_UNWIRED_OUTPUT,
+                            Phase::Check,
+                            format!(
+                                "`{}.{port}` is emitted but wired nowhere; \
+                                 route it or discard it with `-> nothing`",
+                                node.path
+                            ),
+                        )
+                        .with_field("node", node.path.to_string())
+                        .with_field("port", port.name().to_string()),
+                    );
+                }
+            }
+        }
     }
 
     /// Wiring is a DAG (`grammar.md`): a cycle among nodes refuses.
@@ -781,7 +817,19 @@ impl Checker<'_, '_> {
                 if is_connector {
                     self.deferred("a connector handler", handler.span);
                 } else if let Some(checked) = self.handler(handler, &signature, node) {
-                    node.handlers.push(checked);
+                    // Multi-handler arbitration (which fires? does a
+                    // false guard fall through?) has no specified rule
+                    // yet — and the emission-id recipe carries no
+                    // handler identity, so two firings could collide.
+                    if node
+                        .handlers
+                        .iter()
+                        .any(|existing| existing.trigger == checked.trigger)
+                    {
+                        self.deferred("a second handler for one trigger", handler.span);
+                    } else {
+                        node.handlers.push(checked);
+                    }
                 }
             }
         }
@@ -1051,8 +1099,14 @@ impl Checker<'_, '_> {
                     Err(_) => return None,
                 }
             }
-            SynTrigger::Start(_) => node::Trigger::Lifecycle(node::Lifecycle::Start),
-            SynTrigger::Stop(_) => node::Trigger::Lifecycle(node::Lifecycle::Stop),
+            SynTrigger::Start(span) => {
+                self.deferred("a start lifecycle handler", *span);
+                return None;
+            }
+            SynTrigger::Stop(span) => {
+                self.deferred("a stop lifecycle handler", *span);
+                return None;
+            }
             SynTrigger::Compensate(span) => {
                 self.deferred("a compensate handler", *span);
                 return None;
@@ -1242,7 +1296,17 @@ impl Checker<'_, '_> {
                 self.field_writes(body, signature).map(EmitValue::Replace)
             }
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
-            SynValue::Cel(expr) => self.cel(expr, signature).map(EmitValue::Data),
+            SynValue::Cel(expr) => {
+                let tree = self.cel(expr, signature)?;
+                if matches!(
+                    tree.ty,
+                    cel::Type::Duration | cel::Type::Timestamp | cel::Type::Null
+                ) {
+                    self.deferred("a duration, timestamp, or null emission", expr.span);
+                    return None;
+                }
+                Some(EmitValue::Data(tree))
+            }
             SynValue::Struct(body) | SynValue::Map(body) => {
                 let span = body
                     .entries
@@ -1805,6 +1869,58 @@ graph m0_probe : App {
                 bag.diagnostics()
             );
         }
+    }
+
+    #[test]
+    fn an_unwired_output_warns_without_refusing() {
+        let source = "graph g : App {\n  operator o {\n    on in {\n      out = envelope\n      side = envelope\n    }\n  }\n  . -> o -> .\n}\n";
+        let (hir, bag) = check_source(source);
+        assert!(hir.is_some(), "a leak is a warning, not a refusal");
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == W_UNWIRED_OUTPUT && diagnostic.fields()[1].1 == "side"
+        }));
+        // Discarding in writing silences it.
+        let discarded = "graph g : App {\n  operator o {\n    on in {\n      out = envelope\n      side = envelope\n    }\n  }\n  . -> o -> .\n  o.side -> nothing\n}\n";
+        let (_, bag) = check_source(discarded);
+        assert!(
+            !bag.diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code() == W_UNWIRED_OUTPUT)
+        );
+    }
+
+    #[test]
+    fn a_second_handler_for_one_trigger_is_refused() {
+        let source = "graph g : App {\n  operator o {\n    on in { out = envelope }\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == E_CHECK_DEFERRED
+                && diagnostic.fields()[0].1 == "a second handler for one trigger"
+        }));
+    }
+
+    #[test]
+    fn lifecycle_handlers_this_machine_never_fires_are_refused() {
+        let source = "graph g : App {\n  operator o {\n    on start { out = envelope }\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == E_CHECK_DEFERRED
+                && diagnostic.fields()[0].1 == "a start lifecycle handler"
+        }));
+    }
+
+    #[test]
+    fn unrepresentable_emissions_refuse_at_check_not_at_runtime() {
+        let source = "graph g : App {\n  operator o {\n    on in { out = duration(\"3s\") }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(
+            bag.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code() == E_CHECK_DEFERRED
+                    && diagnostic.fields()[0].1 == "a duration, timestamp, or null emission"
+            }),
+            "an accepted plan must not fault on a normal emission: {:#?}",
+            bag.diagnostics()
+        );
     }
 
     #[test]

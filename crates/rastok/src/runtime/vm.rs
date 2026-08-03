@@ -93,19 +93,51 @@ pub struct PumpReport {
     pub uncorrelated: Vec<Response>,
 }
 
+/// One won closure and the trigger its outcome transaction fires
+/// under: `p:in` for a partner answer, `l:timeout` for an expired
+/// budget.
+#[derive(Debug, Clone, PartialEq)]
+struct SettledEntry {
+    event: BoundaryEvent,
+    trigger: node::Trigger,
+}
+
 /// The run-to-completion scheduler: it owns the mailboxes and picks
 /// the next work deterministically — the same journal always replays
 /// to the same order.
 #[derive(Debug)]
 pub struct Scheduler {
     mailboxes: Mailboxes,
+    /// Armed call budgets, ordered by expiry — the machine's one
+    /// dated-event queue. The arm sequence breaks date ties
+    /// deterministically.
+    dated: BTreeMap<(i64, u64), CallRef>,
+    arm_seq: u64,
 }
 
 impl Scheduler {
     fn new(capacity: usize) -> Self {
         Self {
             mailboxes: Mailboxes::new(capacity),
+            dated: BTreeMap::new(),
+            arm_seq: 0,
         }
+    }
+
+    fn arm(&mut self, at: i64, call_ref: CallRef) {
+        self.dated.insert((at, self.arm_seq), call_ref);
+        self.arm_seq = self.arm_seq.wrapping_add(1);
+    }
+
+    /// Removes and returns the next armed expiry at or before
+    /// `target`, if any.
+    fn due(&mut self, target: i64) -> Option<(i64, CallRef)> {
+        let key = self
+            .dated
+            .first_key_value()
+            .filter(|((at, _), _)| *at <= target)
+            .map(|(key, _)| *key)?;
+        self.dated.remove(&key).map(|call_ref| (key.0, call_ref))
     }
 }
 
@@ -123,8 +155,11 @@ pub struct Vm<'plan> {
     /// connector's mailbox stays claimed the whole time.
     pending: BTreeMap<CallRef, Delivery>,
     /// Won closures awaiting their outcome transaction — replayable:
-    /// an event leaves this queue only when its transaction commits.
-    settled: VecDeque<BoundaryEvent>,
+    /// an entry leaves this queue only when its transaction commits.
+    settled: VecDeque<SettledEntry>,
+    /// The machine's virtual date, in nanoseconds; only
+    /// [`Self::advance`] moves it, discretely.
+    now: i64,
     outputs: Vec<Envelope>,
     errors: Vec<Envelope>,
 }
@@ -143,6 +178,7 @@ impl<'plan> Vm<'plan> {
             dispatcher: Dispatcher::new(),
             pending: BTreeMap::new(),
             settled: VecDeque::new(),
+            now: 0,
             outputs: Vec::new(),
             errors: Vec::new(),
         }
@@ -232,12 +268,68 @@ impl<'plan> Vm<'plan> {
             .pump(journal, partner)
             .map_err(VmError::Dispatch)?;
         let settled = batch.events.len();
-        self.settled.extend(batch.events);
+        let in_port =
+            node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port"));
+        self.settled
+            .extend(batch.events.into_iter().map(|event| SettledEntry {
+                event,
+                trigger: node::Trigger::Port(in_port.clone()),
+            }));
         Ok(PumpReport {
             settled,
             discarded: batch.discarded,
             uncorrelated: batch.uncorrelated,
         })
+    }
+
+    /// Advances the virtual date to `target`, firing each armed call
+    /// budget in expiry order — the discrete advance: time moves in
+    /// jumps, and the machine drains between them. A budget whose
+    /// call already settled loses the closure race and fires nothing;
+    /// a won expiry closes the call with a Timeout fact and becomes
+    /// the connector's `l:timeout` transaction, a TimeoutExpired on
+    /// `err`.
+    ///
+    /// # Errors
+    ///
+    /// Journal refusals and faulting steps, as in [`Self::drain`].
+    pub fn advance(&mut self, journal: &mut dyn Journal, target: i64) -> Result<(), VmError> {
+        while let Some((at, call_ref)) = self.scheduler.due(target) {
+            self.now = at;
+            match journal
+                .close_outbound(&call_ref, crate::journal::Closure::Timeout)
+                .map_err(VmError::Journal)?
+            {
+                crate::journal::CloseVerdict::AlreadyClosed => continue,
+                crate::journal::CloseVerdict::Won => {}
+            }
+            let intent = journal
+                .find_call(&call_ref)
+                .unwrap_or_else(|| unreachable!("a closed call is journaled"));
+            self.settled.push_back(SettledEntry {
+                event: BoundaryEvent {
+                    call_ref,
+                    connector_path: intent.connector_path,
+                    emitting_id: intent.emitting_id,
+                    port: node::Port::new("err")
+                        .unwrap_or_else(|_| unreachable!("`err` is a valid port")),
+                    outcome: CallOutcome::Failure(crate::boundary::TypedError {
+                        kind: String::from("TimeoutExpired"),
+                        data: Data::materialized(crate::envelope::Value::Map(BTreeMap::new())),
+                    }),
+                },
+                trigger: node::Trigger::Lifecycle(node::Lifecycle::Timeout),
+            });
+            self.drain(journal)?;
+        }
+        self.now = self.now.max(target);
+        Ok(())
+    }
+
+    /// The machine's virtual date, in nanoseconds.
+    #[must_use]
+    pub fn now(&self) -> i64 {
+        self.now
     }
 
     /// The envelopes that left the graph through its boundary.
@@ -272,7 +364,7 @@ impl<'plan> Vm<'plan> {
     /// The event leaves the queue only after its commit; every
     /// integrity check happens before.
     fn settle_next(&mut self, journal: &mut dyn Journal) -> Result<(), VmError> {
-        let event = self
+        let SettledEntry { event, trigger } = self
             .settled
             .front()
             .cloned()
@@ -295,6 +387,7 @@ impl<'plan> Vm<'plan> {
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
         let outcome = executor.connector_outcome(
             &event,
+            &trigger,
             request.envelope.meta().sys(),
             ConsumedPosition {
                 edge: request.edge.clone(),
@@ -384,6 +477,14 @@ impl<'plan> Vm<'plan> {
             .unwrap_or_else(|| unreachable!("the reserved head is still there"));
         self.pending.insert(call_ref, delivery);
         self.scheduler.mailboxes.claim(slot, key);
+        // A declared budget arms the machine's dated queue; expiry is
+        // a discrete event, not a wall-clock race.
+        if let Some(crate::plan::AttrSetting::Value(crate::cel::Value::Duration(budget))) =
+            spec.attribute("timeout")
+        {
+            self.scheduler
+                .arm(self.now.saturating_add(*budget), call_ref);
+        }
         Ok(())
     }
 
@@ -918,6 +1019,116 @@ graph g : App {
             journal.inner.records().last().unwrap(),
             Record::Transaction(_)
         ));
+    }
+
+    const TIMED_PROBE: &str = r#"
+graph timed : App {
+  connector echo : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("5s")
+  }
+
+  operator shout {
+    var count : int = 0
+    on in where data.text != "" {
+      count = count + 1
+      out = envelope { data.text = data.text }
+    }
+  }
+
+  . -> shout -> echo -> .
+}
+"#;
+
+    #[test]
+    fn a_silent_partner_expires_into_a_typed_timeout() {
+        let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        vm.inject(&mut journal, submission("salut")).unwrap();
+        vm.drain(&mut journal).unwrap();
+        assert!(vm.has_open_obligations());
+        // Nobody answers; the budget expires at the discrete advance.
+        vm.advance(&mut journal, 5_000_000_000).unwrap();
+        assert!(vm.is_stable(), "the expiry released the machine");
+        assert_eq!(vm.now(), 5_000_000_000);
+        // The closure is a Timeout fact and the outcome transaction
+        // fired under l:timeout, a TimeoutExpired on err.
+        let last = journal.records().last().unwrap();
+        let Record::Transaction(transaction) = last else {
+            panic!("expected the timeout transaction");
+        };
+        assert_eq!(
+            transaction.trigger,
+            node::Trigger::Lifecycle(node::Lifecycle::Timeout)
+        );
+        assert_eq!(transaction.emissions[0].port.name(), "err");
+        assert_eq!(vm.errors().len(), 1);
+        let Data::Materialized(Value::Map(payload)) = vm.errors()[0].data() else {
+            panic!("expected the typed error payload");
+        };
+        assert_eq!(
+            payload.get("kind"),
+            Some(&Value::Scalar(Scalar::Text(String::from("TimeoutExpired"))))
+        );
+        // The claim lifted: a second submission opens a second call.
+        vm.inject(&mut journal, submission("encore")).unwrap();
+        vm.drain(&mut journal).unwrap();
+        assert_eq!(journal.open_calls().len(), 1);
+    }
+
+    #[test]
+    fn an_answer_and_an_expiry_race_to_a_single_closure() {
+        let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = EchoWorld::default();
+        vm.inject(&mut journal, submission("salut")).unwrap();
+        vm.drain(&mut journal).unwrap();
+        // The partner answers first; the expiry then loses the race —
+        // one closure fact, one outcome transaction, no duplicate.
+        vm.pump(&mut journal, &mut world).unwrap();
+        vm.drain(&mut journal).unwrap();
+        vm.advance(&mut journal, 5_000_000_000).unwrap();
+        assert!(vm.is_stable());
+        let closures = journal
+            .records()
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record,
+                    Record::Outbound(o) if matches!(o.status, OutboundStatus::Closed(_))
+                )
+            })
+            .count();
+        assert_eq!(closures, 1, "close-once");
+        assert_eq!(vm.outputs().len(), 1);
+        assert!(vm.errors().is_empty(), "no phantom timeout");
+    }
+
+    #[test]
+    fn a_late_answer_is_a_reported_observation_not_a_silence() {
+        let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        vm.inject(&mut journal, submission("salut")).unwrap();
+        vm.drain(&mut journal).unwrap();
+        let call_ref = journal.open_calls()[0].call_ref;
+        // The budget expires first…
+        vm.advance(&mut journal, 5_000_000_000).unwrap();
+        // …then the world answers a closed call.
+        let mut late = ScriptedWorld {
+            answers: vec![Response {
+                call_ref,
+                outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"tard")),
+            }],
+        };
+        let report = vm.pump(&mut journal, &mut late).unwrap();
+        assert_eq!(report.settled, 0);
+        assert_eq!(report.discarded.len(), 1, "the late answer is visible");
+        assert!(report.uncorrelated.is_empty());
     }
 
     #[test]

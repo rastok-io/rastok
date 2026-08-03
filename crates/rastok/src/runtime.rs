@@ -392,12 +392,28 @@ impl<'plan> TransactionExecutor<'plan> {
                             port,
                             index,
                         );
-                        let sys = MetaSys::emission(id, input.meta().sys(), self.graph_version.0);
+                        let mut sys =
+                            MetaSys::emission(id, input.meta().sys(), self.graph_version.0);
                         let (data, app) = data_and_app;
+                        // The identity emission re-ships the input's
+                        // content, so its content-type hint still
+                        // holds; recomputed data drops it.
+                        if matches!(value, PlanEmission::Identity)
+                            && let Some(mime) = input.meta().sys().mime_type()
+                        {
+                            sys = sys.with_mime_type(mime);
+                        }
+                        // Writable namespaces are inherited whole; a
+                        // single-input handler never silently drops
+                        // what the ancestry attached.
+                        let mut meta = Meta::new(sys).with_app(app);
+                        for (name, namespace) in input.meta().customs() {
+                            meta = meta.with_custom(name.clone(), namespace.clone());
+                        }
                         buffer.push(Emission {
                             port: port.clone(),
                             index,
-                            envelope: Envelope::new(Meta::new(sys).with_app(app), data),
+                            envelope: Envelope::new(meta, data),
                         });
                     }
                 }
@@ -483,15 +499,13 @@ impl<'plan> TransactionExecutor<'plan> {
     pub fn connector_outcome(
         &self,
         event: &BoundaryEvent,
+        trigger: &node::Trigger,
         request_sys: &MetaSys,
         consumed: ConsumedPosition,
     ) -> TransactionOutcome {
-        let trigger = node::Trigger::Port(
-            node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
-        );
         let id = ids::emission_id(
             &event.connector_path,
-            &trigger,
+            trigger,
             event.emitting_id,
             &event.port,
             0,
@@ -528,7 +542,7 @@ impl<'plan> TransactionExecutor<'plan> {
         TransactionOutcome {
             record: TransactionRecord {
                 node_path: event.connector_path.clone(),
-                trigger,
+                trigger: trigger.clone(),
                 consumed: vec![consumed],
                 state_delta: vec![],
                 emissions: vec![Emission {
@@ -664,22 +678,49 @@ fn meta_value(meta: &Meta) -> cel::Value {
     for (field, value) in meta.app() {
         app.insert(field.clone(), from_meta_value(value));
     }
+    // The whole six-field spine — a handler reading any `meta.sys`
+    // field the spec names must find it, not a hole.
     let mut sys = BTreeMap::new();
     sys.insert(
         String::from("id"),
         cel::Value::Text(meta.sys().id().to_string()),
     );
     sys.insert(
+        String::from("parent_id"),
+        match meta.sys().parent_id() {
+            Some(parent) => cel::Value::Text(parent.to_string()),
+            None => cel::Value::Null,
+        },
+    );
+    sys.insert(
         String::from("origin_id"),
         cel::Value::Text(meta.sys().origin_id().to_string()),
+    );
+    sys.insert(
+        String::from("role"),
+        cel::Value::Text(meta.sys().role().to_string()),
     );
     sys.insert(
         String::from("graph_version"),
         cel::Value::Int(i64::try_from(meta.sys().graph_version()).unwrap_or(i64::MAX)),
     );
+    sys.insert(
+        String::from("mime_type"),
+        match meta.sys().mime_type() {
+            Some(mime) => cel::Value::Text(String::from(mime)),
+            None => cel::Value::Null,
+        },
+    );
     let mut root = BTreeMap::new();
     root.insert(String::from("app"), cel::Value::Map(app));
     root.insert(String::from("sys"), cel::Value::Map(sys));
+    for (name, namespace) in meta.customs() {
+        let mut fields = BTreeMap::new();
+        for (field, value) in namespace {
+            fields.insert(field.clone(), from_meta_value(value));
+        }
+        root.insert(name.clone(), cel::Value::Map(fields));
+    }
     cel::Value::Map(root)
 }
 
@@ -826,6 +867,84 @@ graph m0_probe : App {
 
     fn trigger_in() -> node::Trigger {
         node::Trigger::Port(node::Port::new("in").unwrap())
+    }
+
+    #[test]
+    fn an_identity_emission_inherits_everything_but_its_spine() {
+        let source = "graph g : App {\n  operator relay {\n    on in { out = envelope }\n  }\n  . -> relay -> .\n}\n";
+        let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+        let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
+        let slot = Slot::new(0);
+        let state = PartitionState::new().cell(&compilation.plan, slot, "");
+        // An ancestry-rich input: app fields, a custom namespace, a
+        // content-type hint on unchanged encoded data.
+        let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+        let mut app = envelope::Namespace::new();
+        app.insert(
+            String::from("label"),
+            envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("greeting"))),
+        );
+        let mut tenant = envelope::Namespace::new();
+        tenant.insert(
+            String::from("org"),
+            envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("acme"))),
+        );
+        let meta = Meta::new(MetaSys::root(id, 1).with_mime_type("text/plain"))
+            .with_app(app.clone())
+            .with_custom("tenant", tenant.clone());
+        let delivery = Delivery {
+            port: node::Port::new("in").unwrap(),
+            edge: String::from(".in>relay.in"),
+            seq: 1,
+            envelope: Envelope::new(meta, Data::encoded(Encoding::Raw, *b"salut")),
+        };
+        let outcome = executor.fire(slot, &delivery, &state).unwrap();
+        let emitted = &outcome.record.emissions[0].envelope;
+        let sys = emitted.meta().sys();
+        let parent = delivery.envelope.meta().sys();
+        // A fresh spine…
+        assert_ne!(sys.id(), parent.id());
+        assert_eq!(sys.parent_id(), Some(parent.id()));
+        assert_eq!(sys.origin_id(), parent.origin_id());
+        // …carrying everything the ancestry attached.
+        assert_eq!(emitted.meta().app(), &app);
+        assert_eq!(emitted.meta().custom("tenant"), Some(&tenant));
+        assert_eq!(
+            sys.mime_type(),
+            Some("text/plain"),
+            "unchanged content keeps its content-type hint"
+        );
+        assert_eq!(emitted.data(), delivery.envelope.data());
+    }
+
+    #[test]
+    fn the_meta_projection_carries_the_whole_spine() {
+        let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
+        let mut tenant = envelope::Namespace::new();
+        tenant.insert(
+            String::from("org"),
+            envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("acme"))),
+        );
+        let meta = Meta::new(MetaSys::root(id, 3).with_mime_type("text/plain"))
+            .with_custom("tenant", tenant);
+        let cel::Value::Map(root) = meta_value(&meta) else {
+            panic!("expected a map projection");
+        };
+        let cel::Value::Map(sys) = &root["sys"] else {
+            panic!("expected a sys map");
+        };
+        assert_eq!(sys["id"], cel::Value::Text(id.to_string()));
+        assert_eq!(sys["parent_id"], cel::Value::Null, "a root has no parent");
+        assert_eq!(sys["role"], cel::Value::Text(String::from("default")));
+        assert_eq!(sys["graph_version"], cel::Value::Int(3));
+        assert_eq!(
+            sys["mime_type"],
+            cel::Value::Text(String::from("text/plain"))
+        );
+        let cel::Value::Map(tenant) = &root["tenant"] else {
+            panic!("custom namespaces project");
+        };
+        assert_eq!(tenant["org"], cel::Value::Text(String::from("acme")));
     }
 
     #[test]
@@ -1018,6 +1137,7 @@ graph m0_probe : App {
         };
         let outcome = executor.connector_outcome(
             &event,
+            &node::Trigger::Port(node::Port::new("in").unwrap()),
             request.meta().sys(),
             ConsumedPosition {
                 edge: String::from("shout.out>echo.in"),

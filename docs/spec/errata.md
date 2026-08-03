@@ -55,3 +55,40 @@
   decode is declared pure and deterministic, memoize the failure with
   a domain `DecodeError`; if retry is intended, say so explicitly.
 - **Found by:** external code review (second pass), 2026-08-03.
+
+## E-2026-08-03-2 — unwired data outputs: warning or error?
+
+- **Where:** [grammar.md](grammar.md) (wiring prose) vs
+  [delivery-semantics.md](delivery-semantics.md) (routing rules).
+- **Contradiction:** grammar.md calls an unwired non-`err` data
+  output a *warning*; delivery-semantics.md treats an unrouted data
+  emission as an *error*. Both agree `-> nothing` is the explicit
+  discard and that `err` bubbles to the root sink.
+- **Interim behavior (implementation):** `W-UNWIRED-OUTPUT`, a
+  warning — the plan still ships. The runtime never silently drops:
+  unwired `err` emissions surface at the root error sink, and
+  unwired data emissions are visible at check time.
+- **Resolution direction:** pick one severity and align both specs.
+  The warning reading keeps exploratory graphs compiling; the error
+  reading serves the "nothing silent" axiom better once `-> nothing`
+  is cheap to write everywhere.
+- **Found by:** external code review (fourth pass), 2026-08-03.
+
+## E-2026-08-03-3 — the idempotency-key rule vs the Process sheet
+
+- **Where:** [effects-and-sagas.md](effects-and-sagas.md) (the
+  general rule: configurable connectors carrying `irreversible`
+  require an idempotency key) vs [stdlib.md](stdlib.md) (the Process
+  sheet, which lists no `idempotency_key` attribute).
+- **Contradiction:** the general rule makes a keyed irreversible
+  Process expressible; the sheet, taken literally, would refuse the
+  key as an unknown attribute. One of them must yield.
+- **Interim behavior (implementation):** the checker admits only
+  `effect = idempotent`; `compensable` and `irreversible` are
+  explicit deferrals until their companions (`on compensate`, the
+  key) are executable — so the contradiction cannot be reached.
+- **Resolution direction:** either add `idempotency_key` (CEL
+  expression domain) to every configurable connector sheet, or state
+  that sheets extend the base attribute set implicitly defined by
+  the effect classes.
+- **Found by:** external code review (fourth pass), 2026-08-03.
