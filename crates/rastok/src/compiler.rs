@@ -36,6 +36,9 @@ pub struct Compilation {
     pub hash: SemanticHash,
     /// Non-fatal diagnostics that accompanied the build.
     pub warnings: Vec<crate::diagnostics::Diagnostic>,
+    /// The checked lab corpus — executable by the lab runner, never
+    /// identity material.
+    pub labs: Vec<hir::Lab>,
 }
 
 /// Compiles `.rkg` sources against a contract registry.
@@ -66,5 +69,6 @@ pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilat
         symbols,
         hash,
         warnings: bag.into_diagnostics(),
+        labs: hir.labs,
     })
 }

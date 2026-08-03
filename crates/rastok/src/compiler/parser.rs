@@ -12,10 +12,11 @@
 
 use crate::compiler::lexer::{Lexer, TerminatorSet, Token, TokenKind};
 use crate::compiler::syntax::{
-    Annotation, AspectEvent, Attribute, BaseType, CelExpr, ConnectorDecl, EdgeDecl, EdgeEndpoint,
-    ErrorNode, FieldDecl, GraphDecl, GraphItem, Guard, HandlerDecl, IntLit, LValue, LabStub,
-    LifetimeValue, Name, OperatorDecl, OperatorItem, PartitionDecl, PartitionField, PerClause,
-    PortDecl, PortDirection, PortRef, ScalarType, Statement, StructBody, StructEntry, SubBlock,
+    Annotation, AspectEvent, Attribute, BaseType, CelExpr, CmpOp, ConnectorDecl, EdgeDecl,
+    EdgeEndpoint, ErrorNode, ExpectStep, FieldDecl, GraphDecl, GraphItem, Guard, HandlerDecl,
+    IntLit, LValue, LabDecl, LifetimeValue, MockDecl, Name, OperatorDecl, OperatorItem,
+    PartitionDecl, PartitionField, PerClause, PortDecl, PortDirection, PortRef, ScalarType,
+    ScenarioDecl, ScenarioItem, SimulationDecl, Statement, StructBody, StructEntry, SubBlock,
     SyntaxTree, TaggedBody, TaggedValue, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
     WindowMode,
 };
@@ -290,7 +291,7 @@ impl<'src> Parser<'src, '_> {
                             Some(val) => TopDecl::Val(val),
                             None => TopDecl::Error(self.recover(start)),
                         }),
-                        "lab" => decls.push(self.lab_stub(start)),
+                        "lab" => decls.push(self.lab_decl(start)),
                         _ => {
                             self.error_expected("a top-level declaration");
                             self.bump();
@@ -309,9 +310,8 @@ impl<'src> Parser<'src, '_> {
         SyntaxTree { decls }
     }
 
-    /// `lab IDENT { … }` — recognized, skipped whole, refused
-    /// explicitly until the scenario stage.
-    fn lab_stub(&mut self, start: usize) -> TopDecl {
+    /// `lab IDENT { (simulation | experiment | theorem)* }`.
+    fn lab_decl(&mut self, start: usize) -> TopDecl {
         self.bump();
         let Some(name) = self.name("the lab name") else {
             return TopDecl::Error(self.recover(start));
@@ -319,10 +319,68 @@ impl<'src> Parser<'src, '_> {
         if self.expect(TokenKind::LBrace, "`{`").is_none() {
             return TopDecl::Error(self.recover(start));
         }
+        let mut simulations = Vec::new();
+        loop {
+            let token = self.peek();
+            match (token.kind, token.text) {
+                (TokenKind::RBrace, _) => {
+                    self.bump();
+                    break;
+                }
+                (TokenKind::Eof, _) => {
+                    self.error_expected("`}`");
+                    break;
+                }
+                (TokenKind::Ident, "simulation") => {
+                    if let Some(simulation) = self.simulation_decl() {
+                        simulations.push(simulation);
+                    }
+                }
+                (TokenKind::Ident, word @ ("experiment" | "theorem")) => {
+                    // Parsed for balance, refused whole: the
+                    // experiment runner and the theorem layer are not
+                    // in this build.
+                    let construct = if word == "experiment" {
+                        "an experiment"
+                    } else {
+                        "a theorem"
+                    };
+                    let block_start = token.span.range().start;
+                    self.skip_balanced_block();
+                    self.deferred(construct, self.span_from(block_start));
+                }
+                _ => {
+                    self.error_expected("`simulation`, `experiment`, or `theorem`");
+                    self.bump();
+                }
+            }
+        }
+        TopDecl::Lab(LabDecl {
+            name,
+            simulations,
+            span: self.span_from(start),
+        })
+    }
+
+    /// Skips forward through the first `{` to its matching `}` —
+    /// how a refused-but-balanced declaration is passed over.
+    fn skip_balanced_block(&mut self) {
+        loop {
+            match self.peek().kind {
+                TokenKind::Eof => return,
+                TokenKind::LBrace => {
+                    self.bump();
+                    break;
+                }
+                _ => {
+                    self.bump();
+                }
+            }
+        }
         let mut depth: u32 = 0;
         loop {
             match self.peek().kind {
-                TokenKind::Eof => break,
+                TokenKind::Eof => return,
                 TokenKind::LBrace => {
                     depth += 1;
                     self.bump();
@@ -330,7 +388,7 @@ impl<'src> Parser<'src, '_> {
                 TokenKind::RBrace => {
                     self.bump();
                     if depth == 0 {
-                        break;
+                        return;
                     }
                     depth -= 1;
                 }
@@ -339,9 +397,296 @@ impl<'src> Parser<'src, '_> {
                 }
             }
         }
-        let span = self.span_from(start);
-        self.deferred("lab", span);
-        TopDecl::Lab(LabStub { name, span })
+    }
+
+    /// `simulation IDENT on graph_ref { (mock | scenario)* }`.
+    fn simulation_decl(&mut self) -> Option<SimulationDecl> {
+        let start = self.peek().span.range().start;
+        self.bump();
+        let name = self.name("the simulation name")?;
+        let on = self.peek();
+        if !(on.kind == TokenKind::Ident && on.text == "on") {
+            self.error_expected("`on`");
+            return None;
+        }
+        self.bump();
+        let target = self.dotted_names("the simulation target")?;
+        self.expect(TokenKind::LBrace, "`{`")?;
+        let mut mocks = Vec::new();
+        let mut scenarios = Vec::new();
+        loop {
+            let token = self.peek();
+            match (token.kind, token.text) {
+                (TokenKind::RBrace, _) => {
+                    self.bump();
+                    break;
+                }
+                (TokenKind::Eof, _) => {
+                    self.error_expected("`}`");
+                    break;
+                }
+                (TokenKind::Ident, "mock") => {
+                    if let Some(mock) = self.mock_decl() {
+                        mocks.push(mock);
+                    }
+                }
+                (TokenKind::Ident, "scenario") => {
+                    if let Some(scenario) = self.scenario_decl() {
+                        scenarios.push(scenario);
+                    }
+                }
+                _ => {
+                    self.error_expected("`mock` or `scenario`");
+                    self.bump();
+                }
+            }
+        }
+        Some(SimulationDecl {
+            name,
+            target,
+            mocks,
+            scenarios,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `mock IDENT ("." IDENT)* { handler* }` — the body is ordinary
+    /// handler grammar.
+    fn mock_decl(&mut self) -> Option<MockDecl> {
+        let start = self.peek().span.range().start;
+        self.bump();
+        let path = self.dotted_names("the mocked connector")?;
+        self.expect(TokenKind::LBrace, "`{`")?;
+        let mut handlers = Vec::new();
+        loop {
+            let token = self.peek();
+            match (token.kind, token.text) {
+                (TokenKind::RBrace, _) => {
+                    self.bump();
+                    break;
+                }
+                (TokenKind::Eof, _) => {
+                    self.error_expected("`}`");
+                    break;
+                }
+                (TokenKind::Ident, "on") => {
+                    let handler_start = token.span.range().start;
+                    match self.handler_decl() {
+                        Some(handler) => handlers.push(handler),
+                        None => {
+                            self.recover(handler_start);
+                        }
+                    }
+                }
+                _ => {
+                    self.error_expected("`on` or `}`");
+                    self.bump();
+                }
+            }
+        }
+        Some(MockDecl {
+            path,
+            handlers,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `scenario IDENT STRING? { (injection | advance | expect |
+    /// mock | …)* }`.
+    fn scenario_decl(&mut self) -> Option<ScenarioDecl> {
+        let start = self.peek().span.range().start;
+        self.bump();
+        let name = self.name("the scenario name")?;
+        let label = self.string_literal();
+        self.expect(TokenKind::LBrace, "`{`")?;
+        let mut body = Vec::new();
+        loop {
+            let token = self.peek();
+            match (token.kind, token.text) {
+                (TokenKind::RBrace, _) => {
+                    self.bump();
+                    break;
+                }
+                (TokenKind::Eof, _) => {
+                    self.error_expected("`}`");
+                    break;
+                }
+                (TokenKind::Ident, "advance") => {
+                    let step_start = token.span.range().start;
+                    self.bump();
+                    let expr = self.cel(&ATTR_POSITION);
+                    body.push(ScenarioItem::Advance {
+                        expr,
+                        span: self.span_from(step_start),
+                    });
+                }
+                (TokenKind::Ident, "expect") => {
+                    if let Some(step) = self.expect_step() {
+                        body.push(ScenarioItem::Expect(step));
+                    }
+                }
+                (TokenKind::Ident, "mock") => {
+                    if let Some(mock) = self.mock_decl() {
+                        body.push(ScenarioItem::Mock(mock));
+                    }
+                }
+                (TokenKind::Ident, word @ ("crash" | "restart" | "origin")) => {
+                    // Fault injection and the civil-time anchor join
+                    // with the recovery fold; parsed to the end of
+                    // the line, refused whole.
+                    let construct = match word {
+                        "crash" => "a crash step",
+                        "restart" => "a restart step",
+                        _ => "a scenario origin",
+                    };
+                    let step_start = token.span.range().start;
+                    self.bump();
+                    loop {
+                        let next = self.peek();
+                        if next.newline_before
+                            || matches!(next.kind, TokenKind::RBrace | TokenKind::Eof)
+                        {
+                            break;
+                        }
+                        self.bump();
+                    }
+                    self.deferred(construct, self.span_from(step_start));
+                }
+                (TokenKind::Ident, _) => {
+                    let target = self.lvalue()?;
+                    self.expect(TokenKind::Eq, "`=`")?;
+                    let value = self.value(&ATTR_POSITION);
+                    let seq = if self.peek().kind == TokenKind::Ident && self.peek().text == "seq" {
+                        self.bump();
+                        let int = self.expect(TokenKind::Int, "an inbound sequence")?;
+                        Some(IntLit {
+                            text: String::from(int.text),
+                            span: int.span,
+                        })
+                    } else {
+                        None
+                    };
+                    body.push(ScenarioItem::Injection { target, value, seq });
+                }
+                _ => {
+                    self.error_expected("a scenario step");
+                    self.bump();
+                }
+            }
+        }
+        Some(ScenarioDecl {
+            name,
+            label,
+            body,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `expect STRING? nothing? port_ref (count cmp INT)? (where
+    /// cel)?`.
+    fn expect_step(&mut self) -> Option<ExpectStep> {
+        let start = self.peek().span.range().start;
+        self.bump();
+        let label = self.string_literal();
+        let nothing = if self.peek().kind == TokenKind::Ident && self.peek().text == "nothing" {
+            self.bump();
+            true
+        } else {
+            false
+        };
+        let target = self.lvalue()?;
+        let count = if self.peek().kind == TokenKind::Ident && self.peek().text == "count" {
+            self.bump();
+            let op = self.cmp_op()?;
+            let int = self.expect(TokenKind::Int, "a count")?;
+            Some((
+                op,
+                IntLit {
+                    text: String::from(int.text),
+                    span: int.span,
+                },
+            ))
+        } else {
+            None
+        };
+        let predicate = if self.peek().kind == TokenKind::Ident && self.peek().text == "where" {
+            self.bump();
+            Some(self.cel(&ATTR_POSITION))
+        } else {
+            None
+        };
+        Some(ExpectStep {
+            label,
+            nothing,
+            target,
+            count,
+            predicate,
+            span: self.span_from(start),
+        })
+    }
+
+    /// One comparison operator, tokenized as its parts.
+    fn cmp_op(&mut self) -> Option<CmpOp> {
+        match self.peek().kind {
+            TokenKind::Eq => {
+                self.bump();
+                self.expect(TokenKind::Eq, "`==`")?;
+                Some(CmpOp::Eq)
+            }
+            TokenKind::Bang => {
+                self.bump();
+                self.expect(TokenKind::Eq, "`!=`")?;
+                Some(CmpOp::Ne)
+            }
+            TokenKind::Lt => {
+                self.bump();
+                if self.peek().kind == TokenKind::Eq {
+                    self.bump();
+                    Some(CmpOp::Le)
+                } else {
+                    Some(CmpOp::Lt)
+                }
+            }
+            TokenKind::Gt => {
+                self.bump();
+                if self.peek().kind == TokenKind::Eq {
+                    self.bump();
+                    Some(CmpOp::Ge)
+                } else {
+                    Some(CmpOp::Gt)
+                }
+            }
+            _ => {
+                self.error_expected("a comparison operator");
+                None
+            }
+        }
+    }
+
+    /// An optional string literal, quotes stripped.
+    fn string_literal(&mut self) -> Option<String> {
+        let token = self.peek();
+        if token.kind != TokenKind::Str {
+            return None;
+        }
+        let text = token.text;
+        self.bump();
+        Some(text[1..text.len().saturating_sub(1)].to_string())
+    }
+
+    /// Dotted same-line names: `app`, `sessions.codex`.
+    fn dotted_names(&mut self, expected: &str) -> Option<Vec<Name>> {
+        let first = self.name(expected)?;
+        let mut segments = vec![first];
+        loop {
+            let dot = self.peek();
+            if dot.kind != TokenKind::Dot || dot.newline_before {
+                break;
+            }
+            self.bump();
+            segments.push(self.name("a path segment")?);
+        }
+        Some(segments)
     }
 
     fn graph_decl(&mut self) -> Option<GraphDecl> {
@@ -1637,14 +1982,77 @@ graph m0_probe : App {
     }
 
     #[test]
-    fn a_lab_is_skipped_with_an_explicit_refusal() {
+    fn a_lab_parses_into_its_simulation_surface() {
         let mut bag = Bag::new();
-        let source = "lab m0_probe { simulation smoke on app { } }\nval x = 1\n";
+        let source = r#"
+lab m0_probe {
+  simulation smoke on app {
+    mock echo {
+      on in { out = { text = "salut" } }
+    }
+    scenario roundtrip "one message through" {
+      app.in = { text = "salut" }
+      expect app.out count == 1 where data.text == "salut"
+      advance duration("5s")
+      expect nothing app.err
+    }
+  }
+}
+val x = 1
+"#;
         let tree = parse(SourceId::new(0), source, &mut bag);
-        assert_eq!(bag.diagnostics().len(), 1);
-        assert_eq!(bag.diagnostics()[0].code(), E_PARSE_DEFERRED);
-        assert!(matches!(&tree.decls[0], TopDecl::Lab(stub) if stub.name.text == "m0_probe"));
+        assert!(bag.diagnostics().is_empty(), "{:#?}", bag.diagnostics());
+        let TopDecl::Lab(lab) = &tree.decls[0] else {
+            panic!("expected the lab");
+        };
+        assert_eq!(lab.name.text, "m0_probe");
+        let simulation = &lab.simulations[0];
+        assert_eq!(simulation.name.text, "smoke");
+        assert_eq!(simulation.target[0].text, "app");
+        assert_eq!(simulation.mocks[0].path[0].text, "echo");
+        assert_eq!(simulation.mocks[0].handlers.len(), 1);
+        let scenario = &simulation.scenarios[0];
+        assert_eq!(scenario.label.as_deref(), Some("one message through"));
+        assert!(
+            matches!(&scenario.body[0], ScenarioItem::Injection { target, .. }
+            if target.segments[0].text == "app" && target.segments[1].text == "in")
+        );
+        let ScenarioItem::Expect(first) = &scenario.body[1] else {
+            panic!("expected an expect step");
+        };
+        assert!(!first.nothing);
+        assert_eq!(
+            first.count,
+            Some((
+                CmpOp::Eq,
+                IntLit {
+                    text: String::from("1"),
+                    span: first.count.as_ref().unwrap().1.span
+                }
+            ))
+        );
+        assert!(first.predicate.is_some());
+        assert!(matches!(&scenario.body[2], ScenarioItem::Advance { .. }));
+        let ScenarioItem::Expect(last) = &scenario.body[3] else {
+            panic!("expected the void expect");
+        };
+        assert!(last.nothing);
         assert!(matches!(tree.decls[1], TopDecl::Val(_)));
+    }
+
+    #[test]
+    fn experiments_and_theorems_are_refused_whole() {
+        let mut bag = Bag::new();
+        let source = "lab m0_probe {\n  experiment probe on app { profile = \"staging\" }\n  theorem safety over smoke { anything { nested } }\n}\n";
+        let tree = parse(SourceId::new(0), source, &mut bag);
+        let constructs: Vec<&str> = bag
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code() == E_PARSE_DEFERRED)
+            .map(|diagnostic| diagnostic.fields()[0].1.as_str())
+            .collect();
+        assert_eq!(constructs, ["an experiment", "a theorem"]);
+        assert!(matches!(&tree.decls[0], TopDecl::Lab(lab) if lab.simulations.is_empty()));
     }
 
     const M0_PROBE: &str = r#"

@@ -64,6 +64,8 @@ pub enum TokenKind {
     Question,
     /// `|`
     Pipe,
+    /// `!`
+    Bang,
     /// `<`
     Lt,
     /// `>`
@@ -524,6 +526,7 @@ fn punctuation(byte: u8) -> Option<TokenKind> {
         b'+' => TokenKind::Plus,
         b'?' => TokenKind::Question,
         b'|' => TokenKind::Pipe,
+        b'!' => TokenKind::Bang,
         b'>' => TokenKind::Gt,
         _ => return None,
     })

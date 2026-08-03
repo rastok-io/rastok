@@ -94,6 +94,21 @@ pub struct PumpReport {
     pub uncorrelated: Vec<Response>,
 }
 
+/// One observed delivery — the debugger-shaped observation surface:
+/// every envelope reaching a node port, the boundary, or the root
+/// error sink is logged here in arrival order. Expectations read
+/// windows of this log; nothing consumes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Observed {
+    /// The receiving node, or `None` at the App boundary (the root
+    /// error sink logs as the boundary `err`).
+    pub node: Option<node::Path>,
+    /// The receiving port.
+    pub port: node::Port,
+    /// The delivered envelope.
+    pub envelope: Envelope,
+}
+
 /// One won closure and the trigger its outcome transaction fires
 /// under: `p:in` for a partner answer, `l:timeout` for an expired
 /// budget.
@@ -164,6 +179,7 @@ pub struct Vm<'plan> {
     now: i64,
     outputs: Vec<Envelope>,
     errors: Vec<Envelope>,
+    observed: Vec<Observed>,
 }
 
 impl<'plan> Vm<'plan> {
@@ -183,6 +199,7 @@ impl<'plan> Vm<'plan> {
             now: 0,
             outputs: Vec::new(),
             errors: Vec::new(),
+            observed: Vec::new(),
         }
     }
 
@@ -347,6 +364,13 @@ impl<'plan> Vm<'plan> {
     #[must_use]
     pub fn errors(&self) -> &[Envelope] {
         &self.errors
+    }
+
+    /// Every delivery the machine made, in arrival order — the
+    /// observation log expectations read windows of.
+    #[must_use]
+    pub fn observations(&self) -> &[Observed] {
+        &self.observed
     }
 
     /// Whether the machine is stable: nothing queued, nothing
@@ -571,6 +595,11 @@ impl<'plan> Vm<'plan> {
             // instead of vanishing.
             if claimed == 0 && emission.port.name() == "err" {
                 self.errors.push(emission.envelope.clone());
+                self.observed.push(Observed {
+                    node: None,
+                    port: emission.port.clone(),
+                    envelope: emission.envelope.clone(),
+                });
             }
         }
     }
@@ -590,7 +619,14 @@ impl<'plan> Vm<'plan> {
             match &edge.to {
                 None => {} // `-> nothing`: the explicit, written discard
                 Some(to) => match to.node {
-                    None => self.outputs.push(envelope.clone()),
+                    None => {
+                        self.outputs.push(envelope.clone());
+                        self.observed.push(Observed {
+                            node: None,
+                            port: to.port.clone(),
+                            envelope: envelope.clone(),
+                        });
+                    }
                     Some(target) => {
                         let edge_text = self.edge_text(&edge);
                         self.scheduler
@@ -599,6 +635,11 @@ impl<'plan> Vm<'plan> {
                             .unwrap_or_else(|_| {
                                 unreachable!("capacity was reserved before the commit")
                             });
+                        self.observed.push(Observed {
+                            node: Some(self.plan.nodes[target.index()].path.clone()),
+                            port: to.port.clone(),
+                            envelope: envelope.clone(),
+                        });
                     }
                 },
             }

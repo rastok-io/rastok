@@ -10,6 +10,7 @@ pub mod connectors;
 pub mod diagnostics;
 pub mod envelope;
 pub mod journal;
+pub mod lab;
 pub mod node;
 pub mod plan;
 pub mod runtime;

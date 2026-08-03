@@ -11,11 +11,15 @@
 use crate::cel;
 use crate::node;
 
-/// The checked unit: the single `: App` graph of the deployed unit.
+/// The checked unit: the single `: App` graph of the deployed unit,
+/// and its lab corpus. Labs are never identity material — the
+/// semantic hash reads `app` alone.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hir {
     /// The application graph.
     pub app: Graph,
+    /// The checked simulations of the App's lab, when declared.
+    pub labs: Vec<Lab>,
 }
 
 pub use crate::node::Direction;
@@ -238,4 +242,126 @@ pub struct Endpoint {
     pub node: Option<node::Path>,
     /// The port.
     pub port: node::Port,
+}
+
+/// One checked lab: the simulation corpus bound to the App sharing
+/// its name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Lab {
+    /// The lab name — the App's name.
+    pub name: String,
+    /// The checked simulations.
+    pub simulations: Vec<Simulation>,
+}
+
+/// One checked simulation: a named set of scenarios sharing mocks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Simulation {
+    /// The simulation name.
+    pub name: String,
+    /// Simulation-level mocks, shared by every scenario.
+    pub mocks: Vec<Mock>,
+    /// The scenarios, in source order.
+    pub scenarios: Vec<Scenario>,
+}
+
+/// A scripted stand-in for one connector: the partner replaced, the
+/// bookkeeping untouched.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mock {
+    /// The mocked connector.
+    pub connector: node::Path,
+    /// The reply branches — ordinary checked handlers, first match
+    /// in text order.
+    pub handlers: Vec<Handler>,
+}
+
+/// One checked scenario.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scenario {
+    /// The scenario name.
+    pub name: String,
+    /// The optional human label.
+    pub label: Option<String>,
+    /// Scenario-level mock overrides — whole-mock replacement,
+    /// nearest wins.
+    pub mocks: Vec<Mock>,
+    /// The action and observation steps, in source order.
+    pub steps: Vec<ScenarioStep>,
+}
+
+/// One checked scenario step.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScenarioStep {
+    /// The world sends: an injection at the App boundary.
+    Inject {
+        /// The draft content, in emission vocabulary.
+        value: EmitValue,
+        /// The explicit inbound sequence, when written.
+        seq: Option<u64>,
+    },
+    /// The discrete sweep to `now + nanos`.
+    Advance {
+        /// The constant duration, reduced to nanoseconds.
+        nanos: i64,
+    },
+    /// A pure observation of the current window.
+    Expect(Expectation),
+}
+
+/// One checked expectation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expectation {
+    /// The optional report label.
+    pub label: Option<String>,
+    /// How many matches satisfy it.
+    pub quantifier: Quantifier,
+    /// The observed target.
+    pub target: ExpectTarget,
+    /// The compiled predicate over each delivery.
+    pub predicate: Option<cel::Tree>,
+}
+
+/// The three quantifiers, nothing more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Quantifier {
+    /// At least one match.
+    Exists,
+    /// Zero deliveries in the window.
+    Nothing,
+    /// An exact-count comparison.
+    Count(Cmp, i64),
+}
+
+/// A count comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cmp {
+    /// `==`
+    Eq,
+    /// `!=`
+    Ne,
+    /// `<`
+    Lt,
+    /// `>`
+    Gt,
+    /// `<=`
+    Le,
+    /// `>=`
+    Ge,
+}
+
+/// Where an expectation looks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpectTarget {
+    /// `app.err` — the root error sink.
+    RootErr,
+    /// `app.<port>` — envelopes leaving the App boundary.
+    Boundary(node::Port),
+    /// `<node>.<port>` — deliveries reaching a node port.
+    Node {
+        /// The receiving node.
+        path: node::Path,
+        /// The receiving port.
+        port: node::Port,
+    },
 }

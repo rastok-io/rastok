@@ -60,20 +60,122 @@ pub enum TopDecl {
     Graph(GraphDecl),
     /// `val … = …`
     Val(ValDecl),
-    /// `lab … { … }` — recognized and skipped until the scenario
-    /// stage; the body is not represented yet.
-    Lab(LabStub),
+    /// `lab … { … }` — the simulation surface.
+    Lab(LabDecl),
     /// Parse-recovery hole.
     Error(ErrorNode),
 }
 
-/// `lab <name>` whose body was skipped with an explicit diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LabStub {
+/// `lab IDENT { (simulation | experiment | theorem)* }` — the
+/// logical test corpus of the App sharing its name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LabDecl {
     /// The lab name, binding to the App of the same name.
     pub name: Name,
-    /// The whole skipped declaration.
+    /// The simulations; experiments and theorems are refused at
+    /// parse in this build.
+    pub simulations: Vec<SimulationDecl>,
+    /// The whole declaration.
     pub span: Span,
+}
+
+/// `simulation IDENT on graph_ref { (mock | scenario)* }`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SimulationDecl {
+    /// The simulation name.
+    pub name: Name,
+    /// The `on` target segments (`app`, or a dotted sub-graph path).
+    pub target: Vec<Name>,
+    /// Simulation-level mocks, shared by every scenario.
+    pub mocks: Vec<MockDecl>,
+    /// The scenarios, in source order.
+    pub scenarios: Vec<ScenarioDecl>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// `mock IDENT ("." IDENT)* { handler* }` — a scripted stand-in
+/// whose body is ordinary handler grammar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MockDecl {
+    /// The mocked connector's path segments.
+    pub path: Vec<Name>,
+    /// The reply branches, first match in text order.
+    pub handlers: Vec<HandlerDecl>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// `scenario IDENT STRING? { … }` — one executable case.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScenarioDecl {
+    /// The scenario name.
+    pub name: Name,
+    /// The optional human label.
+    pub label: Option<String>,
+    /// The steps and scenario-level mocks, in source order.
+    pub body: Vec<ScenarioItem>,
+    /// The whole declaration.
+    pub span: Span,
+}
+
+/// One entry of a scenario body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScenarioItem {
+    /// `<port_ref> = <value> (seq INT)?` — the world sends.
+    Injection {
+        /// The injection target (`app.in` in this build).
+        target: LValue,
+        /// The injected envelope value.
+        value: Value,
+        /// The explicit inbound sequence, when written.
+        seq: Option<IntLit>,
+    },
+    /// `advance <cel duration>` — the discrete sweep.
+    Advance {
+        /// The constant duration expression.
+        expr: CelExpr,
+        /// The step's span.
+        span: Span,
+    },
+    /// `expect …` — pure observation of the current window.
+    Expect(ExpectStep),
+    /// A scenario-level mock override.
+    Mock(MockDecl),
+}
+
+/// `expect STRING? nothing? port_ref (count cmp INT)? (where cel)?`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpectStep {
+    /// The optional report label.
+    pub label: Option<String>,
+    /// The void quantifier: `expect nothing …`.
+    pub nothing: bool,
+    /// The observed port reference.
+    pub target: LValue,
+    /// The exact-count quantifier, when written.
+    pub count: Option<(CmpOp, IntLit)>,
+    /// The predicate over each delivery.
+    pub predicate: Option<CelExpr>,
+    /// The whole step.
+    pub span: Span,
+}
+
+/// A count comparison operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpOp {
+    /// `==`
+    Eq,
+    /// `!=`
+    Ne,
+    /// `<`
+    Lt,
+    /// `>`
+    Gt,
+    /// `<=`
+    Le,
+    /// `>=`
+    Ge,
 }
 
 /// `graph IDENT ( ":" annotation )? per? "{" body "}"`

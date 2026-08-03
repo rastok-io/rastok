@@ -1,0 +1,547 @@
+//! The scenario runner — the graph's possible worlds, executed.
+//!
+//! A scenario is the world's half of a journal, written in advance:
+//! injections play the ingress, mocks play the partners, `advance`
+//! plays time. Everything runs on the same [`Vm`] a production run
+//! uses — the mock replaces the partner, never the bookkeeping — so
+//! a green scenario is a statement about the machine, not about a
+//! test double.
+
+use crate::boundary::{
+    CallOutcome, Draft, InboundSubmission, IngressAuthority, Intent, Partner, Response,
+    SubmissionSequence,
+};
+use crate::compiler::hir::{
+    Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
+};
+use crate::envelope::{Data, Envelope, Namespace};
+use crate::journal::MemJournal;
+use crate::plan::{ExecutionPlan, GraphVersion};
+use crate::runtime::vm::{Observed, Vm};
+use crate::{cel, node, runtime};
+use std::collections::BTreeMap;
+
+/// The verdict of one scenario: green when `failures` is empty.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScenarioReport {
+    /// The owning simulation.
+    pub simulation: String,
+    /// The scenario name.
+    pub scenario: String,
+    /// The human label, when written.
+    pub label: Option<String>,
+    /// Every failed expectation, uncovered call, and fault — in
+    /// occurrence order. Empty means green.
+    pub failures: Vec<String>,
+}
+
+impl ScenarioReport {
+    /// Whether the scenario held.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.failures.is_empty()
+    }
+}
+
+/// Runs every scenario of a checked lab against its plan. Each
+/// scenario gets a fresh journal and a fresh machine — scenarios
+/// share nothing but the graph.
+#[must_use]
+pub fn run(plan: &ExecutionPlan, graph_version: GraphVersion, lab: &Lab) -> Vec<ScenarioReport> {
+    let mut reports = Vec::new();
+    for simulation in &lab.simulations {
+        for scenario in &simulation.scenarios {
+            reports.push(run_scenario(
+                plan,
+                graph_version,
+                &simulation.name,
+                &simulation.mocks,
+                scenario,
+            ));
+        }
+    }
+    reports
+}
+
+fn run_scenario(
+    plan: &ExecutionPlan,
+    graph_version: GraphVersion,
+    simulation: &str,
+    shared_mocks: &[Mock],
+    scenario: &Scenario,
+) -> ScenarioReport {
+    // Nearest wins, whole-mock replacement: a scenario mock for a
+    // connector shadows the simulation-level one entirely.
+    let mut mocks: BTreeMap<node::Path, &Mock> = BTreeMap::new();
+    for mock in shared_mocks {
+        mocks.insert(mock.connector.clone(), mock);
+    }
+    for mock in &scenario.mocks {
+        mocks.insert(mock.connector.clone(), mock);
+    }
+    let mut journal = MemJournal::new(graph_version);
+    let mut vm = Vm::boot(plan, graph_version);
+    let mut partner = MockPartner {
+        mocks,
+        pending: Vec::new(),
+        faults: Vec::new(),
+    };
+    let mut failures = Vec::new();
+    let mut window_start = 0usize;
+    for step in &scenario.steps {
+        match step {
+            ScenarioStep::Inject { value, seq } => {
+                window_start = vm.observations().len();
+                match draft(value) {
+                    Ok(draft) => {
+                        let submission = InboundSubmission {
+                            authority: IngressAuthority::single(
+                                node::Path::new(["lab"])
+                                    .unwrap_or_else(|_| unreachable!("`lab` is a valid path")),
+                            ),
+                            draft,
+                            sequence: match seq {
+                                Some(seq) => SubmissionSequence::Explicit(*seq),
+                                None => SubmissionSequence::Next,
+                            },
+                        };
+                        if let Err(error) = vm.inject(&mut journal, submission) {
+                            failures.push(format!("the injection was refused: {error}"));
+                            continue;
+                        }
+                        settle(&mut vm, &mut journal, &mut partner, &mut failures);
+                    }
+                    Err(message) => failures.push(message),
+                }
+            }
+            ScenarioStep::Advance { nanos } => {
+                window_start = vm.observations().len();
+                let target = vm.now().saturating_add(*nanos);
+                if let Err(error) = vm.advance(&mut journal, target) {
+                    failures.push(format!("the advance faulted: {error}"));
+                }
+                settle(&mut vm, &mut journal, &mut partner, &mut failures);
+            }
+            ScenarioStep::Expect(expectation) => {
+                if let Some(message) =
+                    check_expectation(expectation, &vm.observations()[window_start..])
+                {
+                    failures.push(message);
+                }
+            }
+        }
+    }
+    ScenarioReport {
+        simulation: String::from(simulation),
+        scenario: scenario.name.clone(),
+        label: scenario.label.clone(),
+        failures,
+    }
+}
+
+/// Drives the machine to rest after an action step: drain, let the
+/// mocks answer, drain again — until nothing settles. Uncovered
+/// calls and mock faults surface as failures.
+fn settle(
+    vm: &mut Vm<'_>,
+    journal: &mut MemJournal,
+    partner: &mut MockPartner<'_>,
+    failures: &mut Vec<String>,
+) {
+    for _ in 0..64 {
+        if let Err(error) = vm.drain(journal) {
+            failures.push(format!("a step faulted: {error}"));
+            break;
+        }
+        let report = match vm.pump(journal, partner) {
+            Ok(report) => report,
+            Err(error) => {
+                failures.push(format!("the boundary round faulted: {error}"));
+                break;
+            }
+        };
+        failures.append(&mut partner.faults);
+        if report.settled == 0 {
+            break;
+        }
+    }
+    if let Err(error) = vm.drain(journal) {
+        failures.push(format!("a step faulted: {error}"));
+    }
+}
+
+fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<String> {
+    let deliveries: Vec<&Observed> = window
+        .iter()
+        .filter(|observed| match &expectation.target {
+            ExpectTarget::RootErr => observed.node.is_none() && observed.port.name() == "err",
+            ExpectTarget::Boundary(port) => observed.node.is_none() && observed.port == *port,
+            ExpectTarget::Node { path, port } => {
+                observed.node.as_ref() == Some(path) && observed.port == *port
+            }
+        })
+        .collect();
+    let matches = deliveries
+        .iter()
+        .filter(|observed| match &expectation.predicate {
+            None => true,
+            Some(tree) => {
+                let mut env = BTreeMap::new();
+                if let Ok(data) = runtime::data_value(observed.envelope.data()) {
+                    env.insert(String::from("data"), data);
+                }
+                env.insert(
+                    String::from("meta"),
+                    runtime::meta_value(observed.envelope.meta()),
+                );
+                matches!(cel::eval(tree, &env), Ok(cel::Value::Bool(true)))
+            }
+        })
+        .count();
+    let name = expectation
+        .label
+        .clone()
+        .unwrap_or_else(|| format!("{:?}", expectation.target));
+    let held = match &expectation.quantifier {
+        Quantifier::Exists => matches >= 1,
+        // The void quantifier counts deliveries, predicate-filtered
+        // when one is written.
+        Quantifier::Nothing => {
+            matches == 0 && (expectation.predicate.is_some() || deliveries.is_empty())
+        }
+        Quantifier::Count(cmp, expected) => {
+            let actual = i64::try_from(matches).unwrap_or(i64::MAX);
+            match cmp {
+                Cmp::Eq => actual == *expected,
+                Cmp::Ne => actual != *expected,
+                Cmp::Lt => actual < *expected,
+                Cmp::Gt => actual > *expected,
+                Cmp::Le => actual <= *expected,
+                Cmp::Ge => actual >= *expected,
+            }
+        }
+    };
+    if held {
+        None
+    } else {
+        Some(format!(
+            "expect {name}: {matches} match(es) in a window of {} deliveries",
+            window.len()
+        ))
+    }
+}
+
+/// Builds a world-authored draft from an injection value: `data`
+/// writes shape the payload, `meta.app.*` writes fill the writable
+/// namespace. There is no input — a draft inherits nothing.
+fn draft(value: &EmitValue) -> Result<Draft, String> {
+    let empty = BTreeMap::new();
+    match value {
+        EmitValue::Data(tree) => {
+            let value =
+                cel::eval(tree, &empty).map_err(|error| format!("the injection: {error}"))?;
+            Ok(Draft {
+                data: Data::materialized(
+                    runtime::to_envelope_value(&value)
+                        .map_err(|fault| format!("the injection: {fault}"))?,
+                ),
+                mime_type: None,
+                app: Namespace::new(),
+            })
+        }
+        EmitValue::Replace(writes) | EmitValue::Patch(writes) => {
+            let mut data = cel::Value::Map(BTreeMap::new());
+            let mut app = Namespace::new();
+            for write in writes {
+                let value = cel::eval(&write.value, &empty)
+                    .map_err(|error| format!("the injection: {error}"))?;
+                runtime::apply_write(&mut data, &mut app, &write.path, value)
+                    .map_err(|fault| format!("the injection: {fault}"))?;
+            }
+            Ok(Draft {
+                data: Data::materialized(
+                    runtime::to_envelope_value(&data)
+                        .map_err(|fault| format!("the injection: {fault}"))?,
+                ),
+                mime_type: None,
+                app,
+            })
+        }
+        EmitValue::Nothing => Err(String::from("`nothing` injects nothing")),
+        EmitValue::Identity => Err(String::from("a draft has no input to re-emit")),
+    }
+}
+
+/// The scripted partner: answers journaled intents from mock
+/// branches — first match in text order — and reports every
+/// uncovered call loudly. Deterministic and stateless, a pure
+/// function of the request.
+struct MockPartner<'lab> {
+    mocks: BTreeMap<node::Path, &'lab Mock>,
+    pending: Vec<Response>,
+    faults: Vec<String>,
+}
+
+impl MockPartner<'_> {
+    fn answer(&mut self, intent: &Intent, request: &Envelope) -> Option<CallOutcome> {
+        let Some(mock) = self.mocks.get(&intent.connector_path) else {
+            self.faults.push(format!(
+                "an uncovered call reached `{}` (digest {:02x?}…); mock it or script silence",
+                intent.connector_path,
+                &intent.request_digest[..4]
+            ));
+            return None;
+        };
+        let mut env: BTreeMap<String, cel::Value> = BTreeMap::new();
+        match runtime::data_value(request.data()) {
+            Ok(data) => {
+                env.insert(String::from("data"), data);
+            }
+            Err(fault) => {
+                self.faults
+                    .push(format!("the mock request is unreadable: {fault}"));
+                return None;
+            }
+        }
+        env.insert(String::from("meta"), runtime::meta_value(request.meta()));
+        for handler in &mock.handlers {
+            let passes = match &handler.guard {
+                None => true,
+                Some(guard) => matches!(cel::eval(guard, &env), Ok(cel::Value::Bool(true))),
+            };
+            if !passes {
+                continue;
+            }
+            return self.reply(handler, request, env);
+        }
+        self.faults.push(format!(
+            "no mock branch of `{}` matched the request; add a catch-all or script silence",
+            intent.connector_path
+        ));
+        None
+    }
+
+    /// Evaluates the first matching branch. `out = nothing` is the
+    /// written silence — the call stays open for the timeout
+    /// machinery.
+    fn reply(
+        &mut self,
+        handler: &crate::compiler::hir::Handler,
+        request: &Envelope,
+        mut env: BTreeMap<String, cel::Value>,
+    ) -> Option<CallOutcome> {
+        use crate::compiler::hir::Statement;
+        for statement in &handler.body {
+            match statement {
+                Statement::Let { name, value } => match cel::eval(value, &env) {
+                    Ok(value) => {
+                        env.insert(name.clone(), value);
+                    }
+                    Err(error) => {
+                        self.faults.push(format!("the mock faulted: {error}"));
+                        return None;
+                    }
+                },
+                Statement::SetVar { .. } => {
+                    // The checker refuses vars on a mock's synthetic
+                    // node; nothing reaches here.
+                }
+                Statement::Emit { value, .. } => {
+                    return match self.mock_data(value, request, &env) {
+                        Ok(Some(data)) => Some(CallOutcome::Success(data)),
+                        Ok(None) => None,
+                        Err(message) => {
+                            self.faults.push(message);
+                            None
+                        }
+                    };
+                }
+            }
+        }
+        None
+    }
+
+    fn mock_data(
+        &self,
+        value: &EmitValue,
+        request: &Envelope,
+        env: &BTreeMap<String, cel::Value>,
+    ) -> Result<Option<Data>, String> {
+        match value {
+            EmitValue::Nothing => Ok(None),
+            EmitValue::Identity => Ok(Some(request.data().clone())),
+            EmitValue::Data(tree) => {
+                let value =
+                    cel::eval(tree, env).map_err(|error| format!("the mock faulted: {error}"))?;
+                Ok(Some(Data::materialized(
+                    runtime::to_envelope_value(&value)
+                        .map_err(|fault| format!("the mock faulted: {fault}"))?,
+                )))
+            }
+            EmitValue::Replace(writes) | EmitValue::Patch(writes) => {
+                let mut data = if matches!(value, EmitValue::Patch(_)) {
+                    runtime::data_value(request.data())
+                        .map_err(|fault| format!("the mock faulted: {fault}"))?
+                } else {
+                    cel::Value::Map(BTreeMap::new())
+                };
+                let mut app = request.meta().app().clone();
+                for write in writes {
+                    let evaluated = cel::eval(&write.value, env)
+                        .map_err(|error| format!("the mock faulted: {error}"))?;
+                    runtime::apply_write(&mut data, &mut app, &write.path, evaluated)
+                        .map_err(|fault| format!("the mock faulted: {fault}"))?;
+                }
+                Ok(Some(Data::materialized(
+                    runtime::to_envelope_value(&data)
+                        .map_err(|fault| format!("the mock faulted: {fault}"))?,
+                )))
+            }
+        }
+    }
+}
+
+impl Partner for MockPartner<'_> {
+    fn start(&mut self, intent: &Intent, request: &Envelope) {
+        if let Some(outcome) = self.answer(intent, request) {
+            self.pending.push(Response {
+                call_ref: intent.call_ref,
+                outcome,
+            });
+        }
+    }
+
+    fn events(&mut self) -> Vec<Response> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::compile;
+    use crate::stdlib::Registry;
+
+    /// The M0 probe and its lab, in one unit — the graph under test
+    /// is the production graph; only the world is scripted.
+    const PROBE_WITH_LAB: &str = r#"
+graph m0_probe : App {
+  connector echo : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("5s")
+  }
+
+  operator shout {
+    var count : int = 0
+    on in where data.text != "" {
+      count = count + 1
+      out = envelope { data.text = data.text }
+    }
+  }
+
+  . -> shout -> echo -> .
+}
+
+lab m0_probe {
+  simulation smoke on app {
+    mock echo {
+      on in where data.text == "salut" {
+        out = { text = "salut", echoed = true }
+      }
+      on in { out = envelope }
+    }
+
+    scenario roundtrip "one message through a scripted world" {
+      app.in = { text = "salut" }
+      expect "the echo came back" app.out count == 1 where data.echoed == true
+      expect nothing app.err
+    }
+
+    scenario silence_expires "a silent partner times out" {
+      mock echo {
+        on in { out = nothing }
+      }
+      app.in = { text = "salut" }
+      expect nothing app.out
+      advance duration("5s")
+      expect "the budget expired" app.err where data.kind == "TimeoutExpired"
+    }
+
+    scenario filtered "an empty text never reaches the world" {
+      app.in = { text = "" }
+      expect nothing echo.in
+      expect nothing app.out
+    }
+  }
+}
+"#;
+
+    fn reports() -> Vec<ScenarioReport> {
+        let compilation = compile(&[PROBE_WITH_LAB], &Registry::m0()).expect("a valid unit");
+        assert_eq!(compilation.labs.len(), 1);
+        run(&compilation.plan, GraphVersion(1), &compilation.labs[0])
+    }
+
+    #[test]
+    fn the_lab_runs_its_scenarios_green() {
+        let reports = reports();
+        assert_eq!(reports.len(), 3);
+        for report in &reports {
+            assert!(
+                report.passed(),
+                "{}.{} failed: {:#?}",
+                report.simulation,
+                report.scenario,
+                report.failures
+            );
+        }
+    }
+
+    #[test]
+    fn the_lab_is_repeatable() {
+        assert_eq!(reports(), reports());
+    }
+
+    #[test]
+    fn a_broken_expectation_fails_loudly_not_silently() {
+        let source = PROBE_WITH_LAB.replace("data.echoed == true", "data.echoed == false");
+        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+        let reports = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        let roundtrip = &reports[0];
+        assert!(!roundtrip.passed());
+        assert!(roundtrip.failures[0].contains("the echo came back"));
+    }
+
+    #[test]
+    fn an_uncovered_call_fails_the_scenario_loudly() {
+        let source = r#"
+graph m0_probe : App {
+  connector echo : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator shout {
+    on in { out = envelope }
+  }
+
+  . -> shout -> echo -> .
+}
+
+lab m0_probe {
+  simulation smoke on app {
+    scenario unmocked {
+      app.in = { text = "salut" }
+    }
+  }
+}
+"#;
+        let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+        let reports = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        assert!(!reports[0].passed());
+        assert!(reports[0].failures[0].contains("uncovered call"));
+    }
+}

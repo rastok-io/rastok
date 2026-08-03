@@ -618,7 +618,7 @@ fn emitted_content(
 /// value; `meta.app.x` and `meta.<custom>.x` land in metadata —
 /// custom namespaces are deferred with the checker, so only `app`
 /// arrives here.
-fn apply_write(
+pub(crate) fn apply_write(
     data: &mut cel::Value,
     app: &mut envelope::Namespace,
     path: &[String],
@@ -664,7 +664,7 @@ fn apply_write(
 }
 
 /// The handler-facing view of an envelope's data.
-fn data_value(data: &Data) -> Result<cel::Value, Fault> {
+pub(crate) fn data_value(data: &Data) -> Result<cel::Value, Fault> {
     match data {
         Data::Materialized(value) => Ok(from_envelope_value(value)),
         Data::Encoded {
@@ -682,7 +682,7 @@ fn data_value(data: &Data) -> Result<cel::Value, Fault> {
 }
 
 /// The handler-facing view of an envelope's metadata.
-fn meta_value(meta: &Meta) -> cel::Value {
+pub(crate) fn meta_value(meta: &Meta) -> cel::Value {
     let mut app = BTreeMap::new();
     for (field, value) in meta.app() {
         app.insert(field.clone(), from_meta_value(value));
@@ -770,7 +770,7 @@ fn from_meta_value(value: &MetaValue) -> cel::Value {
     }
 }
 
-fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, Fault> {
+pub(crate) fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, Fault> {
     Ok(match value {
         cel::Value::Bool(v) => envelope::Value::Scalar(envelope::Scalar::Bool(*v)),
         cel::Value::Int(v) => envelope::Value::Scalar(envelope::Scalar::Int(*v)),

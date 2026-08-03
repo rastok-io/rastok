@@ -60,6 +60,13 @@ pub const E_DUP_KEY: Code = Code::new("E-DUP-KEY");
 /// to the root error sink.
 pub const W_UNWIRED_OUTPUT: Code = Code::new("W-UNWIRED-OUTPUT");
 
+/// A lab whose name binds to no `: App` graph in the unit.
+pub const E_LAB_NO_APP: Code = Code::new("E-LAB-NO-APP");
+
+/// A simulation targeting anything but the App root — the only
+/// executable target today.
+pub const E_SIM_TARGET: Code = Code::new("E-SIM-TARGET");
+
 /// Merged sources of one compilation: the application files. Lab
 /// fragments join at the scenario stage.
 #[derive(Debug, Clone, Default)]
@@ -125,8 +132,20 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
             }
         }
     }
+    let checked_app = checker.graph(app);
+    let mut labs = Vec::new();
+    for (_, tree) in &unit.files {
+        for decl in &tree.decls {
+            if let TopDecl::Lab(lab) = decl
+                && let Some(checked) = checker.lab(lab, &checked_app)
+            {
+                labs.push(checked);
+            }
+        }
+    }
     Some(Hir {
-        app: checker.graph(app),
+        app: checked_app,
+        labs,
     })
 }
 
@@ -200,6 +219,286 @@ impl Checker<'_, '_> {
                 );
                 None
             }
+        }
+    }
+
+    /// Checks one lab against the checked App. Labs never enter the
+    /// semantic hash; they compile into their own executable form.
+    fn lab(
+        &mut self,
+        decl: &crate::compiler::syntax::LabDecl,
+        app: &Graph,
+    ) -> Option<crate::compiler::hir::Lab> {
+        if decl.name.text != app.name {
+            self.bag.push(
+                Diagnostic::new(
+                    E_LAB_NO_APP,
+                    Phase::Resolve,
+                    format!(
+                        "the lab `{}` binds to no `: App` graph in this unit",
+                        decl.name.text
+                    ),
+                )
+                .with_span(decl.name.span)
+                .with_field("name", decl.name.text.clone()),
+            );
+            return None;
+        }
+        let mut simulations = Vec::new();
+        for simulation in &decl.simulations {
+            let target: Vec<&str> = simulation
+                .target
+                .iter()
+                .map(|segment| segment.text.as_str())
+                .collect();
+            if target != ["app"] {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_SIM_TARGET,
+                        Phase::Resolve,
+                        "a simulation closes `app`; sub-graph targets are a deferred capability"
+                            .to_string(),
+                    )
+                    .with_span(simulation.name.span)
+                    .with_field("target", target.join(".")),
+                );
+                continue;
+            }
+            let mocks = self.mocks(&simulation.mocks, app);
+            let mut scenarios = Vec::new();
+            for scenario in &simulation.scenarios {
+                scenarios.push(self.scenario(scenario, app));
+            }
+            simulations.push(crate::compiler::hir::Simulation {
+                name: simulation.name.text.clone(),
+                mocks,
+                scenarios,
+            });
+        }
+        Some(crate::compiler::hir::Lab {
+            name: decl.name.text.clone(),
+            simulations,
+        })
+    }
+
+    fn mocks(
+        &mut self,
+        decls: &[crate::compiler::syntax::MockDecl],
+        app: &Graph,
+    ) -> Vec<crate::compiler::hir::Mock> {
+        let mut mocks = Vec::new();
+        for decl in decls {
+            if decl.path.len() > 1 {
+                self.deferred("a mock of a composed node", decl.span);
+                continue;
+            }
+            let name = &decl.path[0];
+            let Some(node) = app.nodes.iter().find(|node| {
+                node.path.segments().len() == 1 && node.path.segments()[0] == name.text
+            }) else {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_RESOLVE_UNKNOWN,
+                        Phase::Resolve,
+                        format!("`{}` names no node of the App", name.text),
+                    )
+                    .with_span(name.span)
+                    .with_field("name", name.text.clone()),
+                );
+                continue;
+            };
+            if node.connector_trait().is_none() {
+                self.deferred("a mock of an operator", name.span);
+                continue;
+            }
+            // A mock is a pure function of the request: its handlers
+            // check like ordinary handlers, against the connector's
+            // own port table.
+            let signature = cel::Signature::new();
+            let mut handlers = Vec::new();
+            for handler in &decl.handlers {
+                if let Some(checked) = self.handler(handler, &signature, node) {
+                    if checked
+                        .body
+                        .iter()
+                        .any(|statement| matches!(statement, Statement::Emit { port, .. } if port.name() == "err"))
+                    {
+                        self.deferred("a mock err reply", handler.span);
+                        continue;
+                    }
+                    handlers.push(checked);
+                }
+            }
+            mocks.push(crate::compiler::hir::Mock {
+                connector: node.path.clone(),
+                handlers,
+            });
+        }
+        mocks
+    }
+
+    fn scenario(
+        &mut self,
+        decl: &crate::compiler::syntax::ScenarioDecl,
+        app: &Graph,
+    ) -> crate::compiler::hir::Scenario {
+        use crate::compiler::hir::{Cmp, ExpectTarget, Expectation, Quantifier, ScenarioStep};
+        use crate::compiler::syntax::{CmpOp, ScenarioItem};
+        let mut mocks = Vec::new();
+        let mut steps = Vec::new();
+        for item in &decl.body {
+            match item {
+                ScenarioItem::Mock(mock) => {
+                    mocks.extend(self.mocks(std::slice::from_ref(mock), app));
+                }
+                ScenarioItem::Injection { target, value, seq } => {
+                    let segments: Vec<&str> = target
+                        .segments
+                        .iter()
+                        .map(|segment| segment.text.as_str())
+                        .collect();
+                    if segments != ["app", "in"] {
+                        // Source-Connector injection joins with the
+                        // source adapters; `app.in` is this build's
+                        // ingress.
+                        self.deferred("an injection outside `app.in`", target.span);
+                        continue;
+                    }
+                    // A draft is world-authored: it is built from
+                    // constants, with no input to read.
+                    let signature = cel::Signature::new();
+                    let Some(value) = self.emit_value(value, &signature, target.span) else {
+                        continue;
+                    };
+                    if matches!(value, EmitValue::Identity) {
+                        self.deferred("an identity injection (there is no input)", target.span);
+                        continue;
+                    }
+                    let seq = match seq {
+                        None => None,
+                        Some(int) => match int.text.parse::<u64>() {
+                            Ok(seq) => Some(seq),
+                            Err(_) => {
+                                self.bag.push(
+                                    Diagnostic::new(
+                                        E_CEL_EXPR,
+                                        Phase::Check,
+                                        "an inbound sequence must be a non-negative integer"
+                                            .to_string(),
+                                    )
+                                    .with_span(int.span)
+                                    .with_field("detail", int.text.clone()),
+                                );
+                                continue;
+                            }
+                        },
+                    };
+                    steps.push(ScenarioStep::Inject { value, seq });
+                }
+                ScenarioItem::Advance { expr, span } => {
+                    let signature = cel::Signature::new();
+                    let Some(constant) = self.constant(expr, &signature, &BTreeMap::new()) else {
+                        continue;
+                    };
+                    let cel::Value::Duration(nanos) = constant.value else {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_CEL_EXPR,
+                                Phase::Check,
+                                "advance takes a constant duration".to_string(),
+                            )
+                            .with_span(*span)
+                            .with_field("detail", format!("{:?}", constant.value)),
+                        );
+                        continue;
+                    };
+                    steps.push(ScenarioStep::Advance { nanos });
+                }
+                ScenarioItem::Expect(expect) => {
+                    let segments: Vec<&str> = expect
+                        .target
+                        .segments
+                        .iter()
+                        .map(|segment| segment.text.as_str())
+                        .collect();
+                    let target = match segments.as_slice() {
+                        ["app", "err"] => ExpectTarget::RootErr,
+                        ["app", port] => match node::Port::new((*port).to_string()) {
+                            Ok(port) => ExpectTarget::Boundary(port),
+                            Err(_) => continue,
+                        },
+                        [name, port] => {
+                            let Some(node) = app.nodes.iter().find(|node| {
+                                node.path.segments().len() == 1 && node.path.segments()[0] == *name
+                            }) else {
+                                self.bag.push(
+                                    Diagnostic::new(
+                                        E_RESOLVE_UNKNOWN,
+                                        Phase::Resolve,
+                                        format!("`{name}` names no node of the App"),
+                                    )
+                                    .with_span(expect.target.span)
+                                    .with_field("name", (*name).to_string()),
+                                );
+                                continue;
+                            };
+                            match node::Port::new((*port).to_string()) {
+                                Ok(port) => ExpectTarget::Node {
+                                    path: node.path.clone(),
+                                    port,
+                                },
+                                Err(_) => continue,
+                            }
+                        }
+                        _ => {
+                            self.deferred("a nested expectation target", expect.target.span);
+                            continue;
+                        }
+                    };
+                    let quantifier = if expect.nothing {
+                        Quantifier::Nothing
+                    } else if let Some((op, int)) = &expect.count {
+                        let Ok(count) = int.text.parse::<i64>() else {
+                            continue;
+                        };
+                        let cmp = match op {
+                            CmpOp::Eq => Cmp::Eq,
+                            CmpOp::Ne => Cmp::Ne,
+                            CmpOp::Lt => Cmp::Lt,
+                            CmpOp::Gt => Cmp::Gt,
+                            CmpOp::Le => Cmp::Le,
+                            CmpOp::Ge => Cmp::Ge,
+                        };
+                        Quantifier::Count(cmp, count)
+                    } else {
+                        Quantifier::Exists
+                    };
+                    let predicate = match &expect.predicate {
+                        None => None,
+                        Some(expr) => {
+                            let signature = cel::Signature::new()
+                                .with("data", cel::Type::Dyn)
+                                .with("meta", cel::Type::Dyn);
+                            match self.cel(expr, &signature) {
+                                Some(tree) => Some(tree),
+                                None => continue,
+                            }
+                        }
+                    };
+                    steps.push(ScenarioStep::Expect(Expectation {
+                        label: expect.label.clone(),
+                        quantifier,
+                        target,
+                        predicate,
+                    }));
+                }
+            }
+        }
+        crate::compiler::hir::Scenario {
+            name: decl.name.text.clone(),
+            label: decl.label.clone(),
+            mocks,
+            steps,
         }
     }
 
