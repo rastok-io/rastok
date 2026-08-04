@@ -88,6 +88,52 @@ effective `max_instances`, no joins, no placement.
 7. **Hot keys** — telemetry first, guidance after; no speculative
    mechanism.
 
+## The Kafka Streams mapping — the translation to keep
+
+The model lands naturally for Kafka Streams practitioners; the
+vocabulary mapping below is the one to keep stable in every future
+document, because each near-synonym hides a real difference.
+
+```text
+key = locality and order          same intuition
+independent logical partitions    same intuition
+local state per key               same intuition
+co-located keys for joins         same requirement
+lag / hot keys                    same operational signals
+
+Rastok `per key`   ≠  a Kafka topic partition
+Rastok `per key`   ≈  one keyed logical instance (a virtual actor)
+later: shards      ≈  where a Kafka partition/task comparison lands
+```
+
+Three consequences worth writing down now:
+
+- **The closed graph can refuse earlier.** Kafka Streams discovers a
+  co-partitioning problem at topology-build time and repairs it with
+  an internal repartition topic; Rastok's checker sees the declared
+  partitions of both join inputs and can refuse with a reserved
+  diagnostic — `E-PARTITION-MISMATCH`, "the port arrives under
+  partition X but the join requires partition Y; an explicit re-key
+  step is needed." The re-key stays an explicit operator in the plan
+  and in the journal: it changes achievable order, state locality,
+  and cost, so it must never be a silent insertion.
+- **Hot keys are the familiar disease.** A skewed key saturates its
+  single sequential instance exactly as a hot Kafka partition
+  saturates its task, and the mitigations carry over — including the
+  warning that salting a key breaks order. `max_instances` does not
+  help a hot key, just as adding consumers does not help a hot
+  partition. Telemetry first (mailbox depth per key is the lag
+  metric), guidance after.
+- **The differentiator is where the journal ends.** Kafka Streams
+  atomizes Kafka-in/state/Kafka-out; the moment a processor calls an
+  external API, exactly-once stops covering the effect. Rastok's
+  journal extends through it: OUTBOUND open before the effect, the
+  gated closure, the outcome transaction — the journal is not a
+  state changelog but a causal WAL that includes external calls,
+  timers, and timeouts. In one line: Rastok ≈ Kafka Streams keyed
+  state + virtual actors + a causal journal + connectors with an
+  effect WAL + a deterministic Lab.
+
 ## The one invariant that must never drift
 
 No implicit concurrency inside one mailbox, ever. Two envelopes of

@@ -59,6 +59,7 @@ causal core. They live in their home specs, not here.
 | E-PORT-DIRECTION | error | check | [grammar.md](grammar.md) | a port used against its direction — edge, handler, or emission side; fields `port`, `direction` |
 | E-GRAPH-CYCLE | error | check | [grammar.md](grammar.md) | a wiring cycle among nodes — edges form a DAG; field `node` |
 | E-PORT-CONFLICT | error | check | [grammar.md](grammar.md) | a port name declared or inferred with conflicting roles, redeclared, or declared on a connector; field `port` |
+| E-PARTITION-MISMATCH | error | check | [execution-model.md](execution-model.md) | a join input arriving under a different partition than the join requires — an explicit re-key step is needed; reserved for the joins slice; fields `port`, `expected`, `found` |
 | E-DUP-EDGE | error | check | [envelope.md](envelope.md) | the same source endpoint wired twice to the same target, compared after desugaring — the deliveries would derive one call ref; field `edge` |
 | E-DUP-LAB-IDENTITY | error | resolve | [simulation-semantics.md](simulation-semantics.md) | a duplicated lab identity — simulation, scenario, or mock of one connector at one level; fragments merge, homonyms refuse; field `name` |
 | W-DEAD-GRAPH | warning | resolve | [grammar.md](grammar.md) | a top-level graph reachable from no App composition |
