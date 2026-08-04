@@ -1,6 +1,15 @@
 # M0 build order
 
-> Implementation slice — non-normative and under review.
+> Implementation slice — non-normative. **Completed 2026-08-04**: all
+> seventeen stages built and exited, followed by seven adversarial
+> review passes (reworks recorded in the git history) and the
+> two-machine reproduction ([`m0-exit-notes.md`](m0-exit-notes.md)).
+> Notable deltas against the plan below: the hand-written diagnostic
+> renderer sufficed — the ariadne fallback of stage 16 was never
+> needed; the discrete `advance` sketched for stage 12 landed through
+> the review cycle rather than the stage itself; and stages 14–15
+> produced `lab`/`golden` in the leaner as-built shapes documented in
+> [`components.md`](components.md).
 
 This document orders the construction of the modules named in
 `06-rastok-modules-overview` so that every stage compiles, carries its

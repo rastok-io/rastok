@@ -4,7 +4,7 @@ skinparam shadowing false
 skinparam packageStyle rectangle
 hide empty members
 
-title Rastok M0 — Rust module and type blueprint (indicative, under review)
+title Rastok M0 — Rust module and type blueprint (pre-build design artifact ;\nas-built state: 06-rastok-modules-overview + components.md)
 
 note as LEGEND
   **UML for Rust**

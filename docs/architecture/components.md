@@ -1,6 +1,10 @@
 # Component blueprint
 
-> Implementation blueprint — non-normative and under review.
+> Implementation blueprint — non-normative. Originally written ahead
+> of the build; updated 2026-08-04 to the as-built M0 state (the
+> deviations were discovered during implementation and the eleven
+> adversarial review passes; assumed gaps live in
+> [`m0-exit-notes.md`](m0-exit-notes.md)).
 
 This document refines the responsibility table of
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md) to the component level: the
@@ -63,30 +67,43 @@ canonical record projection ─▶ golden compare
 | canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
 | `plan::ExecutionPlan` | `compiler` (lower) | `runtime`, `lab` | immutable, serializable data — tables plus `cel::Tree`s; no closures, no host references; names resolved to `Slot`s |
 | `boundary::Intent` (open OUTBOUND) | `runtime` | dispatcher → `boundary::Partner` impls | journaled before any handler runs, carrying the canonical call fields — emitting id, connector path, request digest, optional idempotency key ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
-| `boundary::Response` | `connectors` or `lab::PartnerMock` | `runtime` (as an input event) | returns with the internal `CallRef`, correlated by the *connector's own protocol correlator* — never by the business key; a partner only ever answers: it never decides a timeout and never mints `OutcomeUnknown` |
-| `journal::Record` | **runtime mechanics only** | recovery, `journal::GoldenProjection` | adapters and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
+| `boundary::Response` | `connectors` or the lab's mock partner | `runtime` (as an input event) | returns with the internal `CallRef`, correlated by the *connector's own protocol correlator* — never by the business key; a partner only ever answers: it never decides a timeout and never mints `OutcomeUnknown` |
+| `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | adapters and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `diagnostics::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
-| golden projection | `journal::GoldenProjection` | evidence compare | deterministic bytes: same scope, same bytes ([simulation-semantics.md §6](../spec/simulation-semantics.md)) |
+| golden projection | `golden::Trace` (project, seal, diff) | evidence compare | deterministic bytes: same scope, same bytes ([simulation-semantics.md §6](../spec/simulation-semantics.md)) |
 
 ## 2. The module map
 
 ```text
-crates/rastok/src/
-├── node.rs           # vocabulary : Path, Kind, Port, Effect, Behavior, Trigger
-├── envelope.rs       # Envelope, Meta, MetaSys, Id, Data, Encoding, Value
-├── diagnostics.rs    # Diagnostic, Severity, Phase, Span, Bag
+crates/rastok/src/            # as built
+├── node.rs           # vocabulary : Path, Kind, Port, Direction, Effect,
+│                     #   Behavior, Lifecycle, Trigger, HandlerActivation
+├── envelope.rs       # Envelope, Meta, MetaSys, Id, Data, Encoding, Value,
+│                     #   Role, WriteTarget (checked builder-write targets)
+├── diagnostics.rs    # Diagnostic, Code, Severity, Phase, Span, Bag
 ├── cel.rs            # the isolated expression chain — depends on nothing here
-├── compiler.rs       # parse → assemble → check → lower → canonicalize
-├── plan.rs           # ExecutionPlan, Handler, Slot, GuestProgram, SemanticHash
+├── compiler.rs       # facade : parse → check → hash → lower
+│   └── compiler/     #   lexer, syntax, parser, hir (graph + lab), check, lower
+├── plan.rs           # ExecutionPlan, NodeKind, ConnectorSpec, Handler, Slot,
+│                     #   SemanticHash, Manifest, edge_text
 ├── stdlib.rs         # declarative Connector/guest contracts (the checker's view)
-├── boundary.rs       # Ingress, Partner, Clock, Supervisor + Dispatcher, Intent
-├── runtime.rs        # Vm (boot, step, drain) ; GuestExecutor ; BootBindings (next)
-├── guest_engines.rs  # jq / sql engines (guarded) — the pure twin of connectors
-├── journal.rs        # Journal trait, records, ids, GoldenProjection, RecoveryFold
-├── connectors.rs     # one file per connector ; Process first
-├── lab.rs            # ScenarioRunner + Fixture / PartnerMock / VirtualClock
-└── main.rs           # thin bin : check | run | sim
+├── boundary.rs       # Ingress, Partner (+cancel), OutcomeGate, Clock, Supervisor,
+│                     #   Dispatcher, Intent, PumpBatch, DatedPayload
+├── runtime.rs        # TransactionExecutor, Mailboxes, PartitionState, Delivery
+│   └── runtime/vm.rs #   Vm (boot, inject, step, drain, pump, advance), Scheduler
+├── journal.rs        # Journal trait, records (+ armed timers), mod ids, MemJournal
+├── golden.rs         # Trace, Divergence — projection, seal, diff, CBOR both ways
+├── connectors.rs     # Process (async, group-terminated) + prepare (pure framing)
+├── lab.rs            # run → ScenarioRun { report, records } ; the mock partner
+├── render.rs         # Sources + rustc-shaped diagnostic rendering
+└── main.rs           # thin bin : check | run | simulate (--golden / --bless)
 ```
+
+Two deviations from the pre-build sketch, both deliberate: the golden
+projection grew into its own `golden` module (it owns a two-way
+deterministic CBOR codec and the diff — too much identity machinery to
+live inside `journal`), and `guest_engines.rs` was never created — a
+guarded surface needs a diagnostic, not an empty file.
 
 Naming rules — **M0 working conventions**, revisited at crate
 promotion (the final layout stays open per `ARCHITECTURE.md`):
@@ -98,12 +115,12 @@ promotion (the final layout stays open per `ARCHITECTURE.md`):
    names (`compiler`, `runtime`, `boundary`, `cel`).
 2. **Explicit English over abbreviations.** A newcomer must understand
    a name without the project's internal vocabulary: `diagnostics`,
-   `guest_engines`, `ScenarioRunner`, `RecoveryFold`. `cel` is a
+   `guest_engines`, `ScenarioReport`, `RecoveryFold`. `cel` is a
    proper noun, not an abbreviation. No blessed abbreviations remain.
 3. **Qualified paths give context; precision beats brevity.** A type
    never repeats its module name (`cel::Tree`, never `CelTree`), but
    keeps a precise compound when the bare word would be too generic
-   (`lab::ScenarioRunner`, `journal::GoldenProjection`) and keeps the
+   (`lab::ScenarioRun`, `golden::Divergence`) and keeps the
    corpus term even when it overlaps the module word
    (`plan::ExecutionPlan`, `plan::SemanticHash`). The `x::X` stutter
    stays idiomatic where the type *is* the module's whole concept:
@@ -224,7 +241,7 @@ rather than features.
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **Scheduler** | run-to-completion firing; the single dated-event queue — including the **per-call timeout budgets** (a timeout is the scheduler's dated event, never a partner's answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
+| **Scheduler** | run-to-completion firing; the single dated-event queue — the **call budgets, armed at DELIVERY** so queue time counts, referenced by `(edge, envelope id)`, resolved reserve→resolve→ack so a refused expiry replays (a timeout is the scheduler's dated event, never a partner's answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
 | **Mailboxes** | per-key FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered per-key delivery | [execution-model.md §2–3](../spec/execution-model.md) | M0 |
 | **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
@@ -242,18 +259,24 @@ the world plays itself; in sim, the lab plays the world.
 | Interface | Owns | Real side | Lab side | Spec | M0 |
 |---|---|---|---|---|---|
 | **`Ingress`** | birth of inbound **drafts** — payload, birth metadata, `IngressAuthority` (opaque), and a sequence request `Next \| Explicit(seq)` (a fixture replays a production slice with explicit sequences); bounded, backpressure translated outward. It never births an envelope: a root envelope **cannot pre-exist its sequence** — the root id derives from `inbound_seq` and `origin_id = id` — so only the journal's accepting transaction mints it | listeners | `lab::Fixture` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) fixtures | M0 (minimal) |
-| **`Partner`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef`; correlation is the **connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a partner deduplicates on the idempotency key only *when it cooperates* | `connectors/*` | `lab::PartnerMock` | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M0 (Process only) |
-| **`Clock`** | the only source of time, delivered **one dated event at a time** — the VM drains to stable between events, which may arm new ones before the target, so a sweep can never be precomputed | wall clock | `lab::VirtualClock` | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (virtual required) |
+| **`Partner`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef`; correlation is the **connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a partner deduplicates on the idempotency key only *when it cooperates*; `cancel(call_ref)` withdraws in-flight work when the machine closes a call (default: nothing) | `connectors::Process` | the lab's mock partner | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M0 (Process only) |
+| **`Clock`** | the only source of time. As built, M0 consumes no trait impl: `Vm::advance(journal, partner, target)` IS the virtual clock — the driver (a lab step, the CLI's wall-mapping loop) chooses targets, due budgets fire in expiry order, and same-instant expiries all fire before the machine drains | declared trait; `advance` targets in M0 | `advance` calls | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (target-driven) |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | `lab::FaultInjector` | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | M0 (boot only); faults `next` |
 
 The **`Dispatcher`** (owned here) is the loop between the journal and
 the partners: it takes OUTBOUND records the VM opened, drives the
-selected `Partner` implementation, and settles every answer or timeout
-through `journal::close_outbound(call_ref, …) → Won | AlreadyClosed`.
-Only a `Won` closure becomes an input event for the VM; `AlreadyClosed`
-degrades the late arrival into a discarded observation — the anti-ghost
-rule ([execution-model.md §6.3](../spec/execution-model.md)) as a typed
-race, not a convention.
+selected `Partner` implementation, and settles answers through
+`journal::close_outbound(call_ref, …) → Won | AlreadyClosed`. Before
+any closure, the **`OutcomeGate`** judges the reply against the
+calling connector's sealed error set — a refused reply never becomes
+a causal fact: it returns in `PumpBatch::rejected` with its reason,
+and the call stays open, honestly settleable by the timeout. Only a
+`Won` closure becomes an input event for the VM; `AlreadyClosed`
+degrades the late arrival into a discarded observation — the
+anti-ghost rule
+([execution-model.md §6.3](../spec/execution-model.md)) as a typed
+race, not a convention. `PumpBatch` returns every non-causal
+observation — discarded, uncorrelated, rejected — nothing silent.
 
 Ownership rules that the types must make unrepresentable:
 
@@ -282,7 +305,19 @@ Ownership rules that the types must make unrepresentable:
 | **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `commit(Transaction)` (atomic), `open_outbound(Intent)` (journal-before-effect), `close_outbound(call_ref, response XOR timeout) → Won \| AlreadyClosed` (exactly once — the anti-ghost race is typed), `append_inbound(InboundSubmission) → CommittedInbound { seq, envelope, record }` (in one accepting transaction: allocate or validate the sequence, derive the root id, mint the root `MetaSys` — `parent_id = null`, `origin_id = id` —, build the immutable envelope, commit; only then may the ACK flow), ordered `iter()` | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §2, §5](../spec/envelope.md) | M0 |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
 | **`RecoveryFold`** | journal → state, dated obligations, open-effect triage — the **only** place `OutcomeUnknown` is minted and an open OUTBOUND becomes `Abandoned`; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
-| **`GoldenProjection`** | the canonical record projection; the causal-core / annotation split | records → deterministic bytes | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0 |
+| *(golden projection)* | moved to its own `golden` module as built — see §3.6b | | | |
+
+### 3.6b The golden evidence (`golden`)
+
+| Component | Owns | Interface | Spec | M0 |
+|---|---|---|---|---|
+| **`golden::Trace`** | the canonical record projection (identity.md §3 tables, armed timers included), its hand-rolled deterministic CBOR encoder AND decoder, the blake3 seal | records → deterministic bytes; stored golden → structural re-read | [identity.md §3](../spec/identity.md); [simulation-semantics.md §6](../spec/simulation-semantics.md) | M0 |
+| **`golden::Divergence`** | the first meaningful difference, by record index and NAMED key path — a broken seal explains itself, never a hex dump | two traces → divergence or none | — | M0 |
+
+The module owns both directions of the codec so a mismatch diffs
+structurally against the STORED golden; the workflow (compare,
+explicit `--bless`) is driven by the lab's returned records, the
+golden tests, and `main`.
 
 `InboundRecord` carries the full root recipe — the opaque
 `IngressAuthority` (wrapping exactly the normative `(connector_path,
@@ -325,8 +360,8 @@ An adapter set plus a driver — never a second engine.
 
 | Component | Owns | Interface | Spec | M0 |
 |---|---|---|---|---|
-| **`ScenarioRunner`** | driving the VM through a scenario: inject, advance, expect, golden compare and explicit bless; observation windows; the three expectation quantifiers | scenario → run + verdicts | [simulation-semantics.md §2, §5–6](../spec/simulation-semantics.md) | M0 |
-| **Boundary implementations** | `Fixture` (Ingress), `PartnerMock` (Partner — answers only; the VM still writes the OUTBOUND), `VirtualClock` (Clock), `FaultInjector` (Supervisor, `next`) | the scripted external world behind the same four traits | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0 |
+| **`lab::run`** | driving the production `Vm` through each checked scenario: inject, advance, settle, expectation windows over the machine's observation log, the three quantifiers; every uncovered call, faulting predicate or guard, and unsettled machine is a named failure | `hir::Lab` + plan → `Vec<ScenarioRun { report, records }>` — the records feed the golden workflow | [simulation-semantics.md §2, §5–6](../spec/simulation-semantics.md) | M0 |
+| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual clock* IS `Vm::advance` (no `VirtualClock` type); the internal mock partner answers behind the same `Partner` seam as the real adapter — replies only, the VM still writes every OUTBOUND; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0 |
 | **Coverage** | the statically enumerable failure-space checklist | plan + scenarios → coverage report | [simulation-semantics.md §7](../spec/simulation-semantics.md) | later |
 | **Unsupported surfaces** | `integration`, `theorem`, `experiment`: parse, then refuse explicitly | reachable syntax → `unsupported` diagnostic | [simulation-semantics.md §10–11](../spec/simulation-semantics.md) | guarded |
 
@@ -348,7 +383,7 @@ second parser and no second engine.
 ```text
 main (bin)
    │
-   ├──▶ lab (ScenarioRunner + boundary impls) ──┐
+   ├──▶ lab (run + the mock partner) ───────────┐
    │                                            ├──▶ boundary contracts ──▶ runtime
    └──▶ run wiring (+ stdlib) ──────────────────┘        ▲                     │
                                                          │                     ▼
@@ -366,7 +401,11 @@ Rules, in force from the first commit:
 
 1. **`runtime`** depends only on `plan`, the `node`/`envelope` value types,
    the `boundary` contracts it emits into, and the `journal` trait — never
-   on an adapter, the lab, or the compiler.
+   on an adapter, the lab, or the compiler. **Known as-built exception**:
+   the VM calls the pure `connectors::prepare` so the sealed digest and
+   the sent bytes come from one function; carrying a `PreparedRequest`
+   in the boundary vocabulary removes this edge
+   ([m0-exit-notes.md](m0-exit-notes.md)).
 2. **`cel`** depends on nothing else in Rastok.
 3. **Adapters** (`connectors`, `guest_engines`, the lab's boundary
    implementations) implement traits; nothing depends on an adapter
@@ -379,7 +418,7 @@ Rules, in force from the first commit:
    `journal`. It never patches or introspects `runtime` internals.
 6. **`node`, `envelope`, `diagnostics`** are the base layer: depended on
    everywhere, depending on nothing (except `envelope` on `node`).
-7. **`journal::GoldenProjection`** reads the journal, not the VM.
+7. **`golden`** reads journal records, not the VM.
 
 Within one crate these rules are held by review, not by Cargo — module
 cycles are legal in Rust. Promotion to crates (per the crate policy)
@@ -423,11 +462,11 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `cel` (compile) |
 | Plan | `compiler` (canonicalize, lower), `plan::Manifest` |
 | Step | `runtime` (Scheduler, Mailboxes, TransactionExecutor, EmissionBuffer, error routing) |
-| Handle | `boundary::Dispatcher` + `boundary::Partner`; `connectors::Process` (App) or `lab::PartnerMock` (Lab) |
+| Handle | `boundary::Dispatcher` + `boundary::Partner` behind the OutcomeGate; `connectors::Process` (App) or the lab mock (Lab) |
 | Record | `journal` (semantic operations, id derivation) |
-| Compare | `journal::GoldenProjection` projection, `lab`/`main` workflow |
+| Compare | `golden` projection, seal, and diff; `lab`-returned records; `main --golden/--bless` |
 
-Deliberately without M0 code: `journal::RecoveryFold` and `lab::FaultInjector`
+Deliberately without M0 code: `journal::RecoveryFold` and the lab's fault injector
 (`next` — the record API already carries their inputs), `runtime::BootBindings`
 (`next`), `guest_engines` and the connector catalogue beyond Process
 (`guarded`), coverage (`later`), and live Saga and Loop managers

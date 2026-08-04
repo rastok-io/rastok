@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok M0 — bird's-eye module overview (companion to 05, no members)
+title Rastok M0 — bird's-eye module overview (as built, 2026-08-04)
 
 note as LEGEND
   One line per type ; no fields, no methods, no type-level arrows.
@@ -21,23 +21,29 @@ package "node — shared graph and execution vocabulary" as P_NODE {
   Kind : operator, connector, or graph category
   class Port <<struct>>
   Port : named node endpoint
+  enum Direction <<enum>>
+  Direction : input or output port role
   enum EffectClass <<enum>>
   EffectClass : external-effect risk category
   enum Effect <<enum>>
   Effect : absence or declared class of effect
   enum Behavior <<enum>>
   Behavior : deterministic or probabilistic execution
+  enum Lifecycle <<enum>>
+  Lifecycle : non-port transaction causes (timeout, …)
   enum Trigger <<enum>>
-  Trigger : port or lifecycle transaction trigger
+  Trigger : the CAUSE a committed transaction records
+  enum HandlerActivation <<enum>>
+  HandlerActivation : the PATTERN a handler declares (≠ Trigger)
 }
 
 package "envelope — data and metadata carried through the graph" as P_ENV {
   class Envelope <<struct>>
   Envelope : immutable emitted message
   class Meta <<struct>>
-  Meta : runtime and application metadata
+  Meta : runtime, application, and custom metadata
   class MetaSys <<struct>>
-  MetaSys : runtime-owned identity and lineage metadata
+  MetaSys : runtime-owned six-field identity spine
   class Id <<struct>>
   Id : deterministically derived 128-bit identity
   enum Data <<enum>>
@@ -46,17 +52,23 @@ package "envelope — data and metadata carried through the graph" as P_ENV {
   Encoding : raw, Avro, or Arrow IPC encoding
   enum "Value" as ENV_Value <<enum>>
   ENV_Value : materialized Rastok data domain
+  enum Role <<enum>>
+  Role : default or compensate flow
+  enum WriteTarget <<enum>>
+  WriteTarget : checked landing site of a builder write
 }
 
 package "diagnostics — structured diagnostics shared across phases" as P_DIAG {
   class "Diagnostic" as DIAG_Diagnostic <<struct>>
   DIAG_Diagnostic : stable diagnostic identity and structured details
+  class Code <<struct>>
+  Code : registry code carrying severity by prefix
   enum Severity <<enum>>
   Severity : error or warning
   enum Phase <<enum>>
   Phase : parse, resolve, check, plan, run, replay, or simulation
   class Span <<struct>>
-  Span : source byte range
+  Span : source id and byte range
   class Bag <<struct>>
   Bag : accumulating diagnostic destination
 }
@@ -70,51 +82,64 @@ package "cel — isolated CEL compilation and evaluation domain" as P_CEL {
   CEL_Type : CEL type domain
   enum "Value" as CEL_Value <<enum>>
   CEL_Value : CEL runtime value domain
-  interface Bindings <<trait>>
-  Bindings : bridge exposing Rastok state to CEL
   class "Diagnostic" as CEL_Diagnostic <<struct>>
   CEL_Diagnostic : native CEL compiler diagnostic
   class "Error" as CEL_Error <<struct>>
   CEL_Error : CEL evaluation error
 }
 
+note bottom of P_CEL
+  bindings are a plain sorted map of
+  names to values — no trait needed
+end note
+
 package "compiler — source-to-plan compilation pipeline" as P_COMP {
   class Compilation <<struct>>
-  Compilation : valid plan, semantic hash, and warnings
+  Compilation : valid plan, hash, warnings, and checked labs
   class SyntaxTree <<struct>>
   SyntaxTree : source-faithful parsed representation
   class Unit <<struct>>
   Unit : merged application and lab sources
   class Hir <<struct>>
-  Hir : desugared, resolved, and typed graph
-  enum NodeDecl <<enum>>
-  NodeDecl : operator, connector, or graph declaration
-  interface GuestFrontend <<trait>>
+  Hir : desugared, resolved, and typed graph + labs
+  enum NodeRole <<enum>>
+  NodeRole : operator, or connector with its resolved contract
+  class Lab <<struct>>
+  Lab : checked simulation corpus (never hashed)
+  class Scenario <<struct>>
+  Scenario : checked steps, mocks, and expectations
+  interface GuestFrontend <<trait>> <<next>>
   GuestFrontend : guest-language checking contract
 }
 
 package "plan — serializable compiled execution model" as P_PLAN {
   class ExecutionPlan <<struct>>
   ExecutionPlan : compiled graph shipped to runtime hosts
+  enum NodeKind <<enum>>
+  NodeKind : operator, or connector with its spec
+  class ConnectorSpec <<struct>>
+  ConnectorSpec : typed effect, behavior, attributes, error set
   class Handler <<struct>>
-  Handler : triggered ordered statement body
+  Handler : activation-selected ordered statement body
   class Slot <<struct>>
   Slot : compile-time resolved reference
   class SymbolTable <<struct>>
   SymbolTable : diagnostic and trace symbol information
-  class GuestProgram <<struct>>
-  GuestProgram : opaque compiled guest program
   class SemanticHash <<struct>>
   SemanticHash : canonical HIR identity
   class GraphVersion <<struct>>
   GraphVersion : append-only deployed graph version
   class Manifest <<struct>>
   Manifest : semantic-hash to graph-version ledger
+  class GuestProgram <<struct>> <<next>>
+  GuestProgram : opaque compiled guest program
 }
 
 package "stdlib — declarative contracts for standard capabilities" as P_STD {
   class ConnectorContract <<struct>>
   ConnectorContract : declarative connector contract sheet
+  enum Availability <<enum>>
+  Availability : available, declared, or unknown adapter
   class GuestContract <<struct>>
   GuestContract : guest identity, ABI, and purity contract
 }
@@ -123,13 +148,19 @@ package "boundary — contracts with the external world" as P_BND {
   interface Ingress <<trait>>
   Ingress : supplies inbound submissions under backpressure
   interface Partner <<trait>>
-  Partner : starts external calls and supplies responses
+  Partner : starts calls, answers or stays silent, cancels on demand
+  interface OutcomeGate <<trait>>
+  OutcomeGate : admits an outcome before it may close a call
   interface Clock <<trait>>
-  Clock : supplies one due event at a time
+  Clock : supplies one due event at a time (M0: advance is target-driven)
   interface Supervisor <<trait>>
-  Supervisor : supplies lifecycle events
+  Supervisor : supplies lifecycle events (M0: boot only)
   class Dispatcher <<struct>>
-  Dispatcher : drives journaled outbound calls
+  Dispatcher : starts journaled calls, settles gated closures
+  class PumpBatch <<struct>>
+  PumpBatch : events, discarded, uncorrelated, rejected — nothing silent
+  class BoundaryEvent <<struct>>
+  BoundaryEvent : one routable won closure
   class CallRef <<struct>>
   CallRef : deterministic internal call identity
   class InboundSubmission <<struct>>
@@ -140,38 +171,37 @@ package "boundary — contracts with the external world" as P_BND {
   Intent : canonical journaled outbound-call intent
   class Response <<struct>>
   Response : protocol-correlated partner answer
-  class DatedEvent <<struct>>
-  DatedEvent : scheduler-owned event with a logical date
-  enum LifecycleEvent <<enum>>
-  LifecycleEvent : boot, crash, or restart event
+  enum CallOutcome <<enum>>
+  CallOutcome : success data or typed failure
+  enum DatedPayload <<enum>>
+  DatedPayload : a delivery budget, referenced by (edge, envelope id)
 }
 
 package "runtime — deterministic execution machinery" as P_RT {
   class Vm <<struct>>
-  Vm : pure execution engine shared by run and simulation
+  Vm : pure engine — boot, inject, step, drain, pump, advance
   class Scheduler <<struct>>
-  Scheduler : run-to-completion event scheduler
+  Scheduler : deterministic work picking; the dated-event queue
   class Mailboxes <<struct>>
-  Mailboxes : bounded per-key FIFO queues
+  Mailboxes : bounded per-(node, key) FIFO queues with claims
+  class Delivery <<struct>>
+  Delivery : one queued envelope with its port, edge, and seq
   class TransactionExecutor <<struct>>
   TransactionExecutor : atomic node-transaction executor
   class PartitionState <<struct>>
   PartitionState : state cells partitioned by key
   class EmissionBuffer <<struct>>
   EmissionBuffer : ordered per-port emissions
+  class Observed <<struct>>
+  Observed : one logged delivery — the observation surface
+  enum Fault <<enum>>
+  Fault : evaluation faults a machine converts to typed errors
   interface GuestExecutor <<trait>>
   GuestExecutor : pure deterministic guest execution contract
   class BootBindings <<struct>> <<next>>
   BootBindings : deployment bindings resolved at boot
   class "Secret<T>" as SecretT <<struct>> <<next>>
   SecretT : non-serializable protected binding
-}
-
-package "guest_engines — concrete guest-language engines" as P_GUESTS {
-  class Jq <<struct>> <<guarded>>
-  Jq : jq frontend and executor
-  class Sql <<struct>> <<guarded>>
-  Sql : SQL frontend and executor
 }
 
 package "journal — durable causal history and recovery model" as P_J {
@@ -181,57 +211,66 @@ package "journal — durable causal history and recovery model" as P_J {
   CommittedInbound : accepted inbound envelope and record
   enum CloseVerdict <<enum>>
   CloseVerdict : won or already-closed result
+  enum Closure <<enum>>
+  Closure : partner response or machine timeout
   class MemJournal <<struct>>
   MemJournal : M0 in-memory journal
   enum Record <<enum>>
   Record : inbound, transaction, or outbound record
-  class InboundRecord <<struct>>
-  InboundRecord : committed inbound causal record
   class TransactionRecord <<struct>>
-  TransactionRecord : atomic state and emission record
+  TransactionRecord : consumed, delta, emissions, armed timers
   class OutboundRecord <<struct>>
   OutboundRecord : journaled external-call record
-  enum OutboundStatus <<enum>>
-  OutboundStatus : open, closed, or abandoned state
   class "mod ids" as IDS_API <<mod>>
-  IDS_API : deterministic identity recipes
-  class GoldenProjection <<struct>>
-  GoldenProjection : canonical projection of causal records
-  class Diff <<struct>>
-  Diff : first meaningful projection divergence
+  IDS_API : identity recipes — root, emission, call, budget
   class RecoveryFold <<struct>> <<next>>
   RecoveryFold : journal-to-state recovery fold
 }
 
+package "golden — canonical projection, seal, and diff" as P_GOLD {
+  class Trace <<struct>>
+  Trace : canonical record bytes with their structured trees
+  class Divergence <<struct>>
+  Divergence : first difference, by record and named key path
+  class "mod golden" as GOLD_API <<mod>>
+  GOLD_API : project, seal, diff; hand-rolled deterministic CBOR
+}
+
 package "connectors — concrete external-effect adapters" as P_CONN {
   class Process <<struct>>
-  Process : child-process connector
+  Process : asynchronous child-process adapter with group kill
+  class "mod prepare" as PREP_API <<mod>>
+  PREP_API : pure request framing — sealed equals sent
   class "HttpServer, HttpClient, Clock,\nCalendar, Memory, File" as CATALOGUE <<guarded>>
   CATALOGUE : future connectors — declared, adapters later
 }
 
-package "lab — scenario, simulation, and conformance tooling" as P_LAB {
-  class ScenarioRunner <<struct>>
-  ScenarioRunner : drives scenario actions and expectations
-  class Scenario <<struct>>
-  Scenario : parsed simulation scenario
-  class Expectation <<struct>>
-  Expectation : observable scenario assertion
-  enum Quantifier <<enum>>
-  Quantifier : exists, nothing, or count
-  class Fixture <<struct>>
-  Fixture : pre-written external-world history
-  class PartnerMock <<struct>>
-  PartnerMock : simulated external partner
-  class VirtualClock <<struct>>
-  VirtualClock : discrete logical-time source
-  class FaultInjector <<struct>> <<next>>
-  FaultInjector : controlled lifecycle-fault injection
+package "lab — the scenario runner" as P_LAB {
+  class ScenarioRun <<struct>>
+  ScenarioRun : one executed scenario — verdict and journal records
+  class ScenarioReport <<struct>>
+  ScenarioReport : named failures; empty means green
+  class "mod lab" as LAB_API <<mod>>
+  LAB_API : run — drives scenarios on the production Vm
 }
 
-package "cli — binary assembly and user-facing commands" as P_CLI {
-  enum Command <<enum>>
-  Command : check, run, or simulate command
+note bottom of P_LAB
+  the scenario forms live in compiler::hir (one
+  parser, one checker) ; the fixture IS the scenario's
+  steps ; virtual time IS Vm::advance — no separate
+  Fixture or VirtualClock types exist
+end note
+
+package "render — rustc-shaped diagnostic rendering" as P_REN {
+  class Sources <<struct>>
+  Sources : the compiled sources spans resolve against
+  class "mod render" as REN_API <<mod>>
+  REN_API : code, file:line:col, source line, underline
+}
+
+package "cli — binary assembly (main.rs)" as P_CLI {
+  class "check | run | simulate" as VERBS <<bin>>
+  VERBS : wiring and verbs; owns nothing semantic
 }
 
 ' ===== module-level uses =====
@@ -243,12 +282,18 @@ P_RT ..> P_PLAN : uses
 P_RT ..> P_BND : uses
 P_RT ..> P_J : uses
 P_RT ..> P_CEL : uses
+P_RT ..> P_CONN : prepare only (debt:\nPreparedRequest, see m0-exit-notes)
 P_BND ..> P_J : uses
+P_GOLD ..> P_J : projects
 P_LAB ..> P_COMP : uses
+P_LAB ..> P_RT : drives the Vm
+P_LAB ..> P_BND : mocks Partner
 P_LAB ..> P_J : uses
 P_CLI ..> P_COMP : uses
 P_CLI ..> P_RT : uses
 P_CLI ..> P_LAB : uses
-P_CLI ..> P_STD : uses
+P_CLI ..> P_CONN : wires
+P_CLI ..> P_GOLD : golden workflow
+P_CLI ..> P_REN : renders
 
 @enduml

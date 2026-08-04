@@ -1,6 +1,14 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative and under review.
+> Planning aid — non-normative. **Status 2026-08-04**: every row's
+> initial evidence exists and runs in CI — parse/check fixtures with
+> goldens, the diagnostic registry grown change-by-change, the
+> end-to-end journal assertions, the golden trace with its named-diff
+> mismatch, and the real-vs-scripted Process pair behind one seam.
+> Where implementation surfaced a semantic ambiguity, it stopped at
+> the boundary as required: nine errata in
+> [`../spec/errata.md`](../spec/errata.md) record them; the assumed
+> scope deviations live in [`m0-exit-notes.md`](m0-exit-notes.md).
 
 This table prevents implementation work from silently losing a
 normative requirement. Responsibilities are logical boundaries for M0;
