@@ -42,5 +42,13 @@ its normative home and its planned resolution.
   (checker graph/lab/envelope, runtime transaction/mailbox/vm,
   projection/codec/diff) once the semantic surface stops moving.
 - The two-machine evidence runs as CI (`.github/workflows/ci.yml`,
-  Linux + macOS); the claim is made by a published green run, not by
-  the file's presence.
+  Linux + macOS) for every future push. The reproduction itself was
+  performed on 2026-08-04 at commit `a05b77e`: a clean clone on a
+  Debian 13 x86_64 host (rustc 1.97.1, throwaway toolchain, no
+  system state touched) passed the full gate — fmt, clippy with
+  denied warnings, 209 tests including the pinned golden traces,
+  doc — ran the example against a real child process, and passed all
+  three lab scenarios. The semantic hash of the example and the
+  canonical trace seals were byte-identical to the macOS
+  development machine's: the determinism claim held across
+  operating systems.
