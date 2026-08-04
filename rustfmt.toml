@@ -1,3 +1,10 @@
 edition = "2024"
 max_width = 100
 newline_style = "Unix"
+
+# Prose wraps narrower than code, by hand: comment lines aim for
+# ~72 columns (typographic reading width), while code uses the full
+# max_width. The options that would enforce it are unstable, so they
+# stay declared-but-commented until they ride the stable train:
+# wrap_comments = true
+# comment_width = 80
