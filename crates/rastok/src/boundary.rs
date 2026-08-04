@@ -211,9 +211,9 @@ pub struct DatedEvent {
 pub enum DatedPayload {
     /// A delivery's call budget expired. The budget runs from the
     /// DELIVERY into the connector's mailbox (execution-model §8) —
-    /// queue time counts — so the reference is the delivered
-    /// envelope's id, resolvable whether the call is still queued or
-    /// already open.
+    /// queue time counts — and the obligation resolves by its
+    /// delivery reference `(edge, envelope_id)`, whether the call is
+    /// still queued or already open.
     DeliveryBudget {
         /// The connector whose budget this is (the mailbox to search).
         connector: node::Path,
