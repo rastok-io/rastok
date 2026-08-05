@@ -97,6 +97,8 @@ domain_tag = 0x01 (root, 2 fields)          |  0x02 (emission, 5 fields)
              0x03 (root + boot-epoch, 3 fields : connector_path, inbound_seq,
                    epoch u64 LE — the `durability = none` mode)
              0x04 (root + replica — RESERVED byte ; multi-host semantics are deferred)
+             0x10 (call, 2 fields : delivery_ref, request_digest)
+             0x20 (delivery reference, 2 fields : canonical_edge_text, envelope_id)
 id         = first 128 bits of blake3(input)
 encodings  : paths/triggers/ports = UTF-8 ; parent_id = its 16 raw bytes ;
              inbound_seq = u64 LE ; emission_index = u32 LE
@@ -137,6 +139,36 @@ The five components :
   as-if-run-to-completion contract, [execution model](execution-model.md)) ;
   the index counts emissions per port in handler-text order. The precise
   index rule is pinned by the execution-model spec.
+
+**The delivery reference.** One envelope delivered along one edge is
+one *delivery*, and its identity is the pair `(canonical edge text,
+envelope id)`, condensed as a derived id :
+
+```
+delivery_ref = blake3-derive( 0x20, canonical_edge_text ‖ envelope_id )
+```
+
+The delivery reference — never the envelope id alone — is the
+identity of every per-delivery obligation : the call budget a
+delivery arms (identity.md §3, `timers`), the queue and pending
+lookups that resolve an expiry, and the derivation of the call
+identity below. A fan-out of one envelope to two edges is two
+deliveries, two references, two obligations — two ports of one
+connector included.
+
+**The call identity.** An outbound call is caused by exactly one
+delivery carrying exactly one prepared request, and its internal
+identity derives from both :
+
+```
+call_ref = blake3-derive( 0x10, delivery_ref ‖ request_digest )
+```
+
+`request_digest` is the digest of the EXACT protocol bytes prepared
+for the partner (delivery-semantics §4.2) ; its definition never
+absorbs routing information — the delivery reference carries that.
+Two ports of one connector receiving one envelope with identical
+bytes therefore derive two distinct calls.
 
 Wiring rule : the **same source port wired twice to the same input port is a
 compile error** (a duplicate edge is always a typo — and it would defeat the

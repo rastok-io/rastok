@@ -1,6 +1,13 @@
 # The Rastok specification
 
-> **Status:** normative corpus under review.
+> **Status:** normative corpus, maintained in place. The text is
+> edited directly; git history is the revision record. Tagged
+> editions (`v0.0-spec-freeze`, …) mark the versions implementations
+> and external readers may pin. An amendment that resolves an entry
+> of [`errata.md`](errata.md) marks it resolved in the same change;
+> settled choices and their rejected alternatives are recorded in
+> [`decisions.md`](decisions.md) so they are not re-litigated without
+> new evidence.
 
 This directory defines the language and runtime contracts that an
 implementation of Rastok must honor. The documents are organized by

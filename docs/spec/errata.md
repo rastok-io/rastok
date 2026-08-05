@@ -148,6 +148,12 @@
 
 ## E-2026-08-04-2 — the timer ref of key 37 needs its own recipe
 
+> **Status: resolved, 2026-08-06.** The delivery reference and its
+> `0x20` domain are formalized in envelope.md §2; `call_ref` now
+> derives from it; identity.md §3 seals the causing edge (OUTBOUND
+> key 47) and names the timer ref. The interim behavior below is the
+> history of the gap.
+
 - **Where:** [identity.md §3](identity.md), `timers` sub-form: `ref`
   is described as "the obligation's causal id (a 16-byte
   envelope/instance id)".

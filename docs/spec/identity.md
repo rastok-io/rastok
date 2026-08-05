@@ -191,6 +191,7 @@ delivery-semantics §4) — keys `40–46` :
 | 43 | request_digest | bytes(32) | the boundary integrity seal (delivery-semantics §4.2) |
 | 44 | status | uint | the SEALED causal states : `1 = open · 2 = closed · 4 = abandoned` ; value `3` is reserved — `discarded` (a late reply after closure) is a NON-causal observability record, never a sealed status |
 | 45 | closure | array | present iff status ∈ {closed, abandoned} ; EXACT byteshape fixed BY `status` (`[1,env]` response · `[2]` timeout · `[]` abandoned ; sub-forms below), so `status` and `closure` never disagree |
+| 47 | edge | text | the canonical edge of the causing delivery ; with key 40 (`emitting_id`) it reconstructs `delivery_ref` and hence `call_ref` (envelope.md §2) — the record stays autonomous |
 | 46 | edge_cursor | array | present only on an inter-shard delivery — the DURABLE LOGICAL cursor `[edge (text), source_partition (bytes), seq (uint)]` (seq never restarts on leader change ; the transport `leader_epoch` fence is separate and NOT sealed) ; a transport cursor, NOT an envelope id, outside every id domain |
 
 **Normative sub-form encodings.** Every
@@ -258,9 +259,9 @@ cannot diverge on bytes for the same journal :
 - **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,
   `timer_kind` from `1 = call_timeout · 2 = join_within ·
   3 = instance_lifetime · 4 = saga_timeout · 5 = loop_backoff`
-  (extend-only), `ref` = the obligation's causal id (a 16-byte
-  envelope/instance id — the same width as any id) ; the due µs is
-  never sealed (annotation).
+  (extend-only), `ref` = the obligation's derived 16-byte identity —
+  for a call budget, the `delivery_ref` of the arming delivery
+  (envelope.md §2) ; the due µs is never sealed (annotation).
 - **`closure` (OUTBOUND key 45) — the EXACT byteshapes.**
   The rule is « one call = exactly one closure ». The SEALED
   causal `status` (key 44) is exactly `1 open · 2 closed · 4 abandoned`
