@@ -3,10 +3,11 @@
 This roadmap is organized by evidence gates, not by a speculative
 sequence of product releases.
 
-## Now — M0 mechanical proof
+## Done — M0 mechanical proof (exited 2026-08-04)
 
-M0 answers one question: can the central technical loop work end to
-end?
+M0 answered one question: can the central technical loop work end to
+end? It can — the evidence is recorded in
+[`docs/architecture/m0-exit-report.md`](docs/architecture/m0-exit-report.md).
 
 - Parse and check the smallest useful `.rkg` subset.
 - Lower it to an executable plan.
@@ -19,6 +20,23 @@ end?
 Out of scope: a complete connector catalogue, live Saga or Loop
 managers, durable deployment, enterprise security, UI, registry, and
 cluster operation.
+
+## Now — M0.5 engine consolidation
+
+Consolidate what M0 proved before widening it
+([`docs/architecture/m0.5-slice.md`](docs/architecture/m0.5-slice.md)):
+
+- Specify the delivery reference and derive the call identity from
+  it — the multiport prerequisite, spec-first.
+- Split the no_std-ready core (`rastok-core`) from the std layer,
+  with CI guarding the frontier; prove neutrality by the unchanged
+  semantic hash.
+- Seal the executable plan as a versioned, verifiable blob.
+- Time-boxed embedded spike against a written go/no-go.
+- A connector conformance harness over the `Partner` seam — a new
+  adapter in half a day.
+- First LLM-authorship benchmark wave: generate → check → retry →
+  simulate, measured.
 
 ## Next — incident lab and safe dogfood
 
