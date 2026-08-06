@@ -2,8 +2,13 @@
 
 > Format note — the bytes follow this document, never precede it.
 > Specified 2026-08-06 (M0.5 item 4), after the delivery-reference
-> work froze the vocabulary the plan carries. The package is a
-> TRANSPORT format: versioned and free to evolve by version bump.
+> work froze the vocabulary the plan carries; **revised to format v2
+> on 2026-08-07** after the adversarial review refuted v1 on three
+> counts (an ambiguous value tag, a checksum that did not cover the
+> declared identity, and a decoder that validated shape but not
+> structure — errata E-2026-08-07-1, decisions D-2026-08-07-2/-3).
+> The package is a TRANSPORT format: versioned and free to evolve by
+> version bump; v1 was never published and no decoder reads it.
 > Identity stays where it always was — the semantic hash over the
 > canonical HIR; the package merely carries a plan and proves it intact.
 
@@ -18,29 +23,61 @@ canonical roles (non-canonical, implicit schema —
 
 ```text
 package := magic "RKPB"                      4 raw bytes, sniffable
-        ┌ canonical CBOR map ────────────────────────────────┐
-        │ 1 : format_version   uint      (this document: 1)  │
+        ┌ canonical CBOR map ─────────────────────────────────┐
+        │ 1 : format_version   uint      (this document: 2)   │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
-        │ 4 : seal             bytes(32) = blake3(body bytes) │
-        └────────────────────────────────────────────────────┘
+        │ 4 : checksum         bytes(32) (see recipe below)   │
+        └─────────────────────────────────────────────────────┘
+
+checksum = blake3( "rastok.plan-package\0"   fixed domain string
+                 ‖ format_version (u32 LE)
+                 ‖ semantic_hash  (32 bytes)
+                 ‖ body bytes )
 ```
 
-The body is an **embedded byte string** — the seal covers its exact
-bytes, so a decoder verifies integrity before parsing anything.
-Refusals are typed and total: wrong magic, unknown `format_version`,
-a seal that does not match, or a body outside the tables below. There
-is no silent migration — a new format is a new version, and an old
-decoder refuses it by name.
+The checksum covers the **whole association** — a tampered declared
+hash or version refuses exactly like a tampered body (v1 covered the
+body alone; refuted by counter-example). Every covered field is
+fixed-width or last, so fields cannot slide into one another. An
+unkeyed BLAKE3 is an integrity checksum: it proves the package
+untampered in transit, not who wrote it — authorship would need a
+signature, which this format does not claim.
 
-## Body tables (format v1)
+The body is an **embedded byte string**, verified before a byte of
+it is parsed. After parsing, the decoder holds the plan to the rest
+of the contract, in order:
+
+1. **Structural validation** — the `ExecutionPlan` invariants the
+   machine assumes: every slot in bounds, every referenced port
+   declared with the right direction, every handler owned by its
+   node, paths and names unique, every state write resolvable.
+   Well-shaped bytes naming impossible structure (an edge to slot
+   999) refuse typed — the machine never sees them.
+2. **Canonicity, as one total check** — re-encoding the decoded plan
+   must reproduce the body byte for byte, and re-encoding the header
+   fields must reproduce the envelope. This refuses non-minimal
+   integers, reordered or duplicated map keys, and every other
+   non-canonical variant at once, instead of chasing them rule by
+   rule.
+
+Deep semantic checking (CEL typing, contract coherence) remains the
+compiler's job — the package's validation holds the *structural*
+invariants the runtime dereferences without checking. Refusals are
+typed and total; there is no silent migration — a new format is a
+new version, and an old decoder refuses it by name.
+
+## Body tables (format v2)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
 discriminant; maps use fixed unsigned keys; absent optional = omitted
 key. `tagged_value` is the registry of
 [identity.md §3](../spec/identity.md) — the same sub-form the golden
-traces seal, shared code and shared bytes.
+traces seal, shared code and shared bytes; since 2026-08-07 the CEL
+`uint` domain has its own registry tag 23, and tag 3 is `long` only
+(E-2026-08-07-1 — v1 reused tag 3 for both, and a decode could turn
+an `int` into a `uint` while keeping the plan's hash).
 
 ```text
 plan       := {1: [node*], 2: [boundary*], 3: [edge*], 4: [handler*]}
@@ -109,5 +146,11 @@ golden projection (std, evidence) and the package (core, transport).
   plus the sealed header is the proof.)
 - **Blessed fixture**: the example's package is pinned like a golden
   trace and re-blessed only deliberately.
-- **Typed refusals**: a bumped version, a corrupted body byte, and a
-  truncated package each fail with their own error — tested.
+- **Semantic round trip**: beyond structural equality, the decoded
+  plan must EXECUTE identically — the boundary-value matrix
+  (`i32::MAX`, `i32::MAX + 1`, `i64::MAX`, negatives) runs on both
+  sides of a round trip and compares outputs.
+- **Typed refusals**: a bumped version, a corrupted body byte, a
+  corrupted declared hash, an out-of-bounds slot, a non-canonical
+  envelope, and a truncated package each fail with their own error —
+  tested.

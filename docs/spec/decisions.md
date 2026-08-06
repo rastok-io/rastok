@@ -5,6 +5,34 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-07-3 — Package v2: framed checksum, total validation, canonicity by re-encoding
+
+Format version 2 of the plan package. The checksum covers the whole
+association — `blake3(domain ‖ format_version ‖ semantic_hash ‖
+body)` with a fixed domain string and fixed-width fields — so a
+tampered header refuses, not only a tampered body. After the checksum,
+the decoder validates the plan structurally (slots in bounds, ports
+and directions coherent, handler ownership, unique paths and vars,
+var references resolvable) and enforces canonicity by re-encoding
+what it decoded and requiring byte equality, which refuses non-minimal
+integers, reordered maps, and every other non-canonical variant in one
+total check. **Rejected:** checksum over the body alone (leaves the
+declared identity unprotected — refuted by review counter-example);
+per-rule canonicity checks in the CBOR reader (an open-ended list
+where re-encoding is total); trusting the decoder's shape checks as
+validation (a well-shaped plan can still name Slot 999).
+
+## D-2026-08-07-2 — The CEL uint domain gets registry tag 23
+
+`uint` is a first-class CEL value domain and needs its own identity;
+reusing tag 3 (`long`) made distinct values byte-identical
+(E-2026-08-07-1). The registry being extend-only, `uint` is appended
+as tag 23; tag 3 is long only, and the package decoder maps 2 and 3
+to the signed domain, 23 to the unsigned one. **Rejected:** refusing
+`uint` at the encoding boundary (the value domain is real; refusing
+it merely defers the collision to the first user); a package-local
+tag diverging from the registry (one registry, everywhere).
+
 ## D-2026-08-07-1 — The transport artifact is a plan package, not a blob
 
 The compiled artifact is named **plan package** (`rastok_core::plan_package`,

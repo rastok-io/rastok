@@ -1,12 +1,17 @@
-//! The plan blob — the sealed, versioned serialization of an
-//! [`ExecutionPlan`], per `docs/architecture/plan-blob.md`.
+//! The plan package — the transportable, verifiable serialization
+//! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v1: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v2: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
-//! byte string, and a blake3 seal over exactly those body bytes. The
-//! decoder verifies magic, version, and seal before parsing a single
-//! body byte; every refusal is typed, and an unknown version is a
-//! refusal by name, never a silent migration.
+//! byte string, and a blake3 checksum over the domain-framed
+//! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
+//! tampered header refuses like a tampered body. The decoder
+//! verifies magic, version, and checksum before parsing a single
+//! body byte, then holds what it parsed to the rest of the contract:
+//! the plan must validate structurally, and re-encoding it must
+//! reproduce the exact input bytes — canonicity as one total check.
+//! Every refusal is typed; an unknown version is a refusal by name,
+//! never a silent migration.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -21,55 +26,75 @@ use crate::plan::{
     Node, NodeKind, SemanticHash, Slot, Step, VarCell,
 };
 
-/// The blob's leading magic.
+/// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
 /// The format version this module writes and reads.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
-/// A typed refusal from the blob decoder. Total: nothing is guessed,
-/// nothing is migrated silently.
+/// The checksum domain — fixed-width framing, so the covered fields
+/// cannot slide into one another.
+const CHECKSUM_DOMAIN: &[u8] = b"rastok.plan-package\0";
+
+/// A typed refusal from the package decoder. Total: nothing is
+/// guessed, nothing is migrated silently.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanPackageError {
-    /// The bytes do not start with the blob magic.
+    /// The bytes do not start with the package magic.
     BadMagic,
     /// A format version this build does not read.
     UnknownVersion(u32),
-    /// The blake3 seal does not match the body bytes.
+    /// The blake3 checksum does not match the covered fields.
     BrokenChecksum,
     /// The bytes end before the structure does.
     Truncated,
-    /// Bytes inside the format's frame that its tables cannot read.
+    /// Bytes inside the format's frame that its tables cannot read,
+    /// or bytes that read but are not the canonical encoding.
     Malformed(String),
+    /// A decoded plan that violates the ExecutionPlan invariants —
+    /// well-shaped bytes naming impossible structure.
+    InvalidPlan(String),
 }
 
 impl core::fmt::Display for PlanPackageError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::BadMagic => f.write_str("not a plan blob (bad magic)"),
+            Self::BadMagic => f.write_str("not a plan package (bad magic)"),
             Self::UnknownVersion(version) => {
                 write!(
                     f,
-                    "plan-blob format v{version} is not readable by this build"
+                    "plan-package format v{version} is not readable by this build"
                 )
             }
-            Self::BrokenChecksum => f.write_str("the body does not match its seal"),
-            Self::Truncated => f.write_str("the blob ends before its structure does"),
-            Self::Malformed(detail) => write!(f, "malformed plan blob: {detail}"),
+            Self::BrokenChecksum => f.write_str("the checksum does not match the covered fields"),
+            Self::Truncated => f.write_str("the package ends before its structure does"),
+            Self::Malformed(detail) => write!(f, "malformed plan package: {detail}"),
+            Self::InvalidPlan(detail) => write!(f, "invalid plan in package: {detail}"),
         }
     }
 }
 
 impl core::error::Error for PlanPackageError {}
 
-/// Encodes a plan and its identity into a sealed blob.
+/// The v2 checksum: blake3 over the domain-framed association.
+/// Every covered field is fixed-width or last, so fields cannot
+/// slide into one another.
+fn checksum(version: u32, hash: &[u8; 32], body: &[u8]) -> [u8; 32] {
+    let mut digest = [0u8; 32];
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(CHECKSUM_DOMAIN);
+    hasher.update(&version.to_le_bytes());
+    hasher.update(hash);
+    hasher.update(body);
+    hasher.finalize_xof().fill(&mut digest);
+    digest
+}
+
+/// Encodes a plan and its identity into a package.
 #[must_use]
 pub fn encode(plan: &ExecutionPlan, hash: &SemanticHash) -> Vec<u8> {
     let body = canon::encode(&plan_tree(plan));
-    let mut digest = [0u8; 32];
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&body);
-    hasher.finalize_xof().fill(&mut digest);
+    let digest = checksum(FORMAT_VERSION, hash.as_bytes(), &body);
     let envelope = Cbor::Map(vec![
         (1, Cbor::Uint(u64::from(FORMAT_VERSION))),
         (2, Cbor::Bytes(hash.as_bytes().to_vec())),
@@ -81,8 +106,11 @@ pub fn encode(plan: &ExecutionPlan, hash: &SemanticHash) -> Vec<u8> {
     out
 }
 
-/// Decodes a sealed blob back into the plan and its declared
-/// identity, verifying magic, version, and seal before the body.
+/// Decodes a package back into the plan and its declared identity.
+/// Magic, version, and checksum are verified before a body byte is
+/// parsed; the parsed plan is then validated structurally, and the
+/// whole input must be the canonical encoding of what was read —
+/// re-encoding reproduces it byte for byte, or the package refuses.
 ///
 /// # Errors
 ///
@@ -122,13 +150,11 @@ pub fn decode(bytes: &[u8]) -> Result<(ExecutionPlan, SemanticHash), PlanPackage
         return Err(PlanPackageError::Malformed("no body".into()));
     };
     let Some(Cbor::Bytes(declared)) = field(4) else {
-        return Err(PlanPackageError::Malformed("no seal".into()));
+        return Err(PlanPackageError::Malformed("no checksum".into()));
     };
-    let mut digest = [0u8; 32];
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(body);
-    hasher.finalize_xof().fill(&mut digest);
-    if declared.as_slice() != digest {
+    let version =
+        u32::try_from(*version).unwrap_or_else(|_| unreachable!("equal to FORMAT_VERSION"));
+    if declared.as_slice() != checksum(version, &hash, body) {
         return Err(PlanPackageError::BrokenChecksum);
     }
     let Some((tree, used)) = canon::decode(body) else {
@@ -138,7 +164,156 @@ pub fn decode(bytes: &[u8]) -> Result<(ExecutionPlan, SemanticHash), PlanPackage
         return Err(PlanPackageError::Malformed("trailing body bytes".into()));
     }
     let plan = plan_from(&tree)?;
+    validate(&plan)?;
+    // Canonicity, as one total check: the only accepted bytes for
+    // this plan are the ones this module would write. Re-encoding
+    // catches non-minimal integers, reordered or duplicated keys,
+    // and every other non-canonical variant at once — and the outer
+    // envelope is held to the same rule.
+    if canon::encode(&plan_tree(&plan)) != *body {
+        return Err(PlanPackageError::Malformed(
+            "the body is not the canonical encoding of its plan".into(),
+        ));
+    }
+    let canonical_envelope = Cbor::Map(vec![
+        (1, Cbor::Uint(u64::from(FORMAT_VERSION))),
+        (2, Cbor::Bytes(hash.to_vec())),
+        (3, Cbor::Bytes(body.clone())),
+        (4, Cbor::Bytes(declared.clone())),
+    ]);
+    if canon::encode(&canonical_envelope) != rest {
+        return Err(PlanPackageError::Malformed(
+            "the envelope is not the canonical encoding of its fields".into(),
+        ));
+    }
     Ok((plan, SemanticHash::from_bytes(hash)))
+}
+
+// ===================== validation: parsed → valid =====================
+
+/// Holds a decoded plan to the `ExecutionPlan` invariants the
+/// machine assumes: every slot in bounds, every referenced port
+/// declared with the right direction, every handler owned, names
+/// unique, every state write resolvable. Well-shaped bytes naming
+/// impossible structure refuse here, typed — the machine never sees
+/// them.
+fn validate(plan: &ExecutionPlan) -> Result<(), PlanPackageError> {
+    let invalid = |detail: String| Err(PlanPackageError::InvalidPlan(detail));
+    // M0 lowers no explicit port table — a node's ports are the
+    // implicit trio. A declared table, once present, is the contract.
+    let has_port = |node: &Node, port: &node::Port, direction: node::Direction| {
+        if node.ports.is_empty() {
+            match direction {
+                node::Direction::Input => port.name() == "in",
+                node::Direction::Output => matches!(port.name(), "out" | "err"),
+            }
+        } else {
+            node.ports
+                .iter()
+                .any(|(candidate, dir)| candidate == port && *dir == direction)
+        }
+    };
+    let mut paths = alloc::collections::BTreeSet::new();
+    for node in &plan.nodes {
+        if !paths.insert(node.path.to_string()) {
+            return invalid(format!("duplicate node path `{}`", node.path));
+        }
+        let mut ports = alloc::collections::BTreeSet::new();
+        for (port, _) in &node.ports {
+            if !ports.insert(port.to_string()) {
+                return invalid(format!("duplicate port `{port}` on `{}`", node.path));
+            }
+        }
+        let mut vars = alloc::collections::BTreeSet::new();
+        for var in &node.vars {
+            if !vars.insert(var.name.as_str()) {
+                return invalid(format!("duplicate var `{}` on `{}`", var.name, node.path));
+            }
+        }
+    }
+    let node_at = |slot: Slot| plan.nodes.get(slot.index());
+    let endpoint_ok =
+        |endpoint: &EndpointRef, direction: node::Direction| -> Result<(), PlanPackageError> {
+            match endpoint.node {
+                Some(slot) => {
+                    let Some(node) = node_at(slot) else {
+                        return Err(PlanPackageError::InvalidPlan(format!(
+                            "edge endpoint names slot {} of {} nodes",
+                            slot.index(),
+                            plan.nodes.len()
+                        )));
+                    };
+                    if !has_port(node, &endpoint.port, direction) {
+                        return Err(PlanPackageError::InvalidPlan(format!(
+                            "edge endpoint names `{}.{}` which is not a {direction:?} port",
+                            node.path, endpoint.port
+                        )));
+                    }
+                    Ok(())
+                }
+                None => {
+                    // M0 leaves the boundary table empty — its ports are
+                    // the implicit trio. A declared table, once present,
+                    // is the contract instead.
+                    let known = if plan.boundary.is_empty() {
+                        matches!(endpoint.port.name(), "in" | "out" | "err")
+                    } else {
+                        plan.boundary.iter().any(|(port, _)| port == &endpoint.port)
+                    };
+                    if !known {
+                        return Err(PlanPackageError::InvalidPlan(format!(
+                            "edge endpoint names undeclared boundary port `{}`",
+                            endpoint.port
+                        )));
+                    }
+                    Ok(())
+                }
+            }
+        };
+    for edge in &plan.edges {
+        endpoint_ok(&edge.from, node::Direction::Output)?;
+        if let Some(to) = &edge.to {
+            endpoint_ok(to, node::Direction::Input)?;
+        }
+    }
+    for handler in &plan.handlers {
+        let Some(node) = node_at(handler.node) else {
+            return invalid(format!(
+                "handler names slot {} of {} nodes",
+                handler.node.index(),
+                plan.nodes.len()
+            ));
+        };
+        let node::HandlerActivation::Port(port) = &handler.activation;
+        if !has_port(node, port, node::Direction::Input) {
+            return invalid(format!(
+                "handler on `{}` activates on `{port}` which is not an input port",
+                node.path
+            ));
+        }
+        for step in &handler.body {
+            match step {
+                Step::Emit { port, .. } => {
+                    if !has_port(node, port, node::Direction::Output) {
+                        return invalid(format!(
+                            "handler on `{}` emits on `{port}` which is not an output port",
+                            node.path
+                        ));
+                    }
+                }
+                Step::SetVar { name, .. } => {
+                    if !node.vars.iter().any(|var| var.name == *name) {
+                        return invalid(format!(
+                            "handler on `{}` writes undeclared var `{name}`",
+                            node.path
+                        ));
+                    }
+                }
+                Step::Let { .. } => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 // ===================== encoding: plan → tree =====================
@@ -815,15 +990,17 @@ fn binop_from(code: u64) -> Result<cel::BinaryOp, PlanPackageError> {
 fn cel_value_from(tree: &Cbor) -> Result<cel::Value, PlanPackageError> {
     match array_of(tree, "tagged value")? {
         [Cbor::Uint(1), Cbor::Bool(v)] => Ok(cel::Value::Bool(*v)),
-        [Cbor::Uint(2), value] => Ok(cel::Value::Int(int_from(value)?)),
-        [Cbor::Uint(3), value] => match value {
-            Cbor::Uint(v) => Ok(cel::Value::Uint(*v)),
-            _ => Ok(cel::Value::Int(int_from(value)?)),
-        },
+        [Cbor::Uint(2), value] | [Cbor::Uint(3), value] => {
+            // Tags 2 (int) and 3 (long) are both the signed domain —
+            // the registry keeps them distinct so the seal shows the
+            // honest width; the decoded value is one i64 either way.
+            Ok(cel::Value::Int(int_from(value)?))
+        }
         [Cbor::Uint(5), Cbor::Double(v)] => Ok(cel::Value::Double(*v)),
         [Cbor::Uint(7), Cbor::Bytes(v)] => Ok(cel::Value::Bytes(v.clone())),
         [Cbor::Uint(8), Cbor::Text(v)] => Ok(cel::Value::Text(v.clone())),
         [Cbor::Uint(9), Cbor::Null] => Ok(cel::Value::Null),
+        [Cbor::Uint(23), Cbor::Uint(v)] => Ok(cel::Value::Uint(*v)),
         [Cbor::Uint(12), value] => Ok(cel::Value::Timestamp(int_from(value)?)),
         [Cbor::Uint(16), value] => Ok(cel::Value::Duration(int_from(value)?)),
         [Cbor::Uint(18), Cbor::Array(pairs)] => {

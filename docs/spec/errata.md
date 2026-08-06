@@ -7,6 +7,21 @@
 > An erratum is not a license to improvise — until the fix lands, the
 > designated home is the contract.
 
+## E-2026-08-07-1 — Tag 3 was reused for the CEL uint domain — RESOLVED
+
+Found by the 2026-08-07 adversarial review, with an executable
+counter-example. The canonical encoder gave tag 3 (`long`) both to an
+`int` value beyond the 32-bit range and to every CEL `uint`: two
+semantically different values sealed to identical bytes (an identity
+collision in any projection carrying state deltas), and the plan
+package decoder resolved the ambiguity in favour of `uint` — so a
+valid program containing `2147483648 + -2147483648` changed meaning
+across encode/decode while keeping its semantic hash. **Resolution:**
+the registry is extended with tag 23 = `uint` (identity.md §3,
+D-2026-08-07-2); tag 3 means `long` only; the plan package moves to
+format version 2 with a widened checksum (D-2026-08-07-3); boundary
+and execution-equivalence round-trip tests pin the fix.
+
 ## E-2026-07-31-1 — grammar.md still targets the retired builder API
 
 - **Where:** [grammar.md](grammar.md), section "What the parser must

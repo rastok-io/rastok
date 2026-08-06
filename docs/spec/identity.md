@@ -236,6 +236,7 @@ cannot diverge on bytes for the same journal :
   | 20 | enum | the closed symbol as `text` (schema-order-independent) |
   | 21 | union | `[branch_index (uint), tagged_value]` — the branch's 0-based position in the union's declared order. **Branches MUST be pairwise disjoint : overlapping/identical branches (`int \| int`, `int \| long`, `number \| long`) are a compile error `E-UNION-OVERLAP`, so a value maps to exactly one `branch_index`** |
   | 22 | variant | the dynamic tree, encoded as the `tagged_value` of its resolved concrete tag |
+  | 23 | uint | CBOR unsigned integer (u64 range) — the CEL `uint` domain ; appended 2026-08-07 (see errata E-2026-08-07-1) : it previously borrowed tag 3, making `long 2^31` and `uint 2^31` seal identically |
 
   (Sort keys — struct by `field` UTF-8 ; map by the key's canonical
   `tagged_value` bytes. All temporal logical types share the Arrow
