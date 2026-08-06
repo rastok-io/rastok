@@ -15,9 +15,9 @@
 //! Map iteration and map value ordering are sorted-key — an evaluator
 //! guarantee that golden-trace stability relies on.
 
-use std::collections::BTreeMap;
-use std::fmt;
-use std::ops::Range;
+use alloc::collections::BTreeMap;
+use core::fmt;
+use core::ops::Range;
 
 /// Names refused explicitly: admitted by full CEL, outside this build.
 const UNSUPPORTED_FUNCTIONS: &[&str] = &["has", "exists", "exists_one", "all", "map", "filter"];
@@ -156,7 +156,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 /// Canonical typed CEL tree — one form for hashing, planning, and
 /// evaluation.
@@ -1277,7 +1277,7 @@ fn values_equal(lhs: &Value, rhs: &Value) -> bool {
     }
 }
 
-fn compare(lhs: &Value, rhs: &Value) -> Result<std::cmp::Ordering, Error> {
+fn compare(lhs: &Value, rhs: &Value) -> Result<core::cmp::Ordering, Error> {
     match (lhs, rhs) {
         (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
         (Value::Uint(a), Value::Uint(b)) => Ok(a.cmp(b)),

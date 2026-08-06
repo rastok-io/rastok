@@ -8,7 +8,7 @@
 
 use crate::cel;
 use crate::node;
-use std::fmt;
+use core::fmt;
 
 /// Compile-time resolved node reference; runtime resolution errors
 /// are impossible by construction.

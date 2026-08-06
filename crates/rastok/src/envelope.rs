@@ -13,9 +13,9 @@
 //!
 //! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
 
-use std::cell::OnceCell;
-use std::collections::BTreeMap;
-use std::fmt;
+use alloc::collections::BTreeMap;
+use core::cell::OnceCell;
+use core::fmt;
 
 /// Deterministically derived 128-bit identity (`envelope.md` §2). The
 /// physical type is a fixed 128-bit value; no random bits ever enter an

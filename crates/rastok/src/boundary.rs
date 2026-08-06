@@ -12,8 +12,8 @@
 use crate::envelope::{self, Envelope};
 use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
-use std::collections::BTreeSet;
-use std::fmt;
+use alloc::collections::BTreeSet;
+use core::fmt;
 
 /// Opaque ingress identity: exactly `(connector_path, replica)`.
 /// Opaque so the replica is never inlined anywhere else — the
@@ -322,7 +322,7 @@ impl fmt::Display for DispatchError {
     }
 }
 
-impl std::error::Error for DispatchError {}
+impl core::error::Error for DispatchError {}
 
 /// The loop between the journal and the partners. It starts every
 /// journaled open call exactly once — journal-before-effect: the
@@ -468,7 +468,7 @@ mod tests {
         }
 
         fn events(&mut self) -> Vec<Response> {
-            std::mem::take(&mut self.replies)
+            core::mem::take(&mut self.replies)
         }
     }
 

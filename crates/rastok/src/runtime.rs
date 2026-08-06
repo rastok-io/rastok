@@ -19,8 +19,8 @@ use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue};
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
 use crate::plan::{Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, Slot, Step};
-use std::collections::{BTreeMap, VecDeque};
-use std::fmt;
+use alloc::collections::{BTreeMap, VecDeque};
+use core::fmt;
 
 /// Pure, deterministic, budgeted guest execution — the contract the
 /// jq and SQL engines will implement; no engine ships in M0.
@@ -60,7 +60,7 @@ impl fmt::Display for Fault {
     }
 }
 
-impl std::error::Error for Fault {}
+impl core::error::Error for Fault {}
 
 /// The partition key of a state cell; M0 runs everything under the
 /// default key, but isolation is keyed from day one.
@@ -139,7 +139,7 @@ pub struct Delivery {
 pub struct Mailboxes {
     capacity: usize,
     queues: BTreeMap<(Slot, Key), VecDeque<Delivery>>,
-    claimed: std::collections::BTreeSet<(Slot, Key)>,
+    claimed: alloc::collections::BTreeSet<(Slot, Key)>,
     edge_seq: BTreeMap<String, u64>,
 }
 
@@ -150,7 +150,7 @@ impl Mailboxes {
         Self {
             capacity,
             queues: BTreeMap::new(),
-            claimed: std::collections::BTreeSet::new(),
+            claimed: alloc::collections::BTreeSet::new(),
             edge_seq: BTreeMap::new(),
         }
     }
@@ -853,7 +853,7 @@ pub(crate) fn data_value(data: &Data) -> Result<cel::Value, Fault> {
             encoding: envelope::Encoding::Raw,
             bytes,
             ..
-        } => match std::str::from_utf8(bytes) {
+        } => match core::str::from_utf8(bytes) {
             Ok(text) => Ok(cel::Value::Text(String::from(text))),
             Err(_) => Ok(cel::Value::Bytes(bytes.clone())),
         },

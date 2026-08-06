@@ -26,8 +26,8 @@ use crate::journal::{ConsumedPosition, Journal, ids};
 use crate::node;
 use crate::plan::{Edge, EndpointRef, ExecutionPlan, GraphVersion, NodeKind, Slot};
 use crate::runtime::{Delivery, Fault, Key, Mailboxes, PartitionState, TransactionExecutor};
-use std::collections::{BTreeMap, VecDeque};
-use std::fmt;
+use alloc::collections::{BTreeMap, VecDeque};
+use core::fmt;
 
 /// A machine fault; the step that raised it committed nothing, and
 /// the work that triggered it stays reserved — a retry sees it again.
@@ -67,7 +67,7 @@ impl fmt::Display for VmError {
     }
 }
 
-impl std::error::Error for VmError {}
+impl core::error::Error for VmError {}
 
 /// What one boundary round observed besides causal progress: the
 /// closures that did not become transactions. Nothing here is silent —

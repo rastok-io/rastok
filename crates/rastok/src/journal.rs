@@ -25,8 +25,8 @@ use crate::cel;
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::node;
 use crate::plan::GraphVersion;
-use std::collections::BTreeMap;
-use std::fmt;
+use alloc::collections::BTreeMap;
+use core::fmt;
 
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its domain tags.
@@ -285,7 +285,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 /// Semantic journal operations and queries — never bare appends, and
 /// no exposure of a physical record layout: a durable implementation

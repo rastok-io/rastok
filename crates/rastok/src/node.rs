@@ -10,7 +10,7 @@
 //! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
 //! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
 
-use std::fmt;
+use core::fmt;
 
 /// Error returned when a name would break the vocabulary's structural
 /// invariants.
@@ -25,7 +25,7 @@ impl fmt::Display for InvalidName {
     }
 }
 
-impl std::error::Error for InvalidName {}
+impl core::error::Error for InvalidName {}
 
 /// Stable root-relative node address.
 ///

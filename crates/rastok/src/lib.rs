@@ -6,6 +6,11 @@
 //! `docs/architecture/build-order.md`; the spec under `docs/spec/` is
 //! normative.
 
+// The `alloc` paths used by the core-candidate modules resolve here;
+// under std this is a no-op declaration (std links alloc), and it is
+// exactly what the future `rastok-core` crate root will declare.
+extern crate alloc;
+
 pub mod boundary;
 pub mod cel;
 pub mod compiler;
