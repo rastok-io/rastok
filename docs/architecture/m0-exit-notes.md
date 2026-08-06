@@ -40,3 +40,13 @@ its normative home and its planned resolution.
   canonical trace seals were byte-identical to the macOS
   development machine's: the determinism claim held across
   operating systems.
+
+- The plan-package decoder validates structurally at the boundary
+  (v2, 2026-08-07), but the `ExecutionPlan` type itself still has
+  fully public fields and no validated-newtype seam — a hand-built
+  invalid plan can reach `Vm::boot` without passing any decode. The
+  clean shape is the review's: `decode → Parsed → validate →
+  Validated → Vm`, with the machine accepting only the validated
+  type and constructors that reject invalid states (AGENTS.md
+  style). An M1 candidate, best done alongside the multiport plan
+  changes so the type is reshaped once.
