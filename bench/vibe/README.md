@@ -39,16 +39,27 @@ guided generation, or an expert-only authoring surface.
 
 Authors are pluggable: `canned:<dir>` replays pre-recorded attempts
 (the dry mode — no API spend; also how the runner tests itself),
-`command:<template>` pipes the prompt to any model CLI.
+`command:<name>:<template>` pipes the prompt to any model CLI — the
+NAME is the recorded identity, so several models in one wave stay
+distinguishable in the metrics and in their work directories. On a
+retry, the author receives the full transcript: each prior attempt's
+SOURCE with the feedback it earned — a corrector that cannot see
+what it must correct measures nothing. The runner's exit code tells
+the truth: 0 only when at least one task passed, 1 when tasks ran
+and none passed, 2 when nothing was measured at all.
 
 ## Metrics (one JSONL row per author × task)
 
-`first_try_check` and `first_try_scenarios` (the first-pass rates),
-`attempts` (iterations to a valid graph), `outcome`, `codes` (every
-diagnostic code seen — the recurring-error families), and
-`human_minutes` (null until a human had to intervene; filled by
-hand). Wave-over-wave comparison of the same tasks under a new
-prompt version measures stability under language evolution.
+Every row carries its identity — `run_id`, `wave`, `author` (the
+model name), `prompt` version and `prompt_hash`, `task` and
+`task_hash` — so two models, two waves, or two prompt revisions are
+never conflated. Then the measures: `first_try_check` and
+`first_try_scenarios` (the first-pass rates), `attempts` (iterations
+to a valid graph), `outcome`, `codes` (every diagnostic code seen —
+the recurring-error families), and `human_minutes` (null until a
+human had to intervene; filled by hand). Wave-over-wave comparison
+of the same tasks under a new prompt version measures stability
+under language evolution.
 
 ## Validating the referees
 

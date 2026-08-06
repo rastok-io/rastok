@@ -8,14 +8,25 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const USAGE: &str = "usage: vibe-runner --tasks <dir> --author <canned:<dir> | command:<template>> \
-     --rastok <bin> --prompt <file> --out <dir> [--max-attempts <n>]";
+const USAGE: &str = "usage: vibe-runner --tasks <dir> \
+     --author <canned:<dir> | command:<name>:<template>> \
+     --rastok <bin> --prompt <file> --out <dir> \
+     [--max-attempts <n>] [--wave <label>]\n\
+ exit codes: 0 = at least one task passed; 1 = tasks ran, none passed; \
+ 2 = bad invocation or nothing to run";
 
-/// One authoring seam: given the full prompt and the feedback so
-/// far, produce the next attempt's source, or nothing when the
-/// author has no more to offer.
+/// One authoring seam: given the full prompt and the transcript so
+/// far — each prior attempt's SOURCE with the feedback it earned —
+/// produce the next attempt, or nothing when the author has no more
+/// to offer. The source travels with the feedback: a corrector that
+/// cannot see what it must correct measures nothing.
 trait Author {
-    fn attempt(&mut self, task_id: &str, prompt: &str, feedback: &[String]) -> Option<String>;
+    fn attempt(
+        &mut self,
+        task_id: &str,
+        prompt: &str,
+        transcript: &[(String, String)],
+    ) -> Option<String>;
 }
 
 /// Replays pre-recorded attempts from
@@ -25,8 +36,13 @@ struct Canned {
 }
 
 impl Author for Canned {
-    fn attempt(&mut self, task_id: &str, _prompt: &str, feedback: &[String]) -> Option<String> {
-        let next = feedback.len() + 1;
+    fn attempt(
+        &mut self,
+        task_id: &str,
+        _prompt: &str,
+        transcript: &[(String, String)],
+    ) -> Option<String> {
+        let next = transcript.len() + 1;
         std::fs::read_to_string(self.root.join(task_id).join(format!("attempt-{next}.rkg"))).ok()
     }
 }
@@ -39,17 +55,13 @@ struct Shell {
 }
 
 impl Author for Shell {
-    fn attempt(&mut self, _task_id: &str, prompt: &str, feedback: &[String]) -> Option<String> {
-        let mut full = String::from(prompt);
-        for (index, item) in feedback.iter().enumerate() {
-            let _ = write!(
-                full,
-                "\n\n## Feedback on attempt {}\n\nYour previous submission was refused:\n\n{}\n\
-                 Submit a corrected full file.",
-                index + 1,
-                item
-            );
-        }
+    fn attempt(
+        &mut self,
+        _task_id: &str,
+        prompt: &str,
+        transcript: &[(String, String)],
+    ) -> Option<String> {
+        let full = build_prompt(prompt, transcript);
         let output = Command::new("sh")
             .arg("-c")
             .arg(&self.template)
@@ -61,6 +73,25 @@ impl Author for Shell {
         }
         Some(String::from_utf8_lossy(&output.stdout).into_owned())
     }
+}
+
+/// The live prompt: the card and task, then the FULL transcript —
+/// each prior attempt's source with the feedback it earned. A
+/// corrector that cannot see what it must correct measures nothing.
+fn build_prompt(prompt: &str, transcript: &[(String, String)]) -> String {
+    let mut full = String::from(prompt);
+    for (index, (source, feedback)) in transcript.iter().enumerate() {
+        let _ = write!(
+            full,
+            "\n\n## Attempt {n}\n\nYou submitted:\n\n```\n{source}\n```\n\n\
+             It was refused:\n\n{feedback}\n",
+            n = index + 1,
+        );
+    }
+    if !transcript.is_empty() {
+        full.push_str("\n\nSubmit a corrected full file.");
+    }
+    full
 }
 
 /// Models often wrap sources in markdown fences despite the
@@ -90,6 +121,17 @@ fn diagnostic_codes(stderr: &str) -> Vec<String> {
     codes
 }
 
+/// FNV-1a 64 over the content — a stable identity for prompts and
+/// task statements in the metrics, not a cryptographic claim.
+fn content_hash(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 fn json_text(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -112,6 +154,7 @@ fn json_text(value: &str) -> String {
 
 struct TaskResult {
     task: String,
+    task_hash: String,
     attempts: usize,
     first_try_check: bool,
     first_try_scenarios: bool,
@@ -119,8 +162,19 @@ struct TaskResult {
     codes: Vec<String>,
 }
 
+/// Identity every row carries: which run, which wave, which author,
+/// which prompt and task content — so two models, two waves, or two
+/// prompt revisions are never conflated in the metrics.
+struct RunMeta {
+    run_id: String,
+    wave: String,
+    author: String,
+    prompt_version: String,
+    prompt_hash: String,
+}
+
 impl TaskResult {
-    fn to_json(&self, author: &str, prompt_version: &str) -> String {
+    fn to_json(&self, meta: &RunMeta) -> String {
         let codes = self
             .codes
             .iter()
@@ -128,12 +182,17 @@ impl TaskResult {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{{\"task\":{},\"author\":{},\"prompt\":{},\"attempts\":{},\
+            "{{\"run_id\":{},\"wave\":{},\"author\":{},\"prompt\":{},\
+             \"prompt_hash\":{},\"task\":{},\"task_hash\":{},\"attempts\":{},\
              \"first_try_check\":{},\"first_try_scenarios\":{},\"outcome\":{},\
              \"codes\":[{}],\"human_minutes\":null}}",
+            json_text(&meta.run_id),
+            json_text(&meta.wave),
+            json_text(&meta.author),
+            json_text(&meta.prompt_version),
+            json_text(&meta.prompt_hash),
             json_text(&self.task),
-            json_text(author),
-            json_text(prompt_version),
+            json_text(&self.task_hash),
             self.attempts,
             self.first_try_check,
             self.first_try_scenarios,
@@ -157,16 +216,18 @@ fn run_task(
     let prompt = format!("{prompt_card}\n\n---\n\n{statement}");
     std::fs::create_dir_all(work_dir).ok()?;
 
-    let mut feedback: Vec<String> = Vec::new();
+    let task_hash = content_hash(&statement);
+    let mut transcript: Vec<(String, String)> = Vec::new();
     let mut codes: Vec<String> = Vec::new();
     let mut first_try_check = false;
     let mut first_try_scenarios = false;
-    while feedback.len() < max_attempts {
-        let attempt_index = feedback.len() + 1;
-        let Some(raw) = author.attempt(&task_id, &prompt, &feedback) else {
+    while transcript.len() < max_attempts {
+        let attempt_index = transcript.len() + 1;
+        let Some(raw) = author.attempt(&task_id, &prompt, &transcript) else {
             return Some(TaskResult {
                 task: task_id,
-                attempts: feedback.len(),
+                task_hash,
+                attempts: transcript.len(),
                 first_try_check,
                 first_try_scenarios,
                 outcome: "exhausted",
@@ -187,7 +248,7 @@ fn run_task(
             }
             let feedback_path = work_dir.join(format!("feedback-{attempt_index}.txt"));
             std::fs::write(&feedback_path, &check_err).ok()?;
-            feedback.push(check_err);
+            transcript.push((source, check_err));
             continue;
         }
         if attempt_index == 1 {
@@ -213,7 +274,7 @@ fn run_task(
             }
             let feedback_path = work_dir.join(format!("feedback-{attempt_index}.txt"));
             std::fs::write(&feedback_path, &sim_text).ok()?;
-            feedback.push(sim_text);
+            transcript.push((source, sim_text));
             continue;
         }
         if attempt_index == 1 {
@@ -221,6 +282,7 @@ fn run_task(
         }
         return Some(TaskResult {
             task: task_id,
+            task_hash,
             attempts: attempt_index,
             first_try_check,
             first_try_scenarios,
@@ -230,6 +292,7 @@ fn run_task(
     }
     Some(TaskResult {
         task: task_id,
+        task_hash,
         attempts: max_attempts,
         first_try_check,
         first_try_scenarios,
@@ -245,6 +308,7 @@ fn main() -> std::process::ExitCode {
     let mut prompt_path = None;
     let mut out_dir = None;
     let mut max_attempts = 4usize;
+    let mut wave = String::from("unlabeled");
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut it = args.iter();
     while let Some(flag) = it.next() {
@@ -255,6 +319,7 @@ fn main() -> std::process::ExitCode {
             ("--rastok", Some(v)) => rastok = Some(v.clone()),
             ("--prompt", Some(v)) => prompt_path = Some(PathBuf::from(v)),
             ("--out", Some(v)) => out_dir = Some(PathBuf::from(v)),
+            ("--wave", Some(v)) => wave = v.clone(),
             ("--max-attempts", Some(v)) => match v.parse() {
                 Ok(n) => max_attempts = n,
                 Err(_) => {
@@ -282,6 +347,9 @@ fn main() -> std::process::ExitCode {
     let prompt_version = prompt_path
         .file_stem()
         .map_or_else(|| String::from("unknown"), |stem| stem.to_string_lossy().into_owned());
+    // `command:<name>:<template>` — the NAME is the recorded model
+    // identity; several live models in one wave stay distinguishable
+    // in the metrics and in their work directories.
     let (author_name, mut author): (String, Box<dyn Author>) = match author_spec.split_once(':') {
         Some(("canned", dir)) => (
             format!("canned:{dir}"),
@@ -289,16 +357,37 @@ fn main() -> std::process::ExitCode {
                 root: PathBuf::from(dir),
             }),
         ),
-        Some(("command", template)) => (
-            String::from("command"),
-            Box::new(Shell {
-                template: template.to_string(),
-            }),
-        ),
+        Some(("command", rest)) => match rest.split_once(':') {
+            Some((name, template)) if !name.is_empty() && !template.is_empty() => (
+                name.to_string(),
+                Box::new(Shell {
+                    template: template.to_string(),
+                }),
+            ),
+            _ => {
+                eprintln!("a live author needs a name: command:<name>:<template>");
+                eprintln!("{USAGE}");
+                return std::process::ExitCode::from(2);
+            }
+        },
         _ => {
             eprintln!("{USAGE}");
             return std::process::ExitCode::from(2);
         }
+    };
+    let run_id = format!(
+        "{}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+        std::process::id()
+    );
+    let meta = RunMeta {
+        run_id,
+        wave,
+        author: author_name.clone(),
+        prompt_version: prompt_version.clone(),
+        prompt_hash: content_hash(&prompt_card),
     };
 
     let mut task_dirs: Vec<PathBuf> = match std::fs::read_dir(&tasks_dir) {
@@ -334,7 +423,7 @@ fn main() -> std::process::ExitCode {
                     "{}: {} in {} attempt(s)",
                     result.task, result.outcome, result.attempts
                 );
-                rows.push(result.to_json(&author_name, &prompt_version));
+                rows.push((result.outcome == "passed", result.to_json(&meta)));
             }
             None => {
                 eprintln!("{task_id}: the loop itself failed (io); aborting");
@@ -351,7 +440,12 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::from(1);
     }
     let metrics = out_dir.join("metrics.jsonl");
-    let mut body = rows.join("\n");
+    let passed = rows.iter().filter(|(ok, _)| *ok).count();
+    let mut body = rows
+        .iter()
+        .map(|(_, row)| row.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     if !body.is_empty() {
         body.push('\n');
     }
@@ -368,7 +462,22 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(1);
         }
     }
-    println!("{} row(s) appended to {}", rows.len(), metrics.display());
+    println!(
+        "{} row(s) appended to {} ({} passed)",
+        rows.len(),
+        metrics.display(),
+        passed
+    );
+    // The exit code tells the truth: nothing ran is a broken
+    // invocation, and a wave where nothing passed is a failure, not
+    // a success with sad rows.
+    if rows.is_empty() {
+        eprintln!("no task produced a row — nothing was measured");
+        return std::process::ExitCode::from(2);
+    }
+    if passed == 0 {
+        return std::process::ExitCode::from(1);
+    }
     std::process::ExitCode::SUCCESS
 }
 
@@ -392,5 +501,20 @@ mod tests {
     #[test]
     fn json_rows_escape_their_text() {
         assert_eq!(json_text("a\"b\nc"), "\"a\\\"b\\nc\"");
+    }
+
+    #[test]
+    fn the_live_prompt_carries_the_previous_submission() {
+        let transcript = vec![(
+            String::from("graph broken {}"),
+            String::from("error[E-PARSE-EXPECTED]: ..."),
+        )];
+        let full = build_prompt("CARD", &transcript);
+        assert!(
+            full.contains("graph broken {}"),
+            "the source the model must correct is in the prompt"
+        );
+        assert!(full.contains("error[E-PARSE-EXPECTED]"));
+        assert!(full.contains("Submit a corrected full file."));
     }
 }
