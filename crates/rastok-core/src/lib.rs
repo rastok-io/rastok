@@ -18,6 +18,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod boundary;
+pub mod canon;
 pub mod cel;
 pub mod envelope;
 pub mod journal;
