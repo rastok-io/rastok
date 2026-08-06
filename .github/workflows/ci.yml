@@ -30,3 +30,56 @@ jobs:
       - run: rustup toolchain install 1.97.1 --no-self-update
       - run: rustup target add thumbv8m.main-none-eabihf --toolchain 1.97.1
       - run: cargo check -p rastok-core --target thumbv8m.main-none-eabihf
+
+  # The spike's proof must not rot outside the workspace: build it
+  # warnings-as-errors and execute it under QEMU, asserting the
+  # kernel boots, runs, and prints the SAME semantic hash as the
+  # host gate.
+  spike-emulated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.97.1 --no-self-update
+      - run: rustup target add thumbv8m.main-none-eabihf --toolchain 1.97.1
+      - run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: build (warnings are errors)
+        working-directory: spikes/rp2350-emu
+        run: RUSTFLAGS="-D warnings -C link-arg=-Tlink.x" cargo build --release
+      - name: run under QEMU
+        working-directory: spikes/rp2350-emu
+        run: |
+          qemu-system-arm -M mps2-an505 -cpu cortex-m33 \
+            -kernel target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
+            -nographic -monitor none -serial none \
+            -semihosting-config enable=on,target=native -icount shift=0 \
+            | tee spike.out
+          grep -q "SPIKE_OK" spike.out
+          grep -q "semantic_hash: e166cf4a61ce66918602072577893afe99f6167d2c3dbf091a1a6a9f99a3ec65" spike.out
+
+  # The benchmark's proofs: the runner's own tests, every reference
+  # solution green against its referee, and the dry rehearsal of the
+  # full loop — all without any model spend.
+  bench-proofs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.97.1 --no-self-update
+      - name: runner unit tests
+        working-directory: bench/vibe/runner
+        run: cargo test
+      - name: build the CLI
+        run: cargo build -p rastok
+      - name: every reference satisfies its referee
+        run: |
+          for t in bench/vibe/tasks/T*/; do
+            echo "== $t"
+            cargo run -q -p rastok -- simulate "$t/reference.rkg" "$t/referee.rkg"
+          done
+      - name: dry rehearsal of the loop
+        working-directory: bench/vibe
+        run: |
+          cargo build --manifest-path runner/Cargo.toml
+          ./runner/target/debug/vibe-runner --tasks tasks \
+            --author canned:fixtures/dry --rastok ../../target/debug/rastok \
+            --prompt prompts/v1.md --out results/ci --wave ci-dry
+          test "$(grep -c '"outcome":"passed"' results/ci/metrics.jsonl)" = "3"

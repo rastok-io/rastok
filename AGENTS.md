@@ -44,6 +44,13 @@ surprises. It does not mean maximum abstraction.
 - Use safe Rust. `unsafe` is forbidden in the current workspace.
   A future need for it requires an explicit design review, a narrowly
   isolated boundary, documented safety invariants, and dedicated tests.
+  **Documented exception:** the bare-metal spike crates under
+  `spikes/` (outside the workspace) carry the `unsafe` that bare
+  metal requires — allocator initialization, the exact-count
+  calibration loop in inline assembly. Each block states its safety
+  invariant in a `SAFETY:` comment, the crates never ship, and CI
+  builds and executes them so the exception stays visible instead of
+  rotting.
 - Prefer algebraic data types, exhaustive `match`, newtypes for
   genuinely distinct domain values, and constructors that reject
   invalid states.
