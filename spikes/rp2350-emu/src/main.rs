@@ -10,7 +10,6 @@
 
 extern crate alloc;
 
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use core::mem::MaybeUninit;
 
@@ -26,17 +25,47 @@ use rastok_core::journal::MemJournal;
 use rastok_core::node::Path;
 use rastok_core::plan::GraphVersion;
 use rastok_core::runtime::vm::Vm;
-use rastok_core::{package, journal};
+use rastok_core::{journal, plan_package};
+
+/// The allocator, wrapped to record a true high-water mark: the
+/// peak is updated inside every successful allocation, so no
+/// transient allocation can slip between two samples.
+struct WatermarkHeap {
+    inner: Heap,
+    peak: core::sync::atomic::AtomicUsize,
+}
+
+// SAFETY: delegates allocation to the inner heap unchanged; the
+// wrapper only observes `used()` after a successful alloc. Single
+// core, no interrupts allocating — the critical-section feature of
+// the inner heap covers the superloop.
+unsafe impl core::alloc::GlobalAlloc for WatermarkHeap {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        let ptr = unsafe { core::alloc::GlobalAlloc::alloc(&self.inner, layout) };
+        if !ptr.is_null() {
+            self.peak
+                .fetch_max(self.inner.used(), core::sync::atomic::Ordering::Relaxed);
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        unsafe { core::alloc::GlobalAlloc::dealloc(&self.inner, ptr, layout) }
+    }
+}
 
 #[global_allocator]
-static HEAP: Heap = Heap::empty();
+static HEAP: WatermarkHeap = WatermarkHeap {
+    inner: Heap::empty(),
+    peak: core::sync::atomic::AtomicUsize::new(0),
+};
 
 const HEAP_SIZE: usize = 256 * 1024;
 static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
 
 /// The sealed plan of examples/echo.rkg, produced by the compiler on
 /// the host — the embedded entry point is the package, never source.
-static ECHO_BLOB: &[u8] = include_bytes!("../echo.rkp");
+static ECHO_PACKAGE: &[u8] = include_bytes!("../echo.rkp");
 
 struct Ticks {
     syst: cortex_m::peripheral::SYST,
@@ -66,11 +95,24 @@ impl Ticks {
     }
 }
 
-/// A busy loop with a known instruction count (2 per iteration:
-/// subs + bne), used to calibrate ticks → instructions.
-fn spin(mut n: u32) {
-    while n > 0 {
-        n = core::hint::black_box(n - 1);
+/// The calibration loop: two instructions per iteration — `subs` +
+/// `bne` — BY CONSTRUCTION, written in inline assembly so no
+/// optimization level can change the count (the first measurement's
+/// Rust loop compiled to five instructions via `black_box`, and
+/// every conversion ran ≈ 2.5× low). Verified against the
+/// disassembly; the verdict note carries the repro command.
+fn spin(n: u32) {
+    // SAFETY: register-only arithmetic on a scratch copy of `n`;
+    // no memory access, no stack use; the condition flags are
+    // clobbered, which `asm!` assumes by default.
+    unsafe {
+        core::arch::asm!(
+            "1:",
+            "subs {count}, {count}, #1",
+            "bne 1b",
+            count = inout(reg) n => _,
+            options(nomem, nostack),
+        );
     }
 }
 
@@ -91,29 +133,31 @@ fn submission(text: &str, marker: u8) -> InboundSubmission {
 
 #[entry]
 fn main() -> ! {
+    // SAFETY: called exactly once, before the first allocation, on a
+    // single core; HEAP_MEM is exclusively owned by the allocator
+    // from here on.
     unsafe {
-        HEAP.init(&raw mut HEAP_MEM as usize, HEAP_SIZE);
+        HEAP.inner.init(&raw mut HEAP_MEM as usize, HEAP_SIZE);
     }
     let peripherals = cortex_m::Peripherals::take().unwrap();
     let mut ticks = Ticks::new(peripherals.SYST);
 
-    // Calibration: 1M iterations of a 2-instruction loop.
+    // Calibration: 1M iterations of the asm-exact 2-instruction loop.
     let (calib_ticks, ()) = ticks.measure(|| spin(1_000_000));
-    hprintln!("calib: {} ticks for ~2000000 instructions", calib_ticks);
+    hprintln!("calib: {} ticks for 2000000 instructions (asm-exact)", calib_ticks);
 
     // 1. Open the sealed package.
-    let (open_ticks, opened) = ticks.measure(|| plan_package::decode(ECHO_BLOB));
+    let (open_ticks, opened) = ticks.measure(|| plan_package::decode(ECHO_PACKAGE));
     let (plan, hash) = opened.expect("the package opens");
     hprintln!("pkg_decode: {} ticks", open_ticks);
     hprintln!("semantic_hash: {}", hash);
-    hprintln!("heap_after_open: {} bytes", HEAP.used());
+    hprintln!("heap_after_open: {} bytes", HEAP.inner.used());
 
     // 2. Boot and run: each round injects one envelope and steps the
     //    relay transaction; the delivery to the connector then opens
     //    its journaled call (round 1) or queues behind the claim.
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&plan, GraphVersion(1));
-    let mut peak = HEAP.used();
     let mut tx_ticks_total: u64 = 0;
     let mut tx_min = u64::MAX;
     let mut tx_max = 0u64;
@@ -126,7 +170,6 @@ fn main() -> ! {
         tx_ticks_total += t;
         tx_min = tx_min.min(t);
         tx_max = tx_max.max(t);
-        peak = peak.max(HEAP.used());
     }
     hprintln!(
         "relay_tx over {} rounds: avg {} / min {} / max {} ticks",
@@ -152,7 +195,11 @@ fn main() -> ! {
     );
     let _ = journal::ids::delivery_ref("bench.out>echo.in", last);
 
-    hprintln!("heap_peak: {} bytes of {}", peak, HEAP_SIZE);
+    hprintln!(
+        "heap_watermark: {} bytes of {} (allocator-tracked peak)",
+        HEAP.peak.load(core::sync::atomic::Ordering::Relaxed),
+        HEAP_SIZE
+    );
     hprintln!("records: {}", journal.records().len());
     hprintln!("SPIKE_OK");
     debug::exit(debug::EXIT_SUCCESS);
