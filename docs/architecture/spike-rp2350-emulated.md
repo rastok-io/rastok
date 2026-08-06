@@ -1,11 +1,41 @@
-# Spike verdict — the kernel on Cortex-M33 (emulated), 2026-08-06
+# Spike — the kernel on Cortex-M33 (emulated)
 
-> M0.5 item 5, volet A. Criteria were written before measurement
-> (m0.5-slice.md); this note records method, numbers, and verdict.
-> Volet B — the same image on RP2350 silicon — is pending hardware
-> and will append two lines to this note, not rewrite it.
+> M0.5 item 5, volet A. First measured 2026-08-06; **that
+> measurement's verdict was withdrawn on 2026-08-07** — the
+> adversarial review showed its calibration loop compiled to five
+> instructions per iteration, not the two the conversion assumed
+> (`black_box` spills through memory), so every instruction estimate
+> was ≈ 2.5× low, and the reported heap peak sampled `used()` at
+> chosen instants instead of tracking a true high-water mark. The
+> review also noted, correctly, that the git history carried no
+> numeric thresholds before the first results commit. This revision
+> therefore records the criteria BELOW, in their own commit, before
+> the corrected measurement lands; the next commit brings the
+> instrumentation fixes and the re-measured numbers. Volet B — the
+> same image on RP2350 silicon — remains pending hardware.
 
-## Method
+## Criteria of record (written before the re-measurement)
+
+The thresholds are the original brief's, unchanged since the slice —
+now stated numerically in the repository *before* the numbers:
+
+1. **Compiles without patching any dependency.**
+2. **One relay transaction < 1 ms at 150 MHz** — under the
+   instruction-proportional proxy, **< 150 000 instructions**. The
+   earlier self-imposed "hardened < 50 k" bound is dropped: it was
+   an artifact of the false calibration, and no design decision ever
+   rested on it. Margins are reported as measured, not promised.
+3. **True heap high-water mark < 128 KiB** — measured by an
+   allocator wrapper that records the peak at every allocation, not
+   by sampling.
+4. **Flash `.text` < 1 MiB.**
+
+The calibration method of record: a counted loop written in inline
+assembly — `subs` + `bne`, two instructions per iteration **by
+construction**, verified against the disassembly — so the
+ticks-to-instructions ratio cannot drift with compiler optimization.
+
+## Method (first measurement, retained for the record)
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
@@ -47,9 +77,9 @@ printed by the emulated kernel is byte-identical to the host's:
 
 ## Verdict
 
-**GO (provisional).** All four criteria hold with margin; the
-transaction proxy sits 30 % under its hardened bound, which itself
-is 3× under the original wall-clock criterion. The option stays
-dormant as planned — no embedded chantier opens. Silicon
-confirmation (volet B) pending an RP2350 board; a NO-GO there would
-name flash wait states as the first suspect.
+**WITHDRAWN (2026-08-07)** — the numbers above stand as ticks (the
+raw measurements were reproduced exactly by the review), but their
+instruction and time conversions used the false 20-instructions-per-
+tick ratio, and the heap figure is not a high-water mark. No verdict
+is in force until the corrected measurement commit replaces this
+section.
