@@ -9,14 +9,24 @@
 //! A new connector brings three things: its contract sheet, an
 //! adapter, and a [`Profile`] — a minimal probe unit, one happy
 //! input, one provocation per provocable declared error kind, and a
-//! stated reason for every kind the harness cannot reach. The
-//! battery does the rest: sheet completeness, the silence and
-//! correlation disciplines, journal-before-effect and close-once
-//! observed on a real machine run, the error-set discipline under
-//! the outcome gate, the scheduler-minted timeout, and the
-//! no-late-causal-fact rule after a cancel. The same seam serves a
-//! std adapter today and an embedded one later — this battery is the
-//! portability contract between the two worlds.
+//! stated reason for every kind the harness cannot reach.
+//!
+//! **What the battery holds executable today, stated exactly** —
+//! the M0 subset of the ten contract cases, not yet all ten:
+//! sheet presence and well-formedness (cases 1–6 and 9 are
+//! declarative; the sheet cannot yet express port types, the
+//! correlator, the instance model, or the terminal envelope — those
+//! widen with the sheet model); the silence discipline and, when the
+//! profile opts in, response-to-request correlation under two
+//! interleaved calls (case 7); the error-set discipline under the
+//! outcome gate with per-kind provocations (case 8); journal-before-
+//! effect and close-once observed on the record, the scheduler-minted
+//! timeout, and the no-late-causal-fact rule after a cancel
+//! (case 10). Single-instance only (case 9 is M0's singleton).
+//! The same seam serves a std adapter today and an embedded one
+//! later — the battery grows with the milestones toward the full
+//! portability contract, and [`assert_conformant`] keeps every gap
+//! it cannot yet close explicit.
 
 use crate::boundary::{Draft, InboundSubmission, IngressAuthority, Partner, SubmissionSequence};
 use crate::compiler::compile;
@@ -65,6 +75,29 @@ pub struct Profile {
     /// the timeout and cancel disciplines; `None` skips that battery
     /// (and leaves `TimeoutExpired` unproven).
     pub mute_source: Option<String>,
+    /// The interleaved-correlation probe: a unit in which ONE
+    /// submission opens two calls simultaneously (two connectors,
+    /// distinct request bytes per branch) against an echoing
+    /// partner — each closed call's response must equal its own
+    /// request bytes, so an adapter that crosses two concurrent
+    /// replies is caught. `None` skips the battery and the
+    /// correlation case stays unproven beyond silence.
+    pub interleave: Option<InterleaveProbe>,
+}
+
+/// The probe of the interleaved-correlation battery. The battery
+/// injects one submission whose data is the map `{a = …, b = …}`;
+/// the probe's two branches each forward one field to their own
+/// connector, so two calls with distinct bytes are in flight at
+/// once.
+#[derive(Debug, Clone)]
+pub struct InterleaveProbe {
+    /// The two-branch unit.
+    pub source: String,
+    /// The first branch's payload.
+    pub a: &'static str,
+    /// The second branch's payload — must differ from `a`.
+    pub b: &'static str,
 }
 
 /// The harness verdict: what was proven, what was declared
@@ -164,6 +197,14 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
             }
             Err(violation) => report.violations.push(violation),
         }
+    }
+
+    // Case 7, the correlation half: two calls in flight, distinct
+    // request bytes; every closure must answer its OWN request.
+    if let Some(probe) = &profile.interleave
+        && let Err(violation) = interleave_battery(probe, registry, factory)
+    {
+        report.violations.push(violation);
     }
 
     // No silent gap: declared kinds are proven or stated unprovable.
@@ -418,6 +459,134 @@ fn mute_battery(
     }
     if journal.records().len() != sealed_records {
         return Err("the journal grew after the cancelled closure".into());
+    }
+    Ok(())
+}
+
+/// The interleaved-correlation battery: one submission opens two
+/// calls with distinct request bytes (the machine serializes calls
+/// per connector, so simultaneity needs two connectors served by
+/// the one adapter); for an echoing partner, each
+/// `Closed(Response(Success))` must carry exactly its own intent's
+/// prepared bytes. An adapter that swaps two concurrent responses —
+/// correct call references, wrong payloads — is caught here and
+/// nowhere else, and the journal must show both opens before the
+/// first closure, or the battery never actually interleaved.
+fn interleave_battery(
+    probe: &InterleaveProbe,
+    registry: &Registry,
+    factory: &mut dyn AdapterFactory,
+) -> Result<(), String> {
+    let compilation = compile(&[probe.source.as_str()], registry).map_err(|bag| {
+        format!(
+            "the interleave probe does not compile: {:?}",
+            bag.diagnostics()
+        )
+    })?;
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut partner = factory.make(&compilation.plan);
+    if probe.a == probe.b {
+        return Err("the interleave payloads must differ, or a swap is invisible".into());
+    }
+    let mut data = BTreeMap::new();
+    data.insert(
+        String::from("a"),
+        Value::Scalar(Scalar::Text(String::from(probe.a))),
+    );
+    data.insert(
+        String::from("b"),
+        Value::Scalar(Scalar::Text(String::from(probe.b))),
+    );
+    let paired = InboundSubmission {
+        authority: IngressAuthority::single(
+            node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
+        ),
+        draft: Draft {
+            data: Data::materialized(Value::Map(data)),
+            mime_type: None,
+            app: Namespace::new(),
+        },
+        sequence: SubmissionSequence::Next,
+    };
+    vm.inject(&mut journal, paired)
+        .map_err(|error| format!("the interleave submission was refused: {error}"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        vm.drain(&mut journal)
+            .map_err(|error| format!("a step faulted: {error}"))?;
+        let report = vm
+            .pump(&mut journal, partner.as_mut())
+            .map_err(|error| format!("the boundary round faulted: {error}"))?;
+        vm.drain(&mut journal)
+            .map_err(|error| format!("a step faulted: {error}"))?;
+        if vm.is_stable() {
+            break;
+        }
+        if report.settled == 0 {
+            if std::time::Instant::now() > deadline {
+                return Err("the interleave run wedged".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            vm.advance(&mut journal, partner.as_mut(), vm.now() + 10_000_000)
+                .map_err(|error| format!("the advance faulted: {error}"))?;
+        }
+    }
+    let mut closed = 0usize;
+    let mut opens_before_first_close = 0usize;
+    let mut any_close_seen = false;
+    let mut requests = BTreeSet::new();
+    for record in journal.records() {
+        let Record::Outbound(outbound) = record else {
+            continue;
+        };
+        if matches!(outbound.status, OutboundStatus::Open) {
+            if !any_close_seen {
+                opens_before_first_close += 1;
+            }
+            requests.insert(outbound.intent.prepared.bytes().to_vec());
+            continue;
+        }
+        let OutboundStatus::Closed(Closure::Response(outcome)) = &outbound.status else {
+            continue;
+        };
+        any_close_seen = true;
+        closed += 1;
+        let crate::boundary::CallOutcome::Success(data) = outcome else {
+            return Err(format!(
+                "interleave call {} closed with a failure; the probe expects echoes",
+                outbound.intent.call_ref
+            ));
+        };
+        let request = String::from_utf8_lossy(outbound.intent.prepared.bytes()).into_owned();
+        let response = match data {
+            Data::Materialized(Value::Scalar(Scalar::Text(text))) => text.clone(),
+            other => format!("{other:?}"),
+        };
+        if response != request {
+            return Err(format!(
+                "call {} answered with another call's payload: request {request:?}, \
+                 response {response:?} — the adapter crossed two concurrent replies",
+                outbound.intent.call_ref
+            ));
+        }
+    }
+    if closed < 2 {
+        return Err(format!(
+            "the interleave battery closed {closed} call(s); two in-flight calls are its point"
+        ));
+    }
+    if opens_before_first_close < 2 {
+        return Err(
+            "the interleave calls never overlapped — the probe must open both before either \
+             closes"
+                .into(),
+        );
+    }
+    if requests.len() < 2 {
+        return Err(
+            "the interleave requests were byte-identical; a swap would be invisible".into(),
+        );
     }
     Ok(())
 }

@@ -35,8 +35,11 @@ Consolidated what M0 proved before widening it
   typed refusals.
 - The embedded spike run emulated against its written go/no-go —
   provisional GO, silicon confirmation pending hardware.
-- The connector conformance harness over the `Partner` seam: the ten
-  contract cases executable, `Process` re-expressed on it.
+- The connector conformance harness over the `Partner` seam —
+  the M0 subset of the ten contract cases made executable (error-set,
+  journal, timeout, cancel, silence, and interleaved-correlation
+  disciplines; the declarative cases as sheet checks), with every
+  unproven gap explicit; `Process` re-expressed on it.
 - The verified-authorship benchmark built and rehearsed dry — twenty
   referee-checked tasks, a frozen prompt card, the full
   generate → check → retry → simulate loop measured on recorded

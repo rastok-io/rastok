@@ -5,7 +5,9 @@
 //! battery itself bites.
 
 use rastok::boundary::{CallOutcome, Intent, Partner, Response, TypedError};
-use rastok::conformance::{AdapterFactory, Profile, Provocation, assert_conformant, verify};
+use rastok::conformance::{
+    AdapterFactory, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
+};
 use rastok::connectors::Process;
 use rastok::envelope::{Data, Envelope, Value};
 use rastok::plan::ExecutionPlan;
@@ -116,6 +118,33 @@ graph mute : App {
 }
 "#;
 
+const PAIR: &str = r#"
+graph pair : App {
+  connector left : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  connector right : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator ra {
+    on in { out = data.a }
+  }
+
+  operator rb {
+    on in { out = data.b }
+  }
+
+  . -> ra -> left -> .
+  . -> rb -> right -> .
+}
+"#;
+
 struct ProcessFactory;
 
 impl AdapterFactory for ProcessFactory {
@@ -157,6 +186,11 @@ fn process_profile() -> Profile {
              StderrLine events arrive with the service mode",
         )],
         mute_source: Some(MUTE.into()),
+        interleave: Some(InterleaveProbe {
+            source: PAIR.into(),
+            a: "volt 231",
+            b: "volt 232",
+        }),
     }
 }
 
@@ -218,6 +252,7 @@ fn an_undeclared_kind_fails_the_battery() {
         provocations: Vec::new(),
         unprovable: Vec::new(),
         mute_source: None,
+        interleave: None,
     };
     let report = verify(&profile, &Registry::m0(), &mut LiarFactory);
     assert!(!report.conformant());
@@ -227,6 +262,71 @@ fn an_undeclared_kind_fails_the_battery() {
             .iter()
             .any(|violation| violation.contains("the outcome gate refused a reply")),
         "the gate violation is named: {:#?}",
+        report.violations
+    );
+}
+
+/// Answers both concurrent calls with correct call references but
+/// crossed payloads — the correlation defect a single-call battery
+/// cannot see.
+struct Swapper {
+    pending: Vec<Response>,
+}
+
+impl Partner for Swapper {
+    fn start(&mut self, intent: &Intent, _request: &Envelope) {
+        let echoed = String::from_utf8_lossy(intent.prepared.bytes()).into_owned();
+        self.pending.push(Response {
+            call_ref: intent.call_ref,
+            outcome: CallOutcome::Success(Data::materialized(Value::Scalar(
+                rastok::envelope::Scalar::Text(echoed),
+            ))),
+        });
+    }
+
+    fn events(&mut self) -> Vec<Response> {
+        let mut batch = std::mem::take(&mut self.pending);
+        if batch.len() >= 2 {
+            let crossed = batch[0].outcome.clone();
+            batch[0].outcome = batch[1].outcome.clone();
+            batch[1].outcome = crossed;
+        }
+        batch
+    }
+}
+
+struct SwapperFactory;
+
+impl AdapterFactory for SwapperFactory {
+    fn make<'plan>(&mut self, _plan: &'plan ExecutionPlan) -> Box<dyn Partner + 'plan> {
+        Box::new(Swapper {
+            pending: Vec::new(),
+        })
+    }
+}
+
+#[test]
+fn crossed_concurrent_replies_fail_the_battery() {
+    let profile = Profile {
+        contract: &PROCESS,
+        source: HAPPY.into(),
+        input: "salut",
+        provocations: Vec::new(),
+        unprovable: Vec::new(),
+        mute_source: None,
+        interleave: Some(InterleaveProbe {
+            source: PAIR.into(),
+            a: "volt 231",
+            b: "volt 232",
+        }),
+    };
+    let report = verify(&profile, &Registry::m0(), &mut SwapperFactory);
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|violation| violation.contains("crossed two concurrent replies")),
+        "the swap is named: {:#?}",
         report.violations
     );
 }
