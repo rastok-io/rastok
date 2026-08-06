@@ -9,8 +9,8 @@
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). It embeds the blessed plan blob of `examples/echo.rkg`
-  as a `static`, opens it with `rastok_core::blob::open`, boots the
+  spike-only). It embeds the blessed plan package of `examples/echo.rkg`
+  as a `static`, opens it with `rastok_core::package::open`, boots the
   `Vm` over a `MemJournal`, and runs inject → step rounds — the
   bare-metal superloop, minus real peripherals.
 - Target: `thumbv8m.main-none-eabihf` on QEMU `mps2-an505`
@@ -28,7 +28,7 @@
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `blob::open` (365-byte blob) | 1 468 | 29 k | 0.20 ms |
+| `package::open` (365-byte package) | 1 468 | 29 k | 0.20 ms |
 | relay transaction (avg of 32; min 1 695 / max 1 995) | 1 761 | 35 k | **0.23 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 1.8 k | 12 µs |
 

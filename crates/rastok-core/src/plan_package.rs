@@ -12,7 +12,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
-use crate::canon::{Cbor, cel_tagged, decode, encode};
+use crate::canon::{self, Cbor, cel_tagged};
 use crate::cel;
 use crate::envelope::WriteTarget;
 use crate::node;
@@ -30,20 +30,20 @@ pub const FORMAT_VERSION: u32 = 1;
 /// A typed refusal from the blob decoder. Total: nothing is guessed,
 /// nothing is migrated silently.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BlobError {
+pub enum PlanPackageError {
     /// The bytes do not start with the blob magic.
     BadMagic,
     /// A format version this build does not read.
     UnknownVersion(u32),
     /// The blake3 seal does not match the body bytes.
-    BrokenSeal,
+    BrokenChecksum,
     /// The bytes end before the structure does.
     Truncated,
     /// Bytes inside the format's frame that its tables cannot read.
     Malformed(String),
 }
 
-impl core::fmt::Display for BlobError {
+impl core::fmt::Display for PlanPackageError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::BadMagic => f.write_str("not a plan blob (bad magic)"),
@@ -53,19 +53,19 @@ impl core::fmt::Display for BlobError {
                     "plan-blob format v{version} is not readable by this build"
                 )
             }
-            Self::BrokenSeal => f.write_str("the body does not match its seal"),
+            Self::BrokenChecksum => f.write_str("the body does not match its seal"),
             Self::Truncated => f.write_str("the blob ends before its structure does"),
             Self::Malformed(detail) => write!(f, "malformed plan blob: {detail}"),
         }
     }
 }
 
-impl core::error::Error for BlobError {}
+impl core::error::Error for PlanPackageError {}
 
 /// Encodes a plan and its identity into a sealed blob.
 #[must_use]
-pub fn seal(plan: &ExecutionPlan, hash: &SemanticHash) -> Vec<u8> {
-    let body = encode(&plan_tree(plan));
+pub fn encode(plan: &ExecutionPlan, hash: &SemanticHash) -> Vec<u8> {
+    let body = canon::encode(&plan_tree(plan));
     let mut digest = [0u8; 32];
     let mut hasher = blake3::Hasher::new();
     hasher.update(&body);
@@ -77,7 +77,7 @@ pub fn seal(plan: &ExecutionPlan, hash: &SemanticHash) -> Vec<u8> {
         (4, Cbor::Bytes(digest.to_vec())),
     ]);
     let mut out = MAGIC.to_vec();
-    out.extend_from_slice(&encode(&envelope));
+    out.extend_from_slice(&canon::encode(&envelope));
     out
 }
 
@@ -86,54 +86,56 @@ pub fn seal(plan: &ExecutionPlan, hash: &SemanticHash) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// A [`BlobError`] naming exactly what refused.
-pub fn open(bytes: &[u8]) -> Result<(ExecutionPlan, SemanticHash), BlobError> {
+/// A [`PlanPackageError`] naming exactly what refused.
+pub fn decode(bytes: &[u8]) -> Result<(ExecutionPlan, SemanticHash), PlanPackageError> {
     let Some(rest) = bytes.strip_prefix(&MAGIC) else {
-        return Err(BlobError::BadMagic);
+        return Err(PlanPackageError::BadMagic);
     };
-    let Some((envelope, used)) = decode(rest) else {
-        return Err(BlobError::Truncated);
+    let Some((envelope, used)) = canon::decode(rest) else {
+        return Err(PlanPackageError::Truncated);
     };
     if used != rest.len() {
-        return Err(BlobError::Malformed("trailing bytes".into()));
+        return Err(PlanPackageError::Malformed("trailing bytes".into()));
     }
     let Cbor::Map(pairs) = envelope else {
-        return Err(BlobError::Malformed("the envelope is not a map".into()));
+        return Err(PlanPackageError::Malformed(
+            "the envelope is not a map".into(),
+        ));
     };
     let field = |key: u64| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v);
     let Some(Cbor::Uint(version)) = field(1) else {
-        return Err(BlobError::Malformed("no format version".into()));
+        return Err(PlanPackageError::Malformed("no format version".into()));
     };
     if *version != u64::from(FORMAT_VERSION) {
-        return Err(BlobError::UnknownVersion(
+        return Err(PlanPackageError::UnknownVersion(
             u32::try_from(*version).unwrap_or(u32::MAX),
         ));
     }
     let Some(Cbor::Bytes(hash)) = field(2) else {
-        return Err(BlobError::Malformed("no semantic hash".into()));
+        return Err(PlanPackageError::Malformed("no semantic hash".into()));
     };
     let hash: [u8; 32] = hash
         .as_slice()
         .try_into()
-        .map_err(|_| BlobError::Malformed("the hash is not 32 bytes".into()))?;
+        .map_err(|_| PlanPackageError::Malformed("the hash is not 32 bytes".into()))?;
     let Some(Cbor::Bytes(body)) = field(3) else {
-        return Err(BlobError::Malformed("no body".into()));
+        return Err(PlanPackageError::Malformed("no body".into()));
     };
     let Some(Cbor::Bytes(declared)) = field(4) else {
-        return Err(BlobError::Malformed("no seal".into()));
+        return Err(PlanPackageError::Malformed("no seal".into()));
     };
     let mut digest = [0u8; 32];
     let mut hasher = blake3::Hasher::new();
     hasher.update(body);
     hasher.finalize_xof().fill(&mut digest);
     if declared.as_slice() != digest {
-        return Err(BlobError::BrokenSeal);
+        return Err(PlanPackageError::BrokenChecksum);
     }
-    let Some((tree, used)) = decode(body) else {
-        return Err(BlobError::Truncated);
+    let Some((tree, used)) = canon::decode(body) else {
+        return Err(PlanPackageError::Truncated);
     };
     if used != body.len() {
-        return Err(BlobError::Malformed("trailing body bytes".into()));
+        return Err(PlanPackageError::Malformed("trailing body bytes".into()));
     }
     let plan = plan_from(&tree)?;
     Ok((plan, SemanticHash::from_bytes(hash)))
@@ -437,11 +439,11 @@ fn binop_code(op: cel::BinaryOp) -> u64 {
 
 // ===================== decoding: tree → plan =====================
 
-fn err(detail: &str) -> BlobError {
-    BlobError::Malformed(detail.into())
+fn err(detail: &str) -> PlanPackageError {
+    PlanPackageError::Malformed(detail.into())
 }
 
-fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, BlobError> {
+fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, PlanPackageError> {
     let pairs = map_of(tree, "plan")?;
     let nodes = array_of(get(pairs, 1, "plan nodes")?, "plan nodes")?
         .iter()
@@ -467,7 +469,7 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, BlobError> {
     })
 }
 
-fn node_from(tree: &Cbor) -> Result<Node, BlobError> {
+fn node_from(tree: &Cbor) -> Result<Node, PlanPackageError> {
     let pairs = map_of(tree, "node")?;
     let path = node::Path::new(
         text_of(get(pairs, 1, "node path")?, "node path")?
@@ -500,7 +502,7 @@ fn node_from(tree: &Cbor) -> Result<Node, BlobError> {
     })
 }
 
-fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, BlobError> {
+fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, PlanPackageError> {
     let pairs = map_of(tree, "connector spec")?;
     let contract = text_of(get(pairs, 1, "contract")?, "contract")?.to_string();
     let effect = match get(pairs, 2, "effect")? {
@@ -547,7 +549,7 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, BlobError> {
     })
 }
 
-fn attr_from(tree: &Cbor) -> Result<AttrSetting, BlobError> {
+fn attr_from(tree: &Cbor) -> Result<AttrSetting, PlanPackageError> {
     match array_of(tree, "attr setting")? {
         [Cbor::Uint(1), Cbor::Text(word)] => Ok(AttrSetting::Word(word.clone())),
         [Cbor::Uint(2), value] => Ok(AttrSetting::Value(cel_value_from(value)?)),
@@ -555,7 +557,7 @@ fn attr_from(tree: &Cbor) -> Result<AttrSetting, BlobError> {
     }
 }
 
-fn port_decl_from(tree: &Cbor) -> Result<(node::Port, node::Direction), BlobError> {
+fn port_decl_from(tree: &Cbor) -> Result<(node::Port, node::Direction), PlanPackageError> {
     match array_of(tree, "port declaration")? {
         [Cbor::Text(name), Cbor::Uint(direction)] => Ok((
             node::Port::new(name.clone()).map_err(|_| err("port name"))?,
@@ -569,7 +571,7 @@ fn port_decl_from(tree: &Cbor) -> Result<(node::Port, node::Direction), BlobErro
     }
 }
 
-fn var_from(tree: &Cbor) -> Result<VarCell, BlobError> {
+fn var_from(tree: &Cbor) -> Result<VarCell, PlanPackageError> {
     let pairs = map_of(tree, "var")?;
     let name = text_of(get(pairs, 1, "var name")?, "var name")?.to_string();
     let ty = type_from(get(pairs, 2, "var type")?)?;
@@ -580,7 +582,7 @@ fn var_from(tree: &Cbor) -> Result<VarCell, BlobError> {
     Ok(VarCell { name, ty, init })
 }
 
-fn edge_from(tree: &Cbor) -> Result<Edge, BlobError> {
+fn edge_from(tree: &Cbor) -> Result<Edge, PlanPackageError> {
     match array_of(tree, "edge")? {
         [from, Cbor::Null] => Ok(Edge {
             from: endpoint_from(from)?,
@@ -594,7 +596,7 @@ fn edge_from(tree: &Cbor) -> Result<Edge, BlobError> {
     }
 }
 
-fn endpoint_from(tree: &Cbor) -> Result<EndpointRef, BlobError> {
+fn endpoint_from(tree: &Cbor) -> Result<EndpointRef, PlanPackageError> {
     match array_of(tree, "endpoint")? {
         [slot, Cbor::Text(port)] => Ok(EndpointRef {
             node: match slot {
@@ -610,7 +612,7 @@ fn endpoint_from(tree: &Cbor) -> Result<EndpointRef, BlobError> {
     }
 }
 
-fn handler_from(tree: &Cbor) -> Result<Handler, BlobError> {
+fn handler_from(tree: &Cbor) -> Result<Handler, PlanPackageError> {
     let pairs = map_of(tree, "handler")?;
     let slot = match get(pairs, 1, "handler slot")? {
         Cbor::Uint(index) => Slot::new(u32::try_from(*index).map_err(|_| err("handler slot"))?),
@@ -638,7 +640,7 @@ fn handler_from(tree: &Cbor) -> Result<Handler, BlobError> {
     })
 }
 
-fn step_from(tree: &Cbor) -> Result<Step, BlobError> {
+fn step_from(tree: &Cbor) -> Result<Step, PlanPackageError> {
     match array_of(tree, "step")? {
         [Cbor::Uint(1), Cbor::Text(name), expr] => Ok(Step::Let {
             name: name.clone(),
@@ -656,7 +658,7 @@ fn step_from(tree: &Cbor) -> Result<Step, BlobError> {
     }
 }
 
-fn emission_from(tree: &Cbor) -> Result<Emission, BlobError> {
+fn emission_from(tree: &Cbor) -> Result<Emission, PlanPackageError> {
     match array_of(tree, "emission")? {
         [Cbor::Uint(1)] => Ok(Emission::Identity),
         [Cbor::Uint(2), writes] => Ok(Emission::Patch(writes_from(writes)?)),
@@ -667,7 +669,7 @@ fn emission_from(tree: &Cbor) -> Result<Emission, BlobError> {
     }
 }
 
-fn writes_from(tree: &Cbor) -> Result<Vec<FieldWrite>, BlobError> {
+fn writes_from(tree: &Cbor) -> Result<Vec<FieldWrite>, PlanPackageError> {
     array_of(tree, "writes")?
         .iter()
         .map(|entry| match array_of(entry, "write")? {
@@ -680,13 +682,13 @@ fn writes_from(tree: &Cbor) -> Result<Vec<FieldWrite>, BlobError> {
         .collect()
 }
 
-fn target_from(tree: &Cbor) -> Result<WriteTarget, BlobError> {
+fn target_from(tree: &Cbor) -> Result<WriteTarget, PlanPackageError> {
     match array_of(tree, "write target")? {
         [Cbor::Uint(1), Cbor::Array(segments)] => Ok(WriteTarget::Data(
             segments
                 .iter()
                 .map(|seg| Ok(text_of(seg, "path segment")?.to_string()))
-                .collect::<Result<Vec<_>, BlobError>>()?,
+                .collect::<Result<Vec<_>, PlanPackageError>>()?,
         )),
         [Cbor::Uint(2), Cbor::Text(field)] => Ok(WriteTarget::AppMeta(field.clone())),
         [Cbor::Uint(3), Cbor::Text(namespace), Cbor::Text(field)] => {
@@ -697,7 +699,7 @@ fn target_from(tree: &Cbor) -> Result<WriteTarget, BlobError> {
     }
 }
 
-fn tree_from(tree: &Cbor) -> Result<cel::Tree, BlobError> {
+fn tree_from(tree: &Cbor) -> Result<cel::Tree, PlanPackageError> {
     match array_of(tree, "cel tree")? {
         [ty, expr] => Ok(cel::Tree {
             ty: type_from(ty)?,
@@ -707,7 +709,7 @@ fn tree_from(tree: &Cbor) -> Result<cel::Tree, BlobError> {
     }
 }
 
-fn type_from(tree: &Cbor) -> Result<cel::Type, BlobError> {
+fn type_from(tree: &Cbor) -> Result<cel::Type, PlanPackageError> {
     match tree {
         Cbor::Uint(1) => Ok(cel::Type::Bool),
         Cbor::Uint(2) => Ok(cel::Type::Int),
@@ -732,7 +734,7 @@ fn type_from(tree: &Cbor) -> Result<cel::Type, BlobError> {
     }
 }
 
-fn expr_from(tree: &Cbor) -> Result<cel::Expr, BlobError> {
+fn expr_from(tree: &Cbor) -> Result<cel::Expr, PlanPackageError> {
     let parts = array_of(tree, "cel expr")?;
     match parts {
         [Cbor::Uint(1), value] => Ok(cel::Expr::Literal(cel_value_from(value)?)),
@@ -740,7 +742,7 @@ fn expr_from(tree: &Cbor) -> Result<cel::Expr, BlobError> {
             segments
                 .iter()
                 .map(|seg| Ok(text_of(seg, "path segment")?.to_string()))
-                .collect::<Result<Vec<_>, BlobError>>()?,
+                .collect::<Result<Vec<_>, PlanPackageError>>()?,
         )),
         [Cbor::Uint(3), Cbor::Uint(op), expr] => Ok(cel::Expr::Unary {
             op: match op {
@@ -789,7 +791,7 @@ fn expr_from(tree: &Cbor) -> Result<cel::Expr, BlobError> {
     }
 }
 
-fn binop_from(code: u64) -> Result<cel::BinaryOp, BlobError> {
+fn binop_from(code: u64) -> Result<cel::BinaryOp, PlanPackageError> {
     Ok(match code {
         1 => cel::BinaryOp::Mul,
         2 => cel::BinaryOp::Div,
@@ -810,7 +812,7 @@ fn binop_from(code: u64) -> Result<cel::BinaryOp, BlobError> {
 
 /// Reads a `tagged_value` back into a CEL value — the inverse of the
 /// canon's `cel_tagged`, over the tags the plan can carry.
-fn cel_value_from(tree: &Cbor) -> Result<cel::Value, BlobError> {
+fn cel_value_from(tree: &Cbor) -> Result<cel::Value, PlanPackageError> {
     match array_of(tree, "tagged value")? {
         [Cbor::Uint(1), Cbor::Bool(v)] => Ok(cel::Value::Bool(*v)),
         [Cbor::Uint(2), value] => Ok(cel::Value::Int(int_from(value)?)),
@@ -850,7 +852,7 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, BlobError> {
     }
 }
 
-fn int_from(tree: &Cbor) -> Result<i64, BlobError> {
+fn int_from(tree: &Cbor) -> Result<i64, PlanPackageError> {
     match tree {
         Cbor::Uint(v) => i64::try_from(*v).map_err(|_| err("integer range")),
         Cbor::Int(v) => Ok(*v),
@@ -860,31 +862,31 @@ fn int_from(tree: &Cbor) -> Result<i64, BlobError> {
 
 // ===================== small readers =====================
 
-fn map_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a [(u64, Cbor)], BlobError> {
+fn map_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a [(u64, Cbor)], PlanPackageError> {
     match tree {
         Cbor::Map(pairs) => Ok(pairs),
-        _ => Err(BlobError::Malformed(format!("{what}: not a map"))),
+        _ => Err(PlanPackageError::Malformed(format!("{what}: not a map"))),
     }
 }
 
-fn array_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a [Cbor], BlobError> {
+fn array_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a [Cbor], PlanPackageError> {
     match tree {
         Cbor::Array(items) => Ok(items),
-        _ => Err(BlobError::Malformed(format!("{what}: not an array"))),
+        _ => Err(PlanPackageError::Malformed(format!("{what}: not an array"))),
     }
 }
 
-fn get<'a>(pairs: &'a [(u64, Cbor)], key: u64, what: &str) -> Result<&'a Cbor, BlobError> {
-    find(pairs, key).ok_or_else(|| BlobError::Malformed(format!("{what}: missing")))
+fn get<'a>(pairs: &'a [(u64, Cbor)], key: u64, what: &str) -> Result<&'a Cbor, PlanPackageError> {
+    find(pairs, key).ok_or_else(|| PlanPackageError::Malformed(format!("{what}: missing")))
 }
 
 fn find(pairs: &[(u64, Cbor)], key: u64) -> Option<&Cbor> {
     pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
 }
 
-fn text_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a str, BlobError> {
+fn text_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a str, PlanPackageError> {
     match tree {
         Cbor::Text(text) => Ok(text),
-        _ => Err(BlobError::Malformed(format!("{what}: not text"))),
+        _ => Err(PlanPackageError::Malformed(format!("{what}: not text"))),
     }
 }

@@ -17,7 +17,6 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
-pub mod blob;
 pub mod boundary;
 pub mod canon;
 pub mod cel;
@@ -25,4 +24,5 @@ pub mod envelope;
 pub mod journal;
 pub mod node;
 pub mod plan;
+pub mod plan_package;
 pub mod runtime;

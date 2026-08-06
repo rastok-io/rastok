@@ -1,23 +1,23 @@
-# The plan blob — sealed serialization of the ExecutionPlan
+# The plan package — the transportable, verifiable ExecutionPlan
 
 > Format note — the bytes follow this document, never precede it.
 > Specified 2026-08-06 (M0.5 item 4), after the delivery-reference
-> work froze the vocabulary the plan carries. The blob is a
+> work froze the vocabulary the plan carries. The package is a
 > TRANSPORT format: versioned and free to evolve by version bump.
 > Identity stays where it always was — the semantic hash over the
-> canonical HIR; the blob merely carries a plan and proves it intact.
+> canonical HIR; the package merely carries a plan and proves it intact.
 
 ## Shape
 
 One byte discipline exists in this repository — the deterministic
 CBOR of the golden traces (RFC 8949 §4.2 profile: shortest-form
 integers, definite lengths, fixed unsigned map keys in table order).
-The blob speaks it too; `postcard` and friends were rejected for the
+The package speaks it too; `postcard` and friends were rejected for the
 canonical roles (non-canonical, implicit schema —
 [decisions.md](../spec/decisions.md) D-2026-08-03-1).
 
 ```text
-blob := magic "RKPB"                      4 raw bytes, sniffable
+package := magic "RKPB"                      4 raw bytes, sniffable
         ┌ canonical CBOR map ────────────────────────────────┐
         │ 1 : format_version   uint      (this document: 1)  │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
@@ -98,16 +98,16 @@ layering (the compiler/CLI encodes, the embedded boot decodes), and
 LTO strips the unused half from a firmware. The generic canonical
 CBOR machinery moves from `golden` into the kernel for the same
 reason — one implementation of the byte discipline, used by the
-golden projection (std, evidence) and the blob (core, transport).
+golden projection (std, evidence) and the package (core, transport).
 
 ## Verification contract
 
 - **Round trip**: compile → encode → decode ⇒ the decoded plan is
   structurally equal to the original and the header's semantic hash
   equals the compilation's. (The hash is computed over the HIR and
-  travels with the blob; a plan alone cannot re-derive it — equality
+  travels with the package; a plan alone cannot re-derive it — equality
   plus the sealed header is the proof.)
-- **Blessed fixture**: the example's blob is pinned like a golden
+- **Blessed fixture**: the example's package is pinned like a golden
   trace and re-blessed only deliberately.
 - **Typed refusals**: a bumped version, a corrupted body byte, and a
-  truncated blob each fail with their own error — tested.
+  truncated package each fail with their own error — tested.

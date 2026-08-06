@@ -4,7 +4,7 @@
 //! table order, binary64 held at fixed width with the one canonical
 //! NaN. One implementation serves every canonical form in the
 //! project: the golden projection (std layer, evidence) and the plan
-//! blob (this kernel, transport). The rationale for a hand-rolled
+//! plan package (this kernel, transport). The rationale for a hand-rolled
 //! codec over a library lives with the golden projection's
 //! documentation and in `decisions.md` (D-2026-08-03-1).
 

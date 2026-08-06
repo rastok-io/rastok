@@ -1,6 +1,6 @@
 //! M0.5 spike, volet A: the Rastok kernel on an emulated Cortex-M33
-//! (QEMU mps2-an505). Boots from the sealed plan blob, runs the echo
-//! graph's transactions, and reports: blob-open cost, per-transaction
+//! (QEMU mps2-an505). Boots from the sealed plan package, runs the echo
+//! graph's transactions, and reports: package-open cost, per-transaction
 //! cost, blake3 id cost (all in calibrated instruction counts), and
 //! the heap watermark. Timing is a PROXY under `-icount` — the
 //! verdict note states the caveats.
@@ -26,7 +26,7 @@ use rastok_core::journal::MemJournal;
 use rastok_core::node::Path;
 use rastok_core::plan::GraphVersion;
 use rastok_core::runtime::vm::Vm;
-use rastok_core::{blob, journal};
+use rastok_core::{package, journal};
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
@@ -35,8 +35,8 @@ const HEAP_SIZE: usize = 256 * 1024;
 static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
 
 /// The sealed plan of examples/echo.rkg, produced by the compiler on
-/// the host — the embedded entry point is the blob, never source.
-static ECHO_BLOB: &[u8] = include_bytes!("../echo.blob");
+/// the host — the embedded entry point is the package, never source.
+static ECHO_BLOB: &[u8] = include_bytes!("../echo.rkp");
 
 struct Ticks {
     syst: cortex_m::peripheral::SYST,
@@ -101,10 +101,10 @@ fn main() -> ! {
     let (calib_ticks, ()) = ticks.measure(|| spin(1_000_000));
     hprintln!("calib: {} ticks for ~2000000 instructions", calib_ticks);
 
-    // 1. Open the sealed blob.
-    let (open_ticks, opened) = ticks.measure(|| blob::open(ECHO_BLOB));
-    let (plan, hash) = opened.expect("the blob opens");
-    hprintln!("blob_open: {} ticks", open_ticks);
+    // 1. Open the sealed package.
+    let (open_ticks, opened) = ticks.measure(|| plan_package::decode(ECHO_BLOB));
+    let (plan, hash) = opened.expect("the package opens");
+    hprintln!("pkg_decode: {} ticks", open_ticks);
     hprintln!("semantic_hash: {}", hash);
     hprintln!("heap_after_open: {} bytes", HEAP.used());
 

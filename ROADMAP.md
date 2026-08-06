@@ -31,7 +31,7 @@ Consolidated what M0 proved before widening it
 - The no_std-ready core (`rastok-core`) split from the std layer,
   with CI guarding the frontier; neutrality proven by the unchanged
   semantic hash.
-- The executable plan sealed as a versioned, verifiable blob with
+- The executable plan sealed as a versioned, verifiable package with
   typed refusals.
 - The embedded spike run emulated against its written go/no-go —
   provisional GO, silicon confirmation pending hardware.

@@ -5,6 +5,17 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-07-1 — The transport artifact is a plan package, not a blob
+
+The compiled artifact is named **plan package** (`rastok_core::plan_package`,
+extension `.rkp`): a structured, versioned, validated product of the
+compiler — nothing about it is opaque or generic. The API vocabulary is
+`encode` / `decode` / `checksum`: an unkeyed BLAKE3 is an integrity
+checksum, and `seal` is reserved for a future property that actually
+binds trust (a signature). **Rejected:** `blob` (dishonest about
+structure), `PlanBinary` (suggests machine code), keeping `seal`/`open`
+(overclaims a trust property the format does not have).
+
 ## D-2026-08-06-1 — Specs are maintained in place; tags are the editions
 
 Edition-in-place with git as the revision record, tagged editions
