@@ -1,0 +1,23 @@
+# Time-boxed no_std spike (M0.5 item 5, volet A — emulated Cortex-M33).
+# Deliberately OUTSIDE the product workspace: its embedded runtime
+# dependencies are spike-only and never touch the dependency policy.
+[package]
+name = "rastok-spike-rp2350"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+rastok-core = { path = "../../crates/rastok-core" }
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+cortex-m-semihosting = "0.5"
+embedded-alloc = "0.6"
+panic-semihosting = "0.6"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
