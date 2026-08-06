@@ -1,0 +1,22 @@
+lab export {
+  simulation refereeing on app {
+    scenario answers "a live exporter replies in time" {
+      mock exporter {
+        on in { out = envelope }
+      }
+      app.in = "reading 42"
+      expect "exported" app.out count == 1 where data == "reading 42"
+      expect nothing app.err
+    }
+
+    scenario hangs "a mute exporter times out at its budget" {
+      mock exporter {
+        on in { out = nothing }
+      }
+      app.in = "reading 43"
+      advance duration("2s")
+      expect "the typed timeout" app.err count == 1 where data.kind == "TimeoutExpired"
+      expect nothing app.out
+    }
+  }
+}

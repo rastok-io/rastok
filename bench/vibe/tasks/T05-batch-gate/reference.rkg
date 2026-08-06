@@ -1,0 +1,9 @@
+graph batches : App {
+  operator summarize {
+    on in where size(data.readings) > 0 {
+      out = {count = size(data.readings), status = data.peak > 100 ? "alarm" : "normal"}
+    }
+  }
+
+  . -> summarize -> .
+}

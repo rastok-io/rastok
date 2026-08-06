@@ -1,0 +1,11 @@
+graph totals : App {
+  operator accumulate {
+    var sum : int = 0
+    on in {
+      sum = sum + data.amount
+      out = {total = sum}
+    }
+  }
+
+  . -> accumulate -> .
+}

@@ -1,0 +1,12 @@
+lab stamp {
+  simulation refereeing on app {
+    scenario ordered "lines are numbered in arrival order" {
+      app.in = "first"
+      expect "one" app.out count == 1 where data.seq == 1 && data.text == "first"
+      app.in = "second"
+      expect "two" app.out count == 1 where data.seq == 2 && data.text == "second"
+      app.in = "third"
+      expect "three" app.out count == 1 where data.seq == 3 && data.text == "third"
+    }
+  }
+}

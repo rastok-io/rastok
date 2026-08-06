@@ -1,0 +1,25 @@
+graph fanout : App {
+  connector archive : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  connector pager : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator gate {
+    on in where data.level == "critical" {
+      out = data.message
+    }
+  }
+
+  . -> gate
+  gate.out -> archive.in
+  gate.out -> pager.in
+  archive.out -> .
+  pager.out -> .
+}

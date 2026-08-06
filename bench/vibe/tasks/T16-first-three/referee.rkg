@@ -1,0 +1,16 @@
+lab window {
+  simulation refereeing on app {
+    scenario closes "the window closes after three" {
+      app.in = "a"
+      expect "one" app.out count == 1 where data == "a"
+      app.in = "b"
+      expect "two" app.out count == 1 where data == "b"
+      app.in = "c"
+      expect "three" app.out count == 1 where data == "c"
+      app.in = "d"
+      expect nothing app.out
+      app.in = "e"
+      expect nothing app.out
+    }
+  }
+}

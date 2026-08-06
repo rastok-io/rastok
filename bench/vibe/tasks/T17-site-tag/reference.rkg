@@ -1,0 +1,9 @@
+graph tagging : App {
+  operator tag {
+    on in {
+      out = {site = "alpha-7", reading = data}
+    }
+  }
+
+  . -> tag -> .
+}

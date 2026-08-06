@@ -1,0 +1,14 @@
+lab streaks {
+  simulation refereeing on app {
+    scenario counting "failures accumulate, success resets" {
+      app.in = {ok = false}
+      expect "one" app.out count == 1 where data.streak == 1
+      app.in = {ok = false}
+      expect "two" app.out count == 1 where data.streak == 2
+      app.in = {ok = true}
+      expect "reset" app.out count == 1 where data.streak == 0
+      app.in = {ok = false}
+      expect "restarts" app.out count == 1 where data.streak == 1
+    }
+  }
+}

@@ -1,0 +1,8 @@
+lab tagging {
+  simulation refereeing on app {
+    scenario tags "the reading leaves tagged" {
+      app.in = "flow 12"
+      expect "tagged" app.out count == 1 where data.site == "alpha-7" && data.reading == "flow 12"
+    }
+  }
+}

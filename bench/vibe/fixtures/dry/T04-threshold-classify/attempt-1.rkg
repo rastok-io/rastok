@@ -1,0 +1,9 @@
+graph classify : App {
+  operator label {
+    on in {
+      out = {status = data.peak >= 100 ? "alarm" : "normal"}
+    }
+  }
+
+  . -> label -> .
+}

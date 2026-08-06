@@ -1,0 +1,18 @@
+lab pipeline {
+  simulation refereeing on app {
+    scenario passes "a high value passes clamped" {
+      app.in = {value = 180}
+      expect "passed" app.out count == 1 where data.value == 180
+    }
+
+    scenario clamped "an overrange value is clamped to the cap" {
+      app.in = {value = 900}
+      expect "capped" app.out count == 1 where data.value == 200
+    }
+
+    scenario gated "a low value is clamped then gated out" {
+      app.in = {value = -5}
+      expect nothing app.out
+    }
+  }
+}

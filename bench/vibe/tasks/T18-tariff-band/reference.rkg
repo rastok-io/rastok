@@ -1,0 +1,9 @@
+graph tariffs : App {
+  operator band {
+    on in {
+      out = {band = data.price < 50 ? "low" : (data.price > 150 ? "high" : "mid")}
+    }
+  }
+
+  . -> band -> .
+}

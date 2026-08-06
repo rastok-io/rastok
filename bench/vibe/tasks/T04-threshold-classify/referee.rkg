@@ -1,0 +1,13 @@
+lab classify {
+  simulation refereeing on app {
+    scenario hot "a peak above the line alarms" {
+      app.in = {peak = 101}
+      expect "alarmed" app.out count == 1 where data.status == "alarm"
+    }
+
+    scenario cool "a peak on the line stays normal" {
+      app.in = {peak = 100}
+      expect "normal" app.out count == 1 where data.status == "normal"
+    }
+  }
+}

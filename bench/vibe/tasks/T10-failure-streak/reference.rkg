@@ -1,0 +1,11 @@
+graph streaks : App {
+  operator count_failures {
+    var streak : int = 0
+    on in {
+      streak = data.ok ? 0 : streak + 1
+      out = {streak = streak}
+    }
+  }
+
+  . -> count_failures -> .
+}

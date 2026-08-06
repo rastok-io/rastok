@@ -5,3 +5,5 @@
 .codex/
 .mcp.json
 spikes/*/target/
+bench/vibe/results/
+bench/vibe/runner/target/

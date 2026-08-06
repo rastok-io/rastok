@@ -1,0 +1,18 @@
+lab bounds {
+  simulation refereeing on app {
+    scenario inside "an in-band reading is ok" {
+      app.in = {value = 50, low = 0, high = 100}
+      expect "ok" app.out count == 1 where data.ok == true
+    }
+
+    scenario on_edge "the band ends are inclusive" {
+      app.in = {value = 100, low = 0, high = 100}
+      expect "edge ok" app.out count == 1 where data.ok == true
+    }
+
+    scenario outside "an out-of-band reading is flagged" {
+      app.in = {value = 101, low = 0, high = 100}
+      expect "flagged" app.out count == 1 where data.ok == false
+    }
+  }
+}

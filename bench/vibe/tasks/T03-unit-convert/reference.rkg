@@ -1,0 +1,9 @@
+graph convert : App {
+  operator to_fahrenheit {
+    on in {
+      out = {fahrenheit = (data.celsius * 9) / 5 + 32}
+    }
+  }
+
+  . -> to_fahrenheit -> .
+}

@@ -1,0 +1,11 @@
+graph stamp : App {
+  operator number {
+    var seen : int = 0
+    on in {
+      seen = seen + 1
+      out = {seq = seen, text = data}
+    }
+  }
+
+  . -> number -> .
+}

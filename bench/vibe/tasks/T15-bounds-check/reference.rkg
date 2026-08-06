@@ -1,0 +1,9 @@
+graph bounds : App {
+  operator inside {
+    on in {
+      out = {ok = data.low <= data.value && data.value <= data.high}
+    }
+  }
+
+  . -> inside -> .
+}

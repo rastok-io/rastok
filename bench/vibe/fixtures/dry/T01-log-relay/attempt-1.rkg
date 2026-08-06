@@ -1,0 +1,17 @@
+```rkg
+graph relay : App {
+  connector logger : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator screen {
+    on in where data != "" {
+      out = data
+    }
+  }
+
+  . -> screen -> logger -> .
+}
+```

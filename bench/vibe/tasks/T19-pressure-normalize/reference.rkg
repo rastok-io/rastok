@@ -1,0 +1,9 @@
+graph pressures : App {
+  operator normalize {
+    on in {
+      out = {kpa = data.unit == "bar" ? data.value * 100 : data.value}
+    }
+  }
+
+  . -> normalize -> .
+}

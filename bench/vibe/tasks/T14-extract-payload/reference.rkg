@@ -1,0 +1,15 @@
+graph extract : App {
+  connector forwarder : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator unwrap {
+    on in {
+      out = data.payload
+    }
+  }
+
+  . -> unwrap -> forwarder -> .
+}

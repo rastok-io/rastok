@@ -1,0 +1,11 @@
+graph window : App {
+  operator first_three {
+    var passed : int = 0
+    on in where passed < 3 {
+      passed = passed + 1
+      out = data
+    }
+  }
+
+  . -> first_three -> .
+}

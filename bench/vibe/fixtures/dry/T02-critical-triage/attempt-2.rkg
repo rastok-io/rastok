@@ -1,0 +1,15 @@
+graph triage : App {
+  connector notifier : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator gate {
+    on in where data.level == "critical" {
+      out = data.message
+    }
+  }
+
+  . -> gate -> notifier -> .
+}

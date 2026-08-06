@@ -1,0 +1,11 @@
+graph hysteresis : App {
+  operator latch {
+    var state : text = "normal"
+    on in {
+      state = data.value > 120 ? "tripped" : (data.value < 80 ? "normal" : state)
+      out = {state = state}
+    }
+  }
+
+  . -> latch -> .
+}

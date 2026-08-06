@@ -1,0 +1,13 @@
+lab batches {
+  simulation refereeing on app {
+    scenario full "a live batch is summarized" {
+      app.in = {readings = [98, 101, 99], peak = 101}
+      expect "summarized" app.out count == 1 where data.count == 3 && data.status == "alarm"
+    }
+
+    scenario empty "an empty batch is dropped" {
+      app.in = {readings = [], peak = 0}
+      expect nothing app.out
+    }
+  }
+}

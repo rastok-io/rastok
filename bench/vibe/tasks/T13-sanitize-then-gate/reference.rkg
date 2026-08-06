@@ -1,0 +1,15 @@
+graph pipeline : App {
+  operator clamp {
+    on in {
+      out = {value = data.value < 0 ? 0 : (data.value > 200 ? 200 : data.value)}
+    }
+  }
+
+  operator gate {
+    on in where data.value > 150 {
+      out = data
+    }
+  }
+
+  . -> clamp -> gate -> .
+}

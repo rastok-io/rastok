@@ -1,0 +1,13 @@
+lab extract {
+  simulation refereeing on app {
+    mock forwarder {
+      on in { out = envelope }
+    }
+
+    scenario unwraps "the payload travels bare" {
+      app.in = {site = "alpha-7", payload = "flow 12"}
+      expect "forwarded" forwarder.in count == 1 where data == "flow 12"
+      expect "returned" app.out count == 1 where data == "flow 12"
+    }
+  }
+}
