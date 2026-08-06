@@ -26,19 +26,39 @@ cluster operation.
 Consolidate what M0 proved before widening it
 ([`docs/architecture/m0.5-slice.md`](docs/architecture/m0.5-slice.md)):
 
-- Specify the delivery reference and derive the call identity from
-  it — the multiport prerequisite, spec-first.
-- Split the no_std-ready core (`rastok-core`) from the std layer,
-  with CI guarding the frontier; prove neutrality by the unchanged
-  semantic hash.
+- Done: specify the delivery reference and derive the call identity
+  from it — the multiport prerequisite, spec-first.
+- Done: split the no_std-ready core (`rastok-core`) from the std
+  layer, with CI guarding the frontier; neutrality proven by the
+  unchanged semantic hash.
 - Seal the executable plan as a versioned, verifiable blob.
 - Time-boxed embedded spike against a written go/no-go.
 - A connector conformance harness over the `Partner` seam — a new
   adapter in half a day.
-- First LLM-authorship benchmark wave: generate → check → retry →
-  simulate, measured.
+- First verified-authorship benchmark wave ("vibe coding" under a
+  compiler and Lab contract): generate → check → retry → simulate,
+  measured.
 
-## Next — incident lab and safe dogfood
+## Next — the demonstrable integration slice
+
+The question this slice answers: can a realistic asynchronous
+integration seam — request, external partner, late callback — be
+built, simulated, and shown end to end, before its real systems
+exist?
+
+- A JSON/JSONL codec chain across the boundaries.
+- HTTP client and server boundaries under their contract sheets.
+- Executable joins with their mandatory bounds; the `per` partition
+  surface.
+- Governed retry: the `Loop` aspect, driven by typed transient
+  errors.
+- Per-flow cost and latency counters, carried by the journal.
+- A live view of the running graph, fed by the journal, and a replay
+  of any recorded run.
+- A guided example gallery and a quickstart a third party completes
+  unaided.
+
+## Later — incident lab and safe dogfood
 
 - Turn one real internal failure into a redacted fixture and scenario.
 - Run in a trusted, non-critical environment with a kill switch.
