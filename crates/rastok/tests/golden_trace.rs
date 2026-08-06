@@ -1,3 +1,6 @@
+// A test harness drives the OS on purpose; the frontier lints
+// guard the core modules, not the evidence.
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 //! The golden seal of the M0 probe: the canonical projection of a
 //! full run, pinned byte for byte. `RASTOK_BLESS=1 cargo test` blesses
 //! a new golden after an intentional behavior change — the diff in

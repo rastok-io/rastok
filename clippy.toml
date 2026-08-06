@@ -1,3 +1,23 @@
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-unwrap-in-tests = true
+
+# The no_std frontier, held by lint until the crate split makes it
+# structural: the core-candidate modules must not touch the OS or
+# nondeterministic collections. The std layer opts out explicitly,
+# file by file, with its reason.
+disallowed-types = [
+    { path = "std::time::Instant", reason = "wall-clock is the world's; the machine's time is the scheduler's virtual clock" },
+    { path = "std::time::SystemTime", reason = "wall-clock is the world's" },
+    { path = "std::collections::HashMap", reason = "iteration order is nondeterministic; BTreeMap everywhere" },
+    { path = "std::collections::HashSet", reason = "iteration order is nondeterministic; BTreeSet everywhere" },
+]
+disallowed-methods = [
+    { path = "std::thread::spawn", reason = "threads live in the std layer (adapters), never in the core" },
+    { path = "std::process::Command::new", reason = "spawning is an adapter effect" },
+    { path = "std::fs::read_to_string", reason = "the filesystem is the std layer's" },
+    { path = "std::fs::read", reason = "the filesystem is the std layer's" },
+    { path = "std::fs::write", reason = "the filesystem is the std layer's" },
+    { path = "std::fs::create_dir_all", reason = "the filesystem is the std layer's" },
+    { path = "std::fs::remove_dir_all", reason = "the filesystem is the std layer's" },
+]

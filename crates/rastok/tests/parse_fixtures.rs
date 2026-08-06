@@ -1,3 +1,6 @@
+// A test harness drives the OS on purpose; the frontier lints
+// guard the core modules, not the evidence.
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 //! Fixture-driven parser evidence: every `.rkg` under `tests/fixtures/`
 //! must parse to a stable outcome. A sibling `.diag` file holds the
 //! expected rendered diagnostics — absent or empty means the source is

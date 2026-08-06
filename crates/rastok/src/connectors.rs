@@ -1,3 +1,6 @@
+// The adapter layer IS the OS boundary: spawning, threads, and the
+// clock are its business — the frontier lints stop at this file.
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 //! The real adapters behind connector contracts — where the graph's
 //! intent becomes an actual effect on the machine.
 //!

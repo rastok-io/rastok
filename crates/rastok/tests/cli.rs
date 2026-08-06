@@ -1,3 +1,6 @@
+// A test harness drives the OS on purpose; the frontier lints
+// guard the core modules, not the evidence.
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 //! The binary, end to end: the M0 minimal-evidence chain driven the
 //! way a user drives it — `check`, `run` against a real child
 //! process, `simulate` against the scripted lab.

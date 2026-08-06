@@ -1,3 +1,6 @@
+// The binary wires the OS to the machine: filesystem and process
+// are its business — the frontier lints stop at this file.
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 //! The `rastok` binary: `check`, `run`, `simulate`.
 //!
 //! One deployed unit in, evidence out. `check` compiles and prints
