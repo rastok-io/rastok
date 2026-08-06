@@ -6,22 +6,15 @@
 //! `docs/architecture/build-order.md`; the spec under `docs/spec/` is
 //! normative.
 
-// The `alloc` paths used by the core-candidate modules resolve here;
-// under std this is a no-op declaration (std links alloc), and it is
-// exactly what the future `rastok-core` crate root will declare.
-extern crate alloc;
+// The kernel's modules re-export here so every existing path —
+// `rastok::envelope`, `rastok::runtime::vm` — keeps resolving; the
+// crate boundary is real, the surface is unchanged.
+pub use rastok_core::{boundary, cel, envelope, journal, node, plan, runtime};
 
-pub mod boundary;
-pub mod cel;
 pub mod compiler;
 pub mod connectors;
 pub mod diagnostics;
-pub mod envelope;
 pub mod golden;
-pub mod journal;
 pub mod lab;
-pub mod node;
-pub mod plan;
 pub mod render;
-pub mod runtime;
 pub mod stdlib;

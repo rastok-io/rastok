@@ -76,6 +76,14 @@ name = "rastok"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "rastok-core",
+]
+
+[[package]]
+name = "rastok-core"
+version = "0.0.0"
+dependencies = [
+ "blake3",
 ]
 
 [[package]]
