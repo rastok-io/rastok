@@ -20,3 +20,13 @@ jobs:
       - run: cargo test --workspace --all-features
       - run: cargo doc --workspace --no-deps
       - run: cargo run --quiet -- simulate examples/echo.rkg
+
+  # The kernel must stay buildable for bare metal: an OS leak into
+  # rastok-core is a build error here before it is a review comment.
+  no-std-frontier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.97.1 --no-self-update
+      - run: rustup target add thumbv8m.main-none-eabihf --toolchain 1.97.1
+      - run: cargo check -p rastok-core --target thumbv8m.main-none-eabihf

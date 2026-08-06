@@ -75,25 +75,19 @@ canonical record projection ─▶ golden compare
 ## 2. The module map
 
 ```text
-crates/rastok/src/            # as built
-├── node.rs           # vocabulary : Path, Kind, Port, Direction, Effect,
-│                     #   Behavior, Lifecycle, Trigger, HandlerActivation
-├── envelope.rs       # Envelope, Meta, MetaSys, Id, Data, Encoding, Value,
-│                     #   Role, WriteTarget (checked builder-write targets)
+crates/rastok-core/src/       # the kernel — #![no_std] + alloc (split at M0.5)
+├── node.rs, envelope.rs, cel.rs, plan.rs
+├── journal.rs                # records (+ armed timers), trait, ids, MemJournal
+├── boundary.rs               # vocabulary, PreparedRequest, the five traits
+└── runtime.rs, runtime/vm.rs # the machine
+
+crates/rastok/src/            # the std layer — re-exports the kernel
 ├── diagnostics.rs    # Diagnostic, Code, Severity, Phase, Span, Bag
-├── cel.rs            # the isolated expression chain — depends on nothing here
 ├── compiler.rs       # facade : parse → check → hash → lower
 │   └── compiler/     #   lexer, syntax, parser, hir (graph + lab), check, lower
-├── plan.rs           # ExecutionPlan, NodeKind, ConnectorSpec, Handler, Slot,
-│                     #   SemanticHash, Manifest, edge_text
 ├── stdlib.rs         # declarative Connector/guest contracts (the checker's view)
-├── boundary.rs       # Ingress, Partner (+cancel), OutcomeGate, Clock, Supervisor,
-│                     #   Dispatcher, Intent, PumpBatch, DatedPayload
-├── runtime.rs        # TransactionExecutor, Mailboxes, PartitionState, Delivery
-│   └── runtime/vm.rs #   Vm (boot, inject, step, drain, pump, advance), Scheduler
-├── journal.rs        # Journal trait, records (+ armed timers), mod ids, MemJournal
 ├── golden.rs         # Trace, Divergence — projection, seal, diff, CBOR both ways
-├── connectors.rs     # Process (async, group-terminated) + prepare (pure framing)
+├── connectors.rs     # Process (async, group-terminated) — transports prepared bytes
 ├── lab.rs            # run → ScenarioRun { report, records } ; the mock partner
 ├── render.rs         # Sources + rustc-shaped diagnostic rendering
 └── main.rs           # thin bin : check | run | simulate (--golden / --bless)

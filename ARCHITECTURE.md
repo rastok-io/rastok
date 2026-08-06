@@ -153,6 +153,15 @@ Splitting by architectural noun alone is not sufficient. Compiler and
 runtime crates, once justified, remain in this repository so that
 specification, implementation, and conformance changes can be atomic.
 
+The first split happened at M0.5 under exactly this rule:
+`rastok-core` (no_std + alloc — vocabulary, envelope, CEL, plan,
+journal, boundary, machine) separated from the std layer when the
+"dependency that must not leak" pressure became concrete — the OS
+must never enter the kernel, and a bare-metal target must be able to
+run the same engine. The frontier is machine-checked: CI builds
+`rastok-core` for a Cortex-M target on every push, and the std crate
+re-exports the kernel so callers see one surface.
+
 ## Views
 
 - [System context](docs/architecture/01-system-context.svg) —
