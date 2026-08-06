@@ -21,42 +21,49 @@ Out of scope: a complete connector catalogue, live Saga or Loop
 managers, durable deployment, enterprise security, UI, registry, and
 cluster operation.
 
-## Now — M0.5 engine consolidation
+## Done — M0.5 engine consolidation (closed 2026-08-06)
 
-Consolidate what M0 proved before widening it
+Consolidated what M0 proved before widening it
 ([`docs/architecture/m0.5-slice.md`](docs/architecture/m0.5-slice.md)):
 
-- Done: specify the delivery reference and derive the call identity
+- The delivery reference specified and the call identity derived
   from it — the multiport prerequisite, spec-first.
-- Done: split the no_std-ready core (`rastok-core`) from the std
-  layer, with CI guarding the frontier; neutrality proven by the
-  unchanged semantic hash.
-- Seal the executable plan as a versioned, verifiable blob.
-- Time-boxed embedded spike against a written go/no-go.
-- A connector conformance harness over the `Partner` seam — a new
-  adapter in half a day.
-- First verified-authorship benchmark wave ("vibe coding" under a
-  compiler and Lab contract): generate → check → retry → simulate,
-  measured.
+- The no_std-ready core (`rastok-core`) split from the std layer,
+  with CI guarding the frontier; neutrality proven by the unchanged
+  semantic hash.
+- The executable plan sealed as a versioned, verifiable blob with
+  typed refusals.
+- The embedded spike run emulated against its written go/no-go —
+  provisional GO, silicon confirmation pending hardware.
+- The connector conformance harness over the `Partner` seam: the ten
+  contract cases executable, `Process` re-expressed on it.
+- The verified-authorship benchmark built and rehearsed dry — twenty
+  referee-checked tasks, a frozen prompt card, the full
+  generate → check → retry → simulate loop measured on recorded
+  attempts; the paid model wave is deliberately deferred.
 
-## Next — the demonstrable integration slice
+## Now — M1, the demonstrable integration slice
 
 The question this slice answers: can a realistic asynchronous
 integration seam — request, external partner, late callback — be
 built, simulated, and shown end to end, before its real systems
-exist?
+exist? Scope, order, and evidence:
+[`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
+The repository opens publicly with this milestone (15 October 2026).
 
+- Multiport execution, then the constructs that stand on it: the
+  `per` partition surface and bounded joins.
 - A JSON/JSONL codec chain across the boundaries.
-- HTTP client and server boundaries under their contract sheets.
-- Executable joins with their mandatory bounds; the `per` partition
-  surface.
+- The error half of the language: typed emissions and mock failure
+  replies.
+- `File`, HTTP client and server boundaries under their contract
+  sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by typed transient
   errors.
-- Per-flow cost and latency counters, carried by the journal.
-- A live view of the running graph, fed by the journal, and a replay
-  of any recorded run.
-- A guided example gallery and a quickstart a third party completes
-  unaided.
+- Per-flow cost counters, carried by the journal.
+- A live view of the running graph, fed by the journal.
+- A guided example gallery seeded by the benchmark's reference
+  solutions, closed by the October demo flow.
 
 ## Later — incident lab and safe dogfood
 
