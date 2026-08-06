@@ -12,6 +12,7 @@
 pub use rastok_core::{blob, boundary, canon, cel, envelope, journal, node, plan, runtime};
 
 pub mod compiler;
+pub mod conformance;
 pub mod connectors;
 pub mod diagnostics;
 pub mod golden;
