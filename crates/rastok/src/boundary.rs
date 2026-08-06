@@ -69,23 +69,108 @@ impl fmt::Display for CallRef {
     }
 }
 
+/// The exact protocol bytes of a request, sealed: what the journal
+/// digests and what the partner receives are THE SAME VALUE — the
+/// machine prepares once, the adapter transports, nobody recomputes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedRequest {
+    bytes: alloc::vec::Vec<u8>,
+    digest: [u8; 32],
+}
+
+impl PreparedRequest {
+    /// Seals prepared bytes with their blake3 digest.
+    #[must_use]
+    pub fn seal(bytes: alloc::vec::Vec<u8>) -> Self {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&bytes);
+        let mut digest = [0u8; 32];
+        hasher.finalize_xof().fill(&mut digest);
+        Self { bytes, digest }
+    }
+
+    /// The exact bytes to send.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The sealed digest of those bytes.
+    #[must_use]
+    pub fn digest(&self) -> &[u8; 32] {
+        &self.digest
+    }
+}
+
+/// Frames request data under `codec = lines`: text is one line (one
+/// trailing newline ensured, never doubled), raw bytes pass verbatim,
+/// anything else refuses as a typed decode reason — before any open
+/// fact, before any effect. Pure: the machine and any adapter see one
+/// framing.
+///
+/// # Errors
+///
+/// The decode reason when the data cannot be framed as a line.
+pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
+    use envelope::{Data, Encoding, Scalar, Value};
+    let bytes = match data {
+        Data::Encoded {
+            encoding: Encoding::Raw,
+            bytes,
+            ..
+        } => bytes.clone(),
+        Data::Materialized(Value::Scalar(Scalar::Text(text))) => {
+            let mut bytes = text.clone().into_bytes();
+            if bytes.last() != Some(&b'\n') {
+                bytes.push(b'\n');
+            }
+            bytes
+        }
+        Data::Encoded { encoding, .. } => {
+            return Err(alloc::format!(
+                "the lines codec frames text; the request is {encoding:?}-encoded"
+            ));
+        }
+        Data::Materialized(other) => {
+            return Err(alloc::format!(
+                "the lines codec frames text; the request data is {other:?}"
+            ));
+        }
+    };
+    Ok(PreparedRequest::seal(bytes))
+}
+
 /// Canonical journaled outbound-call intent (`identity.md` §3, keys
-/// 40–43): journaled open before the effect executes.
+/// 40–43 and 47): journaled open before the effect executes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Intent {
     /// The derived internal call identity.
     pub call_ref: CallRef,
     /// The envelope that opened the call — the cause.
     pub emitting_id: envelope::Id,
+    /// The canonical edge of the causing delivery (key 47): with the
+    /// emitting id it reconstructs the delivery reference and hence
+    /// the call identity — the record stays autonomous.
+    pub edge: String,
     /// The calling connector node.
     pub connector_path: node::Path,
-    /// The boundary integrity seal over the request bytes.
-    pub request_digest: [u8; 32],
+    /// The prepared request — the sealed digest is canonical (key
+    /// 43); the bytes ride along for the partner and are never
+    /// themselves record material.
+    pub prepared: PreparedRequest,
     /// Names the business operation; stable across retries. `None`
     /// only for `compensable` without a key.
     pub idempotency_key: Option<String>,
     /// The declared effect class of the call.
     pub effect: node::EffectClass,
+}
+
+impl Intent {
+    /// The boundary integrity seal over the exact prepared bytes.
+    #[must_use]
+    pub fn request_digest(&self) -> &[u8; 32] {
+        self.prepared.digest()
+    }
 }
 
 /// Protocol-correlated partner answer. A partner answers or stays
@@ -442,6 +527,29 @@ impl Dispatcher {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prepare_lines_frames_exactly_one_trailing_newline() {
+        use crate::envelope::{Data, Encoding, Scalar, Value};
+        let framed = prepare_lines(&Data::materialized(Value::Scalar(Scalar::Text(
+            String::from("ligne"),
+        ))))
+        .unwrap();
+        assert_eq!(framed.bytes(), b"ligne\n");
+        let already = prepare_lines(&Data::materialized(Value::Scalar(Scalar::Text(
+            String::from("ligne\n"),
+        ))))
+        .unwrap();
+        assert_eq!(already.bytes(), b"ligne\n");
+        let raw = prepare_lines(&Data::encoded(Encoding::Raw, *b"verbatim")).unwrap();
+        assert_eq!(raw.bytes(), b"verbatim");
+        // The seal is the blake3 of exactly those bytes.
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"verbatim");
+        let mut digest = [0u8; 32];
+        hasher.finalize_xof().fill(&mut digest);
+        assert_eq!(raw.digest(), &digest);
+    }
+
     use super::*;
     use crate::envelope::{Data, Encoding, Namespace};
     use crate::journal::{MemJournal, ids};
@@ -487,12 +595,14 @@ mod tests {
             .unwrap();
         let connector_path = node::Path::new(["echo"]).unwrap();
         let emitting_id = committed.envelope.meta().sys().id();
-        let request_digest = [7; 32];
+        let edge = String::from("shout.out>echo.in");
+        let prepared = PreparedRequest::seal(b"salut\n".to_vec());
         let intent = Intent {
-            call_ref: ids::call_ref(emitting_id, &connector_path, &request_digest),
+            call_ref: ids::call_ref(ids::delivery_ref(&edge, emitting_id), prepared.digest()),
             emitting_id,
+            edge,
             connector_path,
-            request_digest,
+            prepared,
             idempotency_key: None,
             effect: node::EffectClass::Idempotent,
         };
@@ -598,8 +708,7 @@ mod tests {
         let mut dispatcher = Dispatcher::new();
         partner.replies = vec![Response {
             call_ref: ids::call_ref(
-                envelope::Id::from_bytes([9; 16]),
-                &node::Path::new(["ghost"]).unwrap(),
+                ids::delivery_ref("x.out>ghost.in", envelope::Id::from_bytes([9; 16])),
                 &[0; 32],
             ),
             outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"?")),

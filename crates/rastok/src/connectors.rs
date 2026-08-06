@@ -12,7 +12,7 @@
 
 use crate::boundary::{CallOutcome, Intent, Partner, Response, TypedError};
 use crate::cel;
-use crate::envelope::{Data, Encoding, Envelope, Scalar, Value};
+use crate::envelope::{Data, Envelope, Scalar, Value};
 use crate::plan::{AttrSetting, ExecutionPlan, NodeKind};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -22,21 +22,6 @@ use std::process::{Command, Stdio};
 /// The default stdout cap for a job run, per the contract sheet's
 /// `max_output = 8MiB` default.
 const DEFAULT_MAX_OUTPUT: usize = 8 * 1024 * 1024;
-
-/// Prepares the exact protocol bytes of a request under a connector's
-/// contract — pure, shared by the machine and the adapter: the digest
-/// the journal seals and the bytes the child receives come from this
-/// one function, so they cannot diverge. `codec = lines` frames text
-/// as a single line (one trailing newline ensured) and passes raw
-/// bytes verbatim; anything else refuses before any effect.
-///
-/// # Errors
-///
-/// The typed-decode reason when the data cannot be framed.
-pub fn prepare(spec: &crate::plan::ConnectorSpec, data: &Data) -> Result<Vec<u8>, String> {
-    let _ = spec; // one codec exists in this build; jsonl defers at check
-    frame_request(data)
-}
 
 /// Parses a declared size ("8MiB", "512KiB", "100B", bare bytes).
 fn parse_size(text: &str) -> Option<usize> {
@@ -146,10 +131,11 @@ impl<'plan> Process<'plan> {
                 .collect(),
             _ => Vec::new(),
         };
-        let framed = match prepare(spec, request.data()) {
-            Ok(bytes) => bytes,
-            Err(message) => return Err(failure("DecodeError", message)),
-        };
+        // The machine prepared and sealed the bytes; the adapter
+        // TRANSPORTS them — recomputing would reopen the gap between
+        // sealed and sent.
+        let framed = intent.prepared.bytes().to_vec();
+        let _ = request;
         let max_output = match spec.attribute("max_output") {
             Some(AttrSetting::Value(cel::Value::Text(text))) => match parse_size(text) {
                 Some(size) => size,
@@ -431,47 +417,6 @@ impl Partner for Process<'_> {
             // the pump threads then see EOF and exit.
             kill_group(&mut run.child);
         }
-    }
-}
-
-/// Frames a request for stdin under `codec = lines`: text data is
-/// one line — a trailing newline is ensured, not doubled — and raw
-/// bytes pass verbatim. Anything else cannot be framed as a line and
-/// refuses as a typed decode error before any spawn.
-fn frame_request(data: &Data) -> Result<Vec<u8>, String> {
-    match data {
-        Data::Encoded {
-            encoding: Encoding::Raw,
-            bytes,
-            ..
-        } => Ok(bytes.clone()),
-        Data::Materialized(Value::Scalar(Scalar::Text(text))) => {
-            let mut bytes = text.clone().into_bytes();
-            if bytes.last() != Some(&b'\n') {
-                bytes.push(b'\n');
-            }
-            Ok(bytes)
-        }
-        Data::Encoded { encoding, .. } => Err(format!(
-            "the lines codec frames text; the request is {encoding:?}-encoded"
-        )),
-        Data::Materialized(other) => Err(format!(
-            "the lines codec frames text; the request data is {}",
-            value_kind(other)
-        )),
-    }
-}
-
-fn value_kind(value: &Value) -> &'static str {
-    match value {
-        Value::Scalar(Scalar::Bool(_)) => "a bool",
-        Value::Scalar(Scalar::Int(_)) => "an int",
-        Value::Scalar(Scalar::Double(_)) => "a double",
-        Value::Scalar(Scalar::Text(_)) => "text",
-        Value::Scalar(Scalar::Bytes(_)) => "bytes",
-        Value::Struct(_) => "a struct",
-        Value::Array(_) => "an array",
-        Value::Map(_) => "a map",
     }
 }
 
@@ -881,21 +826,5 @@ graph unframeable : App {
                 .any(|record| matches!(record, Record::Outbound(_))),
             "no open fact for an unattemptable effect"
         );
-    }
-
-    #[test]
-    fn framing_ensures_exactly_one_trailing_newline() {
-        let framed = frame_request(&Data::materialized(Value::Scalar(Scalar::Text(
-            String::from("ligne"),
-        ))))
-        .unwrap();
-        assert_eq!(framed, b"ligne\n");
-        let already = frame_request(&Data::materialized(Value::Scalar(Scalar::Text(
-            String::from("ligne\n"),
-        ))))
-        .unwrap();
-        assert_eq!(already, b"ligne\n");
-        let raw = frame_request(&Data::encoded(Encoding::Raw, *b"verbatim")).unwrap();
-        assert_eq!(raw, b"verbatim");
     }
 }

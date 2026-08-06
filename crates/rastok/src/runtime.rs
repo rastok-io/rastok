@@ -524,7 +524,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 if budgeted {
                     timers.push((
                         1,
-                        ids::budget_ref(
+                        ids::delivery_ref(
                             &self.plan.edge_text(edge),
                             emission.envelope.meta().sys().id(),
                         ),
@@ -1469,7 +1469,10 @@ graph m0_probe : App {
         let request = input("salut").envelope;
         let connector_path = node::Path::new(["echo"]).unwrap();
         let event = BoundaryEvent {
-            call_ref: ids::call_ref(request.meta().sys().id(), &connector_path, &[7; 32]),
+            call_ref: ids::call_ref(
+                ids::delivery_ref("shout.out>echo.in", request.meta().sys().id()),
+                &[7; 32],
+            ),
             connector_path: connector_path.clone(),
             emitting_id: request.meta().sys().id(),
             port: node::Port::new("err").unwrap(),

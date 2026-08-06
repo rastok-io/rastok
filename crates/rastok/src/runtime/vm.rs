@@ -457,19 +457,19 @@ impl<'plan> Vm<'plan> {
                 node::Effect::Class(class) => class,
                 node::Effect::None => unreachable!("an effectless connector opens no calls"),
             };
-            match crate::connectors::prepare(spec, queued.envelope.data()) {
+            match crate::boundary::prepare_lines(queued.envelope.data()) {
                 Err(_) => None,
-                Ok(bytes) => {
-                    let mut hasher = blake3::Hasher::new();
-                    hasher.update(&bytes);
-                    let mut digest = [0u8; 32];
-                    hasher.finalize_xof().fill(&mut digest);
+                Ok(prepared) => {
                     let emitting_id = queued.envelope.meta().sys().id();
                     Some(Intent {
-                        call_ref: ids::call_ref(emitting_id, &planned.path, &digest),
+                        call_ref: ids::call_ref(
+                            ids::delivery_ref(&queued.edge, emitting_id),
+                            prepared.digest(),
+                        ),
                         emitting_id,
+                        edge: queued.edge.clone(),
                         connector_path: planned.path.clone(),
-                        request_digest: digest,
+                        prepared,
                         idempotency_key: None,
                         effect,
                     })
@@ -680,18 +680,13 @@ impl<'plan> Vm<'plan> {
             }
         };
         let emitting_id = delivery.envelope.meta().sys().id();
-        // The digest seals the EXACT protocol bytes: preparation is
-        // the same pure function the adapter uses, so what is sealed
-        // and what is sent cannot diverge. An unframeable request is
-        // a typed decode error before any open fact exists.
-        let request_digest = match crate::connectors::prepare(spec, delivery.envelope.data()) {
-            Ok(bytes) => {
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(&bytes);
-                let mut digest = [0u8; 32];
-                hasher.finalize_xof().fill(&mut digest);
-                digest
-            }
+        // The machine prepares ONCE, in the boundary vocabulary: the
+        // sealed digest and the bytes the partner will receive are
+        // one value carried by the intent — nobody recomputes. An
+        // unframeable request is a typed decode error before any
+        // open fact exists.
+        let prepared = match crate::boundary::prepare_lines(delivery.envelope.data()) {
+            Ok(prepared) => prepared,
             Err(message) => {
                 let executor = TransactionExecutor::new(self.plan, self.graph_version);
                 let outcome =
@@ -705,12 +700,18 @@ impl<'plan> Vm<'plan> {
                 return Ok(());
             }
         };
+        // The call identity: one delivery carrying one prepared
+        // request (envelope.md §2) — the reference says by where,
+        // the digest says what.
         let intent = Intent {
-            call_ref: ids::call_ref(emitting_id, &planned.path, &request_digest),
+            call_ref: ids::call_ref(
+                ids::delivery_ref(&delivery.edge, emitting_id),
+                prepared.digest(),
+            ),
             emitting_id,
+            edge: delivery.edge.clone(),
             connector_path: planned.path.clone(),
-            request_digest,
-
+            prepared,
             // The checker admits only `idempotent` in this subset; a
             // keyed irreversible intent arrives with its invariants.
             idempotency_key: None,

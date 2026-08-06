@@ -41,8 +41,8 @@ pub mod ids {
     /// the envelope id domains (`0x01`–`0x04` are reserved by the
     /// spec); a call ref is never an envelope id.
     const CALL: u8 = 0x10;
-    /// Domain tag of a dated budget obligation.
-    const BUDGET: u8 = 0x20;
+    /// Domain tag of a delivery reference.
+    const DELIVERY: u8 = 0x20;
 
     /// The root id of an inbound envelope:
     /// `blake3(connector_path ‖ inbound_seq)`. The single-process
@@ -83,35 +83,27 @@ pub mod ids {
         )
     }
 
-    /// The identity of one armed call budget, from the CANONICAL EDGE
-    /// the envelope traveled and the envelope's id — so a fan-out of
-    /// one envelope arms one distinct obligation per receiving edge,
-    /// two ports of one connector included. This is what `timers`
-    /// (identity.md §3 key 37) seals and what the scheduler resolves;
-    /// the recipe is recorded as erratum E-2026-08-04-2 pending its
-    /// formalization in identity.md.
+    /// The delivery reference (envelope.md §2): one envelope delivered
+    /// along one canonical edge is one delivery, and this is its
+    /// identity — what `timers` (identity.md §3 key 37) seals, what
+    /// the scheduler resolves, and what the call identity derives
+    /// from. A fan-out of one envelope is one distinct reference per
+    /// receiving edge, two ports of one connector included.
     #[must_use]
-    pub fn budget_ref(edge: &str, delivery: Id) -> Id {
-        Id::derive(BUDGET, &[edge.as_bytes(), delivery.as_bytes()])
+    pub fn delivery_ref(edge: &str, delivery: Id) -> Id {
+        Id::derive(DELIVERY, &[edge.as_bytes(), delivery.as_bytes()])
     }
 
-    /// The internal identity of an outbound call, derived from its
-    /// canonical fields — recomputable from any record that carries
-    /// them, never stored as a new causal field.
+    /// The internal identity of an outbound call (envelope.md §2):
+    /// one delivery carrying one prepared request — derived from the
+    /// delivery reference and the digest of the exact prepared bytes,
+    /// recomputable from any record that carries them (OUTBOUND keys
+    /// 40, 43, 47), never stored as a new causal field. The digest
+    /// says WHAT was sent; the reference says BY WHERE — routing
+    /// never salts the digest.
     #[must_use]
-    pub fn call_ref(
-        emitting_id: Id,
-        connector_path: &node::Path,
-        request_digest: &[u8; 32],
-    ) -> CallRef {
-        CallRef::new(Id::derive(
-            CALL,
-            &[
-                emitting_id.as_bytes(),
-                connector_path.to_string().as_bytes(),
-                request_digest,
-            ],
-        ))
+    pub fn call_ref(delivery_ref: Id, request_digest: &[u8; 32]) -> CallRef {
+        CallRef::new(Id::derive(CALL, &[delivery_ref.as_bytes(), request_digest]))
     }
 }
 
@@ -441,10 +433,11 @@ impl Journal for MemJournal {
     }
 
     fn open_outbound(&mut self, intent: Intent) -> Result<(), Error> {
+        // The autonomy check: the call identity must recompute from
+        // the fields this record seals (keys 40, 43, 47).
         let derived = ids::call_ref(
-            intent.emitting_id,
-            &intent.connector_path,
-            &intent.request_digest,
+            ids::delivery_ref(&intent.edge, intent.emitting_id),
+            intent.request_digest(),
         );
         if derived != intent.call_ref {
             return Err(Error::CorruptIntent);
@@ -557,24 +550,52 @@ mod tests {
     fn intent(connector: &str, digest: u8) -> Intent {
         let connector_path = node::Path::new([connector]).unwrap();
         let emitting_id = Id::derive(0x02, &[b"cause"]);
-        let request_digest = [digest; 32];
+        let edge = alloc::format!("shout.out>{connector}.in");
+        let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
         Intent {
-            call_ref: ids::call_ref(emitting_id, &connector_path, &request_digest),
+            call_ref: ids::call_ref(ids::delivery_ref(&edge, emitting_id), prepared.digest()),
             emitting_id,
+            edge,
             connector_path,
-            request_digest,
+            prepared,
             idempotency_key: Some(String::from("op-1")),
             effect: node::EffectClass::Idempotent,
         }
     }
 
     #[test]
-    fn the_budget_ref_recipe_is_pinned_byte_for_byte() {
-        // Erratum E-2026-08-04-2: the budget obligation's identity is
+    fn two_edges_derive_two_calls_for_one_envelope_and_one_payload() {
+        // The multiport prerequisite, closed: same envelope, same
+        // prepared bytes, two receiving edges — two delivery
+        // references, two call identities. Salting the digest was
+        // rejected; the reference carries the routing.
+        let envelope_id = Id::from_bytes([7; 16]);
+        let digest = [3u8; 32];
+        let a = ids::call_ref(ids::delivery_ref("src.out>c.a", envelope_id), &digest);
+        let b = ids::call_ref(ids::delivery_ref("src.out>c.b", envelope_id), &digest);
+        assert_ne!(a, b, "two deliveries, two calls");
+    }
+
+    #[test]
+    fn an_outbound_record_reconstructs_its_call_ref_autonomously() {
+        // The autonomy rule of identity.md §3: keys 40 (emitting),
+        // 43 (digest), and 47 (edge) suffice — no other record, no
+        // out-of-band state.
+        let sealed = intent("echo", 7);
+        let reconstructed = ids::call_ref(
+            ids::delivery_ref(&sealed.edge, sealed.emitting_id),
+            sealed.request_digest(),
+        );
+        assert_eq!(reconstructed, sealed.call_ref);
+    }
+
+    #[test]
+    fn the_delivery_ref_recipe_is_pinned_byte_for_byte() {
+        // envelope.md §2: the delivery reference is
         // derive(0x20, canonical_edge, envelope_id). Any drift here
-        // silently unseals every golden's key 37.
+        // silently unseals every golden's key 37 and every call ref.
         let delivery = Id::from_bytes([7; 16]);
-        let reference = ids::budget_ref("shout.out>echo.in", delivery);
+        let reference = ids::delivery_ref("shout.out>echo.in", delivery);
         assert_eq!(
             reference.to_string(),
             "301cd0af333f760b8f5dc13738b821ec",
@@ -746,8 +767,7 @@ mod tests {
         assert_eq!(journal.records().len(), 2);
         // A closure for an unknown call is a fault, not a silence.
         let ghost = ids::call_ref(
-            Id::from_bytes([9; 16]),
-            &node::Path::new(["ghost"]).unwrap(),
+            ids::delivery_ref("x.out>ghost.in", Id::from_bytes([9; 16])),
             &[0; 32],
         );
         assert_eq!(
@@ -761,8 +781,7 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut forged = intent("echo", 7);
         forged.call_ref = ids::call_ref(
-            Id::from_bytes([9; 16]),
-            &node::Path::new(["other"]).unwrap(),
+            ids::delivery_ref("x.out>other.in", Id::from_bytes([9; 16])),
             &[1; 32],
         );
         assert_eq!(

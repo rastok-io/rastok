@@ -379,6 +379,7 @@ fn key_name(key: u64) -> String {
         44 => "status",
         45 => "closure",
         46 => "edge_cursor",
+        47 => "edge",
         _ => return format!("key {key}"),
     };
     format!("{name}({key})")
@@ -487,7 +488,7 @@ fn record_tree(record: &Record) -> Cbor {
             if let Some(key) = &outbound.intent.idempotency_key {
                 pairs.push((42, Cbor::Bytes(key.clone().into_bytes())));
             }
-            pairs.push((43, Cbor::Bytes(outbound.intent.request_digest.to_vec())));
+            pairs.push((43, Cbor::Bytes(outbound.intent.request_digest().to_vec())));
             let (status, closure) = match &outbound.status {
                 OutboundStatus::Open => (1, None),
                 OutboundStatus::Closed(Closure::Response(outcome)) => (
@@ -503,6 +504,10 @@ fn record_tree(record: &Record) -> Cbor {
             if let Some(closure) = closure {
                 pairs.push((45, closure));
             }
+            // Key 47: the causing delivery's canonical edge — with
+            // key 40 the record reconstructs delivery_ref and hence
+            // call_ref, autonomously (identity.md §3).
+            pairs.push((47, Cbor::Text(outbound.intent.edge.clone())));
             Cbor::Map(pairs)
         }
     }

@@ -361,7 +361,7 @@ impl MockPartner<'_> {
             self.faults.push(format!(
                 "an uncovered call reached `{}` (digest {:02x?}…); mock it or script silence",
                 intent.connector_path,
-                &intent.request_digest[..4]
+                &intent.request_digest()[..4]
             ));
             return None;
         };

@@ -16,27 +16,12 @@ its normative home and its planned resolution.
   job's stderr is currently dropped. The typed event belongs to the
   service-mode stream machinery; until then the drop is stated at the
   adapter, not silent.
-- **`PreparedRequest` at the boundary**: the machine and the adapter
-  share one pure preparation function (`connectors::prepare`), which
-  guarantees sealed-equals-sent by construction, but the VM thereby
-  depends on the adapter module. Carrying prepared bytes in the
-  boundary vocabulary removes the dependency and the double
-  computation; planned with the service-mode rework.
-
-- **CallRef does not yet see the delivery reference** *(specified
-  2026-08-06 — envelope.md §2 and identity.md §3 key 47 now define
-  the derivation; the implementation lands with the M0.5 core-split
-  lot, which re-blesses the affected pins)*
-  ([identity.md §3](../spec/identity.md), OUTBOUND keys 40–43): the
-  mailbox and the budget obligations are keyed by
-  `(edge, envelope_id)`, but `call_ref` still derives from
-  `(emitting_id, connector_path, request_digest)` — two ports of one
-  connector receiving one envelope with identical bytes would derive
-  one call. Unreachable with the single-input Process of M0. The fix
-  is spec-first, BEFORE any multiport connector ships: formalize the
-  delivery reference, seal it in the OUTBOUND record, and derive
-  `call_ref` from it — never by salting `request_digest`, whose
-  definition (the exact sent bytes) must not move.
+- ~~`PreparedRequest` at the boundary~~ and ~~CallRef and the
+  delivery reference~~ — **both closed 2026-08-06**: the boundary
+  vocabulary carries the prepared request (sealed digest + exact
+  bytes, one preparation, the adapter transports), and `call_ref`
+  derives from `delivery_ref(edge, envelope_id)` per envelope.md §2,
+  sealed autonomously in the OUTBOUND record (key 47).
 
 ## Structural debt (no semantic impact)
 
