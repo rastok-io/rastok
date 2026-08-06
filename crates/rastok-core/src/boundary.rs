@@ -13,6 +13,8 @@ use crate::envelope::{self, Envelope};
 use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
 use alloc::collections::BTreeSet;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 
 /// Opaque ingress identity: exactly `(connector_path, replica)`.
@@ -554,6 +556,8 @@ mod tests {
     use crate::envelope::{Data, Encoding, Namespace};
     use crate::journal::{MemJournal, ids};
     use crate::plan::GraphVersion;
+    use alloc::string::ToString;
+    use alloc::vec;
 
     #[test]
     fn the_authority_stays_opaque_but_answers_the_recipes() {

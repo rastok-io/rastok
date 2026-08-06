@@ -8,6 +8,9 @@
 
 use crate::cel;
 use crate::node;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 
 /// Compile-time resolved node reference; runtime resolution errors

@@ -10,6 +10,8 @@
 //! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
 //! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 
 /// Error returned when a name would break the vocabulary's structural
@@ -306,6 +308,8 @@ impl fmt::Display for HandlerActivation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
+    use alloc::vec;
 
     #[test]
     fn path_renders_dotted() {

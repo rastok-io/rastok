@@ -14,6 +14,8 @@
 //! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
 
 use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::cell::OnceCell;
 use core::fmt;
 
@@ -469,6 +471,7 @@ impl Envelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn id_framing_is_injective() {

@@ -11,7 +11,7 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-blake3.workspace = true
+blake3 = { workspace = true, features = ["std"] }
 rastok-core = { path = "../rastok-core" }
 
 [lints]

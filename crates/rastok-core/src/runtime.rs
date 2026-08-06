@@ -19,7 +19,11 @@ use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue};
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
 use crate::plan::{Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, Slot, Step};
+use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::fmt;
 
 /// Pure, deterministic, budgeted guest execution — the contract the

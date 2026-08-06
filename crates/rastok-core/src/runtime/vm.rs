@@ -27,6 +27,9 @@ use crate::node;
 use crate::plan::{Edge, EndpointRef, ExecutionPlan, GraphVersion, NodeKind, Slot};
 use crate::runtime::{Delivery, Fault, Key, Mailboxes, PartitionState, TransactionExecutor};
 use alloc::collections::{BTreeMap, VecDeque};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 
 /// A machine fault; the step that raised it committed nothing, and

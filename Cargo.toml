@@ -13,7 +13,9 @@ publish = false
 [workspace.dependencies]
 # Fixed by the identity contract (docs/spec/envelope.md §2.0): changing the
 # hash would change every derived id and break replay.
-blake3 = "1"
+# Default features off at the workspace so the kernel's no_std path is
+# the baseline; the std layer re-enables what it wants.
+blake3 = { version = "1", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

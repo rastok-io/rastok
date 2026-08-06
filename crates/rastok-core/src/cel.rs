@@ -15,7 +15,11 @@
 //! Map iteration and map value ordering are sorted-key — an evaluator
 //! guarantee that golden-trace stability relies on.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::fmt;
 use core::ops::Range;
 

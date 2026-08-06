@@ -11,6 +11,8 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+# The workspace baseline is already no_std (default features off);
+# a bare-metal build of this crate alone gets the portable path.
 blake3.workspace = true
 
 [lints]

@@ -26,12 +26,15 @@ use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::node;
 use crate::plan::GraphVersion;
 use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its domain tags.
 pub mod ids {
     use super::{CallRef, Id, IngressAuthority, node};
+    use alloc::string::ToString;
 
     /// Domain tag of a root derivation: 2 fields.
     const ROOT: u8 = 0x01;
@@ -530,6 +533,8 @@ mod tests {
     use super::*;
     use crate::boundary::Draft;
     use crate::envelope::{Data, Encoding, Namespace};
+    use alloc::string::ToString;
+    use alloc::vec;
 
     fn authority(path: &str) -> IngressAuthority {
         IngressAuthority::single(node::Path::new([path]).unwrap())
