@@ -18,7 +18,10 @@ use crate::cel;
 use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue};
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
-use crate::plan::{Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, Slot, Step};
+use crate::plan::{
+    Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, Slot, Step,
+    ValidatedExecutionPlan,
+};
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::{String, ToString};
@@ -86,11 +89,13 @@ impl PartitionState {
     }
 
     /// The current cell values for a node under a key, defaults
-    /// applied from the plan on first access.
+    /// applied from the plan on first access. The plan arrives
+    /// validated: this dereferences the slot without checking, so
+    /// the public boundary carries the proof.
     #[must_use]
     pub fn cell(
         &self,
-        plan: &ExecutionPlan,
+        plan: &ValidatedExecutionPlan,
         slot: Slot,
         key: &str,
     ) -> BTreeMap<String, cel::Value> {
@@ -104,10 +109,11 @@ impl PartitionState {
             .collect()
     }
 
-    /// Applies a committed delta to a cell.
+    /// Applies a committed delta to a cell. Validated for the same
+    /// reason as [`Self::cell`].
     pub fn apply(
         &mut self,
-        plan: &ExecutionPlan,
+        plan: &ValidatedExecutionPlan,
         slot: Slot,
         key: &str,
         delta: &[(String, cel::Value)],
@@ -334,11 +340,14 @@ pub struct TransactionExecutor<'plan> {
 }
 
 impl<'plan> TransactionExecutor<'plan> {
-    /// An executor over a compiled plan.
+    /// An executor over a validated plan. The executor dereferences
+    /// the plan without checking, so the proof enters here — the
+    /// internal reference stays raw, but no public path constructs
+    /// an executor around an unvalidated plan.
     #[must_use]
-    pub fn new(plan: &'plan ExecutionPlan, graph_version: GraphVersion) -> Self {
+    pub fn new(plan: &'plan ValidatedExecutionPlan, graph_version: GraphVersion) -> Self {
         Self {
-            plan,
+            plan: plan.plan(),
             graph_version,
         }
     }

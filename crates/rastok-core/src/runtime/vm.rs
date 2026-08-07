@@ -24,7 +24,7 @@ use crate::boundary::{
 use crate::envelope::{Data, Envelope, Id};
 use crate::journal::{ConsumedPosition, Journal, ids};
 use crate::node;
-use crate::plan::{Edge, EndpointRef, ExecutionPlan, GraphVersion, NodeKind, Slot};
+use crate::plan::{Edge, EndpointRef, GraphVersion, NodeKind, Slot, ValidatedExecutionPlan};
 use crate::runtime::{Delivery, Fault, Key, Mailboxes, PartitionState, TransactionExecutor};
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
@@ -102,7 +102,7 @@ struct PendingCall {
 /// calling connector's sealed error set. Timeout-minted failures
 /// never pass here — the machine, not a partner, makes those.
 struct PlanGate<'plan> {
-    plan: &'plan ExecutionPlan,
+    plan: &'plan crate::plan::ExecutionPlan,
 }
 
 impl crate::boundary::OutcomeGate for PlanGate<'_> {
@@ -204,7 +204,7 @@ impl Scheduler {
 /// run and simulation drive it identically.
 #[derive(Debug)]
 pub struct Vm<'plan> {
-    plan: &'plan ExecutionPlan,
+    plan: &'plan ValidatedExecutionPlan,
     graph_version: GraphVersion,
     scheduler: Scheduler,
     state: PartitionState,
@@ -231,12 +231,9 @@ impl<'plan> Vm<'plan> {
     /// is a fresh boot; recovering obligations from an existing
     /// journal is the recovery fold's job and is not in this build.
     #[must_use]
-    pub fn boot(
-        plan: &'plan crate::plan::ValidatedExecutionPlan,
-        graph_version: GraphVersion,
-    ) -> Self {
+    pub fn boot(plan: &'plan ValidatedExecutionPlan, graph_version: GraphVersion) -> Self {
         Self {
-            plan: plan.plan(),
+            plan,
             graph_version,
             scheduler: Scheduler::new(1024),
             state: PartitionState::new(),
@@ -329,7 +326,9 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         partner: &mut dyn Partner,
     ) -> Result<PumpReport, VmError> {
-        let gate = PlanGate { plan: self.plan };
+        let gate = PlanGate {
+            plan: self.plan.plan(),
+        };
         let batch = self
             .dispatcher
             .pump(journal, partner, &gate)
