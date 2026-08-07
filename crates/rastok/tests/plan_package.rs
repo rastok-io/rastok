@@ -346,6 +346,61 @@ fn a_program_beyond_the_nesting_budget_refuses_by_name() {
 }
 
 #[test]
+fn a_hostile_depth_source_refuses_and_the_process_survives() {
+    // Re-exec pattern: the deep compiles run in a CHILD process, so a
+    // regression (a recursive pass before the gate, a recursive drop
+    // of the refused tree) kills the child and fails the assertion —
+    // never the harness. The reviewer's counter-example was exactly
+    // this: E-PLAN-DEPTH at 200 additions, a dead process at 5 000.
+    if std::env::var("RASTOK_DEPTH_PROBE").is_ok() {
+        // A left-fold chain: the parser builds it with NO recursion,
+        // so only the post-parse gate can catch it — and the refused
+        // 30 000-deep tree must be dismantled iteratively.
+        let chain = nested_additions(30_000);
+        let bag = compile(&[chain.as_str()], &Registry::m0()).expect_err("beyond the budget");
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code().as_str() == "E-PLAN-DEPTH"),
+            "{bag:?}"
+        );
+        // A parenthesis tower: pure parser recursion, zero AST depth
+        // — the parser's own guard must refuse it.
+        let tower = format!(
+            "graph g : App {{\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
+             seen = {}1{}\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n",
+            "(".repeat(5_000),
+            ")".repeat(5_000),
+        );
+        let bag = compile(&[tower.as_str()], &Registry::m0()).expect_err("beyond the guard");
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code().as_str() == "E-PLAN-DEPTH"),
+            "{bag:?}"
+        );
+        println!("DEPTH_PROBE_SURVIVED");
+        return;
+    }
+    let exe = std::env::current_exe().expect("the test binary");
+    let output = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "a_hostile_depth_source_refuses_and_the_process_survives",
+            "--nocapture",
+        ])
+        .env("RASTOK_DEPTH_PROBE", "1")
+        .output()
+        .expect("the child spawns");
+    assert!(
+        output.status.success(),
+        "the child died instead of refusing by name:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("DEPTH_PROBE_SURVIVED"));
+}
+
+#[test]
 fn a_deep_but_budgeted_program_rides_the_round_trip() {
     let source = nested_additions(100);
     let compilation = compile(&[source.as_str()], &Registry::m0()).expect("within the budget");

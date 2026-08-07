@@ -218,6 +218,10 @@ impl Checker<'_, '_> {
                     // which is free to change.
                     let code = match diagnostic.kind {
                         cel::DiagnosticKind::DuplicateMapKey => E_DUP_KEY,
+                        // The depth gate: the same named refusal the
+                        // plan validator maps at the plan phase, first
+                        // surfaced here — before any recursive pass.
+                        cel::DiagnosticKind::TooDeep => crate::compiler::E_PLAN_DEPTH,
                         cel::DiagnosticKind::General => E_CEL_EXPR,
                     };
                     self.bag.push(

@@ -213,6 +213,13 @@ pub struct ValidatedExecutionPlan(ExecutionPlan);
 impl ValidatedExecutionPlan {
     /// Validates a raw plan.
     ///
+    /// Raw-plan contract: the checks themselves never recurse before
+    /// the nesting budget holds, but the plan's own `Drop` does — a
+    /// hand-built plan nesting beyond the machine stack cannot even
+    /// be destroyed safely, and is outside this function's domain.
+    /// Both real sources (the compiler, gated at parse; the decoder,
+    /// bounded by its reader) sit far below that.
+    ///
     /// # Errors
     ///
     /// The first violated invariant, named.

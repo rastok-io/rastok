@@ -474,11 +474,15 @@ fn expr_tree(expr: &cel::Expr) -> Cbor {
 
 /// The 0-based level of the deepest CBOR node the body encoding of
 /// this plan will contain — computed WITHOUT building the tree and
-/// without recursion, so the validator can hold an arbitrarily deep
-/// raw plan to the reader's budget before anything recurses over it
-/// (the tree builders above, the encoder, and `Drop` on the plan's
-/// own expression chains all recurse to the depth this bounds). The
-/// per-construct arithmetic mirrors the builders line by line;
+/// without recursion, so the measurement itself never rides the
+/// machine stack. Both real plan sources arrive pre-bounded: the
+/// compiler gates expression depth at parse, and the decoder's
+/// reader is budgeted — so everything that recurses after this check
+/// (the tree builders above, the encoder, the expression walks) is
+/// bounded too. A hand-BUILT plan nesting beyond the machine stack
+/// is outside the raw-plan contract: its mere destruction would
+/// overflow in its builder's hands before validation could answer.
+/// The per-construct arithmetic mirrors the builders line by line;
 /// `the_level_walker_matches_the_builders` pins the equality.
 pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     enum Item<'a> {

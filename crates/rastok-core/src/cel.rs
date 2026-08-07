@@ -133,6 +133,9 @@ pub enum DiagnosticKind {
     General,
     /// A static map literal carrying the same key twice.
     DuplicateMapKey,
+    /// An expression nesting beyond the format budget — refused at
+    /// the gate, before any recursive pass rides the machine stack.
+    TooDeep,
 }
 
 /// Native CEL compiler diagnostic; the caller adapts it.
@@ -287,8 +290,28 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
         tokens: &tokens,
         pos: 0,
         text,
+        depth: 0,
     };
     let root = parser.ternary().map_err(|diagnostic| vec![diagnostic])?;
+    // The depth gate, FIRST — before the trailing-input check drops
+    // the tree and before the type-checker, the hasher, or the
+    // lowering recurse over it on the machine stack. The parser's own
+    // recursion is guarded above, but a left-fold chain (`1 + 1 + …`)
+    // builds depth with no parser recursion at all; it is caught
+    // here, iteratively. Structural depth beyond the reader's budget
+    // can never serialize anyway — every level costs at least one
+    // CBOR level — so the refusal is the same named diagnostic, and
+    // the refused tree is dismantled iteratively, never dropped
+    // through a recursive `Drop`.
+    if structural_depth(&root) > crate::canonical_cbor::MAX_NESTING {
+        let range = 0..text.len();
+        dismantle(root);
+        return Err(vec![Diagnostic {
+            kind: DiagnosticKind::TooDeep,
+            message: String::from("the expression nests deeper than the format budget"),
+            range,
+        }]);
+    }
     if let Some(token) = parser.tokens.get(parser.pos) {
         if let Tok::Ident(word) = &token.tok
             && *word == "as"
@@ -612,6 +635,12 @@ struct ExprParser<'t, 'a> {
     tokens: &'t [Spanned<'a>],
     pos: usize,
     text: &'a str,
+    /// Production-nesting depth — the recursion guard. Bounded at
+    /// the format budget so a parenthesis tower or a unary chain
+    /// refuses by name instead of overflowing the parser's stack;
+    /// grouping does not create AST depth, so the bound is
+    /// conservative for adversarial shapes, never for real programs.
+    depth: usize,
 }
 
 impl<'a> ExprParser<'_, 'a> {
@@ -658,7 +687,30 @@ impl<'a> ExprParser<'_, 'a> {
         }
     }
 
+    /// One step deeper into the productions; refuses past the budget.
+    fn descend(&mut self) -> Result<(), Diagnostic> {
+        self.depth += 1;
+        if self.depth > crate::canonical_cbor::MAX_NESTING {
+            return Err(Diagnostic {
+                kind: DiagnosticKind::TooDeep,
+                message: String::from("the expression nests deeper than the format budget"),
+                range: self
+                    .tokens
+                    .get(self.pos)
+                    .map_or(0..self.text.len(), |token| token.range.clone()),
+            });
+        }
+        Ok(())
+    }
+
     fn ternary(&mut self) -> Result<Expr, Diagnostic> {
+        self.descend()?;
+        let result = self.ternary_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn ternary_inner(&mut self) -> Result<Expr, Diagnostic> {
         let cond = self.or()?;
         if self.eat(&Tok::Question) {
             let then = self.or()?;
@@ -739,6 +791,15 @@ impl<'a> ExprParser<'_, 'a> {
     }
 
     fn unary(&mut self) -> Result<Expr, Diagnostic> {
+        // Guarded too: a unary chain recurses without ever re-entering
+        // `ternary`.
+        self.descend()?;
+        let result = self.unary_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn unary_inner(&mut self) -> Result<Expr, Diagnostic> {
         if self.eat(&Tok::Bang) {
             return Ok(Expr::Unary {
                 op: UnaryOp::Not,
@@ -897,6 +958,90 @@ impl<'a> ExprParser<'_, 'a> {
                 message: String::from("expected an expression"),
                 range: token.range,
             }),
+        }
+    }
+}
+
+/// The structural nesting of a parsed expression, measured with an
+/// explicit stack — the walk that bounds every later recursion over
+/// the tree (type-check, hash, lowering, and the exact serialized
+/// walker at validation). Parser literals are scalars, so only the
+/// expression spine counts.
+fn structural_depth(root: &Expr) -> usize {
+    let mut max = 0;
+    let mut stack = vec![(root, 1usize)];
+    while let Some((expr, depth)) = stack.pop() {
+        max = max.max(depth);
+        match expr {
+            Expr::Literal(_) | Expr::Path(_) => {}
+            Expr::Unary { expr, .. } => stack.push((expr, depth + 1)),
+            Expr::Binary { left, right, .. } => {
+                stack.push((left, depth + 1));
+                stack.push((right, depth + 1));
+            }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                stack.push((cond, depth + 1));
+                stack.push((then, depth + 1));
+                stack.push((otherwise, depth + 1));
+            }
+            Expr::Index { base, index } => {
+                stack.push((base, depth + 1));
+                stack.push((index, depth + 1));
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    stack.push((arg, depth + 1));
+                }
+            }
+            Expr::List(items) => {
+                for item in items {
+                    stack.push((item, depth + 1));
+                }
+            }
+            Expr::MapLit(pairs) => {
+                for (_, value) in pairs {
+                    stack.push((value, depth + 1));
+                }
+            }
+        }
+    }
+    max
+}
+
+/// Consumes a refused tree with an explicit stack — a hostile-depth
+/// chain must not recurse through its own destruction. Moving the
+/// children out leaves each node a leaf, so its ordinary drop is
+/// flat.
+fn dismantle(root: Expr) {
+    let mut stack = vec![root];
+    while let Some(expr) = stack.pop() {
+        match expr {
+            Expr::Literal(_) | Expr::Path(_) => {}
+            Expr::Unary { expr, .. } => stack.push(*expr),
+            Expr::Binary { left, right, .. } => {
+                stack.push(*left);
+                stack.push(*right);
+            }
+            Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                stack.push(*cond);
+                stack.push(*then);
+                stack.push(*otherwise);
+            }
+            Expr::Index { base, index } => {
+                stack.push(*base);
+                stack.push(*index);
+            }
+            Expr::Call { args, .. } => stack.extend(args),
+            Expr::List(items) => stack.extend(items),
+            Expr::MapLit(pairs) => stack.extend(pairs.into_iter().map(|(_, value)| value)),
         }
     }
 }
