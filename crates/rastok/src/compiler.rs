@@ -65,8 +65,23 @@ pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilat
     }
     let hash = lower::semantic_hash(&hir);
     let (plan, symbols) = lower::lower(&hir);
-    let plan = ValidatedExecutionPlan::try_new(plan)
-        .unwrap_or_else(|error| unreachable!("the lowering emitted an invalid plan: {error}"));
+    // A lowering that emits an invalid plan is a compiler bug — but a
+    // bug with a controlled error path, not a vanished process: the
+    // validator exists precisely to catch this disagreement.
+    let plan = match ValidatedExecutionPlan::try_new(plan) {
+        Ok(plan) => plan,
+        Err(error) => {
+            bag.push(
+                crate::diagnostics::Diagnostic::new(
+                    crate::diagnostics::Code::new("E-INTERNAL-PLAN"),
+                    crate::diagnostics::Phase::Plan,
+                    "the lowering emitted an invalid plan — a compiler bug, please report it",
+                )
+                .with_field("detail", error.to_string()),
+            );
+            return Err(bag);
+        }
+    };
     Ok(Compilation {
         plan,
         symbols,

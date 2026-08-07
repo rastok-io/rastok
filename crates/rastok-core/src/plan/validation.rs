@@ -1,42 +1,147 @@
-//! Structural validation of an [`ExecutionPlan`] — the invariants
-//! the machine dereferences without checking, held once, at a
-//! boundary, by a type.
+//! Structural validation of an [`ExecutionPlan`] — every invariant
+//! the machine dereferences without checking and every canonical
+//! order the plan documents, held once, at a boundary, by a type.
 
 use alloc::collections::BTreeSet;
-use alloc::format;
 use alloc::string::{String, ToString};
 
 use crate::node;
-use crate::plan::{EndpointRef, ExecutionPlan, Node, Slot, Step};
+use crate::plan::{EndpointRef, ExecutionPlan, Node, NodeKind, Slot, Step};
 
-/// Why a plan is not executable — one named invariant violation.
+/// Why a plan is not executable — one named invariant violation. The
+/// variants are semantic, not prose: a caller can match on the class
+/// of defect; `Display` renders the human diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlanValidationError {
-    detail: String,
-}
-
-impl PlanValidationError {
-    fn new(detail: String) -> Self {
-        Self { detail }
-    }
+pub enum PlanValidationError {
+    /// A slot indexes past the node table.
+    SlotOutOfBounds {
+        /// The impossible reference.
+        slot: Slot,
+        /// The table it missed.
+        node_count: usize,
+    },
+    /// Two nodes share a path.
+    DuplicateNodePath {
+        /// The repeated path.
+        path: node::Path,
+    },
+    /// One node declares a port twice.
+    DuplicatePort {
+        /// The declaring node.
+        node: node::Path,
+        /// The repeated port.
+        port: node::Port,
+    },
+    /// One node declares a var twice.
+    DuplicateVar {
+        /// The declaring node.
+        node: node::Path,
+        /// The repeated name.
+        name: String,
+    },
+    /// The boundary declares a port name twice.
+    DuplicateBoundaryPort {
+        /// The repeated port.
+        port: node::Port,
+    },
+    /// A connector declares an attribute twice.
+    DuplicateAttribute {
+        /// The declaring node.
+        node: node::Path,
+        /// The repeated attribute.
+        name: String,
+    },
+    /// A referenced port exists, but not in the referenced role —
+    /// an edge from an input, an edge into an output, an activation
+    /// on an output, an emission on an input.
+    WrongPortDirection {
+        /// The owning node; `None` is the boundary.
+        node: Option<node::Path>,
+        /// The port.
+        port: node::Port,
+        /// The role the reference required.
+        expected: node::Direction,
+    },
+    /// An edge references a boundary port the plan does not know.
+    UnknownBoundaryPort {
+        /// The unknown port.
+        port: node::Port,
+    },
+    /// A handler writes a var its node does not declare.
+    UnknownVariable {
+        /// The writing node.
+        node: node::Path,
+        /// The undeclared name.
+        name: String,
+    },
+    /// A collection the plan documents as canonically ordered is not.
+    NonCanonicalOrder {
+        /// Which collection broke the order.
+        collection: &'static str,
+    },
 }
 
 impl core::fmt::Display for PlanValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "invalid plan: {}", self.detail)
+        match self {
+            Self::SlotOutOfBounds { slot, node_count } => write!(
+                f,
+                "invalid plan: slot {} of {node_count} nodes",
+                slot.index()
+            ),
+            Self::DuplicateNodePath { path } => {
+                write!(f, "invalid plan: duplicate node path `{path}`")
+            }
+            Self::DuplicatePort { node, port } => {
+                write!(f, "invalid plan: duplicate port `{port}` on `{node}`")
+            }
+            Self::DuplicateVar { node, name } => {
+                write!(f, "invalid plan: duplicate var `{name}` on `{node}`")
+            }
+            Self::DuplicateBoundaryPort { port } => {
+                write!(f, "invalid plan: duplicate boundary port `{port}`")
+            }
+            Self::DuplicateAttribute { node, name } => {
+                write!(f, "invalid plan: duplicate attribute `{name}` on `{node}`")
+            }
+            Self::WrongPortDirection {
+                node,
+                port,
+                expected,
+            } => match node {
+                Some(node) => write!(
+                    f,
+                    "invalid plan: `{node}.{port}` is not usable as {expected:?}"
+                ),
+                None => write!(
+                    f,
+                    "invalid plan: boundary port `{port}` is not usable as graph {expected:?}"
+                ),
+            },
+            Self::UnknownBoundaryPort { port } => {
+                write!(f, "invalid plan: undeclared boundary port `{port}`")
+            }
+            Self::UnknownVariable { node, name } => {
+                write!(f, "invalid plan: `{node}` writes undeclared var `{name}`")
+            }
+            Self::NonCanonicalOrder { collection } => {
+                write!(f, "invalid plan: `{collection}` is not in canonical order")
+            }
+        }
     }
 }
 
 impl core::error::Error for PlanValidationError {}
 
 /// An [`ExecutionPlan`] whose structural invariants have been
-/// verified: every slot in bounds, every referenced port declared
-/// with the right direction, every handler owned by its node,
-/// activation on an input port, emission on an output port, every
-/// state write resolvable, paths and names unique. The field is
-/// private and there is no unverified constructor and no mutable
-/// access — holding the type IS holding the property. The machine
-/// and the serializer accept only this type.
+/// verified: every slot in bounds, every referenced port declared in
+/// the referenced role — boundary conventions inverted, as the graph
+/// sees them — every handler owned by its node, every state write
+/// resolvable, names unique, and every collection the plan documents
+/// as canonical actually in canonical order. The field is private
+/// and there is no unverified constructor and no mutable access —
+/// holding the type IS holding the property. The machine and the
+/// codec accept only this type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidatedExecutionPlan(ExecutionPlan);
 
@@ -84,13 +189,94 @@ impl core::ops::Deref for ValidatedExecutionPlan {
     }
 }
 
-/// Holds a plan to the `ExecutionPlan` invariants the machine
-/// assumes. Well-shaped structure naming impossible references
-/// refuses here, typed — the machine never sees it.
+/// The node ordering the lowering emits: operators before
+/// connectors, then by path — mirrored here so a reordered node
+/// table refuses instead of minting a second byte form of the same
+/// graph.
+fn kind_rank(kind: &NodeKind) -> u8 {
+    match kind {
+        NodeKind::Operator => 0,
+        NodeKind::Connector(_) => 1,
+    }
+}
+
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
-    let invalid = |detail: String| Err(PlanValidationError::new(detail));
-    // M0 lowers no explicit port table — a node's ports are the
-    // implicit trio. A declared table, once present, is the contract.
+    // Canonical orders first: a plan that fails here is a different
+    // byte form of some graph, and nothing downstream should mint an
+    // opinion about it. Strictly increasing everywhere — ties are
+    // duplicates and refuse as such below or here.
+    if !plan.nodes.windows(2).all(|w| {
+        (kind_rank(&w[0].kind), w[0].path.to_string())
+            < (kind_rank(&w[1].kind), w[1].path.to_string())
+    }) {
+        return Err(PlanValidationError::NonCanonicalOrder {
+            collection: "nodes",
+        });
+    }
+    for pair in plan.boundary.windows(2) {
+        if pair[0].0 == pair[1].0 {
+            return Err(PlanValidationError::DuplicateBoundaryPort {
+                port: pair[0].0.clone(),
+            });
+        }
+        if pair[0] >= pair[1] {
+            return Err(PlanValidationError::NonCanonicalOrder {
+                collection: "boundary",
+            });
+        }
+    }
+    let mut paths = BTreeSet::new();
+    for node in &plan.nodes {
+        if !paths.insert(node.path.clone()) {
+            return Err(PlanValidationError::DuplicateNodePath {
+                path: node.path.clone(),
+            });
+        }
+        for pair in node.ports.windows(2) {
+            if pair[0].0 == pair[1].0 {
+                return Err(PlanValidationError::DuplicatePort {
+                    node: node.path.clone(),
+                    port: pair[0].0.clone(),
+                });
+            }
+            if pair[0] >= pair[1] {
+                return Err(PlanValidationError::NonCanonicalOrder {
+                    collection: "ports",
+                });
+            }
+        }
+        for pair in node.vars.windows(2) {
+            if pair[0].name == pair[1].name {
+                return Err(PlanValidationError::DuplicateVar {
+                    node: node.path.clone(),
+                    name: pair[0].name.clone(),
+                });
+            }
+            if pair[0].name > pair[1].name {
+                return Err(PlanValidationError::NonCanonicalOrder { collection: "vars" });
+            }
+        }
+        if let NodeKind::Connector(spec) = &node.kind {
+            for pair in spec.attributes.windows(2) {
+                if pair[0].0 == pair[1].0 {
+                    return Err(PlanValidationError::DuplicateAttribute {
+                        node: node.path.clone(),
+                        name: pair[0].0.clone(),
+                    });
+                }
+                if pair[0].0 > pair[1].0 {
+                    return Err(PlanValidationError::NonCanonicalOrder {
+                        collection: "attributes",
+                    });
+                }
+            }
+        }
+    }
+
+    // References: slots, ports in their roles, handlers, vars. M0
+    // lowers no explicit port table — a node's ports are the
+    // implicit trio; a declared table, once present, is the
+    // contract for the names it declares.
     let has_port = |node: &Node, port: &node::Port, direction: node::Direction| {
         if node.ports.is_empty() {
             match direction {
@@ -103,55 +289,71 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 .any(|(candidate, dir)| candidate == port && *dir == direction)
         }
     };
-    let mut paths = BTreeSet::new();
-    for node in &plan.nodes {
-        if !paths.insert(node.path.to_string()) {
-            return invalid(format!("duplicate node path `{}`", node.path));
-        }
-        let mut ports = BTreeSet::new();
-        for (port, _) in &node.ports {
-            if !ports.insert(port.to_string()) {
-                return invalid(format!("duplicate port `{port}` on `{}`", node.path));
-            }
-        }
-        let mut vars = BTreeSet::new();
-        for var in &node.vars {
-            if !vars.insert(var.name.as_str()) {
-                return invalid(format!("duplicate var `{}` on `{}`", var.name, node.path));
-            }
-        }
-    }
-    let node_at = |slot: Slot| plan.nodes.get(slot.index());
+    let node_at = |slot: Slot| {
+        plan.nodes
+            .get(slot.index())
+            .ok_or(PlanValidationError::SlotOutOfBounds {
+                slot,
+                node_count: plan.nodes.len(),
+            })
+    };
+    // `position` is the node-side role of the endpoint: Output for a
+    // source, Input for a target. The boundary convention INVERTS:
+    // an edge sourced at the boundary consumes a graph INPUT, an
+    // edge targeting the boundary feeds a graph OUTPUT — the same
+    // rule the checker applies to the surface language.
     let endpoint_ok =
-        |endpoint: &EndpointRef, direction: node::Direction| -> Result<(), PlanValidationError> {
+        |endpoint: &EndpointRef, position: node::Direction| -> Result<(), PlanValidationError> {
             match endpoint.node {
                 Some(slot) => {
-                    let Some(node) = node_at(slot) else {
-                        return Err(PlanValidationError::new(format!(
-                            "edge endpoint names slot {} of {} nodes",
-                            slot.index(),
-                            plan.nodes.len()
-                        )));
-                    };
-                    if !has_port(node, &endpoint.port, direction) {
-                        return Err(PlanValidationError::new(format!(
-                            "edge endpoint names `{}.{}` which is not a {direction:?} port",
-                            node.path, endpoint.port
-                        )));
+                    let node = node_at(slot)?;
+                    if !has_port(node, &endpoint.port, position) {
+                        return Err(PlanValidationError::WrongPortDirection {
+                            node: Some(node.path.clone()),
+                            port: endpoint.port.clone(),
+                            expected: position,
+                        });
                     }
                     Ok(())
                 }
                 None => {
-                    // The boundary's implicit trio always exists in
-                    // M0; a declared boundary port EXTENDS it (the
-                    // checker's semantics), it does not replace it.
-                    let known = matches!(endpoint.port.name(), "in" | "out" | "err")
-                        || plan.boundary.iter().any(|(port, _)| port == &endpoint.port);
-                    if !known {
-                        return Err(PlanValidationError::new(format!(
-                            "edge endpoint names undeclared boundary port `{}`",
-                            endpoint.port
-                        )));
+                    let expected = match position {
+                        node::Direction::Output => node::Direction::Input,
+                        node::Direction::Input => node::Direction::Output,
+                    };
+                    if let Some((_, declared)) = plan
+                        .boundary
+                        .iter()
+                        .find(|(port, _)| port == &endpoint.port)
+                    {
+                        if *declared != expected {
+                            return Err(PlanValidationError::WrongPortDirection {
+                                node: None,
+                                port: endpoint.port.clone(),
+                                expected,
+                            });
+                        }
+                        return Ok(());
+                    }
+                    // The implicit trio: `in` is the graph's input,
+                    // `out` and `err` its outputs.
+                    let implicit = match expected {
+                        node::Direction::Input => endpoint.port.name() == "in",
+                        node::Direction::Output => {
+                            matches!(endpoint.port.name(), "out" | "err")
+                        }
+                    };
+                    if !implicit {
+                        if matches!(endpoint.port.name(), "in" | "out" | "err") {
+                            return Err(PlanValidationError::WrongPortDirection {
+                                node: None,
+                                port: endpoint.port.clone(),
+                                expected,
+                            });
+                        }
+                        return Err(PlanValidationError::UnknownBoundaryPort {
+                            port: endpoint.port.clone(),
+                        });
                     }
                     Ok(())
                 }
@@ -163,37 +365,44 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             endpoint_ok(to, node::Direction::Input)?;
         }
     }
+    // The edge order renders through `edge_text`, which dereferences
+    // slots — bounds first, order after.
+    if !plan
+        .edges
+        .windows(2)
+        .all(|w| plan.edge_text(&w[0]) < plan.edge_text(&w[1]))
+    {
+        return Err(PlanValidationError::NonCanonicalOrder {
+            collection: "edges",
+        });
+    }
     for handler in &plan.handlers {
-        let Some(node) = node_at(handler.node) else {
-            return invalid(format!(
-                "handler names slot {} of {} nodes",
-                handler.node.index(),
-                plan.nodes.len()
-            ));
-        };
+        let node = node_at(handler.node)?;
         let node::HandlerActivation::Port(port) = &handler.activation;
         if !has_port(node, port, node::Direction::Input) {
-            return invalid(format!(
-                "handler on `{}` activates on `{port}` which is not an input port",
-                node.path
-            ));
+            return Err(PlanValidationError::WrongPortDirection {
+                node: Some(node.path.clone()),
+                port: port.clone(),
+                expected: node::Direction::Input,
+            });
         }
         for step in &handler.body {
             match step {
                 Step::Emit { port, .. } => {
                     if !has_port(node, port, node::Direction::Output) {
-                        return invalid(format!(
-                            "handler on `{}` emits on `{port}` which is not an output port",
-                            node.path
-                        ));
+                        return Err(PlanValidationError::WrongPortDirection {
+                            node: Some(node.path.clone()),
+                            port: port.clone(),
+                            expected: node::Direction::Output,
+                        });
                     }
                 }
                 Step::SetVar { name, .. } => {
                     if !node.vars.iter().any(|var| var.name == *name) {
-                        return invalid(format!(
-                            "handler on `{}` writes undeclared var `{name}`",
-                            node.path
-                        ));
+                        return Err(PlanValidationError::UnknownVariable {
+                            node: node.path.clone(),
+                            name: name.clone(),
+                        });
                     }
                 }
                 Step::Let { .. } => {}
