@@ -134,7 +134,11 @@ fn int_cbor(value: i64) -> Cbor {
     if value >= 0 {
         Cbor::Uint(u64::try_from(value).unwrap_or_else(|_| unreachable!("non-negative")))
     } else {
-        Cbor::Int(value)
+        // Major type 1 carries −1−n; `−1 − value` stays in range for
+        // every negative i64 (`i64::MIN` maps to `i64::MAX`).
+        Cbor::Negative(
+            u64::try_from(-1 - value).unwrap_or_else(|_| unreachable!("negative maps into u64")),
+        )
     }
 }
 

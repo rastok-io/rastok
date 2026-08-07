@@ -242,7 +242,8 @@ fn explain(a: &Cbor, b: &Cbor, path: String) -> (String, String, String) {
 fn render(value: &Cbor) -> String {
     match value {
         Cbor::Uint(n) => n.to_string(),
-        Cbor::Int(n) => n.to_string(),
+        // Major type 1 carries −1−n; i128 renders the whole range.
+        Cbor::Negative(n) => (-1 - i128::from(*n)).to_string(),
         Cbor::Bool(b) => b.to_string(),
         Cbor::Null => String::from("null"),
         Cbor::Double(d) => d.to_string(),

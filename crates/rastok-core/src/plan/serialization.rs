@@ -1090,7 +1090,12 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
 fn int_from(tree: &Cbor) -> Result<i64, DecodeError> {
     match tree {
         Cbor::Uint(v) => i64::try_from(*v).map_err(|_| err("integer range")),
-        Cbor::Int(v) => Ok(*v),
+        // Major type 1 carries −1−n; the tables bound their integers
+        // to i64, so an argument beyond it refuses HERE — a table
+        // policy, not a byte-discipline rule.
+        Cbor::Negative(n) => i64::try_from(*n)
+            .map(|magnitude| -1 - magnitude)
+            .map_err(|_| err("integer range")),
         _ => Err(err("integer")),
     }
 }

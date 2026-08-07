@@ -19,13 +19,14 @@ use alloc::vec::Vec;
 pub enum Value {
     /// An unsigned integer (major type 0).
     Uint(u64),
-    /// A signed integer. Canonical CBOR has ONE encoding per
-    /// integer value: a negative encodes as major type 1, a
-    /// non-negative folds onto major type 0 — `Int(5)` and `Uint(5)`
-    /// are the same bytes, so no constructible value panics or emits
-    /// a non-canonical form. The decoder returns non-negatives as
-    /// `Uint`.
-    Int(i64),
+    /// A negative integer (major type 1), carried as the wire's own
+    /// argument `n` for the value `−1 − n`. The two integer variants
+    /// partition the integers exactly as the two major types
+    /// partition the bytes: every argument is valid, no constructible
+    /// state duplicates a `Uint` form — one state per canonical byte
+    /// form, so `decode ∘ encode` is the identity and equality of
+    /// values is equality of bytes.
+    Negative(u64),
     /// A byte string (major type 2).
     Bytes(Vec<u8>),
     /// A UTF-8 text string (major type 3).
@@ -58,21 +59,7 @@ pub fn encode(value: &Value) -> Vec<u8> {
 fn write(value: &Value, out: &mut Vec<u8>) {
     match value {
         Value::Uint(n) => head(0, *n, out),
-        Value::Int(n) => {
-            if *n < 0 {
-                let magnitude = u64::try_from(-1 - *n).unwrap_or_else(|_| unreachable!("i64 fits"));
-                head(1, magnitude, out);
-            } else {
-                // One canonical encoding per integer VALUE: a
-                // non-negative folds onto major type 0, whatever
-                // constructor it arrived through.
-                head(
-                    0,
-                    u64::try_from(*n).unwrap_or_else(|_| unreachable!("non-negative")),
-                    out,
-                );
-            }
-        }
+        Value::Negative(n) => head(1, *n, out),
         Value::Bytes(bytes) => {
             head(2, bytes.len() as u64, out);
             out.extend_from_slice(bytes);
@@ -231,10 +218,11 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(Value, usize), DecodeError> 
             Ok((Value::Uint(value), used))
         }
         (1, _) => {
+            // The argument IS the state — any range policy (the
+            // tables bound their integers to i64) belongs to the
+            // table layer, not the byte discipline.
             let (value, used) = argument(bytes)?;
-            let magnitude = i64::try_from(value)
-                .map_err(|_| DecodeError::Malformed("a negative integer beyond i64"))?;
-            Ok((Value::Int(-1 - magnitude), used))
+            Ok((Value::Negative(value), used))
         }
         (2, _) => {
             let (payload, end) = sized_payload(bytes)?;
@@ -386,10 +374,10 @@ mod tests {
                 Value::Uint(1_000_000_000_000),
                 &[0x1b, 0x00, 0x00, 0x00, 0xe8, 0xd4, 0xa5, 0x10, 0x00],
             ),
-            (Value::Int(-1), &[0x20]),
-            (Value::Int(-10), &[0x29]),
-            (Value::Int(-100), &[0x38, 0x63]),
-            (Value::Int(-1000), &[0x39, 0x03, 0xe7]),
+            (Value::Negative(0), &[0x20]),               // −1
+            (Value::Negative(9), &[0x29]),               // −10
+            (Value::Negative(99), &[0x38, 0x63]),        // −100
+            (Value::Negative(999), &[0x39, 0x03, 0xe7]), // −1000
             (Value::Bool(false), &[0xf4]),
             (Value::Bool(true), &[0xf5]),
             (Value::Null, &[0xf6]),
@@ -428,6 +416,38 @@ mod tests {
         ];
         for (value, expected) in cases {
             assert_eq!(encode(&value), expected, "{value:?}");
+        }
+    }
+
+    /// `decode ∘ encode` is the identity: the type has exactly one
+    /// state per canonical byte form, so two values are equal exactly
+    /// when their bytes are. (NaN stays out: IEEE equality never
+    /// holds for it; its byte form is pinned separately below.)
+    #[test]
+    fn one_state_per_canonical_form() {
+        let values = [
+            Value::Uint(0),
+            Value::Uint(5),
+            Value::Uint(u64::MAX),
+            Value::Negative(0),
+            Value::Negative(4),
+            Value::Negative(u64::MAX),
+            Value::Bool(true),
+            Value::Null,
+            Value::Double(1.5),
+            Value::Double(-0.0),
+            Value::Bytes(vec![1, 2]),
+            Value::Text(String::from("x")),
+            Value::Array(vec![Value::Negative(4), Value::Uint(5)]),
+            Value::Map(BTreeMap::from([(1, Value::Negative(0))])),
+        ];
+        for value in values {
+            let bytes = encode(&value);
+            assert_eq!(
+                decode(&bytes).unwrap(),
+                (value.clone(), bytes.len()),
+                "{value:?}"
+            );
         }
     }
 
