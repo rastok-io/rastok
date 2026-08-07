@@ -12,7 +12,7 @@
 
 use rastok::canon::{Cbor, decode, encode};
 use rastok::compiler::compile;
-use rastok::plan_package::{self, PlanPackageError};
+use rastok::plan::{self, DecodeError};
 use rastok::stdlib::Registry;
 use std::path::PathBuf;
 
@@ -21,20 +21,20 @@ fn example() -> PathBuf {
 }
 
 fn sealed_example() -> (
-    rastok::plan::ExecutionPlan,
+    rastok::plan::ValidatedExecutionPlan,
     rastok::plan::SemanticHash,
     Vec<u8>,
 ) {
     let source = std::fs::read_to_string(example()).expect("the example reads");
     let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
-    let bytes = plan_package::encode(&compilation.plan, &compilation.hash);
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
     (compilation.plan, compilation.hash, bytes)
 }
 
 #[test]
 fn the_round_trip_preserves_the_plan_and_its_identity() {
     let (plan, hash, bytes) = sealed_example();
-    let (decoded, declared) = plan_package::decode(&bytes).expect("the package opens");
+    let (decoded, declared) = plan::decode(&bytes).expect("the package opens");
     assert_eq!(decoded, plan, "structural equality across the trip");
     assert_eq!(declared, hash, "the identity travels intact");
 }
@@ -74,18 +74,25 @@ fn every_refusal_is_typed() {
     // Foreign bytes.
     let mut foreign = bytes.clone();
     foreign[0] = b'X';
-    assert_eq!(
-        plan_package::decode(&foreign).unwrap_err(),
-        PlanPackageError::BadMagic
-    );
+    assert_eq!(plan::decode(&foreign).unwrap_err(), DecodeError::BadMagic);
 
     // A future format version — refused by name.
     let bumped = reframe(&bytes, |pairs| {
         pairs[0].1 = Cbor::Uint(3);
     });
     assert_eq!(
-        plan_package::decode(&bumped).unwrap_err(),
-        PlanPackageError::UnknownVersion(3)
+        plan::decode(&bumped).unwrap_err(),
+        DecodeError::UnsupportedVersion(3)
+    );
+
+    // A version beyond u32 is reported AS READ — never saturated
+    // into a number that was not in the bytes.
+    let huge = reframe(&bytes, |pairs| {
+        pairs[0].1 = Cbor::Uint(u64::MAX);
+    });
+    assert_eq!(
+        plan::decode(&huge).unwrap_err(),
+        DecodeError::UnsupportedVersion(u64::MAX)
     );
 
     // A corrupted DECLARED HASH — the checksum covers the whole
@@ -98,8 +105,8 @@ fn every_refusal_is_typed() {
         hash[0] ^= 0x01;
     });
     assert_eq!(
-        plan_package::decode(&lying).unwrap_err(),
-        PlanPackageError::BrokenChecksum
+        plan::decode(&lying).unwrap_err(),
+        DecodeError::BrokenChecksum
     );
 
     // One corrupted body byte — the seal catches it before parsing.
@@ -111,8 +118,8 @@ fn every_refusal_is_typed() {
         body[middle] ^= 0x01;
     });
     assert_eq!(
-        plan_package::decode(&corrupted).unwrap_err(),
-        PlanPackageError::BrokenChecksum
+        plan::decode(&corrupted).unwrap_err(),
+        DecodeError::BrokenChecksum
     );
 
     // A truncated package — diagnosed as exactly that: the reader's
@@ -120,8 +127,8 @@ fn every_refusal_is_typed() {
     // foreign.
     let truncated = &bytes[..bytes.len() / 2];
     assert_eq!(
-        plan_package::decode(truncated).unwrap_err(),
-        PlanPackageError::Decode(rastok::canon::DecodeError::UnexpectedEof)
+        plan::decode(truncated).unwrap_err(),
+        DecodeError::Read(rastok::canon::DecodeError::UnexpectedEof)
     );
 
     // A syntactically foreign head (an indefinite-length map, 0xbf)
@@ -129,8 +136,8 @@ fn every_refusal_is_typed() {
     let mut foreign_head = bytes.clone();
     foreign_head[4] = 0xbf;
     assert_eq!(
-        plan_package::decode(&foreign_head).unwrap_err(),
-        PlanPackageError::Decode(rastok::canon::DecodeError::UnsupportedHead(0xbf))
+        plan::decode(&foreign_head).unwrap_err(),
+        DecodeError::Read(rastok::canon::DecodeError::UnsupportedHead(0xbf))
     );
 }
 
@@ -153,8 +160,8 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
             "graph probe : App {{\n  operator o {{\n    on in {{ out = {literal} }}\n  }}\n\n  . -> o -> .\n}}\n"
         );
         let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
-        let bytes = plan_package::encode(&compilation.plan, &compilation.hash);
-        let (decoded, _) = plan_package::decode(&bytes).expect("the package opens");
+        let bytes = plan::encode(&compilation.plan, &compilation.hash);
+        let (decoded, _) = plan::decode(&bytes).expect("the package opens");
         assert_eq!(
             decoded, compilation.plan,
             "structural equality for `{literal}`"
@@ -175,7 +182,7 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
 /// One injection through a boundary-only plan; returns the rendered
 /// outputs and the error count — the execution fingerprint the matrix
 /// compares.
-fn run_boundary_probe(plan: &rastok::plan::ExecutionPlan) -> (Vec<String>, usize) {
+fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<String>, usize) {
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
     use rastok::envelope::{Data, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
@@ -204,19 +211,22 @@ fn run_boundary_probe(plan: &rastok::plan::ExecutionPlan) -> (Vec<String>, usize
 }
 
 #[test]
-fn an_out_of_bounds_slot_refuses_typed() {
-    let (mut plan, hash, _) = sealed_example();
+fn an_out_of_bounds_slot_cannot_become_a_validated_plan() {
+    let (plan, _, _) = sealed_example();
     // A well-shaped plan naming impossible structure: the machine
-    // would index past the node table (the review's Slot(999)).
-    plan.edges[0].to = Some(rastok::plan::EndpointRef {
+    // would index past the node table (the review's Slot(999)). The
+    // validity claim does not travel through into_inner — the raw
+    // plan must re-earn the type, and cannot.
+    let mut raw = plan.into_inner();
+    raw.edges[0].to = Some(rastok::plan::EndpointRef {
         node: Some(rastok::plan::Slot::new(999)),
         port: rastok::node::Port::new("in").unwrap(),
     });
-    let bytes = plan_package::encode(&plan, &hash);
-    assert!(matches!(
-        plan_package::decode(&bytes).unwrap_err(),
-        PlanPackageError::InvalidPlan(_)
-    ));
+    let refused = rastok::plan::ValidatedExecutionPlan::try_from(raw);
+    assert!(refused.is_err(), "Slot(999) never earns the validated type");
+    // And since `plan::encode` only accepts the validated type, the
+    // property holds by construction: what encode accepts, decode
+    // reads back — there is no way to package the invalid plan.
 }
 
 #[test]
@@ -239,10 +249,11 @@ fn a_non_canonical_envelope_refuses() {
     let hash_entry: Vec<u8> = bytes[7..42].to_vec();
     reordered.splice(5..42, hash_entry.into_iter().chain(version_entry));
     // The reader is permissive about order; the envelope canonicity
-    // check is what refuses — as Malformed, never as truncation.
+    // check is what refuses — named for what it is, never as
+    // truncation.
     assert!(matches!(
-        plan_package::decode(&reordered).unwrap_err(),
-        PlanPackageError::Malformed(_)
+        plan::decode(&reordered).unwrap_err(),
+        DecodeError::NonCanonical(_)
     ));
 
     // A non-minimal integer in the header: uint 2 written on two
@@ -256,8 +267,8 @@ fn a_non_canonical_envelope_refuses() {
     let mut widened = bytes.clone();
     widened.splice(6..7, [0x18, 0x02]);
     assert!(matches!(
-        plan_package::decode(&widened).unwrap_err(),
-        PlanPackageError::Malformed(_)
+        plan::decode(&widened).unwrap_err(),
+        DecodeError::NonCanonical(_)
     ));
 }
 

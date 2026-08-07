@@ -225,13 +225,18 @@ pub struct Vm<'plan> {
 }
 
 impl<'plan> Vm<'plan> {
-    /// Boots the machine over a compiled plan — once. This is a fresh
-    /// boot; recovering obligations from an existing journal is the
-    /// recovery fold's job and is not in this build.
+    /// Boots the machine over a VALIDATED plan — once. The machine
+    /// dereferences the plan's tables without checking; the type is
+    /// what makes that safe, so no raw plan is accepted here. This
+    /// is a fresh boot; recovering obligations from an existing
+    /// journal is the recovery fold's job and is not in this build.
     #[must_use]
-    pub fn boot(plan: &'plan ExecutionPlan, graph_version: GraphVersion) -> Self {
+    pub fn boot(
+        plan: &'plan crate::plan::ValidatedExecutionPlan,
+        graph_version: GraphVersion,
+    ) -> Self {
         Self {
-            plan,
+            plan: plan.plan(),
             graph_version,
             scheduler: Scheduler::new(1024),
             state: PartitionState::new(),

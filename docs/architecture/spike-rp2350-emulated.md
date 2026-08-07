@@ -41,7 +41,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
   product workspace (its embedded runtime dependencies are
   spike-only). It embeds the blessed **v2 plan package** of
   `examples/echo.rkg` as a `static`, opens it with
-  `rastok_core::plan_package::decode` — which now validates
+  `rastok_core::plan::decode` — which now validates
   structurally and re-encodes for canonicity — boots the `Vm` over a
   `MemJournal`, and runs inject → step rounds: the bare-metal
   superloop, minus real peripherals.
@@ -66,7 +66,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan_package::decode` (365-byte v2 package, full validation + canonicity re-encode) | 2 792 | 140 k | 0.93 ms |
+| `plan::decode` (365-byte v2 package, typed validation + canonicity re-encode) | 2 826 | 141 k | 0.94 ms |
 | relay transaction (avg of 32; min 1 776 / max 2 076) | 1 841 | **92 k** | **0.61 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 

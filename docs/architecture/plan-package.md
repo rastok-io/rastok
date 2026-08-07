@@ -21,8 +21,18 @@ The package speaks it too; `postcard` and friends were rejected for the
 canonical roles (non-canonical, implicit schema —
 [decisions.md](../spec/decisions.md) D-2026-08-03-1).
 
+The API lives under `plan` — the codec is a capability of the plan,
+not a domain of its own: `rastok::plan::encode(&ValidatedExecutionPlan,
+&SemanticHash) -> Vec<u8>` and `rastok::plan::decode(&[u8]) ->
+Result<(ValidatedExecutionPlan, SemanticHash), DecodeError>`.
+`encode` is infallible because structural validity rides in the type;
+what `encode` accepts, `decode` reads back — by construction. "Plan
+Package" stays the artifact's documentary name (`.rkp`); no public
+module carries it.
+
 ```text
 package := magic "RKPB"                      4 raw bytes, sniffable
+           ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
         │ 1 : format_version   uint      (this document: 2)   │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
@@ -39,21 +49,30 @@ checksum = blake3( "rastok.plan-package\0"   fixed domain string
 The checksum covers the **whole association** — a tampered declared
 hash or version refuses exactly like a tampered body (v1 covered the
 body alone; refuted by counter-example). Every covered field is
-fixed-width or last, so fields cannot slide into one another. An
-unkeyed BLAKE3 is an integrity checksum: it proves the package
+fixed-width or last, so fields cannot slide into one another. The
+vocabulary is exact: the producer **declares** the semantic identity
+(computed over the HIR, which the plan alone cannot reproduce); the
+format **protects the association** against later corruption; the
+decoder verifies the association and **never re-derives the claim**.
+An unkeyed BLAKE3 is an integrity checksum: it proves the package
 untampered in transit, not who wrote it — authorship would need a
-signature, which this format does not claim.
+signature, which this format does not claim. A version outside the
+readable set is reported exactly as read, never saturated.
 
 The body is an **embedded byte string**, verified before a byte of
 it is parsed. After parsing, the decoder holds the plan to the rest
 of the contract, in order:
 
-1. **Structural validation** — the `ExecutionPlan` invariants the
-   machine assumes: every slot in bounds, every referenced port
-   declared with the right direction, every handler owned by its
-   node, paths and names unique, every state write resolvable.
-   Well-shaped bytes naming impossible structure (an edge to slot
-   999) refuse typed — the machine never sees them.
+1. **Structural validation, carried by a type** — the parsed plan
+   passes through `ValidatedExecutionPlan` (private field, no
+   unverified constructor, no mutable access): every slot in bounds,
+   every referenced port declared with the right direction, every
+   handler owned by its node, activation on an input port, emission
+   on an output port, paths and names unique, every state write
+   resolvable. Well-shaped bytes naming impossible structure (an
+   edge to slot 999) refuse typed — and the machine's `Vm::boot`
+   accepts only the validated type, so no raw plan reaches it by
+   any path. The compiler's lowering earns the same type once.
 2. **Canonicity, as one total check** — re-encoding the decoded plan
    must reproduce the body byte for byte, and re-encoding the header
    fields must reproduce the envelope. This refuses non-minimal

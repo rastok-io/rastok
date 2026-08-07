@@ -41,12 +41,7 @@ its normative home and its planned resolution.
   development machine's: the determinism claim held across
   operating systems.
 
-- The plan-package decoder validates structurally at the boundary
-  (v2, 2026-08-07), but the `ExecutionPlan` type itself still has
-  fully public fields and no validated-newtype seam — a hand-built
-  invalid plan can reach `Vm::boot` without passing any decode. The
-  clean shape is the review's: `decode → Parsed → validate →
-  Validated → Vm`, with the machine accepting only the validated
-  type and constructors that reject invalid states (AGENTS.md
-  style). An M1 candidate, best done alongside the multiport plan
-  changes so the type is reshaped once.
+- ~~The validated-plan newtype seam~~ — done 2026-08-07 (second
+  review round): `plan::ValidatedExecutionPlan`, private field,
+  `TryFrom`, no mutable access; `Vm::boot` and `plan::encode`
+  accept only it, and the compiler's lowering earns it once.

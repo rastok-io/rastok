@@ -33,6 +33,24 @@ to the signed domain, 23 to the unsigned one. **Rejected:** refusing
 it merely defers the collision to the first user); a package-local
 tag diverging from the registry (one registry, everywhere).
 
+## D-2026-08-07-4 — The codec lives under `plan`; validity is a type
+
+Second review round. `plan_package` as a public module promoted the
+artifact's name into an abstraction with no state or behavior of its
+own; the codec is a capability of the plan — `rastok::plan::encode`
+/ `rastok::plan::decode` (the pair keeps the repository's
+encode/decode vocabulary). Structural validity becomes
+`ValidatedExecutionPlan`: private field, `TryFrom<ExecutionPlan>`,
+no unverified constructor, read-only access (`Deref`, no
+`DerefMut`), owned extraction only through the explicit
+`into_inner`, which drops the claim. The compiler's lowering earns
+the type once; `Vm::boot` and `plan::encode` accept only it, so
+"serialize accepts ⇒ deserialize succeeds" holds by construction.
+The magic `RKPB` is pinned as "Rastok Plan Binary". **Rejected:** a
+public `plan_package` module (name-as-abstraction), `serialize` /
+`deserialize` naming (two vocabularies for one act), validating in
+both the deserializer and the type (one validation, at the type).
+
 ## D-2026-08-07-1 — The transport artifact is a plan package, not a blob
 
 The compiled artifact is named **plan package** (`rastok_core::plan_package`,

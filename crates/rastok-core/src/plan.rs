@@ -6,6 +6,12 @@
 //! taken earlier, over the canonical HIR (`identity.md` §1), and rides
 //! beside the plan as [`SemanticHash`].
 
+mod serialization;
+mod validation;
+
+pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
+pub use validation::{PlanValidationError, ValidatedExecutionPlan};
+
 use crate::cel;
 use crate::node;
 use alloc::format;

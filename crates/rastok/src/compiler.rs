@@ -20,7 +20,7 @@ pub use hir::Hir;
 pub use syntax::SyntaxTree;
 
 use crate::diagnostics::{Bag, SourceId};
-use crate::plan::{ExecutionPlan, SemanticHash, SymbolTable};
+use crate::plan::{SemanticHash, SymbolTable, ValidatedExecutionPlan};
 use crate::stdlib;
 
 /// The result of a successful compilation: a valid plan, its semantic
@@ -28,8 +28,9 @@ use crate::stdlib;
 /// errors is unrepresentable — errors return the whole bag instead.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Compilation {
-    /// The executable plan.
-    pub plan: ExecutionPlan,
+    /// The executable plan — validated: the lowering's claim that it
+    /// produced an executable plan is checked, not assumed.
+    pub plan: ValidatedExecutionPlan,
     /// Diagnostic and trace symbols for the plan.
     pub symbols: SymbolTable,
     /// `blake3(canonical HIR)`.
@@ -64,6 +65,8 @@ pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilat
     }
     let hash = lower::semantic_hash(&hir);
     let (plan, symbols) = lower::lower(&hir);
+    let plan = ValidatedExecutionPlan::try_new(plan)
+        .unwrap_or_else(|error| unreachable!("the lowering emitted an invalid plan: {error}"));
     Ok(Compilation {
         plan,
         symbols,

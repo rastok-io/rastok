@@ -11,7 +11,7 @@ use rastok::boundary::{BoundaryEvent, CallOutcome};
 use rastok::envelope::{Data, Envelope, Meta, MetaSys};
 use rastok::journal::ConsumedPosition;
 use rastok::journal::ids;
-use rastok::plan::{ExecutionPlan, GraphVersion, Slot};
+use rastok::plan::{GraphVersion, Slot, ValidatedExecutionPlan};
 use rastok::runtime::{
     Delivery, Fault, Mailboxes, PartitionState, TransactionExecutor, meta_value,
 };
@@ -43,7 +43,7 @@ on in where data.text != "" {
 }
 "#;
 
-fn probe() -> (ExecutionPlan, Slot) {
+fn probe() -> (ValidatedExecutionPlan, Slot) {
     let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
     let slot = Slot::new(
         u32::try_from(

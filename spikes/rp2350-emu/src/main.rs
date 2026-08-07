@@ -25,7 +25,7 @@ use rastok_core::journal::MemJournal;
 use rastok_core::node::Path;
 use rastok_core::plan::GraphVersion;
 use rastok_core::runtime::vm::Vm;
-use rastok_core::{journal, plan_package};
+use rastok_core::journal;
 
 /// The allocator, wrapped to record a true high-water mark: the
 /// peak is updated inside every successful allocation, so no
@@ -147,7 +147,7 @@ fn main() -> ! {
     hprintln!("calib: {} ticks for 2000000 instructions (asm-exact)", calib_ticks);
 
     // 1. Open the sealed package.
-    let (open_ticks, opened) = ticks.measure(|| plan_package::decode(ECHO_PACKAGE));
+    let (open_ticks, opened) = ticks.measure(|| rastok_core::plan::decode(ECHO_PACKAGE));
     let (plan, hash) = opened.expect("the package opens");
     hprintln!("pkg_decode: {} ticks", open_ticks);
     hprintln!("semantic_hash: {}", hash);

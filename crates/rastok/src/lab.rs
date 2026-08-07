@@ -16,7 +16,7 @@ use crate::compiler::hir::{
 };
 use crate::envelope::{Data, Envelope, Namespace, WriteTarget};
 use crate::journal::{MemJournal, Record};
-use crate::plan::{ExecutionPlan, GraphVersion};
+use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::{Observed, Vm};
 use crate::{cel, node, runtime};
 use std::collections::BTreeMap;
@@ -57,7 +57,11 @@ pub struct ScenarioRun {
 /// scenario gets a fresh journal and a fresh machine — scenarios
 /// share nothing but the graph.
 #[must_use]
-pub fn run(plan: &ExecutionPlan, graph_version: GraphVersion, lab: &Lab) -> Vec<ScenarioRun> {
+pub fn run(
+    plan: &ValidatedExecutionPlan,
+    graph_version: GraphVersion,
+    lab: &Lab,
+) -> Vec<ScenarioRun> {
     let mut reports = Vec::new();
     for simulation in &lab.simulations {
         for scenario in &simulation.scenarios {
@@ -74,7 +78,7 @@ pub fn run(plan: &ExecutionPlan, graph_version: GraphVersion, lab: &Lab) -> Vec<
 }
 
 fn run_scenario(
-    plan: &ExecutionPlan,
+    plan: &ValidatedExecutionPlan,
     graph_version: GraphVersion,
     simulation: &str,
     shared_mocks: &[Mock],
