@@ -256,13 +256,23 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // byte form of some graph, and nothing downstream should mint an
     // opinion about it. Strictly increasing everywhere — ties are
     // duplicates and refuse as such below or here.
-    if !plan.nodes.windows(2).all(|w| {
-        (kind_rank(&w[0].kind), w[0].path.to_string())
-            < (kind_rank(&w[1].kind), w[1].path.to_string())
-    }) {
-        return Err(PlanValidationError::NonCanonicalOrder {
-            collection: "nodes",
-        });
+    for pair in plan.nodes.windows(2) {
+        // Uniqueness before order, here as everywhere: two entries
+        // for one path are a DUPLICATE first — the dedicated variant
+        // must name the defect it exists for, not hide behind the
+        // broken sort the duplication implies.
+        if pair[0].path == pair[1].path {
+            return Err(PlanValidationError::DuplicateNodePath {
+                path: pair[0].path.clone(),
+            });
+        }
+        if (kind_rank(&pair[0].kind), pair[0].path.to_string())
+            >= (kind_rank(&pair[1].kind), pair[1].path.to_string())
+        {
+            return Err(PlanValidationError::NonCanonicalOrder {
+                collection: "nodes",
+            });
+        }
     }
     for pair in plan.boundary.windows(2) {
         if pair[0].0 == pair[1].0 {

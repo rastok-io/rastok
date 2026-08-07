@@ -344,6 +344,131 @@ fn a_duplicated_connector_attribute_refuses() {
 }
 
 #[test]
+fn a_duplicated_node_refuses_as_a_duplicate() {
+    // Two identical nodes break the sort too — but the defect is the
+    // duplication, and the dedicated variant must say so.
+    let mut plan = raw_probe();
+    let relay = plan.nodes[0].clone();
+    plan.nodes.insert(0, relay);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateNodePath {
+            path: rastok::node::Path::new(["relay"]).unwrap(),
+        }
+    );
+
+    // The same path under two KINDS sorts apart (operators before
+    // connectors) — with another operator between them, the
+    // NON-adjacent duplicate must still refuse.
+    let mut plan = raw_probe();
+    let mut ghost = plan.nodes[0].clone();
+    ghost.path = shell_path();
+    let mut zeta = plan.nodes[0].clone();
+    zeta.path = rastok::node::Path::new(["zeta"]).unwrap();
+    plan.nodes.insert(1, ghost);
+    plan.nodes.insert(2, zeta);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateNodePath { path: shell_path() }
+    );
+}
+
+#[test]
+fn a_duplicated_node_port_refuses() {
+    let mut plan = raw_probe();
+    let relay = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the operator");
+    relay.ports = vec![
+        (port("extra"), Direction::Output),
+        (port("extra"), Direction::Output),
+    ];
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicatePort {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+            port: port("extra"),
+        }
+    );
+}
+
+#[test]
+fn a_duplicated_var_refuses() {
+    let mut plan = raw_probe();
+    let relay = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the operator");
+    let seen = relay.vars[0].clone();
+    relay.vars.insert(0, seen.clone());
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateVar {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+            name: seen.name,
+        }
+    );
+}
+
+#[test]
+fn a_write_to_an_undeclared_var_refuses() {
+    let mut plan = raw_probe();
+    for step in &mut plan.handlers[0].body {
+        if let Step::SetVar { name, .. } = step {
+            "ghost".clone_into(name);
+        }
+    }
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::UnknownVariable {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+            name: String::from("ghost"),
+        }
+    );
+}
+
+#[test]
+fn an_edge_to_an_unknown_port_refuses() {
+    // A node port that exists nowhere: neither implicit nor declared
+    // — the reference is not usable in the required role.
+    let mut plan = raw_probe();
+    plan.edges.push(Edge {
+        from: EndpointRef {
+            node: Some(Slot::new(0)),
+            port: port("ghost"),
+        },
+        to: None,
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::WrongPortDirection {
+            node: Some(rastok::node::Path::new(["relay"]).unwrap()),
+            port: port("ghost"),
+            expected: Direction::Output,
+        }
+    );
+
+    // A boundary port that exists nowhere refuses by its own name.
+    let mut plan = raw_probe();
+    plan.edges.push(Edge {
+        from: EndpointRef {
+            node: None,
+            port: port("ghost"),
+        },
+        to: None,
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::UnknownBoundaryPort {
+            port: port("ghost"),
+        }
+    );
+}
+
+#[test]
 fn a_reversed_error_set_is_not_canonical() {
     // The reviewer's reproducer: reverse a raw plan's error set and
     // the old validator accepted it — two packages for one contract,
