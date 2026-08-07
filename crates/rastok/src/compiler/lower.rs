@@ -175,7 +175,12 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
             consts.insert(val.name.clone(), val.value.value.clone());
         }
         let subst = |tree: &cel::Tree| substitute_tree(tree, &consts);
-        for handler in &hir_node.handlers {
+        // Declaration order between handlers carries no semantics and
+        // no identity (identity.md): they ship sorted by their
+        // activation's canonical key, the same key the hash sorts by.
+        let mut handlers: Vec<_> = hir_node.handlers.iter().collect();
+        handlers.sort_by_key(|handler| handler.activation.to_string());
+        for handler in handlers {
             plan.handlers.push(Handler {
                 node: slot,
                 activation: handler.activation.clone(),
@@ -506,8 +511,13 @@ impl Writer {
                 Direction::Output => 2,
             });
         }
-        self.count(node.handlers.len());
-        for handler in &node.handlers {
+        // Sorted by activation key: the identity is insensitive to
+        // declaration order between handlers (identity.md) — only
+        // statements INSIDE a handler are order-sensitive.
+        let mut handlers: Vec<_> = node.handlers.iter().collect();
+        handlers.sort_by_key(|handler| handler.activation.to_string());
+        self.count(handlers.len());
+        for handler in handlers {
             // Hash material: renders `p:<port>` — byte-identical to
             // the pre-activation encoding, pinned by the golden hash.
             self.str(&handler.activation.to_string());

@@ -52,6 +52,14 @@ pub enum PlanValidationError {
         /// The repeated attribute.
         name: String,
     },
+    /// One node declares two handlers for one activation — the
+    /// second would silently shadow the first at dispatch.
+    DuplicateHandler {
+        /// The declaring node.
+        node: node::Path,
+        /// The doubled activation port.
+        activation: node::Port,
+    },
     /// A connector's error set names one kind twice.
     DuplicateErrorKind {
         /// The declaring node.
@@ -134,6 +142,12 @@ impl core::fmt::Display for PlanValidationError {
             }
             Self::DuplicateAttribute { node, name } => {
                 write!(f, "invalid plan: duplicate attribute `{name}` on `{node}`")
+            }
+            Self::DuplicateHandler { node, activation } => {
+                write!(
+                    f,
+                    "invalid plan: `{node}` declares two handlers on `{activation}`"
+                )
             }
             Self::DuplicateErrorKind { node, kind } => {
                 write!(f, "invalid plan: duplicate error kind `{kind}` on `{node}`")
@@ -516,6 +530,28 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 }
                 Step::Let { expr, .. } => expr_canonical(&expr.root)?,
             }
+        }
+    }
+    // Handler order is canonical — (slot, activation key), the same
+    // key the lowering and the hash sort by, because declaration
+    // order between handlers carries neither semantics nor identity.
+    // A tie is one activation fired twice: dispatch would silently
+    // shadow the second, so it refuses by name. Slot bounds are
+    // already proven above.
+    for pair in plan.handlers.windows(2) {
+        let key =
+            |handler: &crate::plan::Handler| (handler.node.index(), handler.activation.to_string());
+        if key(&pair[0]) == key(&pair[1]) {
+            let node::HandlerActivation::Port(port) = &pair[0].activation;
+            return Err(PlanValidationError::DuplicateHandler {
+                node: node_at(pair[0].node)?.path.clone(),
+                activation: port.clone(),
+            });
+        }
+        if key(&pair[0]) > key(&pair[1]) {
+            return Err(PlanValidationError::NonCanonicalOrder {
+                collection: "handlers",
+            });
         }
     }
     Ok(())

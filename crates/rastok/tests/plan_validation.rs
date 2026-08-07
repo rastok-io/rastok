@@ -494,6 +494,56 @@ fn an_edge_to_an_unknown_port_refuses() {
     );
 }
 
+const TWO_TRIGGERS: &str = "graph g : App {\n  operator o {\n    on a { out = data }\n    on b { out = data }\n  }\n  . -> o.a\n  . -> o.b\n  o -> .\n}\n";
+
+#[test]
+fn handler_declaration_order_is_not_identity() {
+    // identity.md: declaration order is insensitive; only statements
+    // INSIDE a handler (and, later, ports inside a join) are order-
+    // sensitive. Swapping two handlers must change neither the hash
+    // nor the plan.
+    let swapped = TWO_TRIGGERS.replacen(
+        "on a { out = data }\n    on b { out = data }",
+        "on b { out = data }\n    on a { out = data }",
+        1,
+    );
+    let one = compile(&[TWO_TRIGGERS], &Registry::m0()).expect("a valid plan");
+    let two = compile(&[swapped.as_str()], &Registry::m0()).expect("a valid plan");
+    assert_eq!(one.hash, two.hash, "same identity");
+    assert_eq!(one.plan, two.plan, "same canonical plan");
+}
+
+#[test]
+fn a_duplicated_handler_refuses() {
+    // Two handlers for one (node, activation): dispatch would fire
+    // the first and silently shadow the second — refused by name.
+    let mut plan = raw_probe();
+    let first = plan.handlers[0].clone();
+    plan.handlers.insert(0, first);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateHandler {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+            activation: port("in"),
+        }
+    );
+}
+
+#[test]
+fn reordered_handlers_are_not_canonical() {
+    let mut plan = compile(&[TWO_TRIGGERS], &Registry::m0())
+        .expect("a valid plan")
+        .plan
+        .into_inner();
+    plan.handlers.swap(0, 1);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::NonCanonicalOrder {
+            collection: "handlers"
+        }
+    );
+}
+
 #[test]
 fn a_reversed_error_set_is_not_canonical() {
     // The reviewer's reproducer: reverse a raw plan's error set and

@@ -51,7 +51,9 @@ pub struct ExecutionPlan {
     /// The wiring, desugared to explicit pairs, in canonical order —
     /// the same order the semantic hash sees.
     pub edges: Vec<Edge>,
-    /// Every handler of every node, in per-node declaration order.
+    /// Every handler, in canonical order — (slot, activation key).
+    /// Declaration order between handlers carries no identity; only
+    /// the statements INSIDE a handler are order-sensitive.
     pub handlers: Vec<Handler>,
 }
 

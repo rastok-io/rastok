@@ -45,7 +45,12 @@ step touches `vm.rs` once.
    flat two-concept model; scheduler keys over the proven multiport
    routing.
 5. **Joins — `on (a, b) within … / last`** — correlation windows;
-   the last language lift of the milestone.
+   the last language lift of the milestone. Identity note, decided
+   with the handler canonicalization: the join's activation KEY must
+   preserve its declared port order — `on (a, b)` and `on (b, a)`
+   are different identities (identity.md makes port order inside a
+   join sensitive), while the order BETWEEN handlers stays
+   insensitive and canonically sorted by that key.
 6. **`File` connector** — the first new adapter on the conformance
    harness: the half-day claim gets its first real measurement, with
    no network in the way.

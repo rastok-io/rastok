@@ -77,8 +77,9 @@ of the contract, in order:
    the plan documents as canonically ordered actually is: nodes by
    (kind rank, path), boundary and port tables sorted and unique with
    the implicit trio never declared, edges by their endpoint text,
-   vars and attributes sorted, the error set sorted (it is a SET —
-   the hash reads it sorted), and every CEL map literal
+   handlers by (slot, activation key) with one handler per
+   activation, vars and attributes sorted, the error set sorted (it
+   is a SET — the hash reads it sorted), and every CEL map literal
    construction-sorted, walked recursively through guards, steps,
    and writes. These orders live in domain arrays the serializer
    reproduces faithfully, so the re-encoding check below cannot see
