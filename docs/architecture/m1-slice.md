@@ -29,7 +29,11 @@ step touches `vm.rs` once.
 
 1. **Multiport execution** — handlers on named ports, multiple
    outputs, typed ports; the OUTBOUND key already carries the
-   canonical edge, so call identity is ready for it.
+   canonical edge, so call identity is ready for it. One transport
+   consequence to honor from day one: when a connector contract
+   exposes non-default ports, the plan must carry the RESOLVED port
+   table — the embedded validator has no `Registry` to consult, so
+   everything it checks must travel in the package.
 2. **The `jsonl` codec** — structured payloads across the `Process`
    boundary, under the one byte discipline; unlocks realistic `File`
    and HTTP payloads.

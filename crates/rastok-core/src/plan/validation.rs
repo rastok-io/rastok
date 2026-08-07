@@ -51,6 +51,15 @@ pub enum PlanValidationError {
         /// The repeated attribute.
         name: String,
     },
+    /// A port table declares one of the implicit defaults — `in`,
+    /// `out`, and `err` are always present and never declared, on
+    /// nodes and at the boundary alike.
+    ImplicitPortDeclared {
+        /// The declaring node; `None` is the boundary.
+        node: Option<node::Path>,
+        /// The implicit port.
+        port: node::Port,
+    },
     /// A referenced port exists, but not in the referenced role —
     /// an edge from an input, an edge into an output, an activation
     /// on an output, an emission on an input.
@@ -104,6 +113,16 @@ impl core::fmt::Display for PlanValidationError {
             Self::DuplicateAttribute { node, name } => {
                 write!(f, "invalid plan: duplicate attribute `{name}` on `{node}`")
             }
+            Self::ImplicitPortDeclared { node, port } => match node {
+                Some(node) => write!(
+                    f,
+                    "invalid plan: `{node}` declares the implicit port `{port}`"
+                ),
+                None => write!(
+                    f,
+                    "invalid plan: the boundary declares the implicit port `{port}`"
+                ),
+            },
             Self::WrongPortDirection {
                 node,
                 port,
@@ -225,11 +244,29 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             });
         }
     }
+    // The implicit trio is exactly that — implicit: `in`, `out`, and
+    // `err` are always present and never appear in a declared table,
+    // on nodes or at the boundary. The checker holds the surface to
+    // the same rule, so a table naming them is a byte form the
+    // lowering can never emit.
+    let implicit = |port: &node::Port| matches!(port.name(), "in" | "out" | "err");
+    if let Some((port, _)) = plan.boundary.iter().find(|(port, _)| implicit(port)) {
+        return Err(PlanValidationError::ImplicitPortDeclared {
+            node: None,
+            port: port.clone(),
+        });
+    }
     let mut paths = BTreeSet::new();
     for node in &plan.nodes {
         if !paths.insert(node.path.clone()) {
             return Err(PlanValidationError::DuplicateNodePath {
                 path: node.path.clone(),
+            });
+        }
+        if let Some((port, _)) = node.ports.iter().find(|(port, _)| implicit(port)) {
+            return Err(PlanValidationError::ImplicitPortDeclared {
+                node: Some(node.path.clone()),
+                port: port.clone(),
             });
         }
         for pair in node.ports.windows(2) {
@@ -273,21 +310,18 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
     }
 
-    // References: slots, ports in their roles, handlers, vars. M0
-    // lowers no explicit port table — a node's ports are the
-    // implicit trio; a declared table, once present, is the
-    // contract for the names it declares.
-    let has_port = |node: &Node, port: &node::Port, direction: node::Direction| {
-        if node.ports.is_empty() {
-            match direction {
-                node::Direction::Input => port.name() == "in",
-                node::Direction::Output => matches!(port.name(), "out" | "err"),
-            }
-        } else {
-            node.ports
-                .iter()
-                .any(|(candidate, dir)| candidate == port && *dir == direction)
-        }
+    // References: slots, ports in their roles, handlers, vars. The
+    // implicit trio is always available in its fixed directions, and
+    // a declared table EXTENDS it — the same union the checker
+    // applies to the surface language (`add_port` never adds a
+    // default), so the two can never disagree about a program.
+    let has_port = |node: &Node, port: &node::Port, direction: node::Direction| match port.name() {
+        "in" => direction == node::Direction::Input,
+        "out" | "err" => direction == node::Direction::Output,
+        _ => node
+            .ports
+            .iter()
+            .any(|(candidate, dir)| candidate == port && *dir == direction),
     };
     let node_at = |slot: Slot| {
         plan.nodes
@@ -321,41 +355,32 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         node::Direction::Output => node::Direction::Input,
                         node::Direction::Input => node::Direction::Output,
                     };
-                    if let Some((_, declared)) = plan
-                        .boundary
-                        .iter()
-                        .find(|(port, _)| port == &endpoint.port)
-                    {
-                        if *declared != expected {
-                            return Err(PlanValidationError::WrongPortDirection {
-                                node: None,
-                                port: endpoint.port.clone(),
-                                expected,
-                            });
-                        }
-                        return Ok(());
-                    }
-                    // The implicit trio: `in` is the graph's input,
-                    // `out` and `err` its outputs.
-                    let implicit = match expected {
-                        node::Direction::Input => endpoint.port.name() == "in",
-                        node::Direction::Output => {
-                            matches!(endpoint.port.name(), "out" | "err")
-                        }
+                    // The implicit trio first — `in` is the graph's
+                    // input, `out` and `err` its outputs — then the
+                    // declared table, which extends it and (checked
+                    // above) never contains it.
+                    let actual = match endpoint.port.name() {
+                        "in" => Some(node::Direction::Input),
+                        "out" | "err" => Some(node::Direction::Output),
+                        _ => plan
+                            .boundary
+                            .iter()
+                            .find(|(port, _)| port == &endpoint.port)
+                            .map(|(_, declared)| *declared),
                     };
-                    if !implicit {
-                        if matches!(endpoint.port.name(), "in" | "out" | "err") {
-                            return Err(PlanValidationError::WrongPortDirection {
+                    match actual {
+                        None => Err(PlanValidationError::UnknownBoundaryPort {
+                            port: endpoint.port.clone(),
+                        }),
+                        Some(declared) if declared != expected => {
+                            Err(PlanValidationError::WrongPortDirection {
                                 node: None,
                                 port: endpoint.port.clone(),
                                 expected,
-                            });
+                            })
                         }
-                        return Err(PlanValidationError::UnknownBoundaryPort {
-                            port: endpoint.port.clone(),
-                        });
+                        Some(_) => Ok(()),
                     }
-                    Ok(())
                 }
             }
         };

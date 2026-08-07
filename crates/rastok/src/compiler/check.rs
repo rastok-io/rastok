@@ -769,6 +769,25 @@ impl Checker<'_, '_> {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
                     };
+                    // The implicit trio is always present and never
+                    // declared — a redeclaration is at best a no-op
+                    // and at worst (`output in`) a contradiction the
+                    // wiring could never satisfy.
+                    if matches!(port.name.text.as_str(), "in" | "out" | "err") {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_PORT_CONFLICT,
+                                Phase::Check,
+                                format!(
+                                    "`{}` is an implicit boundary port; it is always present and cannot be redeclared",
+                                    port.name.text
+                                ),
+                            )
+                            .with_span(port.name.span)
+                            .with_field("port", port.name.text.clone()),
+                        );
+                        continue;
+                    }
                     if graph
                         .boundary
                         .iter()

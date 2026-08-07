@@ -46,6 +46,92 @@ fn port(name: &str) -> Port {
 }
 
 #[test]
+fn a_declared_port_extends_the_implicit_trio() {
+    // The checker keeps `in`/`out`/`err` implicit and lets a declared
+    // port EXTEND them; the validator must hold the same union, or a
+    // checked program dies at lowering as a false compiler bug.
+    let source = r#"
+graph probe : App {
+  operator o {
+    output extra
+
+    on in {
+      out = data
+    }
+  }
+
+  . -> o -> .
+}
+"#;
+    compile(&[source], &Registry::m0())
+        .expect("a program the checker accepts must validate at the plan");
+}
+
+#[test]
+fn redeclaring_an_implicit_boundary_port_refuses_at_check() {
+    // `output in` contradicts the implicit boundary; it must die in
+    // the checker with a named diagnostic, never reach the validator
+    // as an internal error.
+    let source = r#"
+graph probe : App {
+  output in
+
+  operator o {
+    on in {
+      out = data
+    }
+  }
+
+  . -> o -> .
+}
+"#;
+    let bag = compile(&[source], &Registry::m0()).expect_err("the redeclaration refuses");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-CONFLICT"),
+        "a check-phase refusal, not an internal-plan error: {bag:?}"
+    );
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code().as_str() != "E-INTERNAL-PLAN"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn a_node_table_cannot_declare_the_implicit_trio() {
+    let mut plan = raw_probe();
+    let relay = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the operator");
+    relay.ports = vec![(port("in"), Direction::Input)];
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::ImplicitPortDeclared {
+            node: Some(rastok::node::Path::new(["relay"]).unwrap()),
+            port: port("in"),
+        }
+    );
+}
+
+#[test]
+fn the_boundary_cannot_declare_the_implicit_trio() {
+    let mut plan = raw_probe();
+    plan.boundary = vec![(port("err"), Direction::Output)];
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::ImplicitPortDeclared {
+            node: None,
+            port: port("err"),
+        }
+    );
+}
+
+#[test]
 fn a_boundary_input_cannot_be_an_edge_target() {
     // `operator.out -> .request` with `request` declared as a graph
     // INPUT: the boundary convention inverts the node one, and the
