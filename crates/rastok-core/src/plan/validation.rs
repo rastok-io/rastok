@@ -5,8 +5,9 @@
 use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 
+use crate::cel;
 use crate::node;
-use crate::plan::{EndpointRef, ExecutionPlan, Node, NodeKind, Slot, Step};
+use crate::plan::{Emission, EndpointRef, ExecutionPlan, Node, NodeKind, Slot, Step};
 
 /// Why a plan is not executable — one named invariant violation. The
 /// variants are semantic, not prose: a caller can match on the class
@@ -50,6 +51,18 @@ pub enum PlanValidationError {
         node: node::Path,
         /// The repeated attribute.
         name: String,
+    },
+    /// A connector's error set names one kind twice.
+    DuplicateErrorKind {
+        /// The declaring node.
+        node: node::Path,
+        /// The repeated kind.
+        kind: String,
+    },
+    /// A CEL map literal names one key twice.
+    DuplicateMapKey {
+        /// The repeated key.
+        key: String,
     },
     /// A port table declares one of the implicit defaults — `in`,
     /// `out`, and `err` are always present and never declared, on
@@ -121,6 +134,12 @@ impl core::fmt::Display for PlanValidationError {
             }
             Self::DuplicateAttribute { node, name } => {
                 write!(f, "invalid plan: duplicate attribute `{name}` on `{node}`")
+            }
+            Self::DuplicateErrorKind { node, kind } => {
+                write!(f, "invalid plan: duplicate error kind `{kind}` on `{node}`")
+            }
+            Self::DuplicateMapKey { key } => {
+                write!(f, "invalid plan: duplicate map literal key `{key}`")
             }
             Self::ImplicitPortDeclared { node, port } => match node {
                 Some(node) => write!(
@@ -320,6 +339,22 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     });
                 }
             }
+            // The error set is a SET — the hash reads it sorted, so
+            // an unsorted table would be a second byte form of the
+            // same contract.
+            for pair in spec.error_set.windows(2) {
+                if pair[0] == pair[1] {
+                    return Err(PlanValidationError::DuplicateErrorKind {
+                        node: node.path.clone(),
+                        kind: pair[0].clone(),
+                    });
+                }
+                if pair[0] > pair[1] {
+                    return Err(PlanValidationError::NonCanonicalOrder {
+                        collection: "error_set",
+                    });
+                }
+            }
         }
     }
 
@@ -437,9 +472,12 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 expected: node::Direction::Input,
             });
         }
+        if let Some(guard) = &handler.guard {
+            expr_canonical(&guard.root)?;
+        }
         for step in &handler.body {
             match step {
-                Step::Emit { port, .. } => {
+                Step::Emit { port, value } => {
                     if !has_port(node, port, node::Direction::Output) {
                         return Err(PlanValidationError::WrongPortDirection {
                             node: Some(node.path.clone()),
@@ -447,18 +485,78 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             expected: node::Direction::Output,
                         });
                     }
+                    match value {
+                        Emission::Data(tree) => expr_canonical(&tree.root)?,
+                        Emission::Patch(writes) | Emission::Replace(writes) => {
+                            for write in writes {
+                                expr_canonical(&write.expr.root)?;
+                            }
+                        }
+                        Emission::Identity | Emission::Nothing => {}
+                    }
                 }
-                Step::SetVar { name, .. } => {
+                Step::SetVar { name, expr } => {
                     if !node.vars.iter().any(|var| var.name == *name) {
                         return Err(PlanValidationError::UnknownVariable {
                             node: node.path.clone(),
                             name: name.clone(),
                         });
                     }
+                    expr_canonical(&expr.root)?;
                 }
-                Step::Let { .. } => {}
+                Step::Let { expr, .. } => expr_canonical(&expr.root)?,
             }
         }
     }
     Ok(())
+}
+
+/// Every map literal in a shipped CEL tree is construction-sorted —
+/// the parser sorts them, so an unsorted or duplicated literal is a
+/// second byte form of the same expression, which the re-encoding
+/// check cannot catch (it faithfully reproduces whatever order the
+/// tree carries). Recursion is safe here: the nesting budget has
+/// already bounded the tree.
+fn expr_canonical(expr: &cel::Expr) -> Result<(), PlanValidationError> {
+    match expr {
+        cel::Expr::Literal(_) | cel::Expr::Path(_) => Ok(()),
+        cel::Expr::Unary { expr, .. } => expr_canonical(expr),
+        cel::Expr::Binary { left, right, .. } => {
+            expr_canonical(left)?;
+            expr_canonical(right)
+        }
+        cel::Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            expr_canonical(cond)?;
+            expr_canonical(then)?;
+            expr_canonical(otherwise)
+        }
+        cel::Expr::Index { base, index } => {
+            expr_canonical(base)?;
+            expr_canonical(index)
+        }
+        cel::Expr::Call { args, .. } => args.iter().try_for_each(expr_canonical),
+        cel::Expr::List(items) => items.iter().try_for_each(expr_canonical),
+        cel::Expr::MapLit(pairs) => {
+            for pair in pairs.windows(2) {
+                if pair[0].0 == pair[1].0 {
+                    return Err(PlanValidationError::DuplicateMapKey {
+                        key: pair[0].0.clone(),
+                    });
+                }
+                if pair[0].0 > pair[1].0 {
+                    return Err(PlanValidationError::NonCanonicalOrder {
+                        collection: "map literal",
+                    });
+                }
+            }
+            pairs
+                .iter()
+                .map(|(_, value)| value)
+                .try_for_each(expr_canonical)
+        }
+    }
 }

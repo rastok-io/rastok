@@ -73,7 +73,17 @@ of the contract, in order:
    edge to slot 999) refuse typed — and the machine's `Vm::boot`
    accepts only the validated type, so no raw plan reaches it by
    any path. The compiler's lowering earns the same type once.
-2. **Canonicity, as one total check** — re-encoding the decoded plan
+2. **Domain canonicity, audited by the same type** — every collection
+   the plan documents as canonically ordered actually is: nodes by
+   (kind rank, path), boundary and port tables sorted and unique with
+   the implicit trio never declared, edges by their endpoint text,
+   vars and attributes sorted, the error set sorted (it is a SET —
+   the hash reads it sorted), and every CEL map literal
+   construction-sorted, walked recursively through guards, steps,
+   and writes. These orders live in domain arrays the serializer
+   reproduces faithfully, so the re-encoding check below cannot see
+   them — the type must.
+3. **Canonicity, as one total check** — re-encoding the decoded plan
    must reproduce the body byte for byte, and re-encoding the header
    fields must reproduce the envelope. This refuses non-minimal
    integers, reordered or duplicated map keys, and every other

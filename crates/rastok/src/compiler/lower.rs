@@ -140,13 +140,20 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
                     trait_name,
                     error_set,
                     ..
-                } => NodeKind::Connector(ConnectorSpec {
-                    contract: trait_name.clone(),
-                    effect: typed_effect(hir_node),
-                    behavior: typed_behavior(hir_node),
-                    attributes,
-                    error_set: error_set.clone(),
-                }),
+                } => {
+                    // The error set is a SET: it ships sorted, like
+                    // the hash already reads it — the registry's
+                    // declaration order is not identity material.
+                    let mut error_set = error_set.clone();
+                    error_set.sort();
+                    NodeKind::Connector(ConnectorSpec {
+                        contract: trait_name.clone(),
+                        effect: typed_effect(hir_node),
+                        behavior: typed_behavior(hir_node),
+                        attributes,
+                        error_set,
+                    })
+                }
                 NodeRole::Operator => NodeKind::Operator,
             },
             ports,

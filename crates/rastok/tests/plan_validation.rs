@@ -344,6 +344,95 @@ fn a_duplicated_connector_attribute_refuses() {
 }
 
 #[test]
+fn a_reversed_error_set_is_not_canonical() {
+    // The reviewer's reproducer: reverse a raw plan's error set and
+    // the old validator accepted it — two packages for one contract,
+    // where the hash reads the set sorted. The set is now audited.
+    let mut plan = raw_probe();
+    let shell = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the connector");
+    let rastok::plan::NodeKind::Connector(spec) = &mut shell.kind else {
+        panic!("a connector");
+    };
+    spec.error_set.reverse();
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::NonCanonicalOrder {
+            collection: "error_set"
+        }
+    );
+}
+
+#[test]
+fn a_duplicated_error_kind_refuses() {
+    let mut plan = raw_probe();
+    let shell = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the connector");
+    let rastok::plan::NodeKind::Connector(spec) = &mut shell.kind else {
+        panic!("a connector");
+    };
+    let first = spec.error_set[0].clone();
+    spec.error_set.insert(0, first.clone());
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateErrorKind {
+            node: shell_path(),
+            kind: first,
+        }
+    );
+}
+
+/// Replaces the probe's `seen = …` expression — the chassis for the
+/// map-literal canonicity provocations.
+fn with_setvar_root(root: cel::Expr) -> ExecutionPlan {
+    let mut plan = raw_probe();
+    for step in &mut plan.handlers[0].body {
+        if let Step::SetVar { expr, .. } = step {
+            expr.root = root.clone();
+        }
+    }
+    plan
+}
+
+#[test]
+fn an_unsorted_map_literal_is_not_canonical() {
+    // The parser construction-sorts map literals; a raw plan carrying
+    // an unsorted one is a second byte form of the same expression —
+    // one the re-encoding check reproduces faithfully, so the
+    // validator must refuse it by walking the trees.
+    let plan = with_setvar_root(cel::Expr::MapLit(vec![
+        (String::from("b"), cel::Expr::Literal(cel::Value::Int(1))),
+        (String::from("a"), cel::Expr::Literal(cel::Value::Int(2))),
+    ]));
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::NonCanonicalOrder {
+            collection: "map literal"
+        }
+    );
+}
+
+#[test]
+fn a_duplicated_map_literal_key_refuses() {
+    let plan = with_setvar_root(cel::Expr::MapLit(vec![
+        (String::from("a"), cel::Expr::Literal(cel::Value::Int(1))),
+        (String::from("a"), cel::Expr::Literal(cel::Value::Int(2))),
+    ]));
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateMapKey {
+            key: String::from("a"),
+        }
+    );
+}
+
+#[test]
 fn what_the_type_accepts_the_format_reads_back() {
     // The reviewer's counter-example, generalized into the property
     // it violated: grow an expression one level per turn; every plan
