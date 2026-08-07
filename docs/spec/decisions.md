@@ -46,21 +46,33 @@ no unverified constructor, read-only access (`Deref`, no
 `into_inner`, which drops the claim. The compiler's lowering earns
 the type once; `Vm::boot` and `plan::encode` accept only it, so
 "serialize accepts ⇒ deserialize succeeds" holds by construction.
-The magic `RKPB` is pinned as "Rastok Plan Binary". **Rejected:** a
+The magic `RKPB` is pinned as "Rastok Plan Binary" — the expansion
+names the byte form the magic labels, not a public type; D-2026-08-07-1
+rejected `PlanBinary` only as an API name. **Rejected:** a
 public `plan_package` module (name-as-abstraction), `serialize` /
 `deserialize` naming (two vocabularies for one act), validating in
 both the deserializer and the type (one validation, at the type).
 
 ## D-2026-08-07-1 — The transport artifact is a plan package, not a blob
 
-The compiled artifact is named **plan package** (`rastok_core::plan_package`,
-extension `.rkp`): a structured, versioned, validated product of the
-compiler — nothing about it is opaque or generic. The API vocabulary is
-`encode` / `decode` / `checksum`: an unkeyed BLAKE3 is an integrity
-checksum, and `seal` is reserved for a future property that actually
-binds trust (a signature). **Rejected:** `blob` (dishonest about
-structure), `PlanBinary` (suggests machine code), keeping `seal`/`open`
-(overclaims a trust property the format does not have).
+> **Superseded in part by D-2026-08-07-4** — the module placement
+> (`rastok_core::plan_package`) did not survive the next review
+> round: the codec lives under `plan`. The artifact vocabulary
+> ("plan package", `.rkp`, encode/decode/checksum, `seal` reserved)
+> stands.
+
+The compiled artifact is named **plan package** (extension `.rkp`):
+a structured, versioned, validated product of the compiler — nothing
+about it is opaque or generic. The API vocabulary is `encode` /
+`decode` / `checksum`: an unkeyed BLAKE3 is an integrity checksum,
+and `seal` is reserved for a future property that actually binds
+trust (a signature). **Rejected:** `blob` (dishonest about
+structure), `PlanBinary` *as a public type or module name* (suggests
+machine code where a validated structure lives — the magic's
+expansion in D-2026-08-07-4 names the BYTE FORM, which is exactly
+what a magic labels; the two decisions are about different things),
+keeping `seal`/`open` (overclaims a trust property the format does
+not have).
 
 ## D-2026-08-06-1 — Specs are maintained in place; tags are the editions
 

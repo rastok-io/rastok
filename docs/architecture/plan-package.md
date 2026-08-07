@@ -166,10 +166,12 @@ golden projection (std, evidence) and the package (core, transport).
 ## Verification contract
 
 - **Round trip**: compile → encode → decode ⇒ the decoded plan is
-  structurally equal to the original and the header's semantic hash
-  equals the compilation's. (The hash is computed over the HIR and
-  travels with the package; a plan alone cannot re-derive it — equality
-  plus the sealed header is the proof.)
+  structurally equal to the original and the header's DECLARED
+  semantic hash equals the compilation's. (The hash is computed over
+  the HIR and travels with the package; a plan alone cannot
+  re-derive it — the round trip checks equality of plan and of
+  declared hash, under a checksum-protected association. No party
+  proves the hash *belongs* to the plan; the producer declares it.)
 - **Blessed fixture**: the example's package is pinned like a golden
   trace and re-blessed only deliberately.
 - **Semantic round trip**: beyond structural equality, the decoded
