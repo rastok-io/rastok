@@ -313,3 +313,44 @@ fn nesting_beyond_the_budget_refuses_before_the_stack_does() {
         rastok::canonical_cbor::DecodeError::NestingLimitExceeded
     );
 }
+
+fn nested_additions(count: usize) -> String {
+    let additions = "+ 1 ".repeat(count);
+    format!(
+        "graph deep : App {{\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
+         seen = 1 {additions}\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n"
+    )
+}
+
+#[test]
+fn a_program_beyond_the_nesting_budget_refuses_by_name() {
+    // The reviewer's counter-example: a source the checker accepts
+    // whose plan outgrows the reader's budget. It must die as a NAMED
+    // user diagnostic — the budget is a source-level limit — never as
+    // an internal-plan error, and never as an encoded package that
+    // no decoder reads.
+    let source = nested_additions(200);
+    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("beyond the budget");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PLAN-DEPTH"),
+        "{bag:?}"
+    );
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code().as_str() != "E-INTERNAL-PLAN"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn a_deep_but_budgeted_program_rides_the_round_trip() {
+    let source = nested_additions(100);
+    let compilation = compile(&[source.as_str()], &Registry::m0()).expect("within the budget");
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, declared) = plan::decode(&bytes).expect("what encode accepts, decode reads");
+    assert_eq!(decoded, compilation.plan);
+    assert_eq!(declared, compilation.hash);
+}

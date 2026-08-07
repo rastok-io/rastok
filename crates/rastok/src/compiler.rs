@@ -27,6 +27,10 @@ use crate::stdlib;
 /// defect surfaced through the ordinary error path, never a panic.
 pub const E_INTERNAL_PLAN: Code = Code::new("E-INTERNAL-PLAN");
 
+/// The program's plan would serialize deeper than the format
+/// reader's budget — a source-level limit, not a compiler defect.
+pub const E_PLAN_DEPTH: Code = Code::new("E-PLAN-DEPTH");
+
 /// The result of a successful compilation: a valid plan, its semantic
 /// identity, its symbol side table, and the warnings. A plan with
 /// errors is unrepresentable — errors return the whole bag instead.
@@ -74,6 +78,23 @@ pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilat
     // validator exists precisely to catch this disagreement.
     let plan = match ValidatedExecutionPlan::try_new(plan) {
         Ok(plan) => plan,
+        // The one validation refusal a USER causes: a program deep
+        // enough that its plan would outgrow the format reader's
+        // nesting budget. Every other refusal is a compiler defect.
+        Err(PlanValidationError::NestingBudgetExceeded { depth, budget }) => {
+            bag.push(
+                Diagnostic::new(
+                    E_PLAN_DEPTH,
+                    Phase::Plan,
+                    format!(
+                        "the program nests too deeply to ship: its plan reaches \
+                         {depth} levels where the format reads at most {budget}"
+                    ),
+                )
+                .with_field("depth", depth.to_string()),
+            );
+            return Err(bag);
+        }
         Err(error) => {
             bag.push(internal_plan_diagnostic(&error));
             return Err(bag);

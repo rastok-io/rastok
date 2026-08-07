@@ -183,12 +183,14 @@ impl core::fmt::Display for DecodeError {
 
 impl core::error::Error for DecodeError {}
 
-/// The reader's nesting budget. A compiler-produced plan nests an
-/// order of magnitude below this (tables ~10 levels, plus expression
-/// depth); a source pathological enough to exceed it refuses at
-/// decode as [`DecodeError::NestingLimitExceeded`] — the bound is
-/// part of the format contract, documented in the format note, and
-/// sized to hold comfortably on the embedded stack.
+/// The reader's nesting budget — part of the format contract,
+/// documented in the format note, and sized to hold comfortably on
+/// the embedded stack. The plan validator enforces the same budget
+/// on the writing side (a deeper plan cannot earn its type, and the
+/// compiler refuses the source as `E-PLAN-DEPTH`), so everything
+/// `encode` accepts reads back; the check here stands for foreign
+/// bytes, refusing as [`DecodeError::NestingLimitExceeded`], never
+/// a stack overflow.
 pub const MAX_NESTING: usize = 128;
 
 /// Decodes one canonical value; returns the tree and the bytes

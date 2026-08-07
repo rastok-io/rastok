@@ -88,6 +88,15 @@ pub enum PlanValidationError {
         /// Which collection broke the order.
         collection: &'static str,
     },
+    /// The plan's canonical body would nest beyond the format
+    /// reader's budget — the one plan `encode` would write that
+    /// `decode` could not read back, refused here so it cannot exist.
+    NestingBudgetExceeded {
+        /// The deepest level the body would reach (root = 0).
+        depth: usize,
+        /// The reader's budget ([`crate::canonical_cbor::MAX_NESTING`]).
+        budget: usize,
+    },
 }
 
 impl core::fmt::Display for PlanValidationError {
@@ -146,6 +155,10 @@ impl core::fmt::Display for PlanValidationError {
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
             }
+            Self::NestingBudgetExceeded { depth, budget } => write!(
+                f,
+                "invalid plan: the body nests {depth} levels deep; the format reads at most {budget}"
+            ),
         }
     }
 }
@@ -308,6 +321,19 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 }
             }
         }
+    }
+
+    // The reader's nesting budget, enforced on the writing side: a
+    // plan whose body would nest beyond what `decode` reads cannot
+    // earn the type, so `encode ⇒ decode` is total. Measured without
+    // recursion — nothing below (nor the codec, nor the hasher) may
+    // recurse over the plan before this bound holds.
+    let depth = super::serialization::deepest_level(plan);
+    if depth >= crate::canonical_cbor::MAX_NESTING {
+        return Err(PlanValidationError::NestingBudgetExceeded {
+            depth,
+            budget: crate::canonical_cbor::MAX_NESTING,
+        });
     }
 
     // References: slots, ports in their roles, handlers, vars. The

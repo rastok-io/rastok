@@ -83,9 +83,13 @@ of the contract, in order:
 The canonical reader is itself strict and bounded: success means
 the bytes were canonical (minimal heads, strictly increasing unique
 map keys, the one canonical NaN), and nesting beyond its documented
-budget (`canonical_cbor::MAX_NESTING`, 128 — an order of magnitude
-above any compiler-produced plan) refuses as a typed error, never a
-stack overflow.
+budget (`canonical_cbor::MAX_NESTING`, 128) refuses as a typed
+error, never a stack overflow. The budget cuts both ways:
+`ValidatedExecutionPlan` refuses any plan whose body would nest
+beyond it (`NestingBudgetExceeded`, measured without recursion), and
+the compiler surfaces that refusal as the user diagnostic
+`E-PLAN-DEPTH` — so what `encode` accepts, `decode` reads back, with
+no gap at the boundary.
 
 Deep semantic checking (CEL typing, contract coherence) remains the
 compiler's job — the package's validation holds the *structural*

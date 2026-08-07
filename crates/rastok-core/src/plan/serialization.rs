@@ -472,6 +472,186 @@ fn expr_tree(expr: &cel::Expr) -> Cbor {
     }
 }
 
+/// The 0-based level of the deepest CBOR node the body encoding of
+/// this plan will contain — computed WITHOUT building the tree and
+/// without recursion, so the validator can hold an arbitrarily deep
+/// raw plan to the reader's budget before anything recurses over it
+/// (the tree builders above, the encoder, and `Drop` on the plan's
+/// own expression chains all recurse to the depth this bounds). The
+/// per-construct arithmetic mirrors the builders line by line;
+/// `the_level_walker_matches_the_builders` pins the equality.
+pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
+    enum Item<'a> {
+        Expr(&'a cel::Expr, usize),
+        Val(&'a cel::Value, usize),
+        Ty(&'a cel::Type, usize),
+    }
+    /// A `tree_tree`: its type and expression roots sit at `level`.
+    fn tree<'a>(tree: &'a cel::Tree, level: usize, stack: &mut Vec<Item<'a>>) {
+        stack.push(Item::Ty(&tree.ty, level));
+        stack.push(Item::Expr(&tree.root, level));
+    }
+    // The root map's four table arrays sit at level 1 always.
+    let mut max = 1usize;
+    let mut stack: Vec<Item<'_>> = Vec::new();
+    for node in &plan.nodes {
+        // node map at 2: path, kind, and the two table arrays at 3.
+        max = max.max(3);
+        if let NodeKind::Connector(spec) = &node.kind {
+            // kind array at 3, spec map at 4, its fields at 5.
+            max = max.max(5);
+            if matches!(spec.effect, node::Effect::Class(_)) {
+                max = max.max(6);
+            }
+            for (_, setting) in &spec.attributes {
+                // entry array at 6, name and attr_tree at 7, the
+                // attr_tree's tag and payload at 8.
+                max = max.max(8);
+                if let AttrSetting::Value(value) = setting {
+                    stack.push(Item::Val(value, 8));
+                }
+            }
+            if !spec.error_set.is_empty() {
+                max = max.max(6);
+            }
+        }
+        if !node.ports.is_empty() {
+            // decl array at 4, name and direction at 5.
+            max = max.max(5);
+        }
+        for var in &node.vars {
+            // var map at 4, its fields at 5.
+            max = max.max(5);
+            stack.push(Item::Ty(&var.ty, 5));
+            if let Some(init) = &var.init {
+                stack.push(Item::Val(init, 5));
+            }
+        }
+    }
+    if !plan.boundary.is_empty() {
+        // decl array at 2, name and direction at 3.
+        max = max.max(3);
+    }
+    if !plan.edges.is_empty() {
+        // edge array at 2, endpoint arrays at 3, their fields at 4.
+        max = max.max(4);
+    }
+    for handler in &plan.handlers {
+        // handler map at 2, activation array at 3, its fields at 4.
+        max = max.max(4);
+        if let Some(guard) = &handler.guard {
+            // tree_tree at 3, type and expression roots at 4.
+            tree(guard, 4, &mut stack);
+        }
+        for step in &handler.body {
+            // step array at 4, tag and name at 5.
+            max = max.max(5);
+            match step {
+                Step::Let { expr, .. } | Step::SetVar { expr, .. } => tree(expr, 6, &mut stack),
+                Step::Emit { value, .. } => match value {
+                    // emission array at 5, its tag at 6.
+                    Emission::Identity | Emission::Nothing => max = max.max(6),
+                    Emission::Data(data) => tree(data, 7, &mut stack),
+                    Emission::Patch(writes) | Emission::Replace(writes) => {
+                        max = max.max(6);
+                        for write in writes {
+                            // write pair at 7, target array and
+                            // tree_tree at 8, their fields at 9 — a
+                            // data path's segments text at 10.
+                            max = max.max(match &write.target {
+                                WriteTarget::Data(segments) if !segments.is_empty() => 10,
+                                _ => 9,
+                            });
+                            tree(&write.expr, 9, &mut stack);
+                        }
+                    }
+                },
+            }
+        }
+    }
+    while let Some(item) = stack.pop() {
+        match item {
+            Item::Expr(expr, level) => {
+                // Every variant is an array whose tag sits one down.
+                max = max.max(level + 1);
+                match expr {
+                    cel::Expr::Literal(value) => stack.push(Item::Val(value, level + 1)),
+                    cel::Expr::Path(segments) => {
+                        if !segments.is_empty() {
+                            max = max.max(level + 2);
+                        }
+                    }
+                    cel::Expr::Unary { expr, .. } => stack.push(Item::Expr(expr, level + 1)),
+                    cel::Expr::Binary { left, right, .. } => {
+                        stack.push(Item::Expr(left, level + 1));
+                        stack.push(Item::Expr(right, level + 1));
+                    }
+                    cel::Expr::Ternary {
+                        cond,
+                        then,
+                        otherwise,
+                    } => {
+                        stack.push(Item::Expr(cond, level + 1));
+                        stack.push(Item::Expr(then, level + 1));
+                        stack.push(Item::Expr(otherwise, level + 1));
+                    }
+                    cel::Expr::Index { base, index } => {
+                        stack.push(Item::Expr(base, level + 1));
+                        stack.push(Item::Expr(index, level + 1));
+                    }
+                    cel::Expr::Call { args, .. } => {
+                        for arg in args {
+                            stack.push(Item::Expr(arg, level + 2));
+                        }
+                    }
+                    cel::Expr::List(items) => {
+                        for item in items {
+                            stack.push(Item::Expr(item, level + 2));
+                        }
+                    }
+                    cel::Expr::MapLit(pairs) => {
+                        for (_, value) in pairs {
+                            // pair array at +2, key text and value
+                            // at +3.
+                            max = max.max(level + 3);
+                            stack.push(Item::Expr(value, level + 3));
+                        }
+                    }
+                }
+            }
+            Item::Val(value, level) => {
+                // `cel_tagged`: an array whose tag and scalar
+                // payloads sit one down.
+                max = max.max(level + 1);
+                match value {
+                    cel::Value::List(items) => {
+                        for item in items {
+                            stack.push(Item::Val(item, level + 2));
+                        }
+                    }
+                    cel::Value::Map(entries) => {
+                        for entry in entries.values() {
+                            // pair array at +2, the tagged key's own
+                            // tag and text at +4.
+                            max = max.max(level + 4);
+                            stack.push(Item::Val(entry, level + 3));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Item::Ty(ty, level) => match ty {
+                cel::Type::List(inner) | cel::Type::Map(inner) => {
+                    max = max.max(level + 1);
+                    stack.push(Item::Ty(inner, level + 1));
+                }
+                _ => max = max.max(level),
+            },
+        }
+    }
+    max
+}
+
 fn binop_code(op: cel::BinaryOp) -> u64 {
     match op {
         cel::BinaryOp::Mul => 1,
@@ -943,5 +1123,266 @@ fn text_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a str, DecodeError> {
     match tree {
         Cbor::Text(text) => Ok(text),
         _ => Err(DecodeError::Malformed(format!("{what}: not text"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::boxed::Box;
+
+    /// The actual deepest level of a built tree — the ground truth
+    /// the walker's arithmetic is held to.
+    fn levels(value: &Cbor) -> usize {
+        let mut max = 0;
+        let mut stack = vec![(value, 0usize)];
+        while let Some((value, level)) = stack.pop() {
+            max = max.max(level);
+            match value {
+                Cbor::Array(items) => {
+                    for item in items {
+                        stack.push((item, level + 1));
+                    }
+                }
+                Cbor::Map(pairs) => {
+                    for entry in pairs.values() {
+                        // The keys are nodes one down too.
+                        max = max.max(level + 1);
+                        stack.push((entry, level + 1));
+                    }
+                }
+                _ => {}
+            }
+        }
+        max
+    }
+
+    fn text(name: &str) -> String {
+        String::from(name)
+    }
+
+    fn port(name: &str) -> node::Port {
+        node::Port::new(name).unwrap()
+    }
+
+    fn tree(root: cel::Expr) -> cel::Tree {
+        cel::Tree {
+            ty: cel::Type::Dyn,
+            root,
+        }
+    }
+
+    /// One plan exercising every construct the builders encode.
+    fn rich_plan() -> ExecutionPlan {
+        let map_value = {
+            let mut entries = BTreeMap::new();
+            entries.insert(
+                text("k"),
+                cel::Value::List(vec![
+                    cel::Value::Int(-3),
+                    cel::Value::Bytes(vec![1]),
+                    cel::Value::Double(1.5),
+                    cel::Value::Timestamp(7),
+                ]),
+            );
+            cel::Value::Map(entries)
+        };
+        let expr = cel::Expr::Ternary {
+            cond: Box::new(cel::Expr::Binary {
+                op: cel::BinaryOp::Lt,
+                left: Box::new(cel::Expr::Path(vec![text("seen")])),
+                right: Box::new(cel::Expr::Literal(cel::Value::Int(3))),
+            }),
+            then: Box::new(cel::Expr::Call {
+                function: cel::Function::Size,
+                args: vec![cel::Expr::List(vec![cel::Expr::MapLit(vec![(
+                    text("k"),
+                    cel::Expr::Unary {
+                        op: cel::UnaryOp::Neg,
+                        expr: Box::new(cel::Expr::Literal(cel::Value::Int(1))),
+                    },
+                )])])],
+            }),
+            otherwise: Box::new(cel::Expr::Index {
+                base: Box::new(cel::Expr::Path(vec![text("data"), text("f")])),
+                index: Box::new(cel::Expr::Literal(cel::Value::Uint(0))),
+            }),
+        };
+        ExecutionPlan {
+            nodes: vec![
+                Node {
+                    path: node::Path::new(["relay"]).unwrap(),
+                    kind: NodeKind::Operator,
+                    ports: vec![(port("extra"), node::Direction::Output)],
+                    vars: vec![VarCell {
+                        name: text("seen"),
+                        ty: cel::Type::Map(Box::new(cel::Type::List(Box::new(cel::Type::Int)))),
+                        init: Some(map_value.clone()),
+                    }],
+                },
+                Node {
+                    path: node::Path::new(["shell"]).unwrap(),
+                    kind: NodeKind::Connector(ConnectorSpec {
+                        contract: text("Process"),
+                        effect: node::Effect::Class(node::EffectClass::Idempotent),
+                        behavior: node::Behavior::Deterministic,
+                        attributes: vec![
+                            (text("cmd"), AttrSetting::Value(map_value)),
+                            (text("codec"), AttrSetting::Word(text("lines"))),
+                        ],
+                        error_set: vec![text("A"), text("B")],
+                    }),
+                    ports: vec![],
+                    vars: vec![],
+                },
+            ],
+            boundary: vec![(port("feed"), node::Direction::Output)],
+            edges: vec![
+                Edge {
+                    from: EndpointRef {
+                        node: None,
+                        port: port("in"),
+                    },
+                    to: Some(EndpointRef {
+                        node: Some(Slot::new(0)),
+                        port: port("in"),
+                    }),
+                },
+                Edge {
+                    from: EndpointRef {
+                        node: Some(Slot::new(0)),
+                        port: port("extra"),
+                    },
+                    to: None,
+                },
+            ],
+            handlers: vec![Handler {
+                node: Slot::new(0),
+                activation: node::HandlerActivation::Port(port("in")),
+                guard: Some(tree(expr.clone())),
+                body: vec![
+                    Step::Let {
+                        name: text("x"),
+                        expr: tree(expr.clone()),
+                    },
+                    Step::SetVar {
+                        name: text("seen"),
+                        expr: tree(expr.clone()),
+                    },
+                    Step::Emit {
+                        port: port("out"),
+                        value: Emission::Identity,
+                    },
+                    Step::Emit {
+                        port: port("out"),
+                        value: Emission::Nothing,
+                    },
+                    Step::Emit {
+                        port: port("out"),
+                        value: Emission::Data(tree(expr.clone())),
+                    },
+                    Step::Emit {
+                        port: port("out"),
+                        value: Emission::Patch(vec![
+                            FieldWrite {
+                                target: WriteTarget::Data(vec![text("a"), text("b")]),
+                                expr: tree(expr),
+                            },
+                            FieldWrite {
+                                target: WriteTarget::AppMeta(text("m")),
+                                expr: tree(cel::Expr::Literal(cel::Value::Null)),
+                            },
+                            FieldWrite {
+                                target: WriteTarget::CustomMeta(text("ns"), text("f")),
+                                expr: tree(cel::Expr::Literal(cel::Value::Bool(true))),
+                            },
+                            FieldWrite {
+                                target: WriteTarget::MimeType,
+                                expr: tree(cel::Expr::Literal(cel::Value::Text(text("t")))),
+                            },
+                        ]),
+                    },
+                    Step::Emit {
+                        port: port("out"),
+                        value: Emission::Replace(vec![FieldWrite {
+                            target: WriteTarget::Data(vec![]),
+                            expr: tree(cel::Expr::Literal(cel::Value::Duration(5))),
+                        }]),
+                    },
+                ],
+            }],
+        }
+    }
+
+    /// A one-step plan carrying one expression — the chassis for the
+    /// nested chains.
+    fn one_step_plan(root: cel::Expr) -> ExecutionPlan {
+        ExecutionPlan {
+            nodes: vec![Node {
+                path: node::Path::new(["o"]).unwrap(),
+                kind: NodeKind::Operator,
+                ports: vec![],
+                vars: vec![],
+            }],
+            boundary: vec![],
+            edges: vec![],
+            handlers: vec![Handler {
+                node: Slot::new(0),
+                activation: node::HandlerActivation::Port(port("in")),
+                guard: None,
+                body: vec![Step::Let {
+                    name: text("x"),
+                    expr: tree(root),
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn the_level_walker_matches_the_builders() {
+        let mut nested_binary = cel::Expr::Literal(cel::Value::Int(1));
+        let mut nested_maplit = cel::Expr::Literal(cel::Value::Int(1));
+        for _ in 0..60 {
+            nested_binary = cel::Expr::Binary {
+                op: cel::BinaryOp::Add,
+                left: Box::new(nested_binary),
+                right: Box::new(cel::Expr::Literal(cel::Value::Int(0))),
+            };
+            nested_maplit = cel::Expr::MapLit(vec![(text("k"), nested_maplit)]);
+        }
+        let mut nested_value = cel::Value::Int(1);
+        let mut nested_type = cel::Type::Int;
+        for _ in 0..60 {
+            nested_value = cel::Value::List(vec![nested_value]);
+            nested_type = cel::Type::Map(Box::new(nested_type));
+        }
+        let mut deep_type_plan = one_step_plan(cel::Expr::Literal(cel::Value::Null));
+        deep_type_plan.handlers[0].body = vec![Step::Let {
+            name: text("x"),
+            expr: cel::Tree {
+                ty: nested_type,
+                root: cel::Expr::Literal(cel::Value::Null),
+            },
+        }];
+        let plans = [
+            ExecutionPlan {
+                nodes: vec![],
+                boundary: vec![],
+                edges: vec![],
+                handlers: vec![],
+            },
+            rich_plan(),
+            one_step_plan(nested_binary),
+            one_step_plan(nested_maplit),
+            one_step_plan(cel::Expr::Literal(nested_value)),
+            deep_type_plan,
+        ];
+        for plan in &plans {
+            assert_eq!(
+                deepest_level(plan),
+                levels(&plan_tree(plan)),
+                "the walker's arithmetic drifted from the builders"
+            );
+        }
     }
 }

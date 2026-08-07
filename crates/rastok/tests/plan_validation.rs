@@ -7,10 +7,12 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use rastok::canonical_cbor::MAX_NESTING;
+use rastok::cel;
 use rastok::compiler::compile;
 use rastok::node::{Direction, Port};
 use rastok::plan::{
-    Edge, EndpointRef, ExecutionPlan, PlanValidationError, Slot, ValidatedExecutionPlan,
+    self, Edge, EndpointRef, ExecutionPlan, PlanValidationError, Slot, Step, ValidatedExecutionPlan,
 };
 use rastok::stdlib::Registry;
 
@@ -339,6 +341,56 @@ fn a_duplicated_connector_attribute_refuses() {
             name: attribute_name(),
         }
     );
+}
+
+#[test]
+fn what_the_type_accepts_the_format_reads_back() {
+    // The reviewer's counter-example, generalized into the property
+    // it violated: grow an expression one level per turn; every plan
+    // the type accepts must ride the full round trip, and the first
+    // refusal must be the typed budget, exactly at the reader's
+    // bound. `encode ⇒ decode` is total — no gap at the boundary.
+    let hash = compile(&[PROBE], &Registry::m0())
+        .expect("a valid plan")
+        .hash;
+    let mut plan = raw_probe();
+    let mut last_accepted = None;
+    let mut refused = false;
+    for _ in 0..(MAX_NESTING + 16) {
+        let relay_steps = &mut plan.handlers[0].body;
+        for step in relay_steps {
+            if let Step::SetVar { expr, .. } = step {
+                let previous =
+                    core::mem::replace(&mut expr.root, cel::Expr::Literal(cel::Value::Int(0)));
+                expr.root = cel::Expr::Binary {
+                    op: cel::BinaryOp::Add,
+                    left: Box::new(previous),
+                    right: Box::new(cel::Expr::Literal(cel::Value::Int(0))),
+                };
+            }
+        }
+        match ValidatedExecutionPlan::try_new(plan.clone()) {
+            Ok(validated) => last_accepted = Some(validated),
+            Err(error) => {
+                assert_eq!(
+                    error,
+                    PlanValidationError::NestingBudgetExceeded {
+                        depth: MAX_NESTING,
+                        budget: MAX_NESTING,
+                    },
+                    "the first refusal sits exactly at the reader's bound"
+                );
+                refused = true;
+                break;
+            }
+        }
+    }
+    assert!(refused, "the chain crossed the budget");
+    let deepest = last_accepted.expect("a deepest accepted plan");
+    let bytes = plan::encode(&deepest, &hash);
+    let (decoded, declared) = plan::decode(&bytes).expect("the boundary case reads back");
+    assert_eq!(decoded, deepest, "the deepest accepted plan round-trips");
+    assert_eq!(declared, hash);
 }
 
 fn shell_path() -> rastok::node::Path {
