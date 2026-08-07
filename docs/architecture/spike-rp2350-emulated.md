@@ -66,7 +66,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (365-byte v2 package, typed validation + canonicity re-encode) | 2 826 | 141 k | 0.94 ms |
+| `plan::decode` (365-byte v2 package, full invariant validation + canonicity re-encode) | 4 002 | 200 k | 1.33 ms |
 | relay transaction (avg of 32; min 1 776 / max 2 076) | 1 841 | **92 k** | **0.61 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
@@ -81,9 +81,12 @@ Notes the numbers carry:
 - The relay transaction meets its criterion with a **1.6× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 2 792: structural
-  validation and the canonicity re-encode are integrity work done
-  once at boot, and the price is stated rather than hidden.
+- Package decode grew from v1's 1 468 ticks to 4 002 across the
+  review campaign: structural validation of every announced
+  invariant (directions, canonical orders, uniqueness) and the
+  canonicity re-encode are integrity work done once at boot, and
+  the price is stated rather than hidden. No criterion bounds boot
+  cost; the transaction path is unchanged.
 - The true high-water mark (60.9 KiB) sits above the old sampled
   figure (57.2 KiB), as a real peak must.
 - The semantic hash printed by the emulated kernel is byte-identical
