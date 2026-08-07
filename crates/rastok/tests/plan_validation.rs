@@ -497,6 +497,77 @@ fn an_edge_to_an_unknown_port_refuses() {
 const TWO_TRIGGERS: &str = "graph g : App {\n  operator o {\n    on a { out = data }\n    on b { out = data }\n  }\n  . -> o.a\n  . -> o.b\n  o -> .\n}\n";
 
 #[test]
+fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
+    // The `[a, b, a]` shape: duplicated AND disordered. Uniqueness is
+    // a GLOBAL pass that runs first, so the dedicated variant names
+    // the defect — never NonCanonicalOrder standing in front of it.
+    let mut plan = raw_probe();
+    plan.boundary = vec![
+        (port("zeta"), Direction::Input),
+        (port("alpha"), Direction::Input),
+        (port("zeta"), Direction::Input),
+    ];
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateBoundaryPort { port: port("zeta") }
+    );
+
+    let mut plan = raw_probe();
+    let relay = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the operator");
+    let seen = relay.vars[0].clone();
+    let mut alpha = seen.clone();
+    "alpha".clone_into(&mut alpha.name);
+    let mut zeta = seen.clone();
+    "zeta".clone_into(&mut zeta.name);
+    relay.vars = vec![zeta.clone(), alpha, zeta];
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateVar {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+            name: String::from("zeta"),
+        }
+    );
+
+    let mut plan = raw_probe();
+    let shell = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the connector");
+    let rastok::plan::NodeKind::Connector(spec) = &mut shell.kind else {
+        panic!("a connector");
+    };
+    spec.error_set = vec![
+        String::from("Zeta"),
+        String::from("Alpha"),
+        String::from("Zeta"),
+    ];
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateErrorKind {
+            node: shell_path(),
+            kind: String::from("Zeta"),
+        }
+    );
+
+    let plan = with_setvar_root(cel::Expr::MapLit(vec![
+        (String::from("z"), cel::Expr::Literal(cel::Value::Int(1))),
+        (String::from("a"), cel::Expr::Literal(cel::Value::Int(2))),
+        (String::from("z"), cel::Expr::Literal(cel::Value::Int(3))),
+    ]));
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DuplicateMapKey {
+            key: String::from("z"),
+        }
+    );
+}
+
+#[test]
 fn handler_declaration_order_is_not_identity() {
     // identity.md: declaration order is insensitive; only statements
     // INSIDE a handler (and, later, ports inside a join) are order-

@@ -273,20 +273,23 @@ fn kind_rank(kind: &NodeKind) -> u8 {
 }
 
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
-    // Canonical orders first: a plan that fails here is a different
-    // byte form of some graph, and nothing downstream should mint an
-    // opinion about it. Strictly increasing everywhere — ties are
-    // duplicates and refuse as such below or here.
-    for pair in plan.nodes.windows(2) {
-        // Uniqueness before order, here as everywhere: two entries
-        // for one path are a DUPLICATE first — the dedicated variant
-        // must name the defect it exists for, not hide behind the
-        // broken sort the duplication implies.
-        if pair[0].path == pair[1].path {
+    // Uniqueness first, GLOBALLY, then canonical order: a collection
+    // that is both duplicated and disordered refuses as the
+    // DUPLICATE — the dedicated variant names the defect wherever
+    // the copies sit, adjacent or not. (Edges are the stated
+    // exception: a doubled edge has no dedicated variant — the
+    // checker refuses it at the surface as E-DUP-EDGE — so a raw
+    // plan carrying one refuses as the non-canonical order it also
+    // is.)
+    let mut paths = BTreeSet::new();
+    for node in &plan.nodes {
+        if !paths.insert(&node.path) {
             return Err(PlanValidationError::DuplicateNodePath {
-                path: pair[0].path.clone(),
+                path: node.path.clone(),
             });
         }
+    }
+    for pair in plan.nodes.windows(2) {
         if (kind_rank(&pair[0].kind), pair[0].path.to_string())
             >= (kind_rank(&pair[1].kind), pair[1].path.to_string())
         {
@@ -295,12 +298,13 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             });
         }
     }
-    for pair in plan.boundary.windows(2) {
-        if pair[0].0 == pair[1].0 {
-            return Err(PlanValidationError::DuplicateBoundaryPort {
-                port: pair[0].0.clone(),
-            });
+    let mut boundary_ports = BTreeSet::new();
+    for (port, _) in &plan.boundary {
+        if !boundary_ports.insert(port) {
+            return Err(PlanValidationError::DuplicateBoundaryPort { port: port.clone() });
         }
+    }
+    for pair in plan.boundary.windows(2) {
         if pair[0] >= pair[1] {
             return Err(PlanValidationError::NonCanonicalOrder {
                 collection: "boundary",
@@ -319,52 +323,55 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             port: port.clone(),
         });
     }
-    let mut paths = BTreeSet::new();
     for node in &plan.nodes {
-        if !paths.insert(node.path.clone()) {
-            return Err(PlanValidationError::DuplicateNodePath {
-                path: node.path.clone(),
-            });
-        }
         if let Some((port, _)) = node.ports.iter().find(|(port, _)| implicit(port)) {
             return Err(PlanValidationError::ImplicitPortDeclared {
                 node: Some(node.path.clone()),
                 port: port.clone(),
             });
         }
-        for pair in node.ports.windows(2) {
-            if pair[0].0 == pair[1].0 {
+        let mut ports = BTreeSet::new();
+        for (port, _) in &node.ports {
+            if !ports.insert(port) {
                 return Err(PlanValidationError::DuplicatePort {
                     node: node.path.clone(),
-                    port: pair[0].0.clone(),
+                    port: port.clone(),
                 });
             }
+        }
+        for pair in node.ports.windows(2) {
             if pair[0] >= pair[1] {
                 return Err(PlanValidationError::NonCanonicalOrder {
                     collection: "ports",
                 });
             }
         }
-        for pair in node.vars.windows(2) {
-            if pair[0].name == pair[1].name {
+        let mut vars = BTreeSet::new();
+        for var in &node.vars {
+            if !vars.insert(var.name.as_str()) {
                 return Err(PlanValidationError::DuplicateVar {
                     node: node.path.clone(),
-                    name: pair[0].name.clone(),
+                    name: var.name.clone(),
                 });
             }
-            if pair[0].name > pair[1].name {
+        }
+        for pair in node.vars.windows(2) {
+            if pair[0].name >= pair[1].name {
                 return Err(PlanValidationError::NonCanonicalOrder { collection: "vars" });
             }
         }
         if let NodeKind::Connector(spec) = &node.kind {
-            for pair in spec.attributes.windows(2) {
-                if pair[0].0 == pair[1].0 {
+            let mut attributes = BTreeSet::new();
+            for (name, _) in &spec.attributes {
+                if !attributes.insert(name.as_str()) {
                     return Err(PlanValidationError::DuplicateAttribute {
                         node: node.path.clone(),
-                        name: pair[0].0.clone(),
+                        name: name.clone(),
                     });
                 }
-                if pair[0].0 > pair[1].0 {
+            }
+            for pair in spec.attributes.windows(2) {
+                if pair[0].0 >= pair[1].0 {
                     return Err(PlanValidationError::NonCanonicalOrder {
                         collection: "attributes",
                     });
@@ -373,14 +380,17 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             // The error set is a SET — the hash reads it sorted, so
             // an unsorted table would be a second byte form of the
             // same contract.
-            for pair in spec.error_set.windows(2) {
-                if pair[0] == pair[1] {
+            let mut kinds = BTreeSet::new();
+            for kind in &spec.error_set {
+                if !kinds.insert(kind.as_str()) {
                     return Err(PlanValidationError::DuplicateErrorKind {
                         node: node.path.clone(),
-                        kind: pair[0].clone(),
+                        kind: kind.clone(),
                     });
                 }
-                if pair[0] > pair[1] {
+            }
+            for pair in spec.error_set.windows(2) {
+                if pair[0] >= pair[1] {
                     return Err(PlanValidationError::NonCanonicalOrder {
                         collection: "error_set",
                     });
@@ -542,20 +552,24 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // Handler order is canonical — (slot, activation key), the same
     // key the lowering and the hash sort by, because declaration
     // order between handlers carries neither semantics nor identity.
-    // A tie is one activation fired twice: dispatch would silently
-    // shadow the second, so it refuses by name. Slot bounds are
+    // A repeated activation is one trigger fired twice: dispatch
+    // would silently shadow the second, so it refuses by name —
+    // globally first, like every other uniqueness. Slot bounds are
     // already proven above.
-    for pair in plan.handlers.windows(2) {
-        let key =
-            |handler: &crate::plan::Handler| (handler.node.index(), handler.activation.to_string());
-        if key(&pair[0]) == key(&pair[1]) {
-            let node::HandlerActivation::Port(port) = &pair[0].activation;
+    let key =
+        |handler: &crate::plan::Handler| (handler.node.index(), handler.activation.to_string());
+    let mut activations = BTreeSet::new();
+    for handler in &plan.handlers {
+        if !activations.insert(key(handler)) {
+            let node::HandlerActivation::Port(port) = &handler.activation;
             return Err(PlanValidationError::DuplicateHandler {
-                node: node_at(pair[0].node)?.path.clone(),
+                node: node_at(handler.node)?.path.clone(),
                 activation: port.clone(),
             });
         }
-        if key(&pair[0]) > key(&pair[1]) {
+    }
+    for pair in plan.handlers.windows(2) {
+        if key(&pair[0]) >= key(&pair[1]) {
             return Err(PlanValidationError::NonCanonicalOrder {
                 collection: "handlers",
             });
@@ -594,13 +608,14 @@ fn expr_canonical(expr: &cel::Expr) -> Result<(), PlanValidationError> {
         cel::Expr::Call { args, .. } => args.iter().try_for_each(expr_canonical),
         cel::Expr::List(items) => items.iter().try_for_each(expr_canonical),
         cel::Expr::MapLit(pairs) => {
-            for pair in pairs.windows(2) {
-                if pair[0].0 == pair[1].0 {
-                    return Err(PlanValidationError::DuplicateMapKey {
-                        key: pair[0].0.clone(),
-                    });
+            let mut keys = alloc::collections::BTreeSet::new();
+            for (key, _) in pairs {
+                if !keys.insert(key.as_str()) {
+                    return Err(PlanValidationError::DuplicateMapKey { key: key.clone() });
                 }
-                if pair[0].0 > pair[1].0 {
+            }
+            for pair in pairs.windows(2) {
+                if pair[0].0 >= pair[1].0 {
                     return Err(PlanValidationError::NonCanonicalOrder {
                         collection: "map literal",
                     });
