@@ -769,23 +769,34 @@ impl Checker<'_, '_> {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
                     };
-                    // The implicit trio is always present and never
-                    // declared — a redeclaration is at best a no-op
-                    // and at worst (`output in`) a contradiction the
-                    // wiring could never satisfy.
-                    if matches!(port.name.text.as_str(), "in" | "out" | "err") {
-                        self.bag.push(
-                            Diagnostic::new(
-                                E_PORT_CONFLICT,
-                                Phase::Check,
-                                format!(
-                                    "`{}` is an implicit boundary port; it is always present and cannot be redeclared",
-                                    port.name.text
-                                ),
-                            )
-                            .with_span(port.name.span)
-                            .with_field("port", port.name.text.clone()),
-                        );
+                    // The defaults are redefinable, per the grammar —
+                    // the same rule `add_port` applies on nodes: a
+                    // same-direction redeclaration is a no-op the
+                    // serialized table never carries; a contradictory
+                    // direction is a conflict the wiring could never
+                    // satisfy.
+                    let implicit = match port.name.text.as_str() {
+                        "in" => Some(Direction::Input),
+                        "out" | "err" => Some(Direction::Output),
+                        _ => None,
+                    };
+                    if let Some(known) = implicit {
+                        if known != direction {
+                            self.bag.push(
+                                Diagnostic::new(
+                                    E_PORT_CONFLICT,
+                                    Phase::Check,
+                                    format!(
+                                        "`{}` is already {} port of the graph; it cannot also be {}",
+                                        port.name.text,
+                                        direction_words(known),
+                                        direction_words(direction),
+                                    ),
+                                )
+                                .with_span(port.name.span)
+                                .with_field("port", port.name.text.clone()),
+                            );
+                        }
                         continue;
                     }
                     if graph

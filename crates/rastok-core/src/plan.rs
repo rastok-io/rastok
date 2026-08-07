@@ -45,7 +45,8 @@ pub struct ExecutionPlan {
     /// The nodes, in canonical order; [`Slot`]s index this table.
     pub nodes: Vec<Node>,
     /// Boundary ports declared on the graph, in canonical order; the
-    /// defaults `in` and `out` exist implicitly.
+    /// defaults `in`, `out`, and `err` exist implicitly and are
+    /// never in this table.
     pub boundary: Vec<(node::Port, node::Direction)>,
     /// The wiring, desugared to explicit pairs, in canonical order —
     /// the same order the semantic hash sees.

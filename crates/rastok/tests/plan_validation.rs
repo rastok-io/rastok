@@ -70,8 +70,34 @@ graph probe : App {
 }
 
 #[test]
+fn redeclaring_a_default_boundary_port_in_its_direction_is_a_no_op() {
+    // The grammar makes the defaults REDEFINABLE: `input in` restates
+    // what is already true, compiles, and leaves the serialized table
+    // empty — the trio stays implicit.
+    let source = r#"
+graph g : App {
+  input in
+
+  operator o {
+    on in {
+      out = data
+    }
+  }
+
+  . -> o -> .
+}
+"#;
+    let compilation =
+        compile(&[source], &Registry::m0()).expect("a same-direction redeclaration is a no-op");
+    assert!(
+        compilation.plan.plan().boundary.is_empty(),
+        "the defaults never enter the declared table"
+    );
+}
+
+#[test]
 fn redeclaring_an_implicit_boundary_port_refuses_at_check() {
-    // `output in` contradicts the implicit boundary; it must die in
+    // `output in` CONTRADICTS the implicit boundary; it must die in
     // the checker with a named diagnostic, never reach the validator
     // as an internal error.
     let source = r#"
