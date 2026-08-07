@@ -41,8 +41,8 @@
 
 use crate::envelope::{Data, Encoding, Envelope, Role};
 use crate::journal::{Closure, OutboundStatus, Record};
-use rastok_core::canon::meta_tagged;
-use rastok_core::canon::{Cbor, cel_tagged, decode, encode, value_tagged};
+use rastok_core::canonical_cbor::{Value as Cbor, decode, encode};
+use rastok_core::identity::encoding::{cel_tagged, meta_tagged, value_tagged};
 use std::fmt;
 
 /// One projected trace: the canonical bytes of every causal record,

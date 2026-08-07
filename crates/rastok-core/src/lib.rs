@@ -18,9 +18,10 @@ extern crate alloc;
 extern crate std;
 
 pub mod boundary;
-pub mod canon;
+pub mod canonical_cbor;
 pub mod cel;
 pub mod envelope;
+pub mod identity;
 pub mod journal;
 pub mod node;
 pub mod plan;

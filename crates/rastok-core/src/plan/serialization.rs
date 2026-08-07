@@ -17,9 +17,10 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
-use crate::canon::{self, Cbor, cel_tagged};
+use crate::canonical_cbor::{self, Value as Cbor};
 use crate::cel;
 use crate::envelope::WriteTarget;
+use crate::identity::encoding::cel_tagged;
 use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
@@ -51,7 +52,7 @@ pub enum DecodeError {
     /// The canonical reader refused, with its own category — a
     /// truncated input and a syntactically foreign one are different
     /// diagnoses and stay different.
-    Read(canon::DecodeError),
+    Read(canonical_cbor::DecodeError),
     /// Bytes inside the format's frame that its tables cannot read.
     Malformed(String),
     /// Bytes that read, but are not the canonical encoding of what
@@ -102,7 +103,7 @@ fn checksum(version: u32, hash: &[u8; 32], body: &[u8]) -> [u8; 32] {
 /// so what this function accepts, [`decode`] reads back.
 #[must_use]
 pub fn encode(plan: &ValidatedExecutionPlan, declared_hash: &SemanticHash) -> Vec<u8> {
-    let body = canon::encode(&plan_tree(plan.plan()));
+    let body = canonical_cbor::encode(&plan_tree(plan.plan()));
     let digest = checksum(FORMAT_VERSION, declared_hash.as_bytes(), &body);
     let envelope = Cbor::Map(vec![
         (1, Cbor::Uint(u64::from(FORMAT_VERSION))),
@@ -111,7 +112,7 @@ pub fn encode(plan: &ValidatedExecutionPlan, declared_hash: &SemanticHash) -> Ve
         (4, Cbor::Bytes(digest.to_vec())),
     ]);
     let mut out = MAGIC.to_vec();
-    out.extend_from_slice(&canon::encode(&envelope));
+    out.extend_from_slice(&canonical_cbor::encode(&envelope));
     out
 }
 
@@ -129,7 +130,7 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
     let Some(rest) = bytes.strip_prefix(&MAGIC) else {
         return Err(DecodeError::BadMagic);
     };
-    let (envelope, used) = canon::decode(rest).map_err(DecodeError::Read)?;
+    let (envelope, used) = canonical_cbor::decode(rest).map_err(DecodeError::Read)?;
     if used != rest.len() {
         return Err(DecodeError::Malformed("trailing bytes".into()));
     }
@@ -162,7 +163,7 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
     if declared.as_slice() != checksum(FORMAT_VERSION, &hash, body) {
         return Err(DecodeError::BrokenChecksum);
     }
-    let (tree, used) = canon::decode(body).map_err(DecodeError::Read)?;
+    let (tree, used) = canonical_cbor::decode(body).map_err(DecodeError::Read)?;
     if used != body.len() {
         return Err(DecodeError::Malformed("trailing body bytes".into()));
     }
@@ -173,7 +174,7 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
     // catches non-minimal integers, reordered or duplicated keys,
     // and every other non-canonical variant at once — and the outer
     // envelope is held to the same rule.
-    if canon::encode(&plan_tree(validated.plan())) != *body {
+    if canonical_cbor::encode(&plan_tree(validated.plan())) != *body {
         return Err(DecodeError::NonCanonical(
             "the body is not the canonical encoding of its plan",
         ));
@@ -184,7 +185,7 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
         (3, Cbor::Bytes(body.clone())),
         (4, Cbor::Bytes(declared.clone())),
     ]);
-    if canon::encode(&canonical_envelope) != rest {
+    if canonical_cbor::encode(&canonical_envelope) != rest {
         return Err(DecodeError::NonCanonical(
             "the envelope is not the canonical encoding of its fields",
         ));

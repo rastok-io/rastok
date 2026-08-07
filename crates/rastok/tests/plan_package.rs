@@ -10,7 +10,7 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::canon::{Cbor, decode, encode};
+use rastok::canonical_cbor::{Value as Cbor, decode, encode};
 use rastok::compiler::compile;
 use rastok::plan::{self, DecodeError};
 use rastok::stdlib::Registry;
@@ -128,7 +128,7 @@ fn every_refusal_is_typed() {
     let truncated = &bytes[..bytes.len() / 2];
     assert_eq!(
         plan::decode(truncated).unwrap_err(),
-        DecodeError::Read(rastok::canon::DecodeError::UnexpectedEof)
+        DecodeError::Read(rastok::canonical_cbor::DecodeError::UnexpectedEof)
     );
 
     // A syntactically foreign head (an indefinite-length map, 0xbf)
@@ -137,7 +137,7 @@ fn every_refusal_is_typed() {
     foreign_head[4] = 0xbf;
     assert_eq!(
         plan::decode(&foreign_head).unwrap_err(),
-        DecodeError::Read(rastok::canon::DecodeError::UnsupportedHead(0xbf))
+        DecodeError::Read(rastok::canonical_cbor::DecodeError::UnsupportedHead(0xbf))
     );
 }
 
@@ -281,7 +281,7 @@ fn overflowing_declared_lengths_refuse_without_panic() {
     byte_bomb.extend_from_slice(&u64::MAX.to_be_bytes());
     assert!(matches!(
         decode(&byte_bomb).unwrap_err(),
-        rastok::canon::DecodeError::LengthOverflow
+        rastok::canonical_cbor::DecodeError::LengthOverflow
     ));
 
     // The same bomb as a text string (0x7b).
@@ -289,7 +289,7 @@ fn overflowing_declared_lengths_refuse_without_panic() {
     text_bomb.extend_from_slice(&u64::MAX.to_be_bytes());
     assert!(matches!(
         decode(&text_bomb).unwrap_err(),
-        rastok::canon::DecodeError::LengthOverflow
+        rastok::canonical_cbor::DecodeError::LengthOverflow
     ));
 
     // A large-but-addressable declared length with no data behind
@@ -298,6 +298,6 @@ fn overflowing_declared_lengths_refuse_without_panic() {
     hungry.extend_from_slice(&0x1000_0000u32.to_be_bytes());
     assert!(matches!(
         decode(&hungry).unwrap_err(),
-        rastok::canon::DecodeError::UnexpectedEof
+        rastok::canonical_cbor::DecodeError::UnexpectedEof
     ));
 }

@@ -9,7 +9,9 @@
 // The kernel's modules re-export here so every existing path —
 // `rastok::envelope`, `rastok::runtime::vm` — keeps resolving; the
 // crate boundary is real, the surface is unchanged.
-pub use rastok_core::{boundary, canon, cel, envelope, journal, node, plan, runtime};
+pub use rastok_core::{
+    boundary, canonical_cbor, cel, envelope, identity, journal, node, plan, runtime,
+};
 
 pub mod compiler;
 pub mod conformance;
