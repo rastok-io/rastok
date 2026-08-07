@@ -55,7 +55,7 @@ fn the_example_package_matches_its_golden() {
 
 /// Re-frames a package after editing its envelope — the mutation helper
 /// the refusal tests share.
-fn reframe(bytes: &[u8], edit: impl FnOnce(&mut Vec<(u64, Cbor)>)) -> Vec<u8> {
+fn reframe(bytes: &[u8], edit: impl FnOnce(&mut std::collections::BTreeMap<u64, Cbor>)) -> Vec<u8> {
     let rest = bytes.strip_prefix(b"RKPB").expect("the magic");
     let (envelope, _) = decode(rest).expect("the envelope decodes");
     let Cbor::Map(mut pairs) = envelope else {
@@ -78,7 +78,7 @@ fn every_refusal_is_typed() {
 
     // A future format version — refused by name.
     let bumped = reframe(&bytes, |pairs| {
-        pairs[0].1 = Cbor::Uint(3);
+        pairs.insert(1, Cbor::Uint(3));
     });
     assert_eq!(
         plan::decode(&bumped).unwrap_err(),
@@ -88,7 +88,7 @@ fn every_refusal_is_typed() {
     // A version beyond u32 is reported AS READ — never saturated
     // into a number that was not in the bytes.
     let huge = reframe(&bytes, |pairs| {
-        pairs[0].1 = Cbor::Uint(u64::MAX);
+        pairs.insert(1, Cbor::Uint(u64::MAX));
     });
     assert_eq!(
         plan::decode(&huge).unwrap_err(),
@@ -99,7 +99,7 @@ fn every_refusal_is_typed() {
     // association, not the body alone (the v1 hole: this byte flip
     // was accepted).
     let lying = reframe(&bytes, |pairs| {
-        let Cbor::Bytes(hash) = &mut pairs[1].1 else {
+        let Some(Cbor::Bytes(hash)) = pairs.get_mut(&2) else {
             panic!("the hash is bytes");
         };
         hash[0] ^= 0x01;
@@ -111,7 +111,7 @@ fn every_refusal_is_typed() {
 
     // One corrupted body byte — the seal catches it before parsing.
     let corrupted = reframe(&bytes, |pairs| {
-        let Cbor::Bytes(body) = &mut pairs[2].1 else {
+        let Some(Cbor::Bytes(body)) = pairs.get_mut(&3) else {
             panic!("the body is bytes");
         };
         let middle = body.len() / 2;
@@ -248,12 +248,11 @@ fn a_non_canonical_envelope_refuses() {
     let version_entry: Vec<u8> = bytes[5..7].to_vec();
     let hash_entry: Vec<u8> = bytes[7..42].to_vec();
     reordered.splice(5..42, hash_entry.into_iter().chain(version_entry));
-    // The reader is permissive about order; the envelope canonicity
-    // check is what refuses — named for what it is, never as
-    // truncation.
+    // The reader itself is strict now: unsorted keys refuse at the
+    // parse, in the reader's own non-canonical category.
     assert!(matches!(
         plan::decode(&reordered).unwrap_err(),
-        DecodeError::NonCanonical(_)
+        DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
     // A non-minimal integer in the header: uint 2 written on two
@@ -268,7 +267,7 @@ fn a_non_canonical_envelope_refuses() {
     widened.splice(6..7, [0x18, 0x02]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
-        DecodeError::NonCanonical(_)
+        DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 }
 
@@ -300,4 +299,17 @@ fn overflowing_declared_lengths_refuse_without_panic() {
         decode(&hungry).unwrap_err(),
         rastok::canonical_cbor::DecodeError::UnexpectedEof
     ));
+}
+
+#[test]
+fn nesting_beyond_the_budget_refuses_before_the_stack_does() {
+    // 512 nested single-element arrays: a legal-looking prefix that
+    // would recurse past any reasonable stack — refused by budget,
+    // never by overflow.
+    let mut deep = vec![0x81u8; 512];
+    deep.push(0x00);
+    assert_eq!(
+        decode(&deep).unwrap_err(),
+        rastok::canonical_cbor::DecodeError::NestingLimitExceeded
+    );
 }

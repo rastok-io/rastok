@@ -43,6 +43,7 @@ use crate::envelope::{Data, Encoding, Envelope, Role};
 use crate::journal::{Closure, OutboundStatus, Record};
 use rastok_core::canonical_cbor::{Value as Cbor, decode, encode};
 use rastok_core::identity::encoding::{cel_tagged, meta_tagged, value_tagged};
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// One projected trace: the canonical bytes of every causal record,
@@ -202,16 +203,16 @@ fn explain(a: &Cbor, b: &Cbor, path: String) -> (String, String, String) {
                     if path.is_empty() { "" } else { " . " },
                     key_name(*key)
                 );
-                match right.iter().find(|(other, _)| other == key) {
+                match right.get(key) {
                     None => return (at, render(value), String::from("absent")),
-                    Some((_, other)) if other != value => {
+                    Some(other) if other != value => {
                         return explain(value, other, at);
                     }
                     Some(_) => {}
                 }
             }
             for (key, value) in right {
-                if !left.iter().any(|(other, _)| other == key) {
+                if !left.contains_key(key) {
                     let at = format!(
                         "{path}{}{}",
                         if path.is_empty() { "" } else { " . " },
@@ -306,7 +307,7 @@ fn key_name(key: u64) -> String {
 
 fn record_tree(record: &Record) -> Cbor {
     match record {
-        Record::Inbound(inbound) => Cbor::Map(vec![
+        Record::Inbound(inbound) => Cbor::Map(BTreeMap::from([
             (10, Cbor::Uint(1)),
             (20, spine(&inbound.envelope)),
             (
@@ -315,17 +316,17 @@ fn record_tree(record: &Record) -> Cbor {
             ),
             (22, Cbor::Uint(inbound.seq)),
             (23, Cbor::Uint(inbound.authority.replica())),
-        ]),
+        ])),
         Record::Transaction(transaction) => {
-            let mut pairs = vec![
+            let mut pairs = BTreeMap::from([
                 (10, Cbor::Uint(2)),
                 (30, Cbor::Text(transaction.node_path.to_string())),
                 (32, Cbor::Text(transaction.trigger.to_string())),
-            ];
+            ]);
             let mut consumed: Vec<&crate::journal::ConsumedPosition> =
                 transaction.consumed.iter().collect();
             consumed.sort();
-            pairs.push((
+            pairs.insert(
                 33,
                 Cbor::Array(
                     consumed
@@ -341,11 +342,11 @@ fn record_tree(record: &Record) -> Cbor {
                         })
                         .collect(),
                 ),
-            ));
+            );
             if !transaction.state_delta.is_empty() {
                 let mut delta: Vec<_> = transaction.state_delta.iter().collect();
                 delta.sort_by(|a, b| a.0.cmp(&b.0));
-                pairs.push((
+                pairs.insert(
                     35,
                     Cbor::Array(
                         delta
@@ -355,9 +356,9 @@ fn record_tree(record: &Record) -> Cbor {
                             })
                             .collect(),
                     ),
-                ));
+                );
             }
-            pairs.push((
+            pairs.insert(
                 36,
                 Cbor::Array(
                     transaction
@@ -372,11 +373,11 @@ fn record_tree(record: &Record) -> Cbor {
                         })
                         .collect(),
                 ),
-            ));
+            );
             if !transaction.timers.is_empty() {
                 let mut timers: Vec<_> = transaction.timers.iter().collect();
                 timers.sort();
-                pairs.push((
+                pairs.insert(
                     37,
                     Cbor::Array(
                         timers
@@ -389,23 +390,23 @@ fn record_tree(record: &Record) -> Cbor {
                             })
                             .collect(),
                     ),
-                ));
+                );
             }
             Cbor::Map(pairs)
         }
         Record::Outbound(outbound) => {
-            let mut pairs = vec![
+            let mut pairs = BTreeMap::from([
                 (10, Cbor::Uint(3)),
                 (
                     40,
                     Cbor::Bytes(outbound.intent.emitting_id.as_bytes().to_vec()),
                 ),
                 (41, Cbor::Text(outbound.intent.connector_path.to_string())),
-            ];
+            ]);
             if let Some(key) = &outbound.intent.idempotency_key {
-                pairs.push((42, Cbor::Bytes(key.clone().into_bytes())));
+                pairs.insert(42, Cbor::Bytes(key.clone().into_bytes()));
             }
-            pairs.push((43, Cbor::Bytes(outbound.intent.request_digest().to_vec())));
+            pairs.insert(43, Cbor::Bytes(outbound.intent.request_digest().to_vec()));
             let (status, closure) = match &outbound.status {
                 OutboundStatus::Open => (1, None),
                 OutboundStatus::Closed(Closure::Response(outcome)) => (
@@ -417,14 +418,14 @@ fn record_tree(record: &Record) -> Cbor {
                 }
                 OutboundStatus::Abandoned => (4, Some(Cbor::Array(Vec::new()))),
             };
-            pairs.push((44, Cbor::Uint(status)));
+            pairs.insert(44, Cbor::Uint(status));
             if let Some(closure) = closure {
-                pairs.push((45, closure));
+                pairs.insert(45, closure);
             }
             // Key 47: the causing delivery's canonical edge — with
             // key 40 the record reconstructs delivery_ref and hence
             // call_ref, autonomously (identity.md §3).
-            pairs.push((47, Cbor::Text(outbound.intent.edge.clone())));
+            pairs.insert(47, Cbor::Text(outbound.intent.edge.clone()));
             Cbor::Map(pairs)
         }
     }
@@ -434,19 +435,19 @@ fn record_tree(record: &Record) -> Cbor {
 /// never nulls.
 fn spine(envelope: &Envelope) -> Cbor {
     let sys = envelope.meta().sys();
-    let mut pairs = vec![(1, Cbor::Bytes(sys.id().as_bytes().to_vec()))];
+    let mut pairs = BTreeMap::from([(1, Cbor::Bytes(sys.id().as_bytes().to_vec()))]);
     if let Some(parent) = sys.parent_id() {
-        pairs.push((2, Cbor::Bytes(parent.as_bytes().to_vec())));
+        pairs.insert(2, Cbor::Bytes(parent.as_bytes().to_vec()));
     }
-    pairs.push((3, Cbor::Bytes(sys.origin_id().as_bytes().to_vec())));
+    pairs.insert(3, Cbor::Bytes(sys.origin_id().as_bytes().to_vec()));
     if sys.role() != Role::Default {
-        pairs.push((4, Cbor::Text(sys.role().to_string())));
+        pairs.insert(4, Cbor::Text(sys.role().to_string()));
     }
-    pairs.push((5, Cbor::Uint(sys.graph_version())));
+    pairs.insert(5, Cbor::Uint(sys.graph_version()));
     if let Some(mime) = sys.mime_type() {
-        pairs.push((6, Cbor::Text(String::from(mime))));
+        pairs.insert(6, Cbor::Text(String::from(mime)));
     }
-    pairs.push((8, data_form(envelope.data())));
+    pairs.insert(8, data_form(envelope.data()));
     let mut app_meta = Vec::new();
     for (field, value) in envelope.meta().app() {
         app_meta.push((String::from("app"), field.clone(), value));
@@ -458,7 +459,7 @@ fn spine(envelope: &Envelope) -> Cbor {
     }
     if !app_meta.is_empty() {
         app_meta.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-        pairs.push((
+        pairs.insert(
             9,
             Cbor::Array(
                 app_meta
@@ -472,7 +473,7 @@ fn spine(envelope: &Envelope) -> Cbor {
                     })
                     .collect(),
             ),
-        ));
+        );
     }
     Cbor::Map(pairs)
 }
@@ -508,7 +509,7 @@ fn data_form(data: &Data) -> Cbor {
 fn reply_spine(outcome: &crate::boundary::CallOutcome) -> Cbor {
     use crate::boundary::CallOutcome;
     match outcome {
-        CallOutcome::Success(data) => Cbor::Map(vec![(8, data_form(data))]),
+        CallOutcome::Success(data) => Cbor::Map(BTreeMap::from([(8, data_form(data))])),
         CallOutcome::Failure(error) => {
             let wrapper = Cbor::Array(vec![
                 Cbor::Uint(17),
@@ -523,10 +524,10 @@ fn reply_spine(outcome: &crate::boundary::CallOutcome) -> Cbor {
                     ]),
                 ]),
             ]);
-            Cbor::Map(vec![(
+            Cbor::Map(BTreeMap::from([(
                 8,
                 Cbor::Array(vec![Cbor::Uint(1), Cbor::Bytes(encode(&wrapper))]),
-            )])
+            )]))
         }
     }
 }

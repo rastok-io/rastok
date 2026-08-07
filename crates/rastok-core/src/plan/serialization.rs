@@ -13,6 +13,7 @@
 //! Every refusal is typed; an unknown version is a refusal by name,
 //! never a silent migration.
 
+use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -105,12 +106,12 @@ fn checksum(version: u32, hash: &[u8; 32], body: &[u8]) -> [u8; 32] {
 pub fn encode(plan: &ValidatedExecutionPlan, declared_hash: &SemanticHash) -> Vec<u8> {
     let body = canonical_cbor::encode(&plan_tree(plan.plan()));
     let digest = checksum(FORMAT_VERSION, declared_hash.as_bytes(), &body);
-    let envelope = Cbor::Map(vec![
+    let envelope = Cbor::Map(BTreeMap::from([
         (1, Cbor::Uint(u64::from(FORMAT_VERSION))),
         (2, Cbor::Bytes(declared_hash.as_bytes().to_vec())),
         (3, Cbor::Bytes(body)),
         (4, Cbor::Bytes(digest.to_vec())),
-    ]);
+    ]));
     let mut out = MAGIC.to_vec();
     out.extend_from_slice(&canonical_cbor::encode(&envelope));
     out
@@ -137,7 +138,7 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
     let Cbor::Map(pairs) = envelope else {
         return Err(DecodeError::Malformed("the envelope is not a map".into()));
     };
-    let field = |key: u64| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v);
+    let field = |key: u64| pairs.get(&key);
     let Some(Cbor::Uint(version)) = field(1) else {
         return Err(DecodeError::Malformed("no format version".into()));
     };
@@ -179,12 +180,12 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
             "the body is not the canonical encoding of its plan",
         ));
     }
-    let canonical_envelope = Cbor::Map(vec![
+    let canonical_envelope = Cbor::Map(BTreeMap::from([
         (1, Cbor::Uint(u64::from(FORMAT_VERSION))),
         (2, Cbor::Bytes(hash.to_vec())),
         (3, Cbor::Bytes(body.clone())),
         (4, Cbor::Bytes(declared.clone())),
-    ]);
+    ]));
     if canonical_cbor::encode(&canonical_envelope) != rest {
         return Err(DecodeError::NonCanonical(
             "the envelope is not the canonical encoding of its fields",
@@ -196,7 +197,7 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
 // ===================== encoding: plan → tree =====================
 
 fn plan_tree(plan: &ExecutionPlan) -> Cbor {
-    Cbor::Map(vec![
+    Cbor::Map(BTreeMap::from([
         (1, Cbor::Array(plan.nodes.iter().map(node_tree).collect())),
         (
             2,
@@ -212,7 +213,7 @@ fn plan_tree(plan: &ExecutionPlan) -> Cbor {
             4,
             Cbor::Array(plan.handlers.iter().map(handler_tree).collect()),
         ),
-    ])
+    ]))
 }
 
 fn node_tree(node: &Node) -> Cbor {
@@ -220,7 +221,7 @@ fn node_tree(node: &Node) -> Cbor {
         NodeKind::Operator => Cbor::Uint(1),
         NodeKind::Connector(spec) => Cbor::Array(vec![Cbor::Uint(2), spec_tree(spec)]),
     };
-    Cbor::Map(vec![
+    Cbor::Map(BTreeMap::from([
         (1, Cbor::Text(node.path.to_string())),
         (2, kind),
         (
@@ -233,7 +234,7 @@ fn node_tree(node: &Node) -> Cbor {
             ),
         ),
         (4, Cbor::Array(node.vars.iter().map(var_tree).collect())),
-    ])
+    ]))
 }
 
 fn spec_tree(spec: &ConnectorSpec) -> Cbor {
@@ -252,7 +253,7 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
         node::Behavior::Deterministic => 1,
         node::Behavior::Probabilistic => 2,
     });
-    Cbor::Map(vec![
+    Cbor::Map(BTreeMap::from([
         (1, Cbor::Text(spec.contract.clone())),
         (2, effect),
         (3, behavior),
@@ -276,7 +277,7 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
                     .collect(),
             ),
         ),
-    ])
+    ]))
 }
 
 fn attr_tree(setting: &AttrSetting) -> Cbor {
@@ -297,9 +298,9 @@ fn port_decl_tree(port: &node::Port, direction: node::Direction) -> Cbor {
 }
 
 fn var_tree(var: &VarCell) -> Cbor {
-    let mut pairs = vec![(1, Cbor::Text(var.name.clone())), (2, type_tree(&var.ty))];
+    let mut pairs = BTreeMap::from([(1, Cbor::Text(var.name.clone())), (2, type_tree(&var.ty))]);
     if let Some(init) = &var.init {
-        pairs.push((3, cel_tagged(init)));
+        pairs.insert(3, cel_tagged(init));
     }
     Cbor::Map(pairs)
 }
@@ -323,14 +324,14 @@ fn endpoint_tree(endpoint: &EndpointRef) -> Cbor {
 fn handler_tree(handler: &Handler) -> Cbor {
     let node::HandlerActivation::Port(port) = &handler.activation;
     let activation = Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(port.name().to_string())]);
-    let mut pairs = vec![
+    let mut pairs = BTreeMap::from([
         (1, Cbor::Uint(handler.node.index() as u64)),
         (2, activation),
-    ];
+    ]);
     if let Some(guard) = &handler.guard {
-        pairs.push((3, tree_tree(guard)));
+        pairs.insert(3, tree_tree(guard));
     }
-    pairs.push((4, Cbor::Array(handler.body.iter().map(step_tree).collect())));
+    pairs.insert(4, Cbor::Array(handler.body.iter().map(step_tree).collect()));
     Cbor::Map(pairs)
 }
 
@@ -916,7 +917,7 @@ fn int_from(tree: &Cbor) -> Result<i64, DecodeError> {
 
 // ===================== small readers =====================
 
-fn map_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a [(u64, Cbor)], DecodeError> {
+fn map_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a BTreeMap<u64, Cbor>, DecodeError> {
     match tree {
         Cbor::Map(pairs) => Ok(pairs),
         _ => Err(DecodeError::Malformed(format!("{what}: not a map"))),
@@ -930,12 +931,12 @@ fn array_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a [Cbor], DecodeError> {
     }
 }
 
-fn get<'a>(pairs: &'a [(u64, Cbor)], key: u64, what: &str) -> Result<&'a Cbor, DecodeError> {
+fn get<'a>(pairs: &'a BTreeMap<u64, Cbor>, key: u64, what: &str) -> Result<&'a Cbor, DecodeError> {
     find(pairs, key).ok_or_else(|| DecodeError::Malformed(format!("{what}: missing")))
 }
 
-fn find(pairs: &[(u64, Cbor)], key: u64) -> Option<&Cbor> {
-    pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+fn find(pairs: &BTreeMap<u64, Cbor>, key: u64) -> Option<&Cbor> {
+    pairs.get(&key)
 }
 
 fn text_of<'a>(tree: &'a Cbor, what: &str) -> Result<&'a str, DecodeError> {

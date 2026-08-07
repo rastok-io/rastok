@@ -8,6 +8,7 @@
 //! codec over a library lives with the golden projection's
 //! documentation and in `decisions.md` (D-2026-08-03-1).
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -18,7 +19,12 @@ use alloc::vec::Vec;
 pub enum Value {
     /// An unsigned integer (major type 0).
     Uint(u64),
-    /// A negative integer (major type 1); non-negatives use `Uint`.
+    /// A signed integer. Canonical CBOR has ONE encoding per
+    /// integer value: a negative encodes as major type 1, a
+    /// non-negative folds onto major type 0 — `Int(5)` and `Uint(5)`
+    /// are the same bytes, so no constructible value panics or emits
+    /// a non-canonical form. The decoder returns non-negatives as
+    /// `Uint`.
     Int(i64),
     /// A byte string (major type 2).
     Bytes(Vec<u8>),
@@ -26,9 +32,11 @@ pub enum Value {
     Text(String),
     /// A definite-length array (major type 4).
     Array(Vec<Value>),
-    /// A definite-length map with fixed unsigned keys, emitted in
-    /// table order — which is sorted order (major type 5).
-    Map(Vec<(u64, Value)>),
+    /// A definite-length map with fixed unsigned keys (major type
+    /// 5). The payload is a `BTreeMap`, so sorted unique keys are a
+    /// property of the type — an unsorted or duplicated table is not
+    /// constructible, and the encoder has no panic path.
+    Map(BTreeMap<u64, Value>),
     /// A boolean (major type 7).
     Bool(bool),
     /// Null (major type 7).
@@ -51,9 +59,19 @@ fn write(value: &Value, out: &mut Vec<u8>) {
     match value {
         Value::Uint(n) => head(0, *n, out),
         Value::Int(n) => {
-            debug_assert!(*n < 0, "non-negatives encode as Uint");
-            let magnitude = u64::try_from(-1 - *n).unwrap_or_else(|_| unreachable!("i64 fits"));
-            head(1, magnitude, out);
+            if *n < 0 {
+                let magnitude = u64::try_from(-1 - *n).unwrap_or_else(|_| unreachable!("i64 fits"));
+                head(1, magnitude, out);
+            } else {
+                // One canonical encoding per integer VALUE: a
+                // non-negative folds onto major type 0, whatever
+                // constructor it arrived through.
+                head(
+                    0,
+                    u64::try_from(*n).unwrap_or_else(|_| unreachable!("non-negative")),
+                    out,
+                );
+            }
         }
         Value::Bytes(bytes) => {
             head(2, bytes.len() as u64, out);
@@ -70,10 +88,8 @@ fn write(value: &Value, out: &mut Vec<u8>) {
             }
         }
         Value::Map(pairs) => {
-            debug_assert!(
-                pairs.windows(2).all(|window| window[0].0 < window[1].0),
-                "table order is sorted order"
-            );
+            // Sorted unique keys are the BTreeMap's own property —
+            // iteration IS table order.
             head(5, pairs.len() as u64, out);
             for (key, item) in pairs {
                 head(0, *key, out);
@@ -139,6 +155,14 @@ pub enum DecodeError {
     UnsupportedHead(u8),
     /// Bytes that parse structurally but break a table rule.
     Malformed(&'static str),
+    /// Bytes that parse, but are not the canonical form — a
+    /// non-minimal head, an unsorted or duplicated map key, a
+    /// non-canonical NaN. `decode` succeeding MEANS the bytes were
+    /// canonical.
+    NonCanonical(&'static str),
+    /// Nesting beyond the reader's documented budget
+    /// ([`MAX_NESTING`]) — refused, never a stack overflow.
+    NestingLimitExceeded,
 }
 
 impl core::fmt::Display for DecodeError {
@@ -151,17 +175,36 @@ impl core::fmt::Display for DecodeError {
                 write!(f, "unsupported CBOR head byte 0x{head:02x}")
             }
             Self::Malformed(detail) => write!(f, "malformed canonical CBOR: {detail}"),
+            Self::NonCanonical(detail) => write!(f, "not canonical CBOR: {detail}"),
+            Self::NestingLimitExceeded => f.write_str("nesting beyond the reader's budget"),
         }
     }
 }
 
 impl core::error::Error for DecodeError {}
 
+/// The reader's nesting budget. A compiler-produced plan nests an
+/// order of magnitude below this (tables ~10 levels, plus expression
+/// depth); a source pathological enough to exceed it refuses at
+/// decode as [`DecodeError::NestingLimitExceeded`] — the bound is
+/// part of the format contract, documented in the format note, and
+/// sized to hold comfortably on the embedded stack.
+pub const MAX_NESTING: usize = 128;
+
 /// Decodes one canonical value; returns the tree and the bytes
-/// consumed. Only the subset the tables emit is accepted, and every
-/// refusal is categorized — total over arbitrary input, panic-free
-/// by checked arithmetic.
+/// consumed. Only the subset the tables emit is accepted, and the
+/// reading is STRICT: success means the bytes were the canonical
+/// form (minimal heads, sorted unique map keys, the one canonical
+/// NaN). Every refusal is categorized — total over arbitrary input,
+/// panic-free by checked arithmetic and a bounded nesting budget.
 pub fn decode(bytes: &[u8]) -> Result<(Value, usize), DecodeError> {
+    decode_at(bytes, 0)
+}
+
+fn decode_at(bytes: &[u8], depth: usize) -> Result<(Value, usize), DecodeError> {
+    if depth >= MAX_NESTING {
+        return Err(DecodeError::NestingLimitExceeded);
+    }
     let first = *bytes.first().ok_or(DecodeError::UnexpectedEof)?;
     let major = first >> 5;
     match (major, first) {
@@ -174,7 +217,12 @@ pub fn decode(bytes: &[u8]) -> Result<(Value, usize), DecodeError> {
                 .ok_or(DecodeError::UnexpectedEof)?
                 .try_into()
                 .unwrap_or_else(|_| unreachable!("an 8-byte slice"));
-            Ok((Value::Double(f64::from_bits(u64::from_be_bytes(raw))), 9))
+            let bits = u64::from_be_bytes(raw);
+            let value = f64::from_bits(bits);
+            if value.is_nan() && bits != 0x7ff8_0000_0000_0000 {
+                return Err(DecodeError::NonCanonical("a non-canonical NaN payload"));
+            }
+            Ok((Value::Double(value), 9))
         }
         (0, _) => {
             let (value, used) = argument(bytes)?;
@@ -200,7 +248,7 @@ pub fn decode(bytes: &[u8]) -> Result<(Value, usize), DecodeError> {
             let mut items = Vec::new();
             for _ in 0..count {
                 let rest = bytes.get(used..).ok_or(DecodeError::UnexpectedEof)?;
-                let (item, item_used) = decode(rest)?;
+                let (item, item_used) = decode_at(rest, depth + 1)?;
                 items.push(item);
                 used = used
                     .checked_add(item_used)
@@ -210,10 +258,11 @@ pub fn decode(bytes: &[u8]) -> Result<(Value, usize), DecodeError> {
         }
         (5, _) => {
             let (count, mut used) = argument(bytes)?;
-            let mut pairs = Vec::new();
+            let mut pairs = BTreeMap::new();
+            let mut previous: Option<u64> = None;
             for _ in 0..count {
                 let rest = bytes.get(used..).ok_or(DecodeError::UnexpectedEof)?;
-                let (key, key_used) = decode(rest)?;
+                let (key, key_used) = decode_at(rest, depth + 1)?;
                 used = used
                     .checked_add(key_used)
                     .ok_or(DecodeError::LengthOverflow)?;
@@ -222,12 +271,18 @@ pub fn decode(bytes: &[u8]) -> Result<(Value, usize), DecodeError> {
                         "a map key is not an unsigned integer",
                     ));
                 };
+                if previous.is_some_and(|last| last >= key) {
+                    return Err(DecodeError::NonCanonical(
+                        "map keys are not strictly increasing",
+                    ));
+                }
+                previous = Some(key);
                 let rest = bytes.get(used..).ok_or(DecodeError::UnexpectedEof)?;
-                let (value, value_used) = decode(rest)?;
+                let (value, value_used) = decode_at(rest, depth + 1)?;
                 used = used
                     .checked_add(value_used)
                     .ok_or(DecodeError::LengthOverflow)?;
-                pairs.push((key, value));
+                pairs.insert(key, value);
             }
             Ok((Value::Map(pairs), used))
         }
@@ -249,44 +304,61 @@ fn sized_payload(bytes: &[u8]) -> Result<(&[u8], usize), DecodeError> {
     Ok((payload, end))
 }
 
-/// A head's argument and consumed length.
+/// A head's argument and consumed length — SHORTEST FORM enforced:
+/// a value that fits a smaller head refuses as non-canonical.
 fn argument(bytes: &[u8]) -> Result<(u64, usize), DecodeError> {
     let first = *bytes.first().ok_or(DecodeError::UnexpectedEof)?;
     let info = first & 0x1f;
     let eof = DecodeError::UnexpectedEof;
+    let non_minimal = DecodeError::NonCanonical("a non-minimal head");
     match info {
         0..=23 => Ok((u64::from(info), 1)),
-        24 => Ok((u64::from(*bytes.get(1).ok_or(eof)?), 2)),
-        25 => Ok((
-            u64::from(u16::from_be_bytes(
+        24 => {
+            let value = u64::from(*bytes.get(1).ok_or(eof)?);
+            if value < 24 {
+                return Err(non_minimal);
+            }
+            Ok((value, 2))
+        }
+        25 => {
+            let value = u64::from(u16::from_be_bytes(
                 bytes
                     .get(1..3)
                     .ok_or(eof)?
                     .try_into()
                     .unwrap_or_else(|_| unreachable!("2 bytes")),
-            )),
-            3,
-        )),
-        26 => Ok((
-            u64::from(u32::from_be_bytes(
+            ));
+            if value <= u64::from(u8::MAX) {
+                return Err(non_minimal);
+            }
+            Ok((value, 3))
+        }
+        26 => {
+            let value = u64::from(u32::from_be_bytes(
                 bytes
                     .get(1..5)
                     .ok_or(eof)?
                     .try_into()
                     .unwrap_or_else(|_| unreachable!("4 bytes")),
-            )),
-            5,
-        )),
-        27 => Ok((
-            u64::from_be_bytes(
+            ));
+            if value <= u64::from(u16::MAX) {
+                return Err(non_minimal);
+            }
+            Ok((value, 5))
+        }
+        27 => {
+            let value = u64::from_be_bytes(
                 bytes
                     .get(1..9)
                     .ok_or(eof)?
                     .try_into()
                     .unwrap_or_else(|_| unreachable!("8 bytes")),
-            ),
-            9,
-        )),
+            );
+            if value <= u64::from(u32::MAX) {
+                return Err(non_minimal);
+            }
+            Ok((value, 9))
+        }
         _ => Err(DecodeError::UnsupportedHead(first)),
     }
 }
@@ -346,9 +418,9 @@ mod tests {
                 Value::Array(vec![Value::Uint(1), Value::Uint(2), Value::Uint(3)]),
                 &[0x83, 0x01, 0x02, 0x03],
             ),
-            (Value::Map(vec![]), &[0xa0]),
+            (Value::Map(BTreeMap::new()), &[0xa0]),
             (
-                Value::Map(vec![(1, Value::Uint(2)), (3, Value::Uint(4))]),
+                Value::Map(BTreeMap::from([(1, Value::Uint(2)), (3, Value::Uint(4))])),
                 &[0xa2, 0x01, 0x02, 0x03, 0x04],
             ),
         ];
