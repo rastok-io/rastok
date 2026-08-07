@@ -20,7 +20,7 @@ fn example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/echo.rkg")
 }
 
-fn sealed_example() -> (
+fn packaged_example() -> (
     rastok::plan::ValidatedExecutionPlan,
     rastok::plan::SemanticHash,
     Vec<u8>,
@@ -33,7 +33,7 @@ fn sealed_example() -> (
 
 #[test]
 fn the_round_trip_preserves_the_plan_and_its_identity() {
-    let (plan, hash, bytes) = sealed_example();
+    let (plan, hash, bytes) = packaged_example();
     let (decoded, declared) = plan::decode(&bytes).expect("the package opens");
     assert_eq!(decoded, plan, "structural equality across the trip");
     assert_eq!(declared, hash, "the identity travels intact");
@@ -41,7 +41,7 @@ fn the_round_trip_preserves_the_plan_and_its_identity() {
 
 #[test]
 fn the_example_package_matches_its_golden() {
-    let (_, _, bytes) = sealed_example();
+    let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
     if std::env::var("RASTOK_BLESS").is_ok() {
@@ -50,7 +50,7 @@ fn the_example_package_matches_its_golden() {
     }
     let golden = std::fs::read_to_string(&path)
         .expect("no package golden; run once with RASTOK_BLESS=1 to bless");
-    assert_eq!(golden.trim(), rendered, "the sealed bytes are pinned");
+    assert_eq!(golden.trim(), rendered, "the packaged bytes are pinned");
 }
 
 /// Re-frames a package after editing its envelope — the mutation helper
@@ -69,7 +69,7 @@ fn reframe(bytes: &[u8], edit: impl FnOnce(&mut std::collections::BTreeMap<u64, 
 
 #[test]
 fn every_refusal_is_typed() {
-    let (_, _, bytes) = sealed_example();
+    let (_, _, bytes) = packaged_example();
 
     // Foreign bytes.
     let mut foreign = bytes.clone();
@@ -212,7 +212,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
 
 #[test]
 fn an_out_of_bounds_slot_cannot_become_a_validated_plan() {
-    let (plan, _, _) = sealed_example();
+    let (plan, _, _) = packaged_example();
     // A well-shaped plan naming impossible structure: the machine
     // would index past the node table (the review's Slot(999)). The
     // validity claim does not travel through into_inner — the raw
@@ -231,7 +231,7 @@ fn an_out_of_bounds_slot_cannot_become_a_validated_plan() {
 
 #[test]
 fn a_non_canonical_envelope_refuses() {
-    let (_, _, bytes) = sealed_example();
+    let (_, _, bytes) = packaged_example();
 
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,

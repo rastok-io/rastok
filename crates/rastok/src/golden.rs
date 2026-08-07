@@ -35,9 +35,11 @@
 //! `1.5` cannot silently narrow). A conformant library implements
 //! *its* choices among the legal encodings and may revise them at
 //! any version — each revision a broken seal for a non-semantic
-//! reason. This encoder covers the closed subset the tables need,
-//! encode-only (decoding, where CBOR's complexity and attack surface
-//! live, never happens here), and changes only when the spec does.
+//! reason. This codec covers the closed subset the tables need —
+//! writing by construction, and, since the plan package needed to
+//! read its own bytes back, a STRICT reader whose success certifies
+//! the bytes were canonical (`Trace::from_stored` reads goldens
+//! through it too) — and it changes only when the spec does.
 
 use crate::envelope::{Data, Encoding, Envelope, Role};
 use crate::journal::{Closure, OutboundStatus, Record};

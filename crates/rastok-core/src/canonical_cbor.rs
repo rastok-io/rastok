@@ -3,10 +3,11 @@
 //! integers, definite lengths, fixed unsigned map keys emitted in
 //! table order, binary64 held at fixed width with the one canonical
 //! NaN. One implementation serves every canonical form in the
-//! project: the golden projection (std layer, evidence) and the plan
-//! plan package (this kernel, transport). The rationale for a hand-rolled
-//! codec over a library lives with the golden projection's
-//! documentation and in `decisions.md` (D-2026-08-03-1).
+//! project: the golden projection (std layer, evidence) and the
+//! plan package (this kernel, transport). The rationale for a
+//! hand-rolled codec over a library lives with the golden
+//! projection's documentation and in `decisions.md`
+//! (D-2026-08-03-1).
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;

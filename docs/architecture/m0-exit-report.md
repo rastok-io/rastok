@@ -72,8 +72,9 @@ The pressures that accumulated during the build, in order of force:
    forbidden types. Splitting while the surface is small is cheap;
    later it will not be.
 3. **The plan wants to travel.** Boot-from-artifact (and any embedded
-   target) needs a sealed serialization of the `ExecutionPlan` under
-   the same canonical-byte discipline the golden traces proved out.
+   target) needs a canonical, verifiable serialization of the
+   `ExecutionPlan` under the same byte discipline the golden traces
+   proved out.
 4. **Connectors are the velocity bottleneck of the next milestone.**
    The contract sheets exist; a reusable conformance harness over the
    `Partner` seam turns each new adapter into a half-day task.
