@@ -1054,7 +1054,7 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
             // honest width; the decoded value is one i64 either way.
             Ok(cel::Value::Int(int_from(value)?))
         }
-        [Cbor::Uint(5), Cbor::Double(v)] => Ok(cel::Value::Double(*v)),
+        [Cbor::Uint(5), Cbor::Double(v)] => Ok(cel::Value::Double(v.value())),
         [Cbor::Uint(7), Cbor::Bytes(v)] => Ok(cel::Value::Bytes(v.clone())),
         [Cbor::Uint(8), Cbor::Text(v)] => Ok(cel::Value::Text(v.clone())),
         [Cbor::Uint(9), Cbor::Null] => Ok(cel::Value::Null),

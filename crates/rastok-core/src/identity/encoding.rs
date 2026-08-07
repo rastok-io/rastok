@@ -21,7 +21,9 @@ pub fn value_tagged(value: &crate::envelope::Value) -> Cbor {
     match value {
         Value::Scalar(Scalar::Bool(v)) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Bool(*v)]),
         Value::Scalar(Scalar::Int(v)) => int_tagged(*v),
-        Value::Scalar(Scalar::Double(v)) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Double(*v)]),
+        Value::Scalar(Scalar::Double(v)) => {
+            Cbor::Array(vec![Cbor::Uint(5), Cbor::Double((*v).into())])
+        }
         Value::Scalar(Scalar::Text(v)) => Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(v.clone())]),
         Value::Scalar(Scalar::Bytes(v)) => Cbor::Array(vec![Cbor::Uint(7), Cbor::Bytes(v.clone())]),
         Value::Struct(fields) => {
@@ -74,7 +76,7 @@ pub fn cel_tagged(value: &crate::cel::Value) -> Cbor {
         crate::cel::Value::Bool(v) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Bool(*v)]),
         crate::cel::Value::Int(v) => int_tagged(*v),
         crate::cel::Value::Uint(v) => Cbor::Array(vec![Cbor::Uint(23), Cbor::Uint(*v)]),
-        crate::cel::Value::Double(v) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Double(*v)]),
+        crate::cel::Value::Double(v) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Double((*v).into())]),
         crate::cel::Value::Text(v) => Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(v.clone())]),
         crate::cel::Value::Bytes(v) => Cbor::Array(vec![Cbor::Uint(7), Cbor::Bytes(v.clone())]),
         crate::cel::Value::Duration(v) => Cbor::Array(vec![Cbor::Uint(16), int_cbor(*v)]),

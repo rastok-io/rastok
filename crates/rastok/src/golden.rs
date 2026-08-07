@@ -248,7 +248,7 @@ fn render(value: &Cbor) -> String {
         Cbor::Negative(n) => (-1 - i128::from(*n)).to_string(),
         Cbor::Bool(b) => b.to_string(),
         Cbor::Null => String::from("null"),
-        Cbor::Double(d) => d.to_string(),
+        Cbor::Double(d) => d.value().to_string(),
         Cbor::Text(text) => format!("{text:?}"),
         Cbor::Bytes(bytes) => {
             let hex: String = bytes
@@ -536,3 +536,29 @@ fn reply_spine(outcome: &crate::boundary::CallOutcome) -> Cbor {
 }
 
 // ----- the deterministic CBOR encoder (RFC 8949 §4.2) -----
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The diff must descend TO the float: `-0.0` and `+0.0` differ
+    /// in bytes and now differ as VALUES too (bit equality), so
+    /// `explain` names the exact field instead of stopping above an
+    /// equality that contradicted the bytes.
+    #[test]
+    fn the_diff_names_a_zero_sign_divergence() {
+        let record = |zero: f64| {
+            encode(&Cbor::Map(BTreeMap::from([(
+                8,
+                Cbor::Double(rastok_core::canonical_cbor::CanonicalDouble::new(zero)),
+            )])))
+        };
+        let ours = Trace::from_stored(&[record(-0.0)]).expect("canonical bytes");
+        let theirs = Trace::from_stored(&[record(0.0)]).expect("canonical bytes");
+        let divergence = diff(&ours, &theirs).expect("the traces differ");
+        assert_eq!(divergence.record, 0);
+        assert_eq!(divergence.path, "data(8)");
+        assert_eq!(divergence.left, "-0");
+        assert_eq!(divergence.right, "0");
+    }
+}

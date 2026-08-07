@@ -15,8 +15,9 @@ use alloc::vec::Vec;
 
 /// The canonical CBOR subset the tables need. Map keys are the fixed
 /// unsigned registry keys, emitted in table order — which is sorted
-/// order, satisfying §4.2 at zero runtime cost.
-#[derive(Debug, Clone, PartialEq)]
+/// order, satisfying §4.2 at zero runtime cost. `Eq` is real: every
+/// variant, floats included, has one state per canonical byte form.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     /// An unsigned integer (major type 0).
     Uint(u64),
@@ -44,9 +45,52 @@ pub enum Value {
     /// Null (major type 7).
     Null,
     /// Always IEEE-754 binary64 — width fixed by the type tag, the
-    /// stated exception to shortest-form. NaN canonicalizes to the
-    /// one quiet NaN; `-0.0` stays distinct from `+0.0`.
-    Double(f64),
+    /// stated exception to shortest-form. The payload is
+    /// [`CanonicalDouble`], so NaN is normalized at construction and
+    /// equality is bit equality; `-0.0` stays distinct from `+0.0`.
+    Double(CanonicalDouble),
+}
+
+/// A binary64 held in its canonical form: every NaN normalizes to
+/// the one quiet NaN AT CONSTRUCTION, and equality compares the
+/// BITS — so equality of values is equality of encoded bytes,
+/// `-0.0` stays distinct from `+0.0`, and all NaNs are one value.
+/// This is structural equality of the canonical representation; the
+/// CEL `==` operator is a different question and untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CanonicalDouble(u64);
+
+impl CanonicalDouble {
+    /// The one canonical quiet NaN.
+    const CANONICAL_NAN: u64 = 0x7ff8_0000_0000_0000;
+
+    /// Canonicalizes a float — any NaN becomes THE NaN.
+    #[must_use]
+    pub fn new(value: f64) -> Self {
+        if value.is_nan() {
+            Self(Self::CANONICAL_NAN)
+        } else {
+            Self(value.to_bits())
+        }
+    }
+
+    /// The numeric value.
+    #[must_use]
+    pub fn value(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+
+    /// The canonical bit pattern — exactly what the encoder writes.
+    #[must_use]
+    pub fn to_bits(self) -> u64 {
+        self.0
+    }
+}
+
+impl From<f64> for CanonicalDouble {
+    fn from(value: f64) -> Self {
+        Self::new(value)
+    }
 }
 
 /// Encodes one canonical value to its deterministic bytes.
@@ -87,13 +131,9 @@ fn write(value: &Value, out: &mut Vec<u8>) {
         Value::Bool(b) => out.push(if *b { 0xf5 } else { 0xf4 }),
         Value::Null => out.push(0xf6),
         Value::Double(d) => {
-            let bits = if d.is_nan() {
-                0x7ff8_0000_0000_0000
-            } else {
-                d.to_bits()
-            };
+            // Canonical by construction — the bits ARE the payload.
             out.push(0xfb);
-            out.extend_from_slice(&bits.to_be_bytes());
+            out.extend_from_slice(&d.to_bits().to_be_bytes());
         }
     }
 }
@@ -209,10 +249,12 @@ fn decode_at(bytes: &[u8], depth: usize) -> Result<(Value, usize), DecodeError> 
                 .unwrap_or_else(|_| unreachable!("an 8-byte slice"));
             let bits = u64::from_be_bytes(raw);
             let value = f64::from_bits(bits);
-            if value.is_nan() && bits != 0x7ff8_0000_0000_0000 {
+            if value.is_nan() && bits != CanonicalDouble::CANONICAL_NAN {
                 return Err(DecodeError::NonCanonical("a non-canonical NaN payload"));
             }
-            Ok((Value::Double(value), 9))
+            // The bytes were canonical, so construction preserves
+            // them exactly.
+            Ok((Value::Double(CanonicalDouble::new(value)), 9))
         }
         (0, _) => {
             let (value, used) = argument(bytes)?;
@@ -383,11 +425,11 @@ mod tests {
             (Value::Bool(true), &[0xf5]),
             (Value::Null, &[0xf6]),
             (
-                Value::Double(1.1),
+                Value::Double(CanonicalDouble::new(1.1)),
                 &[0xfb, 0x3f, 0xf1, 0x99, 0x99, 0x99, 0x99, 0x99, 0x9a],
             ),
             (
-                Value::Double(-4.1),
+                Value::Double(CanonicalDouble::new(-4.1)),
                 &[0xfb, 0xc0, 0x10, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66],
             ),
             (Value::Bytes(vec![]), &[0x40]),
@@ -422,8 +464,8 @@ mod tests {
 
     /// `decode ∘ encode` is the identity: the type has exactly one
     /// state per canonical byte form, so two values are equal exactly
-    /// when their bytes are. (NaN stays out: IEEE equality never
-    /// holds for it; its byte form is pinned separately below.)
+    /// when their bytes are — NaN included, because equality is bit
+    /// equality on the canonicalized payload, not IEEE comparison.
     #[test]
     fn one_state_per_canonical_form() {
         let values = [
@@ -435,21 +477,52 @@ mod tests {
             Value::Negative(u64::MAX),
             Value::Bool(true),
             Value::Null,
-            Value::Double(1.5),
-            Value::Double(-0.0),
+            Value::Double(CanonicalDouble::new(1.5)),
+            Value::Double(CanonicalDouble::new(-0.0)),
+            Value::Double(CanonicalDouble::new(f64::NAN)),
             Value::Bytes(vec![1, 2]),
             Value::Text(String::from("x")),
             Value::Array(vec![Value::Negative(4), Value::Uint(5)]),
             Value::Map(BTreeMap::from([(1, Value::Negative(0))])),
         ];
-        for value in values {
-            let bytes = encode(&value);
+        for value in &values {
+            let bytes = encode(value);
             assert_eq!(
                 decode(&bytes).unwrap(),
                 (value.clone(), bytes.len()),
                 "{value:?}"
             );
         }
+        // Equality is byte equality, across the whole battery.
+        for a in &values {
+            for b in &values {
+                assert_eq!(
+                    a == b,
+                    encode(a) == encode(b),
+                    "{a:?} vs {b:?}: value equality must BE byte equality"
+                );
+            }
+        }
+    }
+
+    /// The two float edge cases, held to the same law: the zeros are
+    /// DIFFERENT values with different bytes, and all NaN payloads
+    /// are ONE value with one byte form.
+    #[test]
+    fn zeros_split_and_nans_collapse() {
+        let negative_zero = Value::Double(CanonicalDouble::new(-0.0));
+        let positive_zero = Value::Double(CanonicalDouble::new(0.0));
+        assert_ne!(negative_zero, positive_zero, "-0.0 is its own state");
+        assert_ne!(encode(&negative_zero), encode(&positive_zero));
+
+        let payload_nan = CanonicalDouble::new(f64::from_bits(0x7ff8_0000_0000_1234));
+        let plain_nan = CanonicalDouble::new(f64::NAN);
+        assert_eq!(payload_nan, plain_nan, "every NaN canonicalizes to THE NaN");
+        assert_eq!(
+            Value::Double(payload_nan),
+            Value::Double(plain_nan),
+            "equal as values, because equal as bytes"
+        );
     }
 
     /// The profile's stated deviations from shortest-form: doubles
@@ -460,17 +533,17 @@ mod tests {
         // 1.5 is exactly representable in binary16; the profile
         // still seals binary64.
         assert_eq!(
-            encode(&Value::Double(1.5)),
+            encode(&Value::Double(CanonicalDouble::new(1.5))),
             [0xfb, 0x3f, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
         );
         let payload_nan = f64::from_bits(0x7ff8_0000_0000_1234);
         assert_eq!(
-            encode(&Value::Double(payload_nan)),
+            encode(&Value::Double(CanonicalDouble::new(payload_nan))),
             [0xfb, 0x7f, 0xf8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
             "every NaN seals as the canonical quiet NaN"
         );
         assert_eq!(
-            encode(&Value::Double(-0.0)),
+            encode(&Value::Double(CanonicalDouble::new(-0.0))),
             [0xfb, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
             "-0.0 stays distinct from +0.0"
         );
