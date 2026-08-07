@@ -46,8 +46,10 @@ pub enum PlanPackageError {
     UnknownVersion(u32),
     /// The blake3 checksum does not match the covered fields.
     BrokenChecksum,
-    /// The bytes end before the structure does.
-    Truncated,
+    /// The canonical reader refused, with its own category — a
+    /// truncated input and a syntactically foreign one are different
+    /// diagnoses and stay different.
+    Decode(canon::DecodeError),
     /// Bytes inside the format's frame that its tables cannot read,
     /// or bytes that read but are not the canonical encoding.
     Malformed(String),
@@ -67,7 +69,7 @@ impl core::fmt::Display for PlanPackageError {
                 )
             }
             Self::BrokenChecksum => f.write_str("the checksum does not match the covered fields"),
-            Self::Truncated => f.write_str("the package ends before its structure does"),
+            Self::Decode(error) => write!(f, "unreadable canonical bytes: {error}"),
             Self::Malformed(detail) => write!(f, "malformed plan package: {detail}"),
             Self::InvalidPlan(detail) => write!(f, "invalid plan in package: {detail}"),
         }
@@ -119,9 +121,7 @@ pub fn decode(bytes: &[u8]) -> Result<(ExecutionPlan, SemanticHash), PlanPackage
     let Some(rest) = bytes.strip_prefix(&MAGIC) else {
         return Err(PlanPackageError::BadMagic);
     };
-    let Some((envelope, used)) = canon::decode(rest) else {
-        return Err(PlanPackageError::Truncated);
-    };
+    let (envelope, used) = canon::decode(rest).map_err(PlanPackageError::Decode)?;
     if used != rest.len() {
         return Err(PlanPackageError::Malformed("trailing bytes".into()));
     }
@@ -157,9 +157,7 @@ pub fn decode(bytes: &[u8]) -> Result<(ExecutionPlan, SemanticHash), PlanPackage
     if declared.as_slice() != checksum(version, &hash, body) {
         return Err(PlanPackageError::BrokenChecksum);
     }
-    let Some((tree, used)) = canon::decode(body) else {
-        return Err(PlanPackageError::Truncated);
-    };
+    let (tree, used) = canon::decode(body).map_err(PlanPackageError::Decode)?;
     if used != body.len() {
         return Err(PlanPackageError::Malformed("trailing body bytes".into()));
     }

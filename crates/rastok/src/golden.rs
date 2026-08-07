@@ -111,7 +111,7 @@ impl Trace {
     pub fn from_stored(records: &[Vec<u8>]) -> Option<Self> {
         let mut out = Vec::new();
         for bytes in records {
-            let (tree, used) = decode(bytes)?;
+            let (tree, used) = decode(bytes).ok()?;
             if used != bytes.len() {
                 return None;
             }

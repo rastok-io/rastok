@@ -125,87 +125,172 @@ fn head(major: u8, argument: u64, out: &mut Vec<u8>) {
     }
 }
 
+/// Why the canonical reader refused — the categories are real and
+/// preserved by every caller: data that ends early is not the same
+/// diagnosis as data that is syntactically outside the subset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodeError {
+    /// The bytes end before the announced structure does.
+    UnexpectedEof,
+    /// A declared length or offset does not fit the address space —
+    /// refused arithmetically, never by panicking overflow.
+    LengthOverflow,
+    /// A text string whose payload is not UTF-8.
+    InvalidUtf8,
+    /// A CBOR head outside the canonical subset (indefinite lengths,
+    /// tags, unsupported simple values), named by its leading byte.
+    UnsupportedHead(u8),
+    /// Bytes that parse structurally but break a table rule.
+    Malformed(&'static str),
+}
+
+impl core::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnexpectedEof => f.write_str("the bytes end before the structure does"),
+            Self::LengthOverflow => f.write_str("a declared length exceeds the address space"),
+            Self::InvalidUtf8 => f.write_str("a text payload is not valid UTF-8"),
+            Self::UnsupportedHead(head) => {
+                write!(f, "unsupported CBOR head byte 0x{head:02x}")
+            }
+            Self::Malformed(detail) => write!(f, "malformed canonical CBOR: {detail}"),
+        }
+    }
+}
+
+impl core::error::Error for DecodeError {}
+
 /// Decodes one canonical value; returns the tree and the bytes
-/// consumed. Only the subset the tables emit is accepted.
-pub fn decode(bytes: &[u8]) -> Option<(Cbor, usize)> {
-    let first = *bytes.first()?;
+/// consumed. Only the subset the tables emit is accepted, and every
+/// refusal is categorized — total over arbitrary input, panic-free
+/// by checked arithmetic.
+pub fn decode(bytes: &[u8]) -> Result<(Cbor, usize), DecodeError> {
+    let first = *bytes.first().ok_or(DecodeError::UnexpectedEof)?;
     let major = first >> 5;
     match (major, first) {
-        (_, 0xf4) => Some((Cbor::Bool(false), 1)),
-        (_, 0xf5) => Some((Cbor::Bool(true), 1)),
-        (_, 0xf6) => Some((Cbor::Null, 1)),
+        (_, 0xf4) => Ok((Cbor::Bool(false), 1)),
+        (_, 0xf5) => Ok((Cbor::Bool(true), 1)),
+        (_, 0xf6) => Ok((Cbor::Null, 1)),
         (_, 0xfb) => {
-            let raw: [u8; 8] = bytes.get(1..9)?.try_into().ok()?;
-            Some((Cbor::Double(f64::from_bits(u64::from_be_bytes(raw))), 9))
+            let raw: [u8; 8] = bytes
+                .get(1..9)
+                .ok_or(DecodeError::UnexpectedEof)?
+                .try_into()
+                .unwrap_or_else(|_| unreachable!("an 8-byte slice"));
+            Ok((Cbor::Double(f64::from_bits(u64::from_be_bytes(raw))), 9))
         }
         (0, _) => {
             let (value, used) = argument(bytes)?;
-            Some((Cbor::Uint(value), used))
+            Ok((Cbor::Uint(value), used))
         }
         (1, _) => {
             let (value, used) = argument(bytes)?;
-            Some((Cbor::Int(-1 - i64::try_from(value).ok()?), used))
+            let magnitude = i64::try_from(value)
+                .map_err(|_| DecodeError::Malformed("a negative integer beyond i64"))?;
+            Ok((Cbor::Int(-1 - magnitude), used))
         }
         (2, _) => {
-            let (length, used) = argument(bytes)?;
-            let length = usize::try_from(length).ok()?;
-            let payload = bytes.get(used..used + length)?;
-            Some((Cbor::Bytes(payload.to_vec()), used + length))
+            let (payload, end) = sized_payload(bytes)?;
+            Ok((Cbor::Bytes(payload.to_vec()), end))
         }
         (3, _) => {
-            let (length, used) = argument(bytes)?;
-            let length = usize::try_from(length).ok()?;
-            let payload = bytes.get(used..used + length)?;
-            Some((
-                Cbor::Text(String::from_utf8(payload.to_vec()).ok()?),
-                used + length,
-            ))
+            let (payload, end) = sized_payload(bytes)?;
+            let text = String::from_utf8(payload.to_vec()).map_err(|_| DecodeError::InvalidUtf8)?;
+            Ok((Cbor::Text(text), end))
         }
         (4, _) => {
             let (count, mut used) = argument(bytes)?;
             let mut items = Vec::new();
             for _ in 0..count {
-                let (item, item_used) = decode(bytes.get(used..)?)?;
+                let rest = bytes.get(used..).ok_or(DecodeError::UnexpectedEof)?;
+                let (item, item_used) = decode(rest)?;
                 items.push(item);
-                used += item_used;
+                used = used
+                    .checked_add(item_used)
+                    .ok_or(DecodeError::LengthOverflow)?;
             }
-            Some((Cbor::Array(items), used))
+            Ok((Cbor::Array(items), used))
         }
         (5, _) => {
             let (count, mut used) = argument(bytes)?;
             let mut pairs = Vec::new();
             for _ in 0..count {
-                let (key, key_used) = decode(bytes.get(used..)?)?;
-                used += key_used;
+                let rest = bytes.get(used..).ok_or(DecodeError::UnexpectedEof)?;
+                let (key, key_used) = decode(rest)?;
+                used = used
+                    .checked_add(key_used)
+                    .ok_or(DecodeError::LengthOverflow)?;
                 let Cbor::Uint(key) = key else {
-                    return None;
+                    return Err(DecodeError::Malformed(
+                        "a map key is not an unsigned integer",
+                    ));
                 };
-                let (value, value_used) = decode(bytes.get(used..)?)?;
-                used += value_used;
+                let rest = bytes.get(used..).ok_or(DecodeError::UnexpectedEof)?;
+                let (value, value_used) = decode(rest)?;
+                used = used
+                    .checked_add(value_used)
+                    .ok_or(DecodeError::LengthOverflow)?;
                 pairs.push((key, value));
             }
-            Some((Cbor::Map(pairs), used))
+            Ok((Cbor::Map(pairs), used))
         }
-        _ => None,
+        _ => Err(DecodeError::UnsupportedHead(first)),
     }
 }
 
-/// A shortest-form head's argument and consumed length.
-fn argument(bytes: &[u8]) -> Option<(u64, usize)> {
-    let info = bytes.first()? & 0x1f;
+/// A length-prefixed payload (byte and text strings): the declared
+/// length is bounded against the address space BEFORE any offset
+/// arithmetic — a length near `u64::MAX` refuses as
+/// [`DecodeError::LengthOverflow`], never as a panicking add.
+fn sized_payload(bytes: &[u8]) -> Result<(&[u8], usize), DecodeError> {
+    let (length, used) = argument(bytes)?;
+    let length = usize::try_from(length).map_err(|_| DecodeError::LengthOverflow)?;
+    let end = used
+        .checked_add(length)
+        .ok_or(DecodeError::LengthOverflow)?;
+    let payload = bytes.get(used..end).ok_or(DecodeError::UnexpectedEof)?;
+    Ok((payload, end))
+}
+
+/// A head's argument and consumed length.
+fn argument(bytes: &[u8]) -> Result<(u64, usize), DecodeError> {
+    let first = *bytes.first().ok_or(DecodeError::UnexpectedEof)?;
+    let info = first & 0x1f;
+    let eof = DecodeError::UnexpectedEof;
     match info {
-        0..=23 => Some((u64::from(info), 1)),
-        24 => Some((u64::from(*bytes.get(1)?), 2)),
-        25 => Some((
-            u64::from(u16::from_be_bytes(bytes.get(1..3)?.try_into().ok()?)),
+        0..=23 => Ok((u64::from(info), 1)),
+        24 => Ok((u64::from(*bytes.get(1).ok_or(eof)?), 2)),
+        25 => Ok((
+            u64::from(u16::from_be_bytes(
+                bytes
+                    .get(1..3)
+                    .ok_or(eof)?
+                    .try_into()
+                    .unwrap_or_else(|_| unreachable!("2 bytes")),
+            )),
             3,
         )),
-        26 => Some((
-            u64::from(u32::from_be_bytes(bytes.get(1..5)?.try_into().ok()?)),
+        26 => Ok((
+            u64::from(u32::from_be_bytes(
+                bytes
+                    .get(1..5)
+                    .ok_or(eof)?
+                    .try_into()
+                    .unwrap_or_else(|_| unreachable!("4 bytes")),
+            )),
             5,
         )),
-        27 => Some((u64::from_be_bytes(bytes.get(1..9)?.try_into().ok()?), 9)),
-        _ => None,
+        27 => Ok((
+            u64::from_be_bytes(
+                bytes
+                    .get(1..9)
+                    .ok_or(eof)?
+                    .try_into()
+                    .unwrap_or_else(|_| unreachable!("8 bytes")),
+            ),
+            9,
+        )),
+        _ => Err(DecodeError::UnsupportedHead(first)),
     }
 }
 

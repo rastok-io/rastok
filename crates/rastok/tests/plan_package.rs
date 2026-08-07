@@ -115,12 +115,23 @@ fn every_refusal_is_typed() {
         PlanPackageError::BrokenChecksum
     );
 
-    // A truncated package.
+    // A truncated package — diagnosed as exactly that: the reader's
+    // own category says the bytes END EARLY, not that they are
+    // foreign.
     let truncated = &bytes[..bytes.len() / 2];
-    assert!(matches!(
+    assert_eq!(
         plan_package::decode(truncated).unwrap_err(),
-        PlanPackageError::Truncated | PlanPackageError::Malformed(_)
-    ));
+        PlanPackageError::Decode(rastok::canon::DecodeError::UnexpectedEof)
+    );
+
+    // A syntactically foreign head (an indefinite-length map, 0xbf)
+    // is a DIFFERENT category from truncation.
+    let mut foreign_head = bytes.clone();
+    foreign_head[4] = 0xbf;
+    assert_eq!(
+        plan_package::decode(&foreign_head).unwrap_err(),
+        PlanPackageError::Decode(rastok::canon::DecodeError::UnsupportedHead(0xbf))
+    );
 }
 
 #[test]
@@ -227,12 +238,11 @@ fn a_non_canonical_envelope_refuses() {
     let version_entry: Vec<u8> = bytes[5..7].to_vec();
     let hash_entry: Vec<u8> = bytes[7..42].to_vec();
     reordered.splice(5..42, hash_entry.into_iter().chain(version_entry));
-    // The canonical reader itself refuses an unsorted map — the
-    // refusal surfaces at the outer parse, before the envelope
-    // check even runs.
+    // The reader is permissive about order; the envelope canonicity
+    // check is what refuses — as Malformed, never as truncation.
     assert!(matches!(
         plan_package::decode(&reordered).unwrap_err(),
-        PlanPackageError::Malformed(_) | PlanPackageError::Truncated
+        PlanPackageError::Malformed(_)
     ));
 
     // A non-minimal integer in the header: uint 2 written on two
@@ -248,5 +258,35 @@ fn a_non_canonical_envelope_refuses() {
     assert!(matches!(
         plan_package::decode(&widened).unwrap_err(),
         PlanPackageError::Malformed(_)
+    ));
+}
+
+#[test]
+fn overflowing_declared_lengths_refuse_without_panic() {
+    // A byte string announcing u64::MAX bytes: 0x5b + 8 length
+    // bytes. The decoder must refuse arithmetically — LengthOverflow
+    // or an early end — never a panicking add.
+    let mut byte_bomb = vec![0x5b];
+    byte_bomb.extend_from_slice(&u64::MAX.to_be_bytes());
+    assert!(matches!(
+        decode(&byte_bomb).unwrap_err(),
+        rastok::canon::DecodeError::LengthOverflow
+    ));
+
+    // The same bomb as a text string (0x7b).
+    let mut text_bomb = vec![0x7b];
+    text_bomb.extend_from_slice(&u64::MAX.to_be_bytes());
+    assert!(matches!(
+        decode(&text_bomb).unwrap_err(),
+        rastok::canon::DecodeError::LengthOverflow
+    ));
+
+    // A large-but-addressable declared length with no data behind
+    // it is truncation, not overflow — the categories stay honest.
+    let mut hungry = vec![0x5a];
+    hungry.extend_from_slice(&0x1000_0000u32.to_be_bytes());
+    assert!(matches!(
+        decode(&hungry).unwrap_err(),
+        rastok::canon::DecodeError::UnexpectedEof
     ));
 }
