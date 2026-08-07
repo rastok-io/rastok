@@ -19,9 +19,13 @@ pub use check::Unit;
 pub use hir::Hir;
 pub use syntax::SyntaxTree;
 
-use crate::diagnostics::{Bag, SourceId};
-use crate::plan::{SemanticHash, SymbolTable, ValidatedExecutionPlan};
+use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId};
+use crate::plan::{PlanValidationError, SemanticHash, SymbolTable, ValidatedExecutionPlan};
 use crate::stdlib;
+
+/// The lowering emitted a plan the validator refuses — a compiler
+/// defect surfaced through the ordinary error path, never a panic.
+pub const E_INTERNAL_PLAN: Code = Code::new("E-INTERNAL-PLAN");
 
 /// The result of a successful compilation: a valid plan, its semantic
 /// identity, its symbol side table, and the warnings. A plan with
@@ -71,14 +75,7 @@ pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilat
     let plan = match ValidatedExecutionPlan::try_new(plan) {
         Ok(plan) => plan,
         Err(error) => {
-            bag.push(
-                crate::diagnostics::Diagnostic::new(
-                    crate::diagnostics::Code::new("E-INTERNAL-PLAN"),
-                    crate::diagnostics::Phase::Plan,
-                    "the lowering emitted an invalid plan — a compiler bug, please report it",
-                )
-                .with_field("detail", error.to_string()),
-            );
+            bag.push(internal_plan_diagnostic(&error));
             return Err(bag);
         }
     };
@@ -89,4 +86,41 @@ pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilat
         warnings: bag.into_diagnostics(),
         labs: hir.labs,
     })
+}
+
+/// The diagnostic for a lowering/validator disagreement. The payload
+/// contract, stable per the registry: code `E-INTERNAL-PLAN`, phase
+/// `plan`, field `detail` carrying the violated invariant.
+fn internal_plan_diagnostic(error: &PlanValidationError) -> Diagnostic {
+    Diagnostic::new(
+        E_INTERNAL_PLAN,
+        Phase::Plan,
+        "the lowering emitted an invalid plan — a compiler bug, please report it",
+    )
+    .with_field("detail", error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The registered payload: code, phase, and the `detail` field —
+    /// what tools and tests key on, per `diagnostics.md` rule 2.
+    #[test]
+    fn the_internal_plan_diagnostic_carries_its_registered_payload() {
+        let error = PlanValidationError::NonCanonicalOrder {
+            collection: "nodes",
+        };
+        let diagnostic = internal_plan_diagnostic(&error);
+        assert_eq!(diagnostic.code(), E_INTERNAL_PLAN);
+        assert_eq!(diagnostic.code().as_str(), "E-INTERNAL-PLAN");
+        assert_eq!(diagnostic.phase(), Phase::Plan);
+        assert_eq!(
+            diagnostic.fields(),
+            [(
+                "detail",
+                String::from("invalid plan: `nodes` is not in canonical order"),
+            )]
+        );
+    }
 }

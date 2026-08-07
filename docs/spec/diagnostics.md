@@ -62,6 +62,7 @@ causal core. They live in their home specs, not here.
 | E-PARTITION-MISMATCH | error | check | [execution-model.md](execution-model.md) | a join input arriving under a different partition than the join requires — an explicit re-key step is needed; reserved for the joins slice; fields `port`, `expected`, `found` |
 | E-DUP-EDGE | error | check | [envelope.md](envelope.md) | the same source endpoint wired twice to the same target, compared after desugaring — the deliveries would derive one call ref; field `edge` |
 | E-DUP-LAB-IDENTITY | error | resolve | [simulation-semantics.md](simulation-semantics.md) | a duplicated lab identity — simulation, scenario, or mock of one connector at one level; fragments merge, homonyms refuse; field `name` |
+| E-INTERNAL-PLAN | error | plan | [plan-package.md](../architecture/plan-package.md) | the lowering emitted a plan its own validator refuses — a compiler defect surfaced as a diagnostic, never a panic; field `detail` |
 | W-DEAD-GRAPH | warning | resolve | [grammar.md](grammar.md) | a top-level graph reachable from no App composition |
 | W-UNWIRED-OUTPUT | warning | check | [delivery-semantics.md](delivery-semantics.md) | a non-`err` node output wired to no edge and not discarded with `-> nothing`; `err` is exempt — it bubbles to the root error sink; fields `node`, `port` (severity divergence recorded as erratum E-2026-08-03-2) |
 | W-DURABILITY-WEAKENED | warning | plan | [delivery-semantics.md](delivery-semantics.md) | a Node or nested Graph explicitly selects a weaker scope than its closest inherited value |
