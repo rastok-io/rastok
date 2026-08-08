@@ -595,7 +595,7 @@ fn a_duplicated_handler_refuses() {
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicateHandler {
             node: rastok::node::Path::new(["relay"]).unwrap(),
-            activation: port("in"),
+            activation: rastok::node::HandlerActivation::Port(port("in")),
         }
     );
 }

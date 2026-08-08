@@ -179,7 +179,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         // no identity (identity.md): they ship sorted by their
         // activation's canonical key, the same key the hash sorts by.
         let mut handlers: Vec<_> = hir_node.handlers.iter().collect();
-        handlers.sort_by_key(|handler| handler.activation.to_string());
+        handlers.sort_by_key(|handler| handler.activation.canonical_key());
         for handler in handlers {
             plan.handlers.push(Handler {
                 node: slot,
@@ -515,12 +515,14 @@ impl Writer {
         // declaration order between handlers (identity.md) — only
         // statements INSIDE a handler are order-sensitive.
         let mut handlers: Vec<_> = node.handlers.iter().collect();
-        handlers.sort_by_key(|handler| handler.activation.to_string());
+        handlers.sort_by_key(|handler| handler.activation.canonical_key());
         self.count(handlers.len());
         for handler in handlers {
-            // Hash material: renders `p:<port>` — byte-identical to
-            // the pre-activation encoding, pinned by the golden hash.
-            self.str(&handler.activation.to_string());
+            // Hash material: the canonical key (`p:<port>`) — the
+            // pinned identity form, byte-identical to the
+            // pre-activation encoding; Display is presentation and
+            // free to move.
+            self.str(&handler.activation.canonical_key());
             match &handler.guard {
                 None => self.tag(0),
                 Some(guard) => {

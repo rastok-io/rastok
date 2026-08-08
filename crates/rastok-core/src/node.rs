@@ -295,11 +295,27 @@ pub enum HandlerActivation {
     Port(Port),
 }
 
+impl HandlerActivation {
+    /// The canonical identity key — what the lowering sorts by, the
+    /// semantic hash reads, and the plan validator audits. This
+    /// string is IDENTITY material and must not move; `Display` is
+    /// presentation and may. A future join activation extends this
+    /// key PRESERVING its declared port order — `(a, b)` and
+    /// `(b, a)` are different identities (identity.md), while the
+    /// order between handlers stays insensitive.
+    #[must_use]
+    pub fn canonical_key(&self) -> alloc::string::String {
+        match self {
+            Self::Port(port) => alloc::format!("p:{port}"),
+        }
+    }
+}
+
 impl fmt::Display for HandlerActivation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Coincides with the canonical key today; only the key is
+        // pinned.
         match self {
-            // Renders exactly as the port trigger it coincides with:
-            // this string is semantic-hash material and must not move.
             Self::Port(port) => write!(f, "p:{port}"),
         }
     }

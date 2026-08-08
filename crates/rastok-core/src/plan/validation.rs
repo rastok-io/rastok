@@ -57,8 +57,9 @@ pub enum PlanValidationError {
     DuplicateHandler {
         /// The declaring node.
         node: node::Path,
-        /// The doubled activation port.
-        activation: node::Port,
+        /// The doubled activation — carried whole, so a future join
+        /// activation changes nothing about this variant's shape.
+        activation: node::HandlerActivation,
     },
     /// A connector's error set names one kind twice.
     DuplicateErrorKind {
@@ -557,14 +558,13 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // globally first, like every other uniqueness. Slot bounds are
     // already proven above.
     let key =
-        |handler: &crate::plan::Handler| (handler.node.index(), handler.activation.to_string());
+        |handler: &crate::plan::Handler| (handler.node.index(), handler.activation.canonical_key());
     let mut activations = BTreeSet::new();
     for handler in &plan.handlers {
         if !activations.insert(key(handler)) {
-            let node::HandlerActivation::Port(port) = &handler.activation;
             return Err(PlanValidationError::DuplicateHandler {
                 node: node_at(handler.node)?.path.clone(),
-                activation: port.clone(),
+                activation: handler.activation.clone(),
             });
         }
     }
