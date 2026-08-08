@@ -1188,21 +1188,45 @@ impl Checker<'_, '_> {
             self.deferred("a keyed node (per)", decl.span);
         }
         let path = self.node_path(&decl.name.text, decl.name.span)?;
+        // The RESOLVED contract materializes into the node — error
+        // set and the non-implicit port table alike: the plan must
+        // carry everything its embedded validator will check, because
+        // that validator has no Registry to consult (m1-slice's
+        // transport rule). Types join when the sheets carry them.
+        let (error_set, contract_ports) = match self.registry.connector(&trait_name) {
+            stdlib::Availability::Available(contract) => {
+                let mut ports = Vec::new();
+                for name in contract.input_ports {
+                    if !matches!(*name, "in" | "out" | "err")
+                        && let Ok(port) = node::Port::new((*name).to_string())
+                    {
+                        ports.push(crate::plan::PortDecl::untyped(port, Direction::Input));
+                    }
+                }
+                for name in contract.output_ports {
+                    if !matches!(*name, "in" | "out" | "err")
+                        && let Ok(port) = node::Port::new((*name).to_string())
+                    {
+                        ports.push(crate::plan::PortDecl::untyped(port, Direction::Output));
+                    }
+                }
+                (
+                    contract.error_set.iter().map(ToString::to_string).collect(),
+                    ports,
+                )
+            }
+            _ => (Vec::new(), Vec::new()),
+        };
         let mut node = Node {
             path,
             role: NodeRole::Connector {
-                error_set: match self.registry.connector(&trait_name) {
-                    stdlib::Availability::Available(contract) => {
-                        contract.error_set.iter().map(ToString::to_string).collect()
-                    }
-                    _ => Vec::new(),
-                },
+                error_set,
                 trait_name,
                 attributes: Vec::new(),
             },
             vals: Vec::new(),
             vars: Vec::new(),
-            ports: Vec::new(),
+            ports: contract_ports,
             handlers: Vec::new(),
         };
         self.node_body(&decl.body, &mut node, graph_signature, graph_consts, true);

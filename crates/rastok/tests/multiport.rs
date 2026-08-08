@@ -484,3 +484,74 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
     // A conforming constant passes.
     compile(&[inject("7").as_str()], &Registry::m0()).expect("an int through the int input");
 }
+
+// ===== the resolved contract table travels in the plan =====
+
+#[test]
+fn a_contract_port_table_travels_without_the_registry() {
+    use rastok::plan;
+    use rastok::stdlib::{AttrDomain, AttributeSpec, ConnectorContract};
+
+    // A future-shaped contract: named ports beside the trio — what
+    // File and the HTTP pair will declare. The m1-slice transport
+    // rule: everything the embedded validator checks must travel,
+    // because it has no Registry.
+    const PROBE_SHEET: ConnectorContract = ConnectorContract {
+        name: "Probe",
+        input_ports: &["in", "request"],
+        output_ports: &["out", "err", "response"],
+        attributes: &[
+            AttributeSpec {
+                name: "effect",
+                required: true,
+                domain: AttrDomain::Word(&["idempotent"]),
+            },
+            AttributeSpec {
+                name: "behavior",
+                required: true,
+                domain: AttrDomain::Word(&["deterministic"]),
+            },
+        ],
+        error_set: &["ProbeFailed"],
+    };
+    let registry = Registry::m0().with(PROBE_SHEET);
+    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay\n  relay.out -> probe.request\n  probe.response -> .\n}\n";
+    // 1. The checker accepts the wiring to the contract's named ports.
+    let compilation = compile(&[source], &registry).expect("the contract wiring compiles");
+    // 2. The RESOLVED table is in the plan — the trio stays implicit.
+    let probe = compilation
+        .plan
+        .plan()
+        .nodes
+        .iter()
+        .find(|node| node.path.to_string() == "probe")
+        .expect("the connector");
+    assert!(
+        probe.ports.iter().any(|decl| decl.port.name() == "request"
+            && decl.direction == rastok::node::Direction::Input),
+        "{:?}",
+        probe.ports
+    );
+    assert!(
+        probe.ports.iter().any(|decl| decl.port.name() == "response"
+            && decl.direction == rastok::node::Direction::Output),
+        "{:?}",
+        probe.ports
+    );
+    assert!(
+        !probe
+            .ports
+            .iter()
+            .any(|decl| matches!(decl.port.name(), "in" | "out" | "err")),
+        "the trio never enters a table: {:?}",
+        probe.ports
+    );
+    // 3. The package round-trips the table.
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, _) = plan::decode(&bytes).expect("the package opens");
+    assert_eq!(decoded, compilation.plan);
+    // 4. The validator stands WITHOUT the Registry: the raw plan
+    //    re-earns the type from its own tables alone.
+    let raw = decoded.into_inner();
+    rastok::plan::ValidatedExecutionPlan::try_new(raw).expect("no Registry consulted");
+}

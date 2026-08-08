@@ -197,6 +197,19 @@ impl Registry {
         }
     }
 
+    /// Extends the registry with one more contract sheet — the seam
+    /// every M1 connector lands through (`File`, the HTTP pair), and
+    /// what a test contract uses to exercise the transport of
+    /// resolved port tables. A name already present is replaced.
+    #[must_use]
+    pub fn with(mut self, contract: ConnectorContract) -> Self {
+        self.connectors
+            .retain(|existing| existing.name != contract.name);
+        self.declared.retain(|declared| *declared != contract.name);
+        self.connectors.push(contract);
+        self
+    }
+
     /// Resolves a connector type name.
     #[must_use]
     pub fn connector(&self, name: &str) -> Availability<'_> {
