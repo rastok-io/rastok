@@ -54,7 +54,11 @@ step touches `vm.rs` once.
    them, one pre-commit choke point judges every emission — synthesized
    errors included — against every pin of its fan-out,
    the builders are physically STRUCTS (tag 17) across all three
-   interpreters, and the validator audits pinned edges). The trio's
+   interpreters, and the validator audits pinned edges; `92a4da4`
+   fifth pass — Dyn is one rule across checker, validator, and
+   runtime, synthesized error emissions take the same pre-commit
+   gate as everything else, and a bare `data` relay preserves the
+   logical Struct/Map type). The trio's
    own contract types join the connector-sheet items below.
 2. **The `jsonl` codec** — structured payloads across the `Process`
    boundary, under the one byte discipline; unlocks realistic `File`
