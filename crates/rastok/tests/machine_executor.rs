@@ -87,7 +87,9 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
     let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
-    let state = PartitionState::new().cell(&compilation.plan, slot, "");
+    let state = PartitionState::new()
+        .cell(&compilation.plan, slot, "")
+        .unwrap();
     // An ancestry-rich input: app fields, a custom namespace, a
     // content-type hint on unchanged encoded data.
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
@@ -163,7 +165,7 @@ fn the_meta_projection_carries_the_whole_spine() {
 fn the_activation_pattern_is_not_the_causal_trigger() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "");
+    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
     // A handler is *selected* by its declared activation pattern…
     let activation = node::HandlerActivation::Port(node::Port::new("in").unwrap());
     assert!(executor.handler_for(slot, &activation).is_some());
@@ -223,7 +225,9 @@ fn metadata_writes_land_where_the_spec_says() {
     let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
-    let state = PartitionState::new().cell(&compilation.plan, slot, "");
+    let state = PartitionState::new()
+        .cell(&compilation.plan, slot, "")
+        .unwrap();
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
     let delivery = Delivery {
         port: node::Port::new("in").unwrap(),
@@ -277,7 +281,7 @@ fn metadata_writes_land_where_the_spec_says() {
 fn a_transaction_commits_everything_together() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "");
+    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
     assert_eq!(state.get("count"), Some(&cel::Value::Int(0)));
     let delivery = input("salut");
     let outcome = executor.fire(slot, &delivery, &state).unwrap();
@@ -312,7 +316,7 @@ fn a_transaction_commits_everything_together() {
 fn execution_is_deterministic() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "");
+    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
     let delivery = input("salut");
     let once = executor.fire(slot, &delivery, &state).unwrap();
     let twice = executor.fire(slot, &delivery, &state).unwrap();
@@ -323,7 +327,7 @@ fn execution_is_deterministic() {
 fn a_false_guard_consumes_without_effect() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "");
+    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
     let outcome = executor.fire(slot, &input(""), &state).unwrap();
     assert!(outcome.record.emissions.is_empty());
     assert!(outcome.record.state_delta.is_empty());
@@ -338,7 +342,7 @@ fn a_false_guard_consumes_without_effect() {
 fn a_faulted_transaction_changes_nothing() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "");
+    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
     // Avro payloads cannot be materialized in this build: the
     // handler faults, and the caller applies nothing.
     let delivery = Delivery {
@@ -359,18 +363,20 @@ fn a_faulted_transaction_changes_nothing() {
 fn state_is_isolated_between_keys() {
     let (plan, slot) = probe();
     let mut partitions = PartitionState::new();
-    partitions.apply(
-        &plan,
-        slot,
-        "alice",
-        &[(String::from("count"), cel::Value::Int(7))],
-    );
+    partitions
+        .apply(
+            &plan,
+            slot,
+            "alice",
+            &[(String::from("count"), cel::Value::Int(7))],
+        )
+        .unwrap();
     assert_eq!(
-        partitions.cell(&plan, slot, "alice").get("count"),
+        partitions.cell(&plan, slot, "alice").unwrap().get("count"),
         Some(&cel::Value::Int(7))
     );
     assert_eq!(
-        partitions.cell(&plan, slot, "bob").get("count"),
+        partitions.cell(&plan, slot, "bob").unwrap().get("count"),
         Some(&cel::Value::Int(0)),
         "bob's cell starts from the plan defaults"
     );
@@ -518,5 +524,31 @@ fn the_connector_outcome_matches_the_reference_trace() {
     assert_eq!(
         emission.envelope.meta().sys().origin_id(),
         request.meta().sys().origin_id()
+    );
+}
+
+#[test]
+fn a_caller_supplied_slot_is_verified_not_trusted() {
+    // Slot is freely constructible; the validated plan proves only
+    // its OWN references. The reviewer's one-liner panicked here —
+    // every public door now verifies and refuses typed.
+    let (plan, _) = probe();
+    let ghost = Slot::new(999);
+    assert_eq!(
+        PartitionState::new().cell(&plan, ghost, "").unwrap_err(),
+        Fault::UnknownSlot(ghost)
+    );
+    assert_eq!(
+        PartitionState::new()
+            .apply(&plan, ghost, "", &[])
+            .unwrap_err(),
+        Fault::UnknownSlot(ghost)
+    );
+    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    assert_eq!(
+        executor
+            .fire(ghost, &input("salut"), &BTreeMap::new())
+            .unwrap_err(),
+        Fault::UnknownSlot(ghost)
     );
 }

@@ -643,7 +643,7 @@ impl<'plan> Vm<'plan> {
         delivery: &Delivery,
     ) -> Result<(), VmError> {
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
-        let state = self.state.cell(self.plan, slot, key);
+        let state = self.state.cell_unchecked(self.plan.plan(), slot, key);
         let outcome = match executor.fire(slot, delivery, &state) {
             Ok(outcome) => outcome,
             // A missing handler is a wiring integrity breach, not a
@@ -659,7 +659,7 @@ impl<'plan> Vm<'plan> {
             .map_err(VmError::Journal)?;
         self.scheduler.mailboxes.pop(slot, key);
         self.state
-            .apply(self.plan, slot, key, &outcome.record.state_delta);
+            .apply_unchecked(self.plan.plan(), slot, key, &outcome.record.state_delta);
         self.route_emissions(slot, &outcome.record);
         Ok(())
     }

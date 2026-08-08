@@ -19,8 +19,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-/// Compile-time resolved node reference; runtime resolution errors
-/// are impossible by construction.
+/// Compile-time resolved node reference. The claim is scoped: slots
+/// STORED in a [`ValidatedExecutionPlan`] are proven in bounds, but
+/// the type itself is freely constructible — so every public API
+/// that takes a caller's `Slot` next to a plan VERIFIES it and
+/// refuses typed, never indexes on faith.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Slot(u32);
 

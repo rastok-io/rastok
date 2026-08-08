@@ -52,6 +52,11 @@ pub enum Fault {
     MissingHandler,
     /// The payload could not be materialized for the handler.
     Opaque(String),
+    /// A caller-supplied slot the plan does not know. `Slot` is
+    /// freely constructible; the validated plan proves only its OWN
+    /// references, so the public doors verify and refuse — never
+    /// index on faith.
+    UnknownSlot(Slot),
 }
 
 impl fmt::Display for Fault {
@@ -63,6 +68,9 @@ impl fmt::Display for Fault {
             }
             Self::MissingHandler => f.write_str("no handler for this trigger"),
             Self::Opaque(what) => write!(f, "the payload is opaque here: {what}"),
+            Self::UnknownSlot(slot) => {
+                write!(f, "the plan has no node at slot {}", slot.index())
+            }
         }
     }
 }
@@ -89,13 +97,30 @@ impl PartitionState {
     }
 
     /// The current cell values for a node under a key, defaults
-    /// applied from the plan on first access. The plan arrives
-    /// validated: this dereferences the slot without checking, so
-    /// the public boundary carries the proof.
-    #[must_use]
+    /// applied from the plan on first access. The plan is validated,
+    /// which proves the plan's OWN references — not the caller's
+    /// `slot`, which is freely constructible and verified here.
+    ///
+    /// # Errors
+    ///
+    /// [`Fault::UnknownSlot`] when the plan has no such node.
     pub fn cell(
         &self,
         plan: &ValidatedExecutionPlan,
+        slot: Slot,
+        key: &str,
+    ) -> Result<BTreeMap<String, cel::Value>, Fault> {
+        if plan.nodes.get(slot.index()).is_none() {
+            return Err(Fault::UnknownSlot(slot));
+        }
+        Ok(self.cell_unchecked(plan.plan(), slot, key))
+    }
+
+    /// The unchecked read the machine uses on its own plan-derived
+    /// slots — crate-private: the public door above verifies.
+    pub(crate) fn cell_unchecked(
+        &self,
+        plan: &ExecutionPlan,
         slot: Slot,
         key: &str,
     ) -> BTreeMap<String, cel::Value> {
@@ -109,16 +134,35 @@ impl PartitionState {
             .collect()
     }
 
-    /// Applies a committed delta to a cell. Validated for the same
-    /// reason as [`Self::cell`].
+    /// Applies a committed delta to a cell. Verified like
+    /// [`Self::cell`].
+    ///
+    /// # Errors
+    ///
+    /// [`Fault::UnknownSlot`] when the plan has no such node.
     pub fn apply(
         &mut self,
         plan: &ValidatedExecutionPlan,
         slot: Slot,
         key: &str,
         delta: &[(String, cel::Value)],
+    ) -> Result<(), Fault> {
+        if plan.nodes.get(slot.index()).is_none() {
+            return Err(Fault::UnknownSlot(slot));
+        }
+        self.apply_unchecked(plan.plan(), slot, key, delta);
+        Ok(())
+    }
+
+    /// The unchecked write behind [`Self::apply`] — crate-private.
+    pub(crate) fn apply_unchecked(
+        &mut self,
+        plan: &ExecutionPlan,
+        slot: Slot,
+        key: &str,
+        delta: &[(String, cel::Value)],
     ) {
-        let mut cell = self.cell(plan, slot, key);
+        let mut cell = self.cell_unchecked(plan, slot, key);
         for (name, value) in delta {
             cell.insert(name.clone(), value.clone());
         }
@@ -365,7 +409,11 @@ impl<'plan> TransactionExecutor<'plan> {
         delivery: &Delivery,
         state: &BTreeMap<String, cel::Value>,
     ) -> Result<TransactionOutcome, Fault> {
-        let node = &self.plan.nodes[slot.index()];
+        // The validated plan proves its own references, not the
+        // caller's slot — verified, refused typed.
+        let Some(node) = self.plan.nodes.get(slot.index()) else {
+            return Err(Fault::UnknownSlot(slot));
+        };
         // Two distinct facts share one port here: the handler is
         // *selected* by its activation pattern, while the committed
         // record carries the *causal* trigger. They coincide for a
