@@ -346,6 +346,42 @@ fn a_program_beyond_the_nesting_budget_refuses_by_name() {
 }
 
 #[test]
+fn a_nan_plan_equals_itself_across_the_trip() {
+    // `0.0 / 0.0` is a legal constant NaN. Structural plan equality
+    // is canonical-bits equality, so the round trip preserves the
+    // claim the header test makes — "structural equality across the
+    // trip" — instead of a plan that stops equalling itself.
+    let source = "graph g : App {\n  operator o {\n    var seen : double = 0.0 / 0.0\n\n    on in {\n      out = data\n    }\n  }\n\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, _) = plan::decode(&bytes).expect("the package opens");
+    assert_eq!(decoded, compilation.plan, "NaN included");
+}
+
+#[test]
+fn the_zero_signs_are_two_plans() {
+    // `+0.0` and `-0.0` have different canonical bytes; two plans
+    // differing only there must compare UNEQUAL structurally — the
+    // packages differ, so equality may not say otherwise.
+    let with_zero = |zero: &str| {
+        let source = format!(
+            "graph g : App {{\n  operator o {{\n    var seen : double = {zero}\n\n    on in {{\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n"
+        );
+        compile(&[source.as_str()], &Registry::m0()).expect("a valid plan")
+    };
+    let positive = with_zero("0.0");
+    let negative = with_zero("-0.0");
+    assert_ne!(
+        positive.plan, negative.plan,
+        "different canonical bytes, different plans"
+    );
+    assert_ne!(
+        plan::encode(&positive.plan, &positive.hash),
+        plan::encode(&negative.plan, &negative.hash),
+    );
+}
+
+#[test]
 fn a_hostile_depth_source_refuses_and_the_process_survives() {
     // Re-exec pattern: the deep compiles run in a CHILD process, so a
     // regression (a recursive pass before the gate, a recursive drop

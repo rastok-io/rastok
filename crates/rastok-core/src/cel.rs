@@ -57,7 +57,14 @@ pub enum Type {
 }
 
 /// A CEL runtime value, mirroring [`Type`].
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Equality is STRUCTURAL and agrees with the canonical bytes: the
+/// `Double` arm compares canonicalized bits (all NaNs are one value,
+/// `-0.0` and `+0.0` are two), so a plan equals itself across the
+/// encode/decode trip and two plans with different canonical bytes
+/// never compare equal. CEL's own `==` operator does NOT use this —
+/// it lives in `values_equal` and keeps IEEE numeric semantics.
+#[derive(Debug, Clone)]
 pub enum Value {
     /// Boolean.
     Bool(bool),
@@ -82,6 +89,34 @@ pub enum Value {
     /// Text-keyed map; `BTreeMap` keeps iteration sorted by key.
     Map(BTreeMap<String, Value>),
 }
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Int(a), Self::Int(b)) => a == b,
+            (Self::Uint(a), Self::Uint(b)) => a == b,
+            // Canonicalized BITS, not IEEE: structural equality must
+            // agree with the canonical bytes, or a plan carrying NaN
+            // stops equalling itself across the trip while the two
+            // zeros collapse despite different bytes.
+            (Self::Double(a), Self::Double(b)) => {
+                crate::canonical_cbor::CanonicalDouble::new(*a)
+                    == crate::canonical_cbor::CanonicalDouble::new(*b)
+            }
+            (Self::Text(a), Self::Text(b)) => a == b,
+            (Self::Bytes(a), Self::Bytes(b)) => a == b,
+            (Self::Duration(a), Self::Duration(b)) => a == b,
+            (Self::Timestamp(a), Self::Timestamp(b)) => a == b,
+            (Self::Null, Self::Null) => true,
+            (Self::List(a), Self::List(b)) => a == b,
+            (Self::Map(a), Self::Map(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Value {}
 
 /// Names and types visible to an expression. Keys may be dotted
 /// (`data.text`) for pre-resolved leaves, or bare roots. The
@@ -1668,6 +1703,23 @@ mod tests {
         assert_eq!(eval_const("null == null"), Value::Bool(true));
         assert_eq!(eval_const("1 == \"1\""), Value::Bool(false));
         assert_eq!(eval_const("!false || false"), Value::Bool(true));
+    }
+
+    /// The CEL `==` OPERATOR keeps IEEE semantics — `values_equal`,
+    /// not the structural `PartialEq` (which compares canonical bits
+    /// so plans stay equal to themselves across the byte trip). The
+    /// two equalities answer different questions and must not bleed
+    /// into each other.
+    #[test]
+    fn the_cel_operator_keeps_ieee_while_structure_keeps_bits() {
+        // IEEE, through the operator: NaN never equals itself, and
+        // the two zeros are numerically one.
+        assert_eq!(eval_const("0.0 / 0.0 == 0.0 / 0.0"), Value::Bool(false));
+        assert_eq!(eval_const("-0.0 == 0.0"), Value::Bool(true));
+        // Bits, through the structure: NaN is ONE value, the zeros
+        // are TWO.
+        assert_eq!(eval_const("0.0 / 0.0"), eval_const("0.0 / 0.0"));
+        assert_ne!(eval_const("-0.0"), eval_const("0.0"));
     }
 
     #[test]
