@@ -34,6 +34,11 @@ step touches `vm.rs` once.
    exposes non-default ports, the plan must carry the RESOLVED port
    table — the embedded validator has no `Registry` to consult, so
    everything it checks must travel in the package.
+   **LANDED 2026-08-08** — named ingress (`1d5d1a3`: INBOUND key 24,
+   D-2026-08-08-2) and pinned port types (`fa861d8`: `port_decl`'s
+   optional type, E-PORT-TYPE, D-2026-08-08-3); routing and named
+   outputs were already alive, proved by the lift's probes. The
+   trio's own contract types join the connector-sheet items below.
 2. **The `jsonl` codec** — structured payloads across the `Process`
    boundary, under the one byte discipline; unlocks realistic `File`
    and HTTP payloads.
