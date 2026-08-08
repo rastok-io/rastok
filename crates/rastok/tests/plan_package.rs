@@ -445,3 +445,60 @@ fn a_deep_but_budgeted_program_rides_the_round_trip() {
     assert_eq!(decoded, compilation.plan);
     assert_eq!(declared, compilation.hash);
 }
+
+#[test]
+fn the_depth_boundaries_are_exact() {
+    // One unit per SYNTACTIC level, so the visible budget is the
+    // real one. A parenthesis tower spends parser recursion without
+    // creating AST depth: 127 pairs fit under the 128-entry guard
+    // (the expression itself is the first entry), the 128th refuses
+    // at CHECK with the structured `depth` payload.
+    let parens = |n: usize| {
+        format!(
+            "graph g : App {{\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
+             seen = {}1{}\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n",
+            "(".repeat(n),
+            ")".repeat(n),
+        )
+    };
+    compile(&[parens(127).as_str()], &Registry::m0()).expect("127 pairs fit the parser guard");
+    let bag = compile(&[parens(128).as_str()], &Registry::m0()).expect_err("the 128th refuses");
+    let depth = bag
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code().as_str() == "E-PLAN-DEPTH")
+        .expect("refused by name");
+    assert_eq!(depth.phase(), rastok::diagnostics::Phase::Check);
+    assert!(
+        depth
+            .fields()
+            .iter()
+            .any(|(name, value)| *name == "depth" && value == "129"),
+        "the structured payload, not the sentence: {:?}",
+        depth.fields()
+    );
+
+    // An addition chain builds real serialized depth: 119 additions
+    // reach level 127 and ride the round trip; the 120th reaches the
+    // reader's exact budget and refuses at PLAN, same payload.
+    let deep_ok = nested_additions(119);
+    let compilation = compile(&[deep_ok.as_str()], &Registry::m0()).expect("119 additions fit");
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    plan::decode(&bytes).expect("the deepest accepted program reads back");
+    let bag =
+        compile(&[nested_additions(120).as_str()], &Registry::m0()).expect_err("the 120th refuses");
+    let depth = bag
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code().as_str() == "E-PLAN-DEPTH")
+        .expect("refused by name");
+    assert_eq!(depth.phase(), rastok::diagnostics::Phase::Plan);
+    assert!(
+        depth
+            .fields()
+            .iter()
+            .any(|(name, value)| *name == "depth" && value == "128"),
+        "{:?}",
+        depth.fields()
+    );
+}

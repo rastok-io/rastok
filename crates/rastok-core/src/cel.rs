@@ -170,7 +170,12 @@ pub enum DiagnosticKind {
     DuplicateMapKey,
     /// An expression nesting beyond the format budget — refused at
     /// the gate, before any recursive pass rides the machine stack.
-    TooDeep,
+    /// Carries the measured depth: the STRUCTURED payload the
+    /// registered diagnostic emits, never the human sentence.
+    TooDeep {
+        /// The nesting depth reached when the gate refused.
+        depth: usize,
+    },
 }
 
 /// Native CEL compiler diagnostic; the caller adapts it.
@@ -338,11 +343,12 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
     // CBOR level — so the refusal is the same named diagnostic, and
     // the refused tree is dismantled iteratively, never dropped
     // through a recursive `Drop`.
-    if structural_depth(&root) > crate::canonical_cbor::MAX_NESTING {
+    let depth = structural_depth(&root);
+    if depth > crate::canonical_cbor::MAX_NESTING {
         let range = 0..text.len();
         dismantle(root);
         return Err(vec![Diagnostic {
-            kind: DiagnosticKind::TooDeep,
+            kind: DiagnosticKind::TooDeep { depth },
             message: String::from("the expression nests deeper than the format budget"),
             range,
         }]);
@@ -723,11 +729,15 @@ impl<'a> ExprParser<'_, 'a> {
     }
 
     /// One step deeper into the productions; refuses past the budget.
+    /// Each SYNTACTIC nesting level counts exactly once — `ternary`
+    /// counts (every nesting construct re-enters it through
+    /// `primary`), and `unary` counts only when an operator actually
+    /// nests, so the visible budget is the real one.
     fn descend(&mut self) -> Result<(), Diagnostic> {
         self.depth += 1;
         if self.depth > crate::canonical_cbor::MAX_NESTING {
             return Err(Diagnostic {
-                kind: DiagnosticKind::TooDeep,
+                kind: DiagnosticKind::TooDeep { depth: self.depth },
                 message: String::from("the expression nests deeper than the format budget"),
                 range: self
                     .tokens
@@ -826,12 +836,17 @@ impl<'a> ExprParser<'_, 'a> {
     }
 
     fn unary(&mut self) -> Result<Expr, Diagnostic> {
-        // Guarded too: a unary chain recurses without ever re-entering
-        // `ternary`.
-        self.descend()?;
-        let result = self.unary_inner();
-        self.depth -= 1;
-        result
+        // A unary chain recurses without ever re-entering `ternary`,
+        // so an actual operator counts one level; the plain
+        // fall-through to `postfix` is not a nesting and counts
+        // nothing — one unit per syntactic level, everywhere.
+        if matches!(self.peek(), Some(Tok::Bang | Tok::Minus)) {
+            self.descend()?;
+            let result = self.unary_inner();
+            self.depth -= 1;
+            return result;
+        }
+        self.postfix()
     }
 
     fn unary_inner(&mut self) -> Result<Expr, Diagnostic> {

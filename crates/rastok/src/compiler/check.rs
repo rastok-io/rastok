@@ -221,17 +221,23 @@ impl Checker<'_, '_> {
                         // The depth gate: the same named refusal the
                         // plan validator maps at the plan phase, first
                         // surfaced here — before any recursive pass.
-                        cel::DiagnosticKind::TooDeep => crate::compiler::E_PLAN_DEPTH,
+                        cel::DiagnosticKind::TooDeep { .. } => crate::compiler::E_PLAN_DEPTH,
                         cel::DiagnosticKind::General => E_CEL_EXPR,
                     };
-                    self.bag.push(
-                        Diagnostic::new(code, Phase::Check, diagnostic.message.clone())
-                            .with_span(Span::new(
-                                expr.span.source(),
-                                base + diagnostic.range.start..base + diagnostic.range.end,
-                            ))
-                            .with_field("detail", diagnostic.message),
-                    );
+                    let adapted = Diagnostic::new(code, Phase::Check, diagnostic.message.clone())
+                        .with_span(Span::new(
+                            expr.span.source(),
+                            base + diagnostic.range.start..base + diagnostic.range.end,
+                        ));
+                    // The STABLE payload per the registry: E-PLAN-DEPTH
+                    // carries the numeric `depth` in every phase; the
+                    // human sentence stays a message, never a field.
+                    self.bag.push(match diagnostic.kind {
+                        cel::DiagnosticKind::TooDeep { depth } => {
+                            adapted.with_field("depth", depth.to_string())
+                        }
+                        _ => adapted.with_field("detail", diagnostic.message),
+                    });
                 }
                 None
             }
