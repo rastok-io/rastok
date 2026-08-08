@@ -434,7 +434,7 @@ impl Checker<'_, '_> {
             let signature = cel::Signature::new();
             let mut handlers = Vec::new();
             for handler in &decl.handlers {
-                if let Some(checked) = self.handler(handler, &signature, node) {
+                if let Some(checked) = self.handler(handler, &signature, node, &BTreeMap::new()) {
                     if checked
                         .body
                         .iter()
@@ -591,6 +591,7 @@ impl Checker<'_, '_> {
                             &expected,
                             &value,
                             BuildOrigin::Draft,
+                            &BTreeMap::new(),
                             port.name(),
                             target.span,
                         )
@@ -1577,7 +1578,7 @@ impl Checker<'_, '_> {
             if let OperatorItem::Handler(handler) = item {
                 if is_connector {
                     self.deferred("a connector handler", handler.span);
-                } else if let Some(checked) = self.handler(handler, &signature, node) {
+                } else if let Some(checked) = self.handler(handler, &signature, node, &consts) {
                     // Multi-handler arbitration (which fires? does a
                     // false guard fall through?) has no specified rule
                     // yet — and the emission-id recipe carries no
@@ -1852,6 +1853,7 @@ impl Checker<'_, '_> {
         decl: &crate::compiler::syntax::HandlerDecl,
         node_signature: &cel::Signature,
         node: &Node,
+        consts: &BTreeMap<String, cel::Value>,
     ) -> Option<Handler> {
         let activation = match &decl.trigger {
             SynTrigger::Port(name) => {
@@ -2053,6 +2055,7 @@ impl Checker<'_, '_> {
                                 &expected,
                                 &emit,
                                 BuildOrigin::Handler(&data_type),
+                                consts,
                                 port.name(),
                                 name.span,
                             )
@@ -2390,6 +2393,7 @@ impl Checker<'_, '_> {
         pinned: &cel::Type,
         value: &EmitValue,
         origin: BuildOrigin<'_>,
+        consts: &BTreeMap<String, cel::Value>,
         port_name: &str,
         span: Span,
     ) -> bool {
@@ -2415,14 +2419,14 @@ impl Checker<'_, '_> {
             // A draft is born `Map(new())` (`lab::draft`) — a Patch
             // injection starts from that STRUCTURE, so even a
             // metadata-only patch carries a map through the input.
-            BuildOrigin::Draft => DataShape::Structure,
+            BuildOrigin::Draft => DataShape::Struct,
         };
         let shape = match value {
             EmitValue::Nothing => return true,
             EmitValue::Data(tree) => DataShape::Known(tree.ty.clone(), Some(tree)),
             EmitValue::Identity => inherited_shape(),
             EmitValue::Patch(writes) => Self::folded_shape(writes, inherited_shape()),
-            EmitValue::Replace(writes) => Self::folded_shape(writes, DataShape::Structure),
+            EmitValue::Replace(writes) => Self::folded_shape(writes, DataShape::Struct),
         };
         let found: Option<String> = match &shape {
             DataShape::Unknown => None,
@@ -2433,10 +2437,10 @@ impl Checker<'_, '_> {
                         _ => format!("{ty:?}"),
                     })
                 } else {
-                    tree.and_then(|tree| Self::constant_breach(pinned, tree))
+                    tree.and_then(|tree| Self::constant_breach(pinned, tree, consts))
                 }
             }
-            DataShape::Structure => scalar_pinned.then(|| String::from("a built structure")),
+            DataShape::Struct => scalar_pinned.then(|| String::from("a built struct")),
         };
         let Some(found) = found else {
             return true;
@@ -2464,7 +2468,7 @@ impl Checker<'_, '_> {
                 crate::envelope::WriteTarget::Data(path) if path.is_empty() => {
                     shape = DataShape::Known(write.value.ty.clone(), Some(&write.value));
                 }
-                crate::envelope::WriteTarget::Data(_) => shape = DataShape::Structure,
+                crate::envelope::WriteTarget::Data(_) => shape = DataShape::Struct,
                 crate::envelope::WriteTarget::AppMeta(_)
                 | crate::envelope::WriteTarget::CustomMeta(..)
                 | crate::envelope::WriteTarget::MimeType => {}
@@ -2474,10 +2478,16 @@ impl Checker<'_, '_> {
     }
 
     /// The constant half of conformance: the 32-bit `int` bound,
-    /// where the producing tree's value is known at check.
-    fn constant_breach(pinned: &cel::Type, tree: &cel::Tree) -> Option<String> {
+    /// where the producing tree's value is known at check — the
+    /// VISIBLE constants included, so a `val` alias of a literal
+    /// answers exactly like the literal.
+    fn constant_breach(
+        pinned: &cel::Type,
+        tree: &cel::Tree,
+        consts: &BTreeMap<String, cel::Value>,
+    ) -> Option<String> {
         if *pinned == cel::Type::Int
-            && let Ok(cel::Value::Int(value)) = cel::const_eval(tree, &BTreeMap::new())
+            && let Ok(cel::Value::Int(value)) = cel::const_eval(tree, consts)
             && i32::try_from(value).is_err()
         {
             return Some(format!("the constant {value}, outside the 32-bit int"));
@@ -2594,6 +2604,15 @@ impl Checker<'_, '_> {
                 return None;
             }
         };
+        // A connector's non-default port is transported (the resolved
+        // table travels in the plan) but not yet EXECUTABLE: the
+        // Partner seam, the mocks, and the dispatcher still speak
+        // in/out/err. Accept-then-execute-differently is worse than
+        // refusal — it defers by name until the connector items land.
+        if target.connector_trait().is_some() && !matches!(port_name, "in" | "out" | "err") {
+            self.deferred("a connector edge beyond the default trio", reference.span);
+            return None;
+        }
         let Some(direction) = self.node_port_direction(target, port_name) else {
             self.bag.push(
                 Diagnostic::new(
@@ -2627,8 +2646,6 @@ impl Checker<'_, '_> {
     }
 }
 
-/// The canonical text of one checked edge — the human face of
-/// E-DUP-EDGE, mirroring the plan's rendering.
 /// Where a builder's data construction starts — the two contexts a
 /// pinned port is fed from.
 #[derive(Clone, Copy)]
@@ -2643,11 +2660,14 @@ enum BuildOrigin<'a> {
 /// The statically known shape of the data a builder produces —
 /// three DISTINCT states, never one `None` meaning all of them:
 /// unknown (inference territory), a known type (with the producing
-/// tree when there is one, for the constant bound), or structure.
+/// tree when there is one, for the constant bound), or a built
+/// STRUCT — the builders build structs (`{…} ≡ envelope { data =
+/// struct {…} }`), physically distinct from a CEL map (canonical
+/// tags 17 vs 18).
 enum DataShape<'a> {
     Unknown,
     Known(cel::Type, Option<&'a cel::Tree>),
-    Structure,
+    Struct,
 }
 
 /// The pinned type of an edge endpoint, when its port declares one:
@@ -2673,6 +2693,8 @@ fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<cel::Type>
     }
 }
 
+/// The canonical text of one checked edge — the human face of
+/// E-DUP-EDGE, mirroring the plan's rendering.
 fn edge_display(edge: &Edge) -> String {
     let end = |endpoint: &Endpoint| match &endpoint.node {
         Some(path) => format!("{path}.{}", endpoint.port),

@@ -304,7 +304,9 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
             })
         }
         EmitValue::Replace(writes) | EmitValue::Patch(writes) => {
-            let mut data = cel::Value::Map(BTreeMap::new());
+            // A draft is born a fresh STRUCT — the same physical form
+            // the handler builders produce (`{…}` builds a struct).
+            let mut data = crate::envelope::Value::Struct(Vec::new());
             let mut app = Namespace::new();
             let mut mime = None;
             for write in writes {
@@ -312,7 +314,9 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
                     .map_err(|error| format!("the injection: {error}"))?;
                 match &write.target {
                     WriteTarget::Data(path) => {
-                        runtime::apply_data_write(&mut data, path, value);
+                        let leaf = runtime::to_envelope_value(&value)
+                            .map_err(|fault| format!("the injection: {fault}"))?;
+                        runtime::apply_struct_write(&mut data, path, leaf);
                     }
                     WriteTarget::AppMeta(field) => {
                         app.insert(
@@ -337,10 +341,7 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
                 }
             }
             Ok(Draft {
-                data: Data::materialized(
-                    runtime::to_envelope_value(&data)
-                        .map_err(|fault| format!("the injection: {fault}"))?,
-                ),
+                data: Data::materialized(data),
                 mime_type: mime,
                 app,
             })
@@ -477,17 +478,25 @@ impl MockPartner<'_> {
             }
             EmitValue::Replace(writes) | EmitValue::Patch(writes) => {
                 let mut data = if matches!(value, EmitValue::Patch(_)) {
-                    runtime::data_value(request.data())
-                        .map_err(|fault| format!("the mock faulted: {fault}"))?
+                    match request.data() {
+                        Data::Materialized(value) => value.clone(),
+                        encoded => runtime::to_envelope_value(
+                            &runtime::data_value(encoded)
+                                .map_err(|fault| format!("the mock faulted: {fault}"))?,
+                        )
+                        .map_err(|fault| format!("the mock faulted: {fault}"))?,
+                    }
                 } else {
-                    cel::Value::Map(BTreeMap::new())
+                    crate::envelope::Value::Struct(Vec::new())
                 };
                 for write in writes {
                     let evaluated = cel::eval(&write.value, env)
                         .map_err(|error| format!("the mock faulted: {error}"))?;
                     match &write.target {
                         WriteTarget::Data(path) => {
-                            runtime::apply_data_write(&mut data, path, evaluated);
+                            let leaf = runtime::to_envelope_value(&evaluated)
+                                .map_err(|fault| format!("the mock faulted: {fault}"))?;
+                            runtime::apply_struct_write(&mut data, path, leaf);
                         }
                         // A reply carries data only: its envelope is
                         // minted by the connector's own transaction.
@@ -498,10 +507,7 @@ impl MockPartner<'_> {
                         }
                     }
                 }
-                Ok(Some(Data::materialized(
-                    runtime::to_envelope_value(&data)
-                        .map_err(|fault| format!("the mock faulted: {fault}"))?,
-                )))
+                Ok(Some(Data::materialized(data)))
             }
         }
     }

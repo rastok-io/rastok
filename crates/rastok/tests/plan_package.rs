@@ -216,7 +216,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
     let outputs = vm
         .outputs()
         .iter()
-        .map(|envelope| format!("{:?}", envelope.data()))
+        .map(|output| format!("{}: {:?}", output.port, output.envelope.data()))
         .collect();
     (outputs, vm.errors().len())
 }

@@ -509,8 +509,33 @@ impl<'plan> TransactionExecutor<'plan> {
                         // The content-type hint: an explicit write
                         // wins; unchanged content keeps the input's;
                         // rebuilt content carries none.
+                        // Every pin the content must cross — the
+                        // emitting port's own and each fan-out
+                        // target's — is judged HERE, before the
+                        // commit: the same judge as a state cell, so
+                        // runtime arithmetic cannot carry an
+                        // out-of-range int (or any wrong shape) into
+                        // a pin, pass-through included. Encoded
+                        // bytes are the codecs' door.
+                        let own_pin = node
+                            .ports
+                            .iter()
+                            .find(|decl| &decl.port == port)
+                            .and_then(|decl| decl.ty.as_ref());
+                        let from = crate::plan::EndpointRef {
+                            node: Some(slot),
+                            port: port.clone(),
+                        };
                         let data = match built.data {
                             BuiltData::Unchanged => {
+                                if let Data::Materialized(current) = input.data() {
+                                    crossing_pins_hold(
+                                        self.plan,
+                                        &from,
+                                        own_pin,
+                                        &from_envelope_value(current),
+                                    )?;
+                                }
                                 if let Some(mime) = built
                                     .mime
                                     .as_deref()
@@ -521,29 +546,23 @@ impl<'plan> TransactionExecutor<'plan> {
                                 input.data().clone()
                             }
                             BuiltData::Value(value) => {
-                                // A pinned port holds CONSTRUCTED
-                                // content at the point it is built —
-                                // the same judge as a state cell, so
-                                // runtime arithmetic cannot carry an
-                                // out-of-range int (or any wrong
-                                // shape) across the pin. Unchanged
-                                // pass-through is the static Identity
-                                // rule's territory; encoded external
-                                // bytes are the codecs'.
-                                if let Some(pinned) = node
-                                    .ports
-                                    .iter()
-                                    .find(|decl| &decl.port == port)
-                                    .and_then(|decl| decl.ty.as_ref())
-                                    && let Some(message) =
-                                        conformance_fault(port.name(), pinned, &value)
-                                {
-                                    return Err(Fault::Eval(cel::Error { message }));
-                                }
+                                crossing_pins_hold(self.plan, &from, own_pin, &value)?;
                                 if let Some(mime) = &built.mime {
                                     sys = sys.with_mime_type(mime.clone());
                                 }
                                 Data::materialized(to_envelope_value(&value)?)
+                            }
+                            BuiltData::Envelope(value) => {
+                                crossing_pins_hold(
+                                    self.plan,
+                                    &from,
+                                    own_pin,
+                                    &from_envelope_value(&value),
+                                )?;
+                                if let Some(mime) = &built.mime {
+                                    sys = sys.with_mime_type(mime.clone());
+                                }
+                                Data::materialized(value)
                             }
                         };
                         // Writable namespaces travel whole — the
@@ -789,8 +808,11 @@ pub(crate) struct Built {
 pub(crate) enum BuiltData {
     /// No payload write ran: the input's representation ships as-is.
     Unchanged,
-    /// The payload was (re)built.
+    /// The payload was (re)built as an evaluated CEL value.
     Value(cel::Value),
+    /// The payload was built in the ENVELOPE domain — the builders
+    /// build `Struct`s, a physical form CEL does not carry.
+    Envelope(envelope::Value),
 }
 
 fn emitted_content(
@@ -818,8 +840,10 @@ fn emitted_content(
         PlanEmission::Patch(writes) | PlanEmission::Replace(writes) => {
             let replace = matches!(emission, PlanEmission::Replace(_));
             let mut built = inherited(BuiltData::Unchanged);
-            let mut data: Option<cel::Value> = if replace {
-                Some(cel::Value::Map(BTreeMap::new()))
+            let mut data: Option<envelope::Value> = if replace {
+                // A fresh STRUCT — the physical form the grammar
+                // defines: `{ … } ≡ envelope { data = struct { … } }`.
+                Some(envelope::Value::Struct(Vec::new()))
             } else {
                 None
             };
@@ -831,9 +855,12 @@ fn emitted_content(
                         // never touches the payload bytes.
                         let current = match &mut data {
                             Some(current) => current,
-                            None => data.insert(data_value(input.data())?),
+                            None => data.insert(match input.data() {
+                                Data::Materialized(value) => value.clone(),
+                                encoded => to_envelope_value(&data_value(encoded)?)?,
+                            }),
                         };
-                        apply_data_write(current, path, value);
+                        apply_struct_write(current, path, to_envelope_value(&value)?);
                     }
                     envelope::WriteTarget::AppMeta(field) => {
                         built.app.insert(field.clone(), to_meta_value(&value)?);
@@ -856,17 +883,60 @@ fn emitted_content(
                 }
             }
             if let Some(value) = data {
-                built.data = BuiltData::Value(value);
+                built.data = BuiltData::Envelope(value);
             }
             Ok(Some(built))
         }
     }
 }
 
+/// Judges materialized content against every pin it must cross —
+/// the emitting end's own pin and each fan-out target's — BEFORE any
+/// commit: routing is post-commit and must never fail. Encoded bytes
+/// never reach this judge (the codecs' door); `dyn` pins admit
+/// anything.
+pub(crate) fn crossing_pins_hold(
+    plan: &crate::plan::ExecutionPlan,
+    from: &crate::plan::EndpointRef,
+    own_pin: Option<&cel::Type>,
+    value: &cel::Value,
+) -> Result<(), Fault> {
+    if let Some(pinned) = own_pin
+        && let Some(message) = conformance_fault(from.port.name(), pinned, value)
+    {
+        return Err(Fault::Eval(cel::Error { message }));
+    }
+    for edge in plan.edges.iter().filter(|edge| edge.from == *from) {
+        let Some(to) = &edge.to else { continue };
+        let pinned = match to.node {
+            Some(slot) => plan
+                .nodes
+                .get(slot.index())
+                .and_then(|node| node.ports.iter().find(|decl| decl.port == to.port))
+                .and_then(|decl| decl.ty.as_ref()),
+            None => plan
+                .boundary
+                .iter()
+                .find(|decl| decl.port == to.port)
+                .and_then(|decl| decl.ty.as_ref()),
+        };
+        if let Some(pinned) = pinned
+            && let Some(message) = conformance_fault(to.port.name(), pinned, value)
+        {
+            return Err(Fault::Eval(cel::Error { message }));
+        }
+    }
+    Ok(())
+}
+
 /// Judges a runtime value against a declared cell type; `None` means
 /// it conforms. `Dyn` admits anything — the dynamic escape is chosen
 /// in the declaration, not discovered at the write.
-fn conformance_fault(name: &str, declared: &cel::Type, value: &cel::Value) -> Option<String> {
+pub(crate) fn conformance_fault(
+    name: &str,
+    declared: &cel::Type,
+    value: &cel::Value,
+) -> Option<String> {
     let mismatch = |got: &str| {
         Some(format!(
             "`{name}` is declared {declared:?}; a {got} cannot enter it"
@@ -902,32 +972,37 @@ fn conformance_fault(name: &str, declared: &cel::Type, value: &cel::Value) -> Op
     }
 }
 
-/// Applies one payload write along its path; the empty path replaces
-/// the whole value.
-pub fn apply_data_write(data: &mut cel::Value, path: &[String], value: cel::Value) {
-    if path.is_empty() {
-        *data = value;
+/// Applies one struct-building write along its path — the builders
+/// build STRUCTS (`{ … } ≡ envelope { data = struct { … } }`), so a
+/// missing or non-composite level becomes a `Struct` whose fields
+/// keep write order; an existing `Struct` or `Map` level keeps its
+/// own kind. The empty path replaces the whole value.
+pub fn apply_struct_write(data: &mut envelope::Value, path: &[String], leaf: envelope::Value) {
+    let Some((first, rest)) = path.split_first() else {
+        *data = leaf;
         return;
-    }
-    let mut current = data;
-    for segment in &path[..path.len() - 1] {
-        if !matches!(current, cel::Value::Map(_)) {
-            *current = cel::Value::Map(BTreeMap::new());
-        }
-        let cel::Value::Map(map) = current else {
-            unreachable!("just ensured a map");
-        };
-        current = map
-            .entry(segment.clone())
-            .or_insert_with(|| cel::Value::Map(BTreeMap::new()));
-    }
-    if !matches!(current, cel::Value::Map(_)) {
-        *current = cel::Value::Map(BTreeMap::new());
-    }
-    let cel::Value::Map(map) = current else {
-        unreachable!("just ensured a map");
     };
-    map.insert(path[path.len() - 1].clone(), value);
+    match data {
+        envelope::Value::Struct(fields) => {
+            if let Some((_, existing)) = fields.iter_mut().find(|(name, _)| name == first) {
+                apply_struct_write(existing, rest, leaf);
+            } else {
+                let mut fresh = envelope::Value::Struct(Vec::new());
+                apply_struct_write(&mut fresh, rest, leaf);
+                fields.push((first.clone(), fresh));
+            }
+        }
+        envelope::Value::Map(entries) => {
+            let entry = entries
+                .entry(first.clone())
+                .or_insert_with(|| envelope::Value::Struct(Vec::new()));
+            apply_struct_write(entry, rest, leaf);
+        }
+        _ => {
+            *data = envelope::Value::Struct(Vec::new());
+            apply_struct_write(data, path, leaf);
+        }
+    }
 }
 
 /// The handler-facing CEL view of an envelope's data — the bridge a
@@ -1012,7 +1087,7 @@ pub fn meta_value(meta: &Meta) -> cel::Value {
     cel::Value::Map(root)
 }
 
-fn from_envelope_value(value: &envelope::Value) -> cel::Value {
+pub(crate) fn from_envelope_value(value: &envelope::Value) -> cel::Value {
     match value {
         envelope::Value::Scalar(scalar) => from_scalar(scalar),
         envelope::Value::Struct(fields) => cel::Value::Map(

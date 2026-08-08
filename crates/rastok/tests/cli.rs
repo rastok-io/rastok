@@ -69,7 +69,7 @@ fn run_echoes_a_line_through_a_real_child_process() {
         .expect("stdin accepts");
     let output = child.wait_with_output().expect("the run completes");
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "salut\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "out: salut\n");
 }
 
 #[test]

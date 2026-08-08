@@ -91,7 +91,7 @@ fn submission(text: &str) -> InboundSubmission {
     }
 }
 
-fn run_probe() -> (MemJournal, Vec<Envelope>) {
+fn run_probe() -> (MemJournal, Vec<rastok::runtime::vm::BoundaryOutput>) {
     let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
@@ -146,7 +146,7 @@ fn the_m0_probe_runs_end_to_end() {
         panic!("expected the birth");
     };
     assert_eq!(
-        outputs[0].meta().sys().origin_id(),
+        outputs[0].envelope.meta().sys().origin_id(),
         root.envelope.meta().sys().id(),
         "the lineage crosses the world boundary"
     );

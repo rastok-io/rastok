@@ -507,7 +507,14 @@ graph real : App {
                     .unwrap();
             }
         }
-        (journal, vm.outputs().to_vec(), vm.errors().to_vec())
+        (
+            journal,
+            vm.outputs()
+                .iter()
+                .map(|output| output.envelope.clone())
+                .collect(),
+            vm.errors().to_vec(),
+        )
     }
 
     #[test]

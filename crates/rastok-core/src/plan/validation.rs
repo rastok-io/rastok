@@ -105,6 +105,17 @@ pub enum PlanValidationError {
         /// The undeclared name.
         name: String,
     },
+    /// An edge whose two PINNED ends disagree — the checker refuses
+    /// this at source; a foreign package must not smuggle it past
+    /// the type into a machine that trusts its wiring.
+    MismatchedEdgePins {
+        /// The target port.
+        port: node::Port,
+        /// The target's pin.
+        expected: cel::Type,
+        /// The source's pin.
+        found: cel::Type,
+    },
     /// A collection the plan documents as canonically ordered is not.
     NonCanonicalOrder {
         /// Which collection broke the order.
@@ -186,6 +197,14 @@ impl core::fmt::Display for PlanValidationError {
             Self::UnknownVariable { node, name } => {
                 write!(f, "invalid plan: `{node}` writes undeclared var `{name}`")
             }
+            Self::MismatchedEdgePins {
+                port,
+                expected,
+                found,
+            } => write!(
+                f,
+                "invalid plan: `{port}` is pinned to {expected:?}, its source to {found:?}"
+            ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
             }
@@ -495,6 +514,37 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             endpoint_ok(to, node::Direction::Input)?;
         }
     }
+    // Two PINNED edge ends must agree — the same rule the checker
+    // holds the surface to; endpoint slots are proven above, so the
+    // lookups dereference safely.
+    let pin_of = |endpoint: &EndpointRef| -> Option<cel::Type> {
+        match endpoint.node {
+            Some(slot) => plan.nodes[slot.index()]
+                .ports
+                .iter()
+                .find(|decl| decl.port == endpoint.port)
+                .and_then(|decl| decl.ty.clone()),
+            None => plan
+                .boundary
+                .iter()
+                .find(|decl| decl.port == endpoint.port)
+                .and_then(|decl| decl.ty.clone()),
+        }
+    };
+    for edge in &plan.edges {
+        if let Some(to) = &edge.to
+            && let Some(found) = pin_of(&edge.from)
+            && let Some(expected) = pin_of(to)
+            && found != expected
+        {
+            return Err(PlanValidationError::MismatchedEdgePins {
+                port: to.port.clone(),
+                expected,
+                found,
+            });
+        }
+    }
+
     // The edge order renders through `edge_text`, which dereferences
     // slots — bounds first, order after.
     if !plan

@@ -66,9 +66,9 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (365-byte v3 package, full invariant validation + canonicity re-encode) | 4 097 | 205 k | 1.37 ms |
-| — re-measured 2026-08-08 on the v3 fixture (typed `port_decl`, version in the checksum): decode, transaction, and watermark unchanged to the tick | | | |
-| relay transaction (avg of 32; min 1 779 / max 2 075) | 1 832 | **92 k** | **0.61 ms** |
+| `plan::decode` (365-byte v3 package, full invariant validation + canonicity re-encode) | 4 206 | 210 k | 1.40 ms |
+| — re-measured 2026-08-09 after review round four: +109 decode ticks (the pinned-edge audit at validation) and ~5 ticks per relay transaction (the crossing-pin judge at emission construction) — both priced, neither near a criterion | | | |
+| relay transaction (avg of 32; min 1 779 / max 2 088) | 1 837 | **92 k** | **0.61 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
@@ -82,7 +82,7 @@ Notes the numbers carry:
 - The relay transaction meets its criterion with a **1.6× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 4 097 across the
+- Package decode grew from v1's 1 468 ticks to 4 206 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
   nesting budget, the domain-order audits) and the canonicity

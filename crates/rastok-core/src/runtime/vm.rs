@@ -139,6 +139,18 @@ impl crate::boundary::OutcomeGate for PlanGate<'_> {
     }
 }
 
+/// One envelope that left the graph through its boundary — WITH the
+/// port it left by: two named outputs are two different facts, and
+/// the business API must not flatten them into an anonymous stream.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoundaryOutput {
+    /// The boundary port the envelope left through — `out` or a
+    /// declared output.
+    pub port: node::Port,
+    /// The envelope.
+    pub envelope: Envelope,
+}
+
 /// One observed delivery — the debugger-shaped observation surface:
 /// every envelope reaching a node port, the boundary, or the root
 /// error sink is logged here in arrival order. Expectations read
@@ -226,7 +238,7 @@ pub struct Vm<'plan> {
     /// The machine's virtual date, in nanoseconds; only
     /// [`Self::advance`] moves it, discretely.
     now: i64,
-    outputs: Vec<Envelope>,
+    outputs: Vec<BoundaryOutput>,
     errors: Vec<Envelope>,
     observed: Vec<Observed>,
 }
@@ -283,6 +295,25 @@ impl<'plan> Vm<'plan> {
             node: None,
             port: submission.port.clone(),
         };
+        // The pins, held BEFORE any append: a materialized draft is
+        // judged against the ingress port's own pin and every
+        // destination pin it will fan out to — replay never meets a
+        // record a pin refuses. Encoded bytes stay the codecs' door.
+        if let Data::Materialized(value) = &submission.draft.data {
+            let own_pin = self
+                .plan
+                .boundary
+                .iter()
+                .find(|decl| decl.port == submission.port)
+                .and_then(|decl| decl.ty.as_ref());
+            crate::runtime::crossing_pins_hold(
+                self.plan.plan(),
+                &from,
+                own_pin,
+                &crate::runtime::from_envelope_value(value),
+            )
+            .map_err(VmError::Fault)?;
+        }
         self.reserve_targets(&from)?;
         let committed = journal
             .append_inbound(submission)
@@ -581,9 +612,10 @@ impl<'plan> Vm<'plan> {
         self.now
     }
 
-    /// The envelopes that left the graph through its boundary.
+    /// The envelopes that left the graph through its boundary, each
+    /// with the port it left by.
     #[must_use]
-    pub fn outputs(&self) -> &[Envelope] {
+    pub fn outputs(&self) -> &[BoundaryOutput] {
         &self.outputs
     }
 
@@ -630,6 +662,40 @@ impl<'plan> Vm<'plan> {
             return Err(VmError::MissingPending(event.call_ref));
         };
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
+        // A materialized partner answer crosses the connector's
+        // fan-out like any content: every destination pin is judged
+        // BEFORE the outcome commits, and a breach leaves as the
+        // typed error the machine already speaks — never a silent
+        // crossing.
+        if let CallOutcome::Success(Data::Materialized(value)) = &event.outcome {
+            let out = node::Port::new("out").unwrap_or_else(|_| unreachable!("a valid port"));
+            let from = EndpointRef {
+                node: Some(slot),
+                port: out,
+            };
+            if let Err(fault) = crate::runtime::crossing_pins_hold(
+                self.plan.plan(),
+                &from,
+                None,
+                &crate::runtime::from_envelope_value(value),
+            ) {
+                let outcome = executor.typed_error_transaction(
+                    slot,
+                    request,
+                    "RuntimeFault",
+                    &alloc::string::ToString::to_string(&fault),
+                );
+                self.reserve_emissions(slot, &outcome.record)?;
+                journal
+                    .commit(outcome.record.clone())
+                    .map_err(VmError::Journal)?;
+                self.settled.pop_front();
+                self.pending.remove(&event.call_ref);
+                self.scheduler.mailboxes.release(slot, "");
+                self.route_emissions(slot, &outcome.record);
+                return Ok(());
+            }
+        }
         let outcome = executor.connector_outcome(
             &event,
             &trigger,
@@ -861,7 +927,10 @@ impl<'plan> Vm<'plan> {
                 None => {} // `-> nothing`: the explicit, written discard
                 Some(to) => match to.node {
                     None => {
-                        self.outputs.push(envelope.clone());
+                        self.outputs.push(BoundaryOutput {
+                            port: to.port.clone(),
+                            envelope: envelope.clone(),
+                        });
                         self.observed.push(Observed {
                             node: None,
                             port: to.port.clone(),

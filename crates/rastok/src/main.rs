@@ -192,8 +192,13 @@ fn run(paths: &[String]) -> ExitCode {
         }
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
-        for envelope in &vm.outputs()[printed_outputs..] {
-            let _ = writeln!(out, "{}", render_data(envelope.data()));
+        for output in &vm.outputs()[printed_outputs..] {
+            let _ = writeln!(
+                out,
+                "{}: {}",
+                output.port,
+                render_data(output.envelope.data())
+            );
         }
         printed_outputs = vm.outputs().len();
         for envelope in &vm.errors()[printed_errors..] {
