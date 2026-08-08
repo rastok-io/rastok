@@ -769,6 +769,7 @@ impl Checker<'_, '_> {
         let mut consts = BTreeMap::new();
         let mut signature = cel::Signature::new();
         let mut edges = Vec::new();
+        let mut redeclared_defaults = std::collections::BTreeSet::new();
         for item in &decl.body {
             match item {
                 GraphItem::Port(port) => {
@@ -780,11 +781,12 @@ impl Checker<'_, '_> {
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
                     };
                     // The defaults are redefinable, per the grammar —
-                    // the same rule `add_port` applies on nodes: a
+                    // the same rule `add_port` applies on nodes: ONE
                     // same-direction redeclaration is a no-op the
-                    // serialized table never carries; a contradictory
-                    // direction is a conflict the wiring could never
-                    // satisfy.
+                    // serialized table never carries; a second is the
+                    // ordinary duplicate-declaration conflict; a
+                    // contradictory direction is a conflict the
+                    // wiring could never satisfy.
                     let implicit = match port.name.text.as_str() {
                         "in" => Some(Direction::Input),
                         "out" | "err" => Some(Direction::Output),
@@ -801,6 +803,19 @@ impl Checker<'_, '_> {
                                         port.name.text,
                                         direction_words(known),
                                         direction_words(direction),
+                                    ),
+                                )
+                                .with_span(port.name.span)
+                                .with_field("port", port.name.text.clone()),
+                            );
+                        } else if !redeclared_defaults.insert(port.name.text.clone()) {
+                            self.bag.push(
+                                Diagnostic::new(
+                                    E_PORT_CONFLICT,
+                                    Phase::Check,
+                                    format!(
+                                        "the boundary port `{}` is already declared",
+                                        port.name.text
                                     ),
                                 )
                                 .with_span(port.name.span)

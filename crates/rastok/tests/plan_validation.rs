@@ -96,6 +96,34 @@ graph g : App {
 }
 
 #[test]
+fn a_second_identical_redeclaration_is_a_duplicate() {
+    // The decision, fixed by this test: "redefinable" means AT MOST
+    // ONE explicit restatement — the same rule every declaration
+    // follows — never a silently idempotent repetition.
+    let source = r#"
+graph g : App {
+  input in
+  input in
+
+  operator o {
+    on in {
+      out = data
+    }
+  }
+
+  . -> o -> .
+}
+"#;
+    let bag = compile(&[source], &Registry::m0()).expect_err("the repetition refuses");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-CONFLICT"),
+        "{bag:?}"
+    );
+}
+
+#[test]
 fn redeclaring_an_implicit_boundary_port_refuses_at_check() {
     // `output in` CONTRADICTS the implicit boundary; it must die in
     // the checker with a named diagnostic, never reach the validator
