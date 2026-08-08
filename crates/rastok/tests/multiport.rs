@@ -514,7 +514,9 @@ fn a_contract_port_table_travels_without_the_registry() {
         ],
         error_set: &["ProbeFailed"],
     };
-    let registry = Registry::m0().with(PROBE_SHEET);
+    let registry = Registry::m0()
+        .try_with(PROBE_SHEET)
+        .expect("a valid sheet enters");
     let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay\n  relay.out -> probe.request\n  probe.response -> .\n}\n";
     // 1. The checker accepts the wiring to the contract's named ports.
     let compilation = compile(&[source], &registry).expect("the contract wiring compiles");
@@ -554,4 +556,139 @@ fn a_contract_port_table_travels_without_the_registry() {
     //    re-earns the type from its own tables alone.
     let raw = decoded.into_inner();
     rastok::plan::ValidatedExecutionPlan::try_new(raw).expect("no Registry consulted");
+}
+
+// ===== the ordered fold and the shorthand's spec semantics =====
+
+#[test]
+fn the_fold_follows_the_runtime_order() {
+    // `data = 1` then `data.x = 2`: the runtime ends on a STRUCTURE —
+    // the checker must too, whatever wrote data earlier.
+    conformance_refuses("score = envelope {\n        data = 1\n        data.x = 2\n      }");
+    // The reverse order ends on the written int and conforms.
+    compile(
+        &[
+            gauge_graph("score = envelope {\n        data.x = 2\n        data = 1\n      }")
+                .as_str(),
+        ],
+        &Registry::m0(),
+    )
+    .expect("the final whole-data write decides");
+}
+
+#[test]
+fn a_metadata_only_injection_still_carries_the_draft_map() {
+    // The draft is BORN as a map (`lab::draft`); patching only meta
+    // does not change what crosses the pinned scalar input.
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = envelope {meta.tag = \"x\"}\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("the draft map breaches the int pin");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn the_shorthand_builds_a_struct_with_ordinary_names() {
+    // `{ … } ≡ envelope { data = struct { … } }` — `data`, `meta`,
+    // and `mime_type` are FIELDS of the new structure, never
+    // envelope-level writes. Mocks share this resolver with handler
+    // emissions and injections.
+    let source = r#"
+graph g : App {
+  operator o {
+    on in {
+      out = {
+        data = 7
+        meta.flag = true
+      }
+    }
+  }
+  . -> o -> .
+}
+
+lab g {
+  simulation probing on app {
+    scenario s "reserved names are plain fields" {
+      app.in = {v = 1}
+      expect "field named data" app.out count == 1 where data.data == 7
+      expect "field named meta" app.out count == 1 where data.meta.flag == true
+    }
+  }
+}
+"#;
+    lab_passes(source);
+}
+
+#[test]
+fn a_computed_overflow_faults_at_the_pin() {
+    // The reviewer's runtime escape: `data + 2147483647` with data=1
+    // types as int and passes every static gate, but the VALUE
+    // leaves the 32-bit contract. The emission's construction now
+    // judges it like a state-cell write: the transaction faults, a
+    // typed RuntimeFault reaches err, and NOTHING crosses the pinned
+    // output.
+    let source = r#"
+graph g : App {
+  input feed : int
+  output result : int
+
+  operator o {
+    input evt : int
+    output score : int
+
+    on evt {
+      score = data + 2147483647
+    }
+  }
+
+  .feed -> o.evt
+  o.score -> .result
+}
+
+lab g {
+  simulation probing on app {
+    scenario s "computed overflow" {
+      app.feed = 1
+      expect "no long through an int pin" app.result count == 0
+      expect "the fault is typed" app.err count == 1
+    }
+  }
+}
+"#;
+    lab_passes(source);
+}
+
+#[test]
+fn a_defective_sheet_is_held_at_the_door() {
+    use rastok::stdlib::{ConnectorContract, SheetDefect};
+    let sheet = |input_ports: &'static [&'static str], output_ports: &'static [&'static str]| {
+        ConnectorContract {
+            name: "Bad",
+            input_ports,
+            output_ports,
+            attributes: &[],
+            error_set: &[],
+        }
+    };
+    // A default port against its implicit direction — the exact
+    // defect that would have split the checker from the validator
+    // through the old Registry fallback.
+    assert_eq!(
+        Registry::m0().try_with(sheet(&["out"], &[])).unwrap_err(),
+        SheetDefect::MisdirectedDefault("out")
+    );
+    // One name in both directions.
+    assert_eq!(
+        Registry::m0()
+            .try_with(sheet(&["request"], &["request"]))
+            .unwrap_err(),
+        SheetDefect::ConflictingPort("request")
+    );
+    // The shipped M0 sheet passes its own door.
+    Registry::m0()
+        .try_with(rastok::stdlib::PROCESS)
+        .expect("the Process sheet is valid");
 }

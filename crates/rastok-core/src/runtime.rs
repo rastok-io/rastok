@@ -521,6 +521,25 @@ impl<'plan> TransactionExecutor<'plan> {
                                 input.data().clone()
                             }
                             BuiltData::Value(value) => {
+                                // A pinned port holds CONSTRUCTED
+                                // content at the point it is built —
+                                // the same judge as a state cell, so
+                                // runtime arithmetic cannot carry an
+                                // out-of-range int (or any wrong
+                                // shape) across the pin. Unchanged
+                                // pass-through is the static Identity
+                                // rule's territory; encoded external
+                                // bytes are the codecs'.
+                                if let Some(pinned) = node
+                                    .ports
+                                    .iter()
+                                    .find(|decl| &decl.port == port)
+                                    .and_then(|decl| decl.ty.as_ref())
+                                    && let Some(message) =
+                                        conformance_fault(port.name(), pinned, &value)
+                                {
+                                    return Err(Fault::Eval(cel::Error { message }));
+                                }
                                 if let Some(mime) = &built.mime {
                                     sys = sys.with_mime_type(mime.clone());
                                 }

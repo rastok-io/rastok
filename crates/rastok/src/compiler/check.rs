@@ -587,7 +587,13 @@ impl Checker<'_, '_> {
                         .iter()
                         .find(|decl| decl.port == port)
                         .and_then(|decl| decl.ty.clone())
-                        && !self.port_conforms(&expected, &value, None, port.name(), target.span)
+                        && !self.port_conforms(
+                            &expected,
+                            &value,
+                            BuildOrigin::Draft,
+                            port.name(),
+                            target.span,
+                        )
                     {
                         continue;
                     }
@@ -1196,18 +1202,24 @@ impl Checker<'_, '_> {
         let (error_set, contract_ports) = match self.registry.connector(&trait_name) {
             stdlib::Availability::Available(contract) => {
                 let mut ports = Vec::new();
-                for name in contract.input_ports {
-                    if !matches!(*name, "in" | "out" | "err")
-                        && let Ok(port) = node::Port::new((*name).to_string())
-                    {
-                        ports.push(crate::plan::PortDecl::untyped(port, Direction::Input));
-                    }
-                }
-                for name in contract.output_ports {
-                    if !matches!(*name, "in" | "out" | "err")
-                        && let Ok(port) = node::Port::new((*name).to_string())
-                    {
-                        ports.push(crate::plan::PortDecl::untyped(port, Direction::Output));
+                for (name, direction) in contract
+                    .input_ports
+                    .iter()
+                    .map(|name| (*name, Direction::Input))
+                    .chain(
+                        contract
+                            .output_ports
+                            .iter()
+                            .map(|name| (*name, Direction::Output)),
+                    )
+                {
+                    if !matches!(name, "in" | "out" | "err") {
+                        // Sheets are validated at the registry door
+                        // (`Registry::try_with`), so the name IS a
+                        // port name.
+                        let port = node::Port::new(name.to_string())
+                            .unwrap_or_else(|_| unreachable!("a validated sheet"));
+                        ports.push(crate::plan::PortDecl::untyped(port, direction));
                     }
                 }
                 (
@@ -2040,7 +2052,7 @@ impl Checker<'_, '_> {
                             && !self.port_conforms(
                                 &expected,
                                 &emit,
-                                Some(&data_type),
+                                BuildOrigin::Handler(&data_type),
                                 port.name(),
                                 name.span,
                             )
@@ -2092,7 +2104,13 @@ impl Checker<'_, '_> {
                 self.field_writes(body, signature).map(EmitValue::Patch)
             }
             SynValue::EnvelopeSugar(body) => {
-                self.field_writes(body, signature).map(EmitValue::Replace)
+                // `{ … } ≡ envelope { data = struct { … } }` (grammar
+                // §envelope_sugar): every field belongs to the NEW
+                // data structure — `data`, `meta`, and `mime_type`
+                // are ordinary field names here, never envelope-level
+                // writes. Touching the envelope needs the explicit
+                // form.
+                self.struct_fields(body, signature).map(EmitValue::Replace)
             }
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
             SynValue::Cel(expr) => {
@@ -2210,6 +2228,46 @@ impl Checker<'_, '_> {
         Some(writes)
     }
 
+    /// Resolves the fields of the `{ … }` shorthand — a STRUCT body
+    /// building the new `data`: every path is a field path of that
+    /// structure, reserved envelope names included. The counterpart
+    /// of [`Self::field_writes`], which resolves the explicit
+    /// `envelope { … }` builder's writable surface.
+    fn struct_fields(
+        &mut self,
+        body: &StructBody,
+        signature: &cel::Signature,
+    ) -> Option<Vec<FieldWrite>> {
+        let mut writes = Vec::new();
+        for entry in &body.entries {
+            match entry {
+                StructEntry::Field { key, value } => {
+                    let path: Vec<String> = key
+                        .segments
+                        .iter()
+                        .map(|segment| segment.text.clone())
+                        .collect();
+                    match value {
+                        SynValue::Cel(expr) => {
+                            if let Some(tree) = self.cel(expr, signature) {
+                                writes.push(FieldWrite {
+                                    target: crate::envelope::WriteTarget::Data(path.clone()),
+                                    path,
+                                    value: tree,
+                                });
+                            }
+                        }
+                        _ => self.deferred("a nested envelope builder", key.span),
+                    }
+                }
+                StructEntry::Block { name, .. } => {
+                    self.deferred("a block inside a struct body", name.span);
+                }
+            }
+        }
+        Some(writes)
+    }
+
     fn edge(&mut self, decl: &EdgeDecl, graph: &Graph) -> Option<Vec<Edge>> {
         if decl.bidirectional {
             self.deferred("a bidirectional edge", decl.span);
@@ -2286,23 +2344,17 @@ impl Checker<'_, '_> {
     /// the connector contract's port sheet, then the pre-bound
     /// defaults. `None` means the node exposes no such port.
     fn node_port_direction(&self, target: &Node, port_name: &str) -> Option<Direction> {
+        // ONE source of truth: the node's resolved table (contract
+        // ports materialize into it at resolution) plus the implicit
+        // trio. The Registry is never consulted again — a sheet
+        // defect cannot make the checker and the plan's validator
+        // disagree.
         if let Some(decl) = target
             .ports
             .iter()
             .find(|decl| decl.port.name() == port_name)
         {
             return Some(decl.direction);
-        }
-        if let Some(trait_name) = target.connector_trait()
-            && let stdlib::Availability::Available(contract) = self.registry.connector(trait_name)
-        {
-            if contract.input_ports.contains(&port_name) {
-                return Some(Direction::Input);
-            }
-            if contract.output_ports.contains(&port_name) {
-                return Some(Direction::Output);
-            }
-            return None;
         }
         match port_name {
             "in" => Some(Direction::Input),
@@ -2313,27 +2365,31 @@ impl Checker<'_, '_> {
 
     /// The ONE notion of pinned-port conformance, shared by
     /// emissions and injections — every `EmitValue` form answers for
-    /// the data it produces, statically:
+    /// the data it produces, statically, under the SAME construction
+    /// model the runtime executes:
     ///
     /// - `Data` holds its CEL type to the pin, and the physical
     ///   32-bit bound of `int` wherever the value is constant at
-    ///   check — exactly the var-initializer rule; non-constant
-    ///   arithmetic seals honestly at run (int/long tags).
+    ///   check — exactly the var-initializer rule; the runtime holds
+    ///   the rest at emission construction.
     /// - `Identity` holds the INPUT's type (the activation port's
     ///   pin) to the output's pin.
-    /// - `Patch` inherits the input's type when it only touches
-    ///   meta; a whole-`data` write answers with that write's type;
-    ///   a field write builds structure, which no scalar pin holds.
-    /// - `Replace` builds structure — same scalar rule.
+    /// - `Patch` and `Replace` FOLD their writes in order — the order
+    ///   the runtime applies them: a whole-`data` write replaces the
+    ///   running shape with that write's; a field write turns it into
+    ///   structure; a metadata write leaves it alone. The initial
+    ///   shape is the context's: the received envelope in a handler,
+    ///   the draft's fresh map in an injection, a fresh structure for
+    ///   `Replace`.
     /// - `Nothing` produces nothing and always conforms.
     ///
-    /// `dyn` on either side is inference territory and passes.
-    /// Pushes `E-PORT-TYPE` and answers false on a breach.
+    /// An UNKNOWN shape (dyn anywhere) is inference territory and
+    /// passes. Pushes `E-PORT-TYPE` and answers false on a breach.
     fn port_conforms(
         &mut self,
         pinned: &cel::Type,
         value: &EmitValue,
-        inherited: Option<&cel::Type>,
+        origin: BuildOrigin<'_>,
         port_name: &str,
         span: Span,
     ) -> bool {
@@ -2349,36 +2405,38 @@ impl Checker<'_, '_> {
                 | cel::Type::Timestamp
                 | cel::Type::Null
         );
-        let found: Option<String> = match value {
-            EmitValue::Nothing => None,
-            EmitValue::Data(tree) => Self::data_breach(pinned, tree),
-            EmitValue::Identity => match inherited {
-                Some(ty) if !matches!(ty, cel::Type::Dyn) && ty != pinned => {
-                    Some(format!("{ty:?} (the input, unchanged)"))
-                }
-                _ => None,
-            },
-            EmitValue::Patch(writes) => {
-                let whole = writes
-                    .iter()
-                    .rev()
-                    .find(|write| matches!(&write.target, crate::envelope::WriteTarget::Data(path) if path.is_empty()));
-                if let Some(write) = whole {
-                    Self::data_breach(pinned, &write.value)
-                } else if writes.iter().any(|write| {
-                    matches!(&write.target, crate::envelope::WriteTarget::Data(path) if !path.is_empty())
-                }) {
-                    scalar_pinned.then(|| String::from("a patched structure"))
+        let inherited_shape = || match origin {
+            // A handler's Patch starts from the envelope it received,
+            // whose data carries the activation port's pin.
+            BuildOrigin::Handler(ty) if !matches!(ty, cel::Type::Dyn) => {
+                DataShape::Known(ty.clone(), None)
+            }
+            BuildOrigin::Handler(_) => DataShape::Unknown,
+            // A draft is born `Map(new())` (`lab::draft`) — a Patch
+            // injection starts from that STRUCTURE, so even a
+            // metadata-only patch carries a map through the input.
+            BuildOrigin::Draft => DataShape::Structure,
+        };
+        let shape = match value {
+            EmitValue::Nothing => return true,
+            EmitValue::Data(tree) => DataShape::Known(tree.ty.clone(), Some(tree)),
+            EmitValue::Identity => inherited_shape(),
+            EmitValue::Patch(writes) => Self::folded_shape(writes, inherited_shape()),
+            EmitValue::Replace(writes) => Self::folded_shape(writes, DataShape::Structure),
+        };
+        let found: Option<String> = match &shape {
+            DataShape::Unknown => None,
+            DataShape::Known(ty, tree) => {
+                if !matches!(ty, cel::Type::Dyn) && ty != pinned {
+                    Some(match value {
+                        EmitValue::Identity => format!("{ty:?} (the input, unchanged)"),
+                        _ => format!("{ty:?}"),
+                    })
                 } else {
-                    match inherited {
-                        Some(ty) if !matches!(ty, cel::Type::Dyn) && ty != pinned => {
-                            Some(format!("{ty:?} (the input, meta-patched)"))
-                        }
-                        _ => None,
-                    }
+                    tree.and_then(|tree| Self::constant_breach(pinned, tree))
                 }
             }
-            EmitValue::Replace(_) => scalar_pinned.then(|| String::from("a map construction")),
+            DataShape::Structure => scalar_pinned.then(|| String::from("a built structure")),
         };
         let Some(found) = found else {
             return true;
@@ -2397,12 +2455,27 @@ impl Checker<'_, '_> {
         false
     }
 
-    /// The `Data` arm of conformance: the tree's precise type, and
-    /// the 32-bit `int` bound where the value is constant at check.
-    fn data_breach(pinned: &cel::Type, tree: &cel::Tree) -> Option<String> {
-        if !matches!(tree.ty, cel::Type::Dyn) && tree.ty != *pinned {
-            return Some(format!("{:?}", tree.ty));
+    /// Folds a builder's writes IN ORDER — the runtime's order — over
+    /// the running data shape.
+    fn folded_shape<'w>(writes: &'w [FieldWrite], initial: DataShape<'w>) -> DataShape<'w> {
+        let mut shape = initial;
+        for write in writes {
+            match &write.target {
+                crate::envelope::WriteTarget::Data(path) if path.is_empty() => {
+                    shape = DataShape::Known(write.value.ty.clone(), Some(&write.value));
+                }
+                crate::envelope::WriteTarget::Data(_) => shape = DataShape::Structure,
+                crate::envelope::WriteTarget::AppMeta(_)
+                | crate::envelope::WriteTarget::CustomMeta(..)
+                | crate::envelope::WriteTarget::MimeType => {}
+            }
         }
+        shape
+    }
+
+    /// The constant half of conformance: the 32-bit `int` bound,
+    /// where the producing tree's value is known at check.
+    fn constant_breach(pinned: &cel::Type, tree: &cel::Tree) -> Option<String> {
         if *pinned == cel::Type::Int
             && let Ok(cel::Value::Int(value)) = cel::const_eval(tree, &BTreeMap::new())
             && i32::try_from(value).is_err()
@@ -2556,6 +2629,27 @@ impl Checker<'_, '_> {
 
 /// The canonical text of one checked edge — the human face of
 /// E-DUP-EDGE, mirroring the plan's rendering.
+/// Where a builder's data construction starts — the two contexts a
+/// pinned port is fed from.
+#[derive(Clone, Copy)]
+enum BuildOrigin<'a> {
+    /// A handler emission: `Identity`/`Patch` start from the received
+    /// envelope, whose data carries the activation port's pin.
+    Handler(&'a cel::Type),
+    /// A scenario injection: the draft is born as an empty map.
+    Draft,
+}
+
+/// The statically known shape of the data a builder produces —
+/// three DISTINCT states, never one `None` meaning all of them:
+/// unknown (inference territory), a known type (with the producing
+/// tree when there is one, for the constant bound), or structure.
+enum DataShape<'a> {
+    Unknown,
+    Known(cel::Type, Option<&'a cel::Tree>),
+    Structure,
+}
+
 /// The pinned type of an edge endpoint, when its port declares one:
 /// a node's table entry, or a declared boundary port — the implicit
 /// trio and unannotated ports answer `None` (inference territory).

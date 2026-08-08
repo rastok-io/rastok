@@ -13,17 +13,24 @@ refuse identically) and becomes part of the port's declaration
 everywhere the declaration lives: the handler's `data` takes the
 pinned type; an emission, an injection, or an edge whose PRECISE
 type disagrees with a pinned end refuses as `E-PORT-TYPE` (`dyn` on
-either side is inference territory and passes); the package carries
-the type as `port_decl`'s optional third element — absent when
-unannotated, so pre-typed-ports packages are byte-identical; and the
-annotation is IDENTITY (identity.md: types are sensitive), hashed
-with the var-init presence idiom. Unannotated graphs with port
-tables gain one absence tag per port in the hash — an identity move
-declared here, pinned by no golden. **Rejected:** hashing the
-RESOLVED type (inference does not exist yet; annotations-as-written
-is the honest contract), and a runtime type check at edges
-(static-by-default; the boundary will get its own validation with
-the connector sheets).
+either side is inference territory and passes), with builders held
+to the ORDERED write fold the runtime executes — the checker and
+the machine share one construction model, and the machine holds
+CONSTRUCTED content to the pin at emission-build time with the
+state-cell judge, so non-constant arithmetic cannot carry an
+out-of-range int across an `int` port; the package carries the type
+as `port_decl`'s optional third element — absent when unannotated,
+so an unannotated plan's BODY bytes are unchanged, while the PACKAGE
+moved to format v3 with the widening (the version is checksum
+material); and the annotation is IDENTITY (identity.md: types are
+sensitive), hashed with the var-init presence idiom. Unannotated
+graphs with port tables gained one absence tag per port in the hash
+— an identity move PINNED by the gauge fixture (exact hash, v3
+package bytes, golden trace with INBOUND key 24). **Rejected:**
+hashing the RESOLVED type (inference does not exist yet;
+annotations-as-written is the honest contract), and PER-EDGE runtime
+checks (one validation at emission construction and one at ingress
+suffice; encoded external bytes stay the codecs' door).
 
 ## D-2026-08-08-2 — The inbound record carries its ingress port
 

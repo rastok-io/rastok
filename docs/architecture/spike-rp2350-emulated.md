@@ -39,7 +39,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). It embeds the blessed **v2 plan package** of
+  spike-only). It embeds the blessed **v3 plan package** of
   `examples/echo.rkg` as a `static`, opens it with
   `rastok_core::plan::decode` — which now validates
   structurally and re-encodes for canonicity — boots the `Vm` over a
@@ -66,7 +66,8 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (365-byte v2 package, full invariant validation + canonicity re-encode) | 4 097 | 205 k | 1.37 ms |
+| `plan::decode` (365-byte v3 package, full invariant validation + canonicity re-encode) | 4 097 | 205 k | 1.37 ms |
+| — re-measured 2026-08-08 on the v3 fixture (typed `port_decl`, version in the checksum): decode, transaction, and watermark unchanged to the tick | | | |
 | relay transaction (avg of 32; min 1 779 / max 2 075) | 1 832 | **92 k** | **0.61 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 

@@ -12,7 +12,10 @@
 /// How a connector type name resolves against the registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability<'registry> {
-    /// The contract sheet is present and an adapter ships.
+    /// The contract sheet is present in THIS registry — the checker
+    /// can resolve declarations against it. Whether an adapter ships
+    /// is the build's wiring (the Lab mocks need none); the sheet
+    /// claims the contract, not the implementation.
     Available(&'registry ConnectorContract),
     /// The name is in the catalogue; its adapter is not in this build.
     Declared,
@@ -68,6 +71,87 @@ pub enum AttrDomain {
     /// Present in the sheet but a contract violation in the M0 job
     /// mode, with the sheet's own reason.
     Forbidden(&'static str),
+}
+
+/// Why a contract sheet cannot enter the registry — the sheet is an
+/// AUTHORITY once admitted (the checker materializes port tables
+/// from it without re-checking), so it is held at the door.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SheetDefect {
+    /// A port name the language refuses.
+    InvalidPortName(&'static str),
+    /// One name in both direction lists, or listed twice.
+    ConflictingPort(&'static str),
+    /// A default port listed against its implicit direction.
+    MisdirectedDefault(&'static str),
+    /// An attribute declared twice.
+    DuplicateAttribute(&'static str),
+    /// An error kind declared twice.
+    DuplicateErrorKind(&'static str),
+}
+
+impl core::fmt::Display for SheetDefect {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidPortName(name) => write!(f, "`{name}` is not a valid port name"),
+            Self::ConflictingPort(name) => {
+                write!(f, "`{name}` is listed twice or in both directions")
+            }
+            Self::MisdirectedDefault(name) => {
+                write!(f, "`{name}` is a default port listed against its direction")
+            }
+            Self::DuplicateAttribute(name) => write!(f, "`{name}` is declared twice"),
+            Self::DuplicateErrorKind(name) => write!(f, "`{name}` is declared twice"),
+        }
+    }
+}
+
+impl std::error::Error for SheetDefect {}
+
+/// Holds a sheet to the rules the checker will assume forever after.
+fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
+    let mut seen = std::collections::BTreeSet::new();
+    for (name, direction) in contract
+        .input_ports
+        .iter()
+        .map(|name| (*name, crate::node::Direction::Input))
+        .chain(
+            contract
+                .output_ports
+                .iter()
+                .map(|name| (*name, crate::node::Direction::Output)),
+        )
+    {
+        if crate::node::Port::new(name.to_string()).is_err() {
+            return Err(SheetDefect::InvalidPortName(name));
+        }
+        if !seen.insert(name) {
+            return Err(SheetDefect::ConflictingPort(name));
+        }
+        let implicit = match name {
+            "in" => Some(crate::node::Direction::Input),
+            "out" | "err" => Some(crate::node::Direction::Output),
+            _ => None,
+        };
+        if let Some(expected) = implicit
+            && expected != direction
+        {
+            return Err(SheetDefect::MisdirectedDefault(name));
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for spec in contract.attributes {
+        if !names.insert(spec.name) {
+            return Err(SheetDefect::DuplicateAttribute(spec.name));
+        }
+    }
+    let mut kinds = std::collections::BTreeSet::new();
+    for kind in contract.error_set {
+        if !kinds.insert(*kind) {
+            return Err(SheetDefect::DuplicateErrorKind(kind));
+        }
+    }
+    Ok(())
 }
 
 /// Guest identity the manifest pins; M0 declares the languages with
@@ -200,14 +284,21 @@ impl Registry {
     /// Extends the registry with one more contract sheet — the seam
     /// every M1 connector lands through (`File`, the HTTP pair), and
     /// what a test contract uses to exercise the transport of
-    /// resolved port tables. A name already present is replaced.
-    #[must_use]
-    pub fn with(mut self, contract: ConnectorContract) -> Self {
+    /// resolved port tables. FALLIBLE: a sheet is validated before
+    /// it becomes an authority — the checker materializes tables
+    /// from it and never re-checks. A name already present is
+    /// replaced.
+    ///
+    /// # Errors
+    ///
+    /// The first [`SheetDefect`], named.
+    pub fn try_with(mut self, contract: ConnectorContract) -> Result<Self, SheetDefect> {
+        validate_sheet(&contract)?;
         self.connectors
             .retain(|existing| existing.name != contract.name);
         self.declared.retain(|declared| *declared != contract.name);
         self.connectors.push(contract);
-        self
+        Ok(self)
     }
 
     /// Resolves a connector type name.
