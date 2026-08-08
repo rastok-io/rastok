@@ -599,9 +599,12 @@ impl<'plan> TransactionExecutor<'plan> {
 
     /// The typed-error transaction for a faulted handler: the input
     /// is consumed causally and the fault leaves on `err` as a typed
-    /// payload — a machine never swallows an envelope.
+    /// payload — a machine never swallows an envelope. Crate-private:
+    /// it indexes the slot unchecked, which is the VM's invariant to
+    /// hold (its slots come from the plan) — the verified public
+    /// door is [`Self::fire`].
     #[must_use]
-    pub fn fault_transaction(
+    pub(crate) fn fault_transaction(
         &self,
         slot: Slot,
         delivery: &Delivery,
@@ -612,8 +615,10 @@ impl<'plan> TransactionExecutor<'plan> {
 
     /// A transaction consuming `delivery` with a typed error on
     /// `err` — the shape every non-happy consumption shares.
+    /// Crate-private for the same reason as
+    /// [`Self::fault_transaction`].
     #[must_use]
-    pub fn typed_error_transaction(
+    pub(crate) fn typed_error_transaction(
         &self,
         slot: Slot,
         delivery: &Delivery,

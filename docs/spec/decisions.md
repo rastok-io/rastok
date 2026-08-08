@@ -5,6 +5,20 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-08-1 — A default port may be restated once
+
+"Redefinable" in the grammar is bounded like every other
+declaration: a default port (`in` / `out` / `err`) may be explicitly
+restated at most once, in its implicit direction, and the
+restatement never enters the serialized table — the trio stays
+implicit everywhere downstream. A second explicit declaration, or a
+declaration against the implicit direction, is `E-PORT-CONFLICT` —
+the same rule an operator's `declared_names` applies. **Rejected:**
+silently idempotent repetition (observable behavior with no stated
+rule) and a blanket refusal of any restatement (contradicted the
+grammar's own "redefinable", caught by review counter-example
+`input in`).
+
 ## D-2026-08-07-3 — Package v2: framed checksum, total validation, canonicity by re-encoding
 
 Format version 2 of the plan package. The checksum covers the whole

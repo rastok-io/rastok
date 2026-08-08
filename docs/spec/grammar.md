@@ -1225,6 +1225,11 @@ uses the Connector's explicit `read` and `out` ports.
 The default ports **`in` / `out` / `err`** are *not* keywords : they
 are ordinary pre-bound identifiers, usable without declaration and
 redefinable (only `input` / `output` are the declaration keywords).
+Redefinable is bounded like every declaration: a default may be
+explicitly restated **once**, in its implicit direction, and the
+restatement never enters the serialized table; a second explicit
+declaration, or a contradictory direction, is `E-PORT-CONFLICT`
+(D-2026-08-08-1).
 A user-defined identifier may not collide with `DECL_KW`, `TYPE_KW`,
 `TAG_KW` or `LITERAL_KW`. Concrete NodeType names such as `HttpServer`,
 `Process` and `Postgres` are ordinary PascalCase identifiers resolved
@@ -1287,7 +1292,7 @@ partition_inline  ::= "{" partition_body "}"                          // block f
 partition_field   ::= "key" "=" cel_expr | "lifetime" "=" lifetime_value
 
 port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // type OPTIONAL → inferred ; annotate only to pin/force or as a public contract
-                    // in / out / err are default ports : usable without declaration, redefinable.
+                    // in / out / err are default ports : usable without declaration, restatable ONCE in their implicit direction (never serialized) ; twice or against direction = E-PORT-CONFLICT.
                     // Connectors do NOT declare ports — their type defines the ports, the codec gives the value type.
                     // No port-side inbound shortcut : wiring is always graph-level.
                     // To bind a port to a source, declare the Connector then wire it :
