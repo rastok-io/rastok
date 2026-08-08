@@ -6,9 +6,14 @@
 > on 2026-08-07** after the adversarial review refuted v1 on three
 > counts (an ambiguous value tag, a checksum that did not cover the
 > declared identity, and a decoder that validated shape but not
-> structure — errata E-2026-08-07-1, decisions D-2026-08-07-2/-3).
+> structure — errata E-2026-08-07-1, decisions D-2026-08-07-2/-3);
+> **revised to format v3 on 2026-08-08** when the M1 multiport lift
+> widened `port_decl` with the optional pinned type
+> (D-2026-08-08-3) — a new format is a new version, so the typed
+> table did not ride under a v2 header.
 > The package is a TRANSPORT format: versioned and free to evolve by
-> version bump; v1 was never published and no decoder reads it.
+> version bump; neither v1 nor v2 was ever published and no decoder
+> reads them — each refuses by its number.
 > Identity stays where it always was — the semantic hash over the
 > canonical HIR; the package merely carries a plan and proves it intact.
 
@@ -34,7 +39,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (this document: 2)   │
+        │ 1 : format_version   uint      (this document: 3)   │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -108,7 +113,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v2)
+## Body tables (format v3)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -134,8 +139,12 @@ port_decl  := [name (text), direction (uint: 1 in · 2 out), type?]
               — the third element is the PINNED type (same encoding
               as var types), present exactly when the source
               annotates: an unannotated port keeps its two-element
-              form, so pre-typed-ports packages are byte-identical
-              (D-2026-08-08-3)
+              form in the BODY. The claim is scoped: the body bytes
+              of an unannotated plan are unchanged, but the PACKAGE
+              moved to v3 with this widening (version is checksum
+              material), and the semantic hash of any graph with a
+              port table moved with the annotation's identity slot —
+              both pinned by the gauge fixture (D-2026-08-08-3)
 var        := {1: name (text), 2: type, 3: init (tagged_value)?}
 
 edge       := [endpoint, endpoint | null]         — null = «-> nothing»

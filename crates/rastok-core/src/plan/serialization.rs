@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v2: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v3: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -32,8 +32,11 @@ use crate::plan::{
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
-/// The format version this module writes and reads.
-pub const FORMAT_VERSION: u32 = 2;
+/// The format version this module writes and reads. v3 widened
+/// `port_decl` with the optional pinned type — a new format is a new
+/// version, and an old decoder refuses it by name, exactly as the
+/// format note promises.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -86,7 +89,7 @@ impl core::fmt::Display for DecodeError {
 
 impl core::error::Error for DecodeError {}
 
-/// The v2 checksum: blake3 over the domain-framed association.
+/// The checksum: blake3 over the domain-framed association.
 /// Every covered field is fixed-width or last, so fields cannot
 /// slide into one another.
 fn checksum(version: u32, hash: &[u8; 32], body: &[u8]) -> [u8; 32] {

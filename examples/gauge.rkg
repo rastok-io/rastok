@@ -1,0 +1,25 @@
+graph gauge : App {
+  input feed : text
+  output measure : int
+
+  operator meter {
+    input evt : text
+    output score : int
+
+    on evt {
+      score = size(data)
+    }
+  }
+
+  .feed -> meter.evt
+  meter.score -> .measure
+}
+
+lab gauge {
+  simulation golden on app {
+    scenario roundtrip "text in at the named input, its size at the named output" {
+      app.feed = "salut"
+      expect "sized" app.measure count == 1 where data == 5
+    }
+  }
+}

@@ -34,8 +34,10 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
         writer.str(decl.port.name());
         writer.direction(decl.direction);
         // The pinned type is identity material — a public contract;
-        // absence hashes as absence (the var-init idiom), so an
-        // unannotated port keeps its bytes.
+        // absence hashes as absence (the var-init idiom). NOTE: the
+        // absence tag itself moved every identity with a non-empty
+        // table when it landed — declared in D-2026-08-08-3, pinned
+        // by the gauge fixture.
         match &decl.ty {
             None => writer.tag(0),
             Some(ty) => {
