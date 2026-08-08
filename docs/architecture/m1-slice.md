@@ -48,8 +48,13 @@ step touches `vm.rs` once.
    builds the struct the grammar defines, builders fold their writes
    in the runtime's order, constructed content is judged at the pin
    at emission-build time, and the Registry validates sheets at the
-   door and is never consulted past resolution). The trio's own
-   contract types join the connector-sheet items below.
+   door and is never consulted past resolution; `2aa50f4` fourth
+   pass — the frontiers: boundary outputs carry their port, named
+   connector edges defer by name until the Partner seam speaks
+   them, one pre-commit judge closes every dynamic path to a pin,
+   the builders are physically STRUCTS (tag 17) across all three
+   interpreters, and the validator audits pinned edges). The trio's
+   own contract types join the connector-sheet items below.
 2. **The `jsonl` codec** — structured payloads across the `Process`
    boundary, under the one byte discipline; unlocks realistic `File`
    and HTTP payloads.
