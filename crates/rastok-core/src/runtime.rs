@@ -834,6 +834,19 @@ fn emitted_content(
         PlanEmission::Nothing => Ok(None),
         PlanEmission::Identity => Ok(Some(inherited(BuiltData::Unchanged))),
         PlanEmission::Data(expr) => {
+            // The bare `data` relay is a PASS-THROUGH of the value,
+            // not a round trip through CEL: `Struct` and `Map` are
+            // two logical types (canonical tags 17 and 18), and CEL
+            // carries only maps — re-materializing would silently
+            // retype the content. Deeper expressions evaluate in the
+            // CEL domain and answer in it, maps included.
+            if let cel::Expr::Path(segments) = &expr.root
+                && segments.len() == 1
+                && segments[0] == "data"
+                && let Data::Materialized(value) = input.data()
+            {
+                return Ok(Some(inherited(BuiltData::Envelope(value.clone()))));
+            }
             let value = cel::eval(expr, env).map_err(Fault::Eval)?;
             Ok(Some(inherited(BuiltData::Value(value))))
         }

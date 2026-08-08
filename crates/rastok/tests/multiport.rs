@@ -616,8 +616,8 @@ fn the_fold_follows_the_runtime_order() {
 }
 
 #[test]
-fn a_metadata_only_injection_still_carries_the_draft_map() {
-    // The draft is BORN as a map (`lab::draft`); patching only meta
+fn a_metadata_only_injection_still_carries_the_draft_struct() {
+    // The draft is BORN a struct (`lab::draft`); patching only meta
     // does not change what crosses the pinned scalar input.
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = envelope {meta.tag = \"x\"}\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
     let bag = compile(&[source], &Registry::m0()).expect_err("the draft map breaches the int pin");
@@ -1057,4 +1057,380 @@ fn a_named_constant_answers_like_its_literal() {
             .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE"),
         "{bag:?}"
     );
+}
+
+// ===== round five — Dyn coherence, synthesized errors, the relay =====
+
+#[test]
+fn a_variant_pin_is_inference_territory_everywhere() {
+    // `variant` resolves to Dyn — an explicit "anything". A pinned
+    // Dyn admits every emission, and only two PRECISE pins can make
+    // an edge disagree: checker, validator, and runtime share the
+    // rule.
+    let flexible = "graph g : App {\n  operator o {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  . -> o\n  o.flexible -> .\n}\n";
+    compile(&[flexible], &Registry::m0()).expect("an int through a variant pin");
+
+    let variant_to_int = "graph g : App {\n  operator a {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  operator b {\n    input evt : int\n    on evt { out = data }\n  }\n  . -> a\n  a.flexible -> b.evt\n  b -> .\n}\n";
+    compile(&[variant_to_int], &Registry::m0()).expect("variant -> int is inference territory");
+
+    let int_to_variant = "graph g : App {\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : variant\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
+    let compilation =
+        compile(&[int_to_variant], &Registry::m0()).expect("int -> variant is inference territory");
+
+    // The same rule holds for a raw plan re-earning the type after
+    // the trip — a Dyn/Int pinned edge is never a mismatch.
+    let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, _) = rastok::plan::decode(&bytes).expect("the package opens");
+    rastok::plan::ValidatedExecutionPlan::try_new(decoded.into_inner())
+        .expect("the validator applies the same Dyn rule");
+}
+
+#[test]
+fn a_synthesized_runtime_fault_cannot_cross_a_pin() {
+    // `source.err -> sink.evt : int`: the operator faults, the
+    // machine synthesizes a RuntimeFault struct on err — and the ONE
+    // choke point refuses it before ANY commit: no transaction in
+    // the journal, the scenario reports the machine fault.
+    let source = r#"
+graph g : App {
+  operator source {
+    on in { out = data.missing }
+  }
+
+  operator sink {
+    input evt : int
+    on evt { out = data }
+  }
+
+  . -> source
+  source.err -> sink.evt
+  source -> .
+  sink -> .
+}
+
+lab g {
+  simulation probing on app {
+    scenario s "a fault payload cannot enter an int pin" {
+      app.in = "text"
+      expect "nothing crosses" app.out count == 0
+    }
+  }
+}
+"#;
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    let run = &runs[0];
+    assert!(
+        run.report
+            .failures
+            .iter()
+            .any(|failure| failure.contains("cannot enter")),
+        "the machine fault surfaces: {:#?}",
+        run.report.failures
+    );
+    assert!(
+        run.records
+            .iter()
+            .all(|record| !matches!(record, rastok::journal::Record::Transaction(_))),
+        "NOTHING committed — the violating emission never reached the journal"
+    );
+}
+
+#[test]
+fn a_decode_error_cannot_cross_a_pin() {
+    // The machine's own DecodeError synthesis takes the same choke
+    // point: a map into a `lines` connector refuses framing, the
+    // typed error struct heads for err — and err is wired into an
+    // int pin, so nothing commits past the operator.
+    let source = r#"
+graph g : App {
+  connector shell : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator sink {
+    input evt : int
+    on evt { out = data }
+  }
+
+  . -> shell
+  shell.err -> sink.evt
+  shell.out -> .
+  sink -> .
+}
+
+lab g {
+  simulation probing on app {
+    mock shell {
+      on in { out = envelope }
+    }
+
+    scenario s "a decode-error payload cannot enter an int pin" {
+      app.in = {v = 1}
+      expect "nothing crosses" app.out count == 0
+    }
+  }
+}
+"#;
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    let run = &runs[0];
+    assert!(
+        run.report
+            .failures
+            .iter()
+            .any(|failure| failure.contains("cannot enter")),
+        "the machine fault surfaces: {:#?}",
+        run.report.failures
+    );
+    // TimeoutExpired and every Partner failure route through the
+    // SAME reserve_emissions choke point — one line guards them all.
+    assert!(
+        run.records
+            .iter()
+            .all(|record| !matches!(record, rastok::journal::Record::Transaction(_))),
+        "nothing committed"
+    );
+}
+
+#[test]
+fn the_bare_data_relay_preserves_the_logical_type() {
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+    use std::collections::BTreeMap;
+
+    let source =
+        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let relay = |data: Value| {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        vm.inject(
+            &mut journal,
+            InboundSubmission {
+                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                port: rastok::node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::materialized(data),
+                    mime_type: None,
+                    app: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .expect("the injection lands");
+        vm.drain(&mut journal).expect("the drain completes");
+        vm.outputs()[0].envelope.data().clone()
+    };
+    // Struct in, Struct out — tag 17 stays tag 17.
+    let sent = Value::Struct(vec![(String::from("field"), Value::Scalar(Scalar::Int(7)))]);
+    assert!(
+        matches!(relay(sent), Data::Materialized(Value::Struct(_))),
+        "a bare relay must not retype a struct"
+    );
+    // Map in, Map out — tag 18 stays tag 18.
+    let mut entries = BTreeMap::new();
+    entries.insert(String::from("k"), Value::Scalar(Scalar::Int(1)));
+    assert!(
+        matches!(
+            relay(Value::Map(entries)),
+            Data::Materialized(Value::Map(_))
+        ),
+        "a bare relay must not retype a map"
+    );
+}
+
+#[test]
+fn an_ingress_pin_violation_is_a_named_error() {
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::{Vm, VmError};
+
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let error = vm
+        .inject(
+            &mut journal,
+            InboundSubmission {
+                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                port: rastok::node::Port::new("alpha").unwrap(),
+                draft: Draft {
+                    data: Data::materialized(Value::Scalar(Scalar::Text(String::from("wrong")))),
+                    mime_type: None,
+                    app: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .unwrap_err();
+    // The CLIENT's value is wrong, not the plan — the error says so
+    // by name and carries the port.
+    assert!(matches!(
+        error,
+        VmError::IngressPinViolation { port, .. } if port.name() == "alpha"
+    ));
+}
+
+#[test]
+fn the_lab_and_mock_builders_seal_structs_too() {
+    // The VM path is asserted above; the Lab draft and the mock
+    // reply have their own implementations of the same builder —
+    // each is held to tag 17 in the sealed records it produces.
+    let source = r#"
+graph g : App {
+  connector shell : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator relay {
+    on in { out = "ping" }
+  }
+
+  . -> relay -> shell -> .
+}
+
+lab g {
+  simulation probing on app {
+    mock shell {
+      on in { out = {v = 1} }
+    }
+
+    scenario s "sugar everywhere" {
+      app.in = {field = 7}
+      expect "the reply lands" app.out count == 1
+    }
+  }
+}
+"#;
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    let run = &runs[0];
+    assert!(run.report.passed(), "{:#?}", run.report.failures);
+    let trace = rastok::golden::project(&run.records);
+    let tagged_struct = |bytes: &[u8]| {
+        let Ok((rastok::canonical_cbor::Value::Array(tagged), _)) =
+            rastok::canonical_cbor::decode(bytes)
+        else {
+            return false;
+        };
+        tagged.first() == Some(&rastok::canonical_cbor::Value::Uint(17))
+    };
+    let mut inbound_struct = false;
+    let mut outcome_struct = false;
+    for index in 0..trace.len() {
+        let (tree, _) = rastok::canonical_cbor::decode(trace.record_bytes(index).unwrap())
+            .expect("canonical bytes");
+        let rastok::canonical_cbor::Value::Map(pairs) = tree else {
+            continue;
+        };
+        // The INBOUND record: the Lab draft's data seals as a struct.
+        if let Some(rastok::canonical_cbor::Value::Map(spine)) = pairs.get(&20)
+            && let Some(rastok::canonical_cbor::Value::Array(form)) = spine.get(&8)
+            && let Some(rastok::canonical_cbor::Value::Bytes(inner)) = form.get(1)
+            && tagged_struct(inner)
+        {
+            inbound_struct = true;
+        }
+        // The connector outcome: the MOCK reply's data seals as a
+        // struct on the way to `out`.
+        if let Some(rastok::canonical_cbor::Value::Array(emissions)) = pairs.get(&36) {
+            for emission in emissions {
+                let rastok::canonical_cbor::Value::Array(parts) = emission else {
+                    continue;
+                };
+                if let Some(rastok::canonical_cbor::Value::Map(spine)) = parts.last()
+                    && let Some(rastok::canonical_cbor::Value::Array(form)) = spine.get(&8)
+                    && let Some(rastok::canonical_cbor::Value::Bytes(inner)) = form.get(1)
+                    && tagged_struct(inner)
+                {
+                    outcome_struct = true;
+                }
+            }
+        }
+    }
+    assert!(inbound_struct, "the Lab draft seals tag 17");
+    assert!(outcome_struct, "the mock reply seals tag 17");
+}
+
+#[test]
+fn the_validator_exploits_the_traveled_contract_table() {
+    // Transport alone is not the proof — a raw edge into the
+    // contract's named port must be ACCEPTED by the validator from
+    // the plan's own table, no Registry anywhere.
+    use rastok::plan::{Edge, EndpointRef, Slot, ValidatedExecutionPlan};
+    use rastok::stdlib::{AttrDomain, AttributeSpec, ConnectorContract};
+    const PROBE_SHEET: ConnectorContract = ConnectorContract {
+        name: "Probe",
+        input_ports: &["in", "request"],
+        output_ports: &["out", "err", "response"],
+        attributes: &[
+            AttributeSpec {
+                name: "effect",
+                required: true,
+                domain: AttrDomain::Word(&["idempotent"]),
+            },
+            AttributeSpec {
+                name: "behavior",
+                required: true,
+                domain: AttrDomain::Word(&["deterministic"]),
+            },
+        ],
+        error_set: &["ProbeFailed"],
+    };
+    let registry = Registry::m0()
+        .try_with(PROBE_SHEET)
+        .expect("a valid sheet enters");
+    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay -> probe -> .\n}\n";
+    let mut plan = compile(&[source], &registry)
+        .expect("the contract compiles")
+        .plan
+        .into_inner();
+    let probe_slot = plan
+        .nodes
+        .iter()
+        .position(|node| node.path.to_string() == "probe")
+        .expect("the connector");
+    let relay_slot = plan
+        .nodes
+        .iter()
+        .position(|node| node.path.to_string() == "relay")
+        .expect("the operator");
+    plan.edges.push(Edge {
+        from: EndpointRef {
+            node: Some(Slot::new(u32::try_from(relay_slot).unwrap())),
+            port: rastok::node::Port::new("out").unwrap(),
+        },
+        to: Some(EndpointRef {
+            node: Some(Slot::new(u32::try_from(probe_slot).unwrap())),
+            port: rastok::node::Port::new("request").unwrap(),
+        }),
+    });
+    let mut edges = plan.edges.clone();
+    edges.sort_by_key(|edge| plan.edge_text(edge));
+    plan.edges = edges;
+    ValidatedExecutionPlan::try_new(plan)
+        .expect("the traveled table answers for `request` — no Registry consulted");
 }

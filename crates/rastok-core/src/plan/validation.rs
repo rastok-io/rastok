@@ -518,7 +518,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // holds the surface to; endpoint slots are proven above, so the
     // lookups dereference safely.
     let pin_of = |endpoint: &EndpointRef| -> Option<cel::Type> {
-        match endpoint.node {
+        let decl_ty = match endpoint.node {
             Some(slot) => plan.nodes[slot.index()]
                 .ports
                 .iter()
@@ -529,7 +529,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 .iter()
                 .find(|decl| decl.port == endpoint.port)
                 .and_then(|decl| decl.ty.clone()),
-        }
+        };
+        // A `variant` pin admits anything — the same rule the
+        // checker and the runtime judge apply; only two PRECISE
+        // pins can disagree.
+        decl_ty.filter(|ty| !matches!(ty, cel::Type::Dyn))
     };
     for edge in &plan.edges {
         if let Some(to) = &edge.to

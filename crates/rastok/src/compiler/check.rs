@@ -2416,9 +2416,10 @@ impl Checker<'_, '_> {
                 DataShape::Known(ty.clone(), None)
             }
             BuildOrigin::Handler(_) => DataShape::Unknown,
-            // A draft is born `Map(new())` (`lab::draft`) — a Patch
-            // injection starts from that STRUCTURE, so even a
-            // metadata-only patch carries a map through the input.
+            // A draft is born a fresh STRUCT (`lab::draft`) — a
+            // Patch injection starts from it, so even a
+            // metadata-only patch carries a struct through the
+            // input.
             BuildOrigin::Draft => DataShape::Struct,
         };
         let shape = match value {
@@ -2431,7 +2432,10 @@ impl Checker<'_, '_> {
         let found: Option<String> = match &shape {
             DataShape::Unknown => None,
             DataShape::Known(ty, tree) => {
-                if !matches!(ty, cel::Type::Dyn) && ty != pinned {
+                if !matches!(pinned, cel::Type::Dyn)
+                    && !matches!(ty, cel::Type::Dyn)
+                    && ty != pinned
+                {
                     Some(match value {
                         EmitValue::Identity => format!("{ty:?} (the input, unchanged)"),
                         _ => format!("{ty:?}"),
@@ -2674,12 +2678,19 @@ enum DataShape<'a> {
 /// a node's table entry, or a declared boundary port — the implicit
 /// trio and unannotated ports answer `None` (inference territory).
 fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<cel::Type> {
+    let precise = |ty: cel::Type| match ty {
+        // A `variant` pin is an explicit "anything" — inference
+        // territory by declaration, never a conflict.
+        cel::Type::Dyn => None,
+        other => Some(other),
+    };
     match &endpoint.node {
         None => graph
             .boundary
             .iter()
             .find(|decl| decl.port == endpoint.port)
-            .and_then(|decl| decl.ty.clone()),
+            .and_then(|decl| decl.ty.clone())
+            .and_then(precise),
         Some(path) => graph
             .nodes
             .iter()
@@ -2689,6 +2700,7 @@ fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<cel::Type>
                     .iter()
                     .find(|decl| decl.port == endpoint.port)
                     .and_then(|decl| decl.ty.clone())
+                    .and_then(precise)
             }),
     }
 }

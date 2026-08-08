@@ -67,8 +67,8 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
 | `plan::decode` (365-byte v3 package, full invariant validation + canonicity re-encode) | 4 206 | 210 k | 1.40 ms |
-| — re-measured 2026-08-09 after review round four: +109 decode ticks (the pinned-edge audit at validation) and ~5 ticks per relay transaction (the crossing-pin judge at emission construction) — both priced, neither near a criterion | | | |
-| relay transaction (avg of 32; min 1 779 / max 2 088) | 1 837 | **92 k** | **0.61 ms** |
+| — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the value conversion itself runs only when a pin watches, so untyped graphs skip it) — priced, no criterion near | | | |
+| relay transaction (avg of 32; min 1 779 / max 2 096) | 1 846 | **92 k** | **0.61 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |

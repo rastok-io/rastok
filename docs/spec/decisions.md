@@ -28,9 +28,16 @@ graphs with port tables gained one absence tag per port in the hash
 — an identity move PINNED by the gauge fixture (exact hash, v3
 package bytes, golden trace with INBOUND key 24). **Rejected:**
 hashing the RESOLVED type (inference does not exist yet;
-annotations-as-written is the honest contract), and PER-EDGE runtime
-checks (one validation at emission construction and one at ingress
-suffice; encoded external bytes stay the codecs' door).
+annotations-as-written is the honest contract), and SCATTERED
+per-edge runtime checks — the adopted shape is ONE pre-commit choke
+point (`reserve_emissions`, plus the ingress mirror in `inject`)
+that nevertheless inspects EVERY pin of the fan-out: the emitting
+port's own and each destination's, synthesized error payloads
+included; a typed error that violates its own `err` wiring
+surfaces as a machine fault and nothing commits. A `variant` pin is
+an explicit "anything" and never conflicts — checker, plan
+validator, and runtime judge share that rule. Encoded external
+bytes stay the codecs' door.
 
 ## D-2026-08-08-2 — The inbound record carries its ingress port
 

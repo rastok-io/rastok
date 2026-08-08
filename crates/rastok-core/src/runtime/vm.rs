@@ -56,6 +56,15 @@ pub enum VmError {
     /// implicit `in` nor a declared boundary input. Checked sources
     /// never build one; the raw API is verified, not trusted.
     UnknownIngress(node::Port),
+    /// An ingress draft that violates a pin — the ingress port's own
+    /// or a destination's it would fan out to. The CLIENT's value is
+    /// wrong, not the plan; refused before any append.
+    IngressPinViolation {
+        /// The submission's port.
+        port: node::Port,
+        /// The conformance judgement, verbatim.
+        detail: String,
+    },
 }
 
 impl fmt::Display for VmError {
@@ -72,6 +81,9 @@ impl fmt::Display for VmError {
             }
             Self::UnknownIngress(port) => {
                 write!(f, "`{port}` is not an input of this graph")
+            }
+            Self::IngressPinViolation { port, detail } => {
+                write!(f, "the draft cannot enter `{port}`: {detail}")
             }
         }
     }
@@ -268,13 +280,17 @@ impl<'plan> Vm<'plan> {
 
     /// Accepts one submission — the journal's one accepting
     /// transaction — and delivers the born envelope along the
-    /// boundary `in` edges. Capacity is reserved before the journal
-    /// hears: a refused injection commits nothing, and backpressure
-    /// reaches the ingress instead of stranding a committed birth.
+    /// the submission's boundary-input edges. Everything is verified
+    /// before the journal hears: a refused injection commits
+    /// nothing, and backpressure reaches the ingress instead of
+    /// stranding a committed birth.
     ///
     /// # Errors
     ///
-    /// Journal refusals and full target mailboxes; both leave the
+    /// [`VmError::UnknownIngress`] when the port is not a graph
+    /// input; [`VmError::IngressPinViolation`] when a materialized
+    /// draft violates the ingress pin or a destination's; journal
+    /// refusals and full target mailboxes. Every refusal leaves the
     /// journal untouched by this call.
     pub fn inject(
         &mut self,
@@ -312,7 +328,10 @@ impl<'plan> Vm<'plan> {
                 own_pin,
                 &crate::runtime::from_envelope_value(value),
             )
-            .map_err(VmError::Fault)?;
+            .map_err(|fault| VmError::IngressPinViolation {
+                port: submission.port.clone(),
+                detail: alloc::string::ToString::to_string(&fault),
+            })?;
         }
         self.reserve_targets(&from)?;
         let committed = journal
@@ -837,6 +856,52 @@ impl<'plan> Vm<'plan> {
         slot: Slot,
         record: &crate::runtime::TransactionRecord,
     ) -> Result<(), VmError> {
+        // The ONE choke point before any outcome commits: every
+        // materialized emission — a handler's, a synthesized
+        // RuntimeFault's, a DecodeError's, a timeout's — is judged
+        // against every pin it will cross. A typed error that
+        // violates its own `err` wiring cannot be converted into
+        // another typed error on the same wiring: it surfaces as the
+        // machine fault it is, and NOTHING commits.
+        for emission in &record.emissions {
+            if let Data::Materialized(value) = emission.envelope.data() {
+                let own_pin = self.plan.nodes[slot.index()]
+                    .ports
+                    .iter()
+                    .find(|decl| decl.port == emission.port)
+                    .and_then(|decl| decl.ty.as_ref());
+                let from = EndpointRef {
+                    node: Some(slot),
+                    port: emission.port.clone(),
+                };
+                // Convert only when a pin actually watches this
+                // fan-out — an untyped graph pays nothing here.
+                let any_pin = own_pin.is_some()
+                    || self.plan.edges.iter().any(|edge| {
+                        edge.from == from
+                            && edge.to.as_ref().is_some_and(|to| match to.node {
+                                Some(target) => self.plan.nodes[target.index()]
+                                    .ports
+                                    .iter()
+                                    .any(|decl| decl.port == to.port && decl.ty.is_some()),
+                                None => self
+                                    .plan
+                                    .boundary
+                                    .iter()
+                                    .any(|decl| decl.port == to.port && decl.ty.is_some()),
+                            })
+                    });
+                if any_pin {
+                    crate::runtime::crossing_pins_hold(
+                        self.plan.plan(),
+                        &from,
+                        own_pin,
+                        &crate::runtime::from_envelope_value(value),
+                    )
+                    .map_err(VmError::Fault)?;
+                }
+            }
+        }
         let mut needed: BTreeMap<Slot, usize> = BTreeMap::new();
         for emission in &record.emissions {
             let from = EndpointRef {

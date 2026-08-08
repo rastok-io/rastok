@@ -51,7 +51,8 @@ step touches `vm.rs` once.
    door and is never consulted past resolution; `2aa50f4` fourth
    pass — the frontiers: boundary outputs carry their port, named
    connector edges defer by name until the Partner seam speaks
-   them, one pre-commit judge closes every dynamic path to a pin,
+   them, one pre-commit choke point judges every emission — synthesized
+   errors included — against every pin of its fan-out,
    the builders are physically STRUCTS (tag 17) across all three
    interpreters, and the validator audits pinned edges). The trio's
    own contract types join the connector-sheet items below.
