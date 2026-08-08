@@ -580,32 +580,15 @@ impl Checker<'_, '_> {
                         continue;
                     }
                     // A pinned input holds its injections to the
-                    // contract, where both sides are precise — the
-                    // same rule emissions follow at outputs.
+                    // contract — the SAME conformance notion as
+                    // emissions, drafts having no input to inherit.
                     if let Some(expected) = app
                         .boundary
                         .iter()
                         .find(|decl| decl.port == port)
-                        .and_then(|decl| decl.ty.as_ref())
-                        && let EmitValue::Data(tree) = &value
-                        && !matches!(tree.ty, cel::Type::Dyn)
-                        && tree.ty != *expected
+                        .and_then(|decl| decl.ty.clone())
+                        && !self.port_conforms(&expected, &value, None, port.name(), target.span)
                     {
-                        self.bag.push(
-                            Diagnostic::new(
-                                E_PORT_TYPE,
-                                Phase::Check,
-                                format!(
-                                    "`{}` is pinned to {expected:?}; this injection is {:?}",
-                                    port.name(),
-                                    tree.ty
-                                ),
-                            )
-                            .with_span(target.span)
-                            .with_field("port", port.name().to_string())
-                            .with_field("expected", format!("{expected:?}"))
-                            .with_field("found", format!("{:?}", tree.ty)),
-                        );
                         continue;
                     }
                     let seq = match seq {
@@ -1896,7 +1879,7 @@ impl Checker<'_, '_> {
         };
         let mut signature = node_signature
             .clone()
-            .with("data", data_type)
+            .with("data", data_type.clone())
             .with("meta", cel::Type::Dyn);
         let mut guard = None;
         for clause in &decl.guards {
@@ -2023,33 +2006,21 @@ impl Checker<'_, '_> {
                     };
                     if let Some(emit) = self.emit_value(value, &signature, name.span) {
                         // A pinned output holds its emissions to the
-                        // contract — where both sides are PRECISE:
-                        // `dyn` on either side is inference territory
-                        // and passes.
+                        // contract — ONE conformance notion, every
+                        // EmitValue form.
                         if let Some(expected) = node
                             .ports
                             .iter()
                             .find(|decl| decl.port == port)
-                            .and_then(|decl| decl.ty.as_ref())
-                            && let EmitValue::Data(tree) = &emit
-                            && !matches!(tree.ty, cel::Type::Dyn)
-                            && tree.ty != *expected
+                            .and_then(|decl| decl.ty.clone())
+                            && !self.port_conforms(
+                                &expected,
+                                &emit,
+                                Some(&data_type),
+                                port.name(),
+                                name.span,
+                            )
                         {
-                            self.bag.push(
-                                Diagnostic::new(
-                                    E_PORT_TYPE,
-                                    Phase::Check,
-                                    format!(
-                                        "`{}` is pinned to {expected:?}; this emission is {:?}",
-                                        port.name(),
-                                        tree.ty
-                                    ),
-                                )
-                                .with_span(name.span)
-                                .with_field("port", port.name().to_string())
-                                .with_field("expected", format!("{expected:?}"))
-                                .with_field("found", format!("{:?}", tree.ty)),
-                            );
                             continue;
                         }
                         statements.push(Statement::Emit { port, value: emit });
@@ -2314,6 +2285,107 @@ impl Checker<'_, '_> {
             "out" | "err" => Some(Direction::Output),
             _ => None,
         }
+    }
+
+    /// The ONE notion of pinned-port conformance, shared by
+    /// emissions and injections — every `EmitValue` form answers for
+    /// the data it produces, statically:
+    ///
+    /// - `Data` holds its CEL type to the pin, and the physical
+    ///   32-bit bound of `int` wherever the value is constant at
+    ///   check — exactly the var-initializer rule; non-constant
+    ///   arithmetic seals honestly at run (int/long tags).
+    /// - `Identity` holds the INPUT's type (the activation port's
+    ///   pin) to the output's pin.
+    /// - `Patch` inherits the input's type when it only touches
+    ///   meta; a whole-`data` write answers with that write's type;
+    ///   a field write builds structure, which no scalar pin holds.
+    /// - `Replace` builds structure — same scalar rule.
+    /// - `Nothing` produces nothing and always conforms.
+    ///
+    /// `dyn` on either side is inference territory and passes.
+    /// Pushes `E-PORT-TYPE` and answers false on a breach.
+    fn port_conforms(
+        &mut self,
+        pinned: &cel::Type,
+        value: &EmitValue,
+        inherited: Option<&cel::Type>,
+        port_name: &str,
+        span: Span,
+    ) -> bool {
+        let scalar_pinned = matches!(
+            pinned,
+            cel::Type::Bool
+                | cel::Type::Int
+                | cel::Type::Uint
+                | cel::Type::Double
+                | cel::Type::Text
+                | cel::Type::Bytes
+                | cel::Type::Duration
+                | cel::Type::Timestamp
+                | cel::Type::Null
+        );
+        let found: Option<String> = match value {
+            EmitValue::Nothing => None,
+            EmitValue::Data(tree) => Self::data_breach(pinned, tree),
+            EmitValue::Identity => match inherited {
+                Some(ty) if !matches!(ty, cel::Type::Dyn) && ty != pinned => {
+                    Some(format!("{ty:?} (the input, unchanged)"))
+                }
+                _ => None,
+            },
+            EmitValue::Patch(writes) => {
+                let whole = writes
+                    .iter()
+                    .rev()
+                    .find(|write| matches!(&write.target, crate::envelope::WriteTarget::Data(path) if path.is_empty()));
+                if let Some(write) = whole {
+                    Self::data_breach(pinned, &write.value)
+                } else if writes.iter().any(|write| {
+                    matches!(&write.target, crate::envelope::WriteTarget::Data(path) if !path.is_empty())
+                }) {
+                    scalar_pinned.then(|| String::from("a patched structure"))
+                } else {
+                    match inherited {
+                        Some(ty) if !matches!(ty, cel::Type::Dyn) && ty != pinned => {
+                            Some(format!("{ty:?} (the input, meta-patched)"))
+                        }
+                        _ => None,
+                    }
+                }
+            }
+            EmitValue::Replace(_) => scalar_pinned.then(|| String::from("a map construction")),
+        };
+        let Some(found) = found else {
+            return true;
+        };
+        self.bag.push(
+            Diagnostic::new(
+                E_PORT_TYPE,
+                Phase::Check,
+                format!("`{port_name}` is pinned to {pinned:?}; this value is {found}"),
+            )
+            .with_span(span)
+            .with_field("port", port_name.to_string())
+            .with_field("expected", format!("{pinned:?}"))
+            .with_field("found", found),
+        );
+        false
+    }
+
+    /// The `Data` arm of conformance: the tree's precise type, and
+    /// the 32-bit `int` bound where the value is constant at check.
+    fn data_breach(pinned: &cel::Type, tree: &cel::Tree) -> Option<String> {
+        if !matches!(tree.ty, cel::Type::Dyn) && tree.ty != *pinned {
+            return Some(format!("{:?}", tree.ty));
+        }
+        if *pinned == cel::Type::Int
+            && let Ok(cel::Value::Int(value)) = cel::const_eval(tree, &BTreeMap::new())
+            && i32::try_from(value).is_err()
+        {
+            return Some(format!("the constant {value}, outside the 32-bit int"));
+        }
+        None
     }
 
     fn wrong_direction(&mut self, span: Span, port: &str, direction: Direction, required: &str) {

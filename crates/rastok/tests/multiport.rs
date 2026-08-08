@@ -399,3 +399,88 @@ fn an_expectation_on_an_input_refuses_by_direction() {
         expect_refusal("expect \"implicit\" app.in count == 0")
     );
 }
+
+// ===== the conformance matrix — one notion, every EmitValue form =====
+
+fn gauge_graph(body: &str) -> String {
+    format!(
+        "graph g : App {{\n  operator o {{\n    input evt : text\n    output score : int\n\n    \
+         on evt {{\n      {body}\n    }}\n  }}\n\n  . -> o.evt\n  o.score -> .\n}}\n"
+    )
+}
+
+fn conformance_refuses(body: &str) {
+    let source = gauge_graph(body);
+    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the pin holds");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE"),
+        "`{body}` must breach: {bag:?}"
+    );
+}
+
+#[test]
+fn every_emit_form_answers_to_the_pin() {
+    // The reviewer's counter-examples, one per form. Identity: the
+    // text input crosses an int output unchanged.
+    conformance_refuses("score = envelope");
+    // Replace: a map construction into a scalar pin.
+    conformance_refuses("score = {v = 1}");
+    // Patch, field write: builds structure, no scalar pin holds it.
+    conformance_refuses("score = envelope {data.x = 1}");
+    // Patch, whole-data write: answers with the written type.
+    conformance_refuses("score = envelope {data = \"nope\"}");
+    // Data: the 32-bit bound of `int`, on a constant — the exact
+    // var-initializer rule.
+    conformance_refuses("score = 2147483648");
+}
+
+#[test]
+fn conforming_forms_pass() {
+    // Data with the right type and range.
+    compile(
+        &[gauge_graph("score = size(data)").as_str()],
+        &Registry::m0(),
+    )
+    .expect("int through the int pin");
+    // Patch, whole-data write of the pinned type.
+    compile(
+        &[gauge_graph("score = envelope {data = 7}").as_str()],
+        &Registry::m0(),
+    )
+    .expect("a whole-data write of the pinned type");
+    // Nothing produces nothing.
+    compile(&[gauge_graph("score = nothing").as_str()], &Registry::m0()).expect("nothing conforms");
+    // Identity through matching pins.
+    let echoed = "graph g : App {\n  operator o {\n    input evt : text\n    output echo : text\n\n    on evt {\n      echo = envelope\n    }\n  }\n\n  . -> o.evt\n  o.echo -> .\n}\n";
+    compile(&[echoed], &Registry::m0()).expect("text through the text pin, unchanged");
+}
+
+#[test]
+fn a_typed_injection_matrix_holds_at_the_boundary() {
+    let inject = |value: &str| {
+        format!(
+            "graph g : App {{\n  input alpha : int\n\n  operator o {{\n    on a {{ out = data }}\n  }}\n  .alpha -> o.a\n  o -> .\n}}\n\nlab g {{\n  simulation probing on app {{\n    scenario s \"x\" {{\n      app.alpha = {value}\n      expect \"y\" app.out count == 1\n    }}\n  }}\n}}\n"
+        )
+    };
+    // The reviewer's map through the int input.
+    let bag = compile(&[inject("{v = 1}").as_str()], &Registry::m0()).expect_err("a map breaches");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE"),
+        "{bag:?}"
+    );
+    // The bound, at ingress.
+    let bag =
+        compile(&[inject("2147483648").as_str()], &Registry::m0()).expect_err("the bound holds");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE"),
+        "{bag:?}"
+    );
+    // A conforming constant passes.
+    compile(&[inject("7").as_str()], &Registry::m0()).expect("an int through the int input");
+}
