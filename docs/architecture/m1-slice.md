@@ -41,10 +41,15 @@ step touches `vm.rs` once.
    review the same day and re-closed on four findings (`92da490`
    ingress is not observable, `c8459f9` ONE conformance notion over
    every EmitValue form and the physical int bound, `0b0b963` the
-   resolved contract table ships from day one with the
-   `Registry::with` seam, `cf5d21c` format v3 with the gauge fixture
-   pinning hash, package, and trace). The trio's own contract types
-   join the connector-sheet items below.
+   resolved contract table ships from day one with the registry
+   seam, `cf5d21c` format v3 with the gauge fixture pinning hash,
+   package, and trace; `8b61739` third pass — the checker and the
+   machine share ONE data-construction model: the `{…}` shorthand
+   builds the struct the grammar defines, builders fold their writes
+   in the runtime's order, constructed content is judged at the pin
+   at emission-build time, and the Registry validates sheets at the
+   door and is never consulted past resolution). The trio's own
+   contract types join the connector-sheet items below.
 2. **The `jsonl` codec** — structured payloads across the `Process`
    boundary, under the one byte discipline; unlocks realistic `File`
    and HTTP payloads.
