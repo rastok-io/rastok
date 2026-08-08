@@ -66,7 +66,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (365-byte v2 package, full invariant validation + canonicity re-encode) | 4 096 | 205 k | 1.37 ms |
+| `plan::decode` (365-byte v2 package, full invariant validation + canonicity re-encode) | 4 097 | 205 k | 1.37 ms |
 | relay transaction (avg of 32; min 1 779 / max 2 075) | 1 832 | **92 k** | **0.61 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
@@ -81,7 +81,7 @@ Notes the numbers carry:
 - The relay transaction meets its criterion with a **1.6× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 4 096 across the
+- Package decode grew from v1's 1 468 ticks to 4 097 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
   nesting budget, the domain-order audits) and the canonicity

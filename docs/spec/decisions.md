@@ -5,6 +5,26 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-08-3 — A pinned port type is a public contract
+
+Second multiport lift. A port annotation (`input evt : text`)
+resolves through the same type subset as state cells (its deferrals
+refuse identically) and becomes part of the port's declaration
+everywhere the declaration lives: the handler's `data` takes the
+pinned type; an emission, an injection, or an edge whose PRECISE
+type disagrees with a pinned end refuses as `E-PORT-TYPE` (`dyn` on
+either side is inference territory and passes); the package carries
+the type as `port_decl`'s optional third element — absent when
+unannotated, so pre-typed-ports packages are byte-identical; and the
+annotation is IDENTITY (identity.md: types are sensitive), hashed
+with the var-init presence idiom. Unannotated graphs with port
+tables gain one absence tag per port in the hash — an identity move
+declared here, pinned by no golden. **Rejected:** hashing the
+RESOLVED type (inference does not exist yet; annotations-as-written
+is the honest contract), and a runtime type check at edges
+(static-by-default; the boundary will get its own validation with
+the connector sheets).
+
 ## D-2026-08-08-2 — The inbound record carries its ingress port
 
 First M1 lift (multiport). An envelope may now enter through a

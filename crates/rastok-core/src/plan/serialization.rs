@@ -25,7 +25,8 @@ use crate::identity::encoding::cel_tagged;
 use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
-    Node, NodeKind, PlanValidationError, SemanticHash, Slot, Step, ValidatedExecutionPlan, VarCell,
+    Node, NodeKind, PlanValidationError, PortDecl, SemanticHash, Slot, Step,
+    ValidatedExecutionPlan, VarCell,
 };
 
 /// The package's leading magic.
@@ -201,12 +202,7 @@ fn plan_tree(plan: &ExecutionPlan) -> Cbor {
         (1, Cbor::Array(plan.nodes.iter().map(node_tree).collect())),
         (
             2,
-            Cbor::Array(
-                plan.boundary
-                    .iter()
-                    .map(|(port, direction)| port_decl_tree(port, *direction))
-                    .collect(),
-            ),
+            Cbor::Array(plan.boundary.iter().map(port_decl_tree).collect()),
         ),
         (3, Cbor::Array(plan.edges.iter().map(edge_tree).collect())),
         (
@@ -226,12 +222,7 @@ fn node_tree(node: &Node) -> Cbor {
         (2, kind),
         (
             3,
-            Cbor::Array(
-                node.ports
-                    .iter()
-                    .map(|(port, direction)| port_decl_tree(port, *direction))
-                    .collect(),
-            ),
+            Cbor::Array(node.ports.iter().map(port_decl_tree).collect()),
         ),
         (4, Cbor::Array(node.vars.iter().map(var_tree).collect())),
     ]))
@@ -287,14 +278,21 @@ fn attr_tree(setting: &AttrSetting) -> Cbor {
     }
 }
 
-fn port_decl_tree(port: &node::Port, direction: node::Direction) -> Cbor {
-    Cbor::Array(vec![
-        Cbor::Text(port.name().to_string()),
-        Cbor::Uint(match direction {
+fn port_decl_tree(decl: &PortDecl) -> Cbor {
+    let mut parts = vec![
+        Cbor::Text(decl.port.name().to_string()),
+        Cbor::Uint(match decl.direction {
             node::Direction::Input => 1,
             node::Direction::Output => 2,
         }),
-    ])
+    ];
+    // The optional third element is the pinned type — ABSENT when
+    // unannotated, so every pre-typed-ports package is byte-identical
+    // and canonical form stays one form per table.
+    if let Some(ty) = &decl.ty {
+        parts.push(type_tree(ty));
+    }
+    Cbor::Array(parts)
 }
 
 fn var_tree(var: &VarCell) -> Cbor {
@@ -519,9 +517,13 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 max = max.max(6);
             }
         }
-        if !node.ports.is_empty() {
-            // decl array at 4, name and direction at 5.
+        for decl in &node.ports {
+            // decl array at 4, name and direction at 5 — and the
+            // optional pinned type's root at 5 too.
             max = max.max(5);
+            if let Some(ty) = &decl.ty {
+                stack.push(Item::Ty(ty, 5));
+            }
         }
         for var in &node.vars {
             // var map at 4, its fields at 5.
@@ -532,9 +534,13 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             }
         }
     }
-    if !plan.boundary.is_empty() {
-        // decl array at 2, name and direction at 3.
+    for decl in &plan.boundary {
+        // decl array at 2, name and direction at 3 — and the
+        // optional pinned type's root at 3.
         max = max.max(3);
+        if let Some(ty) = &decl.ty {
+            stack.push(Item::Ty(ty, 3));
+        }
     }
     if !plan.edges.is_empty() {
         // edge array at 2, endpoint arrays at 3, their fields at 4.
@@ -794,18 +800,21 @@ fn attr_from(tree: &Cbor) -> Result<AttrSetting, DecodeError> {
     }
 }
 
-fn port_decl_from(tree: &Cbor) -> Result<(node::Port, node::Direction), DecodeError> {
-    match array_of(tree, "port declaration")? {
-        [Cbor::Text(name), Cbor::Uint(direction)] => Ok((
-            node::Port::new(name.clone()).map_err(|_| err("port name"))?,
-            match direction {
-                1 => node::Direction::Input,
-                2 => node::Direction::Output,
-                _ => return Err(err("port direction")),
-            },
-        )),
-        _ => Err(err("port declaration")),
-    }
+fn port_decl_from(tree: &Cbor) -> Result<PortDecl, DecodeError> {
+    let (name, direction, ty) = match array_of(tree, "port declaration")? {
+        [Cbor::Text(name), Cbor::Uint(direction)] => (name, direction, None),
+        [Cbor::Text(name), Cbor::Uint(direction), ty] => (name, direction, Some(type_from(ty)?)),
+        _ => return Err(err("port declaration")),
+    };
+    Ok(PortDecl {
+        port: node::Port::new(name.clone()).map_err(|_| err("port name"))?,
+        direction: match direction {
+            1 => node::Direction::Input,
+            2 => node::Direction::Output,
+            _ => return Err(err("port direction")),
+        },
+        ty,
+    })
 }
 
 fn var_from(tree: &Cbor) -> Result<VarCell, DecodeError> {
@@ -1222,7 +1231,16 @@ mod tests {
                 Node {
                     path: node::Path::new(["relay"]).unwrap(),
                     kind: NodeKind::Operator,
-                    ports: vec![(port("extra"), node::Direction::Output)],
+                    ports: vec![
+                        PortDecl::untyped(port("extra"), node::Direction::Output),
+                        PortDecl {
+                            port: port("typed"),
+                            direction: node::Direction::Input,
+                            ty: Some(cel::Type::Map(Box::new(cel::Type::List(Box::new(
+                                cel::Type::Text,
+                            ))))),
+                        },
+                    ],
                     vars: vec![VarCell {
                         name: text("seen"),
                         ty: cel::Type::Map(Box::new(cel::Type::List(Box::new(cel::Type::Int)))),
@@ -1245,7 +1263,14 @@ mod tests {
                     vars: vec![],
                 },
             ],
-            boundary: vec![(port("feed"), node::Direction::Output)],
+            boundary: vec![
+                PortDecl {
+                    port: port("entry"),
+                    direction: node::Direction::Input,
+                    ty: Some(cel::Type::List(Box::new(cel::Type::Int))),
+                },
+                PortDecl::untyped(port("feed"), node::Direction::Output),
+            ],
             edges: vec![
                 Edge {
                     from: EndpointRef {

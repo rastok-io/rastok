@@ -31,7 +31,7 @@ pub struct Graph {
     pub name: String,
     /// Boundary ports declared on the graph itself; the defaults `in`
     /// and `out` exist implicitly. Identity material.
-    pub boundary: Vec<(node::Port, Direction)>,
+    pub boundary: Vec<crate::plan::PortDecl>,
     /// Graph-level constant bindings, in declaration order.
     pub vals: Vec<Val>,
     /// The graph's nodes, in declaration order.
@@ -95,7 +95,7 @@ pub struct Node {
     pub vars: Vec<Var>,
     /// The semantic port table — declared and inferred, with
     /// directions; the defaults `in`, `out`, `err` stay implicit.
-    pub ports: Vec<(node::Port, Direction)>,
+    pub ports: Vec<crate::plan::PortDecl>,
     /// Checked handlers, in declaration order.
     pub handlers: Vec<Handler>,
 }

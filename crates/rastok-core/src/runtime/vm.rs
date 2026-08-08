@@ -273,8 +273,8 @@ impl<'plan> Vm<'plan> {
         // trusted: the implicit `in` or a DECLARED boundary input —
         // the same union the plan validator holds edges to.
         let ingress_ok = submission.port.name() == "in"
-            || self.plan.boundary.iter().any(|(port, direction)| {
-                port == &submission.port && *direction == node::Direction::Input
+            || self.plan.boundary.iter().any(|decl| {
+                decl.port == submission.port && decl.direction == node::Direction::Input
             });
         if !ingress_ok {
             return Err(VmError::UnknownIngress(submission.port.clone()));

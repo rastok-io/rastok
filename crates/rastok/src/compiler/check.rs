@@ -51,6 +51,10 @@ pub const E_PORT_DIRECTION: Code = Code::new("E-PORT-DIRECTION");
 /// Diagnostic for a port name declared or inferred with conflicting
 /// roles.
 pub const E_PORT_CONFLICT: Code = Code::new("E-PORT-CONFLICT");
+
+/// A value crossing a port whose PINNED type it cannot satisfy — an
+/// emission, an injection, or the two ends of an edge disagreeing.
+pub const E_PORT_TYPE: Code = Code::new("E-PORT-TYPE");
 /// Diagnostic for a wiring cycle — edges form a DAG.
 pub const E_GRAPH_CYCLE: Code = Code::new("E-GRAPH-CYCLE");
 /// Diagnostic for a static literal with two keys canonicalizing equal.
@@ -529,9 +533,9 @@ impl Checker<'_, '_> {
                             );
                             continue;
                         }
-                        _ => match app.boundary.iter().find(|(port, _)| port.name() == *name) {
-                            Some((port, Direction::Input)) => port.clone(),
-                            Some((_, Direction::Output)) => {
+                        _ => match app.boundary.iter().find(|decl| decl.port.name() == *name) {
+                            Some(decl) if decl.direction == Direction::Input => decl.port.clone(),
+                            Some(_) => {
                                 self.wrong_direction(
                                     target.span,
                                     name,
@@ -573,6 +577,35 @@ impl Checker<'_, '_> {
                         })
                     {
                         self.deferred("a custom namespace injection", target.span);
+                        continue;
+                    }
+                    // A pinned input holds its injections to the
+                    // contract, where both sides are precise — the
+                    // same rule emissions follow at outputs.
+                    if let Some(expected) = app
+                        .boundary
+                        .iter()
+                        .find(|decl| decl.port == port)
+                        .and_then(|decl| decl.ty.as_ref())
+                        && let EmitValue::Data(tree) = &value
+                        && !matches!(tree.ty, cel::Type::Dyn)
+                        && tree.ty != *expected
+                    {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_PORT_TYPE,
+                                Phase::Check,
+                                format!(
+                                    "`{}` is pinned to {expected:?}; this injection is {:?}",
+                                    port.name(),
+                                    tree.ty
+                                ),
+                            )
+                            .with_span(target.span)
+                            .with_field("port", port.name().to_string())
+                            .with_field("expected", format!("{expected:?}"))
+                            .with_field("found", format!("{:?}", tree.ty)),
+                        );
                         continue;
                     }
                     let seq = match seq {
@@ -631,10 +664,7 @@ impl Checker<'_, '_> {
                             // would make `expect nothing` a false
                             // green.
                             let known = *port == "out"
-                                || app
-                                    .boundary
-                                    .iter()
-                                    .any(|(declared, _)| declared.name() == *port);
+                                || app.boundary.iter().any(|decl| decl.port.name() == *port);
                             if !known {
                                 self.bag.push(
                                     Diagnostic::new(
@@ -668,10 +698,7 @@ impl Checker<'_, '_> {
                                 continue;
                             };
                             let known = matches!(*port, "in" | "out" | "err")
-                                || node
-                                    .ports
-                                    .iter()
-                                    .any(|(declared, _)| declared.name() == *port);
+                                || node.ports.iter().any(|decl| decl.port.name() == *port);
                             if !known {
                                 self.bag.push(
                                     Diagnostic::new(
@@ -812,9 +839,16 @@ impl Checker<'_, '_> {
         for item in &decl.body {
             match item {
                 GraphItem::Port(port) => {
-                    if port.ty.is_some() {
-                        self.deferred("a typed boundary port", port.span);
-                    }
+                    // The annotation resolves through the same type
+                    // subset as state cells — its deferrals (long,
+                    // float, unions) refuse identically.
+                    let pinned = match &port.ty {
+                        None => None,
+                        Some(type_ref) => match self.state_type(type_ref) {
+                            Some((mapped, _)) => Some(mapped),
+                            None => continue,
+                        },
+                    };
                     let direction = match port.direction {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
@@ -832,7 +866,12 @@ impl Checker<'_, '_> {
                         _ => None,
                     };
                     if let Some(known) = implicit {
-                        if known != direction {
+                        if pinned.is_some() {
+                            // Typing a default pins the trio's own
+                            // contract — that joins the connector
+                            // sheets, not this lift.
+                            self.deferred("a typed default port", port.span);
+                        } else if known != direction {
                             self.bag.push(
                                 Diagnostic::new(
                                     E_PORT_CONFLICT,
@@ -866,7 +905,7 @@ impl Checker<'_, '_> {
                     if graph
                         .boundary
                         .iter()
-                        .any(|(existing, _)| existing.name() == port.name.text)
+                        .any(|decl| decl.port.name() == port.name.text)
                     {
                         self.bag.push(
                             Diagnostic::new(
@@ -883,7 +922,11 @@ impl Checker<'_, '_> {
                         continue;
                     }
                     match node::Port::new(port.name.text.clone()) {
-                        Ok(declared) => graph.boundary.push((declared, direction)),
+                        Ok(declared) => graph.boundary.push(crate::plan::PortDecl {
+                            port: declared,
+                            direction,
+                            ty: pinned,
+                        }),
                         Err(invalid) => self.bag.push(
                             Diagnostic::new(E_PORT_UNKNOWN, Phase::Check, invalid.to_string())
                                 .with_span(port.name.span),
@@ -960,8 +1003,8 @@ impl Checker<'_, '_> {
             let mut outputs: Vec<node::Port> = node
                 .ports
                 .iter()
-                .filter(|(_, direction)| *direction == Direction::Output)
-                .map(|(port, _)| port.clone())
+                .filter(|decl| decl.direction == Direction::Output)
+                .map(|decl| decl.port.clone())
                 .collect();
             for handler in &node.handlers {
                 for statement in &handler.body {
@@ -1391,9 +1434,13 @@ impl Checker<'_, '_> {
                         );
                         continue;
                     }
-                    if port.ty.is_some() {
-                        self.deferred("a typed port", port.span);
-                    }
+                    let pinned = match &port.ty {
+                        None => None,
+                        Some(type_ref) => match self.state_type(type_ref) {
+                            Some((mapped, _)) => Some(mapped),
+                            None => continue,
+                        },
+                    };
                     let direction = match port.direction {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
@@ -1413,7 +1460,7 @@ impl Checker<'_, '_> {
                         );
                         continue;
                     }
-                    self.add_port(node, &port.name, direction, "declared");
+                    self.add_port(node, &port.name, direction, pinned, "declared");
                 }
                 OperatorItem::Val(val) => {
                     if self.bindable(&val.name, &signature)
@@ -1510,12 +1557,14 @@ impl Checker<'_, '_> {
     /// Adds one port to a node's semantic table, refusing conflicting
     /// roles. Default ports are implicit and never added; a matching
     /// explicit or inferred use of a default name is checked against
-    /// the default direction instead.
+    /// the default direction instead. A pinned type on a declaration
+    /// completes an inferred entry; typing a default defers.
     fn add_port(
         &mut self,
         node: &mut Node,
         name: &crate::compiler::syntax::Name,
         direction: Direction,
+        pinned: Option<cel::Type>,
         origin: &str,
     ) {
         let default_direction = match name.text.as_str() {
@@ -1523,11 +1572,15 @@ impl Checker<'_, '_> {
             "out" | "err" => Some(Direction::Output),
             _ => None,
         };
+        if default_direction.is_some() && pinned.is_some() {
+            self.deferred("a typed default port", name.span);
+            return;
+        }
         let existing = default_direction.or_else(|| {
             node.ports
                 .iter()
-                .find(|(port, _)| port.name() == name.text)
-                .map(|(_, direction)| *direction)
+                .find(|decl| decl.port.name() == name.text)
+                .map(|decl| decl.direction)
         });
         match existing {
             Some(known) if known != direction => {
@@ -1546,10 +1599,25 @@ impl Checker<'_, '_> {
                     .with_field("port", name.text.clone()),
                 );
             }
-            Some(_) => {}
+            Some(_) => {
+                // A declaration may COMPLETE an inferred entry with
+                // its pinned type; inference never overwrites one.
+                if let Some(ty) = pinned
+                    && let Some(entry) = node
+                        .ports
+                        .iter_mut()
+                        .find(|decl| decl.port.name() == name.text)
+                {
+                    entry.ty = Some(ty);
+                }
+            }
             None => {
                 if let Ok(port) = node::Port::new(name.text.clone()) {
-                    node.ports.push((port, direction));
+                    node.ports.push(crate::plan::PortDecl {
+                        port,
+                        direction,
+                        ty: pinned,
+                    });
                 } else {
                     self.bag.push(
                         Diagnostic::new(
@@ -1573,7 +1641,7 @@ impl Checker<'_, '_> {
                 continue;
             };
             if let crate::compiler::syntax::Trigger::Port(name) = &handler.trigger {
-                self.add_port(node, name, Direction::Input, "fired by a handler");
+                self.add_port(node, name, Direction::Input, None, "fired by a handler");
             }
             let Some(statements) = &handler.body else {
                 continue;
@@ -1590,7 +1658,7 @@ impl Checker<'_, '_> {
                     || node.vals.iter().any(|val| val.name == name.text)
                     || name.text == "err";
                 if !is_state {
-                    self.add_port(node, name, Direction::Output, "an emission target");
+                    self.add_port(node, name, Direction::Output, None, "an emission target");
                 }
             }
         }
@@ -1792,9 +1860,20 @@ impl Checker<'_, '_> {
                 return None;
             }
         };
+        // A pinned type on the activation port TYPES the handler's
+        // `data` — the annotation's first dividend; unpinned ports
+        // stay `dyn`, inference territory.
+        let data_type = match &activation {
+            node::HandlerActivation::Port(port) => node
+                .ports
+                .iter()
+                .find(|decl| &decl.port == port)
+                .and_then(|decl| decl.ty.clone())
+                .unwrap_or(cel::Type::Dyn),
+        };
         let mut signature = node_signature
             .clone()
-            .with("data", cel::Type::Dyn)
+            .with("data", data_type)
             .with("meta", cel::Type::Dyn);
         let mut guard = None;
         for clause in &decl.guards {
@@ -1920,6 +1999,36 @@ impl Checker<'_, '_> {
                         continue;
                     };
                     if let Some(emit) = self.emit_value(value, &signature, name.span) {
+                        // A pinned output holds its emissions to the
+                        // contract — where both sides are PRECISE:
+                        // `dyn` on either side is inference territory
+                        // and passes.
+                        if let Some(expected) = node
+                            .ports
+                            .iter()
+                            .find(|decl| decl.port == port)
+                            .and_then(|decl| decl.ty.as_ref())
+                            && let EmitValue::Data(tree) = &emit
+                            && !matches!(tree.ty, cel::Type::Dyn)
+                            && tree.ty != *expected
+                        {
+                            self.bag.push(
+                                Diagnostic::new(
+                                    E_PORT_TYPE,
+                                    Phase::Check,
+                                    format!(
+                                        "`{}` is pinned to {expected:?}; this emission is {:?}",
+                                        port.name(),
+                                        tree.ty
+                                    ),
+                                )
+                                .with_span(name.span)
+                                .with_field("port", port.name().to_string())
+                                .with_field("expected", format!("{expected:?}"))
+                                .with_field("found", format!("{:?}", tree.ty)),
+                            );
+                            continue;
+                        }
                         statements.push(Statement::Emit { port, value: emit });
                     }
                 }
@@ -2103,6 +2212,29 @@ impl Checker<'_, '_> {
                 EdgeEndpoint::Nothing(_) => EdgeTarget::Discard,
                 other => EdgeTarget::Port(self.endpoint(other, graph, false)?),
             };
+            // Two PINNED ends must agree — a typed source into a
+            // differently typed target is a contract breach at wiring
+            // time; an unpinned side is inference territory.
+            if let EdgeTarget::Port(target) = &to
+                && let Some(source_ty) = endpoint_pinned_type(&from, graph)
+                && let Some(target_ty) = endpoint_pinned_type(target, graph)
+                && source_ty != target_ty
+            {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_PORT_TYPE,
+                        Phase::Check,
+                        format!(
+                            "this edge connects {source_ty:?} to {target_ty:?}; pinned ends must agree"
+                        ),
+                    )
+                    .with_span(decl.span)
+                    .with_field("port", target.port.name().to_string())
+                    .with_field("expected", format!("{target_ty:?}"))
+                    .with_field("found", format!("{source_ty:?}")),
+                );
+                return None;
+            }
             resolved.push(Edge { from, to });
         }
         Some(resolved)
@@ -2136,12 +2268,12 @@ impl Checker<'_, '_> {
     /// the connector contract's port sheet, then the pre-bound
     /// defaults. `None` means the node exposes no such port.
     fn node_port_direction(&self, target: &Node, port_name: &str) -> Option<Direction> {
-        if let Some((_, direction)) = target
+        if let Some(decl) = target
             .ports
             .iter()
-            .find(|(port, _)| port.name() == port_name)
+            .find(|decl| decl.port.name() == port_name)
         {
-            return Some(*direction);
+            return Some(decl.direction);
         }
         if let Some(trait_name) = target.connector_trait()
             && let stdlib::Availability::Available(contract) = self.registry.connector(trait_name)
@@ -2207,10 +2339,10 @@ impl Checker<'_, '_> {
                     }
                 }
                 Some(name) => {
-                    let Some((_, direction)) = graph
+                    let Some(decl) = graph
                         .boundary
                         .iter()
-                        .find(|(port, _)| port.name() == name.text)
+                        .find(|decl| decl.port.name() == name.text)
                     else {
                         self.bag.push(
                             Diagnostic::new(
@@ -2223,13 +2355,13 @@ impl Checker<'_, '_> {
                         );
                         return None;
                     };
-                    if *direction != expected {
+                    if decl.direction != expected {
                         let required = if is_source {
                             "a boundary edge source must be an input of the graph"
                         } else {
                             "a boundary edge target must be an output of the graph"
                         };
-                        self.wrong_direction(name.span, &name.text, *direction, required);
+                        self.wrong_direction(name.span, &name.text, decl.direction, required);
                         return None;
                     }
                     name.text.as_str()
@@ -2305,6 +2437,29 @@ impl Checker<'_, '_> {
 
 /// The canonical text of one checked edge — the human face of
 /// E-DUP-EDGE, mirroring the plan's rendering.
+/// The pinned type of an edge endpoint, when its port declares one:
+/// a node's table entry, or a declared boundary port — the implicit
+/// trio and unannotated ports answer `None` (inference territory).
+fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<cel::Type> {
+    match &endpoint.node {
+        None => graph
+            .boundary
+            .iter()
+            .find(|decl| decl.port == endpoint.port)
+            .and_then(|decl| decl.ty.clone()),
+        Some(path) => graph
+            .nodes
+            .iter()
+            .find(|node| &node.path == path)
+            .and_then(|node| {
+                node.ports
+                    .iter()
+                    .find(|decl| decl.port == endpoint.port)
+                    .and_then(|decl| decl.ty.clone())
+            }),
+    }
+}
+
 fn edge_display(edge: &Edge) -> String {
     let end = |endpoint: &Endpoint| match &endpoint.node {
         Some(path) => format!("{path}.{}", endpoint.port),
@@ -2815,12 +2970,12 @@ graph m0_probe : App {
         assert!(
             ports
                 .iter()
-                .any(|(port, d)| port.name() == "event" && *d == Direction::Input)
+                .any(|decl| decl.port.name() == "event" && decl.direction == Direction::Input)
         );
         assert!(
             ports
                 .iter()
-                .any(|(port, d)| port.name() == "result" && *d == Direction::Output)
+                .any(|decl| decl.port.name() == "result" && decl.direction == Direction::Output)
         );
     }
 

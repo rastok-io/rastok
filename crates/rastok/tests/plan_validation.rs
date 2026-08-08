@@ -164,7 +164,7 @@ fn a_node_table_cannot_declare_the_implicit_trio() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    relay.ports = vec![(port("in"), Direction::Input)];
+    relay.ports = vec![plan::PortDecl::untyped(port("in"), Direction::Input)];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::ImplicitPortDeclared {
@@ -177,7 +177,7 @@ fn a_node_table_cannot_declare_the_implicit_trio() {
 #[test]
 fn the_boundary_cannot_declare_the_implicit_trio() {
     let mut plan = raw_probe();
-    plan.boundary = vec![(port("err"), Direction::Output)];
+    plan.boundary = vec![plan::PortDecl::untyped(port("err"), Direction::Output)];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::ImplicitPortDeclared {
@@ -193,7 +193,7 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     // INPUT: the boundary convention inverts the node one, and the
     // checker refuses this shape — the type must too.
     let mut plan = raw_probe();
-    plan.boundary = vec![(port("request"), Direction::Input)];
+    plan.boundary = vec![plan::PortDecl::untyped(port("request"), Direction::Input)];
     plan.edges.push(Edge {
         from: EndpointRef {
             node: Some(Slot::new(0)),
@@ -223,7 +223,7 @@ fn a_boundary_output_cannot_be_an_edge_source() {
     // `.response -> operator.in` with `response` declared as a graph
     // OUTPUT.
     let mut plan = raw_probe();
-    plan.boundary = vec![(port("response"), Direction::Output)];
+    plan.boundary = vec![plan::PortDecl::untyped(port("response"), Direction::Output)];
     plan.edges.push(Edge {
         from: EndpointRef {
             node: None,
@@ -306,8 +306,8 @@ fn the_implicit_trio_holds_its_directions() {
 fn an_unsorted_boundary_is_not_canonical() {
     let mut plan = raw_probe();
     plan.boundary = vec![
-        (port("zeta"), Direction::Input),
-        (port("alpha"), Direction::Input),
+        plan::PortDecl::untyped(port("zeta"), Direction::Input),
+        plan::PortDecl::untyped(port("alpha"), Direction::Input),
     ];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -321,8 +321,8 @@ fn an_unsorted_boundary_is_not_canonical() {
 fn a_duplicated_boundary_port_refuses() {
     let mut plan = raw_probe();
     plan.boundary = vec![
-        (port("request"), Direction::Input),
-        (port("request"), Direction::Input),
+        plan::PortDecl::untyped(port("request"), Direction::Input),
+        plan::PortDecl::untyped(port("request"), Direction::Input),
     ];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -436,8 +436,8 @@ fn a_duplicated_node_port_refuses() {
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
     relay.ports = vec![
-        (port("extra"), Direction::Output),
-        (port("extra"), Direction::Output),
+        plan::PortDecl::untyped(port("extra"), Direction::Output),
+        plan::PortDecl::untyped(port("extra"), Direction::Output),
     ];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -531,9 +531,9 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
     // the defect — never NonCanonicalOrder standing in front of it.
     let mut plan = raw_probe();
     plan.boundary = vec![
-        (port("zeta"), Direction::Input),
-        (port("alpha"), Direction::Input),
-        (port("zeta"), Direction::Input),
+        plan::PortDecl::untyped(port("zeta"), Direction::Input),
+        plan::PortDecl::untyped(port("alpha"), Direction::Input),
+        plan::PortDecl::untyped(port("zeta"), Direction::Input),
     ];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),

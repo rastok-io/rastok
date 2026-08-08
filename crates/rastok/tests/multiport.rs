@@ -234,3 +234,137 @@ fn the_inbound_record_carries_its_port_and_omits_the_default() {
         "a named ingress is sealed as key 24"
     );
 }
+
+// ===== typed ports — the annotation is a public contract =====
+
+/// A pinned input types the handler's `data`; the emission is `int`
+/// through `size`, satisfying the pinned output — and the whole
+/// contract rides the Lab.
+const TYPED: &str = r#"
+graph typed : App {
+  input feed : text
+
+  operator gauge {
+    input evt : text
+    output score : int
+
+    on evt {
+      score = size(data)
+    }
+  }
+
+  .feed -> gauge.evt
+  gauge.score -> .
+}
+
+lab typed {
+  simulation probing on app {
+    scenario measures "text in, its size out" {
+      app.feed = "salut"
+      expect "sized" app.out count == 1 where data == 5
+    }
+  }
+}
+"#;
+
+#[test]
+fn a_typed_graph_rides_the_lab() {
+    lab_passes(TYPED);
+}
+
+#[test]
+fn a_pinned_input_types_the_handler_data() {
+    // `data` is TEXT in this handler — multiplying it must refuse at
+    // check; with the old `dyn`, this compiled and faulted at run.
+    let source = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data * 2 }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("text times int refuses");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-CEL-EXPR"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn an_emission_against_a_pinned_output_refuses() {
+    let source = "graph g : App {\n  operator o {\n    output score : int\n    on in { score = \"nope\" }\n  }\n  . -> o\n  o.score -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("a text emission into an int port");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn mismatched_pinned_edge_ends_refuse() {
+    let source = "graph g : App {\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("int wired into text");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn a_typed_injection_refuses_by_contract() {
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = \"text\"\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("a text injection into an int input");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn typed_ports_travel_in_the_package() {
+    use rastok::plan;
+    let compilation = compile(&[TYPED], &Registry::m0()).expect("a valid plan");
+    let gauge = compilation
+        .plan
+        .plan()
+        .nodes
+        .iter()
+        .find(|node| node.path.to_string() == "gauge")
+        .expect("the operator");
+    assert!(
+        gauge
+            .ports
+            .iter()
+            .any(|decl| decl.port.name() == "evt" && decl.ty == Some(rastok::cel::Type::Text)),
+        "the pinned input travels: {:?}",
+        gauge.ports
+    );
+    assert!(
+        compilation
+            .plan
+            .plan()
+            .boundary
+            .iter()
+            .any(|decl| decl.port.name() == "feed" && decl.ty == Some(rastok::cel::Type::Text)),
+        "the pinned boundary input travels: {:?}",
+        compilation.plan.plan().boundary
+    );
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, declared) = plan::decode(&bytes).expect("the typed package opens");
+    assert_eq!(decoded, compilation.plan, "types included");
+    assert_eq!(declared, compilation.hash);
+}
+
+#[test]
+fn the_annotation_is_identity() {
+    // Pinning a type is a public contract — two graphs differing only
+    // by the annotation are two identities.
+    let annotated = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let bare = annotated.replace(" : text", "");
+    let one = compile(&[annotated], &Registry::m0()).expect("a valid plan");
+    let two = compile(&[bare.as_str()], &Registry::m0()).expect("a valid plan");
+    assert_ne!(one.hash, two.hash, "the annotation is identity material");
+    assert_ne!(one.plan, two.plan);
+}

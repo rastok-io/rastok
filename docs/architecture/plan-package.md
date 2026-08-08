@@ -130,7 +130,12 @@ spec       := {1: contract (text), 2: effect, 3: behavior (uint: 1 deterministic
                4: [[name (text), attr]*], 5: [error_kind (text)*]}
 effect     := 0 | [1, class (uint: 1 idempotent · 2 compensable · 3 irreversible)]
 attr       := [1, word (text)] | [2, tagged_value]
-port_decl  := [name (text), direction (uint: 1 in · 2 out)]
+port_decl  := [name (text), direction (uint: 1 in · 2 out), type?]
+              — the third element is the PINNED type (same encoding
+              as var types), present exactly when the source
+              annotates: an unannotated port keeps its two-element
+              form, so pre-typed-ports packages are byte-identical
+              (D-2026-08-08-3)
 var        := {1: name (text), 2: type, 3: init (tagged_value)?}
 
 edge       := [endpoint, endpoint | null]         — null = «-> nothing»

@@ -30,9 +30,19 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     writer.str(&hir.app.name);
     let boundary = sorted_boundary(hir);
     writer.count(boundary.len());
-    for (port, direction) in &boundary {
-        writer.str(port.name());
-        writer.direction(*direction);
+    for decl in &boundary {
+        writer.str(decl.port.name());
+        writer.direction(decl.direction);
+        // The pinned type is identity material — a public contract;
+        // absence hashes as absence (the var-init idiom), so an
+        // unannotated port keeps its bytes.
+        match &decl.ty {
+            None => writer.tag(0),
+            Some(ty) => {
+                writer.tag(1);
+                writer.ty(ty);
+            }
+        }
     }
     let mut vals: Vec<_> = hir.app.vals.iter().collect();
     vals.sort_by(|a, b| a.name.cmp(&b.name));
@@ -56,10 +66,11 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     SemanticHash::from_bytes(bytes)
 }
 
-/// Boundary ports in canonical order.
-fn sorted_boundary(hir: &Hir) -> Vec<(node::Port, Direction)> {
+/// Boundary ports in canonical order — by (port, direction); the
+/// optional pinned type never decides an order.
+fn sorted_boundary(hir: &Hir) -> Vec<crate::plan::PortDecl> {
     let mut boundary = hir.app.boundary.clone();
-    boundary.sort();
+    boundary.sort_by(|a, b| a.key().cmp(&b.key()));
     boundary
 }
 
@@ -122,7 +133,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
             .collect();
         attributes.sort_by(|a, b| a.0.cmp(&b.0));
         let mut ports = hir_node.ports.clone();
-        ports.sort();
+        ports.sort_by(|a, b| a.key().cmp(&b.key()));
         let mut vars: Vec<_> = hir_node
             .vars
             .iter()
@@ -497,19 +508,24 @@ impl Writer {
                 }
             }
         }
-        let mut ports: Vec<_> = node
-            .ports
-            .iter()
-            .map(|(port, direction)| (port.name(), *direction))
-            .collect();
-        ports.sort_unstable();
+        let mut ports: Vec<_> = node.ports.iter().collect();
+        ports.sort_by_key(|decl| (decl.port.name(), decl.direction));
         self.count(ports.len());
-        for (port, direction) in ports {
-            self.str(port);
-            self.tag(match direction {
+        for decl in ports {
+            self.str(decl.port.name());
+            self.tag(match decl.direction {
                 Direction::Input => 1,
                 Direction::Output => 2,
             });
+            // The pinned type, present-or-absent — same idiom as the
+            // boundary and the var initializers.
+            match &decl.ty {
+                None => self.tag(0),
+                Some(ty) => {
+                    self.tag(1);
+                    self.ty(ty);
+                }
+            }
         }
         // Sorted by activation key: the identity is insensitive to
         // declaration order between handlers (identity.md) — only
@@ -870,7 +886,7 @@ graph m0_probe : App {
             "a declared boundary port is identity"
         );
         assert_eq!(ported.plan.boundary.len(), 1);
-        assert_eq!(ported.plan.boundary[0].0.name(), "feed");
+        assert_eq!(ported.plan.boundary[0].port.name(), "feed");
     }
 
     #[test]
@@ -923,8 +939,8 @@ graph m0_probe : App {
         let compilation = compile(&[source], &Registry::m0()).unwrap();
         let ports = &compilation.plan.nodes[0].ports;
         assert_eq!(ports.len(), 2);
-        assert!(ports.iter().any(|(port, _)| port.name() == "event"));
-        assert!(ports.iter().any(|(port, _)| port.name() == "result"));
+        assert!(ports.iter().any(|decl| decl.port.name() == "event"));
+        assert!(ports.iter().any(|decl| decl.port.name() == "result"));
     }
 
     #[test]

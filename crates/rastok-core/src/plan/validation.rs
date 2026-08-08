@@ -300,13 +300,15 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
     }
     let mut boundary_ports = BTreeSet::new();
-    for (port, _) in &plan.boundary {
-        if !boundary_ports.insert(port) {
-            return Err(PlanValidationError::DuplicateBoundaryPort { port: port.clone() });
+    for decl in &plan.boundary {
+        if !boundary_ports.insert(&decl.port) {
+            return Err(PlanValidationError::DuplicateBoundaryPort {
+                port: decl.port.clone(),
+            });
         }
     }
     for pair in plan.boundary.windows(2) {
-        if pair[0] >= pair[1] {
+        if pair[0].key() >= pair[1].key() {
             return Err(PlanValidationError::NonCanonicalOrder {
                 collection: "boundary",
             });
@@ -318,30 +320,30 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // the same rule, so a table naming them is a byte form the
     // lowering can never emit.
     let implicit = |port: &node::Port| matches!(port.name(), "in" | "out" | "err");
-    if let Some((port, _)) = plan.boundary.iter().find(|(port, _)| implicit(port)) {
+    if let Some(decl) = plan.boundary.iter().find(|decl| implicit(&decl.port)) {
         return Err(PlanValidationError::ImplicitPortDeclared {
             node: None,
-            port: port.clone(),
+            port: decl.port.clone(),
         });
     }
     for node in &plan.nodes {
-        if let Some((port, _)) = node.ports.iter().find(|(port, _)| implicit(port)) {
+        if let Some(decl) = node.ports.iter().find(|decl| implicit(&decl.port)) {
             return Err(PlanValidationError::ImplicitPortDeclared {
                 node: Some(node.path.clone()),
-                port: port.clone(),
+                port: decl.port.clone(),
             });
         }
         let mut ports = BTreeSet::new();
-        for (port, _) in &node.ports {
-            if !ports.insert(port) {
+        for decl in &node.ports {
+            if !ports.insert(&decl.port) {
                 return Err(PlanValidationError::DuplicatePort {
                     node: node.path.clone(),
-                    port: port.clone(),
+                    port: decl.port.clone(),
                 });
             }
         }
         for pair in node.ports.windows(2) {
-            if pair[0] >= pair[1] {
+            if pair[0].key() >= pair[1].key() {
                 return Err(PlanValidationError::NonCanonicalOrder {
                     collection: "ports",
                 });
@@ -424,7 +426,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         _ => node
             .ports
             .iter()
-            .any(|(candidate, dir)| candidate == port && *dir == direction),
+            .any(|decl| &decl.port == port && decl.direction == direction),
     };
     let node_at = |slot: Slot| {
         plan.nodes
@@ -468,8 +470,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         _ => plan
                             .boundary
                             .iter()
-                            .find(|(port, _)| port == &endpoint.port)
-                            .map(|(_, declared)| *declared),
+                            .find(|decl| decl.port == endpoint.port)
+                            .map(|decl| decl.direction),
                     };
                     match actual {
                         None => Err(PlanValidationError::UnknownBoundaryPort {

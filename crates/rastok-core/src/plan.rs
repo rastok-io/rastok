@@ -41,6 +41,39 @@ impl Slot {
     }
 }
 
+/// One entry of a port table — a node's or the boundary's: the name,
+/// the direction, and the OPTIONAL pinned type. A present type is a
+/// public contract (identity material, transported in the package);
+/// an absent one is inference territory. The canonical order key is
+/// `(port, direction)` — the type never decides an order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortDecl {
+    /// The port name.
+    pub port: node::Port,
+    /// The declared direction.
+    pub direction: node::Direction,
+    /// The pinned type, when annotated.
+    pub ty: Option<cel::Type>,
+}
+
+impl PortDecl {
+    /// An untyped entry — the whole M0 subset.
+    #[must_use]
+    pub fn untyped(port: node::Port, direction: node::Direction) -> Self {
+        Self {
+            port,
+            direction,
+            ty: None,
+        }
+    }
+
+    /// The canonical order key.
+    #[must_use]
+    pub fn key(&self) -> (&node::Port, node::Direction) {
+        (&self.port, self.direction)
+    }
+}
+
 /// The compiled graph, in the database sense: tables of nodes, edges,
 /// and handlers.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,7 +83,7 @@ pub struct ExecutionPlan {
     /// Boundary ports declared on the graph, in canonical order; the
     /// defaults `in`, `out`, and `err` exist implicitly and are
     /// never in this table.
-    pub boundary: Vec<(node::Port, node::Direction)>,
+    pub boundary: Vec<PortDecl>,
     /// The wiring, desugared to explicit pairs, in canonical order —
     /// the same order the semantic hash sees.
     pub edges: Vec<Edge>,
@@ -97,7 +130,7 @@ pub struct Node {
     pub kind: NodeKind,
     /// The node's semantic port table — declared and inferred, in
     /// canonical order; the defaults `in`, `out`, `err` are implicit.
-    pub ports: Vec<(node::Port, node::Direction)>,
+    pub ports: Vec<PortDecl>,
     /// Declared state cells with their boot-time defaults, in
     /// canonical order.
     pub vars: Vec<VarCell>,
