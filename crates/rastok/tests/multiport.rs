@@ -368,3 +368,34 @@ fn the_annotation_is_identity() {
     assert_ne!(one.hash, two.hash, "the annotation is identity material");
     assert_ne!(one.plan, two.plan);
 }
+
+// ===== observation direction — no false green at the boundary =====
+
+fn expect_refusal(expectation: &str) -> Vec<&'static str> {
+    let source = format!(
+        "{MERGER_GRAPH}\nlab merge {{\n  simulation probing on app {{\n    scenario s \"x\" {{\n      \
+         app.alpha = {{v = 1}}\n      {expectation}\n    }}\n  }}\n}}\n"
+    );
+    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the expectation refuses");
+    bag.diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code().as_str())
+        .collect()
+}
+
+#[test]
+fn an_expectation_on_an_input_refuses_by_direction() {
+    // The reviewer's false green: the machine logs nothing at an
+    // ingress, so `count == 0` there was vacuously true. An input as
+    // an observation target now refuses like any wrong direction.
+    assert!(
+        expect_refusal("expect \"vacuous\" app.alpha count == 0").contains(&"E-PORT-DIRECTION"),
+        "{:?}",
+        expect_refusal("expect \"vacuous\" app.alpha count == 0")
+    );
+    assert!(
+        expect_refusal("expect \"implicit\" app.in count == 0").contains(&"E-PORT-DIRECTION"),
+        "{:?}",
+        expect_refusal("expect \"implicit\" app.in count == 0")
+    );
+}

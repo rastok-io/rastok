@@ -659,23 +659,46 @@ impl Checker<'_, '_> {
                         ["app", "err"] => ExpectTarget::RootErr,
                         ["app", port] => {
                             // A boundary observation watches what
-                            // leaves the App: `out` plus any declared
-                            // boundary port. A typo must refuse — it
-                            // would make `expect nothing` a false
-                            // green.
-                            let known = *port == "out"
-                                || app.boundary.iter().any(|decl| decl.port.name() == *port);
-                            if !known {
-                                self.bag.push(
-                                    Diagnostic::new(
-                                        E_PORT_UNKNOWN,
-                                        Phase::Check,
-                                        format!("the App boundary exposes no port named `{port}`"),
-                                    )
-                                    .with_span(expect.target.span)
-                                    .with_field("port", (*port).to_string()),
-                                );
-                                continue;
+                            // LEAVES the App: `out` plus the declared
+                            // boundary OUTPUTS. An input is an
+                            // ingress, never a destination — the
+                            // machine logs nothing there, so an
+                            // expectation on one (like a typo) would
+                            // be a false green by construction.
+                            let direction = match *port {
+                                "out" => Some(Direction::Output),
+                                "in" => Some(Direction::Input),
+                                _ => app
+                                    .boundary
+                                    .iter()
+                                    .find(|decl| decl.port.name() == *port)
+                                    .map(|decl| decl.direction),
+                            };
+                            match direction {
+                                None => {
+                                    self.bag.push(
+                                        Diagnostic::new(
+                                            E_PORT_UNKNOWN,
+                                            Phase::Check,
+                                            format!(
+                                                "the App boundary exposes no port named `{port}`"
+                                            ),
+                                        )
+                                        .with_span(expect.target.span)
+                                        .with_field("port", (*port).to_string()),
+                                    );
+                                    continue;
+                                }
+                                Some(Direction::Input) => {
+                                    self.wrong_direction(
+                                        expect.target.span,
+                                        port,
+                                        Direction::Input,
+                                        "an expectation watches what leaves the App",
+                                    );
+                                    continue;
+                                }
+                                Some(Direction::Output) => {}
                             }
                             match node::Port::new((*port).to_string()) {
                                 Ok(port) => ExpectTarget::Boundary(port),
