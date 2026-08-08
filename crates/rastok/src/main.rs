@@ -139,6 +139,9 @@ fn run(paths: &[String]) -> ExitCode {
         };
         let submission = InboundSubmission {
             authority: IngressAuthority::single(authority.clone()),
+            // The line-fed run enters through the implicit input;
+            // named ingress is the Lab's and the future servers'.
+            port: node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
             draft: Draft {
                 data: Data::materialized(Value::Scalar(Scalar::Text(line))),
                 mime_type: Some(String::from("text/plain")),

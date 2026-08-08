@@ -52,6 +52,10 @@ pub enum VmError {
     /// A causal closure arrived for a call this machine holds no
     /// pending request for — an integrity breach, never a silence.
     MissingPending(CallRef),
+    /// An injection at a port that is not a graph input — neither the
+    /// implicit `in` nor a declared boundary input. Checked sources
+    /// never build one; the raw API is verified, not trusted.
+    UnknownIngress(node::Port),
 }
 
 impl fmt::Display for VmError {
@@ -65,6 +69,9 @@ impl fmt::Display for VmError {
             }
             Self::MissingPending(_) => {
                 f.write_str("a closure settled a call with no pending request")
+            }
+            Self::UnknownIngress(port) => {
+                write!(f, "`{port}` is not an input of this graph")
             }
         }
     }
@@ -262,11 +269,19 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         submission: InboundSubmission,
     ) -> Result<Id, VmError> {
-        let boundary_in =
-            node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port"));
+        // The submission's port is verified against the graph, not
+        // trusted: the implicit `in` or a DECLARED boundary input —
+        // the same union the plan validator holds edges to.
+        let ingress_ok = submission.port.name() == "in"
+            || self.plan.boundary.iter().any(|(port, direction)| {
+                port == &submission.port && *direction == node::Direction::Input
+            });
+        if !ingress_ok {
+            return Err(VmError::UnknownIngress(submission.port.clone()));
+        }
         let from = EndpointRef {
             node: None,
-            port: boundary_in,
+            port: submission.port.clone(),
         };
         self.reserve_targets(&from)?;
         let committed = journal

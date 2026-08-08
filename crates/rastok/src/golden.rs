@@ -285,6 +285,7 @@ fn key_name(key: u64) -> String {
         21 => "connector_path",
         22 => "inbound_seq",
         23 => "replica",
+        24 => "ingress_port",
         30 => "node_path",
         31 => "partition_key",
         32 => "trigger",
@@ -310,16 +311,25 @@ fn key_name(key: u64) -> String {
 
 fn record_tree(record: &Record) -> Cbor {
     match record {
-        Record::Inbound(inbound) => Cbor::Map(BTreeMap::from([
-            (10, Cbor::Uint(1)),
-            (20, spine(&inbound.envelope)),
-            (
-                21,
-                Cbor::Text(inbound.authority.connector_path().to_string()),
-            ),
-            (22, Cbor::Uint(inbound.seq)),
-            (23, Cbor::Uint(inbound.authority.replica())),
-        ])),
+        Record::Inbound(inbound) => {
+            let mut pairs = BTreeMap::from([
+                (10, Cbor::Uint(1)),
+                (20, spine(&inbound.envelope)),
+                (
+                    21,
+                    Cbor::Text(inbound.authority.connector_path().to_string()),
+                ),
+                (22, Cbor::Uint(inbound.seq)),
+                (23, Cbor::Uint(inbound.authority.replica())),
+            ]);
+            // Key 24: the ingress port — a causal fact since named
+            // boundary inputs, omitted for the default `in` (absent
+            // = omitted), so pre-multiport traces are byte-identical.
+            if inbound.port.name() != "in" {
+                pairs.insert(24, Cbor::Text(inbound.port.name().to_string()));
+            }
+            Cbor::Map(pairs)
+        }
         Record::Transaction(transaction) => {
             let mut pairs = BTreeMap::from([
                 (10, Cbor::Uint(2)),

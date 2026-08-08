@@ -104,7 +104,7 @@ fn run_scenario(
     let mut window_start = 0usize;
     for step in &scenario.steps {
         match step {
-            ScenarioStep::Inject { value, seq } => {
+            ScenarioStep::Inject { port, value, seq } => {
                 window_start = vm.observations().len();
                 match draft(value) {
                     Ok(draft) => {
@@ -113,6 +113,7 @@ fn run_scenario(
                                 node::Path::new(["lab"])
                                     .unwrap_or_else(|_| unreachable!("`lab` is a valid path")),
                             ),
+                            port: port.clone(),
                             draft,
                             sequence: match seq {
                                 Some(seq) => SubmissionSequence::Explicit(*seq),

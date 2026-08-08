@@ -192,6 +192,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
     let mut vm = Vm::boot(plan, GraphVersion(1));
     let submission = InboundSubmission {
         authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+        port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Scalar(Scalar::Text(String::from("go")))),
             mime_type: None,

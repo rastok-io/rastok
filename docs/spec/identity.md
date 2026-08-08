@@ -157,7 +157,7 @@ on replay), never a compared byte of the seal. Two runs differ in the
 seal because their *records and orders* differ, not because a time
 field differs.
 
-**INBOUND** (kind 1 — an envelope entered) — keys `20–22` :
+**INBOUND** (kind 1 — an envelope entered) — keys `20–24` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -165,6 +165,7 @@ field differs.
 | 21 | connector_path | text | the ingress node's root-relative path (root recipe input, envelope.md §2) |
 | 22 | inbound_seq | uint | the atomic sequence for `(connector_path, replica)` — minted by the owning shard's leader ; root recipe input |
 | 23 | replica | uint | the logical replica id = `shard_id` ; sealed so the record autonomously reconstructs the root recipe `(connector_path, replica, inbound_seq)` ; the entry is passive, the owning shard's leader mints under this stable, worker-independent identity |
+| 24 | ingress_port | text | the graph input the envelope entered — a causal fact : replay re-routes from this port ; **omitted for the default `in`** (absent = omitted), so pre-multiport records are byte-identical (D-2026-08-08-2) |
 
 **TRANSACTION** (kind 2 — one node firing ; the commit packet of
 execution-model §1) — keys `30–37` :

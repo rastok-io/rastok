@@ -285,7 +285,8 @@ traces and replay — an index, not history) :
 
 ```
    ① INBOUND record       the world enters
-        { connector, inbound_seq, envelope, committed_at }
+        { connector, inbound_seq, envelope, ingress_port, committed_at }
+        ingress_port = the graph input entered (default `in`, omitted) ;
         inbound_seq committed ATOMICALLY with the accept ;
         ordering rule : COMMIT-THEN-ACK (the record is durable before the
         protocol acknowledgement leaves). A crash between the two → the

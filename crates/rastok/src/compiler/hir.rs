@@ -303,6 +303,9 @@ pub struct Scenario {
 pub enum ScenarioStep {
     /// The world sends: an injection at the App boundary.
     Inject {
+        /// The graph input the draft enters — `in` or a declared
+        /// boundary input, resolved and direction-checked.
+        port: node::Port,
         /// The draft content, in emission vocabulary.
         value: EmitValue,
         /// The explicit inbound sequence, when written.

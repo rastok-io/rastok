@@ -81,6 +81,7 @@ fn submission(text: &str) -> InboundSubmission {
     );
     InboundSubmission {
         authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Map(data)),
             mime_type: None,

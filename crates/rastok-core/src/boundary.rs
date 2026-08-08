@@ -262,6 +262,10 @@ pub enum SubmissionSequence {
 pub struct InboundSubmission {
     /// Who proposes it.
     pub authority: IngressAuthority,
+    /// The graph input the draft enters — `in` or a declared
+    /// boundary input. Journaled with the record: replay must
+    /// re-route from the same port, so the port is a causal fact.
+    pub port: node::Port,
     /// The payload and birth metadata.
     pub draft: Draft,
     /// How the sequence is chosen.
@@ -589,6 +593,7 @@ mod tests {
         let committed = journal
             .append_inbound(InboundSubmission {
                 authority: IngressAuthority::single(node::Path::new(["inbound"]).unwrap()),
+                port: node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::encoded(Encoding::Raw, *b"salut"),
                     mime_type: None,

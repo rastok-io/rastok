@@ -288,6 +288,7 @@ fn submission(text: &str) -> InboundSubmission {
         authority: IngressAuthority::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
+        port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
         draft: Draft {
             data: Data::materialized(Value::Map(data)),
             mime_type: None,
@@ -502,6 +503,7 @@ fn interleave_battery(
         authority: IngressAuthority::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
+        port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
         draft: Draft {
             data: Data::materialized(Value::Map(data)),
             mime_type: None,

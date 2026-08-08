@@ -5,6 +5,23 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-08-2 — The inbound record carries its ingress port
+
+First M1 lift (multiport). An envelope may now enter through a
+DECLARED boundary input, so the port becomes a causal fact — replay
+must re-route from the same input — and it joins the INBOUND record
+as key 24 (`ingress_port`, text), extend-only per the table
+discipline: **omitted for the default `in`** (absent = omitted), so
+every pre-multiport trace is byte-identical and no golden re-bless
+is needed. The machine verifies the submission's port against the
+plan (implicit `in` or a declared boundary input) and refuses
+anything else typed (`UnknownIngress`); the checker resolves and
+direction-checks the injection target, so a checked scenario never
+reaches that refusal. **Rejected:** keying the record on the edge
+list instead of the port (routing is the plan's job, the record
+states the fact), and a required key 24 (would move every existing
+trace for a default nobody wrote).
+
 ## D-2026-08-08-1 — A default port may be restated once
 
 "Redefinable" in the grammar is bounded like every other

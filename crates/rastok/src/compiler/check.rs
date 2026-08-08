@@ -508,13 +508,52 @@ impl Checker<'_, '_> {
                         .iter()
                         .map(|segment| segment.text.as_str())
                         .collect();
-                    if segments != ["app", "in"] {
-                        // Source-Connector injection joins with the
-                        // source adapters; `app.in` is this build's
-                        // ingress.
-                        self.deferred("an injection outside `app.in`", target.span);
+                    // The injection target is a graph INPUT of the
+                    // App — the implicit `in` or a declared boundary
+                    // input; the boundary convention makes a boundary
+                    // source an input of the graph. Source-Connector
+                    // injection still joins with the source adapters.
+                    let ["app", name] = segments.as_slice() else {
+                        self.deferred("an injection outside the app boundary", target.span);
                         continue;
-                    }
+                    };
+                    let port = match *name {
+                        "in" => node::Port::new("in")
+                            .unwrap_or_else(|_| unreachable!("`in` is a valid port")),
+                        "out" | "err" => {
+                            self.wrong_direction(
+                                target.span,
+                                name,
+                                Direction::Output,
+                                "an injection enters through a graph input",
+                            );
+                            continue;
+                        }
+                        _ => match app.boundary.iter().find(|(port, _)| port.name() == *name) {
+                            Some((port, Direction::Input)) => port.clone(),
+                            Some((_, Direction::Output)) => {
+                                self.wrong_direction(
+                                    target.span,
+                                    name,
+                                    Direction::Output,
+                                    "an injection enters through a graph input",
+                                );
+                                continue;
+                            }
+                            None => {
+                                self.bag.push(
+                                    Diagnostic::new(
+                                        E_PORT_UNKNOWN,
+                                        Phase::Check,
+                                        format!("the App boundary exposes no input named `{name}`"),
+                                    )
+                                    .with_span(target.span)
+                                    .with_field("port", (*name).to_string()),
+                                );
+                                continue;
+                            }
+                        },
+                    };
                     // A draft is world-authored: it is built from
                     // constants, with no input to read.
                     let signature = cel::Signature::new();
@@ -555,7 +594,7 @@ impl Checker<'_, '_> {
                             }
                         },
                     };
-                    steps.push(ScenarioStep::Inject { value, seq });
+                    steps.push(ScenarioStep::Inject { port, value, seq });
                 }
                 ScenarioItem::Advance { expr, span } => {
                     let signature = cel::Signature::new();

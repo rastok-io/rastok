@@ -123,12 +123,17 @@ pub enum Record {
 }
 
 /// An accepted inbound envelope and its record (`identity.md` §3,
-/// keys 20–23). The record autonomously reconstructs its root id from
+/// keys 20–24). The record autonomously reconstructs its root id from
 /// `(connector_path, replica, seq)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundRecord {
     /// Who accepted it.
     pub authority: IngressAuthority,
+    /// The graph input the envelope entered — a causal fact: replay
+    /// re-routes from this port. Projects as key 24, omitted for the
+    /// default `in` (absent = omitted, so pre-multiport traces are
+    /// byte-identical).
+    pub port: node::Port,
     /// The atomic per-authority sequence.
     pub seq: u64,
     /// The envelope born here.
@@ -414,6 +419,7 @@ impl Journal for MemJournal {
         );
         let record = InboundRecord {
             authority: submission.authority.clone(),
+            port: submission.port,
             seq,
             envelope: envelope.clone(),
         };
@@ -543,6 +549,7 @@ mod tests {
     fn submission(path: &str, sequence: SubmissionSequence) -> InboundSubmission {
         InboundSubmission {
             authority: authority(path),
+            port: node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::encoded(Encoding::Raw, *b"hello"),
                 mime_type: Some(String::from("text/plain")),

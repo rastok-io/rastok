@@ -67,12 +67,12 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
 | `plan::decode` (365-byte v2 package, full invariant validation + canonicity re-encode) | 4 096 | 205 k | 1.37 ms |
-| relay transaction (avg of 32; min 1 775 / max 2 073) | 1 839 | **92 k** | **0.61 ms** |
+| relay transaction (avg of 32; min 1 779 / max 2 075) | 1 832 | **92 k** | **0.61 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled rounds) | 62 360 B (60.9 KiB) | < 128 KiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled rounds) | 63 048 B (61.6 KiB) | < 128 KiB ✓ |
 | Flash `.text` + `.rodata` (opt-level=z + LTO) | 163 + 30 = 193 KiB | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
@@ -89,8 +89,9 @@ Notes the numbers carry:
   integrity work done once at boot, and the price is stated rather
   than hidden. No criterion bounds boot cost; the transaction path
   is unchanged.
-- The true high-water mark (60.9 KiB) sits above the old sampled
-  figure (57.2 KiB), as a real peak must.
+- The true high-water mark (61.6 KiB) sits above the old sampled
+  figure (57.2 KiB), as a real peak must; the first M1 lift added
+  the ingress port to every inbound record (+688 B over 32 rounds).
 - The semantic hash printed by the emulated kernel is byte-identical
   to the host's: `e166cf4a…` — the identity function is the same
   function everywhere.
@@ -127,7 +128,7 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 **GO (provisional), re-issued 2026-08-07 on the corrected
 instrumentation.** All four criteria of record hold: no patched
 dependencies, 92 k instructions per relay transaction against the
-150 k bound (1.6×), a 60.9 KiB true high-water mark against 128 KiB,
+150 k bound (1.6×), a 61.6 KiB true high-water mark against 128 KiB,
 193 KiB of flash against 1 MiB. The margins are thinner than first
 claimed and are reported as measured. The option stays dormant as
 planned — no embedded chantier opens. Silicon confirmation (volet B)

@@ -469,6 +469,7 @@ graph real : App {
         );
         InboundSubmission {
             authority: IngressAuthority::single(crate::node::Path::new(["cli"]).unwrap()),
+            port: crate::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Map(data)),
                 mime_type: None,

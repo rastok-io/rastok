@@ -122,6 +122,7 @@ fn submission(text: &str, marker: u8) -> InboundSubmission {
     let _ = &mut app;
     InboundSubmission {
         authority: IngressAuthority::single(Path::new(["pico"]).unwrap()),
+        port: rastok_core::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Scalar(Scalar::Text(String::from(text)))),
             mime_type: None,
