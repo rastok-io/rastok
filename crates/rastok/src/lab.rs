@@ -303,7 +303,7 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
                 app: Namespace::new(),
             })
         }
-        EmitValue::Record(writes) | EmitValue::Patch(writes) => {
+        EmitValue::FreshData(writes) | EmitValue::Patch(writes) => {
             // A draft is born a fresh STRUCT — the same physical form
             // the handler builders produce (`{…}` builds a struct).
             let mut data = crate::envelope::Value::Struct(Vec::new());
@@ -371,66 +371,54 @@ impl MockPartner<'_> {
             ));
             return None;
         };
-        // The request materializes ON DEMAND, like the machine's own
-        // bindings: an identity reply or a meta-only guard must
-        // never force an opaque request to decode.
-        use crate::compiler::hir::Statement;
-        let needs_data = mock.handlers.iter().any(|handler| {
-            handler.guard.as_ref().is_some_and(runtime::reads_data)
-                || handler.body.iter().any(|statement| match statement {
-                    Statement::Emit { value, .. } => match value {
-                        EmitValue::Identity | EmitValue::Nothing => false,
-                        EmitValue::Data(tree) => runtime::reads_data(tree),
-                        EmitValue::Patch(writes) | EmitValue::Record(writes) => {
-                            writes.iter().any(|write| runtime::reads_data(&write.value))
-                        }
-                    },
-                    Statement::Let { value, .. } => runtime::reads_data(value),
-                    Statement::SetVar { value, .. } => runtime::reads_data(value),
-                })
-        });
+        // The request materializes on the EVALUATOR'S demand, like
+        // the machine's own bindings: an identity reply, a meta-only
+        // guard, a losing later branch, or a statement past the
+        // reply must never force an opaque request to decode. The
+        // slot caches across branches — one decode at most.
         let mut env: BTreeMap<String, cel::Value> = BTreeMap::new();
-        if needs_data {
-            match runtime::data_value(request.data()) {
-                Ok(data) => {
-                    env.insert(String::from("data"), data);
-                }
-                Err(fault) => {
-                    self.faults
-                        .push(format!("the mock request is unreadable: {fault}"));
-                    return None;
-                }
-            }
-        }
         env.insert(String::from("meta"), runtime::meta_value(request.meta()));
+        let slot = runtime::DataSlot::new(request.data());
         for handler in &mock.handlers {
             let passes = match &handler.guard {
                 None => true,
-                Some(guard) => match cel::eval(guard, &env) {
-                    Ok(cel::Value::Bool(passes)) => passes,
-                    // A faulting or non-boolean guard is a fault of
-                    // the scenario, never a silent fall-through to
-                    // the next branch.
-                    Ok(other) => {
-                        self.faults.push(format!(
-                            "a mock guard of `{}` is not a bool (got {other:?})",
-                            intent.connector_path
-                        ));
+                Some(guard) => {
+                    let lazy = runtime::LazyBindings {
+                        base: &env,
+                        data: &slot,
+                    };
+                    let result = cel::eval(guard, &lazy);
+                    if let Some(fault) = slot.take_fault() {
+                        self.faults
+                            .push(format!("the mock request is unreadable: {fault}"));
                         return None;
                     }
-                    Err(error) => {
-                        self.faults.push(format!(
-                            "a mock guard of `{}` faulted: {error}",
-                            intent.connector_path
-                        ));
-                        return None;
+                    match result {
+                        Ok(cel::Value::Bool(passes)) => passes,
+                        // A faulting or non-boolean guard is a fault
+                        // of the scenario, never a silent
+                        // fall-through to the next branch.
+                        Ok(other) => {
+                            self.faults.push(format!(
+                                "a mock guard of `{}` is not a bool (got {other:?})",
+                                intent.connector_path
+                            ));
+                            return None;
+                        }
+                        Err(error) => {
+                            self.faults.push(format!(
+                                "a mock guard of `{}` faulted: {error}",
+                                intent.connector_path
+                            ));
+                            return None;
+                        }
                     }
-                },
+                }
             };
             if !passes {
                 continue;
             }
-            return self.reply(handler, request, env);
+            return self.reply(handler, request, env, &slot);
         }
         self.faults.push(format!(
             "no mock branch of `{}` matched the request; add a catch-all or script silence",
@@ -447,16 +435,17 @@ impl MockPartner<'_> {
         handler: &crate::compiler::hir::Handler,
         request: &Envelope,
         mut env: BTreeMap<String, cel::Value>,
+        slot: &runtime::DataSlot<'_>,
     ) -> Option<CallOutcome> {
         use crate::compiler::hir::Statement;
         for statement in &handler.body {
             match statement {
-                Statement::Let { name, value } => match cel::eval(value, &env) {
+                Statement::Let { name, value } => match self.lazy_eval(value, &env, slot) {
                     Ok(value) => {
                         env.insert(name.clone(), value);
                     }
-                    Err(error) => {
-                        self.faults.push(format!("the mock faulted: {error}"));
+                    Err(message) => {
+                        self.faults.push(message);
                         return None;
                     }
                 },
@@ -465,7 +454,7 @@ impl MockPartner<'_> {
                     // node; nothing reaches here.
                 }
                 Statement::Emit { value, .. } => {
-                    return match self.mock_data(value, request, &env) {
+                    return match self.mock_data(value, request, &env, slot) {
                         Ok(Some(data)) => Some(CallOutcome::Success(data)),
                         Ok(None) => None,
                         Err(message) => {
@@ -479,39 +468,59 @@ impl MockPartner<'_> {
         None
     }
 
+    /// One lazily-bound evaluation; an unreadable request keeps its
+    /// dedicated message, any other fault is the mock's own.
+    fn lazy_eval(
+        &self,
+        tree: &cel::Tree,
+        env: &BTreeMap<String, cel::Value>,
+        slot: &runtime::DataSlot<'_>,
+    ) -> Result<cel::Value, String> {
+        let lazy = runtime::LazyBindings {
+            base: env,
+            data: slot,
+        };
+        let result = cel::eval(tree, &lazy);
+        if let Some(fault) = slot.take_fault() {
+            return Err(format!("the mock request is unreadable: {fault}"));
+        }
+        result.map_err(|error| format!("the mock faulted: {error}"))
+    }
+
     fn mock_data(
         &self,
         value: &EmitValue,
         request: &Envelope,
         env: &BTreeMap<String, cel::Value>,
+        slot: &runtime::DataSlot<'_>,
     ) -> Result<Option<Data>, String> {
         match value {
             EmitValue::Nothing => Ok(None),
             EmitValue::Identity => Ok(Some(request.data().clone())),
             EmitValue::Data(tree) => {
-                let value =
-                    cel::eval(tree, env).map_err(|error| format!("the mock faulted: {error}"))?;
+                let value = self.lazy_eval(tree, env, slot)?;
                 Ok(Some(Data::materialized(
                     runtime::to_envelope_value(&value)
                         .map_err(|fault| format!("the mock faulted: {fault}"))?,
                 )))
             }
-            EmitValue::Record(writes) | EmitValue::Patch(writes) => {
-                let mut data = if matches!(value, EmitValue::Patch(_)) {
-                    match request.data() {
-                        Data::Materialized(value) => value.clone(),
-                        encoded => runtime::to_envelope_value(
-                            &runtime::data_value(encoded)
-                                .map_err(|fault| format!("the mock faulted: {fault}"))?,
-                        )
-                        .map_err(|fault| format!("the mock faulted: {fault}"))?,
-                    }
-                } else {
-                    crate::envelope::Value::Struct(Vec::new())
-                };
+            EmitValue::FreshData(writes) | EmitValue::Patch(writes) => {
+                let mut data =
+                    if matches!(value, EmitValue::Patch(_)) {
+                        match request.data() {
+                            Data::Materialized(value) => value.clone(),
+                            // A patch base is a DIRECT demand, through
+                            // the same cached slot.
+                            _ => runtime::to_envelope_value(&slot.materialize().map_err(
+                                |fault| format!("the mock request is unreadable: {fault}"),
+                            )?)
+                            .map_err(|fault| format!("the mock faulted: {fault}"))?,
+                        }
+                    } else {
+                        crate::envelope::Value::Struct(Vec::new())
+                    };
                 for write in writes {
-                    let evaluated = cel::eval(&write.value, env)
-                        .map_err(|error| format!("the mock faulted: {error}"))?;
+                    let evaluated = self.lazy_eval(&write.value, env, slot)?;
                     match &write.target {
                         WriteTarget::Data(path) => {
                             let leaf = runtime::to_envelope_value(&evaluated)
@@ -553,6 +562,73 @@ mod tests {
     use super::*;
     use crate::compiler::compile;
     use crate::stdlib::Registry;
+
+    /// Drives the scripted partner directly with an OPAQUE request:
+    /// the branch and statement structure decides the demand, so a
+    /// pre-scan of every handler would fail both cases below.
+    fn opaque_answer(mock_body: &str) -> (Option<CallOutcome>, Vec<String>) {
+        let source = format!(
+            "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> echo -> .\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
+        );
+        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+        let mock = &compilation.labs[0].simulations[0].mocks[0];
+        let path = node::Path::new(["echo"]).unwrap();
+        let mut mocks: BTreeMap<node::Path, &crate::compiler::hir::Mock> = BTreeMap::new();
+        mocks.insert(path.clone(), mock);
+        let mut partner = MockPartner {
+            mocks,
+            pending: Vec::new(),
+            faults: Vec::new(),
+        };
+        let id = crate::envelope::Id::derive(0x01, &[b"request", &0u64.to_le_bytes()]);
+        let request = Envelope::new(
+            crate::envelope::Meta::new(crate::envelope::MetaSys::root(id, 1)),
+            Data::encoded(crate::envelope::Encoding::Avro, *b"\x01\x02"),
+        );
+        let prepared = crate::boundary::PreparedRequest::seal(vec![1]);
+        let intent = crate::boundary::Intent {
+            call_ref: crate::journal::ids::call_ref(
+                crate::journal::ids::delivery_ref(".in>echo.in", id),
+                prepared.digest(),
+            ),
+            emitting_id: id,
+            edge: String::from(".in>echo.in"),
+            connector_path: path,
+            prepared,
+            idempotency_key: None,
+            effect: node::EffectClass::Idempotent,
+        };
+        let outcome = partner.answer(&intent, &request);
+        (outcome, partner.faults)
+    }
+
+    #[test]
+    fn a_winning_earlier_branch_never_decodes_for_a_later_one() {
+        // The first branch is meta-only and WINS; the second reads
+        // `data`. The losing branch's text must not force the opaque
+        // request to decode.
+        let (outcome, faults) = opaque_answer(
+            "      on in where meta.sys.graph_version == 1 { out = {status = \"ok\"} }\n      on in where data == \"x\" { out = . }",
+        );
+        assert!(faults.is_empty(), "no forced decode: {faults:?}");
+        assert!(
+            matches!(outcome, Some(CallOutcome::Success(_))),
+            "the meta-only branch answered"
+        );
+    }
+
+    #[test]
+    fn a_statement_past_the_reply_never_demands_the_request() {
+        // The reply returns at the first emission; a later statement
+        // reading `data` is never reached — and never pre-read.
+        let (outcome, faults) =
+            opaque_answer("      on in {\n        out = .\n        val forced = data\n      }");
+        assert!(faults.is_empty(), "nothing past the reply ran: {faults:?}");
+        assert!(
+            matches!(outcome, Some(CallOutcome::Success(Data::Encoded { .. }))),
+            "the identity reply ships the bytes whole"
+        );
+    }
 
     /// The M0 probe and its lab, in one unit — the graph under test
     /// is the production graph; only the world is scripted.

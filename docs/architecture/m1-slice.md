@@ -70,7 +70,19 @@ step touches `vm.rs` once.
    (`ConformanceViolation`), and the maintainer's syntax reform
    landed as D-2026-08-09-1: one braced form classified once,
    `.` for identity, the `envelope`/`struct` value spellings
-   removed — same hash, package, and trace on the gauge). The
+   removed — same hash, package, and trace on the gauge; eighth
+   pass — the data demand comes from the EVALUATOR itself
+   (`DataSlot`/`LazyBindings`: a short-circuited branch, a losing
+   mock branch, or a statement past the reply never forces an
+   opaque decode — the static pre-scan could not express that), a
+   nested empty record is a VALUE (the one struct constant a plan
+   may carry: the empty literal; the format reads it, the validator
+   admits exactly it), struct equality is sorted-field — total,
+   reflexive, and symmetric even on door-refused duplicates — in
+   both domains and the CEL `==`, a sub-block's name is a
+   classification root like a field's first segment, the frozen
+   bench card v1 is restored byte-for-byte with the M1 surface on a
+   new v2, and the fresh-data variant is named `FreshData`). The
    trio's own contract types join the connector-sheet items below.
 2. **The `jsonl` codec** — structured payloads across the `Process`
    boundary, under the one byte discipline; unlocks realistic `File`

@@ -10,9 +10,11 @@ guided generation, or an expert-only authoring surface.
 ## Layout
 
 - `prompts/` — the language card given to every model, one frozen
-  file per version (`v1.md` = the M0 surface). A card is never
-  edited after a wave has used it; a language evolution gets a new
-  version, and re-running old tasks on a new card measures stability.
+  file per version (`v1.md` = the M0 surface; `v2.md` = the M1
+  surface after the braced-form reform, D-2026-08-09-1). A card is
+  never edited after a wave has used it; a language evolution gets a
+  new version, and re-running old tasks on a new card measures
+  stability.
 - `tasks/T*/` — one directory per task:
   - `task.md` — the statement the model receives (with the pinned
     interface names the referee depends on);

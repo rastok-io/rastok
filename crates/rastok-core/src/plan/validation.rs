@@ -683,6 +683,10 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 /// the form, so admitting it would break `encode ⇒ decode`.
 fn value_expressible(value: &cel::Value) -> Result<(), PlanValidationError> {
     match value {
+        // CEL cannot CONSTRUCT a struct; the one struct constant a
+        // compiler emits is the EMPTY record literal (`parent = {}`,
+        // D-2026-08-09-1). Anything with fields still refuses.
+        cel::Value::Struct(fields) if fields.is_empty() => Ok(()),
         cel::Value::Struct(_) => Err(PlanValidationError::UnrepresentableConstant),
         cel::Value::List(items) => items.iter().try_for_each(value_expressible),
         cel::Value::Map(entries) => entries.values().try_for_each(value_expressible),

@@ -443,34 +443,24 @@ impl<'plan> TransactionExecutor<'plan> {
         let mut lets: BTreeMap<String, cel::Value> = BTreeMap::new();
         let mut buffer = EmissionBuffer::new();
         let input = &delivery.envelope;
-        let bindings = |scratch: &BTreeMap<String, cel::Value>,
-                        lets: &BTreeMap<String, cel::Value>|
-         -> Result<BTreeMap<String, cel::Value>, Fault> {
+        let base = |scratch: &BTreeMap<String, cel::Value>,
+                    lets: &BTreeMap<String, cel::Value>|
+         -> BTreeMap<String, cel::Value> {
             let mut map = scratch.clone();
             for (name, value) in lets {
                 map.insert(name.clone(), value.clone());
             }
             map.insert(String::from("meta"), meta_value(input.meta()));
-            Ok(map)
+            map
         };
-        // `data` materializes ON DEMAND: only an expression that
-        // actually reads it may force an opaque payload to decode —
-        // a guard on `meta`, a state write, or an identity emission
-        // never does (envelope.md §5: opacity is a property, not an
-        // ambush).
-        let bindings = |scratch: &BTreeMap<String, cel::Value>,
-                        lets: &BTreeMap<String, cel::Value>,
-                        needs_data: bool|
-         -> Result<BTreeMap<String, cel::Value>, Fault> {
-            let mut map = bindings(scratch, lets)?;
-            if needs_data {
-                map.insert(String::from("data"), data_value(input.data())?);
-            }
-            Ok(map)
-        };
+        // `data` materializes on the EVALUATOR'S demand, cached for
+        // the whole transaction: a guard on `meta`, a state write,
+        // an identity emission, or a short-circuited branch never
+        // forces an opaque payload to decode (envelope.md §5:
+        // opacity is a property, not an ambush).
+        let data_slot = DataSlot::new(input.data());
         if let Some(guard) = &handler.guard {
-            let env = bindings(&scratch, &lets, reads_data(guard))?;
-            match cel::eval(guard, &env).map_err(Fault::Eval)? {
+            match eval_lazy(guard, &base(&scratch, &lets), &data_slot)? {
                 cel::Value::Bool(true) => {}
                 cel::Value::Bool(false) => {
                     // Filtered: consumed with no effect.
@@ -495,13 +485,11 @@ impl<'plan> TransactionExecutor<'plan> {
         for step in &handler.body {
             match step {
                 Step::Let { name, expr } => {
-                    let env = bindings(&scratch, &lets, reads_data(expr))?;
-                    let value = cel::eval(expr, &env).map_err(Fault::Eval)?;
+                    let value = eval_lazy(expr, &base(&scratch, &lets), &data_slot)?;
                     lets.insert(name.clone(), value);
                 }
                 Step::SetVar { name, expr } => {
-                    let env = bindings(&scratch, &lets, reads_data(expr))?;
-                    let value = cel::eval(expr, &env).map_err(Fault::Eval)?;
+                    let value = eval_lazy(expr, &base(&scratch, &lets), &data_slot)?;
                     // A state cell holds its DECLARED type at every
                     // write, not just at the initializer: a dynamic
                     // value of the wrong shape — or an int leaving
@@ -534,8 +522,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     let built = if encoded_pass_through {
                         Some(pass_through(input))
                     } else {
-                        let env = bindings(&scratch, &lets, emission_reads_data(value))?;
-                        emitted_content(value, input, &env)?
+                        emitted_content(value, input, &base(&scratch, &lets), &data_slot)?
                     };
                     if let Some(built) = built {
                         let index = buffer.next_index(port);
@@ -882,7 +869,8 @@ fn pass_through(input: &Envelope) -> Built {
 fn emitted_content(
     emission: &PlanEmission,
     input: &Envelope,
-    env: &BTreeMap<String, cel::Value>,
+    base: &BTreeMap<String, cel::Value>,
+    slot: &DataSlot<'_>,
 ) -> Result<Option<Built>, Fault> {
     let inherited = |data: BuiltData| Built {
         data,
@@ -902,7 +890,7 @@ fn emitted_content(
             // crosses the CEL bridge in the value itself
             // (`cel::Value::Struct`), so `out = data`, a local
             // binding, or a ternary all preserve the logical type.
-            let value = cel::eval(expr, env).map_err(Fault::Eval)?;
+            let value = eval_lazy(expr, base, slot)?;
             Ok(Some(inherited(BuiltData::Value(value))))
         }
         PlanEmission::Patch(writes) | PlanEmission::Replace(writes) => {
@@ -916,16 +904,18 @@ fn emitted_content(
                 None
             };
             for write in writes {
-                let value = cel::eval(&write.expr, env).map_err(Fault::Eval)?;
+                let value = eval_lazy(&write.expr, base, slot)?;
                 match &write.target {
                     envelope::WriteTarget::Data(path) => {
-                        // Materialize lazily: a metadata-only patch
-                        // never touches the payload bytes.
+                        // The fold base is a DIRECT demand — a
+                        // data-path patch needs the current value —
+                        // through the same cached slot; a meta-only
+                        // patch never touches the payload bytes.
                         let current = match &mut data {
                             Some(current) => current,
                             None => data.insert(match input.data() {
                                 Data::Materialized(value) => value.clone(),
-                                encoded => to_envelope_value(&data_value(encoded)?)?,
+                                _ => to_envelope_value(&slot.materialize()?)?,
                             }),
                         };
                         apply_struct_write(current, path, to_envelope_value(&value)?);
@@ -1239,40 +1229,104 @@ pub fn apply_struct_write(data: &mut envelope::Value, path: &[String], leaf: env
     }
 }
 
-/// Whether a compiled tree reads the `data` binding — the
-/// materialization trigger. Recursion is safe: every shipped tree
-/// is depth-gated at compile.
-pub fn reads_data(tree: &cel::Tree) -> bool {
-    fn expr_reads(expr: &cel::Expr) -> bool {
-        match expr {
-            cel::Expr::Literal(_) => false,
-            cel::Expr::Path(segments) => segments.first().is_some_and(|root| root == "data"),
-            cel::Expr::Unary { expr, .. } => expr_reads(expr),
-            cel::Expr::Binary { left, right, .. } => expr_reads(left) || expr_reads(right),
-            cel::Expr::Ternary {
-                cond,
-                then,
-                otherwise,
-            } => expr_reads(cond) || expr_reads(then) || expr_reads(otherwise),
-            cel::Expr::Index { base, index } => expr_reads(base) || expr_reads(index),
-            cel::Expr::Call { args, .. } => args.iter().any(expr_reads),
-            cel::Expr::List(items) => items.iter().any(expr_reads),
-            cel::Expr::MapLit(pairs) => pairs.iter().any(|(_, value)| expr_reads(value)),
-        }
-    }
-    expr_reads(&tree.root)
+/// The `data` binding, materialized on the EVALUATOR'S first demand
+/// and cached for the rest of the transaction. The demand is the
+/// evaluation itself — a short-circuited branch (`false && data.x`,
+/// the untaken arm of a ternary, a statement never reached) never
+/// asks, so an opaque payload survives every path that does not
+/// structurally read it (envelope.md §5.1: no structural access, no
+/// transcode — ever). A static pre-scan of the tree cannot express
+/// that; only the evaluator knows which paths ran.
+#[derive(Debug)]
+pub struct DataSlot<'a> {
+    data: &'a Data,
+    cache: core::cell::RefCell<Option<cel::Value>>,
+    fault: core::cell::RefCell<Option<Fault>>,
 }
 
-/// Whether an emission's trees read `data` — Identity and Nothing
-/// never do; builders read it exactly when a write expression does.
-pub fn emission_reads_data(emission: &PlanEmission) -> bool {
-    match emission {
-        PlanEmission::Identity | PlanEmission::Nothing => false,
-        PlanEmission::Data(tree) => reads_data(tree),
-        PlanEmission::Patch(writes) | PlanEmission::Replace(writes) => {
-            writes.iter().any(|write| reads_data(&write.expr))
+impl<'a> DataSlot<'a> {
+    /// Wraps the input's data; nothing is read yet.
+    #[must_use]
+    pub fn new(data: &'a Data) -> Self {
+        Self {
+            data,
+            cache: core::cell::RefCell::new(None),
+            fault: core::cell::RefCell::new(None),
         }
     }
+
+    /// The direct demand — a structural fold that NEEDS the value
+    /// (a data-path patch base). Cached like the evaluator's own
+    /// reads.
+    ///
+    /// # Errors
+    /// The materialization fault, if the payload cannot decode.
+    pub fn materialize(&self) -> Result<cel::Value, Fault> {
+        if let Some(value) = self.cache.borrow().as_ref() {
+            return Ok(value.clone());
+        }
+        let value = data_value(self.data)?;
+        *self.cache.borrow_mut() = Some(value.clone());
+        Ok(value)
+    }
+
+    /// The evaluator's demand: a failed materialization parks its
+    /// fault for [`eval_lazy`] to surface and answers "unbound".
+    fn demand(&self) -> Option<cel::Value> {
+        match self.materialize() {
+            Ok(value) => Some(value),
+            Err(fault) => {
+                *self.fault.borrow_mut() = Some(fault);
+                None
+            }
+        }
+    }
+
+    /// Takes a parked materialization fault, if one happened.
+    pub fn take_fault(&self) -> Option<Fault> {
+        self.fault.borrow_mut().take()
+    }
+}
+
+/// Bindings backed by a base map plus the lazy `data` slot. Exact
+/// name only: dotted lookups (`data.x`) fall through to the root,
+/// which is where the demand lands.
+#[derive(Debug)]
+pub struct LazyBindings<'a> {
+    /// Everything already materialized: state scratch, locals, meta.
+    pub base: &'a BTreeMap<String, cel::Value>,
+    /// The on-demand payload.
+    pub data: &'a DataSlot<'a>,
+}
+
+impl cel::Bindings for LazyBindings<'_> {
+    fn get(&self, name: &str) -> Option<cel::Value> {
+        if let Some(value) = self.base.get(name) {
+            return Some(value.clone());
+        }
+        (name == "data").then(|| self.data.demand()).flatten()
+    }
+}
+
+/// Evaluates against the lazy binding. A materialization fault takes
+/// precedence over whatever the evaluator made of the missing
+/// binding: a demanded decode that failed is the transaction's
+/// fault, even if the expression could have absorbed an unbound
+/// name.
+///
+/// # Errors
+/// The materialization fault, or the evaluation's own.
+pub fn eval_lazy(
+    tree: &cel::Tree,
+    base: &BTreeMap<String, cel::Value>,
+    slot: &DataSlot<'_>,
+) -> Result<cel::Value, Fault> {
+    let env = LazyBindings { base, data: slot };
+    let result = cel::eval(tree, &env).map_err(Fault::Eval);
+    if let Some(fault) = slot.take_fault() {
+        return Err(fault);
+    }
+    result
 }
 
 /// The handler-facing CEL view of an envelope's data — the bridge a

@@ -248,7 +248,7 @@ fn lower_emission(value: &EmitValue, subst: &impl Fn(&cel::Tree) -> cel::Tree) -
     match value {
         EmitValue::Identity => Emission::Identity,
         EmitValue::Patch(fields) => Emission::Patch(writes(fields)),
-        EmitValue::Record(fields) => Emission::Replace(writes(fields)),
+        EmitValue::FreshData(fields) => Emission::Replace(writes(fields)),
         EmitValue::Data(tree) => Emission::Data(subst(tree)),
         EmitValue::Nothing => Emission::Nothing,
     }
@@ -578,7 +578,7 @@ impl Writer {
                 self.tag(2);
                 self.field_writes(writes);
             }
-            EmitValue::Record(writes) => {
+            EmitValue::FreshData(writes) => {
                 self.tag(3);
                 self.field_writes(writes);
             }
@@ -740,10 +740,11 @@ impl Writer {
                 }
             }
             cel::Value::Struct(fields) => {
-                // Unreachable from const-eval today (CEL cannot
-                // construct a struct), hashed totally anyway: a
-                // distinct tag, fields sorted by name — the same
-                // canonical reading the seal registry gives structs.
+                // Reached by exactly one literal — the EMPTY record
+                // (`parent = {}`; CEL itself cannot construct a
+                // struct). Hashed totally anyway: a distinct tag,
+                // fields sorted by name — the same canonical reading
+                // the seal registry gives structs.
                 self.tag(12);
                 let mut sorted: Vec<_> = fields.iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));

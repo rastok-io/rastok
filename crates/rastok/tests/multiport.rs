@@ -826,6 +826,39 @@ fn a_mixed_brace_refuses_with_the_dedicated_diagnostic() {
 }
 
 #[test]
+fn a_block_entry_carries_its_root_into_the_classification() {
+    // `ordinary { … }` beside `meta.*` is a MIX — and the diagnostic
+    // names the block, because a sub-block's root is its name, not
+    // an empty string.
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        ordinary { x = 1 }\n        meta.flag = true\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("the mix refuses");
+    assert!(
+        bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code().as_str() == "E-BRACE-MIXED"
+                && diagnostic
+                    .fields()
+                    .iter()
+                    .any(|(name, value)| *name == "field" && *value == "ordinary")
+        }),
+        "the block's name is the offending field: {bag:?}"
+    );
+    // And a `meta { … }` block ALONE is the envelope form — it lands
+    // on the builder's honest deferral, never silently a record.
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta { flag = true }\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("the block form defers");
+    assert!(
+        bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code().as_str() == "E-CHECK-DEFERRED"
+                && diagnostic
+                    .fields()
+                    .iter()
+                    .any(|(_, value)| value.contains("envelope builder"))
+        }),
+        "the envelope form's deferral, not a record: {bag:?}"
+    );
+}
+
+#[test]
 fn identity_re_emits_the_materialized_envelope_whole() {
     // `out = .` — the exact re-emission: payload AND writable
     // metadata cross untouched. (The encoded twin lives in
@@ -877,6 +910,115 @@ fn identity_re_emits_the_materialized_envelope_whole() {
         Some(&MetaValue::Scalar(Scalar::Text(String::from("x")))),
         "the writable metadata rides along"
     );
+}
+
+#[test]
+fn an_empty_nested_record_is_a_value_not_an_absence() {
+    // `parent = {}` writes an EMPTY STRUCT under `parent` — a
+    // leaf-splice alone would write nothing and the field would
+    // vanish. Every nesting and both braced forms hold it.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let run = |body: &str| {
+        let source = format!(
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+        );
+        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        vm.inject(
+            &mut journal,
+            InboundSubmission {
+                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                port: rastok::node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                    mime_type: None,
+                    app: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .expect("the injection lands");
+        vm.drain(&mut journal).expect("the drain completes");
+        vm.outputs()[0].envelope.data().clone()
+    };
+    let empty = || Value::Struct(Vec::new());
+    // The record form.
+    assert_eq!(
+        run("{ parent = {} }"),
+        Data::materialized(Value::Struct(vec![(String::from("parent"), empty())])),
+    );
+    // Two levels down.
+    assert_eq!(
+        run("{ parent = { child = {} } }"),
+        Data::materialized(Value::Struct(vec![(
+            String::from("parent"),
+            Value::Struct(vec![(String::from("child"), empty())]),
+        )])),
+    );
+    // The envelope form's whole-data record.
+    assert_eq!(
+        run("{ data = { parent = {} } }"),
+        Data::materialized(Value::Struct(vec![(String::from("parent"), empty())])),
+    );
+}
+
+#[test]
+fn the_empty_record_travels_and_hashes_stably() {
+    // The one struct constant a plan may carry: the empty record
+    // literal survives the package round trip, revalidates, and the
+    // hash is deterministic across compiles.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { parent = {} } }\n  }\n  . -> o -> .\n}\n";
+    let first = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let second = compile(&[source], &Registry::m0()).expect("a valid plan");
+    assert_eq!(first.hash, second.hash, "the hash is stable");
+    let bytes = rastok::plan::encode(&first.plan, &first.hash);
+    // `decode` re-validates: the empty-record literal is inside the
+    // expressible subset, so the trip is total.
+    let (_, hash) = rastok::plan::decode(&bytes).expect("the package round-trips");
+    assert_eq!(hash, first.hash, "one identity across the trip");
+}
+
+#[test]
+fn a_mock_and_an_injection_hold_the_empty_record_too() {
+    // The three interpreters share the resolver: the mock reply and
+    // the scenario injection carry `parent = {}` like the machine.
+    let source = r#"
+graph g : App {
+  connector shell : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator wrap {
+    on in { out = data.note }
+  }
+
+  . -> wrap -> shell
+  shell.out -> .
+}
+
+lab g {
+  simulation probing on app {
+    mock shell {
+      on in { out = { parent = {}, tag = "answered" } }
+    }
+
+    scenario s "empty records cross every interpreter" {
+      app.in = { note = "go", hollow = {} }
+      expect "the reply arrives" app.out count == 1 where data.tag == "answered"
+      expect "the empty record is a field" app.out count == 1 where size(data.parent) == 0
+    }
+  }
+}
+"#;
+    lab_passes(source);
 }
 
 #[test]
@@ -1987,6 +2129,69 @@ fn data_materializes_only_on_demand() {
     );
     assert_eq!(errors, 0);
     assert_eq!(outputs.len(), 1);
+}
+
+#[test]
+fn short_circuits_never_demand_the_data() {
+    // The demand comes from the EVALUATOR, not a pre-scan of the
+    // tree: a branch the evaluation never takes must never force an
+    // opaque payload to decode, even though `data` appears in it.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Encoding, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let run = |source: &str| {
+        let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        vm.inject(
+            &mut journal,
+            InboundSubmission {
+                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                port: rastok::node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
+                    mime_type: Some(String::from("application/avro")),
+                    app: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .expect("the injection lands");
+        vm.drain(&mut journal).expect("no forced materialization");
+        (vm.outputs().to_vec(), vm.errors().len())
+    };
+    // `false && data.x == 1`: the right side never evaluates —
+    // filtered, no decode, no fault.
+    let (outputs, errors) = run(
+        "graph g : App {\n  operator o {\n    on in where false && data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+    );
+    assert_eq!((outputs.len(), errors), (0, 0), "filtered without a fault");
+    // `true || data.x == 1`: the identity ships the bytes whole.
+    let (outputs, errors) = run(
+        "graph g : App {\n  operator o {\n    on in where true || data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+    );
+    assert_eq!(errors, 0, "the right side never ran");
+    assert!(matches!(
+        outputs[0].envelope.data(),
+        Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_slice() == b"\x01\x02"
+    ));
+    // `false ? data.x : 1`: the untaken arm never demands.
+    let (outputs, errors) = run(
+        "graph g : App {\n  operator o {\n    on in { out = false ? data.x : 1 }\n  }\n  . -> o -> .\n}\n",
+    );
+    assert_eq!(errors, 0, "the untaken arm never ran");
+    assert_eq!(
+        outputs[0].envelope.data(),
+        &Data::materialized(Value::Scalar(Scalar::Int(1)))
+    );
+    // The control: a taken read still faults, typed.
+    let (outputs, errors) = run(
+        "graph g : App {\n  operator o {\n    on in where true && data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+    );
+    assert_eq!((outputs.len(), errors), (0, 1), "a real read still faults");
 }
 
 #[test]

@@ -455,7 +455,8 @@ impl Checker<'_, '_> {
                         let Statement::Emit { value, .. } = statement else {
                             return false;
                         };
-                        let (EmitValue::Patch(writes) | EmitValue::Record(writes)) = value else {
+                        let (EmitValue::Patch(writes) | EmitValue::FreshData(writes)) = value
+                        else {
                             return false;
                         };
                         writes.iter().any(|write| {
@@ -576,7 +577,7 @@ impl Checker<'_, '_> {
                     // What a draft cannot carry refuses HERE — an
                     // accepted scenario never discovers a restriction
                     // mid-simulation.
-                    if let EmitValue::Patch(writes) | EmitValue::Record(writes) = &value
+                    if let EmitValue::Patch(writes) | EmitValue::FreshData(writes) = &value
                         && writes.iter().any(|write| {
                             matches!(write.target, crate::envelope::WriteTarget::CustomMeta(..))
                         })
@@ -2148,7 +2149,7 @@ impl Checker<'_, '_> {
     ///   field, at any depth, builds the new `data` (a fresh
     ///   `Struct`); heritable metadata stays the input's.
     /// - only reserved roots → the ENVELOPE form: a whole-`data`
-    ///   assignment makes the build fresh (`Record`-based, relative
+    ///   assignment makes the build fresh (`FreshData`-based, relative
     ///   writes); otherwise the current envelope is patched.
     /// - a mix → the dedicated diagnostic: wrap the data fields in
     ///   `data = { … }`. Never a silent reinterpretation.
@@ -2158,22 +2159,27 @@ impl Checker<'_, '_> {
         signature: &cel::Signature,
         at: Span,
     ) -> Option<EmitValue> {
-        let reserved = |entry: &StructEntry| match entry {
-            StructEntry::Field { key, .. } => key
-                .segments
-                .first()
-                .is_some_and(|root| matches!(root.text.as_str(), "data" | "meta" | "mime_type")),
-            StructEntry::Block { .. } => false,
-        };
+        // ONE root extraction for both entry forms: a field's first
+        // segment, a sub-block's name — `meta { … }` carries the
+        // reserved root exactly like `meta.x = …`.
+        fn root(entry: &StructEntry) -> Option<&str> {
+            match entry {
+                StructEntry::Field { key, .. } => {
+                    key.segments.first().map(|segment| segment.text.as_str())
+                }
+                StructEntry::Block { name, .. } => Some(name.text.as_str()),
+            }
+        }
+        let reserved =
+            |entry: &StructEntry| matches!(root(entry), Some("data" | "meta" | "mime_type"));
         let any_reserved = body.entries.iter().any(reserved);
         let all_reserved = body.entries.iter().all(reserved);
         if any_reserved && !all_reserved {
-            let ordinary = body.entries.iter().find_map(|entry| match entry {
-                StructEntry::Field { key, .. } if !reserved(entry) => {
-                    key.segments.first().map(|root| root.text.clone())
-                }
-                _ => None,
-            });
+            let ordinary = body
+                .entries
+                .iter()
+                .find(|entry| !reserved(entry))
+                .and_then(|entry| root(entry).map(String::from));
             self.bag.push(
                 Diagnostic::new(
                     E_BRACE_MIXED,
@@ -2188,10 +2194,12 @@ impl Checker<'_, '_> {
         if !any_reserved {
             // A pure data record — the empty body included: `{}` is
             // an empty record, never an identity (identity is `.`).
-            return self.struct_fields(body, signature).map(EmitValue::Record);
+            return self
+                .struct_fields(body, signature)
+                .map(EmitValue::FreshData);
         }
         // The envelope form. A whole-`data` assignment makes the
-        // data fresh — Record-based, so a braced value under `data`
+        // data fresh — FreshData-based, so a braced value under `data`
         // desugars to relative field writes of the fresh structure;
         // without one, the current envelope is patched. Detected on
         // the SYNTAX: after the record splice, no `Data([])` write
@@ -2204,7 +2212,7 @@ impl Checker<'_, '_> {
         });
         let writes = self.field_writes(body, signature)?;
         if whole_data {
-            Some(EmitValue::Record(writes))
+            Some(EmitValue::FreshData(writes))
         } else {
             Some(EmitValue::Patch(writes))
         }
@@ -2349,7 +2357,22 @@ impl Checker<'_, '_> {
                             }
                         }
                         SynValue::Braced(nested) => {
-                            self.record_fields(nested, signature, &path, writes);
+                            if nested.entries.is_empty() {
+                                // An empty record is a VALUE, not an
+                                // absence: `parent = {}` writes an
+                                // empty struct where a leaf-splice
+                                // would write nothing at all.
+                                writes.push(FieldWrite {
+                                    target: crate::envelope::WriteTarget::Data(path.clone()),
+                                    path,
+                                    value: cel::Tree {
+                                        root: cel::Expr::Literal(cel::Value::Struct(Vec::new())),
+                                        ty: cel::Type::Dyn,
+                                    },
+                                });
+                            } else {
+                                self.record_fields(nested, signature, &path, writes);
+                            }
                         }
                         _ => self.deferred("this record field value form", key.span),
                     }
@@ -2467,13 +2490,13 @@ impl Checker<'_, '_> {
     ///   the rest at emission construction.
     /// - `Identity` holds the INPUT's type (the activation port's
     ///   pin) to the output's pin.
-    /// - `Patch` and `Replace` FOLD their writes in order — the order
-    ///   the runtime applies them: a whole-`data` write replaces the
-    ///   running shape with that write's; a field write turns it into
-    ///   structure; a metadata write leaves it alone. The initial
-    ///   shape is the context's: the received envelope in a handler,
-    ///   the draft's fresh map in an injection, a fresh structure for
-    ///   `Replace`.
+    /// - `Patch` and `FreshData` FOLD their writes in order — the
+    ///   order the runtime applies them: a whole-`data` write
+    ///   replaces the running shape with that write's; a field write
+    ///   turns it into structure; a metadata write leaves it alone.
+    ///   The initial shape is the context's: the received envelope
+    ///   in a handler, the draft's fresh map in an injection, a
+    ///   fresh structure for `FreshData`.
     /// - `Nothing` produces nothing and always conforms.
     ///
     /// An UNKNOWN shape (dyn anywhere) is inference territory and
@@ -2517,7 +2540,7 @@ impl Checker<'_, '_> {
             EmitValue::Data(tree) => DataShape::Known(tree.ty.clone(), Some(tree)),
             EmitValue::Identity => inherited_shape(),
             EmitValue::Patch(writes) => Self::folded_shape(writes, inherited_shape()),
-            EmitValue::Record(writes) => Self::folded_shape(writes, DataShape::Struct),
+            EmitValue::FreshData(writes) => Self::folded_shape(writes, DataShape::Struct),
         };
         let found: Option<String> = match &shape {
             DataShape::Unknown => None,

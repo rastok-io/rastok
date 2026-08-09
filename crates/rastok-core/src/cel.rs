@@ -118,24 +118,43 @@ impl PartialEq for Value {
             (Self::Null, Self::Null) => true,
             (Self::List(a), Self::List(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
-            // Fields compare BY NAME — order is presentation; the
-            // canonical seal sorts, and equality must agree with the
-            // bytes. Well-formedness (unique names) is a door
-            // invariant, not equality's business.
-            (Self::Struct(a), Self::Struct(b)) => {
-                a.len() == b.len()
-                    && a.iter().all(|(name, value)| {
-                        b.iter()
-                            .find(|(candidate, _)| candidate == name)
-                            .is_some_and(|(_, other)| other == value)
-                    })
-            }
+            // Fields compare in SORTED order — by name, like the
+            // canonical seal, so order is presentation. Sorting
+            // (stable) instead of name-lookup keeps `Eq`'s contract
+            // total: a malformed duplicate-name struct — refused at
+            // every door, but representable — still equals itself.
+            (Self::Struct(a), Self::Struct(b)) => struct_fields_eq(a, b, Value::eq),
             _ => false,
         }
     }
 }
 
 impl Eq for Value {}
+
+/// Sorted-field struct comparison, shared by structural equality and
+/// the CEL `==` operator: stable-sort both sides by name, compare
+/// positionally. For well-formed structs (unique names — the door
+/// invariant) this IS by-name equality and agrees with the canonical
+/// bytes; for malformed values it stays reflexive, symmetric, and
+/// transitive, which `Eq` promises unconditionally.
+fn struct_fields_eq(
+    a: &[(String, Value)],
+    b: &[(String, Value)],
+    values: impl Fn(&Value, &Value) -> bool,
+) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    fn sorted(fields: &[(String, Value)]) -> alloc::vec::Vec<&(String, Value)> {
+        let mut refs: alloc::vec::Vec<&(String, Value)> = fields.iter().collect();
+        refs.sort_by(|x, y| x.0.cmp(&y.0));
+        refs
+    }
+    sorted(a)
+        .into_iter()
+        .zip(sorted(b))
+        .all(|(x, y)| x.0 == y.0 && values(&x.1, &y.1))
+}
 
 /// Names and types visible to an expression. Keys may be dotted
 /// (`data.text`) for pre-resolved leaves, or bare roots. The
@@ -1504,14 +1523,10 @@ fn values_equal(lhs: &Value, rhs: &Value) -> bool {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(x, y))
         }
         (Value::Struct(a), Value::Struct(b)) => {
-            // BY NAME, like the canonical seal — CEL `==` must not
-            // split two values one identity owns.
-            a.len() == b.len()
-                && a.iter().all(|(name, value)| {
-                    b.iter()
-                        .find(|(candidate, _)| candidate == name)
-                        .is_some_and(|(_, other)| values_equal(value, other))
-                })
+            // Sorted like the canonical seal — CEL `==` must not
+            // split two values one identity owns, and stays total on
+            // malformed duplicates (see `struct_fields_eq`).
+            struct_fields_eq(a, b, values_equal)
         }
         (Value::Map(a), Value::Map(b)) => {
             a.len() == b.len()
@@ -1734,6 +1749,40 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn struct_equality_is_reflexive_even_on_malformed_values() {
+        // `Eq`'s contract is unconditional: a duplicate-name struct
+        // is refused at every door, but it is REPRESENTABLE — and a
+        // representable value must equal itself. Sorted comparison
+        // keeps the door refusals AND the contract.
+        let duplicated = Value::Struct(alloc::vec![
+            (String::from("x"), Value::Int(1)),
+            (String::from("x"), Value::Int(2)),
+        ]);
+        assert_eq!(duplicated, duplicated.clone(), "reflexive");
+        assert!(
+            values_equal(&duplicated, &duplicated),
+            "the CEL `==` agrees"
+        );
+        // Symmetry, on two DIFFERENT malformed spellings.
+        let reversed = Value::Struct(alloc::vec![
+            (String::from("x"), Value::Int(2)),
+            (String::from("x"), Value::Int(1)),
+        ]);
+        assert_eq!(duplicated == reversed, reversed == duplicated, "symmetric");
+        // And the well-formed case still compares by name.
+        let ab = Value::Struct(alloc::vec![
+            (String::from("a"), Value::Int(1)),
+            (String::from("b"), Value::Int(2)),
+        ]);
+        let ba = Value::Struct(alloc::vec![
+            (String::from("b"), Value::Int(2)),
+            (String::from("a"), Value::Int(1)),
+        ]);
+        assert_eq!(ab, ba, "order is presentation");
+        assert!(values_equal(&ab, &ba));
+    }
 
     fn compile_ok(text: &str, signature: &Signature) -> Tree {
         compile(text, signature).unwrap_or_else(|diagnostics| {

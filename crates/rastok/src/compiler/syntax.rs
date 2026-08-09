@@ -498,11 +498,12 @@ pub enum Value {
     Cel(CelExpr),
     /// `.` — exact re-emission of the current envelope (identity).
     Identity(Span),
-    /// `{ … }` — a braced body, legal only in envelope positions.
-    /// The CHECKER classifies it once: no reserved root at the top
-    /// level builds a data record; only reserved roots (`data`,
-    /// `meta`, `mime_type`) build or patch the envelope; a mix
-    /// refuses with a dedicated diagnostic.
+    /// `{ … }` — a braced body, the record literal in every value
+    /// position. In ENVELOPE positions the CHECKER classifies it
+    /// once: no reserved root at the top level builds a data record;
+    /// only reserved roots (`data`, `meta`, `mime_type`) build or
+    /// patch the envelope; a mix refuses with a dedicated
+    /// diagnostic. Elsewhere the body is simply a record.
     Braced(StructBody),
     /// `map { … }` literal — the EXPLICIT spelling for a map value;
     /// a braced record always builds a struct (D-2026-08-09-1).

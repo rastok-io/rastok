@@ -650,6 +650,14 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                             stack.push(Item::Val(entry, level + 3));
                         }
                     }
+                    cel::Value::Struct(fields) => {
+                        for (_, value) in fields {
+                            // pair array at +2, its BARE field text
+                            // at +3 (tag 17 keys carry no tag).
+                            max = max.max(level + 3);
+                            stack.push(Item::Val(value, level + 3));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1077,6 +1085,21 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
         [Cbor::Uint(23), Cbor::Uint(v)] => Ok(cel::Value::Uint(*v)),
         [Cbor::Uint(12), value] => Ok(cel::Value::Timestamp(int_from(value)?)),
         [Cbor::Uint(16), value] => Ok(cel::Value::Duration(int_from(value)?)),
+        [Cbor::Uint(17), Cbor::Array(pairs)] => {
+            // The struct literal — bare text keys, declaration
+            // order AS SEALED (sorted); the validator holds shipped
+            // constants to the expressible subset (empty only).
+            let mut fields = alloc::vec::Vec::new();
+            for pair in pairs {
+                match array_of(pair, "struct field")? {
+                    [Cbor::Text(name), value] => {
+                        fields.push((name.clone(), cel_value_from(value)?));
+                    }
+                    _ => return Err(err("struct field")),
+                }
+            }
+            Ok(cel::Value::Struct(fields))
+        }
         [Cbor::Uint(18), Cbor::Array(pairs)] => {
             let mut map = alloc::collections::BTreeMap::new();
             for pair in pairs {

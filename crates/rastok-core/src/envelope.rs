@@ -114,13 +114,22 @@ impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Scalar(a), Self::Scalar(b)) => a == b,
+            // Sorted-field comparison — by name like the canonical
+            // seal, total on malformed duplicates (the cel twin
+            // documents the contract).
             (Self::Struct(a), Self::Struct(b)) => {
-                a.len() == b.len()
-                    && a.iter().all(|(name, value)| {
-                        b.iter()
-                            .find(|(candidate, _)| candidate == name)
-                            .is_some_and(|(_, other)| other == value)
-                    })
+                if a.len() != b.len() {
+                    return false;
+                }
+                fn sorted(fields: &[(String, Value)]) -> Vec<&(String, Value)> {
+                    let mut refs: Vec<&(String, Value)> = fields.iter().collect();
+                    refs.sort_by(|x, y| x.0.cmp(&y.0));
+                    refs
+                }
+                sorted(a)
+                    .into_iter()
+                    .zip(sorted(b))
+                    .all(|(x, y)| x.0 == y.0 && x.1 == y.1)
             }
             (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,

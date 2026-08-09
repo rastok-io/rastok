@@ -207,10 +207,11 @@ pub enum EmitValue {
     /// The envelope form without a whole-`data` write — inherit the
     /// input and patch the listed fields.
     Patch(Vec<FieldWrite>),
-    /// A braced build with FRESH data — a pure record, or the
-    /// envelope form with a whole-`data` assignment; heritable
-    /// metadata stays the input's.
-    Record(Vec<FieldWrite>),
+    /// A braced build whose data is FRESH — a pure record, or the
+    /// envelope form with a whole-`data` assignment (which may end
+    /// scalar: `{data = 1}`); heritable metadata stays the input's.
+    /// Lowered to the plan's `Replace`.
+    FreshData(Vec<FieldWrite>),
     /// A computed value becoming the whole `data`.
     Data(cel::Tree),
     /// `nothing` — no emission on this port this transaction.
