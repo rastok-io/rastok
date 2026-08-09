@@ -92,7 +92,13 @@ pub enum Scalar {
 }
 
 /// Materialized Rastok data domain — the in-memory view of `data`.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Struct equality compares fields BY NAME: declaration order is
+/// presentation, not semantics (identity.md — the canonical seal
+/// sorts), so two structs with one canonical identity are one
+/// value. Well-formedness (unique field names) is enforced at the
+/// machine's doors, never resolved by "first found".
+#[derive(Debug, Clone)]
 pub enum Value {
     /// Scalar leaf.
     Scalar(Scalar),
@@ -102,6 +108,25 @@ pub enum Value {
     Array(Vec<Value>),
     /// Keyed values; M0 admits text keys.
     Map(BTreeMap<String, Value>),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Scalar(a), Self::Scalar(b)) => a == b,
+            (Self::Struct(a), Self::Struct(b)) => {
+                a.len() == b.len()
+                    && a.iter().all(|(name, value)| {
+                        b.iter()
+                            .find(|(candidate, _)| candidate == name)
+                            .is_some_and(|(_, other)| other == value)
+                    })
+            }
+            (Self::Array(a), Self::Array(b)) => a == b,
+            (Self::Map(a), Self::Map(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// Per-envelope representation tag of encoded `data` bytes

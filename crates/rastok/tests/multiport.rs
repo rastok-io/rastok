@@ -1773,3 +1773,207 @@ fn a_struct_constant_cannot_enter_a_plan() {
         PlanValidationError::UnrepresentableConstant
     );
 }
+
+// ===== round seven, phase one — laziness, name-keyed structs =====
+
+#[test]
+fn data_materializes_only_on_demand() {
+    // An expression that never reads `data` must never force an
+    // opaque payload to decode: a `true` guard, a state write, and
+    // an identity emission all leave Avro bytes untouched.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Encoding, Namespace};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let run = |source: &str| {
+        let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        vm.inject(
+            &mut journal,
+            InboundSubmission {
+                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                port: rastok::node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
+                    mime_type: Some(String::from("application/avro")),
+                    app: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .expect("the injection lands");
+        vm.drain(&mut journal).expect("no forced materialization");
+        (vm.outputs().to_vec(), vm.errors().len())
+    };
+    // A guard reading nothing + identity: bytes, encoding, and MIME
+    // survive whole.
+    let (outputs, errors) = run(
+        "graph g : App {\n  operator o {\n    on in where true { out = envelope }\n  }\n  . -> o -> .\n}\n",
+    );
+    assert_eq!(errors, 0, "no opaque read was asked for");
+    assert!(matches!(
+        outputs[0].envelope.data(),
+        Data::Encoded {
+            encoding: Encoding::Avro,
+            ..
+        }
+    ));
+    assert_eq!(
+        outputs[0].envelope.meta().sys().mime_type(),
+        Some("application/avro")
+    );
+    // A false guard consumes without decoding and without error.
+    let (outputs, errors) = run(
+        "graph g : App {\n  operator o {\n    on in where false { out = envelope }\n  }\n  . -> o -> .\n}\n",
+    );
+    assert_eq!((outputs.len(), errors), (0, 0));
+    // A meta-only guard touches meta, never data.
+    let (outputs, errors) = run(
+        "graph g : App {\n  operator o {\n    on in where meta.sys.graph_version == 1 { out = envelope }\n  }\n  . -> o -> .\n}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(outputs.len(), 1);
+    // A state write independent of data materializes nothing.
+    let (outputs, errors) = run(
+        "graph g : App {\n  operator o {\n    var seen : int = 0\n    on in {\n      seen = seen + 1\n      out = envelope\n    }\n  }\n  . -> o -> .\n}\n",
+    );
+    assert_eq!(errors, 0);
+    assert_eq!(outputs.len(), 1);
+}
+
+#[test]
+fn struct_equality_is_by_name_like_the_seal() {
+    use rastok::envelope::{Scalar, Value};
+    let left = Value::Struct(vec![
+        (String::from("a"), Value::Scalar(Scalar::Int(1))),
+        (String::from("b"), Value::Scalar(Scalar::Int(2))),
+    ]);
+    let right = Value::Struct(vec![
+        (String::from("b"), Value::Scalar(Scalar::Int(2))),
+        (String::from("a"), Value::Scalar(Scalar::Int(1))),
+    ]);
+    // One canonical identity, one value — equality agrees with the
+    // sorted seal in every judge.
+    assert_eq!(left, right, "envelope equality is by name");
+    assert_eq!(
+        rastok_core::canonical_cbor::encode(&rastok_core::identity::encoding::value_tagged(&left)),
+        rastok_core::canonical_cbor::encode(&rastok_core::identity::encoding::value_tagged(&right)),
+        "the canonical bytes already agreed"
+    );
+    // The CEL operator agrees too.
+    let signature = rastok::cel::Signature::new()
+        .with("a", rastok::cel::Type::Dyn)
+        .with("b", rastok::cel::Type::Dyn);
+    let tree = rastok::cel::compile("a == b", &signature).expect("a valid expression");
+    let mut env = std::collections::BTreeMap::new();
+    env.insert(
+        String::from("a"),
+        rastok::cel::Value::Struct(vec![
+            (String::from("x"), rastok::cel::Value::Int(1)),
+            (String::from("y"), rastok::cel::Value::Int(2)),
+        ]),
+    );
+    env.insert(
+        String::from("b"),
+        rastok::cel::Value::Struct(vec![
+            (String::from("y"), rastok::cel::Value::Int(2)),
+            (String::from("x"), rastok::cel::Value::Int(1)),
+        ]),
+    );
+    assert_eq!(
+        rastok::cel::eval(&tree, &env).expect("the comparison evaluates"),
+        rastok::cel::Value::Bool(true),
+        "CEL == follows the canonical identity"
+    );
+}
+
+#[test]
+fn a_duplicated_struct_field_refuses_at_the_door() {
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let source =
+        "graph g : App {\n  operator o {\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let error = vm
+        .inject(
+            &mut journal,
+            InboundSubmission {
+                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                port: rastok::node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::materialized(Value::Struct(vec![
+                        (String::from("twin"), Value::Scalar(Scalar::Int(1))),
+                        (String::from("twin"), Value::Scalar(Scalar::Int(2))),
+                    ])),
+                    mime_type: None,
+                    app: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("`twin` appears twice"),
+        "typed, never first-found: {error}"
+    );
+    assert_eq!(journal.records().len(), 0, "refused before the append");
+}
+
+#[test]
+fn the_conformance_judgement_is_matchable() {
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::{Vm, VmError};
+    use rastok_core::runtime::{ConformanceReason, ValueKind};
+
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let submission = |data: Value| InboundSubmission {
+        authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+        port: rastok::node::Port::new("alpha").unwrap(),
+        draft: Draft {
+            data: Data::materialized(data),
+            mime_type: None,
+            app: Namespace::new(),
+        },
+        sequence: SubmissionSequence::Next,
+    };
+    // A tool MATCHES the judgement — no message parsing.
+    let error = vm
+        .inject(
+            &mut journal,
+            submission(Value::Scalar(Scalar::Text(String::from("wrong")))),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        VmError::IngressPinViolation { violation, .. }
+            if violation.expected == rastok::cel::Type::Int
+                && violation.found == ValueKind::Text
+                && violation.reason == ConformanceReason::TypeMismatch
+    ));
+    let error = vm
+        .inject(
+            &mut journal,
+            submission(Value::Scalar(Scalar::Int(1 << 40))),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        VmError::IngressPinViolation { violation, .. }
+            if matches!(violation.reason, ConformanceReason::IntegerOutOfRange { value } if value == 1 << 40)
+    ));
+}

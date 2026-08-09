@@ -67,8 +67,9 @@ pub enum VmError {
         /// The endpoint whose pin actually refused — the ingress
         /// itself, or a fan-out destination.
         rejected_at: EndpointRef,
-        /// The conformance judgement.
-        detail: String,
+        /// The SEMANTIC judgement: expected type, found kind, and
+        /// the reason — a tool matches, `Display` renders.
+        violation: crate::runtime::ConformanceViolation,
     },
 }
 
@@ -88,9 +89,9 @@ impl fmt::Display for VmError {
                 write!(f, "`{port}` is not an input of this graph")
             }
             Self::IngressPinViolation {
-                ingress, detail, ..
+                ingress, violation, ..
             } => {
-                write!(f, "the draft cannot enter `{ingress}`: {detail}")
+                write!(f, "the draft cannot enter `{ingress}`: {violation}")
             }
         }
     }
@@ -323,6 +324,7 @@ impl<'plan> Vm<'plan> {
         // destination pin it will fan out to — replay never meets a
         // record a pin refuses. Encoded bytes stay the codecs' door.
         if let Data::Materialized(value) = &submission.draft.data {
+            crate::runtime::value_well_formed(value).map_err(VmError::Fault)?;
             let own_pin = self
                 .plan
                 .boundary
@@ -335,10 +337,10 @@ impl<'plan> Vm<'plan> {
                 own_pin,
                 &crate::runtime::from_envelope_value(value),
             )
-            .map_err(|violation| VmError::IngressPinViolation {
+            .map_err(|refused| VmError::IngressPinViolation {
                 ingress: submission.port.clone(),
-                rejected_at: violation.at,
-                detail: violation.message,
+                rejected_at: refused.at,
+                violation: refused.violation,
             })?;
         }
         self.reserve_targets(&from)?;
@@ -878,6 +880,7 @@ impl<'plan> Vm<'plan> {
     ) -> Result<(), VmError> {
         for emission in &record.emissions {
             if let Data::Materialized(value) = emission.envelope.data() {
+                crate::runtime::value_well_formed(value).map_err(VmError::Fault)?;
                 let own_pin = self.plan.nodes[slot.index()]
                     .ports
                     .iter()

@@ -118,9 +118,18 @@ impl PartialEq for Value {
             (Self::Null, Self::Null) => true,
             (Self::List(a), Self::List(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
-            // Field order is declaration order and IS the value —
-            // the same equality the envelope twin has.
-            (Self::Struct(a), Self::Struct(b)) => a == b,
+            // Fields compare BY NAME — order is presentation; the
+            // canonical seal sorts, and equality must agree with the
+            // bytes. Well-formedness (unique names) is a door
+            // invariant, not equality's business.
+            (Self::Struct(a), Self::Struct(b)) => {
+                a.len() == b.len()
+                    && a.iter().all(|(name, value)| {
+                        b.iter()
+                            .find(|(candidate, _)| candidate == name)
+                            .is_some_and(|(_, other)| other == value)
+                    })
+            }
             _ => false,
         }
     }
@@ -1495,10 +1504,14 @@ fn values_equal(lhs: &Value, rhs: &Value) -> bool {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(x, y))
         }
         (Value::Struct(a), Value::Struct(b)) => {
+            // BY NAME, like the canonical seal — CEL `==` must not
+            // split two values one identity owns.
             a.len() == b.len()
-                && a.iter()
-                    .zip(b)
-                    .all(|((ka, va), (kb, vb))| ka == kb && values_equal(va, vb))
+                && a.iter().all(|(name, value)| {
+                    b.iter()
+                        .find(|(candidate, _)| candidate == name)
+                        .is_some_and(|(_, other)| values_equal(value, other))
+                })
         }
         (Value::Map(a), Value::Map(b)) => {
             a.len() == b.len()

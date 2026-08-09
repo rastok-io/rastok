@@ -52,6 +52,10 @@ pub enum Fault {
     MissingHandler,
     /// The payload could not be materialized for the handler.
     Opaque(String),
+    /// A struct carrying one field name twice — ill-formed data the
+    /// canonical seal would silently collapse; refused at the doors,
+    /// never resolved by "first found".
+    DuplicateField(String),
     /// A caller-supplied slot the plan does not know. `Slot` is
     /// freely constructible; the validated plan proves only its OWN
     /// references, so the public doors verify and refuse — never
@@ -68,6 +72,9 @@ impl fmt::Display for Fault {
             }
             Self::MissingHandler => f.write_str("no handler for this trigger"),
             Self::Opaque(what) => write!(f, "the payload is opaque here: {what}"),
+            Self::DuplicateField(name) => {
+                write!(f, "the struct field `{name}` appears twice")
+            }
             Self::UnknownSlot(slot) => {
                 write!(f, "the plan has no node at slot {}", slot.index())
             }
@@ -443,12 +450,26 @@ impl<'plan> TransactionExecutor<'plan> {
             for (name, value) in lets {
                 map.insert(name.clone(), value.clone());
             }
-            map.insert(String::from("data"), data_value(input.data())?);
             map.insert(String::from("meta"), meta_value(input.meta()));
             Ok(map)
         };
+        // `data` materializes ON DEMAND: only an expression that
+        // actually reads it may force an opaque payload to decode —
+        // a guard on `meta`, a state write, or an identity emission
+        // never does (envelope.md §5: opacity is a property, not an
+        // ambush).
+        let bindings = |scratch: &BTreeMap<String, cel::Value>,
+                        lets: &BTreeMap<String, cel::Value>,
+                        needs_data: bool|
+         -> Result<BTreeMap<String, cel::Value>, Fault> {
+            let mut map = bindings(scratch, lets)?;
+            if needs_data {
+                map.insert(String::from("data"), data_value(input.data())?);
+            }
+            Ok(map)
+        };
         if let Some(guard) = &handler.guard {
-            let env = bindings(&scratch, &lets)?;
+            let env = bindings(&scratch, &lets, reads_data(guard))?;
             match cel::eval(guard, &env).map_err(Fault::Eval)? {
                 cel::Value::Bool(true) => {}
                 cel::Value::Bool(false) => {
@@ -474,12 +495,12 @@ impl<'plan> TransactionExecutor<'plan> {
         for step in &handler.body {
             match step {
                 Step::Let { name, expr } => {
-                    let env = bindings(&scratch, &lets)?;
+                    let env = bindings(&scratch, &lets, reads_data(expr))?;
                     let value = cel::eval(expr, &env).map_err(Fault::Eval)?;
                     lets.insert(name.clone(), value);
                 }
                 Step::SetVar { name, expr } => {
-                    let env = bindings(&scratch, &lets)?;
+                    let env = bindings(&scratch, &lets, reads_data(expr))?;
                     let value = cel::eval(expr, &env).map_err(Fault::Eval)?;
                     // A state cell holds its DECLARED type at every
                     // write, not just at the initializer: a dynamic
@@ -487,9 +508,11 @@ impl<'plan> TransactionExecutor<'plan> {
                     // the 32-bit range — is a typed error, never a
                     // silent coercion.
                     if let Some(cell) = node.vars.iter().find(|cell| &cell.name == name)
-                        && let Some(message) = conformance_fault(name, &cell.ty, &value)
+                        && let Some(violation) = conformance_fault(name, &cell.ty, &value)
                     {
-                        return Err(Fault::Eval(cel::Error { message }));
+                        return Err(Fault::Eval(cel::Error {
+                            message: alloc::string::ToString::to_string(&violation),
+                        }));
                     }
                     scratch.insert(name.clone(), value);
                 }
@@ -511,7 +534,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     let built = if encoded_pass_through {
                         Some(pass_through(input))
                     } else {
-                        let env = bindings(&scratch, &lets)?;
+                        let env = bindings(&scratch, &lets, emission_reads_data(value))?;
                         emitted_content(value, input, &env)?
                     };
                     if let Some(built) = built {
@@ -832,8 +855,10 @@ pub(crate) enum BuiltData {
     Unchanged,
     /// The payload was (re)built as an evaluated CEL value.
     Value(cel::Value),
-    /// The payload was built in the ENVELOPE domain — the builders
-    /// build `Struct`s, a physical form CEL does not carry.
+    /// The payload was built directly in the ENVELOPE domain by a
+    /// builder's write fold. (CEL VALUES carry the struct witness
+    /// too, since the bridge preserves it — this variant simply
+    /// skips a domain round trip the fold never needed.)
     Envelope(envelope::Value),
 }
 
@@ -941,8 +966,9 @@ fn emitted_content(
 pub struct PinViolation {
     /// The endpoint whose pin refused.
     pub at: crate::plan::EndpointRef,
-    /// The conformance judgement.
-    pub message: String,
+    /// The conformance judgement — SEMANTIC: expected type, found
+    /// kind, and the reason; text is `Display`'s business.
+    pub violation: ConformanceViolation,
 }
 
 impl PinViolation {
@@ -950,8 +976,30 @@ impl PinViolation {
     #[must_use]
     pub fn into_fault(self) -> Fault {
         Fault::Eval(cel::Error {
-            message: self.message,
+            message: alloc::string::ToString::to_string(&self.violation),
         })
+    }
+}
+
+/// Holds materialized content to WELL-FORMEDNESS: a struct may not
+/// carry one field name twice — the canonical seal would silently
+/// collapse the pair, so the doors refuse it typed instead of
+/// resolving by "first found".
+pub(crate) fn value_well_formed(value: &envelope::Value) -> Result<(), Fault> {
+    match value {
+        envelope::Value::Scalar(_) => Ok(()),
+        envelope::Value::Struct(fields) => {
+            let mut seen = alloc::collections::BTreeSet::new();
+            for (name, value) in fields {
+                if !seen.insert(name.as_str()) {
+                    return Err(Fault::DuplicateField(name.clone()));
+                }
+                value_well_formed(value)?;
+            }
+            Ok(())
+        }
+        envelope::Value::Array(items) => items.iter().try_for_each(value_well_formed),
+        envelope::Value::Map(entries) => entries.values().try_for_each(value_well_formed),
     }
 }
 
@@ -967,11 +1015,11 @@ pub(crate) fn crossing_pins_hold(
     value: &cel::Value,
 ) -> Result<(), PinViolation> {
     if let Some(pinned) = own_pin
-        && let Some(message) = conformance_fault(from.port.name(), pinned, value)
+        && let Some(violation) = conformance_fault(from.port.name(), pinned, value)
     {
         return Err(PinViolation {
             at: from.clone(),
-            message,
+            violation,
         });
     }
     for edge in plan.edges.iter().filter(|edge| edge.from == *from) {
@@ -989,15 +1037,123 @@ pub(crate) fn crossing_pins_hold(
                 .and_then(|decl| decl.ty.as_ref()),
         };
         if let Some(pinned) = pinned
-            && let Some(message) = conformance_fault(to.port.name(), pinned, value)
+            && let Some(violation) = conformance_fault(to.port.name(), pinned, value)
         {
             return Err(PinViolation {
                 at: to.clone(),
-                message,
+                violation,
             });
         }
     }
     Ok(())
+}
+
+/// What kind of value stood at a refused pin — the machine's
+/// vocabulary for "found", never a rendered sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind {
+    /// A boolean.
+    Bool,
+    /// A signed or unsigned integer.
+    Number,
+    /// A binary64.
+    Double,
+    /// Text.
+    Text,
+    /// Bytes.
+    Bytes,
+    /// A duration.
+    Duration,
+    /// A timestamp.
+    Timestamp,
+    /// The null value.
+    Null,
+    /// A list.
+    List,
+    /// A map.
+    Map,
+    /// A struct.
+    Struct,
+}
+
+impl ValueKind {
+    fn of(value: &cel::Value) -> Self {
+        match value {
+            cel::Value::Bool(_) => Self::Bool,
+            cel::Value::Int(_) | cel::Value::Uint(_) => Self::Number,
+            cel::Value::Double(_) => Self::Double,
+            cel::Value::Text(_) => Self::Text,
+            cel::Value::Bytes(_) => Self::Bytes,
+            cel::Value::Duration(_) => Self::Duration,
+            cel::Value::Timestamp(_) => Self::Timestamp,
+            cel::Value::Null => Self::Null,
+            cel::Value::List(_) => Self::List,
+            cel::Value::Map(_) => Self::Map,
+            cel::Value::Struct(_) => Self::Struct,
+        }
+    }
+}
+
+impl fmt::Display for ValueKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Bool => "bool",
+            Self::Number => "number",
+            Self::Double => "double",
+            Self::Text => "text",
+            Self::Bytes => "bytes",
+            Self::Duration => "duration",
+            Self::Timestamp => "timestamp",
+            Self::Null => "null",
+            Self::List => "list",
+            Self::Map => "map",
+            Self::Struct => "struct",
+        })
+    }
+}
+
+/// Why a pin refused — semantic, matchable; `Display` renders the
+/// sentence at the frontier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConformanceReason {
+    /// The value's kind cannot inhabit the declared type.
+    TypeMismatch,
+    /// The right kind, outside the physical range.
+    IntegerOutOfRange {
+        /// The offending value.
+        value: i64,
+    },
+}
+
+/// One refused conformance: the declared expectation, what stood
+/// there, and why — structure first, text at `Display`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConformanceViolation {
+    /// The declaring name (a cell or a port).
+    pub name: String,
+    /// The declared type.
+    pub expected: cel::Type,
+    /// The kind of value that stood there.
+    pub found: ValueKind,
+    /// The semantic reason.
+    pub reason: ConformanceReason,
+}
+
+impl fmt::Display for ConformanceViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.reason {
+            ConformanceReason::TypeMismatch => write!(
+                f,
+                "`{}` is declared {:?}; a {} cannot enter it",
+                self.name, self.expected, self.found
+            ),
+            ConformanceReason::IntegerOutOfRange { value } => write!(
+                f,
+                "`{}` is an int; {value} leaves the 32-bit range",
+                self.name
+            ),
+        }
+    }
 }
 
 /// Judges a runtime value against a declared cell type; `None` means
@@ -1007,19 +1163,25 @@ pub(crate) fn conformance_fault(
     name: &str,
     declared: &cel::Type,
     value: &cel::Value,
-) -> Option<String> {
-    let mismatch = |got: &str| {
-        Some(format!(
-            "`{name}` is declared {declared:?}; a {got} cannot enter it"
-        ))
+) -> Option<ConformanceViolation> {
+    let mismatch = || {
+        Some(ConformanceViolation {
+            name: String::from(name),
+            expected: declared.clone(),
+            found: ValueKind::of(value),
+            reason: ConformanceReason::TypeMismatch,
+        })
     };
     match (declared, value) {
         (cel::Type::Dyn, _) => None,
         (cel::Type::Int, cel::Value::Int(candidate)) => {
             if i32::try_from(*candidate).is_err() {
-                Some(format!(
-                    "`{name}` is an int; {candidate} leaves the 32-bit range"
-                ))
+                Some(ConformanceViolation {
+                    name: String::from(name),
+                    expected: cel::Type::Int,
+                    found: ValueKind::Number,
+                    reason: ConformanceReason::IntegerOutOfRange { value: *candidate },
+                })
             } else {
                 None
             }
@@ -1030,17 +1192,17 @@ pub(crate) fn conformance_fault(
         | (cel::Type::Double, cel::Value::Double(_))
         | (cel::Type::Duration, cel::Value::Duration(_))
         | (cel::Type::Timestamp, cel::Value::Timestamp(_)) => None,
-        (_, cel::Value::Bool(_)) => mismatch("bool"),
-        (_, cel::Value::Int(_) | cel::Value::Uint(_)) => mismatch("number"),
-        (_, cel::Value::Double(_)) => mismatch("double"),
-        (_, cel::Value::Text(_)) => mismatch("text"),
-        (_, cel::Value::Bytes(_)) => mismatch("bytes"),
-        (_, cel::Value::Struct(_)) => mismatch("struct"),
-        (_, cel::Value::Duration(_)) => mismatch("duration"),
-        (_, cel::Value::Timestamp(_)) => mismatch("timestamp"),
-        (_, cel::Value::Null) => mismatch("null"),
-        (_, cel::Value::List(_)) => mismatch("list"),
-        (_, cel::Value::Map(_)) => mismatch("map"),
+        (_, cel::Value::Bool(_)) => mismatch(),
+        (_, cel::Value::Int(_) | cel::Value::Uint(_)) => mismatch(),
+        (_, cel::Value::Double(_)) => mismatch(),
+        (_, cel::Value::Text(_)) => mismatch(),
+        (_, cel::Value::Bytes(_)) => mismatch(),
+        (_, cel::Value::Struct(_)) => mismatch(),
+        (_, cel::Value::Duration(_)) => mismatch(),
+        (_, cel::Value::Timestamp(_)) => mismatch(),
+        (_, cel::Value::Null) => mismatch(),
+        (_, cel::Value::List(_)) => mismatch(),
+        (_, cel::Value::Map(_)) => mismatch(),
     }
 }
 
@@ -1073,6 +1235,42 @@ pub fn apply_struct_write(data: &mut envelope::Value, path: &[String], leaf: env
         _ => {
             *data = envelope::Value::Struct(Vec::new());
             apply_struct_write(data, path, leaf);
+        }
+    }
+}
+
+/// Whether a compiled tree reads the `data` binding — the
+/// materialization trigger. Recursion is safe: every shipped tree
+/// is depth-gated at compile.
+pub fn reads_data(tree: &cel::Tree) -> bool {
+    fn expr_reads(expr: &cel::Expr) -> bool {
+        match expr {
+            cel::Expr::Literal(_) => false,
+            cel::Expr::Path(segments) => segments.first().is_some_and(|root| root == "data"),
+            cel::Expr::Unary { expr, .. } => expr_reads(expr),
+            cel::Expr::Binary { left, right, .. } => expr_reads(left) || expr_reads(right),
+            cel::Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => expr_reads(cond) || expr_reads(then) || expr_reads(otherwise),
+            cel::Expr::Index { base, index } => expr_reads(base) || expr_reads(index),
+            cel::Expr::Call { args, .. } => args.iter().any(expr_reads),
+            cel::Expr::List(items) => items.iter().any(expr_reads),
+            cel::Expr::MapLit(pairs) => pairs.iter().any(|(_, value)| expr_reads(value)),
+        }
+    }
+    expr_reads(&tree.root)
+}
+
+/// Whether an emission's trees read `data` — Identity and Nothing
+/// never do; builders read it exactly when a write expression does.
+pub fn emission_reads_data(emission: &PlanEmission) -> bool {
+    match emission {
+        PlanEmission::Identity | PlanEmission::Nothing => false,
+        PlanEmission::Data(tree) => reads_data(tree),
+        PlanEmission::Patch(writes) | PlanEmission::Replace(writes) => {
+            writes.iter().any(|write| reads_data(&write.expr))
         }
     }
 }

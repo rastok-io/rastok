@@ -371,15 +371,35 @@ impl MockPartner<'_> {
             ));
             return None;
         };
+        // The request materializes ON DEMAND, like the machine's own
+        // bindings: an identity reply or a meta-only guard must
+        // never force an opaque request to decode.
+        use crate::compiler::hir::Statement;
+        let needs_data = mock.handlers.iter().any(|handler| {
+            handler.guard.as_ref().is_some_and(runtime::reads_data)
+                || handler.body.iter().any(|statement| match statement {
+                    Statement::Emit { value, .. } => match value {
+                        EmitValue::Identity | EmitValue::Nothing => false,
+                        EmitValue::Data(tree) => runtime::reads_data(tree),
+                        EmitValue::Patch(writes) | EmitValue::Replace(writes) => {
+                            writes.iter().any(|write| runtime::reads_data(&write.value))
+                        }
+                    },
+                    Statement::Let { value, .. } => runtime::reads_data(value),
+                    Statement::SetVar { value, .. } => runtime::reads_data(value),
+                })
+        });
         let mut env: BTreeMap<String, cel::Value> = BTreeMap::new();
-        match runtime::data_value(request.data()) {
-            Ok(data) => {
-                env.insert(String::from("data"), data);
-            }
-            Err(fault) => {
-                self.faults
-                    .push(format!("the mock request is unreadable: {fault}"));
-                return None;
+        if needs_data {
+            match runtime::data_value(request.data()) {
+                Ok(data) => {
+                    env.insert(String::from("data"), data);
+                }
+                Err(fault) => {
+                    self.faults
+                        .push(format!("the mock request is unreadable: {fault}"));
+                    return None;
+                }
             }
         }
         env.insert(String::from("meta"), runtime::meta_value(request.meta()));
