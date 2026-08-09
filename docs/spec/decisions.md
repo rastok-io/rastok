@@ -29,11 +29,13 @@ graphs with port tables gained one absence tag per port in the hash
 package bytes, golden trace with INBOUND key 24). **Rejected:**
 hashing the RESOLVED type (inference does not exist yet;
 annotations-as-written is the honest contract), and SCATTERED
-per-edge runtime checks — the adopted shape is ONE pre-commit choke
-point (`reserve_emissions`, plus the ingress mirror in `inject`)
-that nevertheless inspects EVERY pin of the fan-out: the emitting
-port's own and each destination's, synthesized error payloads
-included; a typed error that violates its own `err` wiring
+per-edge runtime checks — the adopted shape is TWO named
+levels sharing one judge: a RECOVERABLE check at construction — an
+operator's or partner's value breach converts into a typed error on
+`err` — and the FINAL, non-recursive gate every commit candidate
+passes (`validate_and_reserve_emissions`, mirrored at ingress by
+`inject`), inspecting EVERY pin of the fan-out, synthesized error
+payloads included; an error that violates its own `err` wiring
 surfaces as a machine fault and nothing commits. A `variant` pin is
 an explicit "anything" and never conflicts — checker, plan
 validator, and runtime judge share that rule. Encoded external

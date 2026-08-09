@@ -739,6 +739,20 @@ impl Writer {
                     self.value(item);
                 }
             }
+            cel::Value::Struct(fields) => {
+                // Unreachable from const-eval today (CEL cannot
+                // construct a struct), hashed totally anyway: a
+                // distinct tag, fields sorted by name — the same
+                // canonical reading the seal registry gives structs.
+                self.tag(12);
+                let mut sorted: Vec<_> = fields.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                self.count(sorted.len());
+                for (name, item) in sorted {
+                    self.str(name);
+                    self.value(item);
+                }
+            }
         }
     }
 }

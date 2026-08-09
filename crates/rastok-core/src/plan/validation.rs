@@ -105,6 +105,24 @@ pub enum PlanValidationError {
         /// The undeclared name.
         name: String,
     },
+    /// A constant value no source can express — a struct constant:
+    /// CEL cannot construct one, so the compiler never emits one,
+    /// and the codec's tables do not carry one. Refused so
+    /// `encode ⇒ decode` stays total.
+    UnrepresentableConstant,
+    /// A reference to a connector port beyond the default trio. The
+    /// RESOLVED table travels in the plan (the future needs it), but
+    /// this machine's Partner seam does not carry the port yet —
+    /// `Intent`, the response protocol, and the outcome trigger all
+    /// speak `in`/`out`/`err`. A plan wiring such a port is valid in
+    /// shape and NOT executable faithfully, so it refuses here; the
+    /// restriction lifts when the port enters `Intent`.
+    UnsupportedConnectorPort {
+        /// The connector.
+        node: node::Path,
+        /// The not-yet-executable port.
+        port: node::Port,
+    },
     /// An edge whose two PINNED ends disagree — the checker refuses
     /// this at source; a foreign package must not smuggle it past
     /// the type into a machine that trusts its wiring.
@@ -197,6 +215,13 @@ impl core::fmt::Display for PlanValidationError {
             Self::UnknownVariable { node, name } => {
                 write!(f, "invalid plan: `{node}` writes undeclared var `{name}`")
             }
+            Self::UnrepresentableConstant => {
+                f.write_str("invalid plan: a struct constant is not expressible in source")
+            }
+            Self::UnsupportedConnectorPort { node, port } => write!(
+                f,
+                "invalid plan: `{node}.{port}` is a contract port this machine cannot execute yet"
+            ),
             Self::MismatchedEdgePins {
                 port,
                 expected,
@@ -376,6 +401,9 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     name: var.name.clone(),
                 });
             }
+            if let Some(init) = &var.init {
+                value_expressible(init)?;
+            }
         }
         for pair in node.vars.windows(2) {
             if pair[0].name >= pair[1].name {
@@ -383,6 +411,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
         }
         if let NodeKind::Connector(spec) = &node.kind {
+            for (_, setting) in &spec.attributes {
+                if let crate::plan::AttrSetting::Value(value) = setting {
+                    value_expressible(value)?;
+                }
+            }
             let mut attributes = BTreeSet::new();
             for (name, _) in &spec.attributes {
                 if !attributes.insert(name.as_str()) {
@@ -470,6 +503,17 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             node: Some(node.path.clone()),
                             port: endpoint.port.clone(),
                             expected: position,
+                        });
+                    }
+                    // The table ANSWERED for the port — but the
+                    // Partner seam cannot execute it yet: refuse by
+                    // capability, distinctly from ignorance.
+                    if matches!(node.kind, NodeKind::Connector(_))
+                        && !matches!(endpoint.port.name(), "in" | "out" | "err")
+                    {
+                        return Err(PlanValidationError::UnsupportedConnectorPort {
+                            node: node.path.clone(),
+                            port: endpoint.port.clone(),
                         });
                     }
                     Ok(())
@@ -634,6 +678,18 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     Ok(())
 }
 
+/// No plan constant may carry a struct: CEL cannot construct one,
+/// so no compiled plan holds one — and the codec's tables refuse
+/// the form, so admitting it would break `encode ⇒ decode`.
+fn value_expressible(value: &cel::Value) -> Result<(), PlanValidationError> {
+    match value {
+        cel::Value::Struct(_) => Err(PlanValidationError::UnrepresentableConstant),
+        cel::Value::List(items) => items.iter().try_for_each(value_expressible),
+        cel::Value::Map(entries) => entries.values().try_for_each(value_expressible),
+        _ => Ok(()),
+    }
+}
+
 /// Every map literal in a shipped CEL tree is construction-sorted —
 /// the parser sorts them, so an unsorted or duplicated literal is a
 /// second byte form of the same expression, which the re-encoding
@@ -642,7 +698,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 /// already bounded the tree.
 fn expr_canonical(expr: &cel::Expr) -> Result<(), PlanValidationError> {
     match expr {
-        cel::Expr::Literal(_) | cel::Expr::Path(_) => Ok(()),
+        cel::Expr::Literal(value) => value_expressible(value),
+        cel::Expr::Path(_) => Ok(()),
         cel::Expr::Unary { expr, .. } => expr_canonical(expr),
         cel::Expr::Binary { left, right, .. } => {
             expr_canonical(left)?;

@@ -494,8 +494,27 @@ impl<'plan> TransactionExecutor<'plan> {
                     scratch.insert(name.clone(), value);
                 }
                 Step::Emit { port, value } => {
-                    let env = bindings(&scratch, &lets)?;
-                    if let Some(built) = emitted_content(value, input, &env)? {
+                    // DECIDED for encoded inputs: the bare `data`
+                    // relay is a pass-through of the REPRESENTATION
+                    // — bytes, encoding, and content-type hint —
+                    // recognized before the CEL bindings would try
+                    // to materialize an encoding CEL cannot read
+                    // (an Avro relay works; an Avro FIELD access
+                    // still faults, typed). Materialized inputs need
+                    // no case: the struct witness rides the value.
+                    let encoded_pass_through = matches!(
+                        (value, input.data()),
+                        (PlanEmission::Data(tree), Data::Encoded { .. })
+                            if matches!(&tree.root, cel::Expr::Path(segments)
+                                if segments.len() == 1 && segments[0] == "data")
+                    );
+                    let built = if encoded_pass_through {
+                        Some(pass_through(input))
+                    } else {
+                        let env = bindings(&scratch, &lets)?;
+                        emitted_content(value, input, &env)?
+                    };
+                    if let Some(built) = built {
                         let index = buffer.next_index(port);
                         let id = ids::emission_id(
                             &node.path,
@@ -534,7 +553,8 @@ impl<'plan> TransactionExecutor<'plan> {
                                         &from,
                                         own_pin,
                                         &from_envelope_value(current),
-                                    )?;
+                                    )
+                                    .map_err(PinViolation::into_fault)?;
                                 }
                                 if let Some(mime) = built
                                     .mime
@@ -546,7 +566,8 @@ impl<'plan> TransactionExecutor<'plan> {
                                 input.data().clone()
                             }
                             BuiltData::Value(value) => {
-                                crossing_pins_hold(self.plan, &from, own_pin, &value)?;
+                                crossing_pins_hold(self.plan, &from, own_pin, &value)
+                                    .map_err(PinViolation::into_fault)?;
                                 if let Some(mime) = &built.mime {
                                     sys = sys.with_mime_type(mime.clone());
                                 }
@@ -558,7 +579,8 @@ impl<'plan> TransactionExecutor<'plan> {
                                     &from,
                                     own_pin,
                                     &from_envelope_value(&value),
-                                )?;
+                                )
+                                .map_err(PinViolation::into_fault)?;
                                 if let Some(mime) = &built.mime {
                                     sys = sys.with_mime_type(mime.clone());
                                 }
@@ -815,6 +837,23 @@ pub(crate) enum BuiltData {
     Envelope(envelope::Value),
 }
 
+/// The pass-through emission: the input's representation ships
+/// unchanged — data as stored, writable namespaces whole. The bare
+/// `data` relay on an ENCODED input takes this road before any CEL
+/// binding materializes.
+fn pass_through(input: &Envelope) -> Built {
+    Built {
+        data: BuiltData::Unchanged,
+        app: input.meta().app().clone(),
+        customs: input
+            .meta()
+            .customs()
+            .map(|(name, namespace)| (name.clone(), namespace.clone()))
+            .collect(),
+        mime: None,
+    }
+}
+
 fn emitted_content(
     emission: &PlanEmission,
     input: &Envelope,
@@ -834,19 +873,10 @@ fn emitted_content(
         PlanEmission::Nothing => Ok(None),
         PlanEmission::Identity => Ok(Some(inherited(BuiltData::Unchanged))),
         PlanEmission::Data(expr) => {
-            // The bare `data` relay is a PASS-THROUGH of the value,
-            // not a round trip through CEL: `Struct` and `Map` are
-            // two logical types (canonical tags 17 and 18), and CEL
-            // carries only maps — re-materializing would silently
-            // retype the content. Deeper expressions evaluate in the
-            // CEL domain and answer in it, maps included.
-            if let cel::Expr::Path(segments) = &expr.root
-                && segments.len() == 1
-                && segments[0] == "data"
-                && let Data::Materialized(value) = input.data()
-            {
-                return Ok(Some(inherited(BuiltData::Envelope(value.clone()))));
-            }
+            // No spelling-dependent special case: the STRUCT witness
+            // crosses the CEL bridge in the value itself
+            // (`cel::Value::Struct`), so `out = data`, a local
+            // binding, or a ternary all preserve the logical type.
             let value = cel::eval(expr, env).map_err(Fault::Eval)?;
             Ok(Some(inherited(BuiltData::Value(value))))
         }
@@ -903,6 +933,28 @@ fn emitted_content(
     }
 }
 
+/// One refused crossing: WHERE the pin refused — the emitting end
+/// itself or a precise fan-out destination — and the judgement.
+/// Structure survives to the public APIs; callers that speak Fault
+/// flatten it themselves.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinViolation {
+    /// The endpoint whose pin refused.
+    pub at: crate::plan::EndpointRef,
+    /// The conformance judgement.
+    pub message: String,
+}
+
+impl PinViolation {
+    /// The flattening callers on the Fault path use.
+    #[must_use]
+    pub fn into_fault(self) -> Fault {
+        Fault::Eval(cel::Error {
+            message: self.message,
+        })
+    }
+}
+
 /// Judges materialized content against every pin it must cross —
 /// the emitting end's own pin and each fan-out target's — BEFORE any
 /// commit: routing is post-commit and must never fail. Encoded bytes
@@ -913,11 +965,14 @@ pub(crate) fn crossing_pins_hold(
     from: &crate::plan::EndpointRef,
     own_pin: Option<&cel::Type>,
     value: &cel::Value,
-) -> Result<(), Fault> {
+) -> Result<(), PinViolation> {
     if let Some(pinned) = own_pin
         && let Some(message) = conformance_fault(from.port.name(), pinned, value)
     {
-        return Err(Fault::Eval(cel::Error { message }));
+        return Err(PinViolation {
+            at: from.clone(),
+            message,
+        });
     }
     for edge in plan.edges.iter().filter(|edge| edge.from == *from) {
         let Some(to) = &edge.to else { continue };
@@ -936,7 +991,10 @@ pub(crate) fn crossing_pins_hold(
         if let Some(pinned) = pinned
             && let Some(message) = conformance_fault(to.port.name(), pinned, value)
         {
-            return Err(Fault::Eval(cel::Error { message }));
+            return Err(PinViolation {
+                at: to.clone(),
+                message,
+            });
         }
     }
     Ok(())
@@ -977,6 +1035,7 @@ pub(crate) fn conformance_fault(
         (_, cel::Value::Double(_)) => mismatch("double"),
         (_, cel::Value::Text(_)) => mismatch("text"),
         (_, cel::Value::Bytes(_)) => mismatch("bytes"),
+        (_, cel::Value::Struct(_)) => mismatch("struct"),
         (_, cel::Value::Duration(_)) => mismatch("duration"),
         (_, cel::Value::Timestamp(_)) => mismatch("timestamp"),
         (_, cel::Value::Null) => mismatch("null"),
@@ -1103,7 +1162,10 @@ pub fn meta_value(meta: &Meta) -> cel::Value {
 pub(crate) fn from_envelope_value(value: &envelope::Value) -> cel::Value {
     match value {
         envelope::Value::Scalar(scalar) => from_scalar(scalar),
-        envelope::Value::Struct(fields) => cel::Value::Map(
+        // The logical type CROSSES the bridge: a struct stays a
+        // struct through bindings, locals, and ternaries — tag 17
+        // never silently becomes tag 18 on the way through CEL.
+        envelope::Value::Struct(fields) => cel::Value::Struct(
             fields
                 .iter()
                 .map(|(name, value)| (name.clone(), from_envelope_value(value)))
@@ -1157,6 +1219,12 @@ pub fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, Fault> {
         cel::Value::Map(map) => envelope::Value::Map(
             map.iter()
                 .map(|(key, item)| Ok((key.clone(), to_envelope_value(item)?)))
+                .collect::<Result<_, Fault>>()?,
+        ),
+        cel::Value::Struct(fields) => envelope::Value::Struct(
+            fields
+                .iter()
+                .map(|(name, item)| Ok((name.clone(), to_envelope_value(item)?)))
                 .collect::<Result<_, Fault>>()?,
         ),
         other @ (cel::Value::Duration(_) | cel::Value::Timestamp(_) | cel::Value::Null) => {

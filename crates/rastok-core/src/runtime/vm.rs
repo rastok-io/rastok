@@ -58,11 +58,16 @@ pub enum VmError {
     UnknownIngress(node::Port),
     /// An ingress draft that violates a pin — the ingress port's own
     /// or a destination's it would fan out to. The CLIENT's value is
-    /// wrong, not the plan; refused before any append.
+    /// wrong, not the plan; refused before any append, with the
+    /// STRUCTURE intact: where it was submitted, where it was
+    /// refused, and the judgement.
     IngressPinViolation {
         /// The submission's port.
-        port: node::Port,
-        /// The conformance judgement, verbatim.
+        ingress: node::Port,
+        /// The endpoint whose pin actually refused — the ingress
+        /// itself, or a fan-out destination.
+        rejected_at: EndpointRef,
+        /// The conformance judgement.
         detail: String,
     },
 }
@@ -82,8 +87,10 @@ impl fmt::Display for VmError {
             Self::UnknownIngress(port) => {
                 write!(f, "`{port}` is not an input of this graph")
             }
-            Self::IngressPinViolation { port, detail } => {
-                write!(f, "the draft cannot enter `{port}`: {detail}")
+            Self::IngressPinViolation {
+                ingress, detail, ..
+            } => {
+                write!(f, "the draft cannot enter `{ingress}`: {detail}")
             }
         }
     }
@@ -328,9 +335,10 @@ impl<'plan> Vm<'plan> {
                 own_pin,
                 &crate::runtime::from_envelope_value(value),
             )
-            .map_err(|fault| VmError::IngressPinViolation {
-                port: submission.port.clone(),
-                detail: alloc::string::ToString::to_string(&fault),
+            .map_err(|violation| VmError::IngressPinViolation {
+                ingress: submission.port.clone(),
+                rejected_at: violation.at,
+                detail: violation.message,
             })?;
         }
         self.reserve_targets(&from)?;
@@ -571,7 +579,7 @@ impl<'plan> Vm<'plan> {
                         "the request cannot be framed",
                     )
                 };
-                self.reserve_emissions(slot, &outcome.record)?;
+                self.validate_and_reserve_emissions(slot, &outcome.record)?;
                 journal
                     .commit(outcome.record.clone())
                     .map_err(VmError::Journal)?;
@@ -697,14 +705,16 @@ impl<'plan> Vm<'plan> {
                 &from,
                 None,
                 &crate::runtime::from_envelope_value(value),
-            ) {
+            )
+            .map_err(crate::runtime::PinViolation::into_fault)
+            {
                 let outcome = executor.typed_error_transaction(
                     slot,
                     request,
                     "RuntimeFault",
                     &alloc::string::ToString::to_string(&fault),
                 );
-                self.reserve_emissions(slot, &outcome.record)?;
+                self.validate_and_reserve_emissions(slot, &outcome.record)?;
                 journal
                     .commit(outcome.record.clone())
                     .map_err(VmError::Journal)?;
@@ -724,7 +734,7 @@ impl<'plan> Vm<'plan> {
                 seq: request.seq,
             },
         );
-        self.reserve_emissions(slot, &outcome.record)?;
+        self.validate_and_reserve_emissions(slot, &outcome.record)?;
         journal
             .commit(outcome.record.clone())
             .map_err(VmError::Journal)?;
@@ -753,7 +763,7 @@ impl<'plan> Vm<'plan> {
             // a typed error — the machine never swallows an envelope.
             Err(fault) => executor.fault_transaction(slot, delivery, &fault),
         };
-        self.reserve_emissions(slot, &outcome.record)?;
+        self.validate_and_reserve_emissions(slot, &outcome.record)?;
         journal
             .commit(outcome.record.clone())
             .map_err(VmError::Journal)?;
@@ -798,7 +808,7 @@ impl<'plan> Vm<'plan> {
                 let executor = TransactionExecutor::new(self.plan, self.graph_version);
                 let outcome =
                     executor.typed_error_transaction(slot, delivery, "DecodeError", &message);
-                self.reserve_emissions(slot, &outcome.record)?;
+                self.validate_and_reserve_emissions(slot, &outcome.record)?;
                 journal
                     .commit(outcome.record.clone())
                     .map_err(VmError::Journal)?;
@@ -851,18 +861,21 @@ impl<'plan> Vm<'plan> {
 
     /// Reserves room in every mailbox a record's emissions will reach.
     /// Called before the commit: a refusal is pure backpressure.
-    fn reserve_emissions(
+    /// The FINAL gate every commit candidate passes — validation
+    /// and reservation, in that order, both named by this function.
+    ///
+    /// Pin conformance runs at TWO levels, deliberately: the
+    /// RECOVERABLE level at construction (an operator's or a
+    /// partner's value breach converts into a typed error on `err`)
+    /// and THIS final, non-recursive level — a synthesized error
+    /// that itself violates its wiring cannot become another typed
+    /// error on the same wiring, so it surfaces as the machine
+    /// fault it is and NOTHING commits.
+    fn validate_and_reserve_emissions(
         &self,
         slot: Slot,
         record: &crate::runtime::TransactionRecord,
     ) -> Result<(), VmError> {
-        // The ONE choke point before any outcome commits: every
-        // materialized emission — a handler's, a synthesized
-        // RuntimeFault's, a DecodeError's, a timeout's — is judged
-        // against every pin it will cross. A typed error that
-        // violates its own `err` wiring cannot be converted into
-        // another typed error on the same wiring: it surfaces as the
-        // machine fault it is, and NOTHING commits.
         for emission in &record.emissions {
             if let Data::Materialized(value) = emission.envelope.data() {
                 let own_pin = self.plan.nodes[slot.index()]
@@ -898,7 +911,7 @@ impl<'plan> Vm<'plan> {
                         own_pin,
                         &crate::runtime::from_envelope_value(value),
                     )
-                    .map_err(VmError::Fault)?;
+                    .map_err(|violation| VmError::Fault(violation.into_fault()))?;
                 }
             }
         }

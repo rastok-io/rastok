@@ -2737,6 +2737,7 @@ fn direction_words(direction: Direction) -> &'static str {
 
 fn value_type(value: &cel::Value) -> cel::Type {
     match value {
+        cel::Value::Struct(_) => cel::Type::Dyn,
         cel::Value::Bool(_) => cel::Type::Bool,
         cel::Value::Int(_) => cel::Type::Int,
         cel::Value::Uint(_) => cel::Type::Uint,

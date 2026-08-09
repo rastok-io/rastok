@@ -86,6 +86,24 @@ pub fn cel_tagged(value: &crate::cel::Value) -> Cbor {
             Cbor::Uint(19),
             Cbor::Array(items.iter().map(cel_tagged).collect()),
         ]),
+        crate::cel::Value::Struct(fields) => {
+            // The struct's canonical seal — tag 17, sorted pairs —
+            // mirrors `value_tagged`'s: one registry, whatever
+            // domain carried the value.
+            let mut sorted: Vec<_> = fields.iter().collect();
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            Cbor::Array(vec![
+                Cbor::Uint(17),
+                Cbor::Array(
+                    sorted
+                        .into_iter()
+                        .map(|(field, value)| {
+                            Cbor::Array(vec![Cbor::Text(field.clone()), cel_tagged(value)])
+                        })
+                        .collect(),
+                ),
+            ])
+        }
         crate::cel::Value::Map(entries) => {
             let mut pairs: Vec<(Vec<u8>, Cbor)> = entries
                 .iter()

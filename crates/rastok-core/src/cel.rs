@@ -88,6 +88,13 @@ pub enum Value {
     List(Vec<Value>),
     /// Text-keyed map; `BTreeMap` keeps iteration sorted by key.
     Map(BTreeMap<String, Value>),
+    /// Named fields in declaration order — the LOGICAL twin of
+    /// `envelope::Value::Struct` (canonical tag 17, where a map is
+    /// 18): the witness that lets a struct cross the CEL bridge —
+    /// bindings, locals, ternaries — without silently becoming a
+    /// map. CEL cannot construct one; it can only carry, access,
+    /// and re-emit what the envelope domain handed it.
+    Struct(Vec<(String, Value)>),
 }
 
 impl PartialEq for Value {
@@ -111,6 +118,9 @@ impl PartialEq for Value {
             (Self::Null, Self::Null) => true,
             (Self::List(a), Self::List(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
+            // Field order is declaration order and IS the value —
+            // the same equality the envelope twin has.
+            (Self::Struct(a), Self::Struct(b)) => a == b,
             _ => false,
         }
     }
@@ -1248,6 +1258,9 @@ fn literal_type(value: &Value) -> Type {
         Value::Null => Type::Null,
         Value::List(_) => Type::List(Box::new(Type::Dyn)),
         Value::Map(_) => Type::Map(Box::new(Type::Dyn)),
+        // No struct type exists in the annotation subset; the value
+        // carries its own witness and types as dynamic.
+        Value::Struct(_) => Type::Dyn,
     }
 }
 
@@ -1324,6 +1337,15 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
                             fault(format!("`{dotted}` has no member `{segment}`"))
                         })?;
                     }
+                    Value::Struct(fields) => {
+                        value = fields
+                            .into_iter()
+                            .find(|(name, _)| name == segment)
+                            .map(|(_, value)| value)
+                            .ok_or_else(|| {
+                                fault(format!("`{dotted}` has no member `{segment}`"))
+                            })?;
+                    }
                     _ => return Err(fault(format!("`{dotted}` is not a map"))),
                 }
             }
@@ -1367,6 +1389,11 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
                     .ok()
                     .and_then(|i| items.into_iter().nth(i))
                     .ok_or_else(|| fault(String::from("list index out of range"))),
+                (Value::Struct(fields), Value::Text(key)) => fields
+                    .into_iter()
+                    .find(|(name, _)| name == &key)
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| fault(format!("no member `{key}`"))),
                 (Value::Map(mut map), Value::Text(key)) => map
                     .remove(&key)
                     .ok_or_else(|| fault(format!("no such key `{key}`"))),
@@ -1391,6 +1418,7 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
                 (Function::Size, [Value::Bytes(bytes)]) => Ok(Value::Int(bytes.len() as i64)),
                 (Function::Size, [Value::List(items)]) => Ok(Value::Int(items.len() as i64)),
                 (Function::Size, [Value::Map(map)]) => Ok(Value::Int(map.len() as i64)),
+                (Function::Size, [Value::Struct(fields)]) => Ok(Value::Int(fields.len() as i64)),
                 (function, values) => {
                     Err(fault(format!("{function:?} does not accept {values:?}")))
                 }
@@ -1465,6 +1493,12 @@ fn values_equal(lhs: &Value, rhs: &Value) -> bool {
         (Value::Null, Value::Null) => true,
         (Value::List(a), Value::List(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(x, y))
+        }
+        (Value::Struct(a), Value::Struct(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|((ka, va), (kb, vb))| ka == kb && values_equal(va, vb))
         }
         (Value::Map(a), Value::Map(b)) => {
             a.len() == b.len()
