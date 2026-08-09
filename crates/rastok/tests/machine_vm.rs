@@ -646,7 +646,7 @@ fn a_refused_commit_on_an_unframeable_expiry_loses_nothing() {
     // Case: the queued delivery cannot be framed and the decode
     // transaction's commit is refused — the delivery must stay.
     let compilation = compile(
-        &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = envelope }\n  }\n  . -> wrap -> echo -> nothing\n}\n"],
+        &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  . -> wrap -> echo -> nothing\n}\n"],
         &Registry::m0(),
     )
     .expect("a valid plan");

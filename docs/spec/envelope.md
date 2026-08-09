@@ -248,7 +248,7 @@ compatibility contract.
 - **Edge transport = same envelope, same id.** An edge is a wire, not a
   computation. The envelope leaving `a.out` and arriving at `b.in` is the same.
 - **Every transaction emission = a NEW envelope with a new derived id** — even a
-  content-identical passthrough (`out = envelope` bare). A transaction's output is a
+  content-identical passthrough (`out = .`). A transaction's output is a
   new fact (a span, a commit, a journal entry, an identity), even if its
   content equals the input. New id ≠ new allocation : `data` bytes are shared
   by reference (immutability makes sharing safe) ; the cost is one blake3 of
@@ -402,12 +402,12 @@ that look like writes are not :
    the runtime acting, not the app).
 2. **Emission constructor.** When a handler builds bytes, it declares
    content metadata through the envelope constructor —
-   `out = envelope { mime_type = "image/png", data = … }` — and the *runtime*
+   `out = { mime_type = "image/png", data = … }` — and the *runtime*
    interprets that into `meta.sys`. The app never names `meta.sys` ; it passes
    a hint the runtime owns. (The runtime nulls `mime_type` when `data` is
    replaced by a structured value with no declared type.)
 3. **Simulation fixtures.** A fixture seeds inbound state through `meta.app`
-   (writable) or a runtime-interpreted `envelope { … }` builder — **never** by
+   (writable) or a runtime-interpreted braced envelope-form builder — **never** by
    assigning `meta.sys.*`. Simulation stands in for the runtime, but it does so
    through the same constructor surface, not by violating the invariant. This
    keeps one mental model and lets the type checker enforce read-only with no

@@ -22,7 +22,7 @@ graph echo : App {
 lab echo {
   simulation smoke on app {
     mock shell {
-      on in { out = envelope }
+      on in { out = . }
     }
 
     scenario roundtrip "a line echoes back" {

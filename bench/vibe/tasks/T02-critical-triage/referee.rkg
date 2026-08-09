@@ -1,7 +1,7 @@
 lab triage {
   simulation refereeing on app {
     mock notifier {
-      on in { out = envelope }
+      on in { out = . }
     }
 
     scenario critical_passes "a critical alert notifies" {

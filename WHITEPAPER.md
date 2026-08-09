@@ -331,9 +331,9 @@ graph expense_approval : App {                     // `: App` marks the deployme
     on (request, decision)
       where decision.data.approved
       within duration("48h") {
-      approval = envelope {
+      approval = {
         meta.app = request.meta.app                // a join attributes meta explicitly
-        data = struct { request_id = expense.key,
+        data = { request_id = expense.key,
                         amount     = request.data.amount }
       }
     }
@@ -341,9 +341,9 @@ graph expense_approval : App {                     // `: App` marks the deployme
     on (request, decision)
       where !decision.data.approved
       within duration("48h") {
-      rejection = envelope {
+      rejection = {
         meta.app = request.meta.app
-        data = struct { request_id = expense.key,
+        data = { request_id = expense.key,
                         amount     = request.data.amount,
                         reason     = decision.data.reason }
       }
@@ -366,21 +366,21 @@ lab expense_approval {
         on in { out = { entry_id = "acc-1" } }
       }
       // …but DRIVE the sources by injection (they are inputs, not partners) :
-      decisions.out = envelope { meta.request_id = "r-42",
-                                 data = struct { approved = true } }
-      requests.out  = envelope { meta.request_id = "r-42",
-                                 data = struct { amount = 1250 } }
+      decisions.out = { meta.request_id = "r-42",
+                                 data = { approved = true } }
+      requests.out  = { meta.request_id = "r-42",
+                                 data = { amount = 1250 } }
 
       expect "posted to accounting" accounting.in where
         data.request_id == "r-42"
     }
 
     scenario rejected "a rejection is a business outcome, not an accounting entry" {
-      decisions.out = envelope { meta.request_id = "r-43",
-                                 data = struct { approved = false,
+      decisions.out = { meta.request_id = "r-43",
+                                 data = { approved = false,
                                                  reason = "policy" } }
-      requests.out  = envelope { meta.request_id = "r-43",
-                                 data = struct { amount = 1800 } }
+      requests.out  = { meta.request_id = "r-43",
+                                 data = { amount = 1800 } }
 
       expect "rejection is explicit" app.rejection where
         data.request_id == "r-43" && data.reason == "policy"
@@ -390,8 +390,8 @@ lab expense_approval {
     scenario approval_timeout "no decision within 48 hours; the join expires" {
       mock accounting { on in { out = { entry_id = "acc-1" } } }
 
-      requests.out = envelope { meta.request_id = "r-7",
-                                data = struct { amount = 990 } }
+      requests.out = { meta.request_id = "r-7",
+                                data = { amount = 990 } }
       expect nothing accounting.in                   // window ① : nothing moves on arrival
 
       advance duration("48h")                                    // virtual time — nothing sleeps
@@ -503,15 +503,15 @@ lab agent_gateway {
       mock sessions.codex {             // a qualified path into the per-key sub-graph
         on in where data.type == "message" {
           out = { method = "item/agentMessage",
-                  params = struct { message = "Bonjour" } }
+                  params = { message = "Bonjour" } }
         }
       }
       mock teams_out {                  // EVERY called external system must be covered —
         on in { out = { delivered = true } }   // an uncovered call fails the scenario loudly
       }
 
-      teams_in.out = envelope { meta.session_key = "conv-1",
-                                data = struct { type = "message", text = "Bonjour" } }
+      teams_in.out = { meta.session_key = "conv-1",
+                                data = { type = "message", text = "Bonjour" } }
 
       expect "reply reaches the user" teams_out.in where
         data.params.message == "Bonjour"
@@ -721,9 +721,9 @@ form and birth stamps live in
 [docs/spec/envelope.md](docs/spec/envelope.md).
 
 ```rastok
-out = envelope {
+out = {
   meta.request_city = data.city                  // a scalar annotation, rides on the envelope
-  data = struct { city = "Paris", country = "FR" }  // a typed record payload
+  data = { city = "Paris", country = "FR" }  // a typed record payload
 }
 ```
 
@@ -733,16 +733,19 @@ payload types include scalars, arrays, maps, enums, unions, and the
 explicitly dynamic `variant` type described below.
 
 Because emitting a structured payload is the overwhelmingly common
-case, a bare
-`{ … }` in any *envelope position* (a handler emission, a fixture
-injection, a mock reply) is sugar for `envelope { data = struct { … } }`:
+case, a braced value is classified once by its top-level roots
+(D-2026-08-09-1). With no reserved root it is a *data record* — a fresh
+typed struct payload, the input's heritable metadata kept:
 
 ```rastok
 out = { city = "Paris", country = "FR" }
 ```
 
-Anywhere else, `{ … }` is not a value — structs are written
-`struct { … }`. One exception, one rule.
+With only the reserved roots `data`, `meta`, and `mime_type` it is the
+*envelope form* — the builder shown above, patching or rebuilding the
+envelope itself. Mixing the two refuses at compile time
+(`E-BRACE-MIXED`); business fields named like a reserved root take the
+explicit escape `data = { … }`. One form, one classification.
 
 **Static by default.** The data has a *static type*, known at compile
 time. This is the Rust discipline: a statically-typed value inherits
@@ -905,7 +908,7 @@ envelope — its `parent_id` is the envelope that *triggered* the
 transaction (envelope.md's cause table); the other contributors are
 recorded in the journal, not on the envelope. Each **writable** namespace (`meta.app`, any custom) of the
 emitted envelope must be **attributed explicitly** —
-`out = envelope { meta.app = a.meta.app, meta.auth = b.meta.auth, … }` —
+`out = { meta.app = a.meta.app, meta.auth = b.meta.auth, … }` —
 otherwise the build fails. Single-input handlers inherit each namespace
 additively from their one parent.
 
@@ -928,7 +931,7 @@ operator stats per session {
   on event { count = count + 1 }         // scalar state update : plain CEL
 
   on tick  {
-    metric = envelope { meta.count_per_min = count }
+    metric = { meta.count_per_min = count }
     count  = 0
   }
 }
@@ -944,9 +947,9 @@ the `order` partition key):
 ```rastok
 operator settle per order {
   on (invoice, payment) {
-    out = envelope {
+    out = {
       meta.app = invoice.meta.app               // a join attributes meta explicitly (see below)
-      data = struct { order_id = order.key,     // `order` = the partition → its key
+      data = { order_id = order.key,     // `order` = the partition → its key
                       amount   = invoice.data.amount,   // envelopes are named by PORT
                       paid     = payment.data.confirmed }
     }
@@ -978,7 +981,7 @@ operator counter per session {
 
   on msg {
     count = count + 1                        // mutate ; reads below see the new value
-    out = envelope { meta.count = count }
+    out = { meta.count = count }
   }
 }
 ```
@@ -1000,11 +1003,13 @@ environment lookup, network access, or filesystem reads.
 **Emitting.**
 - A port emits **once per transaction** — the value of its *final* assignment
   (last-write-wins); a port never assigned emits nothing.
-- `out = envelope { … }` emits an envelope that **inherits** the input
-  (meta + data) and overrides only the listed fields — a *patch*.
-- `out = { … }` — the data-only sugar (§2.1): inherits the input's
-  `meta`, replaces `data` with the given struct.
-- `out = envelope` (bare) re-emits the current envelope unchanged.
+- `out = { … }` with only reserved roots (`data`, `meta`, `mime_type`)
+  is the envelope form: it **inherits** the input (meta + data) and
+  overrides only the listed fields — a *patch* ; a whole-`data`
+  assignment makes the data fresh.
+- `out = { … }` with no reserved root is a data record (§2.1): it
+  inherits the input's `meta` and replaces `data` with the new struct.
+- `out = .` re-emits the current envelope unchanged.
 - `out = nothing` emits nothing on that port this transaction (the explicit
   form of simply not assigning it).
 
@@ -1027,7 +1032,7 @@ operator session_metric per session {
   on msg {
     count = count + 1
 
-    out = envelope {
+    out = {
       meta.tenant_plan = tenant.?plan_tier.orValue("free")   // cross-partition read, with default
       meta.session_id  = session.key                   // current partition's key
       meta.trigger_id  = meta.sys.id                   // current envelope's derived id
@@ -1094,7 +1099,7 @@ operator pricing per tenant {
   on upgrade {
     val tier = data.new_tier                           // handler-local binding (val = DRY, used twice)
     subscribed_tier = tier
-    out = envelope { meta.price = TIERS[tier] }        // all of it plain CEL
+    out = { meta.price = TIERS[tier] }        // all of it plain CEL
   }
 }
 ```
@@ -1130,7 +1135,7 @@ operator settings {
 
 operator stamp per tenant {
   on req {
-    out = envelope { meta.rate_limit = settings.rate_limit }  // read the live knob
+    out = { meta.rate_limit = settings.rate_limit }  // read the live knob
   }
 }
 ```
@@ -1449,7 +1454,7 @@ operator counter per session {
 
   on msg {
     count = count + 1
-    out = envelope { meta.count = count }
+    out = { meta.count = count }
   }
 }
 ```
@@ -1607,7 +1612,7 @@ same key creates a fresh instance.
 
 ```rastok
 on checkout {
-  out = envelope { … }
+  out = { … }
   stop           // explicit end after this handler
 }
 ```
@@ -2152,8 +2157,8 @@ lab checkout {
       on in { out = { status = "charged" } }
     }
     scenario accepted {
-      orders.out = envelope { meta.order_id = "o-1"
-                              data = struct { amount = 120 } }
+      orders.out = { meta.order_id = "o-1"
+                              data = { amount = 120 } }
       expect "posted" ledger.in where data.status == "charged"
     }
   }
@@ -2167,8 +2172,8 @@ lab checkout {
       on in { out = { delivered = true } }
     }
     scenario accepted {
-      orders.out = envelope { meta.order_id = "o-2"
-                              data = struct { amount = 120 } }
+      orders.out = { meta.order_id = "o-2"
+                              data = { amount = 120 } }
       expect "charged for real" ledger.in where data.status == "charged"
     }
   }

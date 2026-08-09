@@ -29,7 +29,7 @@ Rules :
 - **Attributes always use `=`.** `command = "codex"`, `args = ["app-server"]`, `timeout = duration("5s")`. No exceptions.
 - **Type annotations always use `:`.** `input msg: struct`, `var count: int`, `connector X : HttpClient`. Never `=`.
 - **Sub-blocks never use `=`.** `env { ... }`, `auth oauth2_client_credentials { ... }`. The block name precedes braces directly.
-- **Tagged values are expressions, not special forms.** `restart = on_crash { ... }`, `Loop.backoff = exponential { ... }`, `data = struct { ... }` — the right-hand side is `<tag> { ... }`, the value type decided by the tag (reserved keyword set).
+- **Tagged values are expressions, not special forms.** `restart = on_crash { ... }`, `Loop.backoff = exponential { ... }`, `data = map { ... }` — the right-hand side is `<tag> { ... }`, the value type decided by the tag (reserved keyword set). An UNTAGGED `{ … }` is the braced record literal (D-2026-08-09-1).
 - **The form is decided at the second token** — see `Formal grammar` at the bottom for the LL(1) decision table.
 
 Example mixing all forms :
@@ -46,7 +46,7 @@ connector codex : Process {        // type annotation with ":"
   // in / out / err = stdin / stdout / stderr (Process defaults — Connectors declare no ports)
 
   init {                           // sub-block : startup handshake
-    message = struct { method = "initialize" }
+    message = { method = "initialize" }
     timeout = duration("15s")
   }
   restart  = on_crash {            // tagged value
@@ -252,7 +252,7 @@ graph sessions per session {
     // in / out / err = stdin / stdout / stderr (Process defaults — no port declaration)
 
     init {
-      message = struct { method = "initialize" }
+      message = { method = "initialize" }
       timeout = duration("10s")
     }
     kill  = process_group
@@ -359,7 +359,7 @@ operator counter {
 
   on msg {
     count = count + 1                         // mutate (plain CEL) ; reads below see the new value
-    out = envelope { meta.count = count }     // default 'out' port
+    out = { meta.count = count }              // default 'out' port
   }
 }
 ```
@@ -369,7 +369,7 @@ There are no mutation shortcuts (`x++` / `x += v`) ; they are redundant with
 CEL. Structural reshaping stays in guest-language blocks (`jq { … }` /
 `sql { … }`).
 
-**Emitting** : `out = envelope { … }` inherits the input envelope (meta + data) and patches the listed fields ; `out = envelope` (bare) re-emits it unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. Wall-clock time enters only through a `Clock` observed via `on <clock_port>` (see [WHITEPAPER.md §5](../../WHITEPAPER.md)).
+**Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only reserved roots (`data`, `meta`, `mime_type`) it is the ENVELOPE form : `out = { meta.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata. Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data`, `meta`, or `mime_type` take the explicit escape `data = { … }`. `out = .` re-emits the input envelope unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. Wall-clock time enters only through a `Clock` observed via `on <clock_port>` (see [WHITEPAPER.md §5](../../WHITEPAPER.md)).
 
 ## Dynamic dispatch primitives (Router, Dispatch)
 
@@ -457,7 +457,7 @@ operator session_counter per session {
 
   on msg {
     count = count + 1
-    out = envelope { meta.count = count }
+    out = { meta.count = count }
   }
 }
 ```
@@ -882,7 +882,7 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 
 | Type      | Literal form                                  | Notes                                                          |
 |-----------|-----------------------------------------------|----------------------------------------------------------------|
-| `struct`  | `struct { k = v, … }`                         | typed record ; schema inferred, or annotated `: <Schema>`      |
+| `struct`  | `{ k = v, … }`                                | typed record — the braced literal (D-2026-08-09-1) ; schema inferred, or annotated `: <Schema>` |
 | `map`     | `map { k = v, … }`                            | dynamic string keys                                            |
 | `array`   | `[ v, v, … ]`                                  | ordered sequence ; `array<struct>` is the relational `table` view |
 | `text`    | `text { "…" }`                                | string scalar (multi-line ok), UTF-8                           |
@@ -894,18 +894,18 @@ Examples :
 
 ```
 // Typed record (struct) ; schema inferred
-struct { city = "Paris", country = "FR" }
+{ city = "Paris", country = "FR" }
 
 // Rows : an array of structs (the relational 'table' view)
 [
-  struct { name = "Alice", age = 30, city = "Paris" },
-  struct { name = "Bob",   age = 42, city = "Rome"  }
+  { name = "Alice", age = 30, city = "Paris" },
+  { name = "Bob",   age = 42, city = "Rome"  }
 ]
 
 // Rows with an explicit element schema
 array<struct { name: text, age: int, city: text }> [
-  struct { name = "Alice", age = 30, city = "Paris" },
-  struct { name = "Bob",   age = 42, city = "Rome"  }
+  { name = "Alice", age = 30, city = "Paris" },
+  { name = "Bob",   age = 42, city = "Rome"  }
 ]
 
 // Text scalar
@@ -927,7 +927,7 @@ bytes  file { "./fixtures/sample.pdf" }
 
 `file` accepts a local path (relative to the `.rkg` file) or an HTTP/HTTPS URL. The Connector reading the resource decodes the wire format (Parquet, Avro, JSON, …) into the declared type via its **codec**. In production graphs, `file` references typically appear only in seed data ; live I/O goes through Connectors.
 
-When data is omitted from an envelope declaration, it defaults to `struct { }` (an empty record).
+When data is omitted from an envelope declaration, it defaults to `{}` (an empty record).
 
 **Wire codecs versus value types.** Wire codecs (`json`, `jsonl`, `csv`, `parquet`, `avro`, `protobuf`, `msgpack`, `xml`, `text`, `raw`, …) live on Connector attributes (`codec`) and are *orthogonal* to the in-graph value type : the codec is the bytes↔value cast at the boundary (parse / serialize, fallible → `err`), the type is *what the parsed value is*. A `S3` reading Parquet produces `array<struct>` ; a `Kafka` reading Avro the same. Inside the graph, operators see the type regardless of the wire format that delivered it.
 
@@ -1011,14 +1011,14 @@ Example :
 lab teams_gateway {
   simulation teams_channel on app {
     scenario plain_message "plain Teams message" {
-      inbound.out = envelope {
+      inbound.out = {
         meta.app.source = "teams"
-        data = struct {
+        data = {
           type = "message"
-          from = struct { aadObjectId = "abc-123" }
-          conversation = struct { id = "conv-1" }
-          channelData = struct {
-            tenant = struct { id = "tenant-x" }
+          from = { aadObjectId = "abc-123" }
+          conversation = { id = "conv-1" }
+          channelData = {
+            tenant = { id = "tenant-x" }
           }
           text = "Bonjour"
         }
@@ -1026,12 +1026,12 @@ lab teams_gateway {
 
       mock sessions.codex {
         on in where data.method == "turn/start" {
-          out = envelope {
+          out = {
             meta.app.kind = "jsonrpc.notification"
             meta.app.method = "item/agentMessage"
-            data = struct {
+            data = {
               method = "item/agentMessage"
-              params = struct { message = "Bonjour" }
+              params = { message = "Bonjour" }
             }
           }
         }
@@ -1047,8 +1047,9 @@ lab teams_gateway {
 
 Semantics :
 
-- `inbound.out = envelope { ... }` injects an envelope at an inbound Connector's
-  output.
+- `inbound.out = { ... }` injects an envelope at an inbound Connector's
+  output — classified like any braced value (here the envelope form :
+  every root is reserved).
 - `mock sessions.codex { on in where ... { out = ... } }` uses ordinary handler
   grammar; an uncovered external call fails the scenario loudly.
 - `expect "label" outbound.in where (...)` observes deliveries since the last
@@ -1323,7 +1324,7 @@ guard_clause      ::= "where" cel_expr                               // content 
                     | "last" INT                                     // join count bound — a Tier-2 θ-join requires AT LEAST ONE bound (within or last) ; presence joins may use either or none
                     // The `where` clause on `on err` doubles as the Loop base-case predicate when the enclosing node carries `: Loop` — see loop.md §3.
 handler_body      ::= "{" ( val_decl | statement )* "}"
-statement         ::= lvalue ( ":" type_ref )? "=" value             // var write / port emit / dotted meta·data write ( = nothing → no emit ; = envelope {…} patches the input )
+statement         ::= lvalue ( ":" type_ref )? "=" value             // var write / port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value )
                     | "err" "=" err_value                            // TYPED-ERROR emission : err = PaymentDeclined { transient = false }
                     | "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast              // atomic multi-emit ; tuple = explicit per-port ; broadcast = same value to every port (`Fanout` is not a surface alias)
                     | implicit_yield                                  // valid only when a single output exists
@@ -1370,13 +1371,13 @@ attr_or_block     ::= lvalue "=" value                               // dotted k
 // leading-dot path forms.
 
 value             ::= tagged_value                                    // jq { … }, measure { … }, exponential { … }, …
-                    | tagged_block_value                              // envelope { … }, struct { … }, map { … }
-                    | envelope_sugar                                  // { … } — ONLY in envelope positions (see rule below)
+                    | tagged_block_value                              // map { … } — the EXPLICIT map spelling
+                    | braced_value                                    // { … } — the braced record ; classified in envelope positions
+                    | "."                                             // identity — exact re-emission (envelope positions only)
                     | "nothing"                                       // emission positions : emit nothing
                     | cel_expr                                        // everything else — one grain, one grammar
                     // LL(1) on the leading token : TAG_KW → tagged_value ;
-                    // envelope/struct/map → tagged_block_value ; "{" → envelope_sugar
-                    // (legal only where an envelope is expected, else parse error) ;
+                    // map → tagged_block_value ; "{" → braced_value ; "." → identity ;
                     // "nothing" → nothing ; anything else → hand the span to the CEL sub-parser.
 
 cel_expr          ::= /* a CEL expression (homegrown parser+checker+eval).
@@ -1413,20 +1414,24 @@ cel_path          ::= /* a CEL access path (subset of cel_expr) : IDENT ( "." ID
 
 err_value         ::= IDENT ( "{" struct_body "}" )?                  // the error kind ∈ the node's declared error set,
                                                                       //   with optional typed fields — compile-checked
-envelope_sugar    ::= "{" struct_body "}"                             // ≡ envelope { data = struct { … } }
-                    // Legal ONLY in envelope positions : handler emissions, fixture
-                    // injections, mock replies. Full-data REPLACEMENT ; meta untouched
-                    // (touch meta ⇒ full envelope { … } form). Struct data only.
-                    // (simulation-semantics.md §4)
+braced_value      ::= "{" struct_body "}"                             // the braced record (D-2026-08-09-1)
+                    // In ENVELOPE positions (handler emissions, fixture injections,
+                    // mock replies) the checker classifies the body ONCE by its
+                    // top-level roots : no reserved root → a fresh data record
+                    // (struct), heritable metadata kept ; only reserved roots
+                    // (data, meta, mime_type) → the envelope form (whole-data
+                    // assignment = fresh build, otherwise a patch) ; a mix →
+                    // E-BRACE-MIXED, wrap the data in `data = { … }`. `{}` is the
+                    // empty record, never an identity. Elsewhere the body is
+                    // simply a record. (simulation-semantics.md §4)
 
 tagged_value      ::= TAG_KW ( "(" arg_list ")" )? ( "{" raw_or_struct "}" )?   // at least one of (args) / {block}
                                                     // jq { ... }       raw body
                                                     // jq(req) { ... }  raw body scoped to envelope `req` (join meta-attribution)
                                                     // bounded(64)      paren args
                                                     // measure { … } / exponential { … } / on_crash { backoff = … }  struct body
-tagged_block_value ::= "envelope" ( "{" struct_body "}" )?           // { … } inherits the input envelope and patches the listed fields ; bare = identity
-                    | "struct"   "{" struct_body "}"                  // struct literal
-                    | "map"      "{" struct_body "}"                  // map literal
+tagged_block_value ::= "map" "{" struct_body "}"                     // map literal — the EXPLICIT spelling ; a braced
+                                                                      // record always builds a struct (D-2026-08-09-1)
                                                                       // array literal : a CEL list expression `[v, v, …]`
 raw_or_struct     ::= /* tag-dependent : raw text for jq/bash/sql/python/rust/json ;
                        struct_body for the others (oauth2_client_credentials,
@@ -1524,7 +1529,7 @@ scenario_step     ::= injection
 
 injection         ::= port_ref "=" value ( "seq" INT )?              // THE EMISSION SYNTAX — injects at an inbound
                                                                       // Connector's out only (lineage stays true) ;
-                                                                      // value = envelope { … } | { … } sugar ;
+                                                                      // value = a braced value, classified as everywhere ;
                                                                       // `seq` : explicit inbound_seq
 
 crash_selector    ::= IDENT "." record_kind ( "#" INT )?              // reserve.outbound_open#2
@@ -1596,12 +1601,13 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | `stop` — alone or followed by IDENT | `stop` action |
 | `handler_body` (statement) | `(` | tuple multi-emit `(a, b) = (e1, e2)` |
 | `handler_body` (statement) | `lvalue` (IDENT, dotted ok — e.g. `meta.app.label`) — next is `=` or `:` | assignment / port emit (`= nothing` = no emit ; `meta.sys` is read-only, never an lvalue) |
-| `handler_body` (statement) | TAG_KW / `envelope` / `struct` / `map` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
+| `handler_body` (statement) | TAG_KW / `map` / `{` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
 | `attr_or_block` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_or_block` | IDENT — next is `{` | `sub_block` |
 | `value` | TAG_KW | `tagged_value` |
-| `value` | `envelope` / `struct` / `map` — next is `{` | `tagged_block_value` |
-| `value` | `{` (envelope position only) | `envelope_sugar` |
+| `value` | `map` — next is `{` | `tagged_block_value` |
+| `value` | `{` | `braced_value` |
+| `value` | `.` (envelope position) | identity — exact re-emission |
 | `value` | `nothing` (emission position) | no-emit |
 | `value` | anything else | hand the span to the CEL sub-parser (`cel_expr` ; `as type_ref` composes at span end) |
 | `lifetime_value` | a CEL span | bare duration value → `idle_ttl` |
@@ -1617,7 +1623,7 @@ symbol of lookahead after the IDENT is consumed. The parser never needs to
 
 ### What this grammar excludes on purpose
 
-- **Bare `{ … }` is a value ONLY in envelope positions** (the `envelope_sugar` : handler emissions, fixture injections, mock replies — `{ … } ≡ envelope { data = struct { … } }`). Everywhere else, `attr = { k: v }` is **not** a value : use `struct { … }`, `json { … }`, or a tagged struct. One exception, one rule, LL(1)-clean.
+- **One braced form, classified once** (D-2026-08-09-1). `{ … }` is the record literal in every value position ; in ENVELOPE positions (handler emissions, fixture injections, mock replies) the checker classifies its top-level roots — no reserved root builds a fresh data record, only reserved roots (`data`, `meta`, `mime_type`) select the envelope form, a mix refuses with `E-BRACE-MIXED`. There is no `envelope { … }` keyword form and no `struct { … }` value literal ; `map { … }` is the explicit map spelling. No silent reinterpretation, LL(1)-clean.
 - **No tag aliasing** for user-defined languages without a sigil. If we ever allow user-defined tags, they must use a sigil (`@mylang { ... }`) so the lexer can recognise them at one token of lookahead without a global registry lookup.
 - **Separators are Scala-style, scoped by bracket.** Inside a **`{ }` block**
   (node body, `partition` block, inline `per { … }`, struct), a newline

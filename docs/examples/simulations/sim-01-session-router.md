@@ -53,9 +53,9 @@ graph sim01 : App {
 
     on in where data.kind == "message" && quota > 0 {
       quota = quota - 1
-      out = envelope {
+      out = {
         meta.app.route = "codex"
-        data = struct {
+        data = {
           request_id = string(meta.sys.id)
           op = "turn/start"
           prompt = data.text
@@ -67,8 +67,8 @@ graph sim01 : App {
   operator triage {
     input in : struct { }               // reacts to err envelopes from codex
     on in where err.kind == "TimeoutExpired" {
-      out = envelope {
-        data = struct { kind = "apology", text = "The agent timed out. Retrying soon." }
+      out = {
+        data = { kind = "apology", text = "The agent timed out. Retrying soon." }
       }
     }
   }
@@ -90,9 +90,9 @@ lab sim01 {
         on in where data.op == "turn/start" { out = nothing }   // deliberately never replies
       }                                                          // → the Connector's timeout machinery works
 
-      teams.out = envelope {
+      teams.out = {
         meta.app.user_id = "alice"        // fixture seeds via meta.app — A2 (meta ⇒ full form)
-        data = struct { kind = "message", text = "Bonjour" }
+        data = { kind = "message", text = "Bonjour" }
       }
 
       expect "turn started" codex.in where data.op == "turn/start"
@@ -111,7 +111,7 @@ lab sim01 {
 Symbolic ids (`H` = blake3 truncated to 128 bits). Virtual clock starts at
 `t = 0`. `inbound_seq` for `teams` starts at 0 (fixture-owned).
 
-### Step 1 — injection (`teams.out: envelope { … }`), then drain
+### Step 1 — injection (`teams.out = { … }`), then drain
 
 ```
 t=0  E0 born at inbound

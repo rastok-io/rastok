@@ -9,7 +9,7 @@ graph m0_probe : App {
 
   operator shout {
     on in where data.text != "" {
-      out = envelope { data.text = data.text }
+      out = { data.text = data.text }
     }
   }
 

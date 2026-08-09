@@ -119,8 +119,8 @@ and defers the index rule here. The rule :
 
 ```
 on in {
-  out = envelope { … }          → ("out",   0)
-  out = envelope { … }          → ("out",   1)     // second emit, same port
+  out = { … }                   → ("out",   0)
+  out = { … }                   → ("out",   1)     // second emit, same port
   (audit, alert) = (m, m)       → ("audit", 0), ("alert", 0)   // broadcast: per-port counters
 }
 ```

@@ -5,6 +5,37 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-09-1 — One braced form, classified once by its roots
+
+A maintainer language decision, taken during the third multiport
+review round, before anything public exists. The value grammar keeps
+ONE braced form: `{ … }` is the record literal in every value
+position, and in envelope positions (handler emissions, fixture
+injections, mock replies) the checker classifies its top-level roots
+exactly once — no reserved root builds a FRESH data record (a
+`struct`, canonical tag 17), keeping the input's heritable metadata;
+only reserved roots (`data`, `meta`, `mime_type` — a closed,
+normative list) select the envelope form, where a whole-`data`
+assignment makes the build fresh and its absence makes it a patch; a
+mix refuses as `E-BRACE-MIXED`, never a silent reinterpretation.
+Business fields that happen to be named like a reserved root take
+the explicit escape `data = { … }`. `{}` is the empty record; the
+exact re-emission of the current envelope is spelled `.`
+(`out = .`); `map { … }` stays the explicit spelling of a map
+(canonical tag 18). The `envelope` keyword forms (`out = envelope`,
+`envelope { … }`) and the `struct { … }` value literal are REMOVED —
+not aliased, not deprecated — while `struct` remains in type
+positions. Migration invariant, held by the gauge fixture and the
+goldens: a program converted spelling-for-spelling produces the same
+HIR, the same validated plan, the same semantic hash, and the same
+golden bytes — the reform touches the surface, never the identity.
+**Rejected:** keeping `envelope { … }` beside the classified braced
+form (two spellings for one build — the sugar/expansion split
+produced the round-3 Map/Struct divergence); classifying by VALUE
+shape at runtime (string decisions in the VM are exactly what
+D-2026-08-04-2 removed); an open reserved-root list (any future
+addition would silently reclassify existing records).
+
 ## D-2026-08-08-3 — A pinned port type is a public contract
 
 Second multiport lift. A port annotation (`input evt : text`)

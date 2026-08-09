@@ -63,8 +63,15 @@ step touches `vm.rs` once.
    preserves it; the validator gates unexecutable connector ports by
    capability; the encoded bare relay passes the representation
    through; all four error production paths pinned at the final
-   gate). The trio's
-   own contract types join the connector-sheet items below.
+   gate; seventh pass — data materializes lazily (an opaque
+   payload relays without a forced decode), struct equality is
+   BY NAME in both value domains with duplicate fields refused
+   typed at the doors, the conformance judgement is structured
+   (`ConformanceViolation`), and the maintainer's syntax reform
+   landed as D-2026-08-09-1: one braced form classified once,
+   `.` for identity, the `envelope`/`struct` value spellings
+   removed — same hash, package, and trace on the gauge). The
+   trio's own contract types join the connector-sheet items below.
 2. **The `jsonl` codec** — structured payloads across the `Process`
    boundary, under the one byte discipline; unlocks realistic `File`
    and HTTP payloads.
@@ -81,7 +88,11 @@ step touches `vm.rs` once.
    preserve its declared port order — `on (a, b)` and `on (b, a)`
    are different identities (identity.md makes port order inside a
    join sensitive), while the order BETWEEN handlers stays
-   insensitive and canonically sorted by that key.
+   insensitive and canonically sorted by that key. Identity-form
+   note (D-2026-08-09-1): under a join, `out = .` is AMBIGUOUS —
+   two input envelopes, no single "current" one — so the joins
+   slice must refuse it until a normative base rule names the
+   re-emitted envelope; never a silent pick.
 6. **`File` connector** — the first new adapter on the conformance
    harness: the half-day claim gets its first real measurement, with
    no network in the way.

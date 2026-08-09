@@ -812,7 +812,7 @@ graph unframeable : App {
   }
 
   operator shout {
-    on in { out = envelope }
+    on in { out = . }
   }
 
   . -> shout -> echo -> .

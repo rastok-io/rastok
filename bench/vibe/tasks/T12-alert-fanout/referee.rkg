@@ -1,7 +1,7 @@
 lab fanout {
   simulation refereeing on app {
-    mock archive { on in { out = envelope } }
-    mock pager { on in { out = envelope } }
+    mock archive { on in { out = . } }
+    mock pager { on in { out = . } }
 
     scenario critical "both branches fire on critical" {
       app.in = {level = "critical", message = "breaker C2 open"}

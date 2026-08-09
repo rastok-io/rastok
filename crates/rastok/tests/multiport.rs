@@ -424,13 +424,13 @@ fn conformance_refuses(body: &str) {
 fn every_emit_form_answers_to_the_pin() {
     // The reviewer's counter-examples, one per form. Identity: the
     // text input crosses an int output unchanged.
-    conformance_refuses("score = envelope");
-    // Replace: a map construction into a scalar pin.
+    conformance_refuses("score = .");
+    // Record: a struct construction into a scalar pin.
     conformance_refuses("score = {v = 1}");
     // Patch, field write: builds structure, no scalar pin holds it.
-    conformance_refuses("score = envelope {data.x = 1}");
+    conformance_refuses("score = {data.x = 1}");
     // Patch, whole-data write: answers with the written type.
-    conformance_refuses("score = envelope {data = \"nope\"}");
+    conformance_refuses("score = {data = \"nope\"}");
     // Data: the 32-bit bound of `int`, on a constant — the exact
     // var-initializer rule.
     conformance_refuses("score = 2147483648");
@@ -446,14 +446,14 @@ fn conforming_forms_pass() {
     .expect("int through the int pin");
     // Patch, whole-data write of the pinned type.
     compile(
-        &[gauge_graph("score = envelope {data = 7}").as_str()],
+        &[gauge_graph("score = {data = 7}").as_str()],
         &Registry::m0(),
     )
     .expect("a whole-data write of the pinned type");
     // Nothing produces nothing.
     compile(&[gauge_graph("score = nothing").as_str()], &Registry::m0()).expect("nothing conforms");
     // Identity through matching pins.
-    let echoed = "graph g : App {\n  operator o {\n    input evt : text\n    output echo : text\n\n    on evt {\n      echo = envelope\n    }\n  }\n\n  . -> o.evt\n  o.echo -> .\n}\n";
+    let echoed = "graph g : App {\n  operator o {\n    input evt : text\n    output echo : text\n\n    on evt {\n      echo = .\n    }\n  }\n\n  . -> o.evt\n  o.echo -> .\n}\n";
     compile(&[echoed], &Registry::m0()).expect("text through the text pin, unchanged");
 }
 
@@ -597,19 +597,16 @@ fn a_named_connector_edge_defers_by_name() {
     );
 }
 
-// ===== the ordered fold and the shorthand's spec semantics =====
+// ===== the ordered fold and the braced form's spec semantics =====
 
 #[test]
 fn the_fold_follows_the_runtime_order() {
     // `data = 1` then `data.x = 2`: the runtime ends on a STRUCTURE —
     // the checker must too, whatever wrote data earlier.
-    conformance_refuses("score = envelope {\n        data = 1\n        data.x = 2\n      }");
+    conformance_refuses("score = {\n        data = 1\n        data.x = 2\n      }");
     // The reverse order ends on the written int and conforms.
     compile(
-        &[
-            gauge_graph("score = envelope {\n        data.x = 2\n        data = 1\n      }")
-                .as_str(),
-        ],
+        &[gauge_graph("score = {\n        data.x = 2\n        data = 1\n      }").as_str()],
         &Registry::m0(),
     )
     .expect("the final whole-data write decides");
@@ -619,7 +616,7 @@ fn the_fold_follows_the_runtime_order() {
 fn a_metadata_only_injection_still_carries_the_draft_struct() {
     // The draft is BORN a struct (`lab::draft`); patching only meta
     // does not change what crosses the pinned scalar input.
-    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = envelope {meta.tag = \"x\"}\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = {meta.tag = \"x\"}\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
     let bag = compile(&[source], &Registry::m0()).expect_err("the draft map breaches the int pin");
     assert!(
         bag.diagnostics()
@@ -630,18 +627,18 @@ fn a_metadata_only_injection_still_carries_the_draft_struct() {
 }
 
 #[test]
-fn the_shorthand_is_physically_a_struct() {
+fn the_braced_record_is_physically_a_struct() {
     // Not cosmetic: Struct and Map are two domain values (canonical
-    // tags 17 and 18). The builders produce STRUCTS — asserted on
-    // the envelope itself for all three interpreters' shared path,
-    // and on the canonical seal below.
+    // tags 17 and 18). A braced record produces a STRUCT — asserted
+    // on the envelope itself for all three interpreters' shared
+    // path, and on the canonical seal below.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
     use rastok::envelope::{Data, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        data = 7\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        v = 7\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
@@ -665,7 +662,7 @@ fn the_shorthand_is_physically_a_struct() {
         panic!("a STRUCT, not a map: {:?}", output.envelope.data());
     };
     assert_eq!(fields.len(), 1);
-    assert_eq!(fields[0].0, "data");
+    assert_eq!(fields[0].0, "v");
     assert_eq!(fields[0].1, Value::Scalar(Scalar::Int(7)));
     // And the canonical seal carries tag 17 (struct), not 18 (map):
     // find the emission record and walk envelope(20).data(8).
@@ -703,18 +700,21 @@ fn the_shorthand_is_physically_a_struct() {
 }
 
 #[test]
-fn the_shorthand_builds_a_struct_with_ordinary_names() {
-    // `{ … } ≡ envelope { data = struct { … } }` — `data`, `meta`,
-    // and `mime_type` are FIELDS of the new structure, never
-    // envelope-level writes. Mocks share this resolver with handler
-    // emissions and injections.
+fn the_escape_gives_reserved_names_as_plain_fields() {
+    // Business fields that happen to be named `data` or `meta` need
+    // the explicit escape: `out = { data = { … } }` is the envelope
+    // form whose whole-data write is a record — inside that record,
+    // reserved names are ordinary fields (D-2026-08-09-1). Mocks
+    // share this resolver with handler emissions and injections.
     let source = r#"
 graph g : App {
   operator o {
     on in {
       out = {
-        data = 7
-        meta.flag = true
+        data = {
+          data = 7
+          meta.flag = true
+        }
       }
     }
   }
@@ -723,7 +723,7 @@ graph g : App {
 
 lab g {
   simulation probing on app {
-    scenario s "reserved names are plain fields" {
+    scenario s "reserved names are plain fields inside the escape" {
       app.in = {v = 1}
       expect "field named data" app.out count == 1 where data.data == 7
       expect "field named meta" app.out count == 1 where data.meta.flag == true
@@ -732,6 +732,151 @@ lab g {
 }
 "#;
     lab_passes(source);
+}
+
+#[test]
+fn an_empty_brace_is_an_empty_record() {
+    // `{}` builds an EMPTY struct — never an identity (identity is
+    // `.`). The injected payload must not leak through.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let source = "graph g : App {\n  operator o {\n    on in { out = {} }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                mime_type: None,
+                app: Namespace::new(),
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    )
+    .expect("the injection lands");
+    vm.drain(&mut journal).expect("the drain completes");
+    assert_eq!(
+        vm.outputs()[0].envelope.data(),
+        &Data::materialized(Value::Struct(Vec::new())),
+        "an empty record, not the input"
+    );
+}
+
+#[test]
+fn a_whole_data_write_is_the_payload_itself() {
+    // `{data = 1}` is the ENVELOPE form: the payload becomes the
+    // integer 1 — never a struct with a field named `data`.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let source =
+        "graph g : App {\n  operator o {\n    on in { out = {data = 1} }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::materialized(Value::Scalar(Scalar::Text(String::from("gone")))),
+                mime_type: None,
+                app: Namespace::new(),
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    )
+    .expect("the injection lands");
+    vm.drain(&mut journal).expect("the drain completes");
+    assert_eq!(
+        vm.outputs()[0].envelope.data(),
+        &Data::materialized(Value::Scalar(Scalar::Int(1))),
+        "the payload itself"
+    );
+}
+
+#[test]
+fn a_mixed_brace_refuses_with_the_dedicated_diagnostic() {
+    // An ordinary field beside a reserved root is never silently
+    // reinterpreted — E-BRACE-MIXED names the offending field.
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        v = 1\n        meta.flag = true\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("the mix refuses");
+    assert!(
+        bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code().as_str() == "E-BRACE-MIXED"
+                && diagnostic
+                    .fields()
+                    .iter()
+                    .any(|(name, value)| *name == "field" && *value == "v")
+        }),
+        "the dedicated code, naming the field: {bag:?}"
+    );
+}
+
+#[test]
+fn identity_re_emits_the_materialized_envelope_whole() {
+    // `out = .` — the exact re-emission: payload AND writable
+    // metadata cross untouched. (The encoded twin lives in
+    // `data_materializes_only_on_demand`.)
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut app = Namespace::new();
+    app.insert(
+        String::from("trace"),
+        MetaValue::Scalar(Scalar::Text(String::from("x"))),
+    );
+    vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::materialized(Value::Struct(vec![(
+                    String::from("v"),
+                    Value::Scalar(Scalar::Int(1)),
+                )])),
+                mime_type: None,
+                app,
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    )
+    .expect("the injection lands");
+    vm.drain(&mut journal).expect("the drain completes");
+    let output = &vm.outputs()[0];
+    assert_eq!(
+        output.envelope.data(),
+        &Data::materialized(Value::Struct(vec![(
+            String::from("v"),
+            Value::Scalar(Scalar::Int(1)),
+        )])),
+        "the payload crosses untouched"
+    );
+    assert_eq!(
+        output.envelope.meta().app().get("trace"),
+        Some(&MetaValue::Scalar(Scalar::Text(String::from("x")))),
+        "the writable metadata rides along"
+    );
 }
 
 #[test]
@@ -898,7 +1043,7 @@ graph g : App {
     output score : int
 
     on in {
-      score = envelope
+      score = .
     }
   }
 
@@ -1168,7 +1313,7 @@ graph g : App {
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = envelope }
+      on in { out = . }
     }
 
     scenario s "a decode-error payload cannot enter an int pin" {
@@ -1811,7 +1956,7 @@ fn data_materializes_only_on_demand() {
     // A guard reading nothing + identity: bytes, encoding, and MIME
     // survive whole.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in where true { out = envelope }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in where true { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0, "no opaque read was asked for");
     assert!(matches!(
@@ -1827,18 +1972,18 @@ fn data_materializes_only_on_demand() {
     );
     // A false guard consumes without decoding and without error.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in where false { out = envelope }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in where false { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!((outputs.len(), errors), (0, 0));
     // A meta-only guard touches meta, never data.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in where meta.sys.graph_version == 1 { out = envelope }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in where meta.sys.graph_version == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0);
     assert_eq!(outputs.len(), 1);
     // A state write independent of data materializes nothing.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    var seen : int = 0\n    on in {\n      seen = seen + 1\n      out = envelope\n    }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    var seen : int = 0\n    on in {\n      seen = seen + 1\n      out = .\n    }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0);
     assert_eq!(outputs.len(), 1);
@@ -1898,8 +2043,7 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source =
-        "graph g : App {\n  operator o {\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));

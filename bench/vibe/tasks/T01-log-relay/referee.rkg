@@ -1,7 +1,7 @@
 lab relay {
   simulation refereeing on app {
     mock logger {
-      on in { out = envelope }
+      on in { out = . }
     }
 
     scenario forwards "a status line reaches the logger and returns" {

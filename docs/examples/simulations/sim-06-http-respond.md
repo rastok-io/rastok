@@ -75,9 +75,9 @@ lab sim06 {
         }
       }
 
-      api.out = envelope {
+      api.out = {
         meta.app.request_id = "r-1"
-        data = struct { q = "meaning of life?" }
+        data = { q = "meaning of life?" }
       }
 
       expect "llm called" llm.in where data.prompt == "meaning of life?"
@@ -96,9 +96,9 @@ lab sim06 {
         }
       }
 
-      api.out = envelope {
+      api.out = {
         meta.app.request_id = "r-2"
-        data = struct { q = "slow one" }
+        data = { q = "slow one" }
       }
 
       advance duration("10s")
@@ -122,9 +122,9 @@ lab sim06 {
 
       // three clients click within the same second (the business shape :
       // a shop's « help me choose » button, the evening a newsletter lands)
-      api.out = envelope { meta.app.visitor = "v1"  data = struct { q = "summer jacket" } }
-      api.out = envelope { meta.app.visitor = "v2"  data = struct { q = "office shoes" } }
-      api.out = envelope { meta.app.visitor = "v3"  data = struct { q = "rain coat" } }
+      api.out = { meta.app.visitor = "v1"  data = { q = "summer jacket" } }
+      api.out = { meta.app.visitor = "v2"  data = { q = "office shoes" } }
+      api.out = { meta.app.visitor = "v3"  data = { q = "rain coat" } }
 
       // the refusal is IMMEDIATE — zero virtual time has passed
       expect "the third hit the bound" app.err where err.kind == "Overloaded"

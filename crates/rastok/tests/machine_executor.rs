@@ -35,7 +35,7 @@ effect = idempotent ; behavior = deterministic
 var count : int = 0
 on in where data.text != "" {
   count = count + 1
-  out = envelope { data.text = data.text }
+  out = { data.text = data.text }
 }
   }
 
@@ -83,7 +83,8 @@ fn trigger_in() -> node::Trigger {
 
 #[test]
 fn an_identity_emission_inherits_everything_but_its_spine() {
-    let source = "graph g : App {\n  operator relay {\n    on in { out = envelope }\n  }\n  . -> relay -> .\n}\n";
+    let source =
+        "graph g : App {\n  operator relay {\n    on in { out = . }\n  }\n  . -> relay -> .\n}\n";
     let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
@@ -221,7 +222,7 @@ fn metadata_writes_land_where_the_spec_says() {
     // instead of aliasing `meta.app.flag`; `meta.audit.flag`
     // silently wrote into app; `mime_type` became a data field;
     // a metadata-only patch transcoded the payload.
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = envelope {\n        meta.flag = \"yes\"\n        meta.audit.origin = \"trace\"\n        mime_type = \"text/x-rastok\"\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.flag = \"yes\"\n        meta.audit.origin = \"trace\"\n        mime_type = \"text/x-rastok\"\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);

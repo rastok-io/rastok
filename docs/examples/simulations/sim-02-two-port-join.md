@@ -36,9 +36,9 @@ graph sim02 : App {
     input payment : struct { amount: decimal(10,2) }
 
     on (order, payment) within duration("15m") {
-      out = envelope {
+      out = {
         meta.app = order.meta.app                       // join : explicit namespace attribution
-        data = struct {
+        data = {
           amount = payment.data.amount
           status = "settled"
         }
@@ -61,20 +61,20 @@ lab sim02 {
     scenario join_and_eviction "order 42 settles ; order 43's payment never comes" {
 
       // ---- case A : the happy join -----------------------------------------
-      orders.out = envelope {
+      orders.out = {
         meta.app.order_id = "42"
-        data = struct { total = 99.90 }
+        data = { total = 99.90 }
       }
-      payments.out = envelope {
+      payments.out = {
         meta.app.order_id = "42"
-        data = struct { amount = 99.90 }
+        data = { amount = 99.90 }
       }
       expect "42 settled" ledger.in where data.status == "settled" && data.amount == 99.90
 
       // ---- case B : the abandoned half --------------------------------------
-      orders.out = envelope {
+      orders.out = {
         meta.app.order_id = "43"
-        data = struct { total = 10.00 }
+        data = { total = 10.00 }
       }
 
       advance duration("15m")

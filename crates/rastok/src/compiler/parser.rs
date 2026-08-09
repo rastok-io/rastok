@@ -1508,33 +1508,28 @@ impl<'src> Parser<'src, '_> {
         // Probe by shape before touching the token stream: CEL text
         // may open with bytes this lexer rejects (`!`, `'`, `-(`), so
         // only builder-shaped input is tokenized here.
-        let builder_shaped = matches!(self.shape(), Some(b'{' | b'a'..=b'z' | b'A'..=b'Z' | b'_'));
+        let builder_shaped = matches!(
+            self.shape(),
+            Some(b'{' | b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_')
+        );
         if !builder_shaped {
             return Value::Cel(self.cel(position));
         }
         let token = self.peek();
         match (token.kind, token.text) {
             (TokenKind::LBrace, _) => match self.struct_body() {
-                Some(body) => Value::EnvelopeSugar(body),
+                Some(body) => Value::Braced(body),
                 None => Value::Cel(CelExpr {
                     text: String::new(),
                     span: token.span,
                 }),
             },
-            (TokenKind::Ident, "envelope") => {
+            (TokenKind::Dot, _) => {
+                // `.` — the exact re-emission of the current
+                // envelope; grammar forbids leading dots in CEL, so
+                // the form is unambiguous here.
                 self.bump();
-                if self.peek().kind == TokenKind::LBrace {
-                    match self.struct_body() {
-                        Some(body) => Value::Envelope(Some(body)),
-                        None => Value::Envelope(None),
-                    }
-                } else {
-                    Value::Envelope(None)
-                }
-            }
-            (TokenKind::Ident, "struct") => {
-                self.bump();
-                Value::Struct(self.struct_body().unwrap_or_default())
+                Value::Identity(token.span)
             }
             (TokenKind::Ident, "map") => {
                 self.bump();
@@ -2065,7 +2060,7 @@ graph m0_probe : App {
 
   operator shout {
     on in where data.text != "" {
-      out = envelope { data.text = data.text }
+      out = { data.text = data.text }
     }
   }
 
@@ -2095,7 +2090,7 @@ graph m0_probe : App {
             panic!("expected the emission");
         };
         assert_eq!(target.segments[0].text, "out");
-        assert!(matches!(value, Value::Envelope(Some(_))));
+        assert!(matches!(value, Value::Braced(_)));
         let GraphItem::Edge(edge) = &graph.body[2] else {
             panic!("expected the wiring chain");
         };
@@ -2248,7 +2243,7 @@ graph m0_probe : App {
     fn spaces_and_comments_around_dots_stay_trivia() {
         // Same line: spacing and comments must not change the parse.
         let spaced = parse_clean(
-            "graph g : App {\n  output feed\n  o . out -> . feed\n  operator o { on in { out = envelope } }\n}\n",
+            "graph g : App {\n  output feed\n  o . out -> . feed\n  operator o { on in { out = . } }\n}\n",
         );
         let TopDecl::Graph(graph) = &spaced.decls[0] else {
             panic!("expected a graph");
@@ -2265,7 +2260,7 @@ graph m0_probe : App {
             EdgeEndpoint::Ref(port) if port.boundary && port.segments[0].text == "feed"
         ));
         let commented = parse_clean(
-            "graph g : App {\n  output feed\n  o.out -> ./* target */feed\n  operator o { on in { out = envelope } }\n}\n",
+            "graph g : App {\n  output feed\n  o.out -> ./* target */feed\n  operator o { on in { out = . } }\n}\n",
         );
         let TopDecl::Graph(graph) = &commented.decls[0] else {
             panic!("expected a graph");

@@ -39,7 +39,7 @@ graph sim04 : App {
       idempotency_key = meta.app.booking_id + "/hold"
       on compensate {
         idempotency_key = meta.app.booking_id + "/release"   // its OWN operation (E-COMPENSATE-KEY)
-        out = envelope { data = struct { op = "release" } }
+        out = { data = { op = "release" } }
       }
     }
     connector pay : HttpClient {
@@ -74,9 +74,9 @@ lab sim04 {
         on in { err = PaymentDeclined { transient = false } }
       }
 
-      bookings.out = envelope {
+      bookings.out = {
         meta.app.booking_id = "bk_7"
-        data = struct { room = "12", amount = 250.00 }
+        data = { room = "12", amount = 250.00 }
       }
       crash after reserve.outbound_open#2        // the 2nd outbound open of reserve = the compensation's
       restart

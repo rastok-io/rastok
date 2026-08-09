@@ -136,7 +136,7 @@ connector reserve : Postgres {
 connector authorize_card : HttpClient {
   effect = compensable
   on compensate {
-    out = envelope { … }                   // emits toward the wired target
+    out = { … }                            // emits toward the wired target
   }
 }
 authorize_card.out -> void_authorization.in   // normal forward edge
@@ -164,7 +164,7 @@ can distinguish them when needed.
   ```rastok
   on compensate {
     idempotency_key = meta.app.booking_id + "/release"
-    out = envelope { data = struct { op = "release" } }
+    out = { data = { op = "release" } }
   }
   ```
 

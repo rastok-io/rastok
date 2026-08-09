@@ -303,7 +303,7 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
                 app: Namespace::new(),
             })
         }
-        EmitValue::Replace(writes) | EmitValue::Patch(writes) => {
+        EmitValue::Record(writes) | EmitValue::Patch(writes) => {
             // A draft is born a fresh STRUCT — the same physical form
             // the handler builders produce (`{…}` builds a struct).
             let mut data = crate::envelope::Value::Struct(Vec::new());
@@ -381,7 +381,7 @@ impl MockPartner<'_> {
                     Statement::Emit { value, .. } => match value {
                         EmitValue::Identity | EmitValue::Nothing => false,
                         EmitValue::Data(tree) => runtime::reads_data(tree),
-                        EmitValue::Patch(writes) | EmitValue::Replace(writes) => {
+                        EmitValue::Patch(writes) | EmitValue::Record(writes) => {
                             writes.iter().any(|write| runtime::reads_data(&write.value))
                         }
                     },
@@ -496,7 +496,7 @@ impl MockPartner<'_> {
                         .map_err(|fault| format!("the mock faulted: {fault}"))?,
                 )))
             }
-            EmitValue::Replace(writes) | EmitValue::Patch(writes) => {
+            EmitValue::Record(writes) | EmitValue::Patch(writes) => {
                 let mut data = if matches!(value, EmitValue::Patch(_)) {
                     match request.data() {
                         Data::Materialized(value) => value.clone(),
@@ -582,7 +582,7 @@ lab m0_probe {
       on in where data == "salut" {
         out = { text = "salut", echoed = true }
       }
-      on in { out = envelope }
+      on in { out = . }
     }
 
     scenario roundtrip "one message through a scripted world" {

@@ -68,10 +68,10 @@ lab sim03 {
         on in { out = { status = "charged", charge_id = "ch_1", deduplicated = true } }
       }
 
-      orders.out = envelope {
+      orders.out = {
         meta.app.order_id   = "42"
         meta.app.payment_id = "pay_42"
-        data = struct { amount = 99.90 }
+        data = { amount = 99.90 }
       }
       advance duration("30s")
       expect "charged exactly once" ledger.in count == 1 where (

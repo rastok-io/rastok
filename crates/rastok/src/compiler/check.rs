@@ -55,6 +55,11 @@ pub const E_PORT_CONFLICT: Code = Code::new("E-PORT-CONFLICT");
 /// A value crossing a port whose PINNED type it cannot satisfy — an
 /// emission, an injection, or the two ends of an edge disagreeing.
 pub const E_PORT_TYPE: Code = Code::new("E-PORT-TYPE");
+
+/// A braced value mixing ordinary data fields with reserved envelope
+/// roots — the classification is one or the other, never a silent
+/// reinterpretation.
+pub const E_BRACE_MIXED: Code = Code::new("E-BRACE-MIXED");
 /// Diagnostic for a wiring cycle — edges form a DAG.
 pub const E_GRAPH_CYCLE: Code = Code::new("E-GRAPH-CYCLE");
 /// Diagnostic for a static literal with two keys canonicalizing equal.
@@ -450,7 +455,7 @@ impl Checker<'_, '_> {
                         let Statement::Emit { value, .. } = statement else {
                             return false;
                         };
-                        let (EmitValue::Patch(writes) | EmitValue::Replace(writes)) = value else {
+                        let (EmitValue::Patch(writes) | EmitValue::Record(writes)) = value else {
                             return false;
                         };
                         writes.iter().any(|write| {
@@ -571,7 +576,7 @@ impl Checker<'_, '_> {
                     // What a draft cannot carry refuses HERE — an
                     // accepted scenario never discovers a restriction
                     // mid-simulation.
-                    if let EmitValue::Patch(writes) | EmitValue::Replace(writes) = &value
+                    if let EmitValue::Patch(writes) | EmitValue::Record(writes) = &value
                         && writes.iter().any(|write| {
                             matches!(write.target, crate::envelope::WriteTarget::CustomMeta(..))
                         })
@@ -2102,19 +2107,8 @@ impl Checker<'_, '_> {
         at: Span,
     ) -> Option<EmitValue> {
         match value {
-            SynValue::Envelope(None) => Some(EmitValue::Identity),
-            SynValue::Envelope(Some(body)) => {
-                self.field_writes(body, signature).map(EmitValue::Patch)
-            }
-            SynValue::EnvelopeSugar(body) => {
-                // `{ … } ≡ envelope { data = struct { … } }` (grammar
-                // §envelope_sugar): every field belongs to the NEW
-                // data structure — `data`, `meta`, and `mime_type`
-                // are ordinary field names here, never envelope-level
-                // writes. Touching the envelope needs the explicit
-                // form.
-                self.struct_fields(body, signature).map(EmitValue::Replace)
-            }
+            SynValue::Identity(_) => Some(EmitValue::Identity),
+            SynValue::Braced(body) => self.braced(body, signature, at),
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
             SynValue::Cel(expr) => {
                 let tree = self.cel(expr, signature)?;
@@ -2127,7 +2121,7 @@ impl Checker<'_, '_> {
                 }
                 Some(EmitValue::Data(tree))
             }
-            SynValue::Struct(body) | SynValue::Map(body) => {
+            SynValue::Map(body) => {
                 let span = body
                     .entries
                     .first()
@@ -2136,13 +2130,83 @@ impl Checker<'_, '_> {
                         StructEntry::Block { name, .. } => name.span,
                     })
                     .unwrap_or(at);
-                self.deferred("a struct or map literal emission", span);
+                self.deferred("a map literal emission", span);
                 None
             }
             SynValue::Tagged(tagged) => {
                 self.deferred("a guest or tagged emission", tagged.tag.span);
                 None
             }
+        }
+    }
+
+    /// Classifies a braced body ONCE — the reform's rule (decision
+    /// D-2026-08-09-1). The reserved roots `data`, `meta`, and
+    /// `mime_type` form a closed, normative list:
+    ///
+    /// - no reserved root at the top level → a DATA RECORD: every
+    ///   field, at any depth, builds the new `data` (a fresh
+    ///   `Struct`); heritable metadata stays the input's.
+    /// - only reserved roots → the ENVELOPE form: a whole-`data`
+    ///   assignment makes the build fresh (`Record`-based, relative
+    ///   writes); otherwise the current envelope is patched.
+    /// - a mix → the dedicated diagnostic: wrap the data fields in
+    ///   `data = { … }`. Never a silent reinterpretation.
+    fn braced(
+        &mut self,
+        body: &StructBody,
+        signature: &cel::Signature,
+        at: Span,
+    ) -> Option<EmitValue> {
+        let reserved = |entry: &StructEntry| match entry {
+            StructEntry::Field { key, .. } => key
+                .segments
+                .first()
+                .is_some_and(|root| matches!(root.text.as_str(), "data" | "meta" | "mime_type")),
+            StructEntry::Block { .. } => false,
+        };
+        let any_reserved = body.entries.iter().any(reserved);
+        let all_reserved = body.entries.iter().all(reserved);
+        if any_reserved && !all_reserved {
+            let ordinary = body.entries.iter().find_map(|entry| match entry {
+                StructEntry::Field { key, .. } if !reserved(entry) => {
+                    key.segments.first().map(|root| root.text.clone())
+                }
+                _ => None,
+            });
+            self.bag.push(
+                Diagnostic::new(
+                    E_BRACE_MIXED,
+                    Phase::Check,
+                    "this braced value mixes data fields with reserved envelope roots; wrap the data in `data = { … }`",
+                )
+                .with_span(at)
+                .with_field("field", ordinary.unwrap_or_default()),
+            );
+            return None;
+        }
+        if !any_reserved {
+            // A pure data record — the empty body included: `{}` is
+            // an empty record, never an identity (identity is `.`).
+            return self.struct_fields(body, signature).map(EmitValue::Record);
+        }
+        // The envelope form. A whole-`data` assignment makes the
+        // data fresh — Record-based, so a braced value under `data`
+        // desugars to relative field writes of the fresh structure;
+        // without one, the current envelope is patched. Detected on
+        // the SYNTAX: after the record splice, no `Data([])` write
+        // remains to look at.
+        let whole_data = body.entries.iter().any(|entry| match entry {
+            StructEntry::Field { key, .. } => {
+                key.segments.len() == 1 && key.segments[0].text == "data"
+            }
+            StructEntry::Block { .. } => false,
+        });
+        let writes = self.field_writes(body, signature)?;
+        if whole_data {
+            Some(EmitValue::Record(writes))
+        } else {
+            Some(EmitValue::Patch(writes))
         }
     }
 
@@ -2220,6 +2284,20 @@ impl Checker<'_, '_> {
                                 });
                             }
                         }
+                        // `data = { … }`: the braced value is a data
+                        // RECORD — the whole-data assignment makes
+                        // the build fresh, so its fields splice in as
+                        // relative writes (construction, never a
+                        // merge). Under a data PATH the base is the
+                        // existing subtree, which the write fold
+                        // cannot reset — deferred by name.
+                        SynValue::Braced(nested) if matches!(&target, crate::envelope::WriteTarget::Data(inner) if inner.is_empty()) =>
+                        {
+                            self.record_fields(nested, signature, &[], &mut writes);
+                        }
+                        SynValue::Braced(_) => {
+                            self.deferred("a record under a data path", key.span);
+                        }
                         _ => self.deferred("a nested envelope builder", key.span),
                     }
                 }
@@ -2231,25 +2309,35 @@ impl Checker<'_, '_> {
         Some(writes)
     }
 
-    /// Resolves the fields of the `{ … }` shorthand — a STRUCT body
-    /// building the new `data`: every path is a field path of that
-    /// structure, reserved envelope names included. The counterpart
-    /// of [`Self::field_writes`], which resolves the explicit
-    /// `envelope { … }` builder's writable surface.
+    /// Resolves the fields of a data RECORD — every path is a field
+    /// path of the fresh structure, reserved envelope names inert. A
+    /// braced VALUE nests another record: its writes splice in with
+    /// the field's path as prefix (the base is fresh, so relative
+    /// writes ARE construction). The counterpart of
+    /// [`Self::field_writes`], which resolves the envelope form's
+    /// writable surface.
     fn struct_fields(
         &mut self,
         body: &StructBody,
         signature: &cel::Signature,
     ) -> Option<Vec<FieldWrite>> {
         let mut writes = Vec::new();
+        self.record_fields(body, signature, &[], &mut writes);
+        Some(writes)
+    }
+
+    fn record_fields(
+        &mut self,
+        body: &StructBody,
+        signature: &cel::Signature,
+        prefix: &[String],
+        writes: &mut Vec<FieldWrite>,
+    ) {
         for entry in &body.entries {
             match entry {
                 StructEntry::Field { key, value } => {
-                    let path: Vec<String> = key
-                        .segments
-                        .iter()
-                        .map(|segment| segment.text.clone())
-                        .collect();
+                    let mut path: Vec<String> = prefix.to_vec();
+                    path.extend(key.segments.iter().map(|segment| segment.text.clone()));
                     match value {
                         SynValue::Cel(expr) => {
                             if let Some(tree) = self.cel(expr, signature) {
@@ -2260,15 +2348,17 @@ impl Checker<'_, '_> {
                                 });
                             }
                         }
-                        _ => self.deferred("a nested envelope builder", key.span),
+                        SynValue::Braced(nested) => {
+                            self.record_fields(nested, signature, &path, writes);
+                        }
+                        _ => self.deferred("this record field value form", key.span),
                     }
                 }
                 StructEntry::Block { name, .. } => {
-                    self.deferred("a block inside a struct body", name.span);
+                    self.deferred("a block inside a record", name.span);
                 }
             }
         }
-        Some(writes)
     }
 
     fn edge(&mut self, decl: &EdgeDecl, graph: &Graph) -> Option<Vec<Edge>> {
@@ -2427,7 +2517,7 @@ impl Checker<'_, '_> {
             EmitValue::Data(tree) => DataShape::Known(tree.ty.clone(), Some(tree)),
             EmitValue::Identity => inherited_shape(),
             EmitValue::Patch(writes) => Self::folded_shape(writes, inherited_shape()),
-            EmitValue::Replace(writes) => Self::folded_shape(writes, DataShape::Struct),
+            EmitValue::Record(writes) => Self::folded_shape(writes, DataShape::Struct),
         };
         let found: Option<String> = match &shape {
             DataShape::Unknown => None,
@@ -2665,9 +2755,8 @@ enum BuildOrigin<'a> {
 /// three DISTINCT states, never one `None` meaning all of them:
 /// unknown (inference territory), a known type (with the producing
 /// tree when there is one, for the constant bound), or a built
-/// STRUCT — the builders build structs (`{…} ≡ envelope { data =
-/// struct {…} }`), physically distinct from a CEL map (canonical
-/// tags 17 vs 18).
+/// STRUCT — a braced record builds a struct (D-2026-08-09-1),
+/// physically distinct from a CEL map (canonical tags 17 vs 18).
 enum DataShape<'a> {
     Unknown,
     Known(cel::Type, Option<&'a cel::Tree>),
@@ -2798,7 +2887,7 @@ graph m0_probe : App {
     var count : int = 0
     on in where data.text != "" {
       count = count + 1
-      out = envelope { data.text = data.text }
+      out = { data.text = data.text }
     }
   }
 
@@ -2865,7 +2954,7 @@ graph m0_probe : App {
 
     #[test]
     fn a_meta_sys_write_carries_its_normative_code() {
-        let source = "graph g : App {\n  operator o {\n    on in {\n      out = envelope { meta.sys.id = data.x }\n    }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in {\n      out = { meta.sys.id = data.x }\n    }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         let diagnostic = bag
             .diagnostics()
@@ -2910,7 +2999,7 @@ graph m0_probe : App {
 
     #[test]
     fn cel_faults_map_back_to_source_spans() {
-        let source = "graph g : App {\n  operator o {\n    on in where mystery > 0 { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in where mystery > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         let diagnostic = bag
             .diagnostics()
@@ -2974,16 +3063,30 @@ graph m0_probe : App {
     }
 
     #[test]
-    fn a_struct_emission_is_no_longer_silently_dropped() {
-        let source = "graph g : App {\n  operator o {\n    on in { out = struct { n = 1 } }\n  }\n  . -> o -> .\n}\n";
+    fn a_map_emission_is_no_longer_silently_dropped() {
+        let source = "graph g : App {\n  operator o {\n    on in { out = map { n = 1 } }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         assert!(
             bag.diagnostics().iter().any(|diagnostic| {
                 diagnostic.code() == E_CHECK_DEFERRED
-                    && diagnostic.fields()[0].1 == "a struct or map literal emission"
+                    && diagnostic.fields()[0].1 == "a map literal emission"
             }),
             "the emission must refuse, not vanish: {:#?}",
             bag.diagnostics()
+        );
+    }
+
+    #[test]
+    fn the_removed_struct_spelling_is_gone_from_the_grammar() {
+        // D-2026-08-09-1 removes `struct { … }` from value positions
+        // cleanly — a braced record IS the struct. The old spelling
+        // now falls outside the grammar and refuses; it never parses
+        // as anything else.
+        let source = "graph g : App {\n  operator o {\n    on in { out = struct { n = 1 } }\n  }\n  . -> o -> .\n}\n";
+        let (_, bag) = check_source(source);
+        assert!(
+            !bag.diagnostics().is_empty(),
+            "the removed form must refuse, not resolve"
         );
     }
 
@@ -3010,14 +3113,14 @@ graph m0_probe : App {
 
     #[test]
     fn an_unwired_output_warns_without_refusing() {
-        let source = "graph g : App {\n  operator o {\n    on in {\n      out = envelope\n      side = envelope\n    }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  . -> o -> .\n}\n";
         let (hir, bag) = check_source(source);
         assert!(hir.is_some(), "a leak is a warning, not a refusal");
         assert!(bag.diagnostics().iter().any(|diagnostic| {
             diagnostic.code() == W_UNWIRED_OUTPUT && diagnostic.fields()[1].1 == "side"
         }));
         // Discarding in writing silences it.
-        let discarded = "graph g : App {\n  operator o {\n    on in {\n      out = envelope\n      side = envelope\n    }\n  }\n  . -> o -> .\n  o.side -> nothing\n}\n";
+        let discarded = "graph g : App {\n  operator o {\n    on in {\n      out = .\n      side = .\n    }\n  }\n  . -> o -> .\n  o.side -> nothing\n}\n";
         let (_, bag) = check_source(discarded);
         assert!(
             !bag.diagnostics()
@@ -3028,7 +3131,7 @@ graph m0_probe : App {
 
     #[test]
     fn a_second_handler_for_one_trigger_is_refused() {
-        let source = "graph g : App {\n  operator o {\n    on in { out = envelope }\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in { out = . }\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         assert!(bag.diagnostics().iter().any(|diagnostic| {
             diagnostic.code() == E_CHECK_DEFERRED
@@ -3038,7 +3141,7 @@ graph m0_probe : App {
 
     #[test]
     fn lifecycle_handlers_this_machine_never_fires_are_refused() {
-        let source = "graph g : App {\n  operator o {\n    on start { out = envelope }\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on start { out = . }\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         assert!(bag.diagnostics().iter().any(|diagnostic| {
             diagnostic.code() == E_CHECK_DEFERRED
@@ -3073,7 +3176,7 @@ graph m0_probe : App {
     fn a_misspelled_expectation_target_refuses() {
         // The exact false-green shapes of the fifth review: a typo'd
         // node port, a typo'd boundary port, a non-boolean predicate.
-        let base = "graph g : App {\n  operator relay {\n    on in { out = envelope }\n  }\n  . -> relay -> .\n}\n\nlab g {\n  simulation s on app {\n    scenario sc {\n      app.in = { text = \"x\" }\n      EXPECT\n    }\n  }\n}\n";
+        let base = "graph g : App {\n  operator relay {\n    on in { out = . }\n  }\n  . -> relay -> .\n}\n\nlab g {\n  simulation s on app {\n    scenario sc {\n      app.in = { text = \"x\" }\n      EXPECT\n    }\n  }\n}\n";
         let cases = [
             ("expect nothing relay.typo", E_PORT_UNKNOWN),
             ("expect nothing app.typo", E_PORT_UNKNOWN),
@@ -3094,7 +3197,7 @@ graph m0_probe : App {
 
     #[test]
     fn lab_fragments_merge_and_homonym_simulations_refuse() {
-        let source = "graph g : App {\n  operator o {\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n\nlab g {\n  simulation a on app { }\n}\n\nlab g {\n  simulation b on app { }\n}\n\nlab g {\n  simulation a on app { }\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n\nlab g {\n  simulation a on app { }\n}\n\nlab g {\n  simulation b on app { }\n}\n\nlab g {\n  simulation a on app { }\n}\n";
         let (hir, bag) = check_source(source);
         // Fragments merged into one corpus of two simulations…
         let hir = hir.expect("the unit checks");
@@ -3110,8 +3213,7 @@ graph m0_probe : App {
     fn an_implicit_unwired_output_still_warns() {
         // `out` never enters the declared port table; the leak must
         // surface anyway — the errata's interim floor is visibility.
-        let source =
-            "graph g : App {\n  operator o {\n    on in { out = envelope }\n  }\n  . -> o\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o\n}\n";
         let (_, bag) = check_source(source);
         assert!(
             bag.diagnostics().iter().any(|diagnostic| {
@@ -3128,7 +3230,7 @@ graph m0_probe : App {
         // one endpoint pair and the second refuses with its own span.
         for second in ["o -> p", "o.out -> p.in"] {
             let source = format!(
-                "graph g : App {{\n  operator o {{\n    on in {{ out = envelope }}\n  }}\n  operator p {{\n    on in {{ out = envelope }}\n  }}\n  . -> o -> p -> .\n  {second}\n}}\n"
+                "graph g : App {{\n  operator o {{\n    on in {{ out = . }}\n  }}\n  operator p {{\n    on in {{ out = . }}\n  }}\n  . -> o -> p -> .\n  {second}\n}}\n"
             );
             let (_, bag) = check_source(&source);
             assert!(
@@ -3146,11 +3248,11 @@ graph m0_probe : App {
         let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  operator o {\n    on in { out = data.text }\n  }\n  . -> o -> shell -> .\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
         let simulation_level = base.replace(
             "BODY",
-            "    mock shell { on in { out = envelope } }\n    mock shell { on in { out = envelope } }\n",
+            "    mock shell { on in { out = . } }\n    mock shell { on in { out = . } }\n",
         );
         let scenario_level = base.replace(
             "BODY",
-            "    scenario x {\n      mock shell { on in { out = envelope } }\n      mock shell { on in { out = envelope } }\n      app.in = \"y\"\n    }\n",
+            "    scenario x {\n      mock shell { on in { out = . } }\n      mock shell { on in { out = . } }\n      app.in = \"y\"\n    }\n",
         );
         for source in [simulation_level, scenario_level] {
             let (_, bag) = check_source(&source);
@@ -3184,7 +3286,7 @@ graph m0_probe : App {
 
     #[test]
     fn a_var_initializer_must_fit_its_declared_type() {
-        let source = "graph g : App {\n  operator o {\n    var count : int = \"oops\"\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    var count : int = \"oops\"\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         let diagnostic = bag
             .diagnostics()
@@ -3196,7 +3298,7 @@ graph m0_probe : App {
 
     #[test]
     fn shadowing_and_reserved_names_are_refused() {
-        let source = "graph g : App {\n  val limit = 1\n  operator o {\n    var limit : int = 0\n    var data : int = 0\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  val limit = 1\n  operator o {\n    var limit : int = 0\n    var data : int = 0\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         let shadows: Vec<&str> = bag
             .diagnostics()
@@ -3210,9 +3312,9 @@ graph m0_probe : App {
     #[test]
     fn handler_and_emission_ports_are_inferred() {
         // The reviewer's reproduction: `on event` implies an input,
-        // `result = envelope` implies an output — no declaration
+        // `result = .` implies an output — no declaration
         // needed. This program is conforming and must check cleanly.
-        let source = "graph g : App {\n  input feed\n  output sink\n\n  operator o {\n    on event {\n      result = envelope\n    }\n  }\n\n  .feed -> o.event\n  o.result -> .sink\n}\n";
+        let source = "graph g : App {\n  input feed\n  output sink\n\n  operator o {\n    on event {\n      result = .\n    }\n  }\n\n  .feed -> o.event\n  o.result -> .sink\n}\n";
         let hir = check_clean(source);
         let ports = &hir.app.nodes[0].ports;
         assert!(
@@ -3230,11 +3332,11 @@ graph m0_probe : App {
     #[test]
     fn conflicting_port_roles_are_refused() {
         // The same name inferred as input and output.
-        let source = "graph g : App {\n  operator o {\n    on chan {\n      chan = envelope\n    }\n  }\n  . -> o.chan -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on chan {\n      chan = .\n    }\n  }\n  . -> o.chan -> .\n}\n";
         let (_, bag) = check_source(source);
         assert!(diagnostic_codes(&bag).contains(&E_PORT_CONFLICT));
         // Explicit double declaration at the boundary.
-        let source = "graph g : App {\n  input feed\n  output feed\n  operator o { on in { out = envelope } }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  input feed\n  output feed\n  operator o { on in { out = . } }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         assert!(diagnostic_codes(&bag).contains(&E_PORT_CONFLICT));
     }
@@ -3253,7 +3355,7 @@ graph m0_probe : App {
 
     #[test]
     fn physical_integer_types_are_not_silently_merged() {
-        let long = "graph g : App {\n  operator o {\n    var n : long = 0\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let long = "graph g : App {\n  operator o {\n    var n : long = 0\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(long);
         let constructs: Vec<&str> = bag
             .diagnostics()
@@ -3262,7 +3364,7 @@ graph m0_probe : App {
             .map(|diagnostic| diagnostic.fields()[0].1.as_str())
             .collect();
         assert!(constructs.contains(&"the long state type"));
-        let overflow = "graph g : App {\n  operator o {\n    var n : int = 2147483648\n    on in { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let overflow = "graph g : App {\n  operator o {\n    var n : int = 2147483648\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(overflow);
         assert!(
             bag.diagnostics()
@@ -3276,7 +3378,7 @@ graph m0_probe : App {
         // `o.in` as an edge source, a handler on `out`, and an
         // emission into `in` all refuse.
         let source =
-            "graph g : App {\n  operator o {\n    on out { in = envelope }\n  }\n  o.in -> o\n}\n";
+            "graph g : App {\n  operator o {\n    on out { in = . }\n  }\n  o.in -> o\n}\n";
         let (_, bag) = check_source(source);
         let directions = bag
             .diagnostics()
@@ -3290,14 +3392,14 @@ graph m0_probe : App {
             bag.diagnostics()
         );
         let emission =
-            "graph g : App {\n  operator o {\n    on in { in = envelope }\n  }\n  . -> o -> .\n}\n";
+            "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(emission);
         assert!(diagnostic_codes(&bag).contains(&E_PORT_DIRECTION));
     }
 
     #[test]
     fn boundary_ports_carry_direction() {
-        let source = "graph g : App {\n  input feed\n  operator o { on in { out = envelope } }\n  o.out -> .feed\n}\n";
+        let source = "graph g : App {\n  input feed\n  operator o { on in { out = . } }\n  o.out -> .feed\n}\n";
         let (_, bag) = check_source(source);
         let diagnostic = bag
             .diagnostics()
@@ -3309,7 +3411,7 @@ graph m0_probe : App {
 
     #[test]
     fn wiring_cycles_are_refused() {
-        let source = "graph g : App {\n  operator a { on in { out = envelope } }\n  operator b { on in { out = envelope } }\n  a -> b\n  b -> a\n}\n";
+        let source = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  a -> b\n  b -> a\n}\n";
         let (_, bag) = check_source(source);
         let diagnostic = bag
             .diagnostics()
@@ -3317,7 +3419,7 @@ graph m0_probe : App {
             .find(|diagnostic| diagnostic.code() == E_GRAPH_CYCLE)
             .expect("the cycle must refuse");
         assert!(diagnostic.message().contains("DAG"));
-        let chain = "graph g : App {\n  operator a { on in { out = envelope } }\n  operator b { on in { out = envelope } }\n  . -> a -> b -> .\n}\n";
+        let chain = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
         let (_, bag) = check_source(chain);
         assert!(!diagnostic_codes(&bag).contains(&E_GRAPH_CYCLE));
     }
@@ -3332,7 +3434,7 @@ graph m0_probe : App {
                 .any(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR
                     && diagnostic.message().contains("twice"))
         );
-        let repeated_port = "graph g : App {\n  operator o {\n    input event\n    input event\n    on event { out = envelope }\n  }\n  .feed -> o.event\n  input feed\n  o -> .\n}\n";
+        let repeated_port = "graph g : App {\n  operator o {\n    input event\n    input event\n    on event { out = . }\n  }\n  .feed -> o.event\n  input feed\n  o -> .\n}\n";
         let (_, bag) = check_source(repeated_port);
         assert!(
             bag.diagnostics()
@@ -3344,7 +3446,7 @@ graph m0_probe : App {
 
     #[test]
     fn guarded_constructs_defer_explicitly() {
-        let source = "graph g : App {\n  partition user { key = meta.app.id }\n  operator o {\n    on (a, b) { out = envelope }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  partition user { key = meta.app.id }\n  operator o {\n    on (a, b) { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         let constructs: Vec<&str> = bag
             .diagnostics()

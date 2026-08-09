@@ -185,7 +185,7 @@ spawn (first delivery).
 | Case | Contract |
 |---|---|
 | Role / Direction | calendar instants; **inbound source** |
-| Ports | `out`: `data = struct { scheduled_at: timestamp }` |
+| Ports | `out`: `data : struct { scheduled_at: timestamp }` |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
 | Attributes | **either** `cron = <expr>` + `tz = <IANA zone>` (mandatory together — never the host's implicit zone) **or** `at = timestamp("…")` (fires **once**; the zone lives in the RFC-3339 string) |
 | Correlator | **none** (a pure source makes no calls) |
@@ -269,7 +269,7 @@ operator total : Reducer per account {
 
   on in {
     amount = amount + data.amount
-    out = envelope { data.total = amount }
+    out = { data.total = amount }
   }
 }
 ```
@@ -285,9 +285,9 @@ partition request {
 
 operator decide : Joiner per request {
   on (expense, decision) within duration("48h") {
-    approval = envelope {
+    approval = {
       meta.app = expense.meta.app
-      data = struct {
+      data = {
         request_id = request.key
         approved = decision.data.approved
       }

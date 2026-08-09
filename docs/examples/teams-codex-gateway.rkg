@@ -49,7 +49,7 @@ graph sessions per session {          // declaration = instance
     // in / out / err = stdin / stdout / stderr (Process defaults, typed by codec)
 
     init {
-      message = struct { method = "initialize" }
+      message = { method = "initialize" }
       timeout = duration("10s")
     }
     kill = process_group
@@ -110,11 +110,11 @@ graph teams_inbound : App {
       meta.app.user_id         = user_map[data.from.aadObjectId]
       meta.app.tenant_id       = data.channelData.tenant.id
       meta.app.conversation_id = data.conversation.id
-      out = envelope
+      out = .
     }
     on in {
       meta.app.skip_reason = "unknown_user"
-      rejected = envelope
+      rejected = .
     }
   }
 
@@ -310,26 +310,26 @@ lab teams_inbound {
     scenario plain_message "user sends a plain Teams message" {
       mock sessions.codex {
         on in where data.method == "turn/start" {
-          out = envelope {                     // meta is written → long form (the { … } sugar carries data only)
+          out = {                     // meta is written → long form (the { … } sugar carries data only)
             meta.app.kind   = "jsonrpc.notification"
             meta.app.method = "item/agentMessage"
-            data = struct { method = "item/agentMessage", params = struct { message = "Bonjour" } }
+            data = { method = "item/agentMessage", params = { message = "Bonjour" } }
           }
         }
       }
       mock teams_out {
-        on in { out = { delivered = true } }   // long form is envelope { data = struct { delivered = true } }
+        on in { out = { delivered = true } }   // a data record: fresh data, metadata kept
       }
 
-      teams_in.out = envelope {
+      teams_in.out = {
         meta.app.source = "teams"      // fixtures seed via meta.app — meta.sys is read-only, even in sim
-        data = struct {
+        data = {
           type = "message"
-          from = struct { aadObjectId = "abc-123" }
+          from = { aadObjectId = "abc-123" }
           text = "Bonjour"
           serviceUrl = "https://smba.trafficmanager.net/emea/"
-          conversation = struct { id = "conv-1" }
-          channelData = struct { tenant = struct { id = "tenant-x" } }
+          conversation = { id = "conv-1" }
+          channelData = { tenant = { id = "tenant-x" } }
         }
       }
 
@@ -341,18 +341,18 @@ lab teams_inbound {
     scenario approval_cycle "user approves a Codex tool request" {
       mock sessions.codex {
         on in where data.method == "turn/start" {
-          out = envelope {
+          out = {
             meta.app.kind   = "jsonrpc.peer_request"
             meta.app.method = "item/commandExecution/requestApproval"
             meta.app.rpc_id = "42"
-            data = struct { method = "item/commandExecution/requestApproval", id = 42, params = struct { command = "ls" } }
+            data = { method = "item/commandExecution/requestApproval", id = 42, params = { command = "ls" } }
           }
         }
         on in where data.decision == "approve" {
-          out = envelope {
+          out = {
             meta.app.kind   = "jsonrpc.notification"
             meta.app.method = "item/agentMessage"
-            data = struct { method = "item/agentMessage", params = struct { message = "completed" } }
+            data = { method = "item/agentMessage", params = { message = "completed" } }
           }
         }
       }
@@ -362,22 +362,22 @@ lab teams_inbound {
 
       teams_in.out = {
         type = "message"
-        from = struct { aadObjectId = "abc-123" }
+        from = { aadObjectId = "abc-123" }
         text = "list files"
         serviceUrl = "https://smba.trafficmanager.net/emea/"
-        conversation = struct { id = "conv-1" }
-        channelData = struct { tenant = struct { id = "tenant-x" } }
+        conversation = { id = "conv-1" }
+        channelData = { tenant = { id = "tenant-x" } }
       }
       expect "adaptive card" teams_out.in where (
          data.attachments[0].contentType == "application/vnd.microsoft.card.adaptive")
 
       teams_in.out = {
         type = "invoke"
-        from = struct { aadObjectId = "abc-123" }
-        value = struct { verb = "approve", approval_id = "42" }
+        from = { aadObjectId = "abc-123" }
+        value = { verb = "approve", approval_id = "42" }
         serviceUrl = "https://smba.trafficmanager.net/emea/"
-        conversation = struct { id = "conv-1" }
-        channelData = struct { tenant = struct { id = "tenant-x" } }
+        conversation = { id = "conv-1" }
+        channelData = { tenant = { id = "tenant-x" } }
       }
       expect "peer response reaches codex" sessions.codex.in where (
          meta.app.kind == "jsonrpc.peer_response" && meta.app.rpc_id == "42" && data.decision == "approve")
@@ -387,10 +387,10 @@ lab teams_inbound {
     scenario dlq_on_delivery_failure "a Teams API failure lands in the DLQ, loudly" {
       mock sessions.codex {
         on in where data.method == "turn/start" {
-          out = envelope {
+          out = {
             meta.app.kind   = "jsonrpc.notification"
             meta.app.method = "item/agentMessage"
-            data = struct { method = "item/agentMessage", params = struct { message = "Bonjour" } }
+            data = { method = "item/agentMessage", params = { message = "Bonjour" } }
           }
         }
       }
@@ -400,11 +400,11 @@ lab teams_inbound {
 
       teams_in.out = {
         type = "message"
-        from = struct { aadObjectId = "abc-123" }
+        from = { aadObjectId = "abc-123" }
         text = "Bonjour"
         serviceUrl = "https://smba.trafficmanager.net/emea/"
-        conversation = struct { id = "conv-1" }
-        channelData = struct { tenant = struct { id = "tenant-x" } }
+        conversation = { id = "conv-1" }
+        channelData = { tenant = { id = "tenant-x" } }
       }
 
       expect "delivery attempted" teams_out.in where data.type == "message"
@@ -414,11 +414,11 @@ lab teams_inbound {
     scenario unknown_user "an unknown Teams user is dropped before Codex" {
       teams_in.out = {
         type = "message"
-        from = struct { aadObjectId = "intruder-999" }
+        from = { aadObjectId = "intruder-999" }
         text = "Bonjour"
         serviceUrl = "https://smba.trafficmanager.net/emea/"
-        conversation = struct { id = "conv-1" }
-        channelData = struct { tenant = struct { id = "tenant-x" } }
+        conversation = { id = "conv-1" }
+        channelData = { tenant = { id = "tenant-x" } }
       }
       expect "unknown user dropped"  auth.rejected where meta.app.skip_reason == "unknown_user"
       expect nothing sessions.codex.in                       // codex never sees the intruder

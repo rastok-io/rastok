@@ -36,7 +36,7 @@ fn check_renders_a_semantic_refusal_in_the_rustc_shape() {
     // leaving by an input port.
     std::fs::write(
         &path,
-        "graph g : App {\n  operator o {\n    on in { in = envelope }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n",
     )
     .expect("a writable temp dir");
     let output = rastok()

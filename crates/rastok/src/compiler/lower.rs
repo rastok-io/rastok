@@ -248,7 +248,7 @@ fn lower_emission(value: &EmitValue, subst: &impl Fn(&cel::Tree) -> cel::Tree) -
     match value {
         EmitValue::Identity => Emission::Identity,
         EmitValue::Patch(fields) => Emission::Patch(writes(fields)),
-        EmitValue::Replace(fields) => Emission::Replace(writes(fields)),
+        EmitValue::Record(fields) => Emission::Replace(writes(fields)),
         EmitValue::Data(tree) => Emission::Data(subst(tree)),
         EmitValue::Nothing => Emission::Nothing,
     }
@@ -578,7 +578,7 @@ impl Writer {
                 self.tag(2);
                 self.field_writes(writes);
             }
-            EmitValue::Replace(writes) => {
+            EmitValue::Record(writes) => {
                 self.tag(3);
                 self.field_writes(writes);
             }
@@ -774,7 +774,7 @@ graph m0_probe : App {
 
   operator shout {
     on in where data.text != "" {
-      out = envelope { data.text = data.text }
+      out = { data.text = data.text }
     }
   }
 
@@ -841,7 +841,7 @@ graph m0_probe : App {
 graph m0_probe : App {
   operator shout {
     on in where data.text != "" {
-      out = envelope { data.text = data.text }
+      out = { data.text = data.text }
     }
   }
 
@@ -893,8 +893,9 @@ graph m0_probe : App {
 
     #[test]
     fn boundary_ports_are_identity_material() {
-        let bare = "graph g : App {\n  operator o { on in { out = envelope } }\n  . -> o -> .\n}\n";
-        let with_port = "graph g : App {\n  input feed\n  operator o { on in { out = envelope } }\n  . -> o -> .\n}\n";
+        let bare = "graph g : App {\n  operator o { on in { out = . } }\n  . -> o -> .\n}\n";
+        let with_port =
+            "graph g : App {\n  input feed\n  operator o { on in { out = . } }\n  . -> o -> .\n}\n";
         let bare_hash = compile(&[bare], &Registry::m0()).unwrap().hash;
         let ported = compile(&[with_port], &Registry::m0()).unwrap();
         assert_ne!(
@@ -907,8 +908,8 @@ graph m0_probe : App {
 
     #[test]
     fn the_plan_and_the_hash_share_one_edge_order() {
-        let forward = "graph g : App {\n  operator a { on in { out = envelope } }\n  operator b { on in { out = envelope } }\n  . -> a -> b -> .\n}\n";
-        let reordered = "graph g : App {\n  operator a { on in { out = envelope } }\n  operator b { on in { out = envelope } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
+        let forward = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
+        let reordered = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
         let one = compile(&[forward], &Registry::m0()).unwrap();
         let two = compile(&[reordered], &Registry::m0()).unwrap();
         assert_eq!(one.hash, two.hash);
@@ -940,7 +941,7 @@ graph m0_probe : App {
         // Map literals: one canonical form for hash, plan, and eval.
         let with_map = |map: &str| {
             format!(
-                "graph g : App {{\n  operator o {{\n    on in where size({map}) > 0 {{ out = envelope }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    on in where size({map}) > 0 {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
             )
         };
         let forward = compile(&[with_map("{'a': 1, 'b': 2}").as_str()], &Registry::m0()).unwrap();
@@ -951,7 +952,7 @@ graph m0_probe : App {
 
     #[test]
     fn inferred_ports_travel_in_the_plan() {
-        let source = "graph g : App {\n  input feed\n  output sink\n  operator o {\n    on event { result = envelope }\n  }\n  .feed -> o.event\n  o.result -> .sink\n}\n";
+        let source = "graph g : App {\n  input feed\n  output sink\n  operator o {\n    on event { result = . }\n  }\n  .feed -> o.event\n  o.result -> .sink\n}\n";
         let compilation = compile(&[source], &Registry::m0()).unwrap();
         let ports = &compilation.plan.nodes[0].ports;
         assert_eq!(ports.len(), 2);
@@ -963,7 +964,7 @@ graph m0_probe : App {
     fn constants_reach_both_the_hash_and_the_plan() {
         let with_val = |n: &str| {
             format!(
-                "graph g : App {{\n  operator o {{\n    val threshold = {n}\n    on in where data.n > threshold {{ out = envelope }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    val threshold = {n}\n    on in where data.n > threshold {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
             )
         };
         let five = compile(&[with_val("5").as_str()], &Registry::m0()).unwrap();

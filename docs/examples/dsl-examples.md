@@ -95,9 +95,9 @@ graph sessions per session {   // declaration = instance
     // in = stdin, out = stdout, err = stderr (Process defaults)
 
     init {
-      message = struct {
+      message = {
         method = "initialize"
-        params = struct { clientInfo = struct { name = "rastok" } }
+        params = { clientInfo = { name = "rastok" } }
       }
       timeout = duration("15s")
     }
@@ -135,9 +135,9 @@ graph teams_inbound {
   operator auth {
     on in where data.?from.aadObjectId.orValue("") != "" {
       meta.app.session_key = data.from.aadObjectId          // CEL — scalar write, no jq needed
-      out = envelope
+      out = .
     }
-    on in { out = envelope }                                // pass-through otherwise
+    on in { out = . }                                // pass-through otherwise
   }
 
   // One running instance of `sessions` per distinct session key (declared in Example 2).
@@ -285,23 +285,23 @@ lab teams_inbound {    // binds to `graph teams_inbound : App` (declared in team
 
       mock sessions.codex {                                 // the composed Process, scripted
         on in where data.method == "turn/start" {
-          out = envelope {
+          out = {
             meta.app.kind   = "jsonrpc.notification"
             meta.app.method = "item/agentMessage"
-            data = struct {
+            data = {
               method = "item/agentMessage"
-              params = struct { message = "Bonjour" }
+              params = { message = "Bonjour" }
             }
           }
         }
       }
 
-      teams_in.out = envelope {
+      teams_in.out = {
         meta.app.source = "teams"          // fixtures seed via meta.app — meta.sys is read-only, even in sim
-        data = struct {
+        data = {
           type         = "message"
-          from         = struct { aadObjectId = "abc-123" }
-          conversation = struct { id = "conv-1" }
+          from         = { aadObjectId = "abc-123" }
+          conversation = { id = "conv-1" }
           text         = "Bonjour"
         }
       }
@@ -317,7 +317,7 @@ lab teams_inbound {    // binds to `graph teams_inbound : App` (declared in team
 A fixture seeds inbound state through **`meta.app`** (writable) — never
 by assigning `meta.sys.*`, which is read-only **absolutely, including in
 simulation** (the fixture stands in for the runtime but goes through the
-same `envelope { … }` constructor, it does not bypass the invariant). See
+same braced envelope-form constructor, it does not bypass the invariant). See
 [envelope.md §6](../spec/envelope.md).
 
 ## 7. Stateful Operator + Connector mock — weather lookup
@@ -338,7 +338,7 @@ graph city_weather {
 
     on in {
       count = count + 1
-      out = envelope { meta.request_index = count }
+      out = { meta.request_index = count }
     }
   }
 
@@ -530,7 +530,7 @@ graph quota_control : App {
     output rejection
 
     operator tenant_policy per tenant {
-      val PLAN_LIMITS = struct {
+      val PLAN_LIMITS = {
         free = 1000,
         pro = 10000,
         enterprise = 100000
@@ -544,7 +544,7 @@ graph quota_control : App {
         plan = jq { .data.plan // $plan }
         monthly_limit = jq { $PLAN_LIMITS[$plan] // $FALLBACK_LIMIT }   // reads the just-written plan
 
-        updated = envelope {
+        updated = {
           meta.tenant_id = tenant.key
           meta.plan = plan
           meta.monthly_limit = monthly_limit

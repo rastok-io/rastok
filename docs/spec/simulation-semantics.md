@@ -78,7 +78,7 @@ production the world-half is *recorded* ; in simulation there is no world —
 
 | Fixture step | Plays | Journal record produced |
 |---|---|---|
-| `orders.out = envelope { … }` | the world sends | **INBOUND** (fixture-owned `inbound_seq`) |
+| `orders.out = { … }` | the world sends | **INBOUND** (fixture-owned `inbound_seq`) |
 | `advance duration("30s")` | time passes | the dated decisions (the sweep, execution-model §8) |
 | `mock … { on in … }` | the partner answers | the **OUTBOUND closures** |
 | `crash after <record>` / `restart` | the process dies | volatile truncation + recovery |
@@ -135,15 +135,15 @@ construct :
 
 ```rastok
 // INJECTION = the emission syntax (an inbound emission, scripted)
-orders.out = envelope { meta.app.user_id = "alice", data = struct { kind = "message" } }
+orders.out = { meta.app.user_id = "alice", data = { kind = "message" } }
 
 // MOCK = a scripted stand-in whose body is HANDLER grammar — nothing new
 mock bank {
   on in where meta.sys.iter_count == 0 {
     after duration("12s")                                       // ← the ONE addition : dated emission
-    out = envelope { data = struct { status = "charged" } }
+    out = { data = { status = "charged" } }
   }
-  on in { out = { status = "charged", deduplicated = true } }   // §4 sugar
+  on in { out = { status = "charged", deduplicated = true } }   // §4 : a data record
 }
 // never answer  = { out = nothing }   → the Connector's `timeout` machinery works
 // typed failure = { err = PaymentDeclined { transient = false } }   (handler grammar already)
@@ -156,25 +156,30 @@ expect ledger.in where data.status == "settled"
 
 Only ~six words are simulation-specific : `simulation`, `scenario`, `mock`,
 `expect`, `advance`, `after`. Everything else — `on`, `where`, `out =`,
-`err =`, `nothing`, the envelope builder, CEL — is the language the developer
+`err =`, `nothing`, the braced builder, CEL — is the language the developer
 (and the generating LLM) already speaks.
 
 
-## 4. The envelope shorthand — `{ … }`
+## 4. The braced value — `{ … }`, classified once
 
 In **any envelope position** (handler emissions, fixture injections, mock
-replies) :
+replies) a braced value is classified ONCE by its top-level roots
+(D-2026-08-09-1) :
 
-```
-   { … }   ≡   envelope { data = struct { … } }
-```
+- **No reserved root** → a DATA RECORD : `{ status = "charged" }` builds a
+  fresh `struct` payload (replacing `data` entirely) ; heritable metadata
+  stays the input's (inbound defaults in fixtures).
+- **Only reserved roots** (`data`, `meta`, `mime_type`) → the ENVELOPE
+  form : `{ meta.app.user_id = "alice", data = { kind = "message" } }`
+  patches or builds the envelope itself ; a whole-`data` assignment makes
+  the data fresh (`out = { data = "hello", mime_type = "text/plain" }` is
+  the non-struct spelling).
+- **A mix** → `E-BRACE-MIXED`, never a silent reinterpretation. Business
+  fields named `data`, `meta`, or `mime_type` take the explicit escape
+  `data = { … }`.
 
-- It **replaces** `data` entirely (not a field patch).
-- `meta` follows the existing builder rules (inherited + patchable in
-  handlers ; inbound defaults in fixtures). Touching `meta.*` ⇒ the full
-  `envelope { … }` form (A2 stays honest).
-- Struct case only — non-struct data uses the full form
-  (`out = envelope { data = "hello", mime_type = "text/plain" }`).
+`{}` is the empty record ; the exact re-emission of the current envelope
+is `.` (`out = .`).
 
 
 ## 5. Mocks and expectations — the fine rules
@@ -380,7 +385,7 @@ incident is a **mechanical projection**, not inference :
 
 | Production journal slice | → | Scenario step |
 |---|---|---|
-| INBOUND records | → | injections (same envelopes, **same `inbound_seq`** — the injection's optional `seq` clause : `ping.out = envelope { … } seq 105` ; hand-written scenarios omit it and use the fixture counter) |
+| INBOUND records | → | injections (same envelopes, **same `inbound_seq`** — the injection's optional `seq` clause : `ping.out = { … } seq 105` ; hand-written scenarios omit it and use the fixture counter) |
 | dated decisions (`l:*` transactions) | → | the `advance` script — **times rebased** (t₀ = first record, deltas preserved) ; the bridge sets the scenario's **`origin` = the slice's first civil instant**, so window/cron arithmetic is preserved (§5.3, execution-model §9.3) |
 | OUTBOUND `closed(response)` | → | generated mock branches : the partner's real replies, **guarded by the recorded request id** (`on in where meta.sys.id == 0x9f42… { out = … }`) — ordinary mock grammar, zero new machinery |
 | OUTBOUND `closed(timeout)` | → | `{ out = nothing }` (the chrono re-does its work) |

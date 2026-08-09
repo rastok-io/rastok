@@ -56,7 +56,7 @@ operator repeat : Loop {
     until = value <= 0
   }
 
-  on in { out = envelope }
+  on in { out = . }
 }
 
 // Connector: an external call is retried.
@@ -223,8 +223,8 @@ system Clock; Lab execution is driven by virtual time and `advance`.
 Loop lifecycle hooks use qualified names:
 
 ```rastok
-on Loop.start { started = envelope }
-on Loop.stop  { finished = envelope }
+on Loop.start { started = . }
+on Loop.stop  { finished = . }
 ```
 
 `Loop.start` fires once before the first predicate check. `Loop.stop` fires

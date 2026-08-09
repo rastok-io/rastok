@@ -3,8 +3,9 @@
 //!
 //! The HIR carries only what survived every check: names are resolved,
 //! the port table is complete — declared and inferred, defaults
-//! implicit — envelope sugar is normalized into its
-//! semantic form, and every expression is a compiled CEL tree. Spans
+//! implicit — every braced value is classified into its semantic
+//! form (D-2026-08-09-1), and every expression is a compiled CEL
+//! tree. Spans
 //! and other diagnostic material stay in side tables owned by later
 //! stages; nothing here is hashed with positions in it.
 
@@ -201,12 +202,15 @@ pub enum Statement {
 /// What an emission builds.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EmitValue {
-    /// `envelope` bare — re-emit the input unchanged.
+    /// `.` — re-emit the input unchanged.
     Identity,
-    /// `envelope { … }` — inherit the input and patch listed fields.
+    /// The envelope form without a whole-`data` write — inherit the
+    /// input and patch the listed fields.
     Patch(Vec<FieldWrite>),
-    /// `{ … }` sugar — full-data replacement, meta untouched.
-    Replace(Vec<FieldWrite>),
+    /// A braced build with FRESH data — a pure record, or the
+    /// envelope form with a whole-`data` assignment; heritable
+    /// metadata stays the input's.
+    Record(Vec<FieldWrite>),
     /// A computed value becoming the whole `data`.
     Data(cel::Tree),
     /// `nothing` — no emission on this port this transaction.

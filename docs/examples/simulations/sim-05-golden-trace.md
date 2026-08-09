@@ -39,7 +39,7 @@ graph sim05 : App {
     var n : int = 0
     on in {
       n = n + 1
-      out = envelope { meta.app.seen = n, data = struct { n = n } }
+      out = { meta.app.seen = n, data = { n = n } }
     }
   }
 
@@ -57,8 +57,8 @@ lab sim05 {
       mock notify {
         on in { out = { ok = true } }
       }
-      ping.out = envelope { meta.app.user_id = "alice", data = struct { } }
-      ping.out = envelope { meta.app.user_id = "alice", data = struct { } }
+      ping.out = { meta.app.user_id = "alice", data = { } }
+      ping.out = { meta.app.user_id = "alice", data = { } }
       expect "counted twice" notify.in count == 1 where data.n == 2
     }
   }

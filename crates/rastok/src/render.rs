@@ -126,7 +126,7 @@ mod tests {
         // A real semantic rule, not a parser accident: an emission
         // leaving by an input port.
         let source =
-            "graph g : App {\n  operator o {\n    on in { in = envelope }\n  }\n  . -> o -> .\n}\n";
+            "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
         let Err(bag) = compile(&[source], &Registry::m0()) else {
             panic!("the direction is violated");
         };
@@ -142,7 +142,7 @@ mod tests {
             "file, line, column: {rendered}"
         );
         assert!(
-            rendered.contains("3 |     on in { in = envelope }"),
+            rendered.contains("3 |     on in { in = . }"),
             "the offending line: {rendered}"
         );
         assert!(rendered.contains("^^"), "the underline: {rendered}");
@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn rendering_is_total_even_without_sources() {
         let source =
-            "graph g : App {\n  operator o {\n    on in { in = envelope }\n  }\n  . -> o -> .\n}\n";
+            "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
         let Err(bag) = compile(&[source], &Registry::m0()) else {
             panic!("the direction is violated");
         };

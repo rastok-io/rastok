@@ -909,8 +909,8 @@ fn emitted_content(
             let replace = matches!(emission, PlanEmission::Replace(_));
             let mut built = inherited(BuiltData::Unchanged);
             let mut data: Option<envelope::Value> = if replace {
-                // A fresh STRUCT — the physical form the grammar
-                // defines: `{ … } ≡ envelope { data = struct { … } }`.
+                // A fresh STRUCT — the physical form of a braced
+                // record (D-2026-08-09-1).
                 Some(envelope::Value::Struct(Vec::new()))
             } else {
                 None
@@ -1206,8 +1206,8 @@ pub(crate) fn conformance_fault(
     }
 }
 
-/// Applies one struct-building write along its path — the builders
-/// build STRUCTS (`{ … } ≡ envelope { data = struct { … } }`), so a
+/// Applies one struct-building write along its path — a braced
+/// record builds a STRUCT (D-2026-08-09-1), so a
 /// missing or non-composite level becomes a `Struct` whose fields
 /// keep write order; an existing `Struct` or `Map` level keeps its
 /// own kind. The empty path replaces the whole value.

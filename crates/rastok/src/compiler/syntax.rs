@@ -496,15 +496,16 @@ pub struct LValue {
 pub enum Value {
     /// Opaque CEL expression.
     Cel(CelExpr),
-    /// `envelope { … }` — patches the input; bare `envelope` is
-    /// identity.
-    Envelope(Option<StructBody>),
-    /// `{ … }` — sugar for a full-data struct replacement, legal only
-    /// in envelope positions. Kept distinct: sugar stays intact.
-    EnvelopeSugar(StructBody),
-    /// `struct { … }` literal.
-    Struct(StructBody),
-    /// `map { … }` literal.
+    /// `.` — exact re-emission of the current envelope (identity).
+    Identity(Span),
+    /// `{ … }` — a braced body, legal only in envelope positions.
+    /// The CHECKER classifies it once: no reserved root at the top
+    /// level builds a data record; only reserved roots (`data`,
+    /// `meta`, `mime_type`) build or patch the envelope; a mix
+    /// refuses with a dedicated diagnostic.
+    Braced(StructBody),
+    /// `map { … }` literal — the EXPLICIT spelling for a map value;
+    /// a braced record always builds a struct (D-2026-08-09-1).
     Map(StructBody),
     /// `nothing` — emit nothing.
     Nothing(Span),
@@ -771,9 +772,9 @@ mod tests {
     }
 
     #[test]
-    fn sugar_stays_distinct_from_its_expansion() {
-        // `{ n = 1 }` and `envelope { data = struct { n = 1 } }` must
-        // not collapse into one representation at this stage.
+    fn the_braced_body_is_carried_unclassified() {
+        // `{ n = 1 }` reaches the checker as its body, uninterpreted
+        // — classification happens once, there (D-2026-08-09-1).
         let body = StructBody {
             entries: vec![StructEntry::Field {
                 key: LValue {
@@ -786,10 +787,9 @@ mod tests {
                 }),
             }],
         };
-        assert_ne!(
-            Value::EnvelopeSugar(body.clone()),
-            Value::Envelope(Some(body))
-        );
+        // One braced form exists now; the CHECKER classifies it —
+        // the syntax only records the body.
+        assert_eq!(Value::Braced(body.clone()), Value::Braced(body));
     }
 
     #[test]
