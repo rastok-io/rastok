@@ -460,7 +460,11 @@ impl<'plan> TransactionExecutor<'plan> {
         // opacity is a property, not an ambush).
         let data_slot = DataSlot::new(input.data());
         if let Some(guard) = &handler.guard {
-            match eval_lazy(guard, &base(&scratch, &lets), &data_slot)? {
+            let verdict = resolve_payload(
+                eval_lazy(guard, &base(&scratch, &lets), &data_slot)?,
+                &data_slot,
+            )?;
+            match verdict {
                 cel::Value::Bool(true) => {}
                 cel::Value::Bool(false) => {
                     // Filtered: consumed with no effect.
@@ -489,7 +493,13 @@ impl<'plan> TransactionExecutor<'plan> {
                     lets.insert(name.clone(), value);
                 }
                 Step::SetVar { name, expr } => {
-                    let value = eval_lazy(expr, &base(&scratch, &lets), &data_slot)?;
+                    // A state write consumes the value — the store
+                    // outlives the transaction, so the witness
+                    // resolves here.
+                    let value = resolve_payload(
+                        eval_lazy(expr, &base(&scratch, &lets), &data_slot)?,
+                        &data_slot,
+                    )?;
                     // A state cell holds its DECLARED type at every
                     // write, not just at the initializer: a dynamic
                     // value of the wrong shape — or an int leaving
@@ -505,25 +515,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     scratch.insert(name.clone(), value);
                 }
                 Step::Emit { port, value } => {
-                    // DECIDED for encoded inputs: the bare `data`
-                    // relay is a pass-through of the REPRESENTATION
-                    // — bytes, encoding, and content-type hint —
-                    // recognized before the CEL bindings would try
-                    // to materialize an encoding CEL cannot read
-                    // (an Avro relay works; an Avro FIELD access
-                    // still faults, typed). Materialized inputs need
-                    // no case: the struct witness rides the value.
-                    let encoded_pass_through = matches!(
-                        (value, input.data()),
-                        (PlanEmission::Data(tree), Data::Encoded { .. })
-                            if matches!(&tree.root, cel::Expr::Path(segments)
-                                if segments.len() == 1 && segments[0] == "data")
-                    );
-                    let built = if encoded_pass_through {
-                        Some(pass_through(input))
-                    } else {
-                        emitted_content(value, input, &base(&scratch, &lets), &data_slot)?
-                    };
+                    let built = emitted_content(value, input, &base(&scratch, &lets), &data_slot)?;
                     if let Some(built) = built {
                         let index = buffer.next_index(port);
                         let id = ids::emission_id(
@@ -849,23 +841,6 @@ pub(crate) enum BuiltData {
     Envelope(envelope::Value),
 }
 
-/// The pass-through emission: the input's representation ships
-/// unchanged — data as stored, writable namespaces whole. The bare
-/// `data` relay on an ENCODED input takes this road before any CEL
-/// binding materializes.
-fn pass_through(input: &Envelope) -> Built {
-    Built {
-        data: BuiltData::Unchanged,
-        app: input.meta().app().clone(),
-        customs: input
-            .meta()
-            .customs()
-            .map(|(name, namespace)| (name.clone(), namespace.clone()))
-            .collect(),
-        mime: None,
-    }
-}
-
 fn emitted_content(
     emission: &PlanEmission,
     input: &Envelope,
@@ -886,11 +861,19 @@ fn emitted_content(
         PlanEmission::Nothing => Ok(None),
         PlanEmission::Identity => Ok(Some(inherited(BuiltData::Unchanged))),
         PlanEmission::Data(expr) => {
-            // No spelling-dependent special case: the STRUCT witness
-            // crosses the CEL bridge in the value itself
-            // (`cel::Value::Struct`), so `out = data`, a local
-            // binding, or a ternary all preserve the logical type.
+            // No spelling-dependent special case, in EITHER
+            // direction: the struct witness rides `cel::Value` and
+            // the laziness witness rides it too. A whole payload
+            // arriving uninspected — `out = data`, `out = copy`, the
+            // taken arm of a ternary — ships the REPRESENTATION:
+            // bytes, encoding, cache, and content-type hint,
+            // whatever the spelling. A composite embedding the
+            // witness resolves it.
             let value = eval_lazy(expr, base, slot)?;
+            if matches!(value, cel::Value::Payload) {
+                return Ok(Some(inherited(BuiltData::Unchanged)));
+            }
+            let value = resolve_payload(value, slot)?;
             Ok(Some(inherited(BuiltData::Value(value))))
         }
         PlanEmission::Patch(writes) | PlanEmission::Replace(writes) => {
@@ -904,7 +887,7 @@ fn emitted_content(
                 None
             };
             for write in writes {
-                let value = eval_lazy(&write.expr, base, slot)?;
+                let value = resolve_payload(eval_lazy(&write.expr, base, slot)?, slot)?;
                 match &write.target {
                     envelope::WriteTarget::Data(path) => {
                         // The fold base is a DIRECT demand — a
@@ -1064,6 +1047,9 @@ pub enum ValueKind {
     Map,
     /// A struct.
     Struct,
+    /// An unmaterialized payload witness — judged values are
+    /// resolved first, so a judge never meets one; total anyway.
+    Opaque,
 }
 
 impl ValueKind {
@@ -1080,6 +1066,7 @@ impl ValueKind {
             cel::Value::List(_) => Self::List,
             cel::Value::Map(_) => Self::Map,
             cel::Value::Struct(_) => Self::Struct,
+            cel::Value::Payload => Self::Opaque,
         }
     }
 }
@@ -1098,6 +1085,7 @@ impl fmt::Display for ValueKind {
             Self::List => "list",
             Self::Map => "map",
             Self::Struct => "struct",
+            Self::Opaque => "opaque",
         })
     }
 }
@@ -1164,6 +1152,9 @@ pub(crate) fn conformance_fault(
     };
     match (declared, value) {
         (cel::Type::Dyn, _) => None,
+        // Judged values are resolved first; an unmaterialized
+        // witness meeting a precise judge is a mismatch, total.
+        (_, cel::Value::Payload) => mismatch(),
         (cel::Type::Int, cel::Value::Int(candidate)) => {
             if i32::try_from(*candidate).is_err() {
                 Some(ConformanceViolation {
@@ -1304,8 +1295,49 @@ impl cel::Bindings for LazyBindings<'_> {
         if let Some(value) = self.base.get(name) {
             return Some(value.clone());
         }
-        (name == "data").then(|| self.data.demand()).flatten()
+        // Resolving the NAME is not yet inspecting the structure:
+        // the witness carries; `Bindings::payload` materializes.
+        (name == "data").then_some(cel::Value::Payload)
     }
+
+    fn payload(&self) -> Result<cel::Value, cel::Error> {
+        self.data.demand().ok_or_else(|| cel::Error {
+            message: String::from("the payload could not materialize"),
+        })
+    }
+}
+
+/// Resolves every payload witness in a value — the host-side twin of
+/// the evaluator's structural demand, for the points where a value
+/// LEAVES the evaluation: a state write, an emission conversion, a
+/// mock reply. Composites resolve deep.
+///
+/// # Errors
+/// The materialization fault, if the payload cannot decode.
+pub fn resolve_payload(value: cel::Value, slot: &DataSlot<'_>) -> Result<cel::Value, Fault> {
+    Ok(match value {
+        cel::Value::Payload => slot.materialize()?,
+        cel::Value::List(items) => cel::Value::List(
+            items
+                .into_iter()
+                .map(|item| resolve_payload(item, slot))
+                .collect::<Result<_, _>>()?,
+        ),
+        cel::Value::Map(map) => {
+            let mut deep = BTreeMap::new();
+            for (key, value) in map {
+                deep.insert(key, resolve_payload(value, slot)?);
+            }
+            cel::Value::Map(deep)
+        }
+        cel::Value::Struct(fields) => cel::Value::Struct(
+            fields
+                .into_iter()
+                .map(|(name, value)| Ok((name, resolve_payload(value, slot)?)))
+                .collect::<Result<_, _>>()?,
+        ),
+        other => other,
+    })
 }
 
 /// Evaluates against the lazy binding. A materialization fault takes
@@ -1333,18 +1365,23 @@ pub fn eval_lazy(
 /// host layer (lab, adapters, tooling) uses to read what a handler
 /// reads.
 pub fn data_value(data: &Data) -> Result<cel::Value, Fault> {
-    match data {
-        Data::Materialized(value) => Ok(from_envelope_value(value)),
-        Data::Encoded {
-            encoding: envelope::Encoding::Raw,
-            bytes,
-            ..
-        } => match core::str::from_utf8(bytes) {
-            Ok(text) => Ok(cel::Value::Text(String::from(text))),
-            Err(_) => Ok(cel::Value::Bytes(bytes.clone())),
-        },
-        Data::Encoded { encoding, .. } => Err(Fault::Opaque(format!(
-            "{encoding} decoding is not in this build"
+    // `Data::materialize_with` is the CACHE AUTHORITY: the decode
+    // lands in the envelope's own cell, so an identity re-emission
+    // ships the filled cell and the next node never decodes again —
+    // once per ENVELOPE, not once per transaction (envelope.md §5.1).
+    Ok(from_envelope_value(data.materialize_with(decode_encoded)?))
+}
+
+/// Decodes encoded bytes into the envelope domain — the closure
+/// `Data::materialize_with` runs on first structural access.
+fn decode_encoded(encoding: envelope::Encoding, bytes: &[u8]) -> Result<envelope::Value, Fault> {
+    match encoding {
+        envelope::Encoding::Raw => Ok(envelope::Value::Scalar(match core::str::from_utf8(bytes) {
+            Ok(text) => envelope::Scalar::Text(String::from(text)),
+            Err(_) => envelope::Scalar::Bytes(bytes.to_vec()),
+        })),
+        other => Err(Fault::Opaque(format!(
+            "{other} decoding is not in this build"
         ))),
     }
 }
@@ -1454,6 +1491,13 @@ fn from_meta_value(value: &MetaValue) -> cel::Value {
 /// Converts a CEL value into the envelope data domain.
 pub fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, Fault> {
     Ok(match value {
+        // Emission builders resolve the witness before converting;
+        // an unresolved one is a caller defect, refused typed.
+        cel::Value::Payload => {
+            return Err(Fault::Unrepresentable(String::from(
+                "an unmaterialized payload cannot enter the envelope domain",
+            )));
+        }
         cel::Value::Bool(v) => envelope::Value::Scalar(envelope::Scalar::Bool(*v)),
         cel::Value::Int(v) => envelope::Value::Scalar(envelope::Scalar::Int(*v)),
         cel::Value::Uint(v) => envelope::Value::Scalar(envelope::Scalar::Int(

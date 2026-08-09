@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v3: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v4: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -33,10 +33,12 @@ use crate::plan::{
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
 /// The format version this module writes and reads. v3 widened
-/// `port_decl` with the optional pinned type — a new format is a new
-/// version, and an old decoder refuses it by name, exactly as the
-/// format note promises.
-pub const FORMAT_VERSION: u32 = 3;
+/// `port_decl` with the optional pinned type; v4 admitted the EMPTY
+/// struct literal (tag 17) into expression constants — the one
+/// struct constant a compiler emits (D-2026-08-09-2). A new format
+/// is a new version, and an old decoder refuses it by name, exactly
+/// as the format note promises.
+pub const FORMAT_VERSION: u32 = 4;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.

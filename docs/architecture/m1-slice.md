@@ -82,8 +82,20 @@ step touches `vm.rs` once.
    both domains and the CEL `==`, a sub-block's name is a
    classification root like a field's first segment, the frozen
    bench card v1 is restored byte-for-byte with the M1 surface on a
-   new v2, and the fresh-data variant is named `FreshData`). The
-   trio's own contract types join the connector-sheet items below.
+   new v2, and the fresh-data variant is named `FreshData`; ninth
+   pass — laziness is SEMANTIC, not syntactic: the whole payload
+   rides evaluation as `cel::Value::Payload`, a witness that
+   carries through `val` bindings and ternaries and materializes
+   only where an operation demands structure, so `val copy = data;
+   out = copy` ships the representation exactly like `out = data`
+   (the syntactic special case is deleted); the envelope's own
+   `Data::materialize_with` cell is the cache authority — an
+   inspected-then-re-emitted envelope carries its filled cell, once
+   per ENVELOPE; the empty-struct literal moved the package to
+   FORMAT v4 (D-2026-08-09-2, v3 joins the refused drafts, goldens
+   re-blessed, spike on v4 to the same hash); `FieldWrite` dropped
+   its dead as-written path). The trio's own contract types join
+   the connector-sheet items below.
 2. **The `jsonl` codec** — structured payloads across the `Process`
    boundary, under the one byte discipline; unlocks realistic `File`
    and HTTP payloads.

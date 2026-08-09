@@ -218,12 +218,13 @@ pub enum EmitValue {
     Nothing,
 }
 
-/// One writable field assignment inside an envelope builder.
+/// One writable field assignment inside an envelope builder. The
+/// RESOLVED target is what travels: the hash seals it canonically
+/// (D-2026-08-04-2 — `meta.flag` and `meta.app.flag` are one
+/// identity), and the as-written spelling lives only in the
+/// diagnostics' spans.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldWrite {
-    /// The dotted path as written — identity material: the semantic
-    /// hash seals the author's spelling, aliases included.
-    pub path: Vec<String>,
     /// The checked landing site — what the runtime executes.
     pub target: crate::envelope::WriteTarget,
     /// The compiled expression.

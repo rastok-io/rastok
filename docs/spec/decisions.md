@@ -5,6 +5,23 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-09-2 — The empty-struct literal moves the package to v4
+
+The reform's nested empty record (`parent = {}`) compiles to the one
+struct constant a plan may carry: the EMPTY struct literal, tag 17.
+Reading it back is an extension of the values a v3 decoder accepted,
+and the format note's own rule is categorical — anything the tables
+cannot express is a format-version bump, not a creative reuse. So
+the package moves to v4, v3 joins v1 and v2 as unpublished drafts
+refused by number, the goldens were re-blessed deliberately, and the
+spike boots the v4 package to the SAME semantic hash — identity
+lives in the canonical HIR, never in the transport. **Rejected:**
+declaring tag 17 retroactively part of v3 (it contradicts the
+written rule, and a rule bent once pre-public will be bent again
+under pressure); accepting both v3 and v4 in one reader (two
+accepted dialects is a silent migration surface — the single-version
+reader stays the sabotage matrix's simplest honest shape).
+
 ## D-2026-08-09-1 — One braced form, classified once by its roots
 
 A maintainer language decision, taken during the third multiport

@@ -498,7 +498,15 @@ impl MockPartner<'_> {
             EmitValue::Nothing => Ok(None),
             EmitValue::Identity => Ok(Some(request.data().clone())),
             EmitValue::Data(tree) => {
+                // The same rule as the machine: a whole payload
+                // arriving uninspected — `out = data`, a local carry
+                // — ships the REPRESENTATION, whatever the spelling.
                 let value = self.lazy_eval(tree, env, slot)?;
+                if matches!(value, cel::Value::Payload) {
+                    return Ok(Some(request.data().clone()));
+                }
+                let value = runtime::resolve_payload(value, slot)
+                    .map_err(|fault| format!("the mock request is unreadable: {fault}"))?;
                 Ok(Some(Data::materialized(
                     runtime::to_envelope_value(&value)
                         .map_err(|fault| format!("the mock faulted: {fault}"))?,
@@ -520,7 +528,9 @@ impl MockPartner<'_> {
                         crate::envelope::Value::Struct(Vec::new())
                     };
                 for write in writes {
-                    let evaluated = self.lazy_eval(&write.value, env, slot)?;
+                    let evaluated =
+                        runtime::resolve_payload(self.lazy_eval(&write.value, env, slot)?, slot)
+                            .map_err(|fault| format!("the mock request is unreadable: {fault}"))?;
                     match &write.target {
                         WriteTarget::Data(path) => {
                             let leaf = runtime::to_envelope_value(&evaluated)
@@ -615,6 +625,28 @@ mod tests {
             matches!(outcome, Some(CallOutcome::Success(_))),
             "the meta-only branch answered"
         );
+    }
+
+    #[test]
+    fn a_mock_carry_is_as_lazy_as_the_name_too() {
+        // The mocks speak the handlers' language: `out = data` and
+        // `val copy = data; out = copy` both ship the opaque
+        // request's REPRESENTATION, exactly like the machine.
+        for body in [
+            "      on in { out = data }",
+            "      on in {\n        val copy = data\n        out = copy\n      }",
+        ] {
+            let (outcome, faults) = opaque_answer(body);
+            assert!(faults.is_empty(), "`{body}`: no forced decode: {faults:?}");
+            assert!(
+                matches!(
+                    outcome,
+                    Some(CallOutcome::Success(Data::Encoded { ref bytes, .. }))
+                        if bytes.as_slice() == b"\x01\x02"
+                ),
+                "`{body}` must relay the representation"
+            );
+        }
     }
 
     #[test]

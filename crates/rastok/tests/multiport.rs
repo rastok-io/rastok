@@ -2195,6 +2195,129 @@ fn short_circuits_never_demand_the_data() {
 }
 
 #[test]
+fn the_carry_is_as_lazy_as_the_name() {
+    // Semantics, not spelling: `val copy = data; out = copy` and a
+    // taken ternary arm behave exactly like `out = data` — the whole
+    // payload ships its REPRESENTATION (bytes, encoding, MIME),
+    // opaque or not, however the carry is written.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Encoding, Namespace};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let run = |body: &str, encoding: Encoding, bytes: &'static [u8]| {
+        let source = format!(
+            "graph g : App {{\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+        );
+        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        vm.inject(
+            &mut journal,
+            InboundSubmission {
+                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                port: rastok::node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::encoded(encoding, bytes.to_vec()),
+                    mime_type: Some(String::from("application/x-opaque")),
+                    app: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .expect("the injection lands");
+        vm.drain(&mut journal).expect("no forced materialization");
+        assert_eq!(vm.errors().len(), 0, "no decode was demanded");
+        vm.outputs()[0].envelope.clone()
+    };
+    let holds = |body: &str| {
+        let output = run(body, Encoding::Avro, b"\x01\x02");
+        assert!(
+            matches!(
+                output.data(),
+                Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_slice() == b"\x01\x02"
+            ),
+            "`{body}` must ship the representation: {:?}",
+            output.data()
+        );
+        assert_eq!(
+            output.meta().sys().mime_type(),
+            Some("application/x-opaque"),
+            "`{body}` must keep the content-type hint"
+        );
+    };
+    holds("      out = data");
+    holds("      val copy = data\n      out = copy");
+    holds("      out = true ? data : 1");
+    holds("      val copy = true ? data : data\n      out = copy");
+}
+
+#[test]
+fn a_field_access_materializes_exactly_once_per_envelope() {
+    // The envelope's own cell is the cache authority: the first
+    // structural access fills it; every later demand — this
+    // transaction's or a later node's — reads the cell.
+    use rastok::envelope::{Data, Encoding};
+    use rastok::runtime::DataSlot;
+
+    let data = Data::encoded(Encoding::Raw, *b"seven");
+    assert!(data.materialized_value().is_none(), "nothing read yet");
+    let slot = DataSlot::new(&data);
+    let first = slot.materialize().expect("raw decodes");
+    let second = slot.materialize().expect("the cache answers");
+    assert_eq!(first, second);
+    assert!(
+        data.materialized_value().is_some(),
+        "the decode landed in the ENVELOPE's cell, not a side cache"
+    );
+}
+
+#[test]
+fn an_inspection_then_identity_ships_the_filled_cell() {
+    // A node inspects `data`, then re-emits the envelope whole: the
+    // emitted data carries the FILLED cell, so the next node's
+    // demand is a cache read — once per envelope, not once per
+    // transaction.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Encoding, Namespace};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let source = "graph g : App {\n  operator o {\n    on in where size(data) > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::encoded(Encoding::Raw, *b"ok"),
+                mime_type: None,
+                app: Namespace::new(),
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    )
+    .expect("the injection lands");
+    vm.drain(&mut journal).expect("the drain completes");
+    let output = &vm.outputs()[0];
+    match output.envelope.data() {
+        Data::Encoded { bytes, .. } => {
+            assert_eq!(bytes.as_slice(), b"ok", "the bytes ship untouched");
+        }
+        other => panic!("the representation must survive: {other:?}"),
+    }
+    assert!(
+        output.envelope.data().materialized_value().is_some(),
+        "the guard's decode rides the emitted envelope"
+    );
+}
+
+#[test]
 fn struct_equality_is_by_name_like_the_seal() {
     use rastok::envelope::{Scalar, Value};
     let left = Value::Struct(vec![

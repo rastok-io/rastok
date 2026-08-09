@@ -2286,7 +2286,6 @@ impl Checker<'_, '_> {
                                     continue;
                                 }
                                 writes.push(FieldWrite {
-                                    path,
                                     target,
                                     value: tree,
                                 });
@@ -2350,8 +2349,7 @@ impl Checker<'_, '_> {
                         SynValue::Cel(expr) => {
                             if let Some(tree) = self.cel(expr, signature) {
                                 writes.push(FieldWrite {
-                                    target: crate::envelope::WriteTarget::Data(path.clone()),
-                                    path,
+                                    target: crate::envelope::WriteTarget::Data(path),
                                     value: tree,
                                 });
                             }
@@ -2363,8 +2361,7 @@ impl Checker<'_, '_> {
                                 // empty struct where a leaf-splice
                                 // would write nothing at all.
                                 writes.push(FieldWrite {
-                                    target: crate::envelope::WriteTarget::Data(path.clone()),
-                                    path,
+                                    target: crate::envelope::WriteTarget::Data(path),
                                     value: cel::Tree {
                                         root: cel::Expr::Literal(cel::Value::Struct(Vec::new())),
                                         ty: cel::Type::Dyn,
@@ -2850,6 +2847,9 @@ fn direction_words(direction: Direction) -> &'static str {
 fn value_type(value: &cel::Value) -> cel::Type {
     match value {
         cel::Value::Struct(_) => cel::Type::Dyn,
+        // A checker value is a constant; the runtime witness never
+        // appears here — total anyway.
+        cel::Value::Payload => cel::Type::Dyn,
         cel::Value::Bool(_) => cel::Type::Bool,
         cel::Value::Int(_) => cel::Type::Int,
         cel::Value::Uint(_) => cel::Type::Uint,
@@ -2953,7 +2953,10 @@ graph m0_probe : App {
         let EmitValue::Patch(writes) = value else {
             panic!("expected an envelope patch");
         };
-        assert_eq!(writes[0].path, ["data", "text"]);
+        assert_eq!(
+            writes[0].target,
+            crate::envelope::WriteTarget::Data(vec![String::from("text")])
+        );
     }
 
     #[test]

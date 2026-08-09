@@ -10,10 +10,14 @@
 > **revised to format v3 on 2026-08-08** when the M1 multiport lift
 > widened `port_decl` with the optional pinned type
 > (D-2026-08-08-3) — a new format is a new version, so the typed
-> table did not ride under a v2 header.
+> table did not ride under a v2 header; **revised to format v4 on
+> 2026-08-09** when the braced-form reform admitted the EMPTY struct
+> literal (tag 17) into expression constants (D-2026-08-09-2) — an
+> extension of the expressible values is a version bump, exactly as
+> this document's own rule demands.
 > The package is a TRANSPORT format: versioned and free to evolve by
-> version bump; neither v1 nor v2 was ever published and no decoder
-> reads them — each refuses by its number.
+> version bump; none of v1, v2, or v3 was ever published and no
+> decoder reads them — each refuses by its number.
 > Identity stays where it always was — the semantic hash over the
 > canonical HIR; the package merely carries a plan and proves it intact.
 
@@ -39,7 +43,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (this document: 3)   │
+        │ 1 : format_version   uint      (this document: 4)   │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -113,7 +117,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v3)
+## Body tables (format v4)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -123,7 +127,10 @@ key. `tagged_value` is the registry of
 traces seal, shared code and shared bytes; since 2026-08-07 the CEL
 `uint` domain has its own registry tag 23, and tag 3 is `long` only
 (E-2026-08-07-1 — v1 reused tag 3 for both, and a decode could turn
-an `int` into a `uint` while keeping the plan's hash).
+an `int` into a `uint` while keeping the plan's hash). Since v4 an
+expression literal may carry the struct tag 17; the validator holds
+shipped constants to the expressible subset — the EMPTY record only,
+the one struct constant a compiler emits (D-2026-08-09-2).
 
 ```text
 plan       := {1: [node*], 2: [boundary*], 3: [edge*], 4: [handler*]}

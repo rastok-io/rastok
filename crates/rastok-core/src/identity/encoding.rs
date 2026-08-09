@@ -73,6 +73,10 @@ pub fn value_tagged(value: &crate::envelope::Value) -> Cbor {
 /// A `tagged_value` for a CEL value (state deltas).
 pub fn cel_tagged(value: &crate::cel::Value) -> Cbor {
     match value {
+        // State writes resolve the laziness witness before the store
+        // (runtime `resolve_payload`), so no delta ever carries one;
+        // encoding a marker would seal a lie.
+        crate::cel::Value::Payload => unreachable!("a payload witness never reaches a seal"),
         crate::cel::Value::Bool(v) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Bool(*v)]),
         crate::cel::Value::Int(v) => int_tagged(*v),
         crate::cel::Value::Uint(v) => Cbor::Array(vec![Cbor::Uint(23), Cbor::Uint(*v)]),

@@ -95,6 +95,15 @@ pub enum Value {
     /// map. CEL cannot construct one; it can only carry, access,
     /// and re-emit what the envelope domain handed it.
     Struct(Vec<(String, Value)>),
+    /// The WHOLE `data` payload, unmaterialized — the laziness
+    /// witness. Resolving the name `data` is not yet inspecting its
+    /// structure: the witness carries through bindings, locals, and
+    /// ternaries untouched, and materializes only where an operation
+    /// demands structure (member, index, operator, call) — through
+    /// [`Bindings::payload`]. It lives inside one evaluation and its
+    /// host's emission builder; it never reaches a plan, a hash, or
+    /// a seal (the expressible-constant gate refuses it).
+    Payload,
 }
 
 impl PartialEq for Value {
@@ -124,6 +133,9 @@ impl PartialEq for Value {
             // total: a malformed duplicate-name struct — refused at
             // every door, but representable — still equals itself.
             (Self::Struct(a), Self::Struct(b)) => struct_fields_eq(a, b, Value::eq),
+            // One payload exists per evaluation; two witnesses can
+            // only name the same thing.
+            (Self::Payload, Self::Payload) => true,
             _ => false,
         }
     }
@@ -190,6 +202,19 @@ impl Signature {
 pub trait Bindings {
     /// The value bound to `name`, if any.
     fn get(&self, name: &str) -> Option<Value>;
+
+    /// The whole payload behind a [`Value::Payload`] witness,
+    /// materialized. The default has no payload authority: a witness
+    /// reaching an environment that cannot honor it is a fault, not
+    /// a silent value.
+    ///
+    /// # Errors
+    /// When this environment carries no payload.
+    fn payload(&self) -> Result<Value, Error> {
+        Err(fault(String::from(
+            "`data` carries no payload in this environment",
+        )))
+    }
 }
 
 impl Bindings for BTreeMap<String, Value> {
@@ -1289,6 +1314,8 @@ fn literal_type(value: &Value) -> Type {
         // No struct type exists in the annotation subset; the value
         // carries its own witness and types as dynamic.
         Value::Struct(_) => Type::Dyn,
+        // A literal is never a witness; total anyway.
+        Value::Payload => Type::Dyn,
     }
 }
 
@@ -1347,6 +1374,46 @@ fn numeric(lhs: &Type, rhs: &Type) -> Option<Type> {
 
 // ===== evaluation =====
 
+/// Upgrades a payload witness at a point of STRUCTURAL consumption;
+/// every other value passes through. Carrying positions (a `val`
+/// binding, a ternary result, a list element) never call this — that
+/// is what keeps `val copy = data` as lazy as `data` itself.
+fn concrete(value: Value, bindings: &dyn Bindings) -> Result<Value, Error> {
+    match value {
+        Value::Payload => bindings.payload(),
+        other => Ok(other),
+    }
+}
+
+/// The deep variant for comparisons: a witness inside a composite
+/// materializes too, so `[data] == [x]` compares values, never
+/// markers.
+fn concrete_deep(value: Value, bindings: &dyn Bindings) -> Result<Value, Error> {
+    Ok(match value {
+        Value::Payload => bindings.payload()?,
+        Value::List(items) => Value::List(
+            items
+                .into_iter()
+                .map(|item| concrete_deep(item, bindings))
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Map(map) => {
+            let mut deep = BTreeMap::new();
+            for (key, value) in map {
+                deep.insert(key, concrete_deep(value, bindings)?);
+            }
+            Value::Map(deep)
+        }
+        Value::Struct(fields) => Value::Struct(
+            fields
+                .into_iter()
+                .map(|(name, value)| Ok((name, concrete_deep(value, bindings)?)))
+                .collect::<Result<_, _>>()?,
+        ),
+        other => other,
+    })
+}
+
 fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
     match expr {
         Expr::Literal(value) => Ok(value.clone()),
@@ -1359,6 +1426,8 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
                 .get(&segments[0])
                 .ok_or_else(|| fault(format!("`{}` is not bound", segments[0])))?;
             for segment in &segments[1..] {
+                // A member access IS the structural demand.
+                value = concrete(value, bindings)?;
                 match value {
                     Value::Map(mut map) => {
                         value = map.remove(segment.as_str()).ok_or_else(|| {
@@ -1380,7 +1449,7 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
             Ok(value)
         }
         Expr::Unary { op, expr } => {
-            let value = eval_expr(expr, bindings)?;
+            let value = concrete(eval_expr(expr, bindings)?, bindings)?;
             match (op, value) {
                 (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
                 (UnaryOp::Neg, Value::Int(i)) => i
@@ -1400,14 +1469,14 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
             cond,
             then,
             otherwise,
-        } => match eval_expr(cond, bindings)? {
+        } => match concrete(eval_expr(cond, bindings)?, bindings)? {
             Value::Bool(true) => eval_expr(then, bindings),
             Value::Bool(false) => eval_expr(otherwise, bindings),
             other => Err(fault(format!("the condition evaluated to {other:?}"))),
         },
         Expr::Index { base, index } => {
-            let base = eval_expr(base, bindings)?;
-            let index = eval_expr(index, bindings)?;
+            let base = concrete(eval_expr(base, bindings)?, bindings)?;
+            let index = concrete(eval_expr(index, bindings)?, bindings)?;
             match (base, index) {
                 (Value::List(items), Value::Int(i)) => usize::try_from(i)
                     .ok()
@@ -1431,7 +1500,8 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
         Expr::Call { function, args } => {
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
-                values.push(eval_expr(arg, bindings)?);
+                // A function consumes its argument's structure.
+                values.push(concrete(eval_expr(arg, bindings)?, bindings)?);
             }
             match (function, values.as_slice()) {
                 (Function::Duration, [Value::Text(text)]) => {
@@ -1477,20 +1547,20 @@ fn eval_binary(
 ) -> Result<Value, Error> {
     use BinaryOp::{Add, And, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Or, Rem, Sub};
     if matches!(op, And | Or) {
-        let Value::Bool(lhs) = eval_expr(left, bindings)? else {
+        let Value::Bool(lhs) = concrete(eval_expr(left, bindings)?, bindings)? else {
             return Err(fault(String::from("logic needs booleans")));
         };
         return match (op, lhs) {
             (And, false) => Ok(Value::Bool(false)),
             (Or, true) => Ok(Value::Bool(true)),
-            _ => match eval_expr(right, bindings)? {
+            _ => match concrete(eval_expr(right, bindings)?, bindings)? {
                 Value::Bool(rhs) => Ok(Value::Bool(rhs)),
                 _ => Err(fault(String::from("logic needs booleans"))),
             },
         };
     }
-    let lhs = eval_expr(left, bindings)?;
-    let rhs = eval_expr(right, bindings)?;
+    let lhs = concrete_deep(eval_expr(left, bindings)?, bindings)?;
+    let rhs = concrete_deep(eval_expr(right, bindings)?, bindings)?;
     match op {
         Eq => Ok(Value::Bool(values_equal(&lhs, &rhs))),
         Ne => Ok(Value::Bool(!values_equal(&lhs, &rhs))),

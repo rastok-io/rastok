@@ -678,16 +678,21 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     Ok(())
 }
 
-/// No plan constant may carry a struct: CEL cannot construct one,
-/// so no compiled plan holds one — and the codec's tables refuse
-/// the form, so admitting it would break `encode ⇒ decode`.
+/// The expressible-constant gate. CEL cannot construct a struct, so
+/// the one struct constant a compiled plan holds is the EMPTY record
+/// literal (`parent = {}`, D-2026-08-09-2) — the v4 tables read it
+/// back, and anything with fields (or a runtime laziness witness)
+/// still refuses: admitting more than the compiler emits would make
+/// hand-forged plans indistinguishable from compiled ones.
 fn value_expressible(value: &cel::Value) -> Result<(), PlanValidationError> {
     match value {
         // CEL cannot CONSTRUCT a struct; the one struct constant a
         // compiler emits is the EMPTY record literal (`parent = {}`,
         // D-2026-08-09-1). Anything with fields still refuses.
         cel::Value::Struct(fields) if fields.is_empty() => Ok(()),
-        cel::Value::Struct(_) => Err(PlanValidationError::UnrepresentableConstant),
+        cel::Value::Struct(_) | cel::Value::Payload => {
+            Err(PlanValidationError::UnrepresentableConstant)
+        }
         cel::Value::List(items) => items.iter().try_for_each(value_expressible),
         cel::Value::Map(entries) => entries.values().try_for_each(value_expressible),
         _ => Ok(()),

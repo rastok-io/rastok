@@ -690,6 +690,10 @@ impl Writer {
 
     fn value(&mut self, value: &cel::Value) {
         match value {
+            // Compiler values are constants; the runtime laziness
+            // witness cannot appear in one (`value_expressible`
+            // refuses it) — hashing a marker would seal a lie.
+            cel::Value::Payload => unreachable!("a payload witness never reaches the hash"),
             cel::Value::Bool(b) => {
                 self.tag(1);
                 self.tag(u8::from(*b));
