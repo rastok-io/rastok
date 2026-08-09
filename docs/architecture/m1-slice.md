@@ -58,7 +58,12 @@ step touches `vm.rs` once.
    fifth pass — Dyn is one rule across checker, validator, and
    runtime, synthesized error emissions take the same pre-commit
    gate as everything else, and a bare `data` relay preserves the
-   logical Struct/Map type). The trio's
+   logical Struct/Map type; `76b220a` sixth pass — the struct
+   witness rides cel::Value itself, so every equivalent spelling
+   preserves it; the validator gates unexecutable connector ports by
+   capability; the encoded bare relay passes the representation
+   through; all four error production paths pinned at the final
+   gate). The trio's
    own contract types join the connector-sheet items below.
 2. **The `jsonl` codec** — structured payloads across the `Process`
    boundary, under the one byte discipline; unlocks realistic `File`
