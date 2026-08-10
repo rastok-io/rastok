@@ -409,12 +409,12 @@ impl Journal for MemJournal {
         };
         let following = seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
         let id = ids::root_id(&submission.authority, seq);
-        let mut sys = MetaSys::root(id, self.graph_version.0);
-        if let Some(mime_type) = submission.draft.mime_type {
-            sys = sys.with_mime_type(mime_type);
-        }
+        let sys = MetaSys::root(id, self.graph_version.0);
+        // The world's half seeds `ext` only: `app` is the
+        // application's zone and starts empty at ingress
+        // (D-2026-08-10-1).
         let envelope = Envelope::new(
-            Meta::new(sys).with_app(submission.draft.app),
+            Meta::new(sys).with_ext(submission.draft.ext),
             submission.draft.data,
         );
         let record = InboundRecord {
@@ -552,8 +552,16 @@ mod tests {
             port: node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::encoded(Encoding::Raw, *b"hello"),
-                mime_type: Some(String::from("text/plain")),
-                app: Namespace::new(),
+                ext: {
+                    let mut ext = Namespace::new();
+                    ext.insert(
+                        String::from("content_type"),
+                        crate::envelope::MetaValue::Scalar(crate::envelope::Scalar::Text(
+                            String::from("text/plain"),
+                        )),
+                    );
+                    ext
+                },
             },
             sequence,
         }
@@ -691,7 +699,12 @@ mod tests {
         assert_eq!(sys.parent_id(), None);
         assert_eq!(sys.origin_id(), sys.id());
         assert_eq!(sys.graph_version(), 1);
-        assert_eq!(sys.mime_type(), Some("text/plain"));
+        assert_eq!(
+            committed.envelope.meta().ext().get("content_type"),
+            Some(&crate::envelope::MetaValue::Scalar(
+                crate::envelope::Scalar::Text(String::from("text/plain"))
+            ))
+        );
         assert_eq!(committed.seq, 0);
     }
 

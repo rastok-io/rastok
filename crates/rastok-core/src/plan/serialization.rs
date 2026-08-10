@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v4: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v5: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -33,12 +33,12 @@ use crate::plan::{
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
 /// The format version this module writes and reads. v3 widened
-/// `port_decl` with the optional pinned type; v4 admitted the EMPTY
-/// struct literal (tag 17) into expression constants — the one
-/// struct constant a compiler emits (D-2026-08-09-2). A new format
-/// is a new version, and an old decoder refuses it by name, exactly
-/// as the format note promises.
-pub const FORMAT_VERSION: u32 = 4;
+/// `port_decl`; v4 admitted the empty-struct literal; v5 is the
+/// consolidated reform (D-2026-08-10-9): the three-zone write
+/// targets, the travelling `app`/`ext` schemas, and the rest of the
+/// reform's tables. A new format is a new version, and an old
+/// decoder refuses it by name, exactly as the format note promises.
+pub const FORMAT_VERSION: u32 = 5;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -203,7 +203,7 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
 // ===================== encoding: plan → tree =====================
 
 fn plan_tree(plan: &ExecutionPlan) -> Cbor {
-    Cbor::Map(BTreeMap::from([
+    let mut pairs = BTreeMap::from([
         (1, Cbor::Array(plan.nodes.iter().map(node_tree).collect())),
         (
             2,
@@ -214,7 +214,25 @@ fn plan_tree(plan: &ExecutionPlan) -> Cbor {
             4,
             Cbor::Array(plan.handlers.iter().map(handler_tree).collect()),
         ),
-    ]))
+    ]);
+    // The travelling zone schemas (v5, D-2026-08-10-1): the
+    // validator answers without a Registry. Absent = omitted key.
+    if !plan.app_schema.is_empty() {
+        pairs.insert(5, schema_tree(&plan.app_schema));
+    }
+    if !plan.ext_schema.is_empty() {
+        pairs.insert(6, schema_tree(&plan.ext_schema));
+    }
+    Cbor::Map(pairs)
+}
+
+fn schema_tree(schema: &[(String, cel::Type)]) -> Cbor {
+    Cbor::Array(
+        schema
+            .iter()
+            .map(|(field, ty)| Cbor::Array(vec![Cbor::Text(field.clone()), type_tree(ty)]))
+            .collect(),
+    )
 }
 
 fn node_tree(node: &Node) -> Cbor {
@@ -383,13 +401,10 @@ fn target_tree(target: &WriteTarget) -> Cbor {
             Cbor::Uint(1),
             Cbor::Array(path.iter().map(|seg| Cbor::Text(seg.clone())).collect()),
         ]),
-        WriteTarget::AppMeta(field) => Cbor::Array(vec![Cbor::Uint(2), Cbor::Text(field.clone())]),
-        WriteTarget::CustomMeta(namespace, field) => Cbor::Array(vec![
-            Cbor::Uint(3),
-            Cbor::Text(namespace.clone()),
-            Cbor::Text(field.clone()),
-        ]),
-        WriteTarget::MimeType => Cbor::Array(vec![Cbor::Uint(4)]),
+        // Tags 3 (custom-namespace) and 4 (mime) are RETIRED with
+        // D-2026-08-10-1/-4 — extend-only: never reused.
+        WriteTarget::App(field) => Cbor::Array(vec![Cbor::Uint(2), Cbor::Text(field.clone())]),
+        WriteTarget::Ext(field) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Text(field.clone())]),
     }
 }
 
@@ -717,12 +732,32 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         .iter()
         .map(handler_from)
         .collect::<Result<Vec<_>, _>>()?;
+    let app_schema = match pairs.get(&5) {
+        Some(tree) => schema_from(tree)?,
+        None => Vec::new(),
+    };
+    let ext_schema = match pairs.get(&6) {
+        Some(tree) => schema_from(tree)?,
+        None => Vec::new(),
+    };
     Ok(ExecutionPlan {
         nodes,
         boundary,
         edges,
         handlers,
+        app_schema,
+        ext_schema,
     })
+}
+
+fn schema_from(tree: &Cbor) -> Result<Vec<(String, cel::Type)>, DecodeError> {
+    array_of(tree, "zone schema")?
+        .iter()
+        .map(|entry| match array_of(entry, "schema field")? {
+            [Cbor::Text(field), ty] => Ok((field.clone(), type_from(ty)?)),
+            _ => Err(err("schema field")),
+        })
+        .collect()
 }
 
 fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
@@ -949,11 +984,10 @@ fn target_from(tree: &Cbor) -> Result<WriteTarget, DecodeError> {
                 .map(|seg| Ok(text_of(seg, "path segment")?.to_string()))
                 .collect::<Result<Vec<_>, DecodeError>>()?,
         )),
-        [Cbor::Uint(2), Cbor::Text(field)] => Ok(WriteTarget::AppMeta(field.clone())),
-        [Cbor::Uint(3), Cbor::Text(namespace), Cbor::Text(field)] => {
-            Ok(WriteTarget::CustomMeta(namespace.clone(), field.clone()))
-        }
-        [Cbor::Uint(4)] => Ok(WriteTarget::MimeType),
+        [Cbor::Uint(2), Cbor::Text(field)] => Ok(WriteTarget::App(field.clone())),
+        [Cbor::Uint(5), Cbor::Text(field)] => Ok(WriteTarget::Ext(field.clone())),
+        // 3 (custom) and 4 (mime) are retired draft tags — refused
+        // like any unknown discriminant.
         _ => Err(err("write target")),
     }
 }
@@ -1351,15 +1385,11 @@ mod tests {
                                 expr: tree(expr),
                             },
                             FieldWrite {
-                                target: WriteTarget::AppMeta(text("m")),
+                                target: WriteTarget::App(text("m.dotted")),
                                 expr: tree(cel::Expr::Literal(cel::Value::Null)),
                             },
                             FieldWrite {
-                                target: WriteTarget::CustomMeta(text("ns"), text("f")),
-                                expr: tree(cel::Expr::Literal(cel::Value::Bool(true))),
-                            },
-                            FieldWrite {
-                                target: WriteTarget::MimeType,
+                                target: WriteTarget::Ext(text("content_type")),
                                 expr: tree(cel::Expr::Literal(cel::Value::Text(text("t")))),
                             },
                         ]),
@@ -1373,6 +1403,8 @@ mod tests {
                     },
                 ],
             }],
+            app_schema: vec![(text("m.dotted"), cel::Type::Dyn)],
+            ext_schema: vec![(text("content_type"), cel::Type::Text)],
         }
     }
 
@@ -1397,6 +1429,8 @@ mod tests {
                     expr: tree(root),
                 }],
             }],
+            app_schema: vec![],
+            ext_schema: vec![],
         }
     }
 
@@ -1432,6 +1466,8 @@ mod tests {
                 boundary: vec![],
                 edges: vec![],
                 handlers: vec![],
+                app_schema: vec![],
+                ext_schema: vec![],
             },
             rich_plan(),
             one_step_plan(nested_binary),

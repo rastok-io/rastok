@@ -21,6 +21,12 @@ pub struct Hir {
     pub app: Graph,
     /// The checked simulations of the App's lab, when declared.
     pub labs: Vec<Lab>,
+    /// The sealed `meta.app` schema — the graph's writes, unified
+    /// (D-2026-08-10-1). DERIVED from the writes: the hash never
+    /// seals it twice.
+    pub app_schema: Vec<(String, crate::cel::Type)>,
+    /// The `meta.ext` vocabulary: `content_type` plus sheet fields.
+    pub ext_schema: Vec<(String, crate::cel::Type)>,
 }
 
 pub use crate::node::Direction;

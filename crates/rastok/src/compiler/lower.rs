@@ -115,6 +115,11 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         boundary: sorted_boundary(hir),
         edges: Vec::new(),
         handlers: Vec::new(),
+        // DERIVED from the writes the hash already seals — carried
+        // for the Registry-less validator (D-2026-08-10-1), never
+        // hashed twice.
+        app_schema: hir.app_schema.clone(),
+        ext_schema: hir.ext_schema.clone(),
     };
     let mut symbols = SymbolTable { nodes: Vec::new() };
     for hir_node in &nodes {
@@ -260,11 +265,8 @@ fn canonical_target(target: &crate::envelope::WriteTarget) -> String {
     match target {
         crate::envelope::WriteTarget::Data(path) if path.is_empty() => String::from("data"),
         crate::envelope::WriteTarget::Data(path) => format!("data.{}", path.join(".")),
-        crate::envelope::WriteTarget::AppMeta(field) => format!("meta.app.{field}"),
-        crate::envelope::WriteTarget::CustomMeta(namespace, field) => {
-            format!("meta.{namespace}.{field}")
-        }
-        crate::envelope::WriteTarget::MimeType => String::from("mime_type"),
+        crate::envelope::WriteTarget::App(field) => format!("meta.app.{field}"),
+        crate::envelope::WriteTarget::Ext(field) => format!("meta.ext.{field}"),
     }
 }
 

@@ -278,10 +278,12 @@ pub struct InboundSubmission {
 pub struct Draft {
     /// The payload.
     pub data: envelope::Data,
-    /// The content-type hint, when the transport provides one.
-    pub mime_type: Option<String>,
-    /// The writable `meta.app` namespace seeded at birth.
-    pub app: envelope::Namespace,
+    /// The external-context zone seeded at birth — the world's
+    /// half: the transport's `content_type` and whatever the
+    /// boundary's sheet declares. `meta.app` is NEVER seeded at
+    /// ingress: the application writes its own zone
+    /// (D-2026-08-10-1).
+    pub ext: envelope::Namespace,
 }
 
 /// One scheduler-owned event with a logical date. Virtual time is
@@ -596,8 +598,7 @@ mod tests {
                 port: node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::encoded(Encoding::Raw, *b"salut"),
-                    mime_type: None,
-                    app: Namespace::new(),
+                    ext: Namespace::new(),
                 },
                 sequence: SubmissionSequence::Next,
             })

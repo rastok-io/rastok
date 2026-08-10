@@ -91,6 +91,14 @@ pub struct ExecutionPlan {
     /// Declaration order between handlers carries no identity; only
     /// the statements INSIDE a handler are order-sensitive.
     pub handlers: Vec<Handler>,
+    /// The resolved `meta.app` schema — inferred from the graph's
+    /// writes, travelling so the validator answers without a
+    /// Registry (D-2026-08-10-1): flat dotted field, unified type.
+    /// Sorted by field; prefix-free.
+    pub app_schema: Vec<(alloc::string::String, cel::Type)>,
+    /// The resolved `meta.ext` vocabulary — the standard
+    /// `content_type` plus the instantiated sheets' fields.
+    pub ext_schema: Vec<(alloc::string::String, cel::Type)>,
 }
 
 impl ExecutionPlan {

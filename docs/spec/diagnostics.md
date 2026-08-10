@@ -59,6 +59,10 @@ causal core. They live in their home specs, not here.
 | E-PORT-DIRECTION | error | check | [grammar.md](grammar.md) | a port used against its direction — edge, handler, or emission side; fields `port`, `direction` |
 | E-GRAPH-CYCLE | error | check | [grammar.md](grammar.md) | a wiring cycle among nodes — edges form a DAG; field `node` |
 | E-PORT-CONFLICT | error | check | [grammar.md](grammar.md) | a port name declared or inferred with conflicting roles, redeclared, or declared on a connector; field `port` |
+| E-META-ZONE | error | check | [envelope.md](envelope.md) | a metadata path outside the three zones (`sys`/`app`/`ext`), outside a zone's vocabulary, a dynamic `meta[…]` access, or a Lab write into the application's zone (D-2026-08-10-1); field `path` |
+| E-META-TYPE | error | check | [envelope.md](envelope.md) | one `meta.app` field written with two incompatible types — both sites carried as spans; field `field` |
+| E-META-PREFIX | error | check | [envelope.md](envelope.md) | two flat keys where one prefixes the other (`audit` vs `audit.origin`) — the nested projection cannot hold both; field `field` |
+| E-NAME-RESERVED | error | resolve | [grammar.md](grammar.md) | a node named `meta`, `data`, `sys`, `app`, or `ext` — envelope surfaces, never nodes; field `name` |
 | E-BRACE-MIXED | error | check | [grammar.md](grammar.md) | a braced value mixing ordinary data fields with reserved envelope roots (`data`, `meta` — `mime_type` left the list with D-2026-08-10-4) — wrap the data in `data = { … }`; never a silent reinterpretation (D-2026-08-09-1); field `field` |
 | E-PORT-TYPE | error | check | [grammar.md](grammar.md) | a value crossing a port against its PINNED type — an emission or injection whose precise type disagrees, or an edge whose two pinned ends disagree; `dyn` on either side passes (inference territory); fields `port`, `expected`, `found` |
 | E-PARTITION-MISMATCH | error | check | [execution-model.md](execution-model.md) | a join input arriving under a different partition than the join requires — an explicit re-key step is needed; reserved for the joins slice; fields `port`, `expected`, `found` |

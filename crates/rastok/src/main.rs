@@ -144,8 +144,16 @@ fn run(paths: &[String]) -> ExitCode {
             port: node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
             draft: Draft {
                 data: Data::materialized(Value::Scalar(Scalar::Text(line))),
-                mime_type: Some(String::from("text/plain")),
-                app: Namespace::new(),
+                ext: {
+                    let mut ext = Namespace::new();
+                    ext.insert(
+                        String::from("content_type"),
+                        rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(
+                            String::from("text/plain"),
+                        )),
+                    );
+                    ext
+                },
             },
             sequence: SubmissionSequence::Next,
         };

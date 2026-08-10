@@ -291,8 +291,7 @@ fn submission(text: &str) -> InboundSubmission {
         port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
         draft: Draft {
             data: Data::materialized(Value::Map(data)),
-            mime_type: None,
-            app: Namespace::new(),
+            ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
     }
@@ -506,8 +505,7 @@ fn interleave_battery(
         port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
         draft: Draft {
             data: Data::materialized(Value::Map(data)),
-            mime_type: None,
-            app: Namespace::new(),
+            ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
     };

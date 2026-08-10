@@ -142,7 +142,7 @@ impl PartialEq for Value {
 /// (`envelope.md` §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Encoding {
-    /// Opaque bytes; `mime_type` is the parse hint.
+    /// Opaque bytes; `meta.ext.content_type` names them externally.
     Raw,
     /// Avro-encoded document.
     Avro,
@@ -292,7 +292,6 @@ pub struct MetaSys {
     origin_id: Id,
     role: Role,
     graph_version: u64,
-    mime_type: Option<String>,
 }
 
 impl MetaSys {
@@ -306,7 +305,6 @@ impl MetaSys {
             origin_id: id,
             role: Role::Default,
             graph_version,
-            mime_type: None,
         }
     }
 
@@ -320,7 +318,6 @@ impl MetaSys {
             origin_id: parent.origin_id,
             role: Role::Default,
             graph_version,
-            mime_type: None,
         }
     }
 
@@ -328,14 +325,6 @@ impl MetaSys {
     #[must_use]
     pub fn with_role(mut self, role: Role) -> Self {
         self.role = role;
-        self
-    }
-
-    /// Attaches the content-type hint at mint time — the emission
-    /// constructor's runtime-interpreted hint (`envelope.md` §6).
-    #[must_use]
-    pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
-        self.mime_type = Some(mime_type.into());
         self
     }
 
@@ -371,12 +360,6 @@ impl MetaSys {
         self.graph_version
     }
 
-    /// MIME type of `data`'s content, when declared.
-    #[must_use]
-    pub fn mime_type(&self) -> Option<&str> {
-        self.mime_type.as_deref()
-    }
-
     /// Whether this envelope is a lineage root.
     #[must_use]
     pub fn is_root(&self) -> bool {
@@ -405,21 +388,25 @@ pub type Namespace = BTreeMap<String, MetaValue>;
 pub enum WriteTarget {
     /// A payload write; the empty path replaces `data` whole.
     Data(Vec<String>),
-    /// A field of the writable application namespace.
-    AppMeta(String),
-    /// A field of a custom writable namespace.
-    CustomMeta(String, String),
-    /// The content-type hint (`meta.sys.mime_type`'s one legal door).
-    MimeType,
+    /// A field of the application zone — the FLAT dotted key
+    /// (`"audit.origin"`); the projection nests, storage does not
+    /// (D-2026-08-10-1).
+    App(String),
+    /// A field of the external-context zone — flat key, vocabulary
+    /// owned by the connector sheets plus the standard
+    /// `content_type` (D-2026-08-10-4).
+    Ext(String),
 }
 
-/// Runtime and application metadata: the reserved `sys` spine, the
-/// default writable `app` namespace, and custom namespaces.
+/// Runtime and application metadata: the reserved `sys` spine and
+/// the two writable zones — `app` (application-owned) and `ext`
+/// (external-boundary context). Exactly three zones, no other root
+/// (D-2026-08-10-1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Meta {
     sys: MetaSys,
     app: Namespace,
-    custom: BTreeMap<String, Namespace>,
+    ext: Namespace,
 }
 
 impl Meta {
@@ -430,7 +417,7 @@ impl Meta {
         Self {
             sys,
             app: Namespace::new(),
-            custom: BTreeMap::new(),
+            ext: Namespace::new(),
         }
     }
 
@@ -441,10 +428,10 @@ impl Meta {
         self
     }
 
-    /// Adds a custom namespace at construction time.
+    /// Sets the external-context zone at construction time.
     #[must_use]
-    pub fn with_custom(mut self, name: impl Into<String>, namespace: Namespace) -> Self {
-        self.custom.insert(name.into(), namespace);
+    pub fn with_ext(mut self, ext: Namespace) -> Self {
+        self.ext = ext;
         self
     }
 
@@ -454,22 +441,17 @@ impl Meta {
         &self.sys
     }
 
-    /// The default writable namespace (`meta.x` reads `meta.app.x`).
+    /// The application zone — flat dotted keys, read/write.
     #[must_use]
     pub fn app(&self) -> &Namespace {
         &self.app
     }
 
-    /// Every custom namespace, in name order — what emission
-    /// inheritance walks.
-    pub fn customs(&self) -> impl Iterator<Item = (&String, &Namespace)> {
-        self.custom.iter()
-    }
-
-    /// A custom namespace by name.
+    /// The external-context zone — flat dotted keys, written by
+    /// boundaries and rewritable by handlers (D-2026-08-10-1).
     #[must_use]
-    pub fn custom(&self, name: &str) -> Option<&Namespace> {
-        self.custom.get(name)
+    pub fn ext(&self) -> &Namespace {
+        &self.ext
     }
 }
 
@@ -615,23 +597,31 @@ mod tests {
 
     #[test]
     fn an_envelope_exposes_meta_and_data_read_only() {
-        let sys = MetaSys::root(Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]), 1)
-            .with_mime_type("application/json");
+        let sys = MetaSys::root(Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]), 1);
         let mut app = Namespace::new();
         app.insert(
             String::from("session_key"),
             MetaValue::Scalar(Scalar::Text(String::from("s-1"))),
         );
+        let mut ext = Namespace::new();
+        ext.insert(
+            String::from("content_type"),
+            MetaValue::Scalar(Scalar::Text(String::from("application/json"))),
+        );
         let envelope = Envelope::new(
-            Meta::new(sys).with_app(app),
+            Meta::new(sys).with_app(app).with_ext(ext),
             Data::encoded(Encoding::Raw, *b"{}"),
         );
-        assert_eq!(envelope.meta().sys().mime_type(), Some("application/json"));
+        assert_eq!(
+            envelope.meta().ext().get("content_type"),
+            Some(&MetaValue::Scalar(Scalar::Text(String::from(
+                "application/json"
+            ))))
+        );
         assert_eq!(
             envelope.meta().app().get("session_key"),
             Some(&MetaValue::Scalar(Scalar::Text(String::from("s-1"))))
         );
-        assert_eq!(envelope.meta().custom("tenant"), None);
         assert_eq!(envelope.data(), &Data::encoded(Encoding::Raw, *b"{}"));
     }
 }

@@ -457,18 +457,15 @@ fn spine(envelope: &Envelope) -> Cbor {
         pairs.insert(4, Cbor::Text(sys.role().to_string()));
     }
     pairs.insert(5, Cbor::Uint(sys.graph_version()));
-    if let Some(mime) = sys.mime_type() {
-        pairs.insert(6, Cbor::Text(String::from(mime)));
-    }
+    // Spine key 6 is RETIRED (extend-only): the content type moved
+    // to the ext zone, sealed in key 9 (D-2026-08-10-4).
     pairs.insert(8, data_form(envelope.data()));
     let mut app_meta = Vec::new();
     for (field, value) in envelope.meta().app() {
         app_meta.push((String::from("app"), field.clone(), value));
     }
-    for (namespace, fields) in envelope.meta().customs() {
-        for (field, value) in fields {
-            app_meta.push((namespace.clone(), field.clone(), value));
-        }
+    for (field, value) in envelope.meta().ext() {
+        app_meta.push((String::from("ext"), field.clone(), value));
     }
     if !app_meta.is_empty() {
         app_meta.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));

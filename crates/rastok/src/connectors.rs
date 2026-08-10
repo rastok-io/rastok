@@ -472,8 +472,7 @@ graph real : App {
             port: crate::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Map(data)),
-                mime_type: None,
-                app: Namespace::new(),
+                ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
         }

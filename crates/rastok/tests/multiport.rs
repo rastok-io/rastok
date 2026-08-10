@@ -75,6 +75,19 @@ lab merge {
 }
 "#;
 
+/// The world's half of an Avro ingress: the transport's content
+/// type rides `meta.ext` (D-2026-08-10-4).
+fn avro_ext() -> rastok::envelope::Namespace {
+    let mut ext = rastok::envelope::Namespace::new();
+    ext.insert(
+        String::from("content_type"),
+        rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(String::from(
+            "application/avro",
+        ))),
+    );
+    ext
+}
+
 fn lab_passes(source: &str) {
     let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
     let runs = rastok::lab::run(
@@ -175,8 +188,7 @@ fn the_machine_verifies_the_ingress_port() {
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Scalar(Scalar::Text(String::from("go")))),
-            mime_type: None,
-            app: Namespace::new(),
+            ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
     };
@@ -207,8 +219,7 @@ fn the_inbound_record_carries_its_port_and_omits_the_default() {
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::encoded(Encoding::Raw, *b"go"),
-            mime_type: None,
-            app: Namespace::new(),
+            ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
     };
@@ -649,8 +660,7 @@ fn the_braced_record_is_physically_a_struct() {
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Scalar(Scalar::Int(1))),
-                mime_type: None,
-                app: Namespace::new(),
+                ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
         },
@@ -755,8 +765,7 @@ fn an_empty_brace_is_an_empty_record() {
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Scalar(Scalar::Int(1))),
-                mime_type: None,
-                app: Namespace::new(),
+                ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
         },
@@ -792,8 +801,7 @@ fn a_whole_data_write_is_the_payload_itself() {
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Scalar(Scalar::Text(String::from("gone")))),
-                mime_type: None,
-                app: Namespace::new(),
+                ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
         },
@@ -888,8 +896,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
                     String::from("v"),
                     Value::Scalar(Scalar::Int(1)),
                 )])),
-                mime_type: None,
-                app,
+                ext: app,
             },
             sequence: SubmissionSequence::Next,
         },
@@ -906,7 +913,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
         "the payload crosses untouched"
     );
     assert_eq!(
-        output.envelope.meta().app().get("trace"),
+        output.envelope.meta().ext().get("trace"),
         Some(&MetaValue::Scalar(Scalar::Text(String::from("x")))),
         "the writable metadata rides along"
     );
@@ -937,8 +944,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Scalar(Scalar::Int(1))),
-                    mime_type: None,
-                    app: Namespace::new(),
+                    ext: Namespace::new(),
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -1114,8 +1120,7 @@ fn boundary_outputs_carry_their_port() {
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Scalar(Scalar::Int(1))),
-                mime_type: None,
-                app: Namespace::new(),
+                ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
         },
@@ -1162,8 +1167,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
         port: rastok::node::Port::new("alpha").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Scalar(Scalar::Text(String::from("wrong")))),
-            mime_type: None,
-            app: Namespace::new(),
+            ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
     };
@@ -1512,8 +1516,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(data),
-                    mime_type: None,
-                    app: Namespace::new(),
+                    ext: Namespace::new(),
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -1560,8 +1563,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
                 port: rastok::node::Port::new("alpha").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Scalar(Scalar::Text(String::from("wrong")))),
-                    mime_type: None,
-                    app: Namespace::new(),
+                    ext: Namespace::new(),
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -1785,8 +1787,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(data),
-                    mime_type: None,
-                    app: Namespace::new(),
+                    ext: Namespace::new(),
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -1867,7 +1868,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     // before any CEL binding materializes. An Avro relay therefore
     // works; reading an Avro FIELD still faults, typed.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Encoding, Namespace};
+    use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -1884,8 +1885,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
-                mime_type: Some(String::from("application/avro")),
-                app: Namespace::new(),
+                ext: avro_ext(),
             },
             sequence: SubmissionSequence::Next,
         },
@@ -1902,9 +1902,11 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
         output.envelope.data()
     );
     assert_eq!(
-        output.envelope.meta().sys().mime_type(),
-        Some("application/avro"),
-        "the content-type hint rides along"
+        output.envelope.meta().ext().get("content_type"),
+        Some(&rastok::envelope::MetaValue::Scalar(
+            rastok::envelope::Scalar::Text(String::from("application/avro"))
+        )),
+        "the content type rides the ext zone"
     );
 }
 
@@ -1932,8 +1934,7 @@ fn a_spawn_failure_cannot_cross_a_pin() {
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Scalar(Scalar::Text(String::from("go")))),
-                mime_type: None,
-                app: Namespace::new(),
+                ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
         },
@@ -2069,7 +2070,7 @@ fn data_materializes_only_on_demand() {
     // opaque payload to decode: a `true` guard, a state write, and
     // an identity emission all leave Avro bytes untouched.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Encoding, Namespace};
+    use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -2085,8 +2086,7 @@ fn data_materializes_only_on_demand() {
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
-                    mime_type: Some(String::from("application/avro")),
-                    app: Namespace::new(),
+                    ext: avro_ext(),
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -2109,8 +2109,10 @@ fn data_materializes_only_on_demand() {
         }
     ));
     assert_eq!(
-        outputs[0].envelope.meta().sys().mime_type(),
-        Some("application/avro")
+        outputs[0].envelope.meta().ext().get("content_type"),
+        Some(&rastok::envelope::MetaValue::Scalar(
+            rastok::envelope::Scalar::Text(String::from("application/avro"))
+        ))
     );
     // A false guard consumes without decoding and without error.
     let (outputs, errors) = run(
@@ -2137,7 +2139,7 @@ fn short_circuits_never_demand_the_data() {
     // tree: a branch the evaluation never takes must never force an
     // opaque payload to decode, even though `data` appears in it.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Encoding, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Encoding, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -2153,8 +2155,7 @@ fn short_circuits_never_demand_the_data() {
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
-                    mime_type: Some(String::from("application/avro")),
-                    app: Namespace::new(),
+                    ext: avro_ext(),
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -2220,8 +2221,16 @@ fn the_carry_is_as_lazy_as_the_name() {
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::encoded(encoding, bytes.to_vec()),
-                    mime_type: Some(String::from("application/x-opaque")),
-                    app: Namespace::new(),
+                    ext: {
+                        let mut ext = Namespace::new();
+                        ext.insert(
+                            String::from("content_type"),
+                            rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(
+                                String::from("application/x-opaque"),
+                            )),
+                        );
+                        ext
+                    },
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -2242,9 +2251,11 @@ fn the_carry_is_as_lazy_as_the_name() {
             output.data()
         );
         assert_eq!(
-            output.meta().sys().mime_type(),
-            Some("application/x-opaque"),
-            "`{body}` must keep the content-type hint"
+            output.meta().ext().get("content_type"),
+            Some(&rastok::envelope::MetaValue::Scalar(
+                rastok::envelope::Scalar::Text(String::from("application/x-opaque"))
+            )),
+            "`{body}` must keep the content type"
         );
     };
     holds("      out = data");
@@ -2296,8 +2307,7 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::encoded(Encoding::Raw, *b"ok"),
-                mime_type: None,
-                app: Namespace::new(),
+                ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
         },
@@ -2386,8 +2396,7 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
                         (String::from("twin"), Value::Scalar(Scalar::Int(1))),
                         (String::from("twin"), Value::Scalar(Scalar::Int(2))),
                     ])),
-                    mime_type: None,
-                    app: Namespace::new(),
+                    ext: Namespace::new(),
                 },
                 sequence: SubmissionSequence::Next,
             },
@@ -2418,8 +2427,7 @@ fn the_conformance_judgement_is_matchable() {
         port: rastok::node::Port::new("alpha").unwrap(),
         draft: Draft {
             data: Data::materialized(data),
-            mime_type: None,
-            app: Namespace::new(),
+            ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
     };

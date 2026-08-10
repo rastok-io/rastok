@@ -117,16 +117,15 @@ fn spin(n: u32) {
 }
 
 fn submission(text: &str, marker: u8) -> InboundSubmission {
-    let mut app = Namespace::new();
+    let mut ext = Namespace::new();
     let _ = marker;
-    let _ = &mut app;
+    let _ = &mut ext;
     InboundSubmission {
         authority: IngressAuthority::single(Path::new(["pico"]).unwrap()),
         port: rastok_core::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Scalar(Scalar::Text(String::from(text)))),
-            mime_type: None,
-            app,
+            ext,
         },
         sequence: SubmissionSequence::Next,
     }

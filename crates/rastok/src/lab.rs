@@ -299,16 +299,14 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
                     runtime::to_envelope_value(&value)
                         .map_err(|fault| format!("the injection: {fault}"))?,
                 ),
-                mime_type: None,
-                app: Namespace::new(),
+                ext: Namespace::new(),
             })
         }
         EmitValue::FreshData(writes) | EmitValue::Patch(writes) => {
             // A draft is born a fresh STRUCT — the same physical form
             // the handler builders produce (`{…}` builds a struct).
             let mut data = crate::envelope::Value::Struct(Vec::new());
-            let mut app = Namespace::new();
-            let mut mime = None;
+            let mut ext = Namespace::new();
             for write in writes {
                 let value = cel::eval(&write.value, &empty)
                     .map_err(|error| format!("the injection: {error}"))?;
@@ -318,32 +316,27 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
                             .map_err(|fault| format!("the injection: {fault}"))?;
                         runtime::apply_struct_write(&mut data, path, leaf);
                     }
-                    WriteTarget::AppMeta(field) => {
-                        app.insert(
+                    WriteTarget::Ext(field) => {
+                        // The fixture is the world's half: it seeds
+                        // the external context (D-2026-08-10-1).
+                        ext.insert(
                             field.clone(),
                             runtime::to_meta_value(&value)
                                 .map_err(|fault| format!("the injection: {fault}"))?,
                         );
                     }
-                    WriteTarget::MimeType => match value {
-                        cel::Value::Text(text) => mime = Some(text),
-                        other => {
-                            return Err(format!(
-                                "the injection: mime_type takes text, got {other:?}"
-                            ));
-                        }
-                    },
-                    WriteTarget::CustomMeta(..) => {
+                    WriteTarget::App(_) => {
+                        // Refused at check; unreachable from a
+                        // validated lab.
                         return Err(String::from(
-                            "the injection: a draft has no custom namespaces yet",
+                            "the injection: `meta.app` is the graph's zone, never the world's",
                         ));
                     }
                 }
             }
             Ok(Draft {
                 data: Data::materialized(data),
-                mime_type: mime,
-                app,
+                ext,
             })
         }
         EmitValue::Nothing => Err(String::from("`nothing` injects nothing")),

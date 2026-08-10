@@ -525,8 +525,7 @@ impl<'plan> TransactionExecutor<'plan> {
                             port,
                             index,
                         );
-                        let mut sys =
-                            MetaSys::emission(id, input.meta().sys(), self.graph_version.0);
+                        let sys = MetaSys::emission(id, input.meta().sys(), self.graph_version.0);
                         // The content-type hint: an explicit write
                         // wins; unchanged content keeps the input's;
                         // rebuilt content carries none.
@@ -558,21 +557,11 @@ impl<'plan> TransactionExecutor<'plan> {
                                     )
                                     .map_err(PinViolation::into_fault)?;
                                 }
-                                if let Some(mime) = built
-                                    .mime
-                                    .as_deref()
-                                    .or_else(|| input.meta().sys().mime_type())
-                                {
-                                    sys = sys.with_mime_type(mime);
-                                }
                                 input.data().clone()
                             }
                             BuiltData::Value(value) => {
                                 crossing_pins_hold(self.plan, &from, own_pin, &value)
                                     .map_err(PinViolation::into_fault)?;
-                                if let Some(mime) = &built.mime {
-                                    sys = sys.with_mime_type(mime.clone());
-                                }
                                 Data::materialized(to_envelope_value(&value)?)
                             }
                             BuiltData::Envelope(value) => {
@@ -583,18 +572,12 @@ impl<'plan> TransactionExecutor<'plan> {
                                     &from_envelope_value(&value),
                                 )
                                 .map_err(PinViolation::into_fault)?;
-                                if let Some(mime) = &built.mime {
-                                    sys = sys.with_mime_type(mime.clone());
-                                }
                                 Data::materialized(value)
                             }
                         };
-                        // Writable namespaces travel whole — the
+                        // The writable zones travel whole — the
                         // builder's overlays are already folded in.
-                        let mut meta = Meta::new(sys).with_app(built.app);
-                        for (name, namespace) in built.customs {
-                            meta = meta.with_custom(name, namespace);
-                        }
+                        let meta = Meta::new(sys).with_app(built.app).with_ext(built.ext);
                         buffer.push(Emission {
                             port: port.clone(),
                             index,
@@ -820,12 +803,11 @@ impl<'plan> TransactionExecutor<'plan> {
 pub(crate) struct Built {
     /// The payload outcome.
     pub(crate) data: BuiltData,
-    /// The outgoing application namespace.
+    /// The outgoing application zone.
     pub(crate) app: envelope::Namespace,
-    /// The outgoing custom namespaces.
-    pub(crate) customs: BTreeMap<String, envelope::Namespace>,
-    /// An explicit `mime_type =` write, when present.
-    pub(crate) mime: Option<String>,
+    /// The outgoing external-context zone — `content_type` already
+    /// derived from the payload decision, explicit writes folded.
+    pub(crate) ext: envelope::Namespace,
 }
 
 /// A builder's payload verdict.
@@ -847,39 +829,63 @@ fn emitted_content(
     base: &BTreeMap<String, cel::Value>,
     slot: &DataSlot<'_>,
 ) -> Result<Option<Built>, Fault> {
-    let inherited = |data: BuiltData| Built {
-        data,
-        app: input.meta().app().clone(),
-        customs: input
-            .meta()
-            .customs()
-            .map(|(name, namespace)| (name.clone(), namespace.clone()))
-            .collect(),
-        mime: None,
+    // The atomic order of D-2026-08-10-4: copy the zones, decide
+    // the payload, DERIVE `content_type` from that decision (a kept
+    // witness keeps it, fresh data strikes it), then let explicit
+    // writes win.
+    let inherited = |data: BuiltData, fresh: bool| {
+        let mut ext = input.meta().ext().clone();
+        if fresh {
+            ext.remove("content_type");
+        }
+        Built {
+            data,
+            app: input.meta().app().clone(),
+            ext,
+        }
     };
     match emission {
         PlanEmission::Nothing => Ok(None),
-        PlanEmission::Identity => Ok(Some(inherited(BuiltData::Unchanged))),
+        PlanEmission::Identity => Ok(Some(inherited(BuiltData::Unchanged, false))),
         PlanEmission::Data(expr) => {
             // No spelling-dependent special case, in EITHER
             // direction: the struct witness rides `cel::Value` and
             // the laziness witness rides it too. A whole payload
             // arriving uninspected — `out = data`, `out = copy`, the
-            // taken arm of a ternary — ships the REPRESENTATION:
-            // bytes, encoding, cache, and content-type hint,
-            // whatever the spelling. A composite embedding the
-            // witness resolves it.
+            // taken arm of a ternary — ships the REPRESENTATION,
+            // content type included; anything else is FRESH data and
+            // strikes it (D-2026-08-10-4).
             let value = eval_lazy(expr, base, slot)?;
             if matches!(value, cel::Value::Payload) {
-                return Ok(Some(inherited(BuiltData::Unchanged)));
+                return Ok(Some(inherited(BuiltData::Unchanged, false)));
             }
             let value = resolve_payload(value, slot)?;
-            Ok(Some(inherited(BuiltData::Value(value))))
+            Ok(Some(inherited(BuiltData::Value(value), true)))
         }
         PlanEmission::Patch(writes) | PlanEmission::Replace(writes) => {
             let replace = matches!(emission, PlanEmission::Replace(_));
-            let mut built = inherited(BuiltData::Unchanged);
-            let mut data: Option<envelope::Value> = if replace {
+            // The whole-data CARRY: a builder whose only payload
+            // write is the bare witness (`data = data`,
+            // `data = a.data`) keeps the representation — the
+            // decision follows the VALUE, not the spelling.
+            let data_writes: alloc::vec::Vec<usize> = writes
+                .iter()
+                .enumerate()
+                .filter(|(_, write)| matches!(&write.target, envelope::WriteTarget::Data(_)))
+                .map(|(index, _)| index)
+                .collect();
+            let carry = if let [only] = data_writes.as_slice() {
+                let write = &writes[*only];
+                matches!(&write.target, envelope::WriteTarget::Data(path) if path.is_empty())
+                    && matches!(eval_lazy(&write.expr, base, slot)?, cel::Value::Payload)
+            } else {
+                false
+            };
+            // Fresh iff the payload changes: any data write (patch)
+            // or the fresh-build form (replace) — except the carry.
+            let fresh = !carry && (replace || !data_writes.is_empty());
+            let mut built = inherited(BuiltData::Unchanged, fresh);
+            let mut data: Option<envelope::Value> = if replace && !carry {
                 // A fresh STRUCT — the physical form of a braced
                 // record (D-2026-08-09-1).
                 Some(envelope::Value::Struct(Vec::new()))
@@ -887,6 +893,10 @@ fn emitted_content(
                 None
             };
             for write in writes {
+                if carry && matches!(&write.target, envelope::WriteTarget::Data(_)) {
+                    // The carried representation IS the payload.
+                    continue;
+                }
                 let value = resolve_payload(eval_lazy(&write.expr, base, slot)?, slot)?;
                 match &write.target {
                     envelope::WriteTarget::Data(path) => {
@@ -903,24 +913,14 @@ fn emitted_content(
                         };
                         apply_struct_write(current, path, to_envelope_value(&value)?);
                     }
-                    envelope::WriteTarget::AppMeta(field) => {
+                    envelope::WriteTarget::App(field) => {
                         built.app.insert(field.clone(), to_meta_value(&value)?);
                     }
-                    envelope::WriteTarget::CustomMeta(namespace, field) => {
-                        built
-                            .customs
-                            .entry(namespace.clone())
-                            .or_default()
-                            .insert(field.clone(), to_meta_value(&value)?);
+                    envelope::WriteTarget::Ext(field) => {
+                        // Explicit writes come LAST in the atomic
+                        // order — they win over the derivation.
+                        built.ext.insert(field.clone(), to_meta_value(&value)?);
                     }
-                    envelope::WriteTarget::MimeType => match value {
-                        cel::Value::Text(mime) => built.mime = Some(mime),
-                        other => {
-                            return Err(Fault::Unrepresentable(format!(
-                                "mime_type takes text, got {other:?}"
-                            )));
-                        }
-                    },
                 }
             }
             if let Some(value) = data {
@@ -1420,32 +1420,53 @@ pub fn meta_value(meta: &Meta) -> cel::Value {
         String::from("graph_version"),
         cel::Value::Int(i64::try_from(meta.sys().graph_version()).unwrap_or(i64::MAX)),
     );
-    sys.insert(
-        String::from("mime_type"),
-        match meta.sys().mime_type() {
-            Some(mime) => cel::Value::Text(String::from(mime)),
-            None => cel::Value::Null,
-        },
-    );
     let mut root = BTreeMap::new();
-    // The read alias mirrors the write alias: `meta.x` reads
-    // `meta.app.x` — app fields surface at the meta root. Precedence
-    // on a name collision: `sys`, `app`, and custom NAMESPACES shadow
-    // the alias (they are inserted after), and the shadowed app field
-    // stays reachable at its unambiguous `meta.app.x` address.
-    for (field, value) in &app {
-        root.insert(field.clone(), value.clone());
-    }
-    root.insert(String::from("app"), cel::Value::Map(app));
+    // Exactly three zones, no alias, no root fields
+    // (D-2026-08-10-1): storage is FLAT dotted keys, the projection
+    // NESTS by splitting on dots so `meta.app.audit.origin` reads
+    // naturally.
+    root.insert(String::from("app"), nested_zone(&app));
+    root.insert(String::from("ext"), nested_zone_meta(meta.ext()));
     root.insert(String::from("sys"), cel::Value::Map(sys));
-    for (name, namespace) in meta.customs() {
-        let mut fields = BTreeMap::new();
-        for (field, value) in namespace {
-            fields.insert(field.clone(), from_meta_value(value));
+    cel::Value::Map(root)
+}
+
+/// Nests a zone's flat dotted keys into the CEL map tree the
+/// projection exposes — one storage form, nested views derived.
+fn nested_from_pairs(pairs: impl Iterator<Item = (String, cel::Value)>) -> cel::Value {
+    let mut root: BTreeMap<String, cel::Value> = BTreeMap::new();
+    for (key, value) in pairs {
+        let segments: alloc::vec::Vec<&str> = key.split('.').collect();
+        let mut cursor = &mut root;
+        for segment in &segments[..segments.len() - 1] {
+            let entry = cursor
+                .entry(String::from(*segment))
+                .or_insert_with(|| cel::Value::Map(BTreeMap::new()));
+            match entry {
+                cel::Value::Map(inner) => cursor = inner,
+                // Prefix-freedom is a checker invariant; a leaf met
+                // on the way is unreachable from validated plans —
+                // keep the projection total by shadowing.
+                other => {
+                    *other = cel::Value::Map(BTreeMap::new());
+                    let cel::Value::Map(inner) = other else {
+                        unreachable!("just inserted a map")
+                    };
+                    cursor = inner;
+                }
+            }
         }
-        root.insert(name.clone(), cel::Value::Map(fields));
+        cursor.insert(String::from(segments[segments.len() - 1]), value);
     }
     cel::Value::Map(root)
+}
+
+fn nested_zone(zone: &BTreeMap<String, cel::Value>) -> cel::Value {
+    nested_from_pairs(zone.iter().map(|(k, v)| (k.clone(), v.clone())))
+}
+
+fn nested_zone_meta(zone: &envelope::Namespace) -> cel::Value {
+    nested_from_pairs(zone.iter().map(|(k, v)| (k.clone(), from_meta_value(v))))
 }
 
 pub(crate) fn from_envelope_value(value: &envelope::Value) -> cel::Value {

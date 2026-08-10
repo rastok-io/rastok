@@ -32,6 +32,18 @@ pub const E_RESOLVE_UNKNOWN: Code = Code::new("E-RESOLVE-UNKNOWN");
 pub const E_PORT_UNKNOWN: Code = Code::new("E-PORT-UNKNOWN");
 /// Diagnostic for a write reaching the read-only `meta.sys` namespace.
 pub const E_META_SYS_READONLY: Code = Code::new("E-META-SYS-READONLY");
+/// A metadata path outside the three zones, or outside a zone's
+/// declared vocabulary (D-2026-08-10-1); field `path`.
+pub const E_META_ZONE: Code = Code::new("E-META-ZONE");
+/// One `meta.app` field written with two incompatible types; both
+/// sites carried as spans; field `field`.
+pub const E_META_TYPE: Code = Code::new("E-META-TYPE");
+/// Two flat keys where one prefixes the other — `audit` vs
+/// `audit.origin`; field `field`.
+pub const E_META_PREFIX: Code = Code::new("E-META-PREFIX");
+/// A reserved word used as a node name (`meta`, `data`, `sys`,
+/// `app`, `ext`); field `name`.
+pub const E_NAME_RESERVED: Code = Code::new("E-NAME-RESERVED");
 /// Diagnostic adapted from the CEL chain, span mapped to the source.
 pub const E_CEL_EXPR: Code = Code::new("E-CEL-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
@@ -131,7 +143,15 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
         return None;
     }
     let app = apps[0];
-    let mut checker = Checker { bag, registry };
+    let mut checker = Checker {
+        bag,
+        registry,
+        ext_fields: std::collections::BTreeSet::new(),
+        app_writes: Vec::new(),
+        meta_reads: Vec::new(),
+        app_schema: BTreeMap::new(),
+        in_lab: false,
+    };
     // No top-level declaration is silently ignored, and none is
     // silently dropped either: until unit composition and a real
     // liveness analysis exist, every additional top-level declaration
@@ -151,6 +171,11 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
         }
     }
     let checked_app = checker.graph(app);
+    // The production schema seals HERE — from the deployed graph's
+    // writes alone. Everything the Lab compiles below is checked
+    // against it and can extend nothing (D-2026-08-10-1).
+    checker.seal_app_schema();
+    checker.in_lab = true;
     // A lab is a logical corpus: fragments sharing a name merge into
     // one; a duplicate simulation name inside the merged corpus
     // refuses — it would shadow silently.
@@ -190,15 +215,47 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
             }
         }
     }
+    checker.in_lab = false;
+    checker.verify_meta_reads();
+    let app_schema: Vec<(String, cel::Type)> = checker
+        .app_schema
+        .iter()
+        .map(|(field, ty)| (field.clone(), ty.clone()))
+        .collect();
+    let mut ext_schema: Vec<(String, cel::Type)> =
+        vec![(String::from("content_type"), cel::Type::Text)];
+    ext_schema.extend(
+        checker
+            .ext_fields
+            .iter()
+            .map(|field| (field.clone(), cel::Type::Dyn)),
+    );
     Some(Hir {
         app: checked_app,
         labs,
+        app_schema,
+        ext_schema,
     })
 }
 
 struct Checker<'bag, 'registry> {
     bag: &'bag mut Bag,
     registry: &'registry stdlib::Registry,
+    /// The `ext` vocabulary the instantiated connectors' sheets
+    /// declare — the standard `content_type` is always known.
+    ext_fields: std::collections::BTreeSet<String>,
+    /// The graph's `meta.app` writes — the INFERENCE source: field,
+    /// written type, and site (D-2026-08-10-1). Lab writes never
+    /// land here.
+    app_writes: Vec<(String, cel::Type, Span)>,
+    /// Every `meta.*` read compiled anywhere in the unit, verified
+    /// against the sealed schema once inference closes.
+    meta_reads: Vec<(Vec<String>, Span)>,
+    /// The sealed production schema — graph writes only.
+    app_schema: BTreeMap<String, cel::Type>,
+    /// Whether the checker is inside the Lab surface: lab writes
+    /// never extend the production schema.
+    in_lab: bool,
 }
 
 impl Checker<'_, '_> {
@@ -218,7 +275,10 @@ impl Checker<'_, '_> {
     /// source with offset-mapped spans.
     fn cel(&mut self, expr: &CelExpr, signature: &cel::Signature) -> Option<cel::Tree> {
         match cel::compile(&expr.text, signature) {
-            Ok(tree) => Some(tree),
+            Ok(tree) => {
+                self.collect_meta_reads(&tree.root, expr.span);
+                Some(tree)
+            }
             Err(diagnostics) => {
                 let base = expr.span.range().start;
                 for diagnostic in diagnostics {
@@ -579,10 +639,18 @@ impl Checker<'_, '_> {
                     // mid-simulation.
                     if let EmitValue::Patch(writes) | EmitValue::FreshData(writes) = &value
                         && writes.iter().any(|write| {
-                            matches!(write.target, crate::envelope::WriteTarget::CustomMeta(..))
+                            matches!(write.target, crate::envelope::WriteTarget::App(_))
                         })
                     {
-                        self.deferred("a custom namespace injection", target.span);
+                        // The fixture is the WORLD's half: world
+                        // context enters through `ext`; `app` is the
+                        // application's own zone and a Lab never
+                        // writes it (D-2026-08-10-1).
+                        self.meta_zone_refusal(
+                            target.span,
+                            "meta.app",
+                            "an injection seeds `meta.ext` (the world's context); the graph writes `meta.app` itself",
+                        );
                         continue;
                     }
                     // A pinned input holds its injections to the
@@ -1119,7 +1187,19 @@ impl Checker<'_, '_> {
 
     fn push_node(&mut self, graph: &mut Graph, node: Node, span: Span) {
         let name = node.path.to_string();
-        if graph
+        if matches!(name.as_str(), "meta" | "data" | "sys" | "app" | "ext") {
+            self.bag.push(
+                Diagnostic::new(
+                    E_NAME_RESERVED,
+                    Phase::Resolve,
+                    format!(
+                        "`{name}` is a reserved word — it names an envelope surface, never a node"
+                    ),
+                )
+                .with_span(span)
+                .with_field("name", name),
+            );
+        } else if graph
             .nodes
             .iter()
             .any(|existing| existing.path == node.path)
@@ -2101,6 +2181,221 @@ impl Checker<'_, '_> {
         );
     }
 
+    /// A metadata path outside the three-zone model, or outside a
+    /// zone's vocabulary (D-2026-08-10-1).
+    fn meta_zone_refusal(&mut self, span: Span, path: &str, detail: &str) {
+        self.bag.push(
+            Diagnostic::new(E_META_ZONE, Phase::Check, detail)
+                .with_span(span)
+                .with_field("path", path.to_string()),
+        );
+    }
+
+    /// Whether an `ext` field belongs to the declared vocabulary:
+    /// the standard `content_type` plus whatever the instantiated
+    /// connectors' sheets declare (none in the M0 catalogue yet).
+    fn ext_field_known(&self, field: &str) -> bool {
+        field == "content_type" || self.ext_fields.contains(field)
+    }
+
+    /// Records every `meta.*` path a compiled expression reads —
+    /// verified against the sealed schema once inference closes.
+    /// A DYNAMIC meta access (`meta["…"]`) refuses on the spot: the
+    /// grid only holds if the checker sees every key.
+    fn collect_meta_reads(&mut self, expr: &cel::Expr, span: Span) {
+        match expr {
+            cel::Expr::Path(segments) => {
+                if segments.first().is_some_and(|root| root == "meta") {
+                    self.meta_reads.push((segments.clone(), span));
+                }
+            }
+            cel::Expr::Index { base, index } => {
+                if matches!(&**base, cel::Expr::Path(segments)
+                    if segments.first().is_some_and(|root| root == "meta"))
+                {
+                    self.meta_zone_refusal(
+                        span,
+                        "meta[…]",
+                        "dynamic metadata access defeats the static grid — spell the key",
+                    );
+                }
+                self.collect_meta_reads(base, span);
+                self.collect_meta_reads(index, span);
+            }
+            cel::Expr::Unary { expr, .. } => self.collect_meta_reads(expr, span),
+            cel::Expr::Binary { left, right, .. } => {
+                self.collect_meta_reads(left, span);
+                self.collect_meta_reads(right, span);
+            }
+            cel::Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                self.collect_meta_reads(cond, span);
+                self.collect_meta_reads(then, span);
+                self.collect_meta_reads(otherwise, span);
+            }
+            cel::Expr::Call { args, .. } => {
+                for arg in args {
+                    self.collect_meta_reads(arg, span);
+                }
+            }
+            cel::Expr::List(items) => {
+                for item in items {
+                    self.collect_meta_reads(item, span);
+                }
+            }
+            cel::Expr::MapLit(pairs) => {
+                for (_, value) in pairs {
+                    self.collect_meta_reads(value, span);
+                }
+            }
+            cel::Expr::Literal(_) => {}
+        }
+    }
+
+    /// Seals the production `app` schema from the GRAPH's writes:
+    /// types unify (Dyn is inference territory), a conflict refuses
+    /// naming both sites, and the flat keys must be prefix-free
+    /// (D-2026-08-10-1).
+    fn seal_app_schema(&mut self) {
+        let mut sites: BTreeMap<String, (cel::Type, Span)> = BTreeMap::new();
+        for (field, ty, span) in core::mem::take(&mut self.app_writes) {
+            match sites.get(&field) {
+                None => {
+                    sites.insert(field, (ty, span));
+                }
+                Some((known, first)) => {
+                    let unified = match (known, &ty) {
+                        (cel::Type::Dyn, other) => Some(other.clone()),
+                        (other, cel::Type::Dyn) => Some(other.clone()),
+                        (a, b) if a == b => Some(a.clone()),
+                        _ => None,
+                    };
+                    match unified {
+                        Some(unified) => {
+                            let first = *first;
+                            sites.insert(field, (unified, first));
+                        }
+                        None => {
+                            let (known, first) = (known.clone(), *first);
+                            self.bag.push(
+                                Diagnostic::new(
+                                    E_META_TYPE,
+                                    Phase::Check,
+                                    format!(
+                                        "`meta.app.{field}` is written as {known:?} and as {ty:?} — one field, one type"
+                                    ),
+                                )
+                                .with_span(span)
+                                .with_span(first)
+                                .with_field("field", field.clone()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        self.app_schema = sites
+            .into_iter()
+            .map(|(field, (ty, _))| (field, ty))
+            .collect();
+        // Prefix-freedom: `audit` and `audit.origin` cannot coexist
+        // — one is a leaf, the other makes it a branch.
+        let keys: Vec<String> = self.app_schema.keys().cloned().collect();
+        for pair in keys.windows(2) {
+            if pair[1].starts_with(&pair[0]) && pair[1].as_bytes().get(pair[0].len()) == Some(&b'.')
+            {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_META_PREFIX,
+                        Phase::Check,
+                        format!(
+                            "`meta.app.{}` is a leaf and `meta.app.{}` makes it a branch — flat keys are prefix-free",
+                            pair[0], pair[1]
+                        ),
+                    )
+                    .with_field("field", pair[0].clone()),
+                );
+            }
+        }
+    }
+
+    /// Verifies every collected `meta.*` read against the sealed
+    /// vocabulary — the CEL grid, statically: three zones only, and
+    /// a name written nowhere refuses.
+    fn verify_meta_reads(&mut self) {
+        const SYS_FIELDS: &[&str] = &[
+            "id",
+            "parent_id",
+            "origin_id",
+            "role",
+            "graph_version",
+            // Tier-2 birth stamps — spec'd fields, absent outside
+            // their aspect scope (envelope.md §1.2).
+            "saga_id",
+            "saga_stack",
+            "loop_id",
+            "loop_stack",
+            "iter_count",
+        ];
+        let reads = core::mem::take(&mut self.meta_reads);
+        for (segments, span) in reads {
+            let parts: Vec<&str> = segments.iter().map(String::as_str).collect();
+            match parts.as_slice() {
+                ["meta"] | ["meta", "app"] | ["meta", "ext"] | ["meta", "sys"] => {}
+                ["meta", "sys", field, ..] => {
+                    if !SYS_FIELDS.contains(field) {
+                        self.meta_zone_refusal(
+                            span,
+                            &format!("meta.sys.{field}"),
+                            "the sys spine has five fields plus the aspect birth stamps — nothing else",
+                        );
+                    }
+                }
+                ["meta", "app", rest @ ..] => {
+                    let field = rest.join(".");
+                    let known = self.app_schema.contains_key(&field)
+                        || self.app_schema.keys().any(|key| {
+                            key.starts_with(&field)
+                                && key.as_bytes().get(field.len()) == Some(&b'.')
+                        });
+                    if !known {
+                        self.meta_zone_refusal(
+                            span,
+                            &format!("meta.app.{field}"),
+                            "the graph writes this field nowhere — a name written nowhere cannot be read (the CEL grid)",
+                        );
+                    }
+                }
+                ["meta", "ext", rest @ ..] => {
+                    let field = rest.join(".");
+                    let known = self.ext_field_known(&field)
+                        || self.ext_fields.iter().any(|key| {
+                            key.starts_with(&field)
+                                && key.as_bytes().get(field.len()) == Some(&b'.')
+                        });
+                    if !known {
+                        self.meta_zone_refusal(
+                            span,
+                            &format!("meta.ext.{field}"),
+                            "no connector sheet declares this `ext` field",
+                        );
+                    }
+                }
+                ["meta", ..] => {
+                    self.meta_zone_refusal(
+                        span,
+                        &segments.join("."),
+                        "metadata has exactly three zones — `meta.sys`, `meta.app`, `meta.ext` (D-2026-08-10-1)",
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn emit_value(
         &mut self,
         value: &SynValue,
@@ -2142,8 +2437,9 @@ impl Checker<'_, '_> {
     }
 
     /// Classifies a braced body ONCE — the reform's rule (decision
-    /// D-2026-08-09-1). The reserved roots `data`, `meta`, and
-    /// `mime_type` form a closed, normative list:
+    /// D-2026-08-09-1). The reserved roots `data` and `meta` form a
+    /// closed, normative list (`mime_type` left it with
+    /// D-2026-08-10-4):
     ///
     /// - no reserved root at the top level → a DATA RECORD: every
     ///   field, at any depth, builds the new `data` (a fresh
@@ -2170,8 +2466,7 @@ impl Checker<'_, '_> {
                 StructEntry::Block { name, .. } => Some(name.text.as_str()),
             }
         }
-        let reserved =
-            |entry: &StructEntry| matches!(root(entry), Some("data" | "meta" | "mime_type"));
+        let reserved = |entry: &StructEntry| matches!(root(entry), Some("data" | "meta"));
         let any_reserved = body.entries.iter().any(reserved);
         let all_reserved = body.entries.iter().all(reserved);
         if any_reserved && !all_reserved {
@@ -2235,33 +2530,43 @@ impl Checker<'_, '_> {
                     let segments: Vec<&str> = path.iter().map(String::as_str).collect();
                     // The writable surface, resolved here once: the
                     // runtime executes a verdict, never re-reads a
-                    // string. `meta.x` is the specified alias of
-                    // `meta.app.x`; `meta.sys` has no write.
+                    // string. Exactly three zones — no alias, no
+                    // custom root (D-2026-08-10-1).
                     let target = match segments.as_slice() {
                         ["data", rest @ ..] => crate::envelope::WriteTarget::Data(
                             rest.iter().map(ToString::to_string).collect(),
                         ),
-                        ["mime_type"] => crate::envelope::WriteTarget::MimeType,
                         ["meta", "sys", ..] => {
                             self.meta_sys_write(key.span);
                             continue;
                         }
-                        ["meta"] | ["meta", "app"] => {
-                            self.deferred("a whole-namespace meta write", key.span);
+                        ["meta"] | ["meta", "app"] | ["meta", "ext"] => {
+                            self.deferred("a whole-zone meta write", key.span);
                             continue;
                         }
-                        ["meta", "app", field] => {
-                            crate::envelope::WriteTarget::AppMeta((*field).to_string())
+                        ["meta", "app", rest @ ..] => {
+                            crate::envelope::WriteTarget::App(rest.join("."))
+                            // The write's TYPE joins the inference
+                            // after the value compiles, below.
                         }
-                        ["meta", field] => {
-                            crate::envelope::WriteTarget::AppMeta((*field).to_string())
+                        ["meta", "ext", rest @ ..] => {
+                            let field = rest.join(".");
+                            if !self.ext_field_known(&field) {
+                                self.meta_zone_refusal(
+                                    key.span,
+                                    &format!("meta.ext.{field}"),
+                                    "no connector sheet declares this `ext` field — the application's own vocabulary belongs to `meta.app`",
+                                );
+                                continue;
+                            }
+                            crate::envelope::WriteTarget::Ext(field)
                         }
-                        ["meta", namespace, field] => crate::envelope::WriteTarget::CustomMeta(
-                            (*namespace).to_string(),
-                            (*field).to_string(),
-                        ),
                         ["meta", ..] => {
-                            self.deferred("a nested metadata write", key.span);
+                            self.meta_zone_refusal(
+                                key.span,
+                                &segments.join("."),
+                                "metadata has exactly three zones — `meta.sys`, `meta.app`, `meta.ext` (D-2026-08-10-1); there is no bare field and no custom root",
+                            );
                             continue;
                         }
                         bare => crate::envelope::WriteTarget::Data(
@@ -2271,19 +2576,28 @@ impl Checker<'_, '_> {
                     match value {
                         SynValue::Cel(expr) => {
                             if let Some(tree) = self.cel(expr, signature) {
-                                if matches!(target, crate::envelope::WriteTarget::MimeType)
+                                if matches!(&target, crate::envelope::WriteTarget::Ext(field) if field == "content_type")
                                     && !matches!(tree.ty, cel::Type::Text | cel::Type::Dyn)
                                 {
                                     self.bag.push(
                                         Diagnostic::new(
                                             E_CEL_EXPR,
                                             Phase::Check,
-                                            "mime_type takes text",
+                                            "content_type takes text",
                                         )
                                         .with_span(key.span)
                                         .with_field("detail", "the value type is not text"),
                                     );
                                     continue;
+                                }
+                                if let crate::envelope::WriteTarget::App(field) = &target
+                                    && !self.in_lab
+                                {
+                                    self.app_writes.push((
+                                        field.clone(),
+                                        tree.ty.clone(),
+                                        key.span,
+                                    ));
                                 }
                                 writes.push(FieldWrite {
                                     target,
@@ -2583,9 +2897,7 @@ impl Checker<'_, '_> {
                     shape = DataShape::Known(write.value.ty.clone(), Some(&write.value));
                 }
                 crate::envelope::WriteTarget::Data(_) => shape = DataShape::Struct,
-                crate::envelope::WriteTarget::AppMeta(_)
-                | crate::envelope::WriteTarget::CustomMeta(..)
-                | crate::envelope::WriteTarget::MimeType => {}
+                crate::envelope::WriteTarget::App(_) | crate::envelope::WriteTarget::Ext(_) => {}
             }
         }
         shape

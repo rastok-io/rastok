@@ -110,6 +110,23 @@ pub enum PlanValidationError {
     /// and the codec's tables do not carry one. Refused so
     /// `encode ⇒ decode` stays total.
     UnrepresentableConstant,
+    /// A metadata write outside the travelling zone schema — the
+    /// checker's grid, re-verified without a Registry
+    /// (D-2026-08-10-1).
+    UnknownMetaField {
+        /// `"app"` or `"ext"`.
+        zone: &'static str,
+        /// The flat dotted field.
+        field: alloc::string::String,
+    },
+    /// Two flat keys where one prefixes the other — the nested
+    /// projection cannot hold both.
+    MetaPrefixCollision {
+        /// The shorter (leaf) key.
+        leaf: alloc::string::String,
+        /// The longer (branch-making) key.
+        branch: alloc::string::String,
+    },
     /// A reference to a connector port beyond the default trio. The
     /// RESOLVED table travels in the plan (the future needs it), but
     /// this machine's Partner seam does not carry the port yet —
@@ -161,6 +178,14 @@ impl core::fmt::Display for PlanValidationError {
             Self::DuplicateNodePath { path } => {
                 write!(f, "invalid plan: duplicate node path `{path}`")
             }
+            Self::UnknownMetaField { zone, field } => write!(
+                f,
+                "invalid plan: a `meta.{zone}.{field}` write outside the travelling schema"
+            ),
+            Self::MetaPrefixCollision { leaf, branch } => write!(
+                f,
+                "invalid plan: `{leaf}` is a leaf and `{branch}` makes it a branch — flat keys are prefix-free"
+            ),
             Self::DuplicatePort { node, port } => {
                 write!(f, "invalid plan: duplicate port `{port}` on `{node}`")
             }
@@ -317,7 +342,58 @@ fn kind_rank(kind: &NodeKind) -> u8 {
     }
 }
 
+/// A metadata write target must sit inside the travelling zone
+/// schema — the Registry-less half of the CEL grid.
+fn meta_target_known(
+    plan: &ExecutionPlan,
+    target: &crate::envelope::WriteTarget,
+) -> Result<(), PlanValidationError> {
+    match target {
+        crate::envelope::WriteTarget::Data(_) => Ok(()),
+        crate::envelope::WriteTarget::App(field) => {
+            if plan.app_schema.iter().any(|(known, _)| known == field) {
+                Ok(())
+            } else {
+                Err(PlanValidationError::UnknownMetaField {
+                    zone: "app",
+                    field: field.clone(),
+                })
+            }
+        }
+        crate::envelope::WriteTarget::Ext(field) => {
+            if plan.ext_schema.iter().any(|(known, _)| known == field) {
+                Ok(())
+            } else {
+                Err(PlanValidationError::UnknownMetaField {
+                    zone: "ext",
+                    field: field.clone(),
+                })
+            }
+        }
+    }
+}
+
+/// Flat keys are prefix-free per zone (D-2026-08-10-1) — the nested
+/// projection cannot hold a leaf and a branch under one name.
+fn schema_prefix_free(
+    schema: &[(alloc::string::String, cel::Type)],
+) -> Result<(), PlanValidationError> {
+    let mut keys: alloc::vec::Vec<&str> = schema.iter().map(|(field, _)| field.as_str()).collect();
+    keys.sort_unstable();
+    for pair in keys.windows(2) {
+        if pair[1].starts_with(pair[0]) && pair[1].as_bytes().get(pair[0].len()) == Some(&b'.') {
+            return Err(PlanValidationError::MetaPrefixCollision {
+                leaf: alloc::string::String::from(pair[0]),
+                branch: alloc::string::String::from(pair[1]),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    schema_prefix_free(&plan.app_schema)?;
+    schema_prefix_free(&plan.ext_schema)?;
     // Uniqueness first, GLOBALLY, then canonical order: a collection
     // that is both duplicated and disordered refuses as the
     // DUPLICATE — the dedicated variant names the defect wherever
@@ -632,6 +708,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         Emission::Patch(writes) | Emission::Replace(writes) => {
                             for write in writes {
                                 expr_canonical(&write.expr.root)?;
+                                meta_target_known(plan, &write.target)?;
                             }
                         }
                         Emission::Identity | Emission::Nothing => {}

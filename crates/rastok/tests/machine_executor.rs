@@ -99,14 +99,18 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
         String::from("label"),
         envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("greeting"))),
     );
-    let mut tenant = envelope::Namespace::new();
-    tenant.insert(
-        String::from("org"),
+    let mut ext = envelope::Namespace::new();
+    ext.insert(
+        String::from("tenant.org"),
         envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("acme"))),
     );
-    let meta = Meta::new(MetaSys::root(id, 1).with_mime_type("text/plain"))
+    ext.insert(
+        String::from("content_type"),
+        envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("text/plain"))),
+    );
+    let meta = Meta::new(MetaSys::root(id, 1))
         .with_app(app.clone())
-        .with_custom("tenant", tenant.clone());
+        .with_ext(ext.clone());
     let delivery = Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>relay.in"),
@@ -121,27 +125,26 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
     assert_ne!(sys.id(), parent.id());
     assert_eq!(sys.parent_id(), Some(parent.id()));
     assert_eq!(sys.origin_id(), parent.origin_id());
-    // …carrying everything the ancestry attached.
+    // …carrying everything the ancestry attached — the app zone,
+    // the ext zone, and (unchanged content) its content type.
     assert_eq!(emitted.meta().app(), &app);
-    assert_eq!(emitted.meta().custom("tenant"), Some(&tenant));
-    assert_eq!(
-        sys.mime_type(),
-        Some("text/plain"),
-        "unchanged content keeps its content-type hint"
-    );
+    assert_eq!(emitted.meta().ext(), &ext);
     assert_eq!(emitted.data(), delivery.envelope.data());
 }
 
 #[test]
 fn the_meta_projection_carries_the_whole_spine() {
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
-    let mut tenant = envelope::Namespace::new();
-    tenant.insert(
-        String::from("org"),
+    let mut ext = envelope::Namespace::new();
+    ext.insert(
+        String::from("tenant.org"),
         envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("acme"))),
     );
-    let meta =
-        Meta::new(MetaSys::root(id, 3).with_mime_type("text/plain")).with_custom("tenant", tenant);
+    ext.insert(
+        String::from("content_type"),
+        envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("text/plain"))),
+    );
+    let meta = Meta::new(MetaSys::root(id, 3)).with_ext(ext);
     let cel::Value::Map(root) = meta_value(&meta) else {
         panic!("expected a map projection");
     };
@@ -152,12 +155,18 @@ fn the_meta_projection_carries_the_whole_spine() {
     assert_eq!(sys["parent_id"], cel::Value::Null, "a root has no parent");
     assert_eq!(sys["role"], cel::Value::Text(String::from("default")));
     assert_eq!(sys["graph_version"], cel::Value::Int(3));
+    // The five-field spine carries no content type; the ext zone
+    // does — and its flat dotted keys NEST in the projection.
+    assert!(!sys.contains_key("mime_type"));
+    let cel::Value::Map(ext) = &root["ext"] else {
+        panic!("the ext zone projects");
+    };
     assert_eq!(
-        sys["mime_type"],
+        ext["content_type"],
         cel::Value::Text(String::from("text/plain"))
     );
-    let cel::Value::Map(tenant) = &root["tenant"] else {
-        panic!("custom namespaces project");
+    let cel::Value::Map(tenant) = &ext["tenant"] else {
+        panic!("flat dotted keys nest in the projection");
     };
     assert_eq!(tenant["org"], cel::Value::Text(String::from("acme")));
 }
@@ -186,43 +195,45 @@ fn the_activation_pattern_is_not_the_causal_trigger() {
 }
 
 #[test]
-fn a_custom_namespace_shadows_the_app_alias_at_the_root() {
+fn the_projection_has_exactly_three_roots() {
+    // No alias, no custom root (D-2026-08-10-1): the projection
+    // exposes `sys`, `app`, and `ext` — nothing else, whatever the
+    // zones contain.
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
     let mut app = envelope::Namespace::new();
     app.insert(
-        String::from("audit"),
+        String::from("audit.origin"),
         envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("app-value"))),
     );
-    let mut audit = envelope::Namespace::new();
-    audit.insert(
-        String::from("origin"),
-        envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("custom"))),
-    );
-    let meta = Meta::new(MetaSys::root(id, 1))
-        .with_app(app)
-        .with_custom("audit", audit);
+    let meta = Meta::new(MetaSys::root(id, 1)).with_app(app);
     let cel::Value::Map(root) = meta_value(&meta) else {
         panic!("a map projection");
     };
-    // The namespace wins the root name; the shadowed app field
-    // keeps its unambiguous address.
-    assert!(matches!(root.get("audit"), Some(cel::Value::Map(_))));
+    assert_eq!(
+        root.keys().collect::<Vec<_>>(),
+        vec!["app", "ext", "sys"],
+        "three zones, no other root"
+    );
+    // The flat dotted key nests under its zone.
     let Some(cel::Value::Map(app)) = root.get("app") else {
-        panic!("the app namespace projects");
+        panic!("the app zone projects");
+    };
+    let Some(cel::Value::Map(audit)) = app.get("audit") else {
+        panic!("dotted keys nest");
     };
     assert_eq!(
-        app.get("audit"),
+        audit.get("origin"),
         Some(&cel::Value::Text(String::from("app-value")))
     );
 }
 
 #[test]
 fn metadata_writes_land_where_the_spec_says() {
-    // The fifth review's confirmed misroutes: `meta.flag` faulted
-    // instead of aliasing `meta.app.flag`; `meta.audit.flag`
-    // silently wrote into app; `mime_type` became a data field;
-    // a metadata-only patch transcoded the payload.
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.flag = \"yes\"\n        meta.audit.origin = \"trace\"\n        mime_type = \"text/x-rastok\"\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    // The three-zone model (D-2026-08-10-1/-4): `meta.app.flag`
+    // lands in the app zone as a flat dotted key,
+    // `meta.ext.content_type` is the standard ext field, and a
+    // metadata-only patch never transcodes the payload.
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.flag = \"yes\"\n        meta.app.audit.origin = \"trace\"\n        meta.ext.content_type = \"text/x-rastok\"\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
@@ -241,40 +252,32 @@ fn metadata_writes_land_where_the_spec_says() {
     };
     let outcome = executor.fire(slot, &delivery, &state).unwrap();
     let emitted = &outcome.record.emissions[0].envelope;
-    // The alias: meta.flag is meta.app.flag.
+    // The app zone holds its flat dotted keys.
     assert_eq!(
         emitted.meta().app().get("flag"),
         Some(&envelope::MetaValue::Scalar(envelope::Scalar::Text(
             String::from("yes")
         )))
     );
-    // The custom namespace is its own, never folded into app.
-    assert!(emitted.meta().app().get("origin").is_none());
     assert_eq!(
-        emitted
-            .meta()
-            .custom("audit")
-            .and_then(|namespace| namespace.get("origin")),
+        emitted.meta().app().get("audit.origin"),
         Some(&envelope::MetaValue::Scalar(envelope::Scalar::Text(
             String::from("trace")
         )))
     );
-    // mime_type feeds the spine hint, not a data field.
-    assert_eq!(emitted.meta().sys().mime_type(), Some("text/x-rastok"));
+    // The standard ext field takes the explicit write.
+    assert_eq!(
+        emitted.meta().ext().get("content_type"),
+        Some(&envelope::MetaValue::Scalar(envelope::Scalar::Text(
+            String::from("text/x-rastok")
+        )))
+    );
     // A metadata-only patch never transcodes: the encoded bytes
     // ship untouched.
     assert_eq!(
         emitted.data(),
         &Data::encoded(Encoding::Raw, *b"payload"),
         "no structural read, no transcode"
-    );
-    // And the read alias mirrors the write alias.
-    let cel::Value::Map(root) = meta_value(emitted.meta()) else {
-        panic!("a map projection");
-    };
-    assert_eq!(
-        root.get("flag"),
-        Some(&cel::Value::Text(String::from("yes")))
     );
 }
 
