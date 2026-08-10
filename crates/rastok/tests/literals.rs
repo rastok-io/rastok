@@ -1300,3 +1300,24 @@ fn the_shape_gate_owns_the_body_and_speaks_once() {
         "the path argument is underlined, not the content type: {hit:?}"
     );
 }
+
+#[test]
+fn empty_parentheses_speak_once_through_the_checker() {
+    // `()` is a WRITTEN form: the parser stays silent and the shape
+    // gate produces the one specialized diagnostic.
+    for (body, expect) in [
+        ("text()", "takes no parentheses"),
+        ("base64()", "empty parentheses"),
+        ("asset()", "the path is required"),
+    ] {
+        let source = format!(
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+        );
+        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("refuses");
+        assert_eq!(bag.diagnostics().len(), 1, "`{body}` speaks once: {bag:?}");
+        assert!(
+            bag.diagnostics()[0].message().contains(expect),
+            "`{body}` says why: {bag:?}"
+        );
+    }
+}

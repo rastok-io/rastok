@@ -1654,7 +1654,10 @@ impl<'src> Parser<'src, '_> {
         } else {
             None
         };
-        if args.is_empty() && body.is_none() {
+        if !parens && args.is_empty() && body.is_none() {
+            // A WRITTEN `()` is a form — the checker owns its
+            // specialized refusal; only a tag with nothing at all
+            // is the parser's fault.
             self.error_expected("arguments or a block");
         }
         Value::Tagged(TaggedValue {
