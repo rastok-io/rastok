@@ -1057,16 +1057,27 @@ fn content_type_arguments_are_literals_only() {
     for body in [
         "base64(\"image/\" + \"png\") { AAEC }",
         "asset(\"a\" + \".bin\")",
+        // The grammar's exact shapes: wrapped strings, empty
+        // parens, trailing commas, and parenthesized text all
+        // refuse (D-2026-08-10-6).
+        "base64((\"image/png\")) { AAEC }",
+        "base64() { AAEC }",
+        "base64(\"image/png\",) { AAEC }",
+        "text() {\n      hi\n    }",
     ] {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("literal only");
+        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("shape exactness");
+        // ONE contractual diagnostic — never a cascade.
+        assert_eq!(
+            bag.diagnostics().len(),
+            1,
+            "`{body}` must refuse exactly once: {bag:?}"
+        );
         assert!(
-            bag.diagnostics()
-                .iter()
-                .any(|d| d.message().contains("LITERAL") || d.code().as_str() == "E-ASSET"),
-            "`{body}`: {bag:?}"
+            !bag.diagnostics()[0].spans().is_empty(),
+            "`{body}` located: {bag:?}"
         );
     }
 }
@@ -1133,5 +1144,53 @@ fn nested_content_type_gets_its_own_diagnostic() {
             .iter()
             .any(|d| d.code().as_str() == "E-CONTENT-TYPE"),
         "no placement noise before the arity truth: {bag:?}"
+    );
+}
+
+#[test]
+fn alias_chains_meet_their_own_budget() {
+    // A 500-link alias chain refuses TYPED — never a compiler stack
+    // exhaustion (the alias-follow budget is 256).
+    let mut source = String::from("type T0 = text\n");
+    for i in 1..500 {
+        source.push_str(&format!("type T{i} = T{}\n", i - 1));
+    }
+    source.push_str(
+        "\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+    );
+    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the alias budget");
+    assert!(
+        bag.diagnostics().iter().any(|d| {
+            d.code().as_str() == "E-TYPE-BUDGET"
+                && d.fields().iter().any(|(name, _)| *name == "aliases")
+        }),
+        "{bag:?}"
+    );
+    // And a chain UNDER the budget still resolves as pure sugar.
+    let mut source = String::from("type T0 = text\n");
+    for i in 1..100 {
+        source.push_str(&format!("type T{i} = T{}\n", i - 1));
+    }
+    source.push_str(
+        "\ngraph g : App {\n  operator o {\n    input evt : T99\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n",
+    );
+    compile(&[source.as_str()], &Registry::m0()).expect("a hundred links resolve");
+}
+
+#[test]
+fn a_misplaced_malformed_call_refuses_once_for_the_malformation() {
+    // The pipeline order: shape → arguments → position. A nested
+    // call with a NON-STRING argument gets the argument truth, one
+    // diagnostic, never E-CONTENT-TYPE noise.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"image/\" + \"png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("argument truth first");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    assert!(
+        bag.diagnostics()[0].message().contains("STRING literal"),
+        "{bag:?}"
+    );
+    assert!(
+        bag.diagnostics()[0].code().as_str() != "E-CONTENT-TYPE",
+        "no placement noise: {bag:?}"
     );
 }

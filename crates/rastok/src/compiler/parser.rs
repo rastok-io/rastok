@@ -1600,15 +1600,41 @@ impl<'src> Parser<'src, '_> {
             span: token.span,
         };
         let mut args = Vec::new();
+        let mut parens = false;
+        let mut trailing_comma = false;
         if self.eat(TokenKind::LParen).is_some() {
+            parens = true;
             loop {
-                if matches!(self.peek().kind, TokenKind::RParen | TokenKind::Eof) {
+                let next = self.peek();
+                if matches!(next.kind, TokenKind::RParen | TokenKind::Eof) {
                     break;
                 }
-                args.push(self.value(&PAREN_POSITION));
+                trailing_comma = false;
+                // A BARE string token followed by `,` or `)` is the
+                // grammar's STRING — kept apart from CEL so wrapped
+                // or concatenated spellings cannot impersonate it.
+                if next.kind == TokenKind::Str {
+                    let raw = String::from(next.text);
+                    let span = next.span;
+                    let start = span.range().start;
+                    self.bump();
+                    if matches!(self.peek().kind, TokenKind::Comma | TokenKind::RParen) {
+                        args.push(Value::StrLit { raw, span });
+                    } else {
+                        // Part of a larger expression — hand the
+                        // WHOLE span back to the CEL sub-parser.
+                        self.peeked = None;
+                        self.lexer.skip_to(start);
+                        self.last_end = start;
+                        args.push(self.value(&PAREN_POSITION));
+                    }
+                } else {
+                    args.push(self.value(&PAREN_POSITION));
+                }
                 if self.eat(TokenKind::Comma).is_none() {
                     break;
                 }
+                trailing_comma = true;
             }
             self.expect(TokenKind::RParen, "`)`");
         }
@@ -1631,7 +1657,13 @@ impl<'src> Parser<'src, '_> {
         if args.is_empty() && body.is_none() {
             self.error_expected("arguments or a block");
         }
-        Value::Tagged(TaggedValue { tag, args, body })
+        Value::Tagged(TaggedValue {
+            tag,
+            args,
+            parens,
+            trailing_comma,
+            body,
+        })
     }
 
     /// One brace, punctuation decides (D-2026-08-10-6): `}` is the

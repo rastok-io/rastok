@@ -513,6 +513,17 @@ pub enum Value {
     /// keep their SOURCE spelling and span: the checker decodes them
     /// through the ONE string rule (CEL's) and owns duplicates.
     BracedMap(Vec<MapEntry>),
+    /// One bare STRING token in a tag-argument position — the
+    /// grammar's `STRING`, kept apart from CEL so `("x")` and
+    /// `"a" + "b"` cannot impersonate it (D-2026-08-10-6). The raw
+    /// spelling keeps its quotes; the checker decodes it by the one
+    /// CEL string rule.
+    StrLit {
+        /// As written, quotes included.
+        raw: String,
+        /// Where it was written.
+        span: Span,
+    },
     /// `json <json-value>` — one complete JSON value, read by the
     /// house reader, always `variant` (D-2026-08-10-6/-7).
     Json {
@@ -546,6 +557,13 @@ pub struct TaggedValue {
     pub tag: Name,
     /// Parenthesized arguments, possibly empty.
     pub args: Vec<Value>,
+    /// Whether a parenthesis list was WRITTEN — `base64()` and
+    /// `base64` differ, and the grammar knows which tags admit
+    /// which (D-2026-08-10-6).
+    pub parens: bool,
+    /// Whether the argument list ended on a comma — the exact
+    /// grammar has no trailing comma in tag calls.
+    pub trailing_comma: bool,
     /// The optional block body.
     pub body: Option<TaggedBody>,
 }
