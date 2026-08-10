@@ -1020,3 +1020,118 @@ fn broken_type_declarations_refuse_even_unused() {
         "{bag:?}"
     );
 }
+
+#[test]
+fn map_keys_keep_their_string_semantics() {
+    // A duplicate key refuses AT CHECK, on the SECOND key — the
+    // registered code, never an internal-plan surprise.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\": 1, \"a\": 2 } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("duplicates refuse");
+    let hit = bag
+        .diagnostics()
+        .iter()
+        .find(|d| d.code().as_str() == "E-DUP-KEY")
+        .unwrap_or_else(|| panic!("{bag:?}"));
+    assert!(!hit.spans().is_empty(), "the second key is underlined");
+    // Escapes decode by the ONE string rule: the RKG map spelling
+    // and the CEL map spelling are the same program.
+    let rkg = hash_of("{ \"a\\nb\": 1 }");
+    let cel = hash_of("({ \"a\\nb\": 1 })");
+    assert_eq!(rkg, cel, "one escape semantics, one hash");
+    // And the decoded key is REALLY the newline form: two escaped
+    // twins collide as duplicates.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\\nb\": 1, \"a\\nb\": 2 } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("decoded twins collide");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-DUP-KEY"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn content_type_arguments_are_literals_only() {
+    // An expression dressed as a string refuses — the grammar says
+    // STRING, and `"image/" + "png"` is not one.
+    for body in [
+        "base64(\"image/\" + \"png\") { AAEC }",
+        "asset(\"a\" + \".bin\")",
+    ] {
+        let source = format!(
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+        );
+        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("literal only");
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|d| d.message().contains("LITERAL") || d.code().as_str() == "E-ASSET"),
+            "`{body}`: {bag:?}"
+        );
+    }
+}
+
+#[test]
+fn alias_and_bare_spellings_share_the_node_budget() {
+    // A Named node is REPLACED by its expansion, never counted on
+    // top: the aliased and bare spellings have exactly the same
+    // acceptance at the boundary (D-2026-08-10-8).
+    let at_budget_bare = format!(
+        "type Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n",
+        (0..4096).map(|_| "text").collect::<Vec<_>>().join(" | ")
+    );
+    let at_budget_aliased = format!(
+        "type T = text\ntype Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n",
+        (0..4096).map(|_| "T").collect::<Vec<_>>().join(" | ")
+    );
+    assert_eq!(
+        compile(&[at_budget_bare.as_str()], &Registry::m0()).is_ok(),
+        compile(&[at_budget_aliased.as_str()], &Registry::m0()).is_ok(),
+        "sugar carries no budget weight"
+    );
+    let over_bare = format!(
+        "type Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n",
+        (0..4097).map(|_| "text").collect::<Vec<_>>().join(" | ")
+    );
+    let over_aliased = format!(
+        "type T = text\ntype Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n",
+        (0..4097).map(|_| "T").collect::<Vec<_>>().join(" | ")
+    );
+    assert!(compile(&[over_bare.as_str()], &Registry::m0()).is_err());
+    assert!(compile(&[over_aliased.as_str()], &Registry::m0()).is_err());
+}
+
+#[test]
+fn nested_content_type_gets_its_own_diagnostic() {
+    // The dedicated code, on the TAG's span — never E-META-ZONE.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("placement");
+    let hit = bag
+        .diagnostics()
+        .iter()
+        .find(|d| d.code().as_str() == "E-CONTENT-TYPE")
+        .unwrap_or_else(|| panic!("{bag:?}"));
+    assert!(
+        hit.fields()
+            .iter()
+            .any(|(k, v)| *k == "tag" && *v == "base64"),
+        "{hit:?}"
+    );
+    assert!(!hit.spans().is_empty(), "the tag is underlined");
+    // Arity refuses FIRST: a malformed call is malformed wherever
+    // it sits.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"a\", \"b\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("arity");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.message().contains("at most one content-type argument")),
+        "{bag:?}"
+    );
+    assert!(
+        !bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-CONTENT-TYPE"),
+        "no placement noise before the arity truth: {bag:?}"
+    );
+}

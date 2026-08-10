@@ -504,13 +504,15 @@ pub enum Value {
     /// `{ … }` — a braced body, the record literal in every value
     /// position. In ENVELOPE positions the CHECKER classifies it
     /// once: no reserved root at the top level builds a data record;
-    /// only reserved roots (`data`, `meta`, `mime_type`) build or
+    /// only reserved roots (`data`, `meta`) build or
     /// patch the envelope; a mix refuses with a dedicated
     /// diagnostic. Elsewhere the body is simply a record.
     Braced(StructBody),
     /// `{ "k": v, … }` — the map literal, decided by its `:`
-    /// punctuation; `{:}` is the empty map (D-2026-08-10-6).
-    BracedMap(Vec<(String, Value)>),
+    /// punctuation; `{:}` is the empty map (D-2026-08-10-6). Keys
+    /// keep their SOURCE spelling and span: the checker decodes them
+    /// through the ONE string rule (CEL's) and owns duplicates.
+    BracedMap(Vec<MapEntry>),
     /// `json <json-value>` — one complete JSON value, read by the
     /// house reader, always `variant` (D-2026-08-10-6/-7).
     Json {
@@ -523,6 +525,18 @@ pub enum Value {
     Nothing(Span),
     /// `jq { … }`, `bounded(64)`, `exponential { … }`, …
     Tagged(TaggedValue),
+}
+
+/// One `"key": value` entry of a braced map.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapEntry {
+    /// The key as WRITTEN — quotes and escapes included; decoded at
+    /// check by the CEL string rule.
+    pub key: CelExpr,
+    /// The key's location.
+    pub span: Span,
+    /// The entry's value.
+    pub value: Value,
 }
 
 /// `TAG_KW ( "(" args ")" )? ( "{" body "}" )?`

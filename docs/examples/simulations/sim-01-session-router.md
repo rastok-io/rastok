@@ -19,7 +19,7 @@
 | The call-closed rule : late response discarded-and-journaled | execution-model.md §6.3 |
 | `on_timeout = bypass` (default) : the instance lives | execution-model.md §6.4 |
 | `advance` = discrete sweep (dated events in date order, zero-time computation) | execution-model.md §8 |
-| Fixture seeds via `meta.app` (never `meta.sys` — A2) | envelope.md §6 |
+| Fixture seeds via `meta.ext` (never `meta.sys` — A2) | envelope.md §6 |
 | CEL guard on typed pinned input ; absent-field grid row 1 | grammar.md, CEL references |
 | Per-hop journal entries : arrival seq, partition key, committed_at | envelope.md §7 |
 
@@ -28,7 +28,7 @@
 ```rastok
 graph sim01 : App {
 
-  partition session { key = meta.app.user_id; lifetime = duration("2h") }
+  partition session { key = meta.ext.user_id; lifetime = duration("2h") }
 
   connector teams : HttpServer {
     path   = "/api/messages"
@@ -91,7 +91,7 @@ lab sim01 {
       }                                                          // → the Connector's timeout machinery works
 
       teams.out = {
-        meta.ext.user_id = "alice"        // fixture seeds via meta.app — A2 (meta ⇒ full form)
+        meta.ext.user_id = "alice"        // the world's half seeds meta.ext — A2
         data = { kind = "message", text = "Bonjour" }
       }
 
@@ -117,7 +117,7 @@ Symbolic ids (`H` = blake3 truncated to 128 bits). Virtual clock starts at
 t=0  E0 born at inbound
        id        = H( "teams" ‖ 0 )                      ← root recipe
        parent_id = ∅          origin_id = E0.id           role = default
-       graph_version = 1      mime_type = null (structured value)
+       graph_version = 1      ext.content_type = absent (structured value)
 
      mailbox session=alice ◄─ E0 (arrival seq 0 in this box — journaled)
 

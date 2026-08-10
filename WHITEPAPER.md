@@ -1043,7 +1043,7 @@ operator session_metric per session {
     out = {
       meta.app.tenant_plan = tenant.?plan_tier.orValue("free")   // cross-partition read, with default
       meta.app.session_id = session.key                // current partition's key
-      meta.trigger_id  = meta.sys.id                   // current envelope's derived id
+      meta.app.trigger_id = meta.sys.id                // current envelope's derived id
       meta.app.count      = count                      // my own state (new value, imperative)
     }
   }

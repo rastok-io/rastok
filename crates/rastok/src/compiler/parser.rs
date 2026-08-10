@@ -1659,12 +1659,20 @@ impl<'src> Parser<'src, '_> {
                             self.bump();
                         }
                         TokenKind::Str => {
-                            let key = String::from(token.text.trim_matches('"'));
+                            let key = CelExpr {
+                                text: String::from(token.text),
+                                span: token.span,
+                            };
+                            let span = token.span;
                             self.bump();
                             if self.expect(TokenKind::Colon, "`:` (a map entry)").is_none() {
                                 break;
                             }
-                            entries.push((key, self.value(&STRUCT_POSITION)));
+                            entries.push(crate::compiler::syntax::MapEntry {
+                                key,
+                                span,
+                                value: self.value(&STRUCT_POSITION),
+                            });
                         }
                         TokenKind::Ident => {
                             self.error_expected(

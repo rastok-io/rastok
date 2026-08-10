@@ -60,6 +60,9 @@ pub const E_TYPE_DUP: Code = Code::new("E-TYPE-DUP");
 /// width; the MEASURED value rides the diagnostic; fields `name` +
 /// `depth`/`nodes`/`count` (D-2026-08-10-8).
 pub const E_TYPE_BUDGET: Code = Code::new("E-TYPE-BUDGET");
+/// A content-typed byte form outside whole-payload position
+/// (D-2026-08-10-5); field `tag`.
+pub const E_CONTENT_TYPE: Code = Code::new("E-CONTENT-TYPE");
 
 /// Why a type declaration refuses — one variant per rule, each with
 /// its own code, span, and measured value.
@@ -2357,23 +2360,7 @@ impl Checker<'_, '_> {
         use crate::compiler::syntax::TaggedBody;
         let content_type = match tagged.args.as_slice() {
             [] => None,
-            [SynValue::Cel(expr)] => {
-                let text = expr.text.trim();
-                if text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {
-                    Some(String::from(&text[1..text.len() - 1]))
-                } else {
-                    self.bag.push(
-                        Diagnostic::new(
-                            E_CEL_EXPR,
-                            Phase::Check,
-                            "base64 takes one literal content-type string",
-                        )
-                        .with_span(tagged.tag.span)
-                        .with_field("detail", "the argument is not a string literal"),
-                    );
-                    return None;
-                }
-            }
+            [SynValue::Cel(expr)] => Some(self.string_literal(expr)?),
             _ => {
                 self.bag.push(
                     Diagnostic::new(
@@ -2512,11 +2499,16 @@ impl Checker<'_, '_> {
             return Err(TypeRefusal::DepthBudget { measured: depth });
         }
         for base in &ty.alternatives {
-            // Every alternative is one expanded node — a wide union
-            // spends its budget like a wide struct.
-            *nodes += 1;
-            if *nodes > MAX_NODES {
-                return Err(TypeRefusal::NodeBudget { measured: *nodes });
+            // Every STRUCTURAL alternative is one expanded node — a
+            // wide union spends its budget like a wide struct. A
+            // Named reference is transparent: its EXPANSION is
+            // counted, the name itself never is (sugar carries no
+            // weight — D-2026-08-10-8).
+            if !matches!(base, BaseType::Named(_)) {
+                *nodes += 1;
+                if *nodes > MAX_NODES {
+                    return Err(TypeRefusal::NodeBudget { measured: *nodes });
+                }
             }
             match base {
                 BaseType::Named(name) => {
@@ -2609,28 +2601,31 @@ impl Checker<'_, '_> {
                     .with_field("path", path.to_string()),
             );
         };
-        let literal = |value: &SynValue| -> Option<String> {
-            if let SynValue::Cel(expr) = value {
-                let text = expr.text.trim();
-                if text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {
-                    return Some(String::from(&text[1..text.len() - 1]));
-                }
-            }
-            None
-        };
         let (path, content_type) = match tagged.args.as_slice() {
-            [path] => (literal(path), None),
-            [path, ct] => {
-                let Some(ct) = literal(ct) else {
+            [path] => {
+                let SynValue::Cel(expr) = path else {
                     refuse(
                         self,
                         E_ASSET,
-                        String::from("the content type must be a string literal"),
+                        String::from("the asset path must be a string literal"),
                         "",
                     );
                     return None;
                 };
-                (literal(path), Some(ct))
+                (self.string_literal(expr), None)
+            }
+            [path, ct] => {
+                let (SynValue::Cel(path_expr), SynValue::Cel(ct_expr)) = (path, ct) else {
+                    refuse(
+                        self,
+                        E_ASSET,
+                        String::from("asset takes string literals only"),
+                        "",
+                    );
+                    return None;
+                };
+                let ct = self.string_literal(ct_expr)?;
+                (self.string_literal(path_expr), Some(ct))
             }
             _ => {
                 refuse(
@@ -2803,16 +2798,48 @@ impl Checker<'_, '_> {
                 None
             }
             SynValue::Tagged(tagged) => {
+                // Arity refuses FIRST — a malformed call is a
+                // malformed call wherever it sits; only a
+                // well-formed content-typed form gets the placement
+                // rule, on ITS OWN span.
                 let content_typed = match tagged.tag.text.as_str() {
+                    "base64" if tagged.args.len() > 1 => {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_CEL_EXPR,
+                                Phase::Check,
+                                "base64 takes at most one content-type argument",
+                            )
+                            .with_span(tagged.tag.span)
+                            .with_field("detail", "too many arguments"),
+                        );
+                        return None;
+                    }
+                    "asset" if tagged.args.len() > 2 => {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_ASSET,
+                                Phase::Check,
+                                "asset(path, content_type?) — one path, at most one type",
+                            )
+                            .with_span(tagged.tag.span)
+                            .with_field("path", String::new()),
+                        );
+                        return None;
+                    }
                     "base64" => !tagged.args.is_empty(),
                     "asset" => tagged.args.len() > 1,
                     _ => false,
                 };
                 if content_typed {
-                    self.meta_zone_refusal(
-                        at,
-                        "content_type",
-                        "a nested field has no `meta.ext` of its own — the content-typed form is whole-payload only",
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTENT_TYPE,
+                            Phase::Check,
+                            "a content type qualifies the WHOLE payload — a nested field has no `meta.ext` of its own",
+                        )
+                        .with_span(tagged.tag.span)
+                        .with_field("tag", tagged.tag.text.clone()),
                     );
                     return None;
                 }
@@ -2844,20 +2871,78 @@ impl Checker<'_, '_> {
     /// entry goes through [`Self::nested_value_tree`].
     fn map_value_tree(
         &mut self,
-        entries: &[(String, SynValue)],
+        entries: &[crate::compiler::syntax::MapEntry],
         signature: &cel::Signature,
         at: Span,
     ) -> Option<cel::Tree> {
-        let mut pairs = Vec::new();
-        for (map_key, entry) in entries {
-            let tree = self.nested_value_tree(entry, signature, at)?;
-            pairs.push((map_key.clone(), tree.root));
+        let mut pairs: Vec<(String, cel::Expr, cel::Type)> = Vec::new();
+        for entry in entries {
+            // ONE string semantics: the key decodes through CEL —
+            // `"a\nb"` here and `{"a\nb": 1}` inside a CEL span are
+            // the same key, the same hash.
+            let key = self.string_literal(&entry.key)?;
+            if pairs.iter().any(|(known, _, _)| known == &key) {
+                // A duplicate refuses HERE, at the SECOND key — the
+                // registered static rule, never an internal-plan
+                // surprise downstream.
+                self.bag.push(
+                    Diagnostic::new(
+                        E_DUP_KEY,
+                        Phase::Check,
+                        format!("the map key `{key}` is already present"),
+                    )
+                    .with_span(entry.span)
+                    .with_field("detail", key),
+                );
+                return None;
+            }
+            let tree = self.nested_value_tree(&entry.value, signature, at)?;
+            pairs.push((key, tree.root, tree.ty));
         }
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        // CEL's own MapLit inference (join over the value types) —
+        // `{ "k": 1 }` here and inside a CEL span are ONE program,
+        // one type, one hash.
+        let mut values = cel::Type::Dyn;
+        for (index, (_, _, ty)) in pairs.iter().enumerate() {
+            if index == 0 {
+                values = ty.clone();
+            } else if values != *ty {
+                values = cel::Type::Dyn;
+            }
+        }
         Some(cel::Tree {
-            root: cel::Expr::MapLit(pairs),
-            ty: cel::Type::Dyn,
+            root: cel::Expr::MapLit(
+                pairs
+                    .into_iter()
+                    .map(|(key, root, _)| (key, root))
+                    .collect(),
+            ),
+            ty: cel::Type::Map(Box::new(values)),
         })
+    }
+
+    /// Compiles an expression that MUST be one text literal — map
+    /// keys and the STRING arguments of `asset`/`base64`. The CEL
+    /// compiler owns the escape rule; an expression, however
+    /// string-shaped its spelling, refuses.
+    fn string_literal(&mut self, expr: &CelExpr) -> Option<String> {
+        let tree = self.cel(expr, &cel::Signature::new())?;
+        match tree.root {
+            cel::Expr::Literal(cel::Value::Text(text)) => Some(text),
+            _ => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CEL_EXPR,
+                        Phase::Check,
+                        "one string LITERAL is required here — not an expression",
+                    )
+                    .with_span(expr.span)
+                    .with_field("detail", "the value is not a text literal"),
+                );
+                None
+            }
+        }
     }
 
     /// Whether an `ext` field belongs to the declared vocabulary:
