@@ -1181,24 +1181,10 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
                 }
                 #[allow(clippy::cast_possible_truncation)]
                 let scale = scale_wide as i32;
-                if value.unsigned_abs() >= 10_i128.pow(crate::json::MAX_DIGITS) as u128 {
-                    return Err(err("decimal digits"));
-                }
-                if value % 10 == 0 {
-                    // Trailing zeros were stripped at construction;
-                    // zero itself is the integer 0.
-                    return Err(err("decimal minimal scale"));
-                }
-                if scale <= 0 {
-                    let mut expanded = Some(value);
-                    for _ in 0..scale.unsigned_abs() {
-                        expanded = expanded.and_then(|v| v.checked_mul(10));
-                    }
-                    if expanded.is_some_and(|v| i64::try_from(v).is_ok()) {
-                        // An int-representable value hiding in the
-                        // decimal domain — two byte forms, one value.
-                        return Err(err("decimal integer domain"));
-                    }
+                // ONE shared rule with the validator — encode ⇒
+                // decode has no gap to hide in.
+                if !crate::json::dynamic_decimal_well_formed(value, scale) {
+                    return Err(err("decimal form"));
                 }
                 Ok(cel::Value::Decimal {
                     unscaled: value,

@@ -133,26 +133,25 @@ fn base64_with_a_content_type_is_whole_payload() {
 }
 
 #[test]
-fn maps_are_colon_punctuated() {
-    // The map VALUE parses (punctuation decides) and still defers as
-    // an emission — the honest pre-reform status, new spelling.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\": 1, \"b\": 2 } }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("deferred");
-    assert!(
-        bag.diagnostics()
-            .iter()
-            .any(|d| d.code().as_str() == "E-CHECK-DEFERRED"),
-        "{bag:?}"
+fn maps_are_colon_punctuated_and_run() {
+    use rastok::envelope::{Data, Scalar, Value};
+    use std::collections::BTreeMap;
+    // `{ "k": v }` is an executable emission: a MAP, tag 18 — never
+    // silently a struct.
+    let Data::Materialized(Value::Map(map)) = emitted("{ \"a\": 1, \"b\": 2 }") else {
+        panic!("a map value");
+    };
+    assert_eq!(map.get("a"), Some(&Value::Scalar(Scalar::Int(1))));
+    assert_eq!(map.get("b"), Some(&Value::Scalar(Scalar::Int(2))));
+    // `{:}` is the EMPTY map — distinct from `{}` the empty struct.
+    assert_eq!(
+        emitted("{:}"),
+        Data::materialized(Value::Map(BTreeMap::new()))
     );
-    // The empty map `{:}` parses to the same deferral.
-    let source =
-        "graph g : App {\n  operator o {\n    on in { out = {:} }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("deferred");
-    assert!(
-        bag.diagnostics()
-            .iter()
-            .any(|d| d.code().as_str() == "E-CHECK-DEFERRED"),
-        "{bag:?}"
+    assert_eq!(
+        emitted("{}"),
+        Data::materialized(Value::Struct(Vec::new())),
+        "the two empties stay two values"
     );
 }
 
@@ -575,4 +574,155 @@ fn a_non_meta_typed_app_write_refuses_or_converts() {
         .expect("the machine absorbs the fault");
     assert_eq!(vm.outputs().len(), 0, "nothing crosses");
     assert_eq!(vm.errors().len(), 1, "the typed fault leaves on err");
+}
+
+#[test]
+fn the_meta_type_grid_is_closed_end_to_end() {
+    // The reviewer's three static escapes now refuse at CHECK.
+    for (body, what) in [
+        ("meta.app.bad = [[1]]", "a nested list"),
+        ("meta.app.ttl = duration(\"1s\")", "a duration leaf"),
+    ] {
+        let source = format!(
+            "graph g : App {{\n  operator o {{\n    on in {{\n      out = {{\n        {body}\n        data = data\n      }}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+        );
+        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err(what);
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|d| d.code().as_str() == "E-META-ZONE"),
+            "`{what}`: {bag:?}"
+        );
+    }
+    // And the ingress holds content_type to TEXT, name and type.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+    let source =
+        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut ext = Namespace::new();
+    ext.insert(
+        String::from("content_type"),
+        MetaValue::Scalar(Scalar::Int(7)),
+    );
+    let refused = vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                ext,
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    );
+    assert!(refused.is_err(), "an int content_type cannot enter");
+    assert_eq!(journal.records().len(), 0, "refused BEFORE the append");
+}
+
+#[test]
+fn a_branch_alias_cannot_dodge_the_grid_either() {
+    // The refined escape: a projected BRANCH leaving as a value.
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.audit.origin = \"x\"\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      val m = meta.app.audit\n      out = m\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("a branch is not a value");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-META-ZONE"),
+        "{bag:?}"
+    );
+    // And a sys LEAF takes no extra segments.
+    let source = "graph g : App {\n  operator o {\n    on in where meta.sys.id.extra == \"x\" { out = data }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("a leaf nests nothing");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-META-ZONE"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn the_validator_matches_the_decoder_on_decimals_and_digests() {
+    use rastok::plan::{AssetBlob, PlanValidationError, ValidatedExecutionPlan};
+    // A NON-minimal decimal (unscaled divisible by 10) cannot obtain
+    // validation — exactly what the decoder would refuse.
+    let source = "graph g : App {\n  operator o {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> o -> .\n}\n";
+    let mut plan = compile(&[source], &Registry::m0())
+        .expect("a valid plan")
+        .plan
+        .into_inner();
+    plan.nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "o")
+        .expect("the operator")
+        .vars[0]
+        .init = Some(rastok::cel::Value::Decimal {
+        unscaled: 100,
+        scale: 2,
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::UnrepresentableConstant
+    );
+    // A blob lying about its digest cannot obtain validation.
+    let source =
+        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let mut plan = compile(&[source], &Registry::m0())
+        .expect("a valid plan")
+        .plan
+        .into_inner();
+    plan.assets.push(AssetBlob {
+        digest: [0; 32],
+        bytes: vec![1, 2, 3],
+    });
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::AssetDigestMismatch { .. }
+    ));
+}
+
+#[test]
+fn whole_data_bare_forms_run_in_the_builder() {
+    use rastok::envelope::{Data, Scalar, Value};
+    // `out = { data = base64 { … }, meta.app.tag = "x" }` — the
+    // D-5 form the review named.
+    let Data::Materialized(value) = emitted("{ data = base64 { AAEC }, meta.app.tag = \"x\" }")
+    else {
+        panic!("materialized");
+    };
+    assert_eq!(value, Value::Scalar(Scalar::Bytes(vec![0, 1, 2])));
+}
+
+#[test]
+fn asset_order_is_digest_canonical() {
+    use rastok::compiler::compile_with_assets;
+    use std::io::Write;
+
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("asset-order");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut a = std::fs::File::create(root.join("a.bin")).unwrap();
+    a.write_all(b"alpha").unwrap();
+    let mut b = std::fs::File::create(root.join("b.bin")).unwrap();
+    b.write_all(b"beta").unwrap();
+
+    // The same two assets, used in OPPOSITE source order, produce
+    // the same package bytes: the table is digest-sorted at seal.
+    let ab = "graph g : App {\n  operator o {\n    on in { out = asset(\"a.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"b.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let ba = "graph g : App {\n  operator o {\n    on in { out = asset(\"b.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"a.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let first = compile_with_assets(&[ab], &Registry::m0(), Some(&root)).expect("compiles");
+    let second = compile_with_assets(&[ba], &Registry::m0(), Some(&root)).expect("compiles");
+    let table_first: Vec<[u8; 32]> = first.plan.assets.iter().map(|blob| blob.digest).collect();
+    let table_second: Vec<[u8; 32]> = second.plan.assets.iter().map(|blob| blob.digest).collect();
+    assert_eq!(table_first, table_second, "one canonical table");
+    assert!(
+        table_first.windows(2).all(|pair| pair[0] < pair[1]),
+        "strictly increasing digests"
+    );
 }

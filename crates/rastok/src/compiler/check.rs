@@ -265,6 +265,24 @@ pub fn check(
     }
     checker.in_lab = false;
     checker.verify_meta_reads();
+    // The asset table's CANONICAL layout (D-2026-08-10-5 as
+    // amended): digest order — one content set, one byte layout,
+    // whatever order the source visited it in. Indices in the
+    // compiled trees remap accordingly.
+    let mut checked_app = checked_app;
+    if !checker.assets.is_empty() {
+        let mut order: Vec<usize> = (0..checker.assets.len()).collect();
+        order.sort_by(|&a, &b| checker.assets[a].digest.cmp(&checker.assets[b].digest));
+        let mut remap = vec![0u32; order.len()];
+        for (new_index, &old_index) in order.iter().enumerate() {
+            remap[old_index] = u32::try_from(new_index).unwrap_or_else(|_| unreachable!("bounded"));
+        }
+        checker.assets = order
+            .iter()
+            .map(|&old_index| checker.assets[old_index].clone())
+            .collect();
+        remap_graph_assets(&mut checked_app, &remap);
+    }
     let app_schema: Vec<(String, cel::Type)> = checker
         .app_schema
         .iter()
@@ -2403,9 +2421,15 @@ impl Checker<'_, '_> {
         use crate::compiler::syntax::BaseType;
         const MAX_NODES: usize = 4096;
         const MAX_FIELDS: usize = 256;
+        const MAX_DEPTH: usize = 128;
         *nodes += 1;
         if *nodes > MAX_NODES {
             return Some(format!("the expansion exceeds {MAX_NODES} nodes"));
+        }
+        if stack.len() > MAX_DEPTH {
+            // The depth budget of D-2026-08-10-8 — MAX_NESTING's
+            // twin on the expansion stack.
+            return Some(format!("the expansion nests beyond {MAX_DEPTH}"));
         }
         for base in &ty.alternatives {
             match base {
@@ -2868,7 +2892,7 @@ impl Checker<'_, '_> {
                         "a metadata zone is not a value — read fields by their full spelled path",
                     );
                 }
-                ["meta", "sys", field, ..] => {
+                ["meta", "sys", field] => {
                     if !SYS_FIELDS.contains(field) {
                         self.meta_zone_refusal(
                             span,
@@ -2877,33 +2901,34 @@ impl Checker<'_, '_> {
                         );
                     }
                 }
+                ["meta", "sys", ..] => {
+                    // `meta.sys.id.extra` — a spine field is a LEAF.
+                    self.meta_zone_refusal(
+                        span,
+                        &segments.join("."),
+                        "a sys field is a leaf — nothing nests under it",
+                    );
+                }
                 ["meta", "app", rest @ ..] => {
+                    // A read names EXACTLY a leaf: a projected
+                    // BRANCH leaving as a value would alias the grid
+                    // away (`val m = meta.app.audit; m.ghost`).
                     let field = rest.join(".");
-                    let known = self.app_schema.contains_key(&field)
-                        || self.app_schema.keys().any(|key| {
-                            key.starts_with(&field)
-                                && key.as_bytes().get(field.len()) == Some(&b'.')
-                        });
-                    if !known {
+                    if !self.app_schema.contains_key(&field) {
                         self.meta_zone_refusal(
                             span,
                             &format!("meta.app.{field}"),
-                            "the graph writes this field nowhere — a name written nowhere cannot be read (the CEL grid)",
+                            "the graph writes this exact leaf nowhere — reads name a leaf, never a branch (the CEL grid)",
                         );
                     }
                 }
                 ["meta", "ext", rest @ ..] => {
                     let field = rest.join(".");
-                    let known = self.ext_field_known(&field)
-                        || self.ext_fields.iter().any(|key| {
-                            key.starts_with(&field)
-                                && key.as_bytes().get(field.len()) == Some(&b'.')
-                        });
-                    if !known {
+                    if !self.ext_field_known(&field) {
                         self.meta_zone_refusal(
                             span,
                             &format!("meta.ext.{field}"),
-                            "no connector sheet declares this `ext` field",
+                            "no connector sheet declares this exact `ext` leaf",
                         );
                     }
                 }
@@ -2947,13 +2972,28 @@ impl Checker<'_, '_> {
                 }
                 Some(EmitValue::Data(tree))
             }
-            SynValue::BracedMap(_) => {
-                // The map VALUE exists (D-2026-08-10-6); emitting
-                // one stays outside the executable subset until a
-                // consumer pays for it — same honest deferral as
-                // before the punctuation reform.
-                self.deferred("a map literal emission", at);
-                None
+            SynValue::BracedMap(entries) => {
+                // `{ "k": v }` and `{:}` are executable emissions:
+                // the entries compile into the existing MapLit form
+                // (construction-sorted at the literal, like CEL's).
+                let mut pairs = Vec::new();
+                for (map_key, entry) in entries {
+                    match entry {
+                        SynValue::Cel(expr) => {
+                            let tree = self.cel(expr, signature)?;
+                            pairs.push((map_key.clone(), tree.root));
+                        }
+                        _ => {
+                            self.deferred("this map entry value form", at);
+                            return None;
+                        }
+                    }
+                }
+                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                Some(EmitValue::Data(cel::Tree {
+                    root: cel::Expr::MapLit(pairs),
+                    ty: cel::Type::Dyn,
+                }))
             }
             SynValue::Tagged(tagged) => match tagged.tag.text.as_str() {
                 "text" => self
@@ -3168,6 +3208,15 @@ impl Checker<'_, '_> {
                                     );
                                     continue;
                                 }
+                                if matches!(
+                                    &target,
+                                    crate::envelope::WriteTarget::App(_)
+                                        | crate::envelope::WriteTarget::Ext(_)
+                                ) && let Some(why) = meta_type_refusal(&tree.ty)
+                                {
+                                    self.meta_zone_refusal(key.span, &key_path(key), why);
+                                    continue;
+                                }
                                 if let crate::envelope::WriteTarget::App(field) = &target
                                     && !self.in_lab
                                 {
@@ -3196,6 +3245,27 @@ impl Checker<'_, '_> {
                         }
                         SynValue::Braced(_) => {
                             self.deferred("a record under a data path", key.span);
+                        }
+                        // The bare byte/text forms are ordinary data
+                        // values in the builder too (D-2026-08-10-5):
+                        // `data = base64 { … }` is a fresh payload.
+                        SynValue::Tagged(tagged)
+                            if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
+                        {
+                            if let crate::envelope::WriteTarget::Data(path) = &target
+                                && let Some(write) =
+                                    self.nested_tagged_write(tagged, path.clone(), key.span)
+                            {
+                                writes.push(write);
+                            }
+                        }
+                        SynValue::Json { value, .. }
+                            if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
+                        {
+                            writes.push(FieldWrite {
+                                target,
+                                value: literal_tree(value.clone(), cel::Type::Dyn),
+                            });
                         }
                         _ => self.deferred("a nested envelope builder", key.span),
                     }
@@ -3749,6 +3819,124 @@ fn direction_words(direction: Direction) -> &'static str {
     }
 }
 
+/// Rewrites every `Expr::Asset` index in a checked graph after the
+/// table's canonical digest sort.
+fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
+    fn expr(node: &mut cel::Expr, remap: &[u32]) {
+        match node {
+            cel::Expr::Asset(index) => {
+                *index = remap[*index as usize];
+            }
+            cel::Expr::Literal(_) | cel::Expr::Path(_) => {}
+            cel::Expr::Unary { expr: inner, .. } => expr(inner, remap),
+            cel::Expr::Binary { left, right, .. } => {
+                expr(left, remap);
+                expr(right, remap);
+            }
+            cel::Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                expr(cond, remap);
+                expr(then, remap);
+                expr(otherwise, remap);
+            }
+            cel::Expr::Index { base, index } => {
+                expr(base, remap);
+                expr(index, remap);
+            }
+            cel::Expr::Call { args, .. } => {
+                for arg in args {
+                    expr(arg, remap);
+                }
+            }
+            cel::Expr::List(items) => {
+                for item in items {
+                    expr(item, remap);
+                }
+            }
+            cel::Expr::MapLit(pairs) => {
+                for (_, value) in pairs {
+                    expr(value, remap);
+                }
+            }
+        }
+    }
+    fn emit(value: &mut EmitValue, remap: &[u32]) {
+        match value {
+            EmitValue::Data(tree) => expr(&mut tree.root, remap),
+            EmitValue::Patch(writes) | EmitValue::FreshData(writes) => {
+                for write in writes {
+                    expr(&mut write.value.root, remap);
+                }
+            }
+            EmitValue::Identity | EmitValue::Nothing => {}
+        }
+    }
+    for node in &mut graph.nodes {
+        for val in &mut node.vals {
+            expr(&mut val.value.tree.root, remap);
+        }
+        for handler in &mut node.handlers {
+            if let Some(guard) = &mut handler.guard {
+                expr(&mut guard.root, remap);
+            }
+            for statement in &mut handler.body {
+                match statement {
+                    Statement::Let { value, .. } | Statement::SetVar { value, .. } => {
+                        expr(&mut value.root, remap);
+                    }
+                    Statement::Emit { value, .. } => emit(value, remap),
+                }
+            }
+        }
+    }
+    for val in &mut graph.vals {
+        expr(&mut val.value.tree.root, remap);
+    }
+}
+
+/// The ONE static admissibility rule for metadata leaves
+/// (D-2026-08-10-1): `scalar | array<scalar>` — a statically known
+/// type outside it refuses at CHECK; `Dyn` passes and the runtime's
+/// `to_meta_value` guards it (defense in depth, same rule).
+fn meta_type_refusal(ty: &cel::Type) -> Option<&'static str> {
+    match ty {
+        cel::Type::Bool
+        | cel::Type::Int
+        | cel::Type::Uint
+        | cel::Type::Double
+        | cel::Type::Text
+        | cel::Type::Bytes
+        | cel::Type::Dyn => None,
+        cel::Type::List(inner) => match &**inner {
+            cel::Type::Bool
+            | cel::Type::Int
+            | cel::Type::Uint
+            | cel::Type::Double
+            | cel::Type::Text
+            | cel::Type::Bytes
+            | cel::Type::Dyn => None,
+            _ => Some(
+                "a metadata leaf is `scalar | array<scalar>` — a nested composite belongs in `data`",
+            ),
+        },
+        cel::Type::Duration | cel::Type::Timestamp => Some(
+            "a duration or timestamp metadata leaf is outside this build's physical form — carry it in `data` for now",
+        ),
+        _ => Some("a metadata leaf is `scalar | array<scalar>` — composites belong in `data`"),
+    }
+}
+
+fn key_path(key: &crate::compiler::syntax::LValue) -> String {
+    key.segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 /// A literal expression tree — the compiler's own constants.
 fn literal_tree(value: cel::Value, ty: cel::Type) -> cel::Tree {
     cel::Tree {
@@ -4082,16 +4270,22 @@ graph m0_probe : App {
     }
 
     #[test]
-    fn a_map_emission_is_no_longer_silently_dropped() {
+    fn a_map_emission_compiles_to_the_map_literal_form() {
+        // `{ "n": 1 }` is an executable emission now — the entries
+        // compile into the existing MapLit expression.
         let source = "graph g : App {\n  operator o {\n    on in { out = { \"n\": 1 } }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
+        let (hir, bag) = check_source(source);
+        assert!(!bag.has_errors(), "{:#?}", bag.diagnostics());
+        let hir = hir.expect("a checked unit");
+        let Statement::Emit { value, .. } = &hir.app.nodes[0].handlers[0].body[0] else {
+            panic!("an emission");
+        };
+        let EmitValue::Data(tree) = value else {
+            panic!("a data emission");
+        };
         assert!(
-            bag.diagnostics().iter().any(|diagnostic| {
-                diagnostic.code() == E_CHECK_DEFERRED
-                    && diagnostic.fields()[0].1 == "a map literal emission"
-            }),
-            "the emission must refuse, not vanish: {:#?}",
-            bag.diagnostics()
+            matches!(&tree.root, cel::Expr::MapLit(pairs) if pairs.len() == 1),
+            "the MapLit form: {tree:?}"
         );
     }
 

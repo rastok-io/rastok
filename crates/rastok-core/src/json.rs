@@ -21,6 +21,34 @@ pub const MAX_SCALE: i32 = 6144;
 /// The lower scale bound (see [`MAX_SCALE`]).
 pub const MIN_SCALE: i32 = -6143;
 
+/// The D-2026-08-10-7 invariants of a DYNAMIC decimal, shared by
+/// the package decoder and the plan validator (`encode ⇒ decode`
+/// demands one rule): budget bounds, minimal scale, and the
+/// integer-domain disjointness.
+#[must_use]
+pub fn dynamic_decimal_well_formed(unscaled: i128, scale: i32) -> bool {
+    if !(MIN_SCALE..=MAX_SCALE).contains(&scale) {
+        return false;
+    }
+    if unscaled.unsigned_abs() >= 10_u128.pow(MAX_DIGITS) {
+        return false;
+    }
+    if unscaled % 10 == 0 {
+        // Trailing zeros strip at construction; zero is integer 0.
+        return false;
+    }
+    if scale <= 0 {
+        let mut expanded = Some(unscaled);
+        for _ in 0..scale.unsigned_abs() {
+            expanded = expanded.and_then(|value| value.checked_mul(10));
+        }
+        if expanded.is_some_and(|value| i64::try_from(value).is_ok()) {
+            return false;
+        }
+    }
+    true
+}
+
 /// A refusal, located by byte offset into the parsed text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonError {

@@ -1413,7 +1413,7 @@ on `err`: a typed error, terminal *by kind*, whose payload carries the
 outcome — `ProcessExited { exit_code, signal, run_id }` for a `Process`,
 the close code / reason for a `WebSocket`, the final status for a
 transaction. The outcome lives in the typed error payload; `meta.sys`
-stays closed (its six fields never grow per-Connector). `out`
+stays closed (its five fields never grow per-Connector). `out`
 stays the data stream; a graph that reacts to termination wires
 `process.err -> …`. `restart = on_crash { … }` (a Connector attribute)
 spawns a fresh instance — a new `run_id`, a new partition instance — with
@@ -1588,7 +1588,8 @@ Operators (absolutely, including in simulation): transport
 request/response correlation is set by the runtime when crossing a
 Connector; business correlation is a join `on (a, b)`; an echo token
 an external system imposes is an `app` field. Writable metadata lives
-in `meta.app` (the default namespace) or a custom namespace.
+in `meta.app` (the application's zone) or `meta.ext` (the external
+boundaries' zone).
 
 ### 3.4 Lifetime and termination
 
@@ -2691,9 +2692,9 @@ wins.
 12. **The same App runs from embedded (single device, no
     persistence) to clustered (multi-Host SaaS). The mode is a
     deployment choice, not a code choice.**
-13. **An envelope is `meta + data`. `meta` is namespaced typed scalars
-    (or scalar arrays): `meta.sys` read-only and runtime-fresh,
-    `meta.app` (the default) and custom namespaces writable. `data` is
+13. **An envelope is `meta + data`. `meta` is three zones of typed
+    scalars (or scalar arrays): `meta.sys` read-only and
+    runtime-fresh, `meta.app` and `meta.ext` writable. `data` is
     the typed payload. Envelopes are immutable in flight; Operators
     emit new ones. Single input inherits `meta` additively; a join
     must attribute each writable namespace explicitly (else compile

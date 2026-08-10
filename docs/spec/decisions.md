@@ -157,10 +157,11 @@ refuse at build; raw content, no normalization; the semantic hash
 seals the CONTENT DIGEST, never the path (spelling); the bytes live
 in a content-addressed package section outside the decoded body.
 **Amended 2026-08-10, at implementation:** the v1 physical form is
-body key 7 — raw blob bytes in FIRST-USE order (deterministic from
-the canonical source), digests DERIVED at decode (and thereby
-verified) with uniqueness and both budgets re-checked by the
-validator. The out-of-body section deferred WITH the embedded
+body key 7 — raw blob bytes in strict DIGEST order (the checker
+sorts and remaps indices at seal, so reordering source declarations
+moves nothing), digests DERIVED at decode (and thereby verified),
+with order, uniqueness, digest truth, and both budgets re-checked by
+the validator. The out-of-body section deferred WITH the embedded
 loader that needs it: v1 embedded targets refuse asset-bearing
 plans, so no decoder pays the in-body cost today, and moving the
 region is a format bump when the loader exists. Content addressing
@@ -278,10 +279,13 @@ depth budgets for no current need).
 The whole reform ships under ONE new package format. v5 carries: the
 `App`/`Ext` write targets (`CustomMeta` and `MimeType` die); the
 resolved `app`/`ext` schemas (they TRAVEL — the validator answers
-without a Registry, the round-2 doctrine); the `JoinMetaPlan` ops;
-the content-addressed asset section (digests and sizes in the body,
-bytes outside it); expanded named types; the structural budgets; the
-`decimal` canonical tag. It carries NOTHING for history lookups
+without a Registry, the round-2 doctrine); the digest-ordered asset
+table in body key 7 (D-2026-08-10-5 as amended); expanded named
+types; the structural budgets; the `decimal` canonical tag.
+**Amended 2026-08-10, at freeze:** v5 is FROZEN as landed — the
+`JoinMetaPlan` ops and any out-of-body asset region take LATER
+versions; this reader's re-encoding check refuses unknown keys, so
+nothing rides v5 silently. It carries NOTHING for history lookups
 (D-2026-08-10-3). The v5 skeleton lands with the first serialized
 change and exactly one final number is published; v4 joins v1–v3 as
 unpublished drafts refused by number — this entry SUPERSEDES

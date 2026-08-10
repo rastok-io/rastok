@@ -125,6 +125,18 @@ pub enum PlanValidationError {
         /// The later duplicate's index.
         index: u32,
     },
+    /// A blob whose declared digest is not `blake3(bytes)` — the
+    /// identity would silently change across an encode/decode trip.
+    AssetDigestMismatch {
+        /// The lying blob.
+        index: u32,
+    },
+    /// The asset table out of digest order — one content, one
+    /// canonical layout (D-2026-08-10-5 as amended).
+    AssetOrder {
+        /// The out-of-place blob.
+        index: u32,
+    },
     /// An asset (or the table) beyond the fixed v1 budgets.
     AssetBudget {
         /// The offending blob, `u32::MAX` for the total.
@@ -204,6 +216,12 @@ impl core::fmt::Display for PlanValidationError {
             ),
             Self::DuplicateAsset { index } => {
                 write!(f, "invalid plan: asset {index} repeats an earlier digest")
+            }
+            Self::AssetDigestMismatch { index } => {
+                write!(f, "invalid plan: asset {index} lies about its digest")
+            }
+            Self::AssetOrder { index } => {
+                write!(f, "invalid plan: asset {index} is out of digest order")
             }
             Self::AssetBudget { index, bytes } => {
                 write!(
@@ -404,14 +422,44 @@ fn meta_target_known(
         }
     }
 }
-
-/// Flat keys are prefix-free per zone (D-2026-08-10-1) — the nested
-/// projection cannot hold a leaf and a branch under one name.
-fn schema_prefix_free(
+/// One zone schema, held whole (D-2026-08-10-1): SORTED and unique
+/// by field, flat keys prefix-free, every type inside the metadata
+/// leaf rule (`scalar | array<scalar>` | Dyn), and the standard
+/// `content_type` pinned to text.
+fn schema_well_formed(
     schema: &[(alloc::string::String, cel::Type)],
 ) -> Result<(), PlanValidationError> {
-    let mut keys: alloc::vec::Vec<&str> = schema.iter().map(|(field, _)| field.as_str()).collect();
-    keys.sort_unstable();
+    fn leaf_scalar(ty: &cel::Type) -> bool {
+        matches!(
+            ty,
+            cel::Type::Bool
+                | cel::Type::Int
+                | cel::Type::Uint
+                | cel::Type::Double
+                | cel::Type::Text
+                | cel::Type::Bytes
+                | cel::Type::Dyn
+        )
+    }
+    for (index, (field, ty)) in schema.iter().enumerate() {
+        let leaf_ok = leaf_scalar(ty) || matches!(ty, cel::Type::List(inner) if leaf_scalar(inner));
+        if !leaf_ok || (field == "content_type" && !matches!(ty, cel::Type::Text)) {
+            return Err(PlanValidationError::UnknownMetaField {
+                zone: "schema",
+                field: field.clone(),
+            });
+        }
+        if let Some((previous, _)) = index.checked_sub(1).and_then(|i| schema.get(i))
+            && previous >= field
+        {
+            // Sorted strictly — uniqueness for free.
+            return Err(PlanValidationError::UnknownMetaField {
+                zone: "schema-order",
+                field: field.clone(),
+            });
+        }
+    }
+    let keys: alloc::vec::Vec<&str> = schema.iter().map(|(field, _)| field.as_str()).collect();
     for pair in keys.windows(2) {
         if pair[1].starts_with(pair[0]) && pair[1].as_bytes().get(pair[0].len()) == Some(&b'.') {
             return Err(PlanValidationError::MetaPrefixCollision {
@@ -477,6 +525,23 @@ fn assets_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     const TOTAL: u64 = 32 * 1024 * 1024;
     let mut total: u64 = 0;
     for (index, blob) in plan.assets.iter().enumerate() {
+        // The digest IS the identity: a blob whose declared digest
+        // is not blake3(bytes) would encode (bytes only), then
+        // decode to a DIFFERENT identity — refused here, so
+        // encode ⇒ decode holds.
+        if blob.digest != *blake3::hash(&blob.bytes).as_bytes() {
+            return Err(PlanValidationError::AssetDigestMismatch {
+                index: index as u32,
+            });
+        }
+        if let Some(previous) = index.checked_sub(1).and_then(|i| plan.assets.get(i))
+            && previous.digest >= blob.digest
+        {
+            // Strictly increasing — canonical order AND uniqueness.
+            return Err(PlanValidationError::AssetOrder {
+                index: index as u32,
+            });
+        }
         if blob.bytes.len() as u64 > PER_ASSET {
             return Err(PlanValidationError::AssetBudget {
                 index: index as u32,
@@ -503,8 +568,8 @@ fn assets_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 }
 
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
-    schema_prefix_free(&plan.app_schema)?;
-    schema_prefix_free(&plan.ext_schema)?;
+    schema_well_formed(&plan.app_schema)?;
+    schema_well_formed(&plan.ext_schema)?;
     assets_well_formed(plan)?;
     // Uniqueness first, GLOBALLY, then canonical order: a collection
     // that is both duplicated and disordered refuses as the
@@ -883,7 +948,15 @@ fn value_expressible(value: &cel::Value) -> Result<(), PlanValidationError> {
         // compiler emits is the EMPTY record literal (`parent = {}`,
         // D-2026-08-09-1). Anything with fields still refuses.
         cel::Value::Struct(fields) if fields.is_empty() => Ok(()),
-        cel::Value::Decimal { .. } => Ok(()),
+        // The decoder's exact rule (D-2026-08-10-7): a decimal the
+        // reader would refuse cannot obtain validation either.
+        cel::Value::Decimal { unscaled, scale } => {
+            if crate::json::dynamic_decimal_well_formed(*unscaled, *scale) {
+                Ok(())
+            } else {
+                Err(PlanValidationError::UnrepresentableConstant)
+            }
+        }
         cel::Value::Struct(_) | cel::Value::Payload => {
             Err(PlanValidationError::UnrepresentableConstant)
         }

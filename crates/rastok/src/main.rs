@@ -84,11 +84,20 @@ fn load(paths: &[String]) -> Result<(Compilation, Sources), ExitCode> {
         }
     }
     let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-    // The App root for `asset(…)` resolution: the first source's
-    // directory (D-2026-08-10-5) — the CLI compiles real files, so
-    // real assets must resolve.
+    // The App root for `asset(…)` resolution (D-2026-08-10-5): the
+    // directory of the file DECLARING the `: App` graph — argument
+    // order cannot move it. Fallback: the first file's directory.
+    let app_index = texts
+        .iter()
+        .position(|text| {
+            text.lines().any(|line| {
+                let line = line.trim_start();
+                line.starts_with("graph ") && line.contains(": App") && !line.starts_with("//")
+            })
+        })
+        .unwrap_or(0);
     let asset_root = paths
-        .first()
+        .get(app_index)
         .and_then(|path| std::path::Path::new(path).parent())
         .map(std::path::Path::to_path_buf);
     match rastok::compiler::compile_with_assets(&refs, &Registry::m0(), asset_root.as_deref()) {

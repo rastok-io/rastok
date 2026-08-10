@@ -330,11 +330,23 @@ impl<'plan> Vm<'plan> {
         // append (D-2026-08-10-1): an external caller cannot seed a
         // field no sheet declares — the same grid the checker
         // enforces on sources, applied to the API.
-        for field in submission.draft.ext.keys() {
+        for (field, value) in &submission.draft.ext {
             let known = plan_ext_field(self.plan.plan(), field);
             if !known {
                 return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
                     alloc::format!("`meta.ext.{field}` is outside the declared schema"),
+                )));
+            }
+            // Name AND type: the standard field keeps its contract
+            // at the API door too.
+            if field == "content_type"
+                && !matches!(
+                    value,
+                    crate::envelope::MetaValue::Scalar(crate::envelope::Scalar::Text(_))
+                )
+            {
+                return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
+                    alloc::string::String::from("content_type takes text"),
                 )));
             }
         }
