@@ -521,7 +521,7 @@ impl<'plan> TransactionExecutor<'plan> {
                         input,
                         &base(&scratch, &lets),
                         &data_slot,
-                        &self.plan.assets,
+                        self.plan,
                     )?;
                     if let Some(built) = built {
                         let index = buffer.next_index(port);
@@ -835,8 +835,9 @@ fn emitted_content(
     input: &Envelope,
     base: &BTreeMap<String, cel::Value>,
     slot: &DataSlot<'_>,
-    assets: &[crate::plan::AssetBlob],
+    plan: &crate::plan::ExecutionPlan,
 ) -> Result<Option<Built>, Fault> {
+    let assets: &[crate::plan::AssetBlob] = &plan.assets;
     // The atomic order of D-2026-08-10-4: copy the zones, decide
     // the payload, DERIVE `content_type` from that decision (a kept
     // witness keeps it, fresh data strikes it), then let explicit
@@ -931,19 +932,44 @@ fn emitted_content(
                         apply_struct_write(current, path, to_envelope_value(&value)?);
                     }
                     envelope::WriteTarget::App(field) => {
-                        built.app.insert(field.clone(), to_meta_value(&value)?);
+                        // The travelling schema judges the VALUE — a
+                        // Dyn expression cannot smuggle a text into
+                        // a sealed `int` leaf (D-2026-08-10-1).
+                        let converted = to_meta_value(&value)?;
+                        if let Some((_, ty)) =
+                            plan.app_schema.iter().find(|(known, _)| known == field)
+                            && !meta_conforms(&converted, ty)
+                        {
+                            return Err(Fault::Unrepresentable(format!(
+                                "`meta.app.{field}` is sealed as {ty:?}; this value is not"
+                            )));
+                        }
+                        built.app.insert(field.clone(), converted);
                     }
                     envelope::WriteTarget::Ext(field) => {
                         // Explicit writes come LAST in the atomic
                         // order — they win over the derivation. The
-                        // standard field keeps its contract even
-                        // through a Dyn-typed expression.
-                        if field == "content_type" && !matches!(value, cel::Value::Text(_)) {
+                        // standard field keeps its implicit `text`
+                        // contract even through a Dyn expression;
+                        // sheet fields answer to their declared
+                        // types.
+                        let converted = to_meta_value(&value)?;
+                        let ty = if field == "content_type" {
+                            Some(cel::Type::Text)
+                        } else {
+                            plan.ext_schema
+                                .iter()
+                                .find(|(known, _)| known == field)
+                                .map(|(_, ty)| ty.clone())
+                        };
+                        if let Some(ty) = ty
+                            && !meta_conforms(&converted, &ty)
+                        {
                             return Err(Fault::Unrepresentable(format!(
-                                "content_type takes text, got {value:?}"
+                                "`meta.ext.{field}` is declared {ty:?}; this value is not"
                             )));
                         }
-                        built.ext.insert(field.clone(), to_meta_value(&value)?);
+                        built.ext.insert(field.clone(), converted);
                     }
                 }
             }
@@ -1608,6 +1634,34 @@ pub fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, Fault> {
 }
 
 /// Converts a CEL value into a writable-metadata leaf.
+/// The ONE conformance rule between a metadata value and a schema
+/// type (D-2026-08-10-1) — used at runtime zone writes, at the VM
+/// ingress, and mirrored by the checker's static list. `Dyn` admits
+/// every representable leaf.
+#[must_use]
+pub fn meta_conforms(value: &MetaValue, ty: &cel::Type) -> bool {
+    match ty {
+        cel::Type::Dyn => true,
+        cel::Type::Bool => matches!(value, MetaValue::Scalar(envelope::Scalar::Bool(_))),
+        cel::Type::Int => matches!(value, MetaValue::Scalar(envelope::Scalar::Int(_))),
+        cel::Type::Double => matches!(value, MetaValue::Scalar(envelope::Scalar::Double(_))),
+        cel::Type::Text => matches!(value, MetaValue::Scalar(envelope::Scalar::Text(_))),
+        cel::Type::Bytes => matches!(value, MetaValue::Scalar(envelope::Scalar::Bytes(_))),
+        cel::Type::List(inner) => match value {
+            MetaValue::Array(items) => items
+                .iter()
+                .all(|scalar| meta_conforms(&MetaValue::Scalar(scalar.clone()), inner)),
+            MetaValue::Scalar(_) => false,
+        },
+        _ => false,
+    }
+}
+
+/// Converts a CEL value into a metadata leaf — the physical half of
+/// [`meta_conforms`]'s rule.
+///
+/// # Errors
+/// A typed refusal when the value has no flat-leaf representation.
 pub fn to_meta_value(value: &cel::Value) -> Result<MetaValue, Fault> {
     Ok(match value {
         cel::Value::Bool(v) => MetaValue::Scalar(envelope::Scalar::Bool(*v)),

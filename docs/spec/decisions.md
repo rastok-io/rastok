@@ -266,6 +266,14 @@ EXPANDED type tree ≤ 4 096 nodes total; ≤ 256 fields per struct
 and ≤ 256 symbols per enum; ≤ 64 KiB of canonical type bytes per
 plan — each refusing at check with the measured value in the
 diagnostic, and re-verified by the package validator.
+**Amended 2026-08-10, at implementation:** the delivered slice
+enforces STRUCTURAL depth, total nodes, and per-struct/per-enum
+counts at collection; the 64 KiB canonical-byte budget and its
+package re-verification land WITH composite pins — until a
+composite type can reach a plan, there are no canonical type bytes
+to measure. Composite ALIASES resolve structurally but still meet
+the pre-reform scalar port subset (`E-CHECK-DEFERRED`), a scope
+older than this decision.
 The type tree itself is unchanged — `scalar`, `struct`, `map`,
 `array`, `enum`, `union`, `variant`; `table` stays the relational
 view of `array<struct>`. `schema` is not introduced (it would only

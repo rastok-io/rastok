@@ -34,12 +34,6 @@ use core::fmt;
 
 /// A machine fault; the step that raised it committed nothing, and
 /// the work that triggered it stays reserved — a retry sees it again.
-/// Whether an `ext` field sits inside the plan's travelling
-/// vocabulary — the standard `content_type` is always known.
-fn plan_ext_field(plan: &crate::plan::ExecutionPlan, field: &str) -> bool {
-    field == "content_type" || plan.ext_schema.iter().any(|(known, _)| known == field)
-}
-
 /// A machine-integrity refusal — never a business error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmError {
@@ -331,22 +325,27 @@ impl<'plan> Vm<'plan> {
         // field no sheet declares — the same grid the checker
         // enforces on sources, applied to the API.
         for (field, value) in &submission.draft.ext {
-            let known = plan_ext_field(self.plan.plan(), field);
-            if !known {
+            // Name AND type, one shared rule (D-2026-08-10-1): the
+            // standard field is implicitly `text`, sheet fields
+            // answer to their declared types.
+            let ty = if field == "content_type" {
+                Some(crate::cel::Type::Text)
+            } else {
+                self.plan
+                    .plan()
+                    .ext_schema
+                    .iter()
+                    .find(|(known, _)| known == field)
+                    .map(|(_, ty)| ty.clone())
+            };
+            let Some(ty) = ty else {
                 return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
                     alloc::format!("`meta.ext.{field}` is outside the declared schema"),
                 )));
-            }
-            // Name AND type: the standard field keeps its contract
-            // at the API door too.
-            if field == "content_type"
-                && !matches!(
-                    value,
-                    crate::envelope::MetaValue::Scalar(crate::envelope::Scalar::Text(_))
-                )
-            {
+            };
+            if !crate::runtime::meta_conforms(value, &ty) {
                 return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
-                    alloc::string::String::from("content_type takes text"),
+                    alloc::format!("`meta.ext.{field}` is declared {ty:?}; this value is not"),
                 )));
             }
         }

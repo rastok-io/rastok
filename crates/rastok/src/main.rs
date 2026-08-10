@@ -85,17 +85,11 @@ fn load(paths: &[String]) -> Result<(Compilation, Sources), ExitCode> {
     }
     let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
     // The App root for `asset(…)` resolution (D-2026-08-10-5): the
-    // directory of the file DECLARING the `: App` graph — argument
-    // order cannot move it. Fallback: the first file's directory.
-    let app_index = texts
-        .iter()
-        .position(|text| {
-            text.lines().any(|line| {
-                let line = line.trim_start();
-                line.starts_with("graph ") && line.contains(": App") && !line.starts_with("//")
-            })
-        })
-        .unwrap_or(0);
+    // directory of the file DECLARING the `: App` graph, found by
+    // the PARSER's reading — never a line scan, so a multi-line
+    // annotation or a raw block cannot fool it. Fallback: the
+    // first file's directory.
+    let app_index = rastok::compiler::app_source_index(&refs).unwrap_or(0);
     let asset_root = paths
         .get(app_index)
         .and_then(|path| std::path::Path::new(path).parent())

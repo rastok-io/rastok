@@ -2697,8 +2697,8 @@ wins.
     runtime-fresh, `meta.app` and `meta.ext` writable. `data` is
     the typed payload. Envelopes are immutable in flight; Operators
     emit new ones. Single input inherits `meta` additively; a join
-    must attribute each writable namespace explicitly (else compile
-    error).**
+    merges by value — common fields survive, conflicts drop, and
+    explicit writes win (D-2026-08-10-2).**
 14. **A partition instance has three lifecycle phases: starts
     (lazy, on first envelope for a key, transaction `on start`), runs
     (handlers fire on events), stops (event-driven via `stop`

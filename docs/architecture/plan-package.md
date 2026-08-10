@@ -186,7 +186,7 @@ target     := [1, [seg (text)*]]                  — data path (empty = whole d
             | [5, field (text)]                   — meta.ext, flat field
                                                   // 3 (custom namespace) and 4 (mime) are RETIRED
                                                   //   draft tags — extend-only, never reused
-              data path · app meta · custom meta · mime type
+              data path · app field · ext field (D-2026-08-10-1)
 
 tree       := [type, expr]
 type       := uint: 1 bool · 2 int · 3 uint · 4 double · 5 text · 6 bytes ·

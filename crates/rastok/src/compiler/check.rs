@@ -288,14 +288,14 @@ pub fn check(
         .iter()
         .map(|(field, ty)| (field.clone(), ty.clone()))
         .collect();
-    let mut ext_schema: Vec<(String, cel::Type)> =
-        vec![(String::from("content_type"), cel::Type::Text)];
-    ext_schema.extend(
-        checker
-            .ext_fields
-            .iter()
-            .map(|field| (field.clone(), cel::Type::Dyn)),
-    );
+    // The standard `content_type` is IMPLICIT — known to every
+    // consumer, never serialized (D-2026-08-10-4); the schema
+    // carries the sheets' fields only.
+    let ext_schema: Vec<(String, cel::Type)> = checker
+        .ext_fields
+        .iter()
+        .map(|field| (field.clone(), cel::Type::Dyn))
+        .collect();
     Some(Hir {
         app: checked_app,
         labs,
@@ -2396,7 +2396,7 @@ impl Checker<'_, '_> {
     fn validate_type_decl(&mut self, decl: &crate::compiler::syntax::TypeDecl) {
         let mut nodes = 0usize;
         let mut stack: Vec<String> = Vec::new();
-        let breach = self.walk_type(&decl.ty, &mut nodes, &mut stack);
+        let breach = self.walk_type(&decl.ty, &mut nodes, 0, &mut stack);
         if let Some(detail) = breach {
             self.bag.push(
                 Diagnostic::new(
@@ -2416,6 +2416,7 @@ impl Checker<'_, '_> {
         &self,
         ty: &crate::compiler::syntax::TypeRef,
         nodes: &mut usize,
+        depth: usize,
         stack: &mut Vec<String>,
     ) -> Option<String> {
         use crate::compiler::syntax::BaseType;
@@ -2426,9 +2427,10 @@ impl Checker<'_, '_> {
         if *nodes > MAX_NODES {
             return Some(format!("the expansion exceeds {MAX_NODES} nodes"));
         }
-        if stack.len() > MAX_DEPTH {
-            // The depth budget of D-2026-08-10-8 — MAX_NESTING's
-            // twin on the expansion stack.
+        if depth > MAX_DEPTH {
+            // The depth budget of D-2026-08-10-8 counts STRUCTURAL
+            // levels — `array<array<…>>` included, not just the
+            // named-reference stack.
             return Some(format!("the expansion nests beyond {MAX_DEPTH}"));
         }
         for base in &ty.alternatives {
@@ -2448,7 +2450,7 @@ impl Checker<'_, '_> {
                     };
                     stack.push(name.text.clone());
                     let aliased = aliased.clone();
-                    if let Some(detail) = self.walk_type(&aliased, nodes, stack) {
+                    if let Some(detail) = self.walk_type(&aliased, nodes, depth, stack) {
                         return Some(detail);
                     }
                     stack.pop();
@@ -2461,7 +2463,7 @@ impl Checker<'_, '_> {
                         ));
                     }
                     for field in fields {
-                        if let Some(detail) = self.walk_type(&field.ty, nodes, stack) {
+                        if let Some(detail) = self.walk_type(&field.ty, nodes, depth + 1, stack) {
                             return Some(detail);
                         }
                     }
@@ -2475,15 +2477,15 @@ impl Checker<'_, '_> {
                     }
                 }
                 BaseType::Map(keys, values) => {
-                    if let Some(detail) = self.walk_type(keys, nodes, stack) {
+                    if let Some(detail) = self.walk_type(keys, nodes, depth + 1, stack) {
                         return Some(detail);
                     }
-                    if let Some(detail) = self.walk_type(values, nodes, stack) {
+                    if let Some(detail) = self.walk_type(values, nodes, depth + 1, stack) {
                         return Some(detail);
                     }
                 }
                 BaseType::Array(inner) | BaseType::Table(inner) => {
-                    if let Some(detail) = self.walk_type(inner, nodes, stack) {
+                    if let Some(detail) = self.walk_type(inner, nodes, depth + 1, stack) {
                         return Some(detail);
                     }
                 }
@@ -3246,17 +3248,110 @@ impl Checker<'_, '_> {
                         SynValue::Braced(_) => {
                             self.deferred("a record under a data path", key.span);
                         }
-                        // The bare byte/text forms are ordinary data
-                        // values in the builder too (D-2026-08-10-5):
-                        // `data = base64 { … }` is a fresh payload.
+                        // The byte/text forms are data values in
+                        // the builder too (D-2026-08-10-5): bare
+                        // anywhere, content-typed at WHOLE data —
+                        // `data = ` names exactly the payload the
+                        // content type qualifies.
                         SynValue::Tagged(tagged)
                             if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
                         {
-                            if let crate::envelope::WriteTarget::Data(path) = &target
-                                && let Some(write) =
-                                    self.nested_tagged_write(tagged, path.clone(), key.span)
+                            let crate::envelope::WriteTarget::Data(path) = &target else {
+                                unreachable!("guarded")
+                            };
+                            let whole = path.is_empty();
+                            let content_typed = !tagged.args.is_empty()
+                                && matches!(tagged.tag.text.as_str(), "base64")
+                                || tagged.tag.text.as_str() == "asset" && tagged.args.len() > 1;
+                            if whole && content_typed {
+                                match tagged.tag.text.as_str() {
+                                    "base64" => {
+                                        if let Some((bytes, ct)) = self.inline_bytes(tagged) {
+                                            writes.push(FieldWrite {
+                                                target: crate::envelope::WriteTarget::Data(
+                                                    Vec::new(),
+                                                ),
+                                                value: literal_tree(
+                                                    cel::Value::Bytes(bytes),
+                                                    cel::Type::Bytes,
+                                                ),
+                                            });
+                                            if let Some(ct) = ct {
+                                                writes.push(FieldWrite {
+                                                    target: crate::envelope::WriteTarget::Ext(
+                                                        String::from("content_type"),
+                                                    ),
+                                                    value: literal_tree(
+                                                        cel::Value::Text(ct),
+                                                        cel::Type::Text,
+                                                    ),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    "asset" => {
+                                        if let Some((index, ct)) = self.asset_value(tagged) {
+                                            writes.push(FieldWrite {
+                                                target: crate::envelope::WriteTarget::Data(
+                                                    Vec::new(),
+                                                ),
+                                                value: cel::Tree {
+                                                    root: cel::Expr::Asset(index),
+                                                    ty: cel::Type::Bytes,
+                                                },
+                                            });
+                                            if let Some(ct) = ct {
+                                                writes.push(FieldWrite {
+                                                    target: crate::envelope::WriteTarget::Ext(
+                                                        String::from("content_type"),
+                                                    ),
+                                                    value: literal_tree(
+                                                        cel::Value::Text(ct),
+                                                        cel::Type::Text,
+                                                    ),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    _ => unreachable!("content_typed covers these tags"),
+                                }
+                            } else if let Some(write) =
+                                self.nested_tagged_write(tagged, path.clone(), key.span)
                             {
                                 writes.push(write);
+                            }
+                        }
+                        // `data = { "k": v }` — the map value is the
+                        // whole payload (or a subtree).
+                        SynValue::BracedMap(entries)
+                            if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
+                        {
+                            let mut pairs = Vec::new();
+                            let mut broken = false;
+                            for (map_key, entry) in entries {
+                                match entry {
+                                    SynValue::Cel(expr) => {
+                                        if let Some(tree) = self.cel(expr, signature) {
+                                            pairs.push((map_key.clone(), tree.root));
+                                        } else {
+                                            broken = true;
+                                        }
+                                    }
+                                    _ => {
+                                        self.deferred("this map entry value form", key.span);
+                                        broken = true;
+                                    }
+                                }
+                            }
+                            if !broken {
+                                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                                writes.push(FieldWrite {
+                                    target,
+                                    value: cel::Tree {
+                                        root: cel::Expr::MapLit(pairs),
+                                        ty: cel::Type::Dyn,
+                                    },
+                                });
                             }
                         }
                         SynValue::Json { value, .. }
@@ -3905,21 +4000,22 @@ fn meta_type_refusal(ty: &cel::Type) -> Option<&'static str> {
     match ty {
         cel::Type::Bool
         | cel::Type::Int
-        | cel::Type::Uint
         | cel::Type::Double
         | cel::Type::Text
         | cel::Type::Bytes
         | cel::Type::Dyn => None,
+        cel::Type::Uint => {
+            Some("the uint domain stays in expressions — a metadata leaf takes `int`")
+        }
         cel::Type::List(inner) => match &**inner {
             cel::Type::Bool
             | cel::Type::Int
-            | cel::Type::Uint
             | cel::Type::Double
             | cel::Type::Text
             | cel::Type::Bytes
             | cel::Type::Dyn => None,
             _ => Some(
-                "a metadata leaf is `scalar | array<scalar>` — a nested composite belongs in `data`",
+                "a metadata leaf is `scalar | array<scalar>` — uint and nested composites stay out",
             ),
         },
         cel::Type::Duration | cel::Type::Timestamp => Some(

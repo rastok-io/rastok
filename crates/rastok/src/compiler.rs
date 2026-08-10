@@ -60,6 +60,29 @@ pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilat
     compile_with_assets(sources, registry, None)
 }
 
+/// The index of the source DECLARING the `: App` graph, by the
+/// parser's own reading — the CLI's asset-root anchor
+/// (D-2026-08-10-5). `None` when no source declares one.
+#[must_use]
+pub fn app_source_index(sources: &[&str]) -> Option<usize> {
+    use crate::compiler::syntax::TopDecl;
+    let mut scratch = Bag::new();
+    for (index, source) in sources.iter().enumerate() {
+        let source_id = SourceId::new(u32::try_from(index).unwrap_or(u32::MAX));
+        let tree = parser::parse(source_id, source, &mut scratch);
+        let declares_app = tree.decls.iter().any(|decl| {
+            matches!(decl, TopDecl::Graph(graph) if graph
+                .annotation
+                .as_ref()
+                .is_some_and(|annotation| annotation.symbols.iter().any(|symbol| symbol.text == "App")))
+        });
+        if declares_app {
+            return Some(index);
+        }
+    }
+    None
+}
+
 /// [`compile`], with an asset root the `asset(…)` literal may read
 /// from at build time (D-2026-08-10-5). `None` refuses every asset.
 ///

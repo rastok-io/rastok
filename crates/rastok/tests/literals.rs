@@ -726,3 +726,114 @@ fn asset_order_is_digest_canonical() {
         "strictly increasing digests"
     );
 }
+
+#[test]
+fn the_review_round_three_matrix_holds() {
+    use rastok::envelope::{Data, Scalar, Value};
+    // uint refuses statically — the runtime cannot represent it.
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.n = 3u\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("uint refuses at check");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-META-ZONE"),
+        "{bag:?}"
+    );
+    // A Dyn write is judged against the SEALED schema at run: x is
+    // int (the other writer), the text faults typed.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::Namespace;
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.x = 1\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.x = data\n        data = data\n      }\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("Dyn passes the static gate");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::materialized(Value::Scalar(Scalar::Text(String::from("hello")))),
+                ext: Namespace::new(),
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    )
+    .expect("the injection lands");
+    vm.drain(&mut journal)
+        .expect("the machine absorbs the fault");
+    assert_eq!(vm.outputs().len(), 0, "the text never crosses as int");
+    assert_eq!(vm.errors().len(), 1, "the typed fault leaves on err");
+    // app.content_type is an ORDINARY app field — no special rule.
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.content_type = 7\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    compile(&[source], &Registry::m0())
+        .expect("app.content_type is application vocabulary, int included");
+    // The whole-data content-typed builder forms run.
+    let Data::Materialized(value) =
+        emitted("{ data = base64(\"image/png\") { AAEC }, meta.app.tag = \"x\" }")
+    else {
+        panic!("materialized");
+    };
+    assert_eq!(value, Value::Scalar(Scalar::Bytes(vec![0, 1, 2])));
+    // And a map as the whole payload beside metadata.
+    let Data::Materialized(Value::Map(map)) =
+        emitted("{ data = { \"a\": 1 }, meta.app.tag = \"x\" }")
+    else {
+        panic!("a map payload");
+    };
+    assert_eq!(map.get("a"), Some(&Value::Scalar(Scalar::Int(1))));
+}
+
+#[test]
+fn deep_structural_types_meet_the_depth_budget() {
+    // 200 nested arrays — beyond the 128 structural levels D-8 pins.
+    let mut ty = String::from("text");
+    for _ in 0..200 {
+        ty = format!("array<{ty}>");
+    }
+    let source = format!(
+        "type Deep = {ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
+    );
+    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the depth budget");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-TYPE-RECURSIVE"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn lab_assets_never_reach_the_production_plan() {
+    use rastok::compiler::compile_with_assets;
+    use std::io::Write;
+
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lab-asset");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut file = std::fs::File::create(root.join("seed.bin")).unwrap();
+    file.write_all(b"seed").unwrap();
+
+    // An asset in a scenario injection AND one in a mock reply: both
+    // refuse — the Lab cannot extend the plan (D-2026-08-10-5), so
+    // no lab-only blob can ever contaminate the production table.
+    for body in [
+        "app.in = asset(\"seed.bin\")",
+        "mock shell { on in { out = asset(\"seed.bin\") } }\n      app.in = \"x\"",
+    ] {
+        let source = format!(
+            "graph g : App {{\n  connector shell : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> shell -> .\n}}\n\nlab g {{\n  simulation probing on app {{\n    scenario s \"lab asset\" {{\n      {body}\n      expect \"out\" app.out count == 1\n    }}\n  }}\n}}\n"
+        );
+        let bag = compile_with_assets(&[source.as_str()], &Registry::m0(), Some(&root))
+            .expect_err("a lab asset refuses");
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|d| d.code().as_str() == "E-ASSET"
+                    && d.message().contains("a Lab cannot extend the plan")),
+            "{bag:?}"
+        );
+    }
+}

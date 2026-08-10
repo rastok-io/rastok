@@ -411,7 +411,9 @@ fn meta_target_known(
             }
         }
         crate::envelope::WriteTarget::Ext(field) => {
-            if plan.ext_schema.iter().any(|(known, _)| known == field) {
+            // The standard field is IMPLICIT — known to every
+            // consumer, never serialized (D-2026-08-10-4).
+            if field == "content_type" || plan.ext_schema.iter().any(|(known, _)| known == field) {
                 Ok(())
             } else {
                 Err(PlanValidationError::UnknownMetaField {
@@ -427,6 +429,7 @@ fn meta_target_known(
 /// leaf rule (`scalar | array<scalar>` | Dyn), and the standard
 /// `content_type` pinned to text.
 fn schema_well_formed(
+    zone: &'static str,
     schema: &[(alloc::string::String, cel::Type)],
 ) -> Result<(), PlanValidationError> {
     fn leaf_scalar(ty: &cel::Type) -> bool {
@@ -443,9 +446,13 @@ fn schema_well_formed(
     }
     for (index, (field, ty)) in schema.iter().enumerate() {
         let leaf_ok = leaf_scalar(ty) || matches!(ty, cel::Type::List(inner) if leaf_scalar(inner));
-        if !leaf_ok || (field == "content_type" && !matches!(ty, cel::Type::Text)) {
+        // In EXT the standard field is implicit and reserved — a
+        // serialized entry would create a second authority. In APP
+        // it is an ordinary application field (D-2026-08-10-4).
+        let reserved = zone == "ext" && field == "content_type";
+        if !leaf_ok || reserved {
             return Err(PlanValidationError::UnknownMetaField {
-                zone: "schema",
+                zone,
                 field: field.clone(),
             });
         }
@@ -568,8 +575,8 @@ fn assets_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 }
 
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
-    schema_well_formed(&plan.app_schema)?;
-    schema_well_formed(&plan.ext_schema)?;
+    schema_well_formed("app", &plan.app_schema)?;
+    schema_well_formed("ext", &plan.ext_schema)?;
     assets_well_formed(plan)?;
     // Uniqueness first, GLOBALLY, then canonical order: a collection
     // that is both duplicated and disordered refuses as the
