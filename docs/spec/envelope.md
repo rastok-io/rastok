@@ -14,7 +14,7 @@ on the outside, `data` is sealed inside.
 ```
 envelope = meta + data
   meta.sys   runtime-owned, READ-ONLY                       (this doc)
-  meta.app   application-owned, read-write, DECLARED        (D-2026-08-10-1)
+  meta.app   application-owned, read-write, INFERRED        (D-2026-08-10-1)
   meta.ext   external-boundary context, read-write          (D-2026-08-10-1/-4)
   data       the payload — any type, any encoding, lazy     (§5)
 ```
@@ -22,10 +22,10 @@ envelope = meta + data
 Exactly three zones, no other root: there is NO bare field
 (`meta.customer_id` is invalid — no alias resolves it), no custom
 namespace at the root, and no connector name in a meta path.
-`app` is auto-available but its fields are DECLARED at graph level
-(`meta app { customer_id: text, audit.origin: text }`), unified
-App-wide; a write to an undeclared field refuses at check — a typo
-never mints a metadata field. `ext`'s vocabulary belongs to
+`app` is auto-available and its fields are INFERRED from the unit's
+writes (graph and lab alike): types unify across writers, a conflict
+refusing with both sites named; a read of a name written nowhere
+refuses. There is no declaration form. `ext`'s vocabulary belongs to
 connector contract sheets (their `Populates` row, stdlib.md) plus
 the standard `content_type` (§5.2); handlers may rewrite declared
 ext fields, never invent one. Each zone's leaves are

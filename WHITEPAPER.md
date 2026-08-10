@@ -713,11 +713,11 @@ single carried payload. The postal metaphor fits: `meta` is what's written
 
 `meta` has exactly three zones. `meta.sys` is the runtime's read-only spine —
 identity, lineage, role; six fields, minted fresh at every hop.
-`meta.app` is the application's writable zone — its fields DECLARED at
-graph level (`meta app { customer_id: text }`), a typo never minting a
-field — and `meta.ext` is the external-boundary context, written by
-connectors (their contract sheets declare its fields) and rewritable
-by handlers. There is no bare form: `meta.x` resolves to nothing.
+`meta.app` is the application's writable zone — its fields inferred
+from the graph's own writes, with types unified across writers — and
+`meta.ext` is the external-boundary context, written by connectors
+(their contract sheets declare its fields) and rewritable by
+handlers. There is no bare form: `meta.x` resolves to nothing.
 `meta` leaves are typed scalars (or scalar arrays) — composites belong in
 `data`. The normative field list, read-only rules, id derivation, storage
 form and birth stamps live in

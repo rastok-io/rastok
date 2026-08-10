@@ -12,35 +12,35 @@ read-write), `meta.ext` (external-boundary context, read-write). No
 other root exists: no bare field (`meta.customer_id` is invalid — the
 `meta.x ≡ meta.app.x` alias is REMOVED), no custom namespace at the
 root, no connector name in a meta path, no lexical scoping of meta
-references, no prefix-freedom machinery. `app` is auto-available but
-its fields are DECLARED, never inferred: a graph-level declaration
-(`meta app { customer_id: text, audit.origin: text }`) types every
-field; declarations may appear at any graph level and unify into ONE
-App-wide schema, a type conflict refusing with both sites named; a
-write to an undeclared `app` field refuses at check — a typo can
-never mint a metadata field — and fixtures and mocks are checked
-against the SAME resolved schema. `ext`'s vocabulary is declared
-ONLY by connector contract sheets (a `Populates` row: fields and
-scalar types, unified across connectors — incompatible declarations
-refuse naming the connectors and types) plus the standard reserved
-field `content_type` (D-2026-08-10-4); handlers may REWRITE declared
-ext fields, never invent one — the application's own vocabulary
-belongs to `app`. Leaves stay `scalar | array<scalar>`; composites
-live in `data`. The physical form is FLAT — one dotted string key
-per field within its zone (`"app.audit.origin"`,
-`"ext.content_type"`); the projections NEST by splitting on dots, so
-CEL reads `meta.app.audit.origin` and a guest block sees nested
-objects, while every seal sorts by the flat key and the package's
-schema tables key by it — one storage form, one sort order, nested
-views derived. `meta`, `data`, `sys`, `app`, and `ext` are refused
-as node names. **Supersedes:** the root alias and its write/read
-projection (round 5 of M0); root custom namespaces (`meta.<custom>`);
-the field-creation-by-first-write behavior of the current CEL grid;
-every intermediate proposal of connector-path namespaces, scoped
-resolution, shadowing, reach-through reads, and prefix-freedom (none
-implemented). **Rejected:** inference from writes (a write-only typo
-silently mints a field, and the join presence analysis
-(D-2026-08-10-2) loses its anchor — declarations buy both);
+references, no prefix-freedom machinery. `app` is auto-available and
+its fields are INFERRED from the unit's writes — graph and lab
+alike, so fixtures and mocks answer to the same resolved schema:
+types unify across writers and a conflict refuses with both sites
+named; a read of a name written nowhere refuses (the existing
+CEL-grid rule); dotted names (`meta.app.audit.origin`) are plain
+field names, not a subspace mechanism. There is NO declaration form
+for `app`. `ext`'s vocabulary is declared ONLY by connector contract
+sheets (a `Populates` row: fields and scalar types, unified across
+connectors — incompatible declarations refuse naming the connectors
+and types) plus the standard reserved field `content_type`
+(D-2026-08-10-4); handlers may REWRITE declared ext fields, never
+invent one — the application's own vocabulary belongs to `app`.
+Leaves stay `scalar | array<scalar>`; composites live in `data`. The
+physical form is FLAT — one dotted string key per field within its
+zone (`"app.audit.origin"`, `"ext.content_type"`); the projections
+NEST by splitting on dots, so CEL reads `meta.app.audit.origin` and
+a guest block sees nested objects, while every seal sorts by the
+flat key and the package's schema tables key by it — one storage
+form, one sort order, nested views derived. `meta`, `data`, `sys`,
+`app`, and `ext` are refused as node names. **Supersedes:** the root
+alias and its write/read projection (round 5 of M0); root custom
+namespaces (`meta.<custom>`); every intermediate proposal of
+connector-path namespaces, scoped resolution, shadowing,
+reach-through reads, and prefix-freedom (none implemented).
+**Rejected:** a mandatory `meta app { … }` declaration (ceremony the
+grid already covers: the read-of-nowhere-written rule and
+cross-writer type unification catch the dangerous typos — the
+write-only typo mints a dead field and is the accepted price);
 per-connector namespaces (two connector types wanting one name,
 unanswerable join merges, renames rippling through readers).
 ## D-2026-08-10-2 — Propagation is uniform; joins merge by value
@@ -48,8 +48,9 @@ unanswerable join merges, renames rippling through readers).
 A single-input emission copies `app` and `ext` from the input, mints
 `sys` fresh, then applies the handler's explicit writes,
 last-write-wins per field. A join has NO implicit parent: for every
-field of the declared universe (`app` declarations, sheet `ext`
-fields, standard fields), the merge is CommonOrAbsent — absent
+field of the statically known universe (the inferred `app` schema —
+every write in the unit —, sheet `ext` fields, standard fields), the
+merge is CommonOrAbsent — absent
 everywhere → absent; one distinct value → kept; conflicting values →
 absent — using each metadata type's canonical equality, never a map
 order or a scheduler order. The lowering emits a static
