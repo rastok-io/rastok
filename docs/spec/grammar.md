@@ -1172,6 +1172,7 @@ COMMENT    ::= "//" .* EOL  |  "/*" any* "*/"
 
 ```rastok
 DECL_KW    = { "graph", "partition", "operator", "connector",
+               "type",                                                 // unit-level type alias (D-2026-08-10-8)
                "per", "val", "var", "input", "output", "on",
                "start", "stop", "compensate",                          // lifecycle / saga handler triggers (see effects-and-sagas.md for `compensate`)
                "by", "where", "having", "within", "last",
@@ -1194,8 +1195,10 @@ TYPE_KW    = { "variant",                                             // the val
                "decimal", "date", "timestamp", "timestamp_ntz",      // scalar logical
                "time", "uuid", "duration" }
 TAG_KW     = { "jq", "bash", "sql", "python", "rust",
-               "json", "avro", "protobuf", "parquet", "msgpack",     // wire codecs
-               "base64", "hex", "csv", "file",
+               "json", "avro", "protobuf", "parquet", "msgpack",     // wire codecs — `json` doubles as the json_value literal tag (D-2026-08-10-6)
+               "base64", "csv",                                       // `hex` and `file` are DEAD (D-2026-08-10-5/-6)
+               "text",                                                // the verbatim block tag (also a TYPE_KW — position disambiguates)
+               "asset",                                               // build-time repo bytes (D-2026-08-10-5)
                "oauth2_client_credentials",
                "measure",                                             // Loop.variant value (loop.md §2)
                "exponential", "linear", "constant", "fibonacci",     // backoff constructors (loop.md §4)
@@ -1249,6 +1252,8 @@ top_decl          ::= graph_decl                       // incl. the one `: App` 
                     | lab_decl                           // the Lab is the home of
                     | val_decl                           //  simulation / experiment / theorem ;
                                                          //  no bare top-level `simulation`)
+                    | type_decl                          // `type Person = struct { … }` — UNIT-level namespace,
+                                                         //  structural sugar (D-2026-08-10-8)
 // A graph instantiates by declaration and wires by name ; the entry point is
 // the `: App`-annotated graph ; `app` is a pre-bound identifier for it.
 
@@ -1281,12 +1286,13 @@ operator_body     ::= "{" ( port_decl | val_decl | var_decl
 graph_body        ::= ( port_decl | partition_decl | operator_decl | connector_decl
                        | val_decl | edge_decl
                        | defaults_block
-                       | type_decl                             // `type Person = struct { … }` — structural sugar (D-2026-08-10-8)
                        | graph_decl                            // graphs NEST (effects-and-sagas §7.2)
                        | attribute                             // aspect attributes : Saga.timeout = duration("10m"), name = …
                        | handler_decl )*                        // graph-level handlers (including Loop base cases)
 
-type_decl         ::= "type" IDENT "=" type_ref                   // unit-level namespace ; duplicates refuse ; recursion refuses (v1)
+type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL only ; one namespace per unit ; duplicates refuse ;
+                                                                  //   recursion refuses (v1) ; budgets: depth ≤ MAX_NESTING, expanded
+                                                                  //   tree ≤ 4096 nodes, ≤ 256 fields/struct, ≤ 64 KiB (D-2026-08-10-8)
 
 // A Node carrying `: Loop` must have exactly one qualified attribute:
 //   Loop.variant = measure { initial = 5; next = value - 1; until = value <= 0 }
@@ -1383,9 +1389,12 @@ value             ::= tagged_value                                    // jq { �
                     | "."                                             // identity — exact re-emission (envelope positions only)
                     | "nothing"                                       // emission positions : emit nothing
                     | cel_expr                                        // everything else — one grain, one grammar
-                    // LL(1) on the leading token : TAG_KW → tagged_value ;
-                    // map → tagged_block_value ; "{" → braced_value ; "." → identity ;
-                    // "nothing" → nothing ; anything else → hand the span to the CEL sub-parser.
+                    // LL(1) on the leading token : "text"/"base64"/"json"/"asset" →
+                    // tagged_block_value ; other TAG_KW → tagged_value ; "{" →
+                    // braced_value (then ONE token inside decides struct/map/empty :
+                    // "}" → {} struct ; ":" → {:} map ; STRING → map_entries ;
+                    // IDENT → struct_entries) ; "." → identity ; "nothing" → nothing ;
+                    // anything else → hand the span to the CEL sub-parser.
 
 cel_expr          ::= /* a CEL expression (homegrown parser+checker+eval).
                        Pure-CEL subset : literals, member/index access, operators, ternary,
@@ -1407,7 +1416,8 @@ cel_path          ::= /* a CEL access path (subset of cel_expr) : IDENT ( "." ID
 
 // DELIMITATION of a cel_expr span — how the DSL lexer finds the end.
 // The span runs at BRACKET DEPTH 0 (the CEL sub-lexer tracks ( ) [ ] { } nesting,
-// so CEL map literals `{'a': 1}` and struct-ish braces inside the span are fine)
+// so CEL map literals `{"a": 1}` — the SAME punctuation as the DSL map,
+// D-2026-08-10-6 — and struct-ish braces inside the span are fine)
 // until the position's terminator set :
 //   guard positions   (where/having/by/when)  → { having by within last when NEWLINE "{" "->" }
 //   attribute / init  (= …)                   → { NEWLINE ";" "}" }
@@ -1421,7 +1431,18 @@ cel_path          ::= /* a CEL access path (subset of cel_expr) : IDENT ( "." ID
 
 err_value         ::= IDENT ( "{" struct_body "}" )?                  // the error kind ∈ the node's declared error set,
                                                                       //   with optional typed fields — compile-checked
-braced_value      ::= "{" struct_body "}"                             // the braced record (D-2026-08-09-1)
+braced_value      ::= "{" braced_body? "}"                            // ONE brace, punctuation decides (D-2026-08-10-6)
+braced_body       ::= struct_entries | map_entries | ":"              // `{}` empty struct ; `{:}` empty map ;
+                                                                      // mixing `=` and `:` entries REFUSES (one diagnostic, first offender named)
+struct_entries    ::= struct_entry ( ","? struct_entry )*             // newline or comma separated (Scala-style, § separators)
+struct_entry      ::= lvalue "=" value                                // dotted keys nest (a.b = 1) ; reserved-root classification
+                    | IDENT "{" struct_body "}"                       //   applies in envelope positions only
+map_entries       ::= map_entry ( ","? map_entry )*
+map_entry         ::= STRING ":" value                                // text keys in this milestone
+json_value        ::= JSON_VALUE                                      // one complete JSON value, delegated to the house reader :
+                                                                      // object/array by brace/bracket balance, scalars by the JSON
+                                                                      // grammar itself ; duplicate keys refuse ; numbers exact
+                                                                      // (identity.md tag-6 rule, D-2026-08-10-7)
                     // In ENVELOPE positions (handler emissions, fixture injections,
                     // mock replies) the checker classifies the body ONCE by its
                     // top-level roots : no reserved root → a fresh data record
@@ -1610,12 +1631,12 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | `stop` — alone or followed by IDENT | `stop` action |
 | `handler_body` (statement) | `(` | tuple multi-emit `(a, b) = (e1, e2)` |
 | `handler_body` (statement) | `lvalue` (IDENT, dotted ok — e.g. `meta.app.label`) — next is `=` or `:` | assignment / port emit (`= nothing` = no emit ; `meta.sys` is read-only, never an lvalue) |
-| `handler_body` (statement) | TAG_KW / `map` / `{` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
+| `handler_body` (statement) | TAG_KW / `{` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
 | `attr_or_block` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_or_block` | IDENT — next is `{` | `sub_block` |
 | `value` | TAG_KW | `tagged_value` |
-| `value` | `map` — next is `{` | `tagged_block_value` |
-| `value` | `{` | `braced_value` |
+| `value` | `text` / `base64` / `json` / `asset` | `tagged_block_value` (verbatim / bytes / json_value / build-time bytes) |
+| `value` | `{` — then `}` / `:` / STRING / IDENT | `braced_value` : empty struct / empty map / map_entries / struct_entries |
 | `value` | `.` (envelope position) | identity — exact re-emission |
 | `value` | `nothing` (emission position) | no-emit |
 | `value` | anything else | hand the span to the CEL sub-parser (`cel_expr` ; `as type_ref` composes at span end) |

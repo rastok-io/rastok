@@ -22,10 +22,23 @@ envelope = meta + data
 Exactly three zones, no other root: there is NO bare field
 (`meta.customer_id` is invalid — no alias resolves it), no custom
 namespace at the root, and no connector name in a meta path.
-`app` is auto-available and its fields are INFERRED from the unit's
-writes (graph and lab alike): types unify across writers, a conflict
-refusing with both sites named; a read of a name written nowhere
-refuses. There is no declaration form. `ext`'s vocabulary belongs to
+`app` is auto-available and its fields are INFERRED — from the
+DEPLOYED GRAPH's statically visible RKG writes ONLY: types unify
+across writers, a conflict refusing with both sites named; a read of
+a name the graph writes nowhere refuses. There is no declaration
+form. Three boundaries close the inference (D-2026-08-10-1):
+a LAB never extends the production schema — fixtures, mocks, and
+expectations are checked against the graph's resolved schema and
+cannot add a field to it (nor touch the plan or the semantic hash);
+world-owned values enter through `meta.ext` and the graph copies
+them into `app` explicitly when it wants to keep them; and a GUEST
+block (`jq`/Wasm) reads `meta` but never writes it in v1 — metadata
+writes belong to the DSL, where the checker sees every key, so no
+dynamic key can silently widen the schema. Within each zone the
+flat keys are PREFIX-FREE: `app.audit` and `app.audit.origin`
+cannot coexist (one is a leaf, the other makes it a branch of the
+nested projection) — refused at check and re-verified by the
+package validator. `ext`'s vocabulary belongs to
 connector contract sheets (their `Populates` row, stdlib.md) plus
 the standard `content_type` (§5.2); handlers may rewrite declared
 ext fields, never invent one. Each zone's leaves are
@@ -388,10 +401,15 @@ envelope (storage = wire) =
 - **`data` is tagged bytes.** The static type (what `data` *means* — `bytes`,
   `struct`, `table<…>`) comes from the graph schema via `graph_version`. The
   `encoding_tag` (how it is *represented now*) is dynamic, per-envelope, drawn
-  from the runtime's internal representations : `raw | avro | arrow-ipc`. When
-  `encoding_tag = raw`, **`meta.ext.content_type` is the parse hint** (`raw` +
-  `application/json` → the JSON parser on first structural access). No separate
-  `json` tag is needed — exactly how HTTP works.
+  from the runtime's internal representations : `raw | avro | arrow-ipc`. `meta.ext.content_type` is never an internal decode tag: the core
+  decodes with `encoding_tag` ALONE. The v1 regime (D-2026-08-10-4):
+  a structured external body (HTTP JSON) is decoded EAGERLY at the
+  frontier by the connector — `Materialized(variant)` — while `raw`
+  carries opaque bytes whose only structural readings are UTF-8 text
+  or the bytes themselves; a possible future `Encoding::Json` would
+  make JSON lazy WITHOUT consulting Meta. A JSON body is never
+  parked under `raw` where a structural access would materialize it
+  as raw text.
 
 ### 5.0 Four planes, never confused
 
@@ -409,9 +427,12 @@ bytes and a matching `content_type`.
 
 ### 5.1 Lazy rules (Memory-Representation Polymorphism)
 
-1. **No structural access → no transcode, ever.** A JSON body entering by HTTP
-   and leaving by HTTP, routed on `meta` alone, is never parsed nor re-encoded —
-   the bytes traverse untouched. An OGG `bytes` payload stays OGG forever.
+1. **No structural access → no transcode, ever.** An opaque `bytes` payload
+   routed on `meta` alone is never parsed nor re-encoded — the bytes traverse
+   untouched; an OGG payload stays OGG forever. (The pass-through ideal for
+   structured bodies awaits a lazy `Encoding::Json`; in the v1 regime a JSON
+   body is decoded eagerly at the frontier — D-2026-08-10-4 — because parking
+   it under `raw` would make a structural access materialize raw text.)
 2. **Access → transcode once** to the guest-native form (`jq` on a document →
    parse ; `sql {}` on a table → Arrow, once).
 3. **A value built by the graph** (output of a `jq`, a join) is born in memory

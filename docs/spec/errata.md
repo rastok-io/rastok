@@ -159,6 +159,11 @@ and execution-equivalence round-trip tests pin the fix.
   `meta.app.<field>` only when `<field>` names no declared custom
   namespace — or drop the bare alias entirely and require the
   explicit form.
+- **RESOLVED (2026-08-10):** the second branch, taken to its end by
+  D-2026-08-10-1 — the bare alias AND custom namespaces are both
+  removed. Metadata has exactly three zones (`sys`/`app`/`ext`);
+  every path is explicit; the collision is unrepresentable. The
+  interim shadowing projection dies with the model.
 - **Found by:** external code review (seventh pass), 2026-08-04.
 
 ## E-2026-08-04-2 — the timer ref of key 37 needs its own recipe
