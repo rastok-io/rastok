@@ -798,12 +798,16 @@ fn deep_structural_types_meet_the_depth_budget() {
         "type Deep = {ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
     );
     let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the depth budget");
+    let hit = bag
+        .diagnostics()
+        .iter()
+        .find(|d| d.code().as_str() == "E-TYPE-BUDGET")
+        .expect("the budget code");
     assert!(
-        bag.diagnostics()
-            .iter()
-            .any(|d| d.code().as_str() == "E-TYPE-RECURSIVE"),
-        "{bag:?}"
+        hit.fields().iter().any(|(name, _)| *name == "depth"),
+        "the measured depth rides the payload: {hit:?}"
     );
+    assert!(!hit.spans().is_empty(), "located: {hit:?}");
 }
 
 #[test]
@@ -842,7 +846,8 @@ fn lab_assets_never_reach_the_production_plan() {
 fn the_validator_only_admits_executable_schemas() {
     use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
     let base = "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
-    // A uint schema entry: no value can ever satisfy it.
+    // A uint schema entry: no value can ever satisfy it — named as
+    // the TYPE refusal it is.
     let mut plan = compile(&[base], &Registry::m0())
         .expect("valid")
         .plan
@@ -850,9 +855,10 @@ fn the_validator_only_admits_executable_schemas() {
     plan.app_schema = vec![(String::from("n"), rastok::cel::Type::Uint)];
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::UnknownMetaField { .. }
+        PlanValidationError::MetaSchemaType { .. }
     ));
-    // A branch under the implicit ext leaf: it would shadow it.
+    // A branch under the implicit ext leaf: a PREFIX collision with
+    // the implicit `content_type`.
     let mut plan = compile(&[base], &Registry::m0())
         .expect("valid")
         .plan
@@ -860,8 +866,23 @@ fn the_validator_only_admits_executable_schemas() {
     plan.ext_schema = vec![(String::from("content_type.foo"), rastok::cel::Type::Text)];
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::UnknownMetaField { .. }
+        PlanValidationError::MetaPrefixCollision { .. }
     ));
+    // Malformed dotted keys — unreachable by the projection.
+    for bad in ["", ".origin", "a.", "a..b"] {
+        let mut plan = compile(&[base], &Registry::m0())
+            .expect("valid")
+            .plan
+            .into_inner();
+        plan.app_schema = vec![(String::from(bad), rastok::cel::Type::Text)];
+        assert!(
+            matches!(
+                ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+                PlanValidationError::MetaFieldMalformed { .. }
+            ),
+            "`{bad}` must refuse as malformed"
+        );
+    }
 }
 
 #[test]
@@ -937,22 +958,51 @@ fn values_nest_recursively_across_struct_and_map() {
 
 #[test]
 fn broken_type_declarations_refuse_even_unused() {
-    for (source_ty, code, what) in [
-        ("Ghost", "E-RESOLVE-UNKNOWN", "unknown name"),
+    for (source_ty, code, field_key, field_value, what) in [
+        (
+            "Ghost",
+            "E-RESOLVE-UNKNOWN",
+            "name",
+            "Ghost",
+            "unknown name",
+        ),
         (
             "struct { x: int, x: text }",
             "E-TYPE-DUP",
+            "field",
+            "x",
             "duplicate field",
         ),
-        ("enum { x, x }", "E-TYPE-DUP", "duplicate symbol"),
+        (
+            "enum { x, x }",
+            "E-TYPE-DUP",
+            "field",
+            "x",
+            "duplicate symbol",
+        ),
     ] {
         let source = format!(
             "type Broken = {source_ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
         );
         let bag = compile(&[source.as_str()], &Registry::m0()).expect_err(what);
+        let hit = bag
+            .diagnostics()
+            .iter()
+            .find(|d| d.code().as_str() == code)
+            .unwrap_or_else(|| panic!("`{what}`: {bag:?}"));
         assert!(
-            bag.diagnostics().iter().any(|d| d.code().as_str() == code),
-            "`{what}`: {bag:?}"
+            hit.fields()
+                .iter()
+                .any(|(name, value)| *name == field_key && *value == field_value),
+            "`{what}` payload: {hit:?}"
+        );
+        assert!(!hit.spans().is_empty(), "`{what}` located: {hit:?}");
+        // The stable payload never carries one key twice.
+        let mut keys: Vec<&str> = hit.fields().iter().map(|(name, _)| *name).collect();
+        keys.sort_unstable();
+        assert!(
+            keys.windows(2).all(|pair| pair[0] != pair[1]),
+            "`{what}` duplicate field keys: {hit:?}"
         );
     }
     // A wide union spends the node budget alternative by
@@ -965,7 +1015,8 @@ fn broken_type_declarations_refuse_even_unused() {
     assert!(
         bag.diagnostics()
             .iter()
-            .any(|d| { d.code().as_str() == "E-TYPE-RECURSIVE" && d.message().contains("4096") }),
+            .any(|d| d.code().as_str() == "E-TYPE-BUDGET"
+                && d.fields().iter().any(|(name, _)| *name == "nodes")),
         "{bag:?}"
     );
 }

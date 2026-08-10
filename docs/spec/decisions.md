@@ -185,7 +185,12 @@ guard nothing); URLs; path-sealed identity.
 
 `{ a = 1 }` is a struct; `{ "a": 1 }` is a map (text keys in this
 milestone); `{}` is the empty struct; `{:}` is the empty map; mixing
-`=` and `:` entries refuses. `map { … }` dies — superseding exactly
+`=` and `:` entries refuses. Values NEST recursively — maps, json,
+the empty struct, and the bare byte/text forms are ordinary nested
+values — with ONE inexpressible form in v1: a non-empty struct
+inside a map (no serializable struct-literal expression exists);
+it defers by name, and `json` covers dynamic nesting at the price
+of being `variant`, never a typed struct. `map { … }` dies — superseding exactly
 that clause of D-2026-08-09-1 (its braced-classification core
 stands). The CEL MapLit aligns on the same punctuation: one map
 dialect per source file. `text { … }` is the verbatim text form:

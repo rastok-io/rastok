@@ -119,6 +119,22 @@ pub enum PlanValidationError {
         /// The flat dotted field.
         field: alloc::string::String,
     },
+    /// A schema type no metadata value can satisfy.
+    MetaSchemaType {
+        /// The zone.
+        zone: &'static str,
+        /// The unsatisfiable field.
+        field: alloc::string::String,
+    },
+    /// A flat key whose spelling breaks the dotted form — empty, a
+    /// leading/trailing dot, or an empty segment; the nested
+    /// projection could never reach it.
+    MetaFieldMalformed {
+        /// The zone.
+        zone: &'static str,
+        /// The malformed key.
+        field: alloc::string::String,
+    },
     /// Two asset blobs carrying one digest — the table is
     /// content-addressed, one content one blob.
     DuplicateAsset {
@@ -213,6 +229,14 @@ impl core::fmt::Display for PlanValidationError {
             Self::UnknownMetaField { zone, field } => write!(
                 f,
                 "invalid plan: a `meta.{zone}.{field}` write outside the travelling schema"
+            ),
+            Self::MetaSchemaType { zone, field } => write!(
+                f,
+                "invalid plan: `meta.{zone}.{field}` declares a type no value can satisfy"
+            ),
+            Self::MetaFieldMalformed { zone, field } => write!(
+                f,
+                "invalid plan: `meta.{zone}.{field}` is not a well-formed dotted key"
             ),
             Self::DuplicateAsset { index } => {
                 write!(f, "invalid plan: asset {index} repeats an earlier digest")
@@ -447,17 +471,36 @@ fn schema_well_formed(
         )
     }
     for (index, (field, ty)) in schema.iter().enumerate() {
+        // The dotted-key FORM first: the nested projection splits on
+        // dots, so an empty key or segment is unreachable state.
+        if field.is_empty() || field.split('.').any(str::is_empty) {
+            return Err(PlanValidationError::MetaFieldMalformed {
+                zone,
+                field: field.clone(),
+            });
+        }
         let leaf_ok = leaf_scalar(ty) || matches!(ty, cel::Type::List(inner) if leaf_scalar(inner));
+        if !leaf_ok {
+            return Err(PlanValidationError::MetaSchemaType {
+                zone,
+                field: field.clone(),
+            });
+        }
         // In EXT the standard field is implicit and reserved — a
         // serialized entry would create a second authority, and a
-        // BRANCH under it would shadow the implicit leaf. In APP it
-        // is an ordinary application field (D-2026-08-10-4).
-        let reserved =
-            zone == "ext" && (field == "content_type" || field.starts_with("content_type."));
-        if !leaf_ok || reserved {
+        // BRANCH under it would shadow the implicit leaf (a prefix
+        // collision with the implicit leaf, named as such). In APP
+        // it is an ordinary application field (D-2026-08-10-4).
+        if zone == "ext" && field == "content_type" {
             return Err(PlanValidationError::UnknownMetaField {
                 zone,
                 field: field.clone(),
+            });
+        }
+        if zone == "ext" && field.starts_with("content_type.") {
+            return Err(PlanValidationError::MetaPrefixCollision {
+                leaf: alloc::string::String::from("content_type"),
+                branch: field.clone(),
             });
         }
         if let Some((previous, _)) = index.checked_sub(1).and_then(|i| schema.get(i))

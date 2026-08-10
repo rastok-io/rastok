@@ -56,14 +56,18 @@ pub const E_TYPE_RECURSIVE: Code = Code::new("E-TYPE-RECURSIVE");
 /// A duplicate field or symbol inside one type declaration; fields
 /// `name` (the type) and `field` (the duplicate).
 pub const E_TYPE_DUP: Code = Code::new("E-TYPE-DUP");
+/// A type expansion beyond a structural budget — depth, nodes, or
+/// width; the MEASURED value rides the diagnostic; fields `name` +
+/// `depth`/`nodes`/`count` (D-2026-08-10-8).
+pub const E_TYPE_BUDGET: Code = Code::new("E-TYPE-BUDGET");
 
-/// Why a type declaration refuses — one variant per rule, so each
-/// carries its own diagnostic and its measured value.
+/// Why a type declaration refuses — one variant per rule, each with
+/// its own code, span, and measured value.
 enum TypeRefusal {
-    UnknownName { name: String },
-    Cycle { name: String },
-    DuplicateField { name: String },
-    DuplicateSymbol { name: String },
+    UnknownName { name: String, span: Span },
+    Cycle { name: String, span: Span },
+    DuplicateField { name: String, span: Span },
+    DuplicateSymbol { name: String, span: Span },
     DepthBudget { measured: usize },
     NodeBudget { measured: usize },
     WidthBudget { what: &'static str, measured: usize },
@@ -2413,53 +2417,78 @@ impl Checker<'_, '_> {
         let mut nodes = 0usize;
         let mut stack: Vec<String> = Vec::new();
         if let Err(refusal) = self.walk_type(&decl.ty, &mut nodes, 0, &mut stack) {
-            let (code, message, extra) = match refusal {
-                TypeRefusal::UnknownName { name } => (
+            // Each refusal picks its own code, PHASE, and span — the
+            // faulty reference or duplicate is underlined, never the
+            // declaration name it happens to live in.
+            let diagnostic = match refusal {
+                TypeRefusal::UnknownName { name, span } => Diagnostic::new(
                     E_RESOLVE_UNKNOWN,
+                    Phase::Resolve,
                     format!("`{name}` names no declared type"),
-                    ("name", name),
-                ),
-                TypeRefusal::Cycle { name } => (
+                )
+                .with_span(span)
+                .with_field("name", name),
+                TypeRefusal::Cycle { name, span } => Diagnostic::new(
                     E_TYPE_RECURSIVE,
-                    format!("`{name}` reaches itself — recursion refuses in v1"),
-                    ("name", name),
-                ),
-                TypeRefusal::DuplicateField { name } => (
-                    E_TYPE_DUP,
-                    format!("the struct field `{name}` is declared twice"),
-                    ("field", name),
-                ),
-                TypeRefusal::DuplicateSymbol { name } => (
-                    E_TYPE_DUP,
-                    format!("the enum symbol `{name}` is declared twice"),
-                    ("field", name),
-                ),
-                TypeRefusal::DepthBudget { measured } => (
-                    E_TYPE_RECURSIVE,
-                    format!("the expansion nests {measured} levels deep — the budget is 128"),
-                    ("depth", measured.to_string()),
-                ),
-                TypeRefusal::NodeBudget { measured } => (
-                    E_TYPE_RECURSIVE,
-                    format!("the expansion reaches {measured} nodes — the budget is 4096"),
-                    ("nodes", measured.to_string()),
-                ),
-                TypeRefusal::WidthBudget { what, measured } => (
-                    E_TYPE_RECURSIVE,
-                    format!("{measured} {what} — the budget is 256"),
-                    ("count", measured.to_string()),
-                ),
-            };
-            self.bag.push(
-                Diagnostic::new(
-                    code,
                     Phase::Check,
-                    format!("the type `{}` does not expand: {message}", decl.name.text),
+                    format!(
+                        "the type `{}` does not expand: `{name}` reaches itself — recursion refuses in v1",
+                        decl.name.text
+                    ),
+                )
+                .with_span(span)
+                .with_field("name", decl.name.text.clone()),
+                TypeRefusal::DuplicateField { name, span } => Diagnostic::new(
+                    E_TYPE_DUP,
+                    Phase::Check,
+                    format!("the struct field `{name}` is declared twice"),
+                )
+                .with_span(span)
+                .with_field("name", decl.name.text.clone())
+                .with_field("field", name),
+                TypeRefusal::DuplicateSymbol { name, span } => Diagnostic::new(
+                    E_TYPE_DUP,
+                    Phase::Check,
+                    format!("the enum symbol `{name}` is declared twice"),
+                )
+                .with_span(span)
+                .with_field("name", decl.name.text.clone())
+                .with_field("field", name),
+                TypeRefusal::DepthBudget { measured } => Diagnostic::new(
+                    E_TYPE_BUDGET,
+                    Phase::Check,
+                    format!(
+                        "the type `{}` nests {measured} levels deep — the budget is 128",
+                        decl.name.text
+                    ),
                 )
                 .with_span(decl.name.span)
                 .with_field("name", decl.name.text.clone())
-                .with_field(extra.0, extra.1),
-            );
+                .with_field("depth", measured.to_string()),
+                TypeRefusal::NodeBudget { measured } => Diagnostic::new(
+                    E_TYPE_BUDGET,
+                    Phase::Check,
+                    format!(
+                        "the type `{}` expands to {measured} nodes — the budget is 4096",
+                        decl.name.text
+                    ),
+                )
+                .with_span(decl.name.span)
+                .with_field("name", decl.name.text.clone())
+                .with_field("nodes", measured.to_string()),
+                TypeRefusal::WidthBudget { what, measured } => Diagnostic::new(
+                    E_TYPE_BUDGET,
+                    Phase::Check,
+                    format!(
+                        "the type `{}` carries {measured} {what} — the budget is 256",
+                        decl.name.text
+                    ),
+                )
+                .with_span(decl.name.span)
+                .with_field("name", decl.name.text.clone())
+                .with_field("count", measured.to_string()),
+            };
+            self.bag.push(diagnostic);
         }
     }
 
@@ -2494,6 +2523,7 @@ impl Checker<'_, '_> {
                     if stack.contains(&name.text) {
                         return Err(TypeRefusal::Cycle {
                             name: name.text.clone(),
+                            span: name.span,
                         });
                     }
                     let Some(aliased) = self.type_decls.get(&name.text) else {
@@ -2502,6 +2532,7 @@ impl Checker<'_, '_> {
                         // not anything uses it.
                         return Err(TypeRefusal::UnknownName {
                             name: name.text.clone(),
+                            span: name.span,
                         });
                     };
                     stack.push(name.text.clone());
@@ -2523,6 +2554,7 @@ impl Checker<'_, '_> {
                         {
                             return Err(TypeRefusal::DuplicateField {
                                 name: field.name.text.clone(),
+                                span: field.name.span,
                             });
                         }
                         self.walk_type(&field.ty, nodes, depth + 1, stack)?;
@@ -2542,6 +2574,7 @@ impl Checker<'_, '_> {
                         {
                             return Err(TypeRefusal::DuplicateSymbol {
                                 name: symbol.text.clone(),
+                                span: symbol.span,
                             });
                         }
                     }
@@ -2744,12 +2777,71 @@ impl Checker<'_, '_> {
         ))
     }
 
-    /// Compiles a braced-map body into the MapLit expression —
-    /// entries are CEL expressions, JSON literals, or NESTED maps
-    /// (MapLit composes); a non-empty STRUCT inside a map is
-    /// inexpressible in v1 and defers by name (D-2026-08-10-6 as
-    /// amended: the map entry domain is expressions — dynamic
-    /// nesting spells `json`).
+    /// THE nested-value lowering, shared by struct fields and map
+    /// entries: CEL, JSON, recursive maps, the EMPTY struct
+    /// (tag 17's literal), verbatim text, bare base64, bare asset.
+    /// A content-typed byte form refuses with the dedicated rule —
+    /// a nested field has no `meta.ext` of its own — and the one
+    /// genuinely inexpressible form, a NON-EMPTY struct inside a
+    /// map, defers by name (D-2026-08-10-6 as amended; dynamic
+    /// nesting spells `json`, which is always `variant`).
+    fn nested_value_tree(
+        &mut self,
+        value: &SynValue,
+        signature: &cel::Signature,
+        at: Span,
+    ) -> Option<cel::Tree> {
+        match value {
+            SynValue::Cel(expr) => self.cel(expr, signature),
+            SynValue::Json { value, .. } => Some(literal_tree(value.clone(), cel::Type::Dyn)),
+            SynValue::BracedMap(entries) => self.map_value_tree(entries, signature, at),
+            SynValue::Braced(body) if body.entries.is_empty() => {
+                Some(literal_tree(cel::Value::Struct(Vec::new()), cel::Type::Dyn))
+            }
+            SynValue::Braced(_) => {
+                self.deferred("a struct inside a map entry", at);
+                None
+            }
+            SynValue::Tagged(tagged) => {
+                let content_typed = match tagged.tag.text.as_str() {
+                    "base64" => !tagged.args.is_empty(),
+                    "asset" => tagged.args.len() > 1,
+                    _ => false,
+                };
+                if content_typed {
+                    self.meta_zone_refusal(
+                        at,
+                        "content_type",
+                        "a nested field has no `meta.ext` of its own — the content-typed form is whole-payload only",
+                    );
+                    return None;
+                }
+                match tagged.tag.text.as_str() {
+                    "text" => self
+                        .verbatim_text(tagged)
+                        .map(|value| literal_tree(value, cel::Type::Text)),
+                    "base64" => self
+                        .inline_bytes(tagged)
+                        .map(|(bytes, _)| literal_tree(cel::Value::Bytes(bytes), cel::Type::Bytes)),
+                    "asset" => self.asset_value(tagged).map(|(index, _)| cel::Tree {
+                        root: cel::Expr::Asset(index),
+                        ty: cel::Type::Bytes,
+                    }),
+                    _ => {
+                        self.deferred("this nested value form", at);
+                        None
+                    }
+                }
+            }
+            _ => {
+                self.deferred("this nested value form", at);
+                None
+            }
+        }
+    }
+
+    /// Compiles a braced-map body into the MapLit expression — every
+    /// entry goes through [`Self::nested_value_tree`].
     fn map_value_tree(
         &mut self,
         entries: &[(String, SynValue)],
@@ -2758,83 +2850,14 @@ impl Checker<'_, '_> {
     ) -> Option<cel::Tree> {
         let mut pairs = Vec::new();
         for (map_key, entry) in entries {
-            match entry {
-                SynValue::Cel(expr) => {
-                    let tree = self.cel(expr, signature)?;
-                    pairs.push((map_key.clone(), tree.root));
-                }
-                SynValue::Json { value, .. } => {
-                    pairs.push((map_key.clone(), cel::Expr::Literal(value.clone())));
-                }
-                SynValue::BracedMap(nested) => {
-                    let tree = self.map_value_tree(nested, signature, at)?;
-                    pairs.push((map_key.clone(), tree.root));
-                }
-                SynValue::Braced(_) => {
-                    self.deferred("a struct inside a map entry", at);
-                    return None;
-                }
-                _ => {
-                    self.deferred("this map entry value form", at);
-                    return None;
-                }
-            }
+            let tree = self.nested_value_tree(entry, signature, at)?;
+            pairs.push((map_key.clone(), tree.root));
         }
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
         Some(cel::Tree {
             root: cel::Expr::MapLit(pairs),
             ty: cel::Type::Dyn,
         })
-    }
-
-    /// A tagged value in a NESTED record position: the bare forms
-    /// (`text {}`, `base64 {}`, `asset("…")`) become field writes; a
-    /// content-typed form refuses with the dedicated rule — a nested
-    /// field has no `meta.ext` of its own (D-2026-08-10-5).
-    fn nested_tagged_write(
-        &mut self,
-        tagged: &crate::compiler::syntax::TaggedValue,
-        path: Vec<String>,
-        at: Span,
-    ) -> Option<FieldWrite> {
-        let content_typed = !tagged.args.is_empty();
-        match tagged.tag.text.as_str() {
-            "text" => self.verbatim_text(tagged).map(|value| FieldWrite {
-                target: crate::envelope::WriteTarget::Data(path),
-                value: literal_tree(value, cel::Type::Text),
-            }),
-            "base64" if content_typed => {
-                self.meta_zone_refusal(
-                    at,
-                    "content_type",
-                    "a nested field has no `meta.ext` of its own — the content-typed form is whole-payload only",
-                );
-                None
-            }
-            "base64" => self.inline_bytes(tagged).map(|(bytes, _)| FieldWrite {
-                target: crate::envelope::WriteTarget::Data(path),
-                value: literal_tree(cel::Value::Bytes(bytes), cel::Type::Bytes),
-            }),
-            "asset" if tagged.args.len() > 1 => {
-                self.meta_zone_refusal(
-                    at,
-                    "content_type",
-                    "a nested field has no `meta.ext` of its own — the content-typed form is whole-payload only",
-                );
-                None
-            }
-            "asset" => self.asset_value(tagged).map(|(index, _)| FieldWrite {
-                target: crate::envelope::WriteTarget::Data(path),
-                value: cel::Tree {
-                    root: cel::Expr::Asset(index),
-                    ty: cel::Type::Bytes,
-                },
-            }),
-            _ => {
-                self.deferred("this record field value form", at);
-                None
-            }
-        }
     }
 
     /// Whether an `ext` field belongs to the declared vocabulary:
@@ -3406,10 +3429,15 @@ impl Checker<'_, '_> {
                                     }
                                     _ => unreachable!("content_typed covers these tags"),
                                 }
-                            } else if let Some(write) =
-                                self.nested_tagged_write(tagged, path.clone(), key.span)
-                            {
-                                writes.push(write);
+                            } else if let Some(tree) = self.nested_value_tree(
+                                &SynValue::Tagged(tagged.clone()),
+                                signature,
+                                key.span,
+                            ) {
+                                writes.push(FieldWrite {
+                                    target: crate::envelope::WriteTarget::Data(path.clone()),
+                                    value: tree,
+                                });
                             }
                         }
                         // `data = { "k": v }` — the map value is the
@@ -3519,8 +3547,15 @@ impl Checker<'_, '_> {
                             // (D-2026-08-10-5/-6); the content-typed
                             // forms refuse — a nested field has no
                             // `meta.ext` of its own.
-                            if let Some(write) = self.nested_tagged_write(tagged, path, key.span) {
-                                writes.push(write);
+                            if let Some(tree) = self.nested_value_tree(
+                                &SynValue::Tagged(tagged.clone()),
+                                signature,
+                                key.span,
+                            ) {
+                                writes.push(FieldWrite {
+                                    target: crate::envelope::WriteTarget::Data(path),
+                                    value: tree,
+                                });
                             }
                         }
                         _ => self.deferred("this record field value form", key.span),
