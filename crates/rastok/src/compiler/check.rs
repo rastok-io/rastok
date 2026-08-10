@@ -255,6 +255,12 @@ pub fn check(
             }
         }
     }
+    // ONE alias resolution, shared by every use: pure alias chains
+    // collapse HERE, after validation — a use site never follows a
+    // chain again, so what validation accepted, resolution serves
+    // (the 256-link boundary included; longer chains and cycles
+    // were refused above and collapse stops harmlessly on them).
+    checker.collapse_alias_chains();
     let checked_app = checker.graph(app);
     // The production schema seals HERE — from the deployed graph's
     // writes alone. Everything the Lab compiles below is checked
@@ -2039,10 +2045,13 @@ impl Checker<'_, '_> {
                     );
                     return None;
                 };
-                if self.type_stack.contains(&name.text) || self.type_stack.len() >= 256 {
-                    // Belt to collection's braces: the cycle and the
-                    // alias budget both refused THERE with their own
-                    // diagnostics — this keeps the resolver total.
+                if self.type_stack.contains(&name.text) {
+                    // A true cycle — validation refused it with its
+                    // own diagnostic, so this unit never compiles;
+                    // stopping here only keeps the resolver total.
+                    // (Chains are COLLAPSED before any use, so no
+                    // depth cap is needed: what validation accepted,
+                    // resolution serves.)
                     return None;
                 }
                 self.type_stack.push(name.text.clone());
@@ -2379,6 +2388,11 @@ impl Checker<'_, '_> {
                 }
             }
         };
+        // A tag with NO argument list and NO body already refused at
+        // parse ("arguments or a block") — one fault, one voice.
+        if !tagged.parens && tagged.args.is_empty() && tagged.body.is_none() {
+            return None;
+        }
         match tagged.tag.text.as_str() {
             "text" => {
                 if tagged.parens {
@@ -2387,6 +2401,15 @@ impl Checker<'_, '_> {
                         tagged.tag.span,
                         "`text { … }` takes no parentheses",
                         "the grammar is `text RAW_BLOCK` exactly",
+                    );
+                    return None;
+                }
+                if tagged.body.is_none() {
+                    refuse(
+                        self,
+                        tagged.tag.span,
+                        "`text { … }` needs a verbatim body",
+                        "no block",
                     );
                     return None;
                 }
@@ -2411,6 +2434,18 @@ impl Checker<'_, '_> {
                     );
                     return None;
                 }
+                if tagged.body.is_none() {
+                    // The body is part of the SHAPE: `base64(ct)`
+                    // without a block is malformed wherever it sits
+                    // — never a placement question.
+                    refuse(
+                        self,
+                        tagged.tag.span,
+                        "`base64 { … }` needs a body",
+                        "no block",
+                    );
+                    return None;
+                }
                 match tagged.args.as_slice() {
                     [] => Some(TagCall::Base64 { content_type: None }),
                     [only] => Some(TagCall::Base64 {
@@ -2428,51 +2463,71 @@ impl Checker<'_, '_> {
                 }
             }
             "asset" => {
-                if tagged.trailing_comma {
-                    refuse(
-                        self,
-                        tagged.tag.span,
-                        "no trailing comma in a tag call",
-                        "the grammar is `asset \"(\" STRING (\",\" STRING)? \")\"` exactly",
+                // A malformed asset CALL is E-ASSET, per the
+                // registry — the code that owns the asset contract.
+                let refuse_asset = |checker: &mut Self, span: Span, message: &str| {
+                    checker.bag.push(
+                        Diagnostic::new(E_ASSET, Phase::Check, message.to_string())
+                            .with_span(span)
+                            .with_field("path", String::new()),
                     );
+                };
+                let asset_string = |checker: &mut Self, value: &SynValue| -> Option<String> {
+                    match value {
+                        SynValue::StrLit { raw, span } => checker.decode_string(raw, *span),
+                        SynValue::Cel(expr) => {
+                            refuse_asset(
+                                checker,
+                                expr.span,
+                                "one STRING literal is required here — not an expression",
+                            );
+                            None
+                        }
+                        _ => {
+                            refuse_asset(
+                                checker,
+                                tagged.tag.span,
+                                "one STRING literal is required here",
+                            );
+                            None
+                        }
+                    }
+                };
+                if tagged.trailing_comma {
+                    refuse_asset(self, tagged.tag.span, "no trailing comma in a tag call");
                     return None;
                 }
                 if tagged.body.is_some() {
-                    refuse(
-                        self,
-                        tagged.tag.span,
-                        "asset(…) takes no block",
-                        "the content is the repository file",
-                    );
+                    refuse_asset(self, tagged.tag.span, "asset(…) takes no block");
                     return None;
                 }
                 match tagged.args.as_slice() {
                     [path] => Some(TagCall::Asset {
-                        path: string_arg(self, path)?,
+                        path: asset_string(self, path)?,
                         content_type: None,
                     }),
                     [path, ct] => {
-                        let ct = string_arg(self, ct)?;
+                        // The path is the FIRST argument — it
+                        // speaks first when both are faulty.
+                        let path = asset_string(self, path)?;
                         Some(TagCall::Asset {
-                            path: string_arg(self, path)?,
-                            content_type: Some(ct),
+                            path,
+                            content_type: Some(asset_string(self, ct)?),
                         })
                     }
                     [] => {
-                        refuse(
+                        refuse_asset(
                             self,
                             tagged.tag.span,
                             "asset(path, content_type?) — the path is required",
-                            "no arguments",
                         );
                         None
                     }
                     _ => {
-                        refuse(
+                        refuse_asset(
                             self,
                             tagged.tag.span,
                             "asset(path, content_type?) — one path, at most one type",
-                            "too many arguments",
                         );
                         None
                     }
@@ -2534,6 +2589,45 @@ impl Checker<'_, '_> {
                         .with_field("detail", detail),
                 );
                 None
+            }
+        }
+    }
+
+    /// Collapses every PURE alias chain (`type A = B` where `B` is
+    /// itself a single bare name) to its terminal type, iteratively
+    /// — validation has already refused cycles and over-budget
+    /// chains, so the guard here is a backstop, never a judge.
+    fn collapse_alias_chains(&mut self) {
+        let names: Vec<String> = self.type_decls.keys().cloned().collect();
+        for name in names {
+            let mut current = name.clone();
+            let mut hops = 0usize;
+            while let Some(ty) = self.type_decls.get(&current) {
+                let pure_alias = !ty.optional
+                    && ty.alternatives.len() == 1
+                    && matches!(
+                        &ty.alternatives[0],
+                        crate::compiler::syntax::BaseType::Named(_)
+                    );
+                if !pure_alias {
+                    break;
+                }
+                let crate::compiler::syntax::BaseType::Named(next) = &ty.alternatives[0] else {
+                    unreachable!("just matched");
+                };
+                current = next.text.clone();
+                hops += 1;
+                if hops > 512 || current == name {
+                    // Over-budget or cyclic — already diagnosed by
+                    // validation; leave the entry as written.
+                    current = name.clone();
+                    break;
+                }
+            }
+            if current != name
+                && let Some(terminal) = self.type_decls.get(&current).cloned()
+            {
+                self.type_decls.insert(name, terminal);
             }
         }
     }

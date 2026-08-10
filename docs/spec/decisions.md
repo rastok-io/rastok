@@ -273,8 +273,14 @@ and ≤ 256 symbols per enum; ≤ 64 KiB of canonical type bytes per
 plan — each refusing at check with the measured value in the
 diagnostic, and re-verified by the package validator.
 **Amended 2026-08-10, at implementation:** the delivered slice
-enforces STRUCTURAL depth, total nodes, and per-struct/per-enum
-counts at collection; the 64 KiB canonical-byte budget and its
+enforces STRUCTURAL depth, total nodes, per-struct/per-enum counts,
+and an ALIAS-FOLLOW budget of 256 links at collection — a name
+carries no structural weight, but following one is work, so a
+50 000-link chain refuses typed instead of exhausting the compiler;
+pure alias chains then COLLAPSE once, after validation, so every
+use site resolves in one hop and what validation accepted,
+resolution serves (the boundary chain keeps its variable and its
+hash); the 64 KiB canonical-byte budget and its
 package re-verification land WITH composite pins — until a
 composite type can reach a plan, there are no canonical type bytes
 to measure. Composite ALIASES resolve structurally but still meet

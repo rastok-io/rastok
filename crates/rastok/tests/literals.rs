@@ -1194,3 +1194,109 @@ fn a_misplaced_malformed_call_refuses_once_for_the_malformation() {
         "no placement noise: {bag:?}"
     );
 }
+
+#[test]
+fn the_alias_boundary_keeps_its_variable() {
+    // 255 and 256 links both compile AND keep the variable: the
+    // aliased hash equals the bare `text` hash — nothing is
+    // silently dropped at the boundary. 257 refuses typed.
+    let graph_with = |ty: &str| {
+        format!(
+            "graph g : App {{\n  operator o {{\n    var seen : {ty} = \"x\"\n    on in {{ seen = data\n      out = data }}\n  }}\n  . -> o -> .\n}}\n"
+        )
+    };
+    let chain = |n: usize| {
+        let mut source = String::from("type T0 = text\n");
+        for i in 1..=n {
+            source.push_str(&format!("type T{i} = T{}\n", i - 1));
+        }
+        source.push('\n');
+        source.push_str(&graph_with(&format!("T{n}")));
+        source
+    };
+    let bare = compile(&[graph_with("text").as_str()], &Registry::m0())
+        .expect("bare")
+        .hash;
+    for n in [255, 256] {
+        let aliased = compile(&[chain(n).as_str()], &Registry::m0())
+            .unwrap_or_else(|bag| panic!("{n} links must compile: {bag:?}"))
+            .hash;
+        assert_eq!(aliased, bare, "{n} links: the variable survives as sugar");
+    }
+    let bag = compile(&[chain(257).as_str()], &Registry::m0()).expect_err("257 refuses");
+    assert!(
+        bag.diagnostics().iter().any(|d| {
+            d.code().as_str() == "E-TYPE-BUDGET"
+                && d.fields().iter().any(|(name, _)| *name == "aliases")
+        }),
+        "{bag:?}"
+    );
+    // The same boundary on a PORT pin.
+    let port_with = |ty: &str| {
+        format!(
+            "graph g : App {{\n  operator o {{\n    input evt : {ty}\n    on evt {{ out = data }}\n  }}\n  . -> o.evt\n  o -> .\n}}\n"
+        )
+    };
+    let port_chain = {
+        let mut source = String::from("type T0 = text\n");
+        for i in 1..=256 {
+            source.push_str(&format!("type T{i} = T{}\n", i - 1));
+        }
+        source.push('\n');
+        source.push_str(&port_with("T256"));
+        source
+    };
+    let bare_port = compile(&[port_with("text").as_str()], &Registry::m0())
+        .expect("bare port")
+        .hash;
+    let aliased_port = compile(&[port_chain.as_str()], &Registry::m0())
+        .expect("256 links pin the port")
+        .hash;
+    assert_eq!(aliased_port, bare_port, "the port pin survives as sugar");
+}
+
+#[test]
+fn the_shape_gate_owns_the_body_and_speaks_once() {
+    // A content-typed base64 with NO body is a malformed CALL —
+    // the body is shape, never placement.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"image/png\") } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("the body is shape");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    assert!(
+        bag.diagnostics()[0].message().contains("needs a body"),
+        "{bag:?}"
+    );
+    assert!(
+        bag.diagnostics()[0].code().as_str() != "E-CONTENT-TYPE",
+        "never a placement answer to a shape fault: {bag:?}"
+    );
+    // A BARE tag (no parens, no body) is the parser's fault alone —
+    // one diagnostic, not a parse+check cascade.
+    for tag in ["text", "base64", "asset"] {
+        let source = format!(
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {tag} }}\n  }}\n  . -> o -> .\n}}\n"
+        );
+        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("bare refuses");
+        assert_eq!(
+            bag.diagnostics().len(),
+            1,
+            "`{tag}` bare speaks once: {bag:?}"
+        );
+    }
+    // Both asset arguments faulty: the PATH speaks first.
+    let source = "graph g : App {\n  operator o {\n    on in { out = asset(\"a\" + \".bin\", \"x\" + \"y\") }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("path first");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    let hit = &bag.diagnostics()[0];
+    assert_eq!(
+        hit.code().as_str(),
+        "E-ASSET",
+        "the registry's code: {hit:?}"
+    );
+    // The span points at the FIRST argument.
+    let span = hit.spans()[0];
+    assert!(
+        span.range().start < 60,
+        "the path argument is underlined, not the content type: {hit:?}"
+    );
+}
