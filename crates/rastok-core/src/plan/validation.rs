@@ -119,6 +119,19 @@ pub enum PlanValidationError {
         /// The flat dotted field.
         field: alloc::string::String,
     },
+    /// Two asset blobs carrying one digest — the table is
+    /// content-addressed, one content one blob.
+    DuplicateAsset {
+        /// The later duplicate's index.
+        index: u32,
+    },
+    /// An asset (or the table) beyond the fixed v1 budgets.
+    AssetBudget {
+        /// The offending blob, `u32::MAX` for the total.
+        index: u32,
+        /// The measured size.
+        bytes: u64,
+    },
     /// An `Expr::Asset` index past the asset table.
     AssetOutOfBounds {
         /// The impossible reference.
@@ -189,6 +202,15 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: a `meta.{zone}.{field}` write outside the travelling schema"
             ),
+            Self::DuplicateAsset { index } => {
+                write!(f, "invalid plan: asset {index} repeats an earlier digest")
+            }
+            Self::AssetBudget { index, bytes } => {
+                write!(
+                    f,
+                    "invalid plan: asset budget breached at {index} ({bytes} bytes)"
+                )
+            }
             Self::AssetOutOfBounds { index, count } => {
                 write!(f, "invalid plan: asset {index} of a {count}-blob table")
             }
@@ -446,9 +468,44 @@ fn asset_indexes_bound(plan: &ExecutionPlan, expr: &cel::Expr) -> Result<(), Pla
     }
 }
 
+/// The asset table's own invariants (D-2026-08-10-5): digests
+/// unique (one content, one blob) and the fixed v1 budgets held —
+/// 8 MiB per asset, 32 MiB total. Digests were DERIVED at decode,
+/// so verifying them here is verifying the bytes.
+fn assets_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    const PER_ASSET: u64 = 8 * 1024 * 1024;
+    const TOTAL: u64 = 32 * 1024 * 1024;
+    let mut total: u64 = 0;
+    for (index, blob) in plan.assets.iter().enumerate() {
+        if blob.bytes.len() as u64 > PER_ASSET {
+            return Err(PlanValidationError::AssetBudget {
+                index: index as u32,
+                bytes: blob.bytes.len() as u64,
+            });
+        }
+        total += blob.bytes.len() as u64;
+        if plan.assets[..index]
+            .iter()
+            .any(|earlier| earlier.digest == blob.digest)
+        {
+            return Err(PlanValidationError::DuplicateAsset {
+                index: index as u32,
+            });
+        }
+    }
+    if total > TOTAL {
+        return Err(PlanValidationError::AssetBudget {
+            index: u32::MAX,
+            bytes: total,
+        });
+    }
+    Ok(())
+}
+
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     schema_prefix_free(&plan.app_schema)?;
     schema_prefix_free(&plan.ext_schema)?;
+    assets_well_formed(plan)?;
     // Uniqueness first, GLOBALLY, then canonical order: a collection
     // that is both duplicated and disordered refuses as the
     // DUPLICATE — the dedicated variant names the defect wherever

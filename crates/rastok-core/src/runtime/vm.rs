@@ -34,6 +34,13 @@ use core::fmt;
 
 /// A machine fault; the step that raised it committed nothing, and
 /// the work that triggered it stays reserved — a retry sees it again.
+/// Whether an `ext` field sits inside the plan's travelling
+/// vocabulary — the standard `content_type` is always known.
+fn plan_ext_field(plan: &crate::plan::ExecutionPlan, field: &str) -> bool {
+    field == "content_type" || plan.ext_schema.iter().any(|(known, _)| known == field)
+}
+
+/// A machine-integrity refusal — never a business error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmError {
     /// A transaction fault the machine cannot convert into a typed
@@ -319,6 +326,18 @@ impl<'plan> Vm<'plan> {
             node: None,
             port: submission.port.clone(),
         };
+        // The ext zone, held to the travelling schema BEFORE any
+        // append (D-2026-08-10-1): an external caller cannot seed a
+        // field no sheet declares — the same grid the checker
+        // enforces on sources, applied to the API.
+        for field in submission.draft.ext.keys() {
+            let known = plan_ext_field(self.plan.plan(), field);
+            if !known {
+                return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
+                    alloc::format!("`meta.ext.{field}` is outside the declared schema"),
+                )));
+            }
+        }
         // The pins, held BEFORE any append: a materialized draft is
         // judged against the ingress port's own pin and every
         // destination pin it will fan out to — replay never meets a

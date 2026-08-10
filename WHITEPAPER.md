@@ -712,7 +712,7 @@ single carried payload. The postal metaphor fits: `meta` is what's written
 *on* the envelope, `data` is what's *inside*.
 
 `meta` has exactly three zones. `meta.sys` is the runtime's read-only spine —
-identity, lineage, role; six fields, minted fresh at every hop.
+identity, lineage, role; five fields, minted fresh at every hop.
 `meta.app` is the application's writable zone — its fields inferred
 from the graph's own writes, with types unified across writers — and
 `meta.ext` is the external-boundary context, written by connectors

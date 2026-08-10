@@ -2575,6 +2575,30 @@ impl Checker<'_, '_> {
             return None;
         }
         let full = root.join(relative);
+        // The LEXICAL check above stops `..` spellings; the
+        // RESOLVED check stops symlinks — the read happens only on
+        // a path that canonicalizes under the canonicalized root.
+        match (full.canonicalize(), root.canonicalize()) {
+            (Ok(resolved), Ok(resolved_root)) if resolved.starts_with(&resolved_root) => {}
+            (Err(error), _) => {
+                refuse(
+                    self,
+                    E_ASSET,
+                    format!("the asset does not read: {error}"),
+                    &path,
+                );
+                return None;
+            }
+            _ => {
+                refuse(
+                    self,
+                    E_ASSET,
+                    String::from("the path resolves outside the App root"),
+                    &path,
+                );
+                return None;
+            }
+        }
         // The ONE sanctioned filesystem read of the build: asset
         // resolution is the compiler's job by decision
         // (D-2026-08-10-5); the kernel-guarding lint stands aside
@@ -2628,6 +2652,56 @@ impl Checker<'_, '_> {
                 .unwrap_or_else(|_| unreachable!("bounded by TOTAL")),
             content_type,
         ))
+    }
+
+    /// A tagged value in a NESTED record position: the bare forms
+    /// (`text {}`, `base64 {}`, `asset("…")`) become field writes; a
+    /// content-typed form refuses with the dedicated rule — a nested
+    /// field has no `meta.ext` of its own (D-2026-08-10-5).
+    fn nested_tagged_write(
+        &mut self,
+        tagged: &crate::compiler::syntax::TaggedValue,
+        path: Vec<String>,
+        at: Span,
+    ) -> Option<FieldWrite> {
+        let content_typed = !tagged.args.is_empty();
+        match tagged.tag.text.as_str() {
+            "text" => self.verbatim_text(tagged).map(|value| FieldWrite {
+                target: crate::envelope::WriteTarget::Data(path),
+                value: literal_tree(value, cel::Type::Text),
+            }),
+            "base64" if content_typed => {
+                self.meta_zone_refusal(
+                    at,
+                    "content_type",
+                    "a nested field has no `meta.ext` of its own — the content-typed form is whole-payload only",
+                );
+                None
+            }
+            "base64" => self.inline_bytes(tagged).map(|(bytes, _)| FieldWrite {
+                target: crate::envelope::WriteTarget::Data(path),
+                value: literal_tree(cel::Value::Bytes(bytes), cel::Type::Bytes),
+            }),
+            "asset" if tagged.args.len() > 1 => {
+                self.meta_zone_refusal(
+                    at,
+                    "content_type",
+                    "a nested field has no `meta.ext` of its own — the content-typed form is whole-payload only",
+                );
+                None
+            }
+            "asset" => self.asset_value(tagged).map(|(index, _)| FieldWrite {
+                target: crate::envelope::WriteTarget::Data(path),
+                value: cel::Tree {
+                    root: cel::Expr::Asset(index),
+                    ty: cel::Type::Bytes,
+                },
+            }),
+            _ => {
+                self.deferred("this record field value form", at);
+                None
+            }
+        }
     }
 
     /// Whether an `ext` field belongs to the declared vocabulary:
@@ -2783,7 +2857,17 @@ impl Checker<'_, '_> {
         for (segments, span) in reads {
             let parts: Vec<&str> = segments.iter().map(String::as_str).collect();
             match parts.as_slice() {
-                ["meta"] | ["meta", "app"] | ["meta", "ext"] | ["meta", "sys"] => {}
+                // A WHOLE zone leaving as a value would alias the
+                // grid away (`val m = meta.app; m.ghost`): fields
+                // are read by their spelled path, never through a
+                // zone-typed binding.
+                ["meta"] | ["meta", "app"] | ["meta", "ext"] | ["meta", "sys"] => {
+                    self.meta_zone_refusal(
+                        span,
+                        &segments.join("."),
+                        "a metadata zone is not a value — read fields by their full spelled path",
+                    );
+                }
                 ["meta", "sys", field, ..] => {
                     if !SYS_FIELDS.contains(field) {
                         self.meta_zone_refusal(
@@ -3177,6 +3261,21 @@ impl Checker<'_, '_> {
                                 });
                             } else {
                                 self.record_fields(nested, signature, &path, writes);
+                            }
+                        }
+                        SynValue::Json { value, .. } => {
+                            writes.push(FieldWrite {
+                                target: crate::envelope::WriteTarget::Data(path),
+                                value: literal_tree(value.clone(), cel::Type::Dyn),
+                            });
+                        }
+                        SynValue::Tagged(tagged) => {
+                            // The BARE byte/text forms embed anywhere
+                            // (D-2026-08-10-5/-6); the content-typed
+                            // forms refuse — a nested field has no
+                            // `meta.ext` of its own.
+                            if let Some(write) = self.nested_tagged_write(tagged, path, key.span) {
+                                writes.push(write);
                             }
                         }
                         _ => self.deferred("this record field value form", key.span),

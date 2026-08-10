@@ -882,9 +882,11 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut app = Namespace::new();
+    // The one ext field this plan's schema declares — the standard
+    // `content_type` (inject validates the zone, D-2026-08-10-1).
     app.insert(
-        String::from("trace"),
-        MetaValue::Scalar(Scalar::Text(String::from("x"))),
+        String::from("content_type"),
+        MetaValue::Scalar(Scalar::Text(String::from("text/x-probe"))),
     );
     vm.inject(
         &mut journal,
@@ -913,8 +915,10 @@ fn identity_re_emits_the_materialized_envelope_whole() {
         "the payload crosses untouched"
     );
     assert_eq!(
-        output.envelope.meta().ext().get("trace"),
-        Some(&MetaValue::Scalar(Scalar::Text(String::from("x")))),
+        output.envelope.meta().ext().get("content_type"),
+        Some(&MetaValue::Scalar(Scalar::Text(String::from(
+            "text/x-probe"
+        )))),
         "the writable metadata rides along"
     );
 }

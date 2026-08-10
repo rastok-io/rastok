@@ -91,7 +91,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
     let state = PartitionState::new()
         .cell(&compilation.plan, slot, "")
         .unwrap();
-    // An ancestry-rich input: app fields, a custom namespace, a
+    // An ancestry-rich input: app fields, ext fields, a
     // content-type hint on unchanged encoded data.
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
     let mut app = envelope::Namespace::new();

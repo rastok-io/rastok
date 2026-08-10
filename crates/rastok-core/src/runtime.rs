@@ -882,8 +882,14 @@ fn emitted_content(
                 .filter(|(_, write)| matches!(&write.target, envelope::WriteTarget::Data(_)))
                 .map(|(index, _)| index)
                 .collect();
-            let carry = if let [only] = data_writes.as_slice() {
-                let write = &writes[*only];
+            // The decision follows the FINAL fold result, not the
+            // write count: a whole-data write replaces everything
+            // before it, so the LAST data write decides — if it is
+            // whole-data and its value is the bare witness, every
+            // earlier data write is dead and the representation
+            // carries (`data = "temp"` then `data = data` keeps).
+            let carry = if let Some(last) = data_writes.last() {
+                let write = &writes[*last];
                 matches!(&write.target, envelope::WriteTarget::Data(path) if path.is_empty())
                     && matches!(
                         eval_lazy(&write.expr, base, slot, assets)?,
@@ -929,7 +935,14 @@ fn emitted_content(
                     }
                     envelope::WriteTarget::Ext(field) => {
                         // Explicit writes come LAST in the atomic
-                        // order — they win over the derivation.
+                        // order — they win over the derivation. The
+                        // standard field keeps its contract even
+                        // through a Dyn-typed expression.
+                        if field == "content_type" && !matches!(value, cel::Value::Text(_)) {
+                            return Err(Fault::Unrepresentable(format!(
+                                "content_type takes text, got {value:?}"
+                            )));
+                        }
                         built.ext.insert(field.clone(), to_meta_value(&value)?);
                     }
                 }
@@ -1421,14 +1434,14 @@ fn decode_encoded(encoding: envelope::Encoding, bytes: &[u8]) -> Result<envelope
 }
 
 /// The handler-facing CEL view of an envelope's metadata: the full
-/// `meta.sys` spine, the app namespace (aliased at the root), and
-/// every custom namespace.
+/// `meta.sys` spine and the two writable zones, flat dotted keys
+/// nested for reading.
 pub fn meta_value(meta: &Meta) -> cel::Value {
     let mut app = BTreeMap::new();
     for (field, value) in meta.app() {
         app.insert(field.clone(), from_meta_value(value));
     }
-    // The whole six-field spine — a handler reading any `meta.sys`
+    // The whole five-field spine — a handler reading any `meta.sys`
     // field the spec names must find it, not a hole.
     let mut sys = BTreeMap::new();
     sys.insert(
@@ -1602,6 +1615,19 @@ pub fn to_meta_value(value: &cel::Value) -> Result<MetaValue, Fault> {
         cel::Value::Double(v) => MetaValue::Scalar(envelope::Scalar::Double(*v)),
         cel::Value::Text(v) => MetaValue::Scalar(envelope::Scalar::Text(v.clone())),
         cel::Value::Bytes(v) => MetaValue::Scalar(envelope::Scalar::Bytes(v.clone())),
+        // `array<scalar>` is spec-admitted meta (envelope.md §0).
+        cel::Value::List(items) => {
+            let scalars = items
+                .iter()
+                .map(|item| match to_meta_value(item)? {
+                    MetaValue::Scalar(scalar) => Ok(scalar),
+                    MetaValue::Array(_) => Err(Fault::Unrepresentable(String::from(
+                        "a nested array in a flat meta zone",
+                    ))),
+                })
+                .collect::<Result<alloc::vec::Vec<_>, _>>()?;
+            MetaValue::Array(scalars)
+        }
         other => {
             return Err(Fault::Unrepresentable(format!(
                 "{other:?} in a flat meta namespace"

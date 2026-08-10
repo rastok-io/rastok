@@ -1167,10 +1167,42 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
                     [0x00_u8; 16]
                 };
                 wide[16 - unscaled.len()..].copy_from_slice(unscaled);
+                let value = i128::from_be_bytes(wide);
+                let scale_wide = int_from(scale)?;
+                // The reader RE-VERIFIES the D-2026-08-10-7
+                // invariants a compiler enforced: the decimal128
+                // budgets, and — plan constants being DYNAMIC
+                // decimals — the minimal scale that keeps the
+                // decimal and integer domains disjoint.
+                let scale_ok = scale_wide >= i64::from(crate::json::MIN_SCALE)
+                    && scale_wide <= i64::from(crate::json::MAX_SCALE);
+                if !scale_ok {
+                    return Err(err("decimal scale"));
+                }
                 #[allow(clippy::cast_possible_truncation)]
+                let scale = scale_wide as i32;
+                if value.unsigned_abs() >= 10_i128.pow(crate::json::MAX_DIGITS) as u128 {
+                    return Err(err("decimal digits"));
+                }
+                if value % 10 == 0 {
+                    // Trailing zeros were stripped at construction;
+                    // zero itself is the integer 0.
+                    return Err(err("decimal minimal scale"));
+                }
+                if scale <= 0 {
+                    let mut expanded = Some(value);
+                    for _ in 0..scale.unsigned_abs() {
+                        expanded = expanded.and_then(|v| v.checked_mul(10));
+                    }
+                    if expanded.is_some_and(|v| i64::try_from(v).is_ok()) {
+                        // An int-representable value hiding in the
+                        // decimal domain — two byte forms, one value.
+                        return Err(err("decimal integer domain"));
+                    }
+                }
                 Ok(cel::Value::Decimal {
-                    unscaled: i128::from_be_bytes(wide),
-                    scale: int_from(scale)? as i32,
+                    unscaled: value,
+                    scale,
                 })
             }
             _ => Err(err("decimal")),

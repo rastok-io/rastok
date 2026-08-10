@@ -866,8 +866,8 @@ scope. All ids are blake3-derived 128-bit values.)
 
 | Field | Writable by jaq |
 |---|---|
-| `data`, `meta.app.*`, custom `meta.<ns>.*` | ✅ |
-| All of `meta.sys.*` | ❌ — runtime-managed, restored after the program runs |
+| `data` | ✅ |
+| All of `meta.*` | ❌ — guests READ metadata, never write it (v1, D-2026-08-10-1): metadata writes belong to the DSL, where the checker sees every key |
 
 `meta` has exactly THREE zones (D-2026-08-10-1) : `sys` (runtime, read-only), `app` (application, read-write, DECLARED), `ext` (external-boundary context, read-write, sheet-declared). Each zone is a flat struct whose leaves are scalars (`bool`, `number` = `int`/`long`/`float`/`double`, `text`, `uuid`, `timestamp`, `duration`, `enum`) or `array<scalar>` — a field is one dotted key inside its zone (`app.audit.origin`), composites (`struct` / `map` / `array`) belong in `data`. There is NO bare form : `meta.customer_id` is invalid, no alias resolves it. `app` fields are INFERRED from the unit's writes (graph and lab alike) : types unify across writers, a conflict refusing with both sites named — there is no declaration form. `ext` fields come from the connector sheets' `Populates` rows plus the standard `content_type` ; handlers may rewrite them, never invent one. `meta.sys` is read-only — its fixed 5-field Tier 1 (`id` / `parent_id` / `origin_id` / `role` / `graph_version`, see [envelope.md](envelope.md)), plus the scope-conditional `saga_*` / `loop_*`. A Connector's **terminal envelope** (WHITEPAPER §2.7) does NOT extend it : the outcome lives in the typed error payload (`ProcessExited { exit_code, signal, run_id }`, … — terminal *by kind* ; see [stdlib.md](stdlib.md)). Absent-field semantics are fixed by the **CEL grid** : an `app` name written nowhere in the unit, or an `ext` name no sheet declares = compile error ; a BARE (required) read of a field a join merge may have dropped = compile error until an explicit write chooses the value (D-2026-08-10-2 — the read form is the requirement marker) ; a bare read whose field is absent at runtime routes the envelope to `err` — defense in depth, never the primary check ; legitimate absence is explicit (`meta.app.?x.orValue(…)`). The jq rule *missing ≡ null* applies **only inside `jq { }` blocks** (extension). On the wire an absent key is simply **omitted**, never serialized as `key: null`.
 
@@ -912,22 +912,26 @@ array<struct { name: text, age: int, city: text }> [
   { name = "Bob",   age = 42, city = "Rome"  }
 ]
 
-// Text scalar
-text { "INFO: agent started\nINFO: thread created\n" }
+// Text — the CEL string, or the verbatim block (margin set by the
+// closing brace; no escapes, no interpolation)
+"INFO: agent started"
+text {
+    INFO: agent started
+    INFO: thread created
+}
 
-// Bytes scalar
-bytes base64 { "3q2+7wEC/w==" }
-bytes hex    { "deadbeef" }
+// Bytes — inline base64 (RFC 4648 standard, mandatory padding), or
+// build-time repo bytes
+base64 { 3q2+7wEC/w== }
+asset("fixtures/sample.pdf")
 
-// Dynamic / semi-structured → variant
-json { { "anything": [1, 2, 3] } }
-
-// External reference (any type)
-struct file { "s3://bucket/events.json" }
-array  file { "s3://bucket/events.parquet" }   // Connector decodes Parquet → array<struct>
-text   file { "/var/log/syslog" }
-bytes  file { "./fixtures/sample.pdf" }
+// Dynamic / semi-structured → variant : any JSON value, directly
+json { "anything": [1, 2, 3] }
 ```
+
+The pre-reform spellings — `bytes base64 { … }`, `bytes hex { … }`,
+`json { { … } }`, `<type> file { … }` — are DEAD (D-2026-08-10-5/-6);
+runtime files and URLs are Connectors' business.
 
 `file` accepts a local path (relative to the `.rkg` file) or an HTTP/HTTPS URL. The Connector reading the resource decodes the wire format (Parquet, Avro, JSON, …) into the declared type via its **codec**. In production graphs, `file` references typically appear only in seed data ; live I/O goes through Connectors.
 

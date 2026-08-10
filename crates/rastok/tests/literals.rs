@@ -401,3 +401,178 @@ fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
         "{bag:?}"
     );
 }
+
+#[test]
+fn bare_forms_embed_in_records_and_typed_forms_refuse_there() {
+    use rastok::envelope::{Data, Scalar, Value};
+    // The bare forms are ordinary field values (D-2026-08-10-5/-6).
+    let Data::Materialized(Value::Struct(fields)) =
+        emitted("{ signature = base64 { AAEC }, note = text {\n      hi\n    }, blob = json [1] }")
+    else {
+        panic!("a struct");
+    };
+    assert_eq!(
+        fields
+            .iter()
+            .find(|(name, _)| name == "signature")
+            .map(|(_, v)| v),
+        Some(&Value::Scalar(Scalar::Bytes(vec![0, 1, 2])))
+    );
+    assert_eq!(
+        fields
+            .iter()
+            .find(|(name, _)| name == "note")
+            .map(|(_, v)| v),
+        Some(&Value::Scalar(Scalar::Text(String::from("  hi"))))
+    );
+    assert_eq!(
+        fields
+            .iter()
+            .find(|(name, _)| name == "blob")
+            .map(|(_, v)| v),
+        Some(&Value::Array(vec![Value::Scalar(Scalar::Int(1))]))
+    );
+    // A content-typed form nested in a record refuses with the rule.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { document = base64(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("whole-payload only");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.message().contains("no `meta.ext` of its own")),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn the_carry_survives_a_dead_earlier_write() {
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Encoding, MetaValue, Namespace, Scalar};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    // `data = "temp"` then `data = data`: last-write-wins — the
+    // final value is the input payload, so the representation and
+    // its content type CARRY (the reviewer's counter-example).
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        data = \"temp\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut ext = Namespace::new();
+    ext.insert(
+        String::from("content_type"),
+        MetaValue::Scalar(Scalar::Text(String::from("application/avro"))),
+    );
+    vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
+                ext,
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    )
+    .expect("the injection lands");
+    vm.drain(&mut journal).expect("no forced materialization");
+    let output = &vm.outputs()[0];
+    assert!(
+        matches!(
+            output.envelope.data(),
+            Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_slice() == b"\x01\x02"
+        ),
+        "the final write wins and carries: {:?}",
+        output.envelope.data()
+    );
+    assert_eq!(
+        output.envelope.meta().ext().get("content_type"),
+        Some(&MetaValue::Scalar(Scalar::Text(String::from(
+            "application/avro"
+        )))),
+    );
+}
+
+#[test]
+fn inject_holds_the_ext_zone_to_the_schema() {
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let source =
+        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut ext = Namespace::new();
+    ext.insert(
+        String::from("invented"),
+        MetaValue::Scalar(Scalar::Text(String::from("x"))),
+    );
+    let refused = vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                ext,
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    );
+    assert!(refused.is_err(), "an undeclared ext field cannot enter");
+    assert_eq!(journal.records().len(), 0, "refused BEFORE the append");
+}
+
+#[test]
+fn a_zone_alias_cannot_dodge_the_grid() {
+    // `val m = meta.app; out = m.ghost` must refuse at CHECK — a
+    // zone is not a value (the reviewer's escape).
+    let source = "graph g : App {\n  operator o {\n    on in {\n      val m = meta.app\n      out = m.ghost\n    }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("the alias refuses");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-META-ZONE"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn a_non_meta_typed_app_write_refuses_or_converts() {
+    // An array<scalar> write now CONVERTS (spec-admitted meta)…
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.tags = [\"a\", \"b\"]\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    compile(&[source], &Registry::m0()).expect("array<scalar> is legal meta");
+    // …and a Dyn-typed content_type that turns out non-text faults
+    // TYPED at the runtime write, never a silent int.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+    let source = "graph g : App {\n  operator o {\n    on in { out = { data = \"x\", meta.ext.content_type = data } }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("Dyn passes the static gate");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::materialized(Value::Scalar(Scalar::Int(7))),
+                ext: Namespace::new(),
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    )
+    .expect("the injection lands");
+    vm.drain(&mut journal)
+        .expect("the machine absorbs the fault");
+    assert_eq!(vm.outputs().len(), 0, "nothing crosses");
+    assert_eq!(vm.errors().len(), 1, "the typed fault leaves on err");
+}

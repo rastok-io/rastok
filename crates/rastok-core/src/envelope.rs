@@ -286,7 +286,7 @@ impl fmt::Display for Role {
     }
 }
 
-/// Runtime-owned identity and lineage metadata — exactly the six-field
+/// Runtime-owned identity and lineage metadata — exactly the five-field
 /// Tier-1 spine of `envelope.md` §1.1. Tier-2 birth stamps join with
 /// the aspect work; envelopes born outside an aspect scope carry
 /// nothing.
@@ -391,8 +391,8 @@ pub type Namespace = BTreeMap<String, MetaValue>;
 
 /// Where an envelope-builder write lands — resolved at check, never
 /// re-interpreted from strings at run time. The checker owns the
-/// aliasing rules (`meta.x` ≡ `meta.app.x`, `meta.sys` refused); the
-/// runtime only executes a verdict.
+/// zone rules (three zones, no alias, `meta.sys` refused —
+/// D-2026-08-10-1); the runtime only executes a verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteTarget {
     /// A payload write; the empty path replaces `data` whole.

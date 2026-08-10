@@ -15,8 +15,11 @@ use crate::cel::Value;
 
 /// The significant-digit budget — Arrow `decimal128`.
 pub const MAX_DIGITS: u32 = 38;
-/// The scale bound — the IEEE decimal128 exponent domain.
+/// The scale bounds — the IEEE decimal128 exponent domain, exactly
+/// as identity.md's registry pins it: scale ∈ [−6143, +6144].
 pub const MAX_SCALE: i32 = 6144;
+/// The lower scale bound (see [`MAX_SCALE`]).
+pub const MIN_SCALE: i32 = -6143;
 
 /// A refusal, located by byte offset into the parsed text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,7 +288,14 @@ impl Reader<'_> {
                 offset: start,
                 message: String::from("the exponent is out of range"),
             })?;
-            scale += if exp_negative { exponent } else { -exponent };
+            // Checked, total: an extreme exponent refuses instead
+            // of a debug-build panic.
+            scale = scale
+                .checked_add(if exp_negative { exponent } else { -exponent })
+                .ok_or_else(|| JsonError {
+                    offset: start,
+                    message: String::from("the exponent is out of range"),
+                })?;
         }
         // Normalize: strip trailing zeros from the coefficient.
         let mut digits = String::from(coefficient.trim_start_matches('0'));
@@ -293,15 +303,15 @@ impl Reader<'_> {
             // Zero of any spelling — `-0` included — is integer 0.
             return Ok(Value::Int(0));
         }
-        while digits.ends_with('0') && scale > 0 {
-            digits.pop();
-            scale -= 1;
-        }
         while digits.ends_with('0') {
-            // Beyond the written fraction: fold trailing zeros into
-            // a negative scale.
+            // Trailing zeros normalize away; beyond the written
+            // fraction they fold into a negative scale. Checked —
+            // totality over adversarial zero runs.
             digits.pop();
-            scale -= 1;
+            scale = scale.checked_sub(1).ok_or_else(|| JsonError {
+                offset: start,
+                message: String::from("the scale is outside the decimal128 domain"),
+            })?;
         }
         if digits.len() as u32 > MAX_DIGITS {
             return Err(JsonError {
@@ -311,7 +321,7 @@ impl Reader<'_> {
                 ),
             });
         }
-        if scale.unsigned_abs() > MAX_SCALE as u64 {
+        if scale > i64::from(MAX_SCALE) || scale < i64::from(MIN_SCALE) {
             return Err(JsonError {
                 offset: start,
                 message: String::from("the scale is outside the decimal128 domain"),
@@ -455,5 +465,82 @@ mod tests {
         let (value, consumed) = parse_value("[1] trailing").expect("parses");
         assert_eq!(value, Value::List(vec![Value::Int(1)]));
         assert_eq!(consumed, 3, "trailing input is the caller's");
+    }
+}
+
+#[cfg(test)]
+mod oracle {
+    //! The serde_json differential oracle (D-2026-08-10-7), scoped
+    //! to what it can actually verify: structure, strings, booleans,
+    //! nulls, and integers within i64 — the COMMON domain. Exact
+    //! fractions and Rastok's stricter refusals (duplicate keys,
+    //! over-budget numbers) are outside serde's vocabulary and are
+    //! asserted directly in the unit tests above.
+
+    use super::*;
+
+    fn agrees(ours: &Value, theirs: &serde_json::Value) -> bool {
+        match (ours, theirs) {
+            (Value::Null, serde_json::Value::Null) => true,
+            (Value::Bool(a), serde_json::Value::Bool(b)) => a == b,
+            (Value::Text(a), serde_json::Value::String(b)) => a == b,
+            (Value::Int(a), serde_json::Value::Number(b)) => b.as_i64() == Some(*a),
+            (Value::Decimal { .. }, serde_json::Value::Number(_)) => {
+                // Outside the oracle's exact vocabulary — the unit
+                // tests own this half.
+                true
+            }
+            (Value::List(a), serde_json::Value::Array(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| agrees(x, y))
+            }
+            (Value::Map(a), serde_json::Value::Object(b)) => {
+                a.len() == b.len()
+                    && a.iter().all(|(key, value)| {
+                        b.get(key.as_str())
+                            .is_some_and(|other| agrees(value, other))
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn the_common_domain_parses_identically() {
+        let corpus = [
+            "null",
+            "true",
+            "false",
+            "0",
+            "-1",
+            "42",
+            "9007199254740993",
+            "\"hello\"",
+            "\"esc \\n \\u00e9 \\ud83d\\ude00\"",
+            "[]",
+            "[1, 2, 3]",
+            "[[[1]]]",
+            "{}",
+            "{\"a\": 1}",
+            "{\"a\": {\"b\": [true, null, \"x\"]}}",
+            "  [ 1 , {\"k\" : \"v\"} ]  ",
+        ];
+        for input in corpus {
+            let (ours, _) = parse_value(input).expect(input);
+            let theirs: serde_json::Value = serde_json::from_str(input).expect(input);
+            assert!(agrees(&ours, &theirs), "diverged on `{input}`: {ours:?}");
+        }
+    }
+
+    #[test]
+    fn shared_refusals_agree() {
+        // Syntax both must refuse — the oracle checks we are not
+        // LOOSER than JSON.
+        for input in ["{", "[1,", "{\"a\"}", "tru", "01", "+1", "\"\\q\"", "'x'"] {
+            assert!(parse_value(input).is_err(), "`{input}` must refuse");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(input).is_err(),
+                "the oracle also refuses `{input}`"
+            );
+        }
     }
 }

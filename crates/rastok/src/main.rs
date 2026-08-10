@@ -10,7 +10,7 @@
 //! the rustc shape through [`rastok::render`].
 
 use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-use rastok::compiler::{Compilation, compile};
+use rastok::compiler::Compilation;
 use rastok::envelope::{Data, Namespace, Scalar, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
@@ -84,7 +84,14 @@ fn load(paths: &[String]) -> Result<(Compilation, Sources), ExitCode> {
         }
     }
     let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-    match compile(&refs, &Registry::m0()) {
+    // The App root for `asset(…)` resolution: the first source's
+    // directory (D-2026-08-10-5) — the CLI compiles real files, so
+    // real assets must resolve.
+    let asset_root = paths
+        .first()
+        .and_then(|path| std::path::Path::new(path).parent())
+        .map(std::path::Path::to_path_buf);
+    match rastok::compiler::compile_with_assets(&refs, &Registry::m0(), asset_root.as_deref()) {
         Ok(compilation) => {
             let warnings = render_all(&compilation.warnings, &sources);
             if !warnings.is_empty() {

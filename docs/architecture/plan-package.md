@@ -23,8 +23,10 @@
 > schemas, the content-addressed asset table, expanded named types
 > (they never reach the format — expansion is the checker's), and
 > the revised numeric canonicalization (D-2026-08-10-7). v4 joined
-> the refused drafts. The `JoinMetaPlan` ops land with the joins
-> slice under this same version, as reserved keys.
+> the refused drafts. **v5 is FROZEN**: the `JoinMetaPlan` ops land
+> with the joins slice under a LATER version — this reader's
+> re-encoding check refuses unknown keys, so nothing can ride v5
+> silently.
 > Identity stays where it always was — the semantic hash over the
 > canonical HIR; the package merely carries a plan and proves it intact.
 

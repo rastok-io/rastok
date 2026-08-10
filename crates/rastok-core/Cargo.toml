@@ -15,5 +15,12 @@ path = "src/lib.rs"
 # a bare-metal build of this crate alone gets the portable path.
 blake3.workspace = true
 
+[dev-dependencies]
+# The differential ORACLE for the house JSON reader
+# (D-2026-08-10-7) — dev-only, never shipped: on the common domain
+# (valid JSON both accept, integers within i64) the two parsers must
+# agree; Rastok's stricter refusals are asserted directly.
+serde_json = "1"
+
 [lints]
 workspace = true

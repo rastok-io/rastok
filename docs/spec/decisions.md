@@ -13,8 +13,9 @@ other root exists: no bare field (`meta.customer_id` is invalid — the
 `meta.x ≡ meta.app.x` alias is REMOVED), no custom namespace at the
 root, no connector name in a meta path, no lexical scoping of meta
 references, no prefix-freedom machinery. `app` is auto-available and
-its fields are INFERRED from the unit's writes — graph and lab
-alike, so fixtures and mocks answer to the same resolved schema:
+its fields are INFERRED from the DEPLOYED GRAPH's statically visible
+writes ALONE — the Lab is checked against that resolved schema and
+extends nothing:
 types unify across writers and a conflict refuses with both sites
 named; a read of a name written nowhere refuses (the existing
 CEL-grid rule); dotted names (`meta.app.audit.origin`) are plain
@@ -155,6 +156,15 @@ only; path relative to the App root; escapes and missing files
 refuse at build; raw content, no normalization; the semantic hash
 seals the CONTENT DIGEST, never the path (spelling); the bytes live
 in a content-addressed package section outside the decoded body.
+**Amended 2026-08-10, at implementation:** the v1 physical form is
+body key 7 — raw blob bytes in FIRST-USE order (deterministic from
+the canonical source), digests DERIVED at decode (and thereby
+verified) with uniqueness and both budgets re-checked by the
+validator. The out-of-body section deferred WITH the embedded
+loader that needs it: v1 embedded targets refuse asset-bearing
+plans, so no decoder pays the in-body cost today, and moving the
+region is a format bump when the loader exists. Content addressing
+(the digest as the sole identity) is unchanged.
 Budgets: 8 MiB per asset and 32 MiB total — FIXED caps in v1, not a
 knob (an App must not raise its own resource barrier from its own
 source; a future version may lift them on evidence, which breaks
