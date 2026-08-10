@@ -18,14 +18,13 @@
 > The package is a TRANSPORT format: versioned and free to evolve by
 > version bump; none of v1, v2, or v3 was ever published and no
 > decoder reads them — each refuses by its number.
-> **Format v5 is DECIDED and forthcoming** (D-2026-08-10-9): the
-> three-zone metadata write targets and travelling schemas, the
-> `JoinMetaPlan` ops, the content-addressed asset section, expanded
-> named types, the structural budgets, and the revised numeric
-> canonicalization (D-2026-08-10-7). Its skeleton lands with the
-> reform's first serialized change; v4 then joins the refused
-> drafts. The v4 tables below describe the CURRENT reader until
-> that change lands.
+> **Format v5 is CURRENT** (D-2026-08-10-9, landed 2026-08-10): the
+> three-zone metadata write targets, the travelling `app`/`ext`
+> schemas, the content-addressed asset table, expanded named types
+> (they never reach the format — expansion is the checker's), and
+> the revised numeric canonicalization (D-2026-08-10-7). v4 joined
+> the refused drafts. The `JoinMetaPlan` ops land with the joins
+> slice under this same version, as reserved keys.
 > Identity stays where it always was — the semantic hash over the
 > canonical HIR; the package merely carries a plan and proves it intact.
 
@@ -51,7 +50,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (this document: 4)   │
+        │ 1 : format_version   uint      (this document: 5)   │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -125,7 +124,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v4)
+## Body tables (format v5)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -141,7 +140,14 @@ shipped constants to the expressible subset — the EMPTY record only,
 the one struct constant a compiler emits (D-2026-08-09-2).
 
 ```text
-plan       := {1: [node*], 2: [boundary*], 3: [edge*], 4: [handler*]}
+plan       := {1: [node*], 2: [boundary*], 3: [edge*], 4: [handler*],
+               5: app_schema?, 6: ext_schema?, 7: [asset_bytes*]?}
+                                                  // 5/6 : the travelling zone schemas —
+                                                  //   [[field (text), type]*], sorted, prefix-free
+                                                  //   (D-2026-08-10-1) ; absent = empty
+                                                  // 7 : the asset table — RAW blob bytes in
+                                                  //   digest order ; digests are DERIVED at decode
+                                                  //   (and thereby verified) ; absent = none
 
 node       := {1: path (text), 2: kind, 3: [port_decl*], 4: [var*]}
 kind       := 1                                   — operator
@@ -173,7 +179,11 @@ step       := [1, name (text), tree]              — let
 emission   := [1] | [2, [write*]] | [3, [write*]] | [4, tree] | [5]
               identity · patch · replace · data · nothing
 write      := [target, tree]
-target     := [1, [seg (text)*]] | [2, field (text)] | [3, ns (text), field (text)] | [4]
+target     := [1, [seg (text)*]]                  — data path (empty = whole data)
+            | [2, field (text)]                   — meta.app, FLAT dotted field (D-2026-08-10-1)
+            | [5, field (text)]                   — meta.ext, flat field
+                                                  // 3 (custom namespace) and 4 (mime) are RETIRED
+                                                  //   draft tags — extend-only, never reused
               data path · app meta · custom meta · mime type
 
 tree       := [type, expr]
@@ -190,7 +200,15 @@ expr       := [1, tagged_value]                   — literal
             | [7, fn (uint), [expr*]]             — call    (1 duration · 2 timestamp · 3 size)
             | [8, [expr*]]                        — list literal
             | [9, [[key (text), expr]*]]          — map literal (already construction-sorted)
+            | [10, index (uint)]                  — asset reference into body key 7
+                                                  //   (D-2026-08-10-5 ; the HASH seals the content
+                                                  //   digest, never this index)
 ```
+
+The `tagged_value` alphabet gained the exact decimal (registry tag
+10, D-2026-08-10-7): typed decimals at their declared scale, dynamic
+ones at minimal scale, 38 significant digits and the decimal128
+exponent domain as hard budgets.
 
 All discriminants and keys are extend-only: append, never renumber.
 Anything a future plan carries that these tables cannot express is a
