@@ -25,7 +25,8 @@ pub struct Hir {
     /// (D-2026-08-10-1). DERIVED from the writes: the hash never
     /// seals it twice.
     pub app_schema: Vec<(String, crate::cel::Type)>,
-    /// The `meta.ext` vocabulary: `content_type` plus sheet fields.
+    /// The `meta.ext` vocabulary: the sheets' fields only — the
+    /// standard `content_type` is implicit, never carried.
     pub ext_schema: Vec<(String, crate::cel::Type)>,
     /// The build-time assets the checker resolved (D-2026-08-10-5).
     pub assets: Vec<crate::plan::AssetBlob>,

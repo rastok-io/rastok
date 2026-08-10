@@ -23,10 +23,15 @@
 > schemas, the content-addressed asset table, expanded named types
 > (they never reach the format — expansion is the checker's), and
 > the revised numeric canonicalization (D-2026-08-10-7). v4 joined
-> the refused drafts. **v5 is FROZEN**: the `JoinMetaPlan` ops land
-> with the joins slice under a LATER version — this reader's
-> re-encoding check refuses unknown keys, so nothing can ride v5
-> silently.
+> the refused drafts. **v5 is FROZEN (second freeze, 2026-08-10)**: the first freeze
+> was lifted the same day to settle two review findings — the
+> implicit `content_type` (key 6 carries sheet fields only) and the
+> recursive value forms (maps compose through the MapLit expression;
+> a non-empty struct inside a map is INEXPRESSIBLE in v1 and defers
+> by name, so no new expression form was needed). Nothing was ever
+> published between the freezes. The `JoinMetaPlan` ops land with
+> the joins slice under a LATER version — this reader's re-encoding
+> check refuses unknown keys, so nothing can ride v5 silently.
 > Identity stays where it always was — the semantic hash over the
 > canonical HIR; the package merely carries a plan and proves it intact.
 
@@ -146,7 +151,9 @@ plan       := {1: [node*], 2: [boundary*], 3: [edge*], 4: [handler*],
                5: app_schema?, 6: ext_schema?, 7: [asset_bytes*]?}
                                                   // 5/6 : the travelling zone schemas —
                                                   //   [[field (text), type]*], sorted, prefix-free
-                                                  //   (D-2026-08-10-1) ; absent = empty
+                                                  //   (D-2026-08-10-1) ; absent = empty ; the ext
+                                                  //   standard leaf `content_type: text` is IMPLICIT,
+                                                  //   never serialized (D-2026-08-10-4)
                                                   // 7 : the asset table — RAW blob bytes in
                                                   //   digest order ; digests are DERIVED at decode
                                                   //   (and thereby verified) ; absent = none

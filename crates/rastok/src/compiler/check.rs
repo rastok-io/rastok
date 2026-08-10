@@ -50,8 +50,24 @@ pub const E_ASSET: Code = Code::new("E-ASSET");
 /// A named type declared twice in the unit; field `name`.
 pub const E_DUP_TYPE: Code = Code::new("E-DUP-TYPE");
 /// A named type that reaches itself through its own expansion, or
-/// one whose expansion exceeds the structural budgets; field `name`.
+/// one whose expansion exceeds the structural budgets — the
+/// measured value rides the diagnostic; field `name`.
 pub const E_TYPE_RECURSIVE: Code = Code::new("E-TYPE-RECURSIVE");
+/// A duplicate field or symbol inside one type declaration; fields
+/// `name` (the type) and `field` (the duplicate).
+pub const E_TYPE_DUP: Code = Code::new("E-TYPE-DUP");
+
+/// Why a type declaration refuses — one variant per rule, so each
+/// carries its own diagnostic and its measured value.
+enum TypeRefusal {
+    UnknownName { name: String },
+    Cycle { name: String },
+    DuplicateField { name: String },
+    DuplicateSymbol { name: String },
+    DepthBudget { measured: usize },
+    NodeBudget { measured: usize },
+    WidthBudget { what: &'static str, measured: usize },
+}
 /// Diagnostic adapted from the CEL chain, span mapped to the source.
 pub const E_CEL_EXPR: Code = Code::new("E-CEL-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
@@ -2396,103 +2412,151 @@ impl Checker<'_, '_> {
     fn validate_type_decl(&mut self, decl: &crate::compiler::syntax::TypeDecl) {
         let mut nodes = 0usize;
         let mut stack: Vec<String> = Vec::new();
-        let breach = self.walk_type(&decl.ty, &mut nodes, 0, &mut stack);
-        if let Some(detail) = breach {
+        if let Err(refusal) = self.walk_type(&decl.ty, &mut nodes, 0, &mut stack) {
+            let (code, message, extra) = match refusal {
+                TypeRefusal::UnknownName { name } => (
+                    E_RESOLVE_UNKNOWN,
+                    format!("`{name}` names no declared type"),
+                    ("name", name),
+                ),
+                TypeRefusal::Cycle { name } => (
+                    E_TYPE_RECURSIVE,
+                    format!("`{name}` reaches itself — recursion refuses in v1"),
+                    ("name", name),
+                ),
+                TypeRefusal::DuplicateField { name } => (
+                    E_TYPE_DUP,
+                    format!("the struct field `{name}` is declared twice"),
+                    ("field", name),
+                ),
+                TypeRefusal::DuplicateSymbol { name } => (
+                    E_TYPE_DUP,
+                    format!("the enum symbol `{name}` is declared twice"),
+                    ("field", name),
+                ),
+                TypeRefusal::DepthBudget { measured } => (
+                    E_TYPE_RECURSIVE,
+                    format!("the expansion nests {measured} levels deep — the budget is 128"),
+                    ("depth", measured.to_string()),
+                ),
+                TypeRefusal::NodeBudget { measured } => (
+                    E_TYPE_RECURSIVE,
+                    format!("the expansion reaches {measured} nodes — the budget is 4096"),
+                    ("nodes", measured.to_string()),
+                ),
+                TypeRefusal::WidthBudget { what, measured } => (
+                    E_TYPE_RECURSIVE,
+                    format!("{measured} {what} — the budget is 256"),
+                    ("count", measured.to_string()),
+                ),
+            };
             self.bag.push(
                 Diagnostic::new(
-                    E_TYPE_RECURSIVE,
+                    code,
                     Phase::Check,
-                    format!("the type `{}` does not expand: {detail}", decl.name.text),
+                    format!("the type `{}` does not expand: {message}", decl.name.text),
                 )
                 .with_span(decl.name.span)
-                .with_field("name", decl.name.text.clone()),
+                .with_field("name", decl.name.text.clone())
+                .with_field(extra.0, extra.1),
             );
         }
     }
 
-    /// Walks a type reference through its named expansions; returns
-    /// the refusal detail on a cycle or a budget breach.
+    /// Walks a type reference through its named expansions — every
+    /// declaration is validated WHOLE at collection, used or not.
     fn walk_type(
         &self,
         ty: &crate::compiler::syntax::TypeRef,
         nodes: &mut usize,
         depth: usize,
         stack: &mut Vec<String>,
-    ) -> Option<String> {
+    ) -> Result<(), TypeRefusal> {
         use crate::compiler::syntax::BaseType;
         const MAX_NODES: usize = 4096;
         const MAX_FIELDS: usize = 256;
         const MAX_DEPTH: usize = 128;
-        *nodes += 1;
-        if *nodes > MAX_NODES {
-            return Some(format!("the expansion exceeds {MAX_NODES} nodes"));
-        }
         if depth > MAX_DEPTH {
             // The depth budget of D-2026-08-10-8 counts STRUCTURAL
             // levels — `array<array<…>>` included, not just the
             // named-reference stack.
-            return Some(format!("the expansion nests beyond {MAX_DEPTH}"));
+            return Err(TypeRefusal::DepthBudget { measured: depth });
         }
         for base in &ty.alternatives {
+            // Every alternative is one expanded node — a wide union
+            // spends its budget like a wide struct.
+            *nodes += 1;
+            if *nodes > MAX_NODES {
+                return Err(TypeRefusal::NodeBudget { measured: *nodes });
+            }
             match base {
                 BaseType::Named(name) => {
                     if stack.contains(&name.text) {
-                        return Some(format!(
-                            "`{}` reaches itself — recursion refuses in v1",
-                            name.text
-                        ));
+                        return Err(TypeRefusal::Cycle {
+                            name: name.text.clone(),
+                        });
                     }
                     let Some(aliased) = self.type_decls.get(&name.text) else {
-                        // Unknown names refuse at USE sites with the
-                        // resolver's own diagnostic; collection only
-                        // guards structure.
-                        continue;
+                        // An unknown name refuses at DECLARATION —
+                        // `type Broken = Ghost` is broken whether or
+                        // not anything uses it.
+                        return Err(TypeRefusal::UnknownName {
+                            name: name.text.clone(),
+                        });
                     };
                     stack.push(name.text.clone());
                     let aliased = aliased.clone();
-                    if let Some(detail) = self.walk_type(&aliased, nodes, depth, stack) {
-                        return Some(detail);
-                    }
+                    self.walk_type(&aliased, nodes, depth, stack)?;
                     stack.pop();
                 }
                 BaseType::Struct { fields, .. } => {
                     if fields.len() > MAX_FIELDS {
-                        return Some(format!(
-                            "a struct with {} fields exceeds the {MAX_FIELDS}-field budget",
-                            fields.len()
-                        ));
+                        return Err(TypeRefusal::WidthBudget {
+                            what: "struct fields",
+                            measured: fields.len(),
+                        });
                     }
-                    for field in fields {
-                        if let Some(detail) = self.walk_type(&field.ty, nodes, depth + 1, stack) {
-                            return Some(detail);
+                    for (index, field) in fields.iter().enumerate() {
+                        if fields[..index]
+                            .iter()
+                            .any(|earlier| earlier.name.text == field.name.text)
+                        {
+                            return Err(TypeRefusal::DuplicateField {
+                                name: field.name.text.clone(),
+                            });
                         }
+                        self.walk_type(&field.ty, nodes, depth + 1, stack)?;
                     }
                 }
                 BaseType::Enum(symbols) => {
                     if symbols.len() > MAX_FIELDS {
-                        return Some(format!(
-                            "an enum with {} symbols exceeds the {MAX_FIELDS}-symbol budget",
-                            symbols.len()
-                        ));
+                        return Err(TypeRefusal::WidthBudget {
+                            what: "enum symbols",
+                            measured: symbols.len(),
+                        });
+                    }
+                    for (index, symbol) in symbols.iter().enumerate() {
+                        if symbols[..index]
+                            .iter()
+                            .any(|earlier| earlier.text == symbol.text)
+                        {
+                            return Err(TypeRefusal::DuplicateSymbol {
+                                name: symbol.text.clone(),
+                            });
+                        }
                     }
                 }
                 BaseType::Map(keys, values) => {
-                    if let Some(detail) = self.walk_type(keys, nodes, depth + 1, stack) {
-                        return Some(detail);
-                    }
-                    if let Some(detail) = self.walk_type(values, nodes, depth + 1, stack) {
-                        return Some(detail);
-                    }
+                    self.walk_type(keys, nodes, depth + 1, stack)?;
+                    self.walk_type(values, nodes, depth + 1, stack)?;
                 }
                 BaseType::Array(inner) | BaseType::Table(inner) => {
-                    if let Some(detail) = self.walk_type(inner, nodes, depth + 1, stack) {
-                        return Some(detail);
-                    }
+                    self.walk_type(inner, nodes, depth + 1, stack)?;
                 }
                 BaseType::Scalar(_) | BaseType::Variant => {}
             }
         }
-        None
+        Ok(())
     }
 
     /// Resolves `asset("path", content_type?)` at BUILD time
@@ -2678,6 +2742,49 @@ impl Checker<'_, '_> {
                 .unwrap_or_else(|_| unreachable!("bounded by TOTAL")),
             content_type,
         ))
+    }
+
+    /// Compiles a braced-map body into the MapLit expression —
+    /// entries are CEL expressions, JSON literals, or NESTED maps
+    /// (MapLit composes); a non-empty STRUCT inside a map is
+    /// inexpressible in v1 and defers by name (D-2026-08-10-6 as
+    /// amended: the map entry domain is expressions — dynamic
+    /// nesting spells `json`).
+    fn map_value_tree(
+        &mut self,
+        entries: &[(String, SynValue)],
+        signature: &cel::Signature,
+        at: Span,
+    ) -> Option<cel::Tree> {
+        let mut pairs = Vec::new();
+        for (map_key, entry) in entries {
+            match entry {
+                SynValue::Cel(expr) => {
+                    let tree = self.cel(expr, signature)?;
+                    pairs.push((map_key.clone(), tree.root));
+                }
+                SynValue::Json { value, .. } => {
+                    pairs.push((map_key.clone(), cel::Expr::Literal(value.clone())));
+                }
+                SynValue::BracedMap(nested) => {
+                    let tree = self.map_value_tree(nested, signature, at)?;
+                    pairs.push((map_key.clone(), tree.root));
+                }
+                SynValue::Braced(_) => {
+                    self.deferred("a struct inside a map entry", at);
+                    return None;
+                }
+                _ => {
+                    self.deferred("this map entry value form", at);
+                    return None;
+                }
+            }
+        }
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        Some(cel::Tree {
+            root: cel::Expr::MapLit(pairs),
+            ty: cel::Type::Dyn,
+        })
     }
 
     /// A tagged value in a NESTED record position: the bare forms
@@ -2976,26 +3083,10 @@ impl Checker<'_, '_> {
             }
             SynValue::BracedMap(entries) => {
                 // `{ "k": v }` and `{:}` are executable emissions:
-                // the entries compile into the existing MapLit form
-                // (construction-sorted at the literal, like CEL's).
-                let mut pairs = Vec::new();
-                for (map_key, entry) in entries {
-                    match entry {
-                        SynValue::Cel(expr) => {
-                            let tree = self.cel(expr, signature)?;
-                            pairs.push((map_key.clone(), tree.root));
-                        }
-                        _ => {
-                            self.deferred("this map entry value form", at);
-                            return None;
-                        }
-                    }
-                }
-                pairs.sort_by(|a, b| a.0.cmp(&b.0));
-                Some(EmitValue::Data(cel::Tree {
-                    root: cel::Expr::MapLit(pairs),
-                    ty: cel::Type::Dyn,
-                }))
+                // the entries compile into the existing MapLit form,
+                // nested maps and json literals included.
+                self.map_value_tree(entries, signature, at)
+                    .map(EmitValue::Data)
             }
             SynValue::Tagged(tagged) => match tagged.tag.text.as_str() {
                 "text" => self
@@ -3326,31 +3417,10 @@ impl Checker<'_, '_> {
                         SynValue::BracedMap(entries)
                             if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
                         {
-                            let mut pairs = Vec::new();
-                            let mut broken = false;
-                            for (map_key, entry) in entries {
-                                match entry {
-                                    SynValue::Cel(expr) => {
-                                        if let Some(tree) = self.cel(expr, signature) {
-                                            pairs.push((map_key.clone(), tree.root));
-                                        } else {
-                                            broken = true;
-                                        }
-                                    }
-                                    _ => {
-                                        self.deferred("this map entry value form", key.span);
-                                        broken = true;
-                                    }
-                                }
-                            }
-                            if !broken {
-                                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                            if let Some(tree) = self.map_value_tree(entries, signature, key.span) {
                                 writes.push(FieldWrite {
                                     target,
-                                    value: cel::Tree {
-                                        root: cel::Expr::MapLit(pairs),
-                                        ty: cel::Type::Dyn,
-                                    },
+                                    value: tree,
                                 });
                             }
                         }
@@ -3433,6 +3503,16 @@ impl Checker<'_, '_> {
                                 target: crate::envelope::WriteTarget::Data(path),
                                 value: literal_tree(value.clone(), cel::Type::Dyn),
                             });
+                        }
+                        SynValue::BracedMap(entries) => {
+                            // A map is an ordinary field value —
+                            // `{ nested = { "a": 1 } }` composes.
+                            if let Some(tree) = self.map_value_tree(entries, signature, key.span) {
+                                writes.push(FieldWrite {
+                                    target: crate::envelope::WriteTarget::Data(path),
+                                    value: tree,
+                                });
+                            }
                         }
                         SynValue::Tagged(tagged) => {
                             // The BARE byte/text forms embed anywhere

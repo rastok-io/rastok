@@ -1669,6 +1669,10 @@ pub fn to_meta_value(value: &cel::Value) -> Result<MetaValue, Fault> {
         cel::Value::Double(v) => MetaValue::Scalar(envelope::Scalar::Double(*v)),
         cel::Value::Text(v) => MetaValue::Scalar(envelope::Scalar::Text(v.clone())),
         cel::Value::Bytes(v) => MetaValue::Scalar(envelope::Scalar::Bytes(v.clone())),
+        cel::Value::Decimal { unscaled, scale } => MetaValue::Scalar(envelope::Scalar::Decimal {
+            unscaled: *unscaled,
+            scale: *scale,
+        }),
         // `array<scalar>` is spec-admitted meta (envelope.md §0).
         cel::Value::List(items) => {
             let scalars = items

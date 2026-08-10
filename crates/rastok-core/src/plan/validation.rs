@@ -433,11 +433,13 @@ fn schema_well_formed(
     schema: &[(alloc::string::String, cel::Type)],
 ) -> Result<(), PlanValidationError> {
     fn leaf_scalar(ty: &cel::Type) -> bool {
+        // EXACTLY the checker's static list and `meta_conforms`'s
+        // vocabulary — a schema no value can satisfy must not
+        // validate (uint has no leaf representation).
         matches!(
             ty,
             cel::Type::Bool
                 | cel::Type::Int
-                | cel::Type::Uint
                 | cel::Type::Double
                 | cel::Type::Text
                 | cel::Type::Bytes
@@ -447,9 +449,11 @@ fn schema_well_formed(
     for (index, (field, ty)) in schema.iter().enumerate() {
         let leaf_ok = leaf_scalar(ty) || matches!(ty, cel::Type::List(inner) if leaf_scalar(inner));
         // In EXT the standard field is implicit and reserved — a
-        // serialized entry would create a second authority. In APP
-        // it is an ordinary application field (D-2026-08-10-4).
-        let reserved = zone == "ext" && field == "content_type";
+        // serialized entry would create a second authority, and a
+        // BRANCH under it would shadow the implicit leaf. In APP it
+        // is an ordinary application field (D-2026-08-10-4).
+        let reserved =
+            zone == "ext" && (field == "content_type" || field.starts_with("content_type."));
         if !leaf_ok || reserved {
             return Err(PlanValidationError::UnknownMetaField {
                 zone,

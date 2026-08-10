@@ -101,8 +101,9 @@ The canonical name is `content_type` (never `mime_type` — the value
 is the FULL Content-Type, parameters included, so the old name
 contradicted its own definition; the NiFi-lineage rename note dies).
 Type `text?`; read as `meta.ext.content_type`. There is no
-`meta.sys.content_type`, no `meta.app.content_type`, and no
-`Data::Encoded.content_type`; the `meta.sys` spine drops to FIVE
+`meta.sys.content_type` and no `Data::Encoded.content_type`; an
+`app` field named `content_type` carries NO standard semantics — it
+is ordinary application vocabulary like any other name; the `meta.sys` spine drops to FIVE
 fields (id, parent_id, origin_id, role, graph_version) and the seal
 registry's mime row moves to the ordinary `ext` seal — the field
 stays causal. `WriteTarget::MimeType` and `Draft.mime_type` die.
@@ -290,10 +291,15 @@ resolved `app`/`ext` schemas (they TRAVEL — the validator answers
 without a Registry, the round-2 doctrine); the digest-ordered asset
 table in body key 7 (D-2026-08-10-5 as amended); expanded named
 types; the structural budgets; the `decimal` canonical tag.
-**Amended 2026-08-10, at freeze:** v5 is FROZEN as landed — the
-`JoinMetaPlan` ops and any out-of-body asset region take LATER
-versions; this reader's re-encoding check refuses unknown keys, so
-nothing rides v5 silently. It carries NOTHING for history lookups
+**Amended 2026-08-10, at freeze (twice — the first freeze was
+lifted the same day, pre-publication, to settle the implicit
+`content_type` and the recursive value forms):** v5 is FROZEN as
+landed — `ext_schema` carries sheet fields only (the standard field
+is implicit), map values compose through the MapLit expression (a
+non-empty struct inside a map is inexpressible in v1, deferred by
+name), and the `JoinMetaPlan` ops and any out-of-body asset region
+take LATER versions; this reader's re-encoding check refuses
+unknown keys, so nothing rides v5 silently. It carries NOTHING for history lookups
 (D-2026-08-10-3). The v5 skeleton lands with the first serialized
 change and exactly one final number is published; v4 joins v1–v3 as
 unpublished drafts refused by number — this entry SUPERSEDES

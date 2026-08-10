@@ -837,3 +837,135 @@ fn lab_assets_never_reach_the_production_plan() {
         );
     }
 }
+
+#[test]
+fn the_validator_only_admits_executable_schemas() {
+    use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
+    let base = "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    // A uint schema entry: no value can ever satisfy it.
+    let mut plan = compile(&[base], &Registry::m0())
+        .expect("valid")
+        .plan
+        .into_inner();
+    plan.app_schema = vec![(String::from("n"), rastok::cel::Type::Uint)];
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::UnknownMetaField { .. }
+    ));
+    // A branch under the implicit ext leaf: it would shadow it.
+    let mut plan = compile(&[base], &Registry::m0())
+        .expect("valid")
+        .plan
+        .into_inner();
+    plan.ext_schema = vec![(String::from("content_type.foo"), rastok::cel::Type::Text)];
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::UnknownMetaField { .. }
+    ));
+}
+
+#[test]
+fn a_decimal_meta_value_round_trips_through_a_copy() {
+    // Admitted under Dyn at the ingress, an exact decimal must
+    // survive an explicit handler copy — one physical vocabulary.
+    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
+    use rastok::journal::MemJournal;
+    use rastok::plan::GraphVersion;
+    use rastok::runtime::vm::Vm;
+
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.price = data\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::materialized(Value::Scalar(Scalar::Decimal {
+                    unscaled: 1999,
+                    scale: 2,
+                })),
+                ext: Namespace::new(),
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    )
+    .expect("the injection lands");
+    vm.drain(&mut journal).expect("the copy converts");
+    assert_eq!(
+        vm.outputs()[0].envelope.meta().app().get("price"),
+        Some(&MetaValue::Scalar(Scalar::Decimal {
+            unscaled: 1999,
+            scale: 2
+        })),
+    );
+}
+
+#[test]
+fn values_nest_recursively_across_struct_and_map() {
+    use rastok::envelope::{Data, Scalar, Value};
+    // A map inside a struct field.
+    let Data::Materialized(Value::Struct(fields)) = emitted("{ nested = { \"a\": 1 } }") else {
+        panic!("a struct");
+    };
+    let Some((_, Value::Map(inner))) = fields.iter().find(|(name, _)| name == "nested") else {
+        panic!("a nested map");
+    };
+    assert_eq!(inner.get("a"), Some(&Value::Scalar(Scalar::Int(1))));
+    // A map inside a map.
+    let Data::Materialized(Value::Map(outer)) = emitted("{ \"row\": { \"x\": 1 } }") else {
+        panic!("a map");
+    };
+    let Some(Value::Map(inner)) = outer.get("row") else {
+        panic!("a nested map");
+    };
+    assert_eq!(inner.get("x"), Some(&Value::Scalar(Scalar::Int(1))));
+    // A non-empty STRUCT inside a map: inexpressible in v1, deferred
+    // BY NAME (the D-6 amendment) — dynamic nesting spells `json`.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"row\": { x = 1 } } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("deferred by name");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.message().contains("a struct inside a map entry")),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn broken_type_declarations_refuse_even_unused() {
+    for (source_ty, code, what) in [
+        ("Ghost", "E-RESOLVE-UNKNOWN", "unknown name"),
+        (
+            "struct { x: int, x: text }",
+            "E-TYPE-DUP",
+            "duplicate field",
+        ),
+        ("enum { x, x }", "E-TYPE-DUP", "duplicate symbol"),
+    ] {
+        let source = format!(
+            "type Broken = {source_ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
+        );
+        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err(what);
+        assert!(
+            bag.diagnostics().iter().any(|d| d.code().as_str() == code),
+            "`{what}`: {bag:?}"
+        );
+    }
+    // A wide union spends the node budget alternative by
+    // alternative: 5000 branches refuse.
+    let wide = (0..5000).map(|_| "text").collect::<Vec<_>>().join(" | ");
+    let source = format!(
+        "type Wide = {wide}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
+    );
+    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("node budget");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| { d.code().as_str() == "E-TYPE-RECURSIVE" && d.message().contains("4096") }),
+        "{bag:?}"
+    );
+}

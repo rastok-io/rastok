@@ -96,8 +96,10 @@ pub struct ExecutionPlan {
     /// Registry (D-2026-08-10-1): flat dotted field, unified type.
     /// Sorted by field; prefix-free.
     pub app_schema: Vec<(alloc::string::String, cel::Type)>,
-    /// The resolved `meta.ext` vocabulary — the standard
-    /// `content_type` plus the instantiated sheets' fields.
+    /// The resolved `meta.ext` vocabulary — the instantiated
+    /// sheets' fields ONLY: the standard `content_type` is IMPLICIT
+    /// (`text`), known to every consumer and never serialized
+    /// (D-2026-08-10-4).
     pub ext_schema: Vec<(alloc::string::String, cel::Type)>,
     /// The build-time asset table (D-2026-08-10-5): content-addressed,
     /// DEDUPLICATED by digest; `cel::Expr::Asset` indexes it. Sorted
