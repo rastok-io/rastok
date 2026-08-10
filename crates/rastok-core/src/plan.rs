@@ -99,6 +99,19 @@ pub struct ExecutionPlan {
     /// The resolved `meta.ext` vocabulary — the standard
     /// `content_type` plus the instantiated sheets' fields.
     pub ext_schema: Vec<(alloc::string::String, cel::Type)>,
+    /// The build-time asset table (D-2026-08-10-5): content-addressed,
+    /// DEDUPLICATED by digest; `cel::Expr::Asset` indexes it. Sorted
+    /// by digest — one content, one order, one identity.
+    pub assets: Vec<AssetBlob>,
+}
+
+/// One embedded build-time blob.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetBlob {
+    /// blake3 of the bytes — the IDENTITY the hash seals.
+    pub digest: [u8; 32],
+    /// The raw content, unnormalized.
+    pub bytes: alloc::vec::Vec<u8>,
 }
 
 impl ExecutionPlan {

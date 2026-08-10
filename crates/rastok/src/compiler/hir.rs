@@ -27,6 +27,8 @@ pub struct Hir {
     pub app_schema: Vec<(String, crate::cel::Type)>,
     /// The `meta.ext` vocabulary: `content_type` plus sheet fields.
     pub ext_schema: Vec<(String, crate::cel::Type)>,
+    /// The build-time assets the checker resolved (D-2026-08-10-5).
+    pub assets: Vec<crate::plan::AssetBlob>,
 }
 
 pub use crate::node::Direction;

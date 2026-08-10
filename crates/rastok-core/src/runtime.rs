@@ -461,7 +461,7 @@ impl<'plan> TransactionExecutor<'plan> {
         let data_slot = DataSlot::new(input.data());
         if let Some(guard) = &handler.guard {
             let verdict = resolve_payload(
-                eval_lazy(guard, &base(&scratch, &lets), &data_slot)?,
+                eval_lazy(guard, &base(&scratch, &lets), &data_slot, &self.plan.assets)?,
                 &data_slot,
             )?;
             match verdict {
@@ -489,7 +489,8 @@ impl<'plan> TransactionExecutor<'plan> {
         for step in &handler.body {
             match step {
                 Step::Let { name, expr } => {
-                    let value = eval_lazy(expr, &base(&scratch, &lets), &data_slot)?;
+                    let value =
+                        eval_lazy(expr, &base(&scratch, &lets), &data_slot, &self.plan.assets)?;
                     lets.insert(name.clone(), value);
                 }
                 Step::SetVar { name, expr } => {
@@ -497,7 +498,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     // outlives the transaction, so the witness
                     // resolves here.
                     let value = resolve_payload(
-                        eval_lazy(expr, &base(&scratch, &lets), &data_slot)?,
+                        eval_lazy(expr, &base(&scratch, &lets), &data_slot, &self.plan.assets)?,
                         &data_slot,
                     )?;
                     // A state cell holds its DECLARED type at every
@@ -515,7 +516,13 @@ impl<'plan> TransactionExecutor<'plan> {
                     scratch.insert(name.clone(), value);
                 }
                 Step::Emit { port, value } => {
-                    let built = emitted_content(value, input, &base(&scratch, &lets), &data_slot)?;
+                    let built = emitted_content(
+                        value,
+                        input,
+                        &base(&scratch, &lets),
+                        &data_slot,
+                        &self.plan.assets,
+                    )?;
                     if let Some(built) = built {
                         let index = buffer.next_index(port);
                         let id = ids::emission_id(
@@ -828,6 +835,7 @@ fn emitted_content(
     input: &Envelope,
     base: &BTreeMap<String, cel::Value>,
     slot: &DataSlot<'_>,
+    assets: &[crate::plan::AssetBlob],
 ) -> Result<Option<Built>, Fault> {
     // The atomic order of D-2026-08-10-4: copy the zones, decide
     // the payload, DERIVE `content_type` from that decision (a kept
@@ -855,7 +863,7 @@ fn emitted_content(
             // taken arm of a ternary — ships the REPRESENTATION,
             // content type included; anything else is FRESH data and
             // strikes it (D-2026-08-10-4).
-            let value = eval_lazy(expr, base, slot)?;
+            let value = eval_lazy(expr, base, slot, assets)?;
             if matches!(value, cel::Value::Payload) {
                 return Ok(Some(inherited(BuiltData::Unchanged, false)));
             }
@@ -877,7 +885,10 @@ fn emitted_content(
             let carry = if let [only] = data_writes.as_slice() {
                 let write = &writes[*only];
                 matches!(&write.target, envelope::WriteTarget::Data(path) if path.is_empty())
-                    && matches!(eval_lazy(&write.expr, base, slot)?, cel::Value::Payload)
+                    && matches!(
+                        eval_lazy(&write.expr, base, slot, assets)?,
+                        cel::Value::Payload
+                    )
             } else {
                 false
             };
@@ -897,7 +908,7 @@ fn emitted_content(
                     // The carried representation IS the payload.
                     continue;
                 }
-                let value = resolve_payload(eval_lazy(&write.expr, base, slot)?, slot)?;
+                let value = resolve_payload(eval_lazy(&write.expr, base, slot, assets)?, slot)?;
                 match &write.target {
                     envelope::WriteTarget::Data(path) => {
                         // The fold base is a DIRECT demand — a
@@ -1050,6 +1061,8 @@ pub enum ValueKind {
     /// An unmaterialized payload witness — judged values are
     /// resolved first, so a judge never meets one; total anyway.
     Opaque,
+    /// An exact dynamic decimal (D-2026-08-10-7).
+    Decimal,
 }
 
 impl ValueKind {
@@ -1057,6 +1070,7 @@ impl ValueKind {
         match value {
             cel::Value::Bool(_) => Self::Bool,
             cel::Value::Int(_) | cel::Value::Uint(_) => Self::Number,
+            cel::Value::Decimal { .. } => Self::Decimal,
             cel::Value::Double(_) => Self::Double,
             cel::Value::Text(_) => Self::Text,
             cel::Value::Bytes(_) => Self::Bytes,
@@ -1086,6 +1100,7 @@ impl fmt::Display for ValueKind {
             Self::Map => "map",
             Self::Struct => "struct",
             Self::Opaque => "opaque",
+            Self::Decimal => "decimal",
         })
     }
 }
@@ -1152,6 +1167,9 @@ pub(crate) fn conformance_fault(
     };
     match (declared, value) {
         (cel::Type::Dyn, _) => None,
+        // A dynamic decimal conforms to no precise M0 type — it is
+        // narrowed before use (D-2026-08-10-7).
+        (_, cel::Value::Decimal { .. }) => mismatch(),
         // Judged values are resolved first; an unmaterialized
         // witness meeting a precise judge is a mismatch, total.
         (_, cel::Value::Payload) => mismatch(),
@@ -1288,6 +1306,8 @@ pub struct LazyBindings<'a> {
     pub base: &'a BTreeMap<String, cel::Value>,
     /// The on-demand payload.
     pub data: &'a DataSlot<'a>,
+    /// The plan's build-time asset table (D-2026-08-10-5).
+    pub assets: &'a [crate::plan::AssetBlob],
 }
 
 impl cel::Bindings for LazyBindings<'_> {
@@ -1304,6 +1324,15 @@ impl cel::Bindings for LazyBindings<'_> {
         self.data.demand().ok_or_else(|| cel::Error {
             message: String::from("the payload could not materialize"),
         })
+    }
+
+    fn asset(&self, index: u32) -> Result<cel::Value, cel::Error> {
+        self.assets
+            .get(index as usize)
+            .map(|blob| cel::Value::Bytes(blob.bytes.clone()))
+            .ok_or_else(|| cel::Error {
+                message: format!("asset {index} is outside the validated table"),
+            })
     }
 }
 
@@ -1352,8 +1381,13 @@ pub fn eval_lazy(
     tree: &cel::Tree,
     base: &BTreeMap<String, cel::Value>,
     slot: &DataSlot<'_>,
+    assets: &[crate::plan::AssetBlob],
 ) -> Result<cel::Value, Fault> {
-    let env = LazyBindings { base, data: slot };
+    let env = LazyBindings {
+        base,
+        data: slot,
+        assets,
+    };
     let result = cel::eval(tree, &env).map_err(Fault::Eval);
     if let Some(fault) = slot.take_fault() {
         return Err(fault);
@@ -1499,6 +1533,10 @@ fn from_scalar(scalar: &envelope::Scalar) -> cel::Value {
         envelope::Scalar::Double(value) => cel::Value::Double(*value),
         envelope::Scalar::Text(value) => cel::Value::Text(value.clone()),
         envelope::Scalar::Bytes(value) => cel::Value::Bytes(value.clone()),
+        envelope::Scalar::Decimal { unscaled, scale } => cel::Value::Decimal {
+            unscaled: *unscaled,
+            scale: *scale,
+        },
     }
 }
 
@@ -1512,6 +1550,12 @@ fn from_meta_value(value: &MetaValue) -> cel::Value {
 /// Converts a CEL value into the envelope data domain.
 pub fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, Fault> {
     Ok(match value {
+        cel::Value::Decimal { unscaled, scale } => {
+            envelope::Value::Scalar(envelope::Scalar::Decimal {
+                unscaled: *unscaled,
+                scale: *scale,
+            })
+        }
         // Emission builders resolve the witness before converting;
         // an unresolved one is a caller defect, refused typed.
         cel::Value::Payload => {

@@ -86,7 +86,9 @@ const SYNC_WORDS: &[&str] = &[
 ];
 
 /// Tags whose block body is raw guest text, never read by the host.
-const RAW_TAGS: &[&str] = &["jq", "bash", "sql", "python", "rust", "json"];
+const RAW_TAGS: &[&str] = &[
+    "jq", "bash", "sql", "python", "rust", "json", "text", "base64",
+];
 
 /// Tag words that open tagged-value expressions.
 const TAG_WORDS: &[&str] = &[
@@ -101,9 +103,9 @@ const TAG_WORDS: &[&str] = &[
     "parquet",
     "msgpack",
     "base64",
-    "hex",
     "csv",
-    "file",
+    "text",
+    "asset",
     "oauth2_client_credentials",
     "measure",
     "exponential",
@@ -1517,13 +1519,7 @@ impl<'src> Parser<'src, '_> {
         }
         let token = self.peek();
         match (token.kind, token.text) {
-            (TokenKind::LBrace, _) => match self.struct_body() {
-                Some(body) => Value::Braced(body),
-                None => Value::Cel(CelExpr {
-                    text: String::new(),
-                    span: token.span,
-                }),
-            },
+            (TokenKind::LBrace, _) => self.braced_value(token.span),
             (TokenKind::Dot, _) => {
                 // `.` — the exact re-emission of the current
                 // envelope; grammar forbids leading dots in CEL, so
@@ -1531,9 +1527,45 @@ impl<'src> Parser<'src, '_> {
                 self.bump();
                 Value::Identity(token.span)
             }
-            (TokenKind::Ident, "map") => {
+            (TokenKind::Ident, "json") => {
                 self.bump();
-                Value::Map(self.struct_body().unwrap_or_default())
+                // Delegate ONE complete JSON value to the house
+                // reader from the raw source (D-2026-08-10-6): the
+                // reader returns the consumed length and the parser
+                // resumes exactly after it.
+                self.unpeek();
+                let start = self.last_end;
+                let tail = self.lexer.source_from(start);
+                // Skip the whitespace between the tag and the value.
+                let lead = tail.len() - tail.trim_start().len();
+                match rastok_core::json::parse_value(tail.trim_start()) {
+                    Ok((value, consumed)) => {
+                        let end = start + lead + consumed;
+                        self.lexer.skip_to(end);
+                        self.last_end = end;
+                        Value::Json {
+                            value,
+                            span: Span::new(self.source_id, start..end),
+                        }
+                    }
+                    Err(error) => {
+                        let at = start + lead + error.offset;
+                        self.bag.push(
+                            crate::diagnostics::Diagnostic::new(
+                                crate::compiler::check::E_CEL_EXPR,
+                                crate::diagnostics::Phase::Parse,
+                                format!("the JSON value does not read: {}", error.message),
+                            )
+                            .with_span(Span::new(self.source_id, at..at + 1))
+                            .with_field("detail", error.message),
+                        );
+                        self.lexer.skip_to(start + lead);
+                        Value::Cel(CelExpr {
+                            text: String::new(),
+                            span: Span::new(self.source_id, start..start),
+                        })
+                    }
+                }
             }
             (TokenKind::Ident, "nothing") => {
                 self.bump();
@@ -1585,9 +1617,75 @@ impl<'src> Parser<'src, '_> {
         Value::Tagged(TaggedValue { tag, args, body })
     }
 
+    /// One brace, punctuation decides (D-2026-08-10-6): `}` is the
+    /// empty struct, `:` alone the empty map, a STRING key opens map
+    /// entries, an IDENT opens struct entries. Mixing refuses.
+    fn braced_value(&mut self, open: Span) -> Value {
+        let _ = open;
+        // The opening brace is still unconsumed (`struct_body`
+        // expects it); peek PAST it to dispatch.
+        self.bump();
+        match self.peek().kind {
+            TokenKind::Colon => {
+                // `{:}` — the empty map.
+                self.bump();
+                self.expect(TokenKind::RBrace, "`}`");
+                Value::BracedMap(Vec::new())
+            }
+            TokenKind::Str => {
+                let mut entries = Vec::new();
+                loop {
+                    let token = self.peek();
+                    match token.kind {
+                        TokenKind::RBrace | TokenKind::Eof => break,
+                        TokenKind::Comma | TokenKind::Semi => {
+                            self.bump();
+                        }
+                        TokenKind::Str => {
+                            let key = String::from(token.text.trim_matches('"'));
+                            self.bump();
+                            if self.expect(TokenKind::Colon, "`:` (a map entry)").is_none() {
+                                break;
+                            }
+                            entries.push((key, self.value(&STRUCT_POSITION)));
+                        }
+                        TokenKind::Ident => {
+                            self.error_expected(
+                                "a quoted map key — `=` entries build a struct, `:` entries a map; the two never mix",
+                            );
+                            break;
+                        }
+                        _ => {
+                            self.error_expected("a map entry or `}`");
+                            break;
+                        }
+                    }
+                }
+                self.expect(TokenKind::RBrace, "`}`");
+                Value::BracedMap(entries)
+            }
+            _ => {
+                // Struct entries (or `{}` — the empty struct). A
+                // stray `"k": v` inside refuses in the entry loop.
+                match self.struct_entries() {
+                    Some(body) => Value::Braced(body),
+                    None => Value::Cel(CelExpr {
+                        text: String::new(),
+                        span: self.peek().span,
+                    }),
+                }
+            }
+        }
+    }
+
     /// `"{" ( entry ","? )* "}"` — shared by struct-shaped bodies.
     fn struct_body(&mut self) -> Option<StructBody> {
         self.expect(TokenKind::LBrace, "`{`")?;
+        self.struct_entries()
+    }
+
+    /// The entry loop, opening brace already consumed.
+    fn struct_entries(&mut self) -> Option<StructBody> {
         let mut entries = Vec::new();
         loop {
             let token = self.peek();
@@ -1622,6 +1720,12 @@ impl<'src> Parser<'src, '_> {
                             break;
                         }
                     }
+                }
+                TokenKind::Str => {
+                    self.error_expected(
+                        "a field name — `=` entries build a struct, `:` entries a map; the two never mix",
+                    );
+                    break;
                 }
                 _ => {
                     self.error_expected("a field or `}`");

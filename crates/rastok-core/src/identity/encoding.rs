@@ -25,6 +25,7 @@ pub fn value_tagged(value: &crate::envelope::Value) -> Cbor {
             Cbor::Array(vec![Cbor::Uint(5), Cbor::Double((*v).into())])
         }
         Value::Scalar(Scalar::Text(v)) => Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(v.clone())]),
+        Value::Scalar(Scalar::Decimal { unscaled, scale }) => decimal_tagged(*unscaled, *scale),
         Value::Scalar(Scalar::Bytes(v)) => Cbor::Array(vec![Cbor::Uint(7), Cbor::Bytes(v.clone())]),
         Value::Struct(fields) => {
             // Canonical sorted pairs — construction order is not
@@ -77,6 +78,7 @@ pub fn cel_tagged(value: &crate::cel::Value) -> Cbor {
         // (runtime `resolve_payload`), so no delta ever carries one;
         // encoding a marker would seal a lie.
         crate::cel::Value::Payload => unreachable!("a payload witness never reaches a seal"),
+        crate::cel::Value::Decimal { unscaled, scale } => decimal_tagged(*unscaled, *scale),
         crate::cel::Value::Bool(v) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Bool(*v)]),
         crate::cel::Value::Int(v) => int_tagged(*v),
         crate::cel::Value::Uint(v) => Cbor::Array(vec![Cbor::Uint(23), Cbor::Uint(*v)]),
@@ -144,6 +146,36 @@ pub fn meta_tagged(value: &crate::envelope::MetaValue) -> Cbor {
             ),
         ]),
     }
+}
+
+/// `decimal` (tag 10): `[unscaled (minimal big-endian
+/// two's-complement bytes), scale (int)]` — the registry's pinned
+/// layout, shared by typed and dynamic decimals (D-2026-08-10-7).
+pub fn decimal_tagged(unscaled: i128, scale: i32) -> Cbor {
+    Cbor::Array(vec![
+        Cbor::Uint(10),
+        Cbor::Array(vec![
+            Cbor::Bytes(minimal_twos_complement(unscaled)),
+            int_cbor(i64::from(scale)),
+        ]),
+    ])
+}
+
+/// Minimal big-endian two's complement — no redundant sign byte;
+/// zero is a single `0x00` (the registry's rule).
+fn minimal_twos_complement(value: i128) -> Vec<u8> {
+    let bytes = value.to_be_bytes();
+    let mut start = 0;
+    while start < 15 {
+        let cut = bytes[start];
+        let next_msb = bytes[start + 1] & 0x80;
+        let redundant = (cut == 0x00 && next_msb == 0) || (cut == 0xFF && next_msb != 0);
+        if !redundant {
+            break;
+        }
+        start += 1;
+    }
+    bytes[start..].to_vec()
 }
 
 /// `int` (tag 2) inside the 32-bit range, `long` (tag 3) beyond — the

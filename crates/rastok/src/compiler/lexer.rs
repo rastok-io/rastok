@@ -237,6 +237,21 @@ impl<'a> Lexer<'a> {
     /// matching `}` under the frozen balanced-brace delimitation; the
     /// closing brace is consumed, the text excludes it. The host never
     /// reads the content — quoted strings are skipped opaquely.
+    /// The unlexed source from `offset` — a delegation window for
+    /// sub-readers (the JSON literal); the caller re-syncs with
+    /// [`Self::skip_to`].
+    #[must_use]
+    pub fn source_from(&self, offset: usize) -> &'a str {
+        &self.source[offset..]
+    }
+
+    /// Re-syncs the cursor after a delegated read.
+    pub fn skip_to(&mut self, offset: usize) {
+        self.pos = offset;
+    }
+
+    /// Captures a raw brace-balanced block (guest text, verbatim
+    /// text, inline bytes) — braces excluded, no host lexing.
     pub fn raw_block(&mut self, bag: &mut Bag) -> Token<'a> {
         let start = self.pos;
         let mut depth: u32 = 0;

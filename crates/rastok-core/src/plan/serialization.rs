@@ -223,6 +223,19 @@ fn plan_tree(plan: &ExecutionPlan) -> Cbor {
     if !plan.ext_schema.is_empty() {
         pairs.insert(6, schema_tree(&plan.ext_schema));
     }
+    if !plan.assets.is_empty() {
+        // Content only: the digest is DERIVED and re-verified at
+        // decode — a tampered blob cannot keep its identity.
+        pairs.insert(
+            7,
+            Cbor::Array(
+                plan.assets
+                    .iter()
+                    .map(|blob| Cbor::Bytes(blob.bytes.clone()))
+                    .collect(),
+            ),
+        );
+    }
     Cbor::Map(pairs)
 }
 
@@ -432,6 +445,7 @@ fn type_tree(ty: &cel::Type) -> Cbor {
 fn expr_tree(expr: &cel::Expr) -> Cbor {
     match expr {
         cel::Expr::Literal(value) => Cbor::Array(vec![Cbor::Uint(1), cel_tagged(value)]),
+        cel::Expr::Asset(index) => Cbor::Array(vec![Cbor::Uint(10), Cbor::Uint(u64::from(*index))]),
         cel::Expr::Path(segments) => Cbor::Array(vec![
             Cbor::Uint(2),
             Cbor::Array(segments.iter().map(|seg| Cbor::Text(seg.clone())).collect()),
@@ -605,6 +619,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 // Every variant is an array whose tag sits one down.
                 max = max.max(level + 1);
                 match expr {
+                    cel::Expr::Asset(_) => {}
                     cel::Expr::Literal(value) => stack.push(Item::Val(value, level + 1)),
                     cel::Expr::Path(segments) => {
                         if !segments.is_empty() {
@@ -675,6 +690,11 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                             stack.push(Item::Val(value, level + 3));
                         }
                     }
+                    cel::Value::Decimal { .. } => {
+                        // `[10, [bytes, scale]]` — the payload pair
+                        // sits one deeper than the tag.
+                        max = max.max(level + 2);
+                    }
                     _ => {}
                 }
             }
@@ -740,6 +760,19 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         Some(tree) => schema_from(tree)?,
         None => Vec::new(),
     };
+    let assets = match pairs.get(&7) {
+        Some(tree) => array_of(tree, "assets")?
+            .iter()
+            .map(|blob| match blob {
+                Cbor::Bytes(bytes) => Ok(crate::plan::AssetBlob {
+                    digest: *blake3::hash(bytes).as_bytes(),
+                    bytes: bytes.clone(),
+                }),
+                _ => Err(err("asset blob")),
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        None => Vec::new(),
+    };
     Ok(ExecutionPlan {
         nodes,
         boundary,
@@ -747,6 +780,7 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         handlers,
         app_schema,
         ext_schema,
+        assets,
     })
 }
 
@@ -1031,6 +1065,9 @@ fn expr_from(tree: &Cbor) -> Result<cel::Expr, DecodeError> {
     let parts = array_of(tree, "cel expr")?;
     match parts {
         [Cbor::Uint(1), value] => Ok(cel::Expr::Literal(cel_value_from(value)?)),
+        [Cbor::Uint(10), Cbor::Uint(index)] => Ok(cel::Expr::Asset(
+            u32::try_from(*index).map_err(|_| err("asset index"))?,
+        )),
         [Cbor::Uint(2), Cbor::Array(segments)] => Ok(cel::Expr::Path(
             segments
                 .iter()
@@ -1119,6 +1156,25 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
         [Cbor::Uint(8), Cbor::Text(v)] => Ok(cel::Value::Text(v.clone())),
         [Cbor::Uint(9), Cbor::Null] => Ok(cel::Value::Null),
         [Cbor::Uint(23), Cbor::Uint(v)] => Ok(cel::Value::Uint(*v)),
+        [Cbor::Uint(10), payload] => match array_of(payload, "decimal")? {
+            [Cbor::Bytes(unscaled), scale] => {
+                if unscaled.is_empty() || unscaled.len() > 16 {
+                    return Err(err("decimal coefficient"));
+                }
+                let mut wide = if unscaled[0] & 0x80 != 0 {
+                    [0xFF_u8; 16]
+                } else {
+                    [0x00_u8; 16]
+                };
+                wide[16 - unscaled.len()..].copy_from_slice(unscaled);
+                #[allow(clippy::cast_possible_truncation)]
+                Ok(cel::Value::Decimal {
+                    unscaled: i128::from_be_bytes(wide),
+                    scale: int_from(scale)? as i32,
+                })
+            }
+            _ => Err(err("decimal")),
+        },
         [Cbor::Uint(12), value] => Ok(cel::Value::Timestamp(int_from(value)?)),
         [Cbor::Uint(16), value] => Ok(cel::Value::Duration(int_from(value)?)),
         [Cbor::Uint(17), Cbor::Array(pairs)] => {
@@ -1405,6 +1461,7 @@ mod tests {
             }],
             app_schema: vec![(text("m.dotted"), cel::Type::Dyn)],
             ext_schema: vec![(text("content_type"), cel::Type::Text)],
+            assets: vec![],
         }
     }
 
@@ -1431,6 +1488,7 @@ mod tests {
             }],
             app_schema: vec![],
             ext_schema: vec![],
+            assets: vec![],
         }
     }
 
@@ -1468,6 +1526,7 @@ mod tests {
                 handlers: vec![],
                 app_schema: vec![],
                 ext_schema: vec![],
+                assets: vec![],
             },
             rich_plan(),
             one_step_plan(nested_binary),

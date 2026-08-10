@@ -57,6 +57,19 @@ pub struct Compilation {
 /// Returns the full diagnostic bag when parsing or checking rejects
 /// the unit; no plan exists in that case, by construction.
 pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilation, Bag> {
+    compile_with_assets(sources, registry, None)
+}
+
+/// [`compile`], with an asset root the `asset(…)` literal may read
+/// from at build time (D-2026-08-10-5). `None` refuses every asset.
+///
+/// # Errors
+/// As [`compile`].
+pub fn compile_with_assets(
+    sources: &[&str],
+    registry: &stdlib::Registry,
+    asset_root: Option<&std::path::Path>,
+) -> Result<Compilation, Bag> {
     let mut bag = Bag::new();
     let mut unit = Unit::default();
     for (index, source) in sources.iter().enumerate() {
@@ -64,7 +77,7 @@ pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilat
         let tree = parser::parse(source_id, source, &mut bag);
         unit.files.push((source_id, tree));
     }
-    let hir = check::check(&unit, registry, &mut bag);
+    let hir = check::check(&unit, registry, &mut bag, asset_root);
     let Some(hir) = hir else {
         return Err(bag);
     };

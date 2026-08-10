@@ -379,6 +379,7 @@ impl MockPartner<'_> {
                     let lazy = runtime::LazyBindings {
                         base: &env,
                         data: &slot,
+                        assets: &[],
                     };
                     let result = cel::eval(guard, &lazy);
                     if let Some(fault) = slot.take_fault() {
@@ -472,6 +473,7 @@ impl MockPartner<'_> {
         let lazy = runtime::LazyBindings {
             base: env,
             data: slot,
+            assets: &[],
         };
         let result = cel::eval(tree, &lazy);
         if let Some(fault) = slot.take_fault() {

@@ -23,6 +23,7 @@ pub mod cel;
 pub mod envelope;
 pub mod identity;
 pub mod journal;
+pub mod json;
 pub mod node;
 pub mod plan;
 pub mod runtime;

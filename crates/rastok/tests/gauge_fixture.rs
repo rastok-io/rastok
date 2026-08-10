@@ -27,7 +27,9 @@ fn compilation() -> rastok::compiler::Compilation {
 /// this hash includes the port-table presence tags and the pinned
 /// types (D-2026-08-08-3). It moves only when the language does —
 /// deliberately, with this constant re-blessed in review.
-const GAUGE_HASH: &str = "301dfecf27049ccfcd8874704057080b8d7df3bc941cd50c3f14b1d84c29df34";
+// DELIBERATE MOVE 2026-08-10 (D-2026-08-10-7): trees seal
+// [type, root] — see lower.rs's pinned-hash note.
+const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

@@ -119,6 +119,13 @@ pub enum PlanValidationError {
         /// The flat dotted field.
         field: alloc::string::String,
     },
+    /// An `Expr::Asset` index past the asset table.
+    AssetOutOfBounds {
+        /// The impossible reference.
+        index: u32,
+        /// The table it missed.
+        count: usize,
+    },
     /// Two flat keys where one prefixes the other — the nested
     /// projection cannot hold both.
     MetaPrefixCollision {
@@ -182,6 +189,9 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: a `meta.{zone}.{field}` write outside the travelling schema"
             ),
+            Self::AssetOutOfBounds { index, count } => {
+                write!(f, "invalid plan: asset {index} of a {count}-blob table")
+            }
             Self::MetaPrefixCollision { leaf, branch } => write!(
                 f,
                 "invalid plan: `{leaf}` is a leaf and `{branch}` makes it a branch — flat keys are prefix-free"
@@ -389,6 +399,51 @@ fn schema_prefix_free(
         }
     }
     Ok(())
+}
+
+/// Every `Expr::Asset` index must sit inside the asset table — the
+/// VM dereferences without checking.
+fn asset_indexes_bound(plan: &ExecutionPlan, expr: &cel::Expr) -> Result<(), PlanValidationError> {
+    match expr {
+        cel::Expr::Asset(index) => {
+            if (*index as usize) < plan.assets.len() {
+                Ok(())
+            } else {
+                Err(PlanValidationError::AssetOutOfBounds {
+                    index: *index,
+                    count: plan.assets.len(),
+                })
+            }
+        }
+        cel::Expr::Literal(_) | cel::Expr::Path(_) => Ok(()),
+        cel::Expr::Unary { expr, .. } => asset_indexes_bound(plan, expr),
+        cel::Expr::Binary { left, right, .. } => {
+            asset_indexes_bound(plan, left)?;
+            asset_indexes_bound(plan, right)
+        }
+        cel::Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            asset_indexes_bound(plan, cond)?;
+            asset_indexes_bound(plan, then)?;
+            asset_indexes_bound(plan, otherwise)
+        }
+        cel::Expr::Index { base, index } => {
+            asset_indexes_bound(plan, base)?;
+            asset_indexes_bound(plan, index)
+        }
+        cel::Expr::Call { args, .. } => args
+            .iter()
+            .try_for_each(|arg| asset_indexes_bound(plan, arg)),
+        cel::Expr::List(items) => items
+            .iter()
+            .try_for_each(|item| asset_indexes_bound(plan, item)),
+        cel::Expr::MapLit(pairs) => pairs
+            .iter()
+            .try_for_each(|(_, value)| asset_indexes_bound(plan, value)),
+    }
 }
 
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
@@ -704,10 +759,14 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         });
                     }
                     match value {
-                        Emission::Data(tree) => expr_canonical(&tree.root)?,
+                        Emission::Data(tree) => {
+                            expr_canonical(&tree.root)?;
+                            asset_indexes_bound(plan, &tree.root)?;
+                        }
                         Emission::Patch(writes) | Emission::Replace(writes) => {
                             for write in writes {
                                 expr_canonical(&write.expr.root)?;
+                                asset_indexes_bound(plan, &write.expr.root)?;
                                 meta_target_known(plan, &write.target)?;
                             }
                         }
@@ -767,6 +826,7 @@ fn value_expressible(value: &cel::Value) -> Result<(), PlanValidationError> {
         // compiler emits is the EMPTY record literal (`parent = {}`,
         // D-2026-08-09-1). Anything with fields still refuses.
         cel::Value::Struct(fields) if fields.is_empty() => Ok(()),
+        cel::Value::Decimal { .. } => Ok(()),
         cel::Value::Struct(_) | cel::Value::Payload => {
             Err(PlanValidationError::UnrepresentableConstant)
         }
@@ -785,6 +845,10 @@ fn value_expressible(value: &cel::Value) -> Result<(), PlanValidationError> {
 fn expr_canonical(expr: &cel::Expr) -> Result<(), PlanValidationError> {
     match expr {
         cel::Expr::Literal(value) => value_expressible(value),
+        // The index is bounds-checked against the asset table in
+        // the walk that owns the plan (`meta_target_known`'s
+        // sibling); canonical here.
+        cel::Expr::Asset(_) => Ok(()),
         cel::Expr::Path(_) => Ok(()),
         cel::Expr::Unary { expr, .. } => expr_canonical(expr),
         cel::Expr::Binary { left, right, .. } => {

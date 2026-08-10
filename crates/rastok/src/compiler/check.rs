@@ -44,6 +44,9 @@ pub const E_META_PREFIX: Code = Code::new("E-META-PREFIX");
 /// A reserved word used as a node name (`meta`, `data`, `sys`,
 /// `app`, `ext`); field `name`.
 pub const E_NAME_RESERVED: Code = Code::new("E-NAME-RESERVED");
+/// An `asset(…)` that cannot resolve at build: missing file, root
+/// escape, budget breach, or a malformed call; field `path`.
+pub const E_ASSET: Code = Code::new("E-ASSET");
 /// Diagnostic adapted from the CEL chain, span mapped to the source.
 pub const E_CEL_EXPR: Code = Code::new("E-CEL-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
@@ -110,7 +113,12 @@ pub struct Unit {
 /// graph to check. A returned HIR is meaningful only when the bag
 /// holds no errors.
 #[must_use]
-pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<Hir> {
+pub fn check(
+    unit: &Unit,
+    registry: &stdlib::Registry,
+    bag: &mut Bag,
+    asset_root: Option<&std::path::Path>,
+) -> Option<Hir> {
     let mut apps = Vec::new();
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
@@ -151,6 +159,8 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
         meta_reads: Vec::new(),
         app_schema: BTreeMap::new(),
         in_lab: false,
+        asset_root: asset_root.map(std::path::Path::to_path_buf),
+        assets: Vec::new(),
     };
     // No top-level declaration is silently ignored, and none is
     // silently dropped either: until unit composition and a real
@@ -235,6 +245,7 @@ pub fn check(unit: &Unit, registry: &stdlib::Registry, bag: &mut Bag) -> Option<
         labs,
         app_schema,
         ext_schema,
+        assets: checker.assets,
     })
 }
 
@@ -256,6 +267,12 @@ struct Checker<'bag, 'registry> {
     /// Whether the checker is inside the Lab surface: lab writes
     /// never extend the production schema.
     in_lab: bool,
+    /// The asset root this compilation may read from — `None`
+    /// refuses every `asset(…)` (a string-source compilation has no
+    /// filesystem).
+    asset_root: Option<std::path::PathBuf>,
+    /// The resolved blobs, deduplicated by digest.
+    assets: Vec<crate::plan::AssetBlob>,
 }
 
 impl Checker<'_, '_> {
@@ -2191,6 +2208,260 @@ impl Checker<'_, '_> {
         );
     }
 
+    /// The verbatim `text { … }` block (D-2026-08-10-6): the first
+    /// newline is excluded, the closing brace's column sets the
+    /// margin stripped from every line, the trailing newline before
+    /// the brace is excluded. No interpolation, no escapes.
+    fn verbatim_text(
+        &mut self,
+        tagged: &crate::compiler::syntax::TaggedValue,
+    ) -> Option<cel::Value> {
+        use crate::compiler::syntax::TaggedBody;
+        if !tagged.args.is_empty() {
+            self.bag.push(
+                Diagnostic::new(E_CEL_EXPR, Phase::Check, "`text { … }` takes no arguments")
+                    .with_span(tagged.tag.span)
+                    .with_field("detail", "a verbatim block has a body only"),
+            );
+            return None;
+        }
+        let Some(TaggedBody::Raw { text, .. }) = &tagged.body else {
+            self.bag.push(
+                Diagnostic::new(
+                    E_CEL_EXPR,
+                    Phase::Check,
+                    "`text { … }` needs a verbatim body",
+                )
+                .with_span(tagged.tag.span)
+                .with_field("detail", "no block"),
+            );
+            return None;
+        };
+        Some(cel::Value::Text(strip_verbatim_margin(text)))
+    }
+
+    /// The `base64(content_type?) { … }` inline bytes
+    /// (D-2026-08-10-5/-6): RFC 4648 standard alphabet, mandatory
+    /// padding, ASCII whitespace ignored, URL-safe refused.
+    fn inline_bytes(
+        &mut self,
+        tagged: &crate::compiler::syntax::TaggedValue,
+    ) -> Option<(Vec<u8>, Option<String>)> {
+        use crate::compiler::syntax::TaggedBody;
+        let content_type = match tagged.args.as_slice() {
+            [] => None,
+            [SynValue::Cel(expr)] => {
+                let text = expr.text.trim();
+                if text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {
+                    Some(String::from(&text[1..text.len() - 1]))
+                } else {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CEL_EXPR,
+                            Phase::Check,
+                            "base64 takes one literal content-type string",
+                        )
+                        .with_span(tagged.tag.span)
+                        .with_field("detail", "the argument is not a string literal"),
+                    );
+                    return None;
+                }
+            }
+            _ => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CEL_EXPR,
+                        Phase::Check,
+                        "base64 takes at most one content-type argument",
+                    )
+                    .with_span(tagged.tag.span)
+                    .with_field("detail", "too many arguments"),
+                );
+                return None;
+            }
+        };
+        let Some(TaggedBody::Raw { text, span }) = &tagged.body else {
+            self.bag.push(
+                Diagnostic::new(E_CEL_EXPR, Phase::Check, "`base64 { … }` needs a body")
+                    .with_span(tagged.tag.span)
+                    .with_field("detail", "no block"),
+            );
+            return None;
+        };
+        match decode_base64(text) {
+            Ok(bytes) => Some((bytes, content_type)),
+            Err(detail) => {
+                self.bag.push(
+                    Diagnostic::new(E_CEL_EXPR, Phase::Check, "the base64 body does not decode")
+                        .with_span(*span)
+                        .with_field("detail", detail),
+                );
+                None
+            }
+        }
+    }
+
+    /// Resolves `asset("path", content_type?)` at BUILD time
+    /// (D-2026-08-10-5): App-root-relative, escapes and missing
+    /// files refuse, 8 MiB per asset and 32 MiB total, blobs
+    /// deduplicated by digest.
+    fn asset_value(
+        &mut self,
+        tagged: &crate::compiler::syntax::TaggedValue,
+    ) -> Option<(u32, Option<String>)> {
+        const PER_ASSET: u64 = 8 * 1024 * 1024;
+        const TOTAL: u64 = 32 * 1024 * 1024;
+        let refuse = |checker: &mut Self, code: Code, message: String, path: &str| {
+            checker.bag.push(
+                Diagnostic::new(code, Phase::Check, message)
+                    .with_span(tagged.tag.span)
+                    .with_field("path", path.to_string()),
+            );
+        };
+        let literal = |value: &SynValue| -> Option<String> {
+            if let SynValue::Cel(expr) = value {
+                let text = expr.text.trim();
+                if text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {
+                    return Some(String::from(&text[1..text.len() - 1]));
+                }
+            }
+            None
+        };
+        let (path, content_type) = match tagged.args.as_slice() {
+            [path] => (literal(path), None),
+            [path, ct] => {
+                let Some(ct) = literal(ct) else {
+                    refuse(
+                        self,
+                        E_ASSET,
+                        String::from("the content type must be a string literal"),
+                        "",
+                    );
+                    return None;
+                };
+                (literal(path), Some(ct))
+            }
+            _ => {
+                refuse(
+                    self,
+                    E_ASSET,
+                    String::from("asset(path, content_type?) — one path, at most one type"),
+                    "",
+                );
+                return None;
+            }
+        };
+        let Some(path) = path else {
+            refuse(
+                self,
+                E_ASSET,
+                String::from("the asset path must be a string literal"),
+                "",
+            );
+            return None;
+        };
+        if tagged.body.is_some() {
+            refuse(
+                self,
+                E_ASSET,
+                String::from("asset(…) takes no block"),
+                &path,
+            );
+            return None;
+        }
+        if self.in_lab {
+            refuse(
+                self,
+                E_ASSET,
+                String::from(
+                    "an asset belongs to the deployed graph — a Lab cannot extend the plan",
+                ),
+                &path,
+            );
+            return None;
+        }
+        let Some(root) = self.asset_root.clone() else {
+            refuse(
+                self,
+                E_ASSET,
+                String::from("this compilation has no asset root — nothing to read from"),
+                &path,
+            );
+            return None;
+        };
+        // Escape refusal on the LEXICAL path — no dot-dot, no
+        // absolute path; resolution stays under the root by
+        // construction (symlinks are the packager's covenant).
+        let relative = std::path::Path::new(&path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            refuse(
+                self,
+                E_ASSET,
+                String::from("the path leaves the App root"),
+                &path,
+            );
+            return None;
+        }
+        let full = root.join(relative);
+        // The ONE sanctioned filesystem read of the build: asset
+        // resolution is the compiler's job by decision
+        // (D-2026-08-10-5); the kernel-guarding lint stands aside
+        // here and only here.
+        #[allow(clippy::disallowed_methods)]
+        let bytes = match std::fs::read(&full) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                refuse(
+                    self,
+                    E_ASSET,
+                    format!("the asset does not read: {error}"),
+                    &path,
+                );
+                return None;
+            }
+        };
+        if bytes.len() as u64 > PER_ASSET {
+            refuse(
+                self,
+                E_ASSET,
+                format!(
+                    "{} bytes — the per-asset budget is {PER_ASSET} (build-time bytes; runtime data goes through Connectors)",
+                    bytes.len()
+                ),
+                &path,
+            );
+            return None;
+        }
+        let digest = *blake3::hash(&bytes).as_bytes();
+        if let Some(index) = self.assets.iter().position(|blob| blob.digest == digest) {
+            // Deduplicated: one content, one blob, one index.
+            return Some((
+                u32::try_from(index).unwrap_or_else(|_| unreachable!("bounded by TOTAL")),
+                content_type,
+            ));
+        }
+        let total: u64 = self.assets.iter().map(|blob| blob.bytes.len() as u64).sum();
+        if total + bytes.len() as u64 > TOTAL {
+            refuse(
+                self,
+                E_ASSET,
+                format!("the App's total asset budget ({TOTAL} bytes) is exceeded"),
+                &path,
+            );
+            return None;
+        }
+        self.assets.push(crate::plan::AssetBlob { digest, bytes });
+        Some((
+            u32::try_from(self.assets.len() - 1)
+                .unwrap_or_else(|_| unreachable!("bounded by TOTAL")),
+            content_type,
+        ))
+    }
+
     /// Whether an `ext` field belongs to the declared vocabulary:
     /// the standard `content_type` plus whatever the instantiated
     /// connectors' sheets declare (none in the M0 catalogue yet).
@@ -2251,7 +2522,7 @@ impl Checker<'_, '_> {
                     self.collect_meta_reads(value, span);
                 }
             }
-            cel::Expr::Literal(_) => {}
+            cel::Expr::Literal(_) | cel::Expr::Asset(_) => {}
         }
     }
 
@@ -2406,6 +2677,13 @@ impl Checker<'_, '_> {
             SynValue::Identity(_) => Some(EmitValue::Identity),
             SynValue::Braced(body) => self.braced(body, signature, at),
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
+            SynValue::Json { value, .. } => {
+                // Always `variant` — the literal is a VALUE, exact
+                // numbers included; its Dyn type is what
+                // distinguishes `json 1` from `1` in the hash
+                // (D-2026-08-10-7: the tree seals type and root).
+                Some(EmitValue::Data(literal_tree(value.clone(), cel::Type::Dyn)))
+            }
             SynValue::Cel(expr) => {
                 let tree = self.cel(expr, signature)?;
                 if matches!(
@@ -2417,22 +2695,70 @@ impl Checker<'_, '_> {
                 }
                 Some(EmitValue::Data(tree))
             }
-            SynValue::Map(body) => {
-                let span = body
-                    .entries
-                    .first()
-                    .map(|entry| match entry {
-                        StructEntry::Field { key, .. } => key.span,
-                        StructEntry::Block { name, .. } => name.span,
-                    })
-                    .unwrap_or(at);
-                self.deferred("a map literal emission", span);
+            SynValue::BracedMap(_) => {
+                // The map VALUE exists (D-2026-08-10-6); emitting
+                // one stays outside the executable subset until a
+                // consumer pays for it — same honest deferral as
+                // before the punctuation reform.
+                self.deferred("a map literal emission", at);
                 None
             }
-            SynValue::Tagged(tagged) => {
-                self.deferred("a guest or tagged emission", tagged.tag.span);
-                None
-            }
+            SynValue::Tagged(tagged) => match tagged.tag.text.as_str() {
+                "text" => self
+                    .verbatim_text(tagged)
+                    .map(|value| EmitValue::Data(literal_tree(value, cel::Type::Text))),
+                "base64" => match self.inline_bytes(tagged) {
+                    Some((bytes, Some(content_type))) => {
+                        // A content type qualifies the WHOLE payload
+                        // (D-2026-08-10-5): fresh bytes plus the
+                        // standard ext write, one atomic emission.
+                        Some(EmitValue::FreshData(vec![
+                            FieldWrite {
+                                target: crate::envelope::WriteTarget::Data(Vec::new()),
+                                value: literal_tree(cel::Value::Bytes(bytes), cel::Type::Bytes),
+                            },
+                            FieldWrite {
+                                target: crate::envelope::WriteTarget::Ext(String::from(
+                                    "content_type",
+                                )),
+                                value: literal_tree(
+                                    cel::Value::Text(content_type),
+                                    cel::Type::Text,
+                                ),
+                            },
+                        ]))
+                    }
+                    Some((bytes, None)) => Some(EmitValue::Data(literal_tree(
+                        cel::Value::Bytes(bytes),
+                        cel::Type::Bytes,
+                    ))),
+                    None => None,
+                },
+                "asset" => match self.asset_value(tagged) {
+                    Some((index, Some(content_type))) => Some(EmitValue::FreshData(vec![
+                        FieldWrite {
+                            target: crate::envelope::WriteTarget::Data(Vec::new()),
+                            value: cel::Tree {
+                                root: cel::Expr::Asset(index),
+                                ty: cel::Type::Bytes,
+                            },
+                        },
+                        FieldWrite {
+                            target: crate::envelope::WriteTarget::Ext(String::from("content_type")),
+                            value: literal_tree(cel::Value::Text(content_type), cel::Type::Text),
+                        },
+                    ])),
+                    Some((index, None)) => Some(EmitValue::Data(cel::Tree {
+                        root: cel::Expr::Asset(index),
+                        ty: cel::Type::Bytes,
+                    })),
+                    None => None,
+                },
+                _ => {
+                    self.deferred("a guest or tagged emission", tagged.tag.span);
+                    None
+                }
+            },
         }
     }
 
@@ -3156,9 +3482,97 @@ fn direction_words(direction: Direction) -> &'static str {
     }
 }
 
+/// A literal expression tree — the compiler's own constants.
+fn literal_tree(value: cel::Value, ty: cel::Type) -> cel::Tree {
+    cel::Tree {
+        root: cel::Expr::Literal(value),
+        ty,
+    }
+}
+
+/// The verbatim margin rule (D-2026-08-10-6): drop one leading
+/// newline; the segment after the LAST newline (the closing brace's
+/// indentation) is the margin, stripped from every line; the final
+/// newline is dropped with it. A single-line body is itself.
+fn strip_verbatim_margin(raw: &str) -> String {
+    let Some(body) = raw.strip_prefix('\n') else {
+        return String::from(raw);
+    };
+    let Some(last_newline) = body.rfind('\n') else {
+        return String::from(body);
+    };
+    let margin = &body[last_newline + 1..];
+    if !margin.chars().all(|c| c == ' ') {
+        return String::from(body);
+    }
+    let content = &body[..last_newline];
+    content
+        .split('\n')
+        .map(|line| line.strip_prefix(margin).unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// RFC 4648 standard base64: mandatory padding, ASCII whitespace
+/// ignored, URL-safe alphabet refused (D-2026-08-10-6).
+fn decode_base64(raw: &str) -> Result<Vec<u8>, String> {
+    let mut symbols: Vec<u8> = Vec::new();
+    for ch in raw.bytes() {
+        match ch {
+            b' ' | b'\n' | b'\r' | b'\t' => {}
+            b'A'..=b'Z' => symbols.push(ch - b'A'),
+            b'a'..=b'z' => symbols.push(ch - b'a' + 26),
+            b'0'..=b'9' => symbols.push(ch - b'0' + 52),
+            b'+' => symbols.push(62),
+            b'/' => symbols.push(63),
+            b'=' => symbols.push(64),
+            b'-' | b'_' => {
+                return Err(String::from(
+                    "the URL-safe alphabet is refused — RFC 4648 standard only",
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "`{}` is outside the base64 alphabet",
+                    other as char
+                ));
+            }
+        }
+    }
+    if !symbols.len().is_multiple_of(4) {
+        return Err(String::from(
+            "the length is not a multiple of four — padding is mandatory",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(symbols.len() / 4 * 3);
+    let chunk_count = symbols.len() / 4;
+    for (index, chunk) in symbols.chunks(4).enumerate() {
+        let pads = chunk.iter().filter(|&&s| s == 64).count();
+        if pads > 0 && index + 1 != chunk_count {
+            return Err(String::from("padding may only end the body"));
+        }
+        if chunk[..4 - pads].contains(&64) || pads > 2 {
+            return Err(String::from("padding may only end the body"));
+        }
+        let [a, b, c, d] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+        if a == 64 || b == 64 {
+            return Err(String::from("padding may only end the body"));
+        }
+        bytes.push((a << 2) | (b >> 4));
+        if c != 64 {
+            bytes.push((b << 4) | (c >> 2));
+        }
+        if d != 64 {
+            bytes.push((c << 6) | d);
+        }
+    }
+    Ok(bytes)
+}
+
 fn value_type(value: &cel::Value) -> cel::Type {
     match value {
         cel::Value::Struct(_) => cel::Type::Dyn,
+        cel::Value::Decimal { .. } => cel::Type::Dyn,
         // A checker value is a constant; the runtime witness never
         // appears here — total anyway.
         cel::Value::Payload => cel::Type::Dyn,
@@ -3187,7 +3601,7 @@ mod tests {
         let unit = Unit {
             files: vec![(SourceId::new(0), tree)],
         };
-        let hir = check(&unit, &stdlib::Registry::m0(), &mut bag);
+        let hir = check(&unit, &stdlib::Registry::m0(), &mut bag, None);
         (hir, bag)
     }
 
@@ -3402,7 +3816,7 @@ graph m0_probe : App {
 
     #[test]
     fn a_map_emission_is_no_longer_silently_dropped() {
-        let source = "graph g : App {\n  operator o {\n    on in { out = map { n = 1 } }\n  }\n  . -> o -> .\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in { out = { \"n\": 1 } }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         assert!(
             bag.diagnostics().iter().any(|diagnostic| {

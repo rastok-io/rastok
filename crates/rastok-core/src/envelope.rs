@@ -89,6 +89,15 @@ pub enum Scalar {
     Text(String),
     /// Opaque bytes.
     Bytes(Vec<u8>),
+    /// An exact decimal — `unscaled × 10^(−scale)`, at most 38
+    /// significant digits (D-2026-08-10-7). Typed decimals keep
+    /// their declared scale; dynamic ones the minimal scale.
+    Decimal {
+        /// The unscaled coefficient.
+        unscaled: i128,
+        /// Digits after the point (negative = trailing zeros).
+        scale: i32,
+    },
 }
 
 /// Materialized Rastok data domain — the in-memory view of `data`.

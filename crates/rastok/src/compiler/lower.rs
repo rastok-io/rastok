@@ -26,6 +26,7 @@ use crate::plan::{
 pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     let mut writer = Writer {
         hasher: blake3::Hasher::new(),
+        assets: &hir.assets,
     };
     writer.str(&hir.app.name);
     let boundary = sorted_boundary(hir);
@@ -120,6 +121,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         // hashed twice.
         app_schema: hir.app_schema.clone(),
         ext_schema: hir.ext_schema.clone(),
+        assets: hir.assets.clone(),
     };
     let mut symbols = SymbolTable { nodes: Vec::new() };
     for hir_node in &nodes {
@@ -289,6 +291,7 @@ fn substitute(
 ) -> cel::Expr {
     let recurse = |inner: &cel::Expr| Box::new(substitute(inner, consts));
     match expr {
+        cel::Expr::Asset(_) => expr.clone(),
         cel::Expr::Path(segments) => match consts.get(&segments[0]) {
             None => expr.clone(),
             Some(value) => {
@@ -397,11 +400,13 @@ fn endpoint_text(endpoint: &crate::compiler::hir::Endpoint) -> String {
 /// Deterministic canonical byte writer feeding blake3. Every variable
 /// datum is length- or count-prefixed; every variant carries a tag —
 /// the same injectivity discipline as the id framing.
-struct Writer {
+struct Writer<'assets> {
     hasher: blake3::Hasher,
+    /// The asset table — `Expr::Asset` hashes by content digest.
+    assets: &'assets [crate::plan::AssetBlob],
 }
 
-impl Writer {
+impl Writer<'_> {
     fn tag(&mut self, tag: u8) {
         self.hasher.update(&[tag]);
     }
@@ -480,7 +485,7 @@ impl Writer {
         self.count(vals.len());
         for val in vals {
             self.str(&val.name);
-            self.expr(&val.value.tree.root);
+            self.tree(&val.value.tree);
         }
         let mut attributes: Vec<_> = node.attributes().iter().collect();
         attributes.sort_by(|a, b| a.name.cmp(&b.name));
@@ -494,7 +499,7 @@ impl Writer {
                 }
                 AttrValue::Const(constant) => {
                     self.tag(2);
-                    self.expr(&constant.tree.root);
+                    self.tree(&constant.tree);
                 }
             }
         }
@@ -508,7 +513,7 @@ impl Writer {
                 None => self.tag(0),
                 Some(init) => {
                     self.tag(1);
-                    self.expr(&init.tree.root);
+                    self.tree(&init.tree);
                 }
             }
         }
@@ -547,7 +552,7 @@ impl Writer {
                 None => self.tag(0),
                 Some(guard) => {
                     self.tag(1);
-                    self.expr(&guard.root);
+                    self.tree(guard);
                 }
             }
             self.count(handler.body.len());
@@ -556,7 +561,7 @@ impl Writer {
                     HirStatement::Let { name, value } => {
                         self.tag(1);
                         self.str(name);
-                        self.expr(&value.root);
+                        self.tree(value);
                     }
                     HirStatement::Emit { port, value } => {
                         self.tag(2);
@@ -566,7 +571,7 @@ impl Writer {
                     HirStatement::SetVar { name, value } => {
                         self.tag(3);
                         self.str(name);
-                        self.expr(&value.root);
+                        self.tree(value);
                     }
                 }
             }
@@ -586,7 +591,7 @@ impl Writer {
             }
             EmitValue::Data(tree) => {
                 self.tag(4);
-                self.expr(&tree.root);
+                self.tree(tree);
             }
             EmitValue::Nothing => self.tag(5),
         }
@@ -599,8 +604,17 @@ impl Writer {
             // makes the hash sugar-spelling-insensitive, so
             // `meta.flag` and `meta.app.flag` seal identically.
             self.str(&canonical_target(&write.target));
-            self.expr(&write.value.root);
+            self.tree(&write.value);
         }
+    }
+
+    /// A compiled tree seals its STATIC TYPE with its expression —
+    /// `json 1` (variant) and `1` (int) are different programs
+    /// (D-2026-08-10-7), exactly as a pinned port differs from an
+    /// unpinned one.
+    fn tree(&mut self, tree: &cel::Tree) {
+        self.ty(&tree.ty);
+        self.expr(&tree.root);
     }
 
     fn expr(&mut self, expr: &cel::Expr) {
@@ -608,6 +622,17 @@ impl Writer {
             cel::Expr::Literal(value) => {
                 self.tag(1);
                 self.value(value);
+            }
+            cel::Expr::Asset(index) => {
+                // The CONTENT digest is the identity — the path is
+                // spelling and the index is layout (D-2026-08-10-5).
+                self.tag(9);
+                let digest = self
+                    .assets
+                    .get(*index as usize)
+                    .map(|blob| blob.digest)
+                    .unwrap_or_else(|| unreachable!("the checker minted the index"));
+                self.hasher.update(&digest);
             }
             cel::Expr::Path(segments) => {
                 self.tag(2);
@@ -696,6 +721,13 @@ impl Writer {
             // witness cannot appear in one (`value_expressible`
             // refuses it) — hashing a marker would seal a lie.
             cel::Value::Payload => unreachable!("a payload witness never reaches the hash"),
+            cel::Value::Decimal { unscaled, scale } => {
+                // Tag 13 in the HASH register: the canonical pair —
+                // reached by `json` literals (D-2026-08-10-7).
+                self.tag(13);
+                self.hasher.update(&unscaled.to_be_bytes());
+                self.hasher.update(&scale.to_be_bytes());
+            }
             cel::Value::Bool(b) => {
                 self.tag(1);
                 self.tag(u8::from(*b));
@@ -891,10 +923,14 @@ graph m0_probe : App {
         // The frozen identity of the M0 probe. If this test fails, the
         // canonical form changed: that is an identity-contract change
         // and must be deliberate, reviewed, and re-blessed.
+        // DELIBERATE MOVE 2026-08-10 (D-2026-08-10-7): a compiled
+        // tree seals its STATIC TYPE with its root, so `json 1`
+        // (variant) and `1` (int) are distinct programs — every
+        // tree-carrying graph moved once.
         let hash = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
         assert_eq!(
             hash.to_string(),
-            "60d911720258efd717e66c86b87e55aba8ff94f97ca9bc90f078a1587bd9cee3"
+            "4fb25ffd66db564568c5bbd384a27f8f529344e5db4f3465a920fcf8d72161fe"
         );
     }
 

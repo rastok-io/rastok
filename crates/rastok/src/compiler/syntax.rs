@@ -505,9 +505,17 @@ pub enum Value {
     /// patch the envelope; a mix refuses with a dedicated
     /// diagnostic. Elsewhere the body is simply a record.
     Braced(StructBody),
-    /// `map { … }` literal — the EXPLICIT spelling for a map value;
-    /// a braced record always builds a struct (D-2026-08-09-1).
-    Map(StructBody),
+    /// `{ "k": v, … }` — the map literal, decided by its `:`
+    /// punctuation; `{:}` is the empty map (D-2026-08-10-6).
+    BracedMap(Vec<(String, Value)>),
+    /// `json <json-value>` — one complete JSON value, read by the
+    /// house reader, always `variant` (D-2026-08-10-6/-7).
+    Json {
+        /// The parsed value — exact numbers, duplicate keys refused.
+        value: rastok_core::cel::Value,
+        /// Where it was written.
+        span: Span,
+    },
     /// `nothing` — emit nothing.
     Nothing(Span),
     /// `jq { … }`, `bounded(64)`, `exponential { … }`, …

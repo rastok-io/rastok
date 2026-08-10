@@ -95,6 +95,18 @@ pub enum Value {
     /// map. CEL cannot construct one; it can only carry, access,
     /// and re-emit what the envelope domain handed it.
     Struct(Vec<(String, Value)>),
+    /// An exact decimal — `unscaled × 10^(−scale)` — the dynamic
+    /// numeric beyond the integer domain (D-2026-08-10-7): at most
+    /// 38 significant digits (Arrow decimal128), MINIMAL scale for
+    /// dynamic values (trailing zeros stripped, so an
+    /// int-representable value never hides here). No arithmetic —
+    /// `variant` is narrowed before use.
+    Decimal {
+        /// The unscaled coefficient.
+        unscaled: i128,
+        /// Digits after the point (negative = trailing zeros).
+        scale: i32,
+    },
     /// The WHOLE `data` payload, unmaterialized — the laziness
     /// witness. Resolving the name `data` is not yet inspecting its
     /// structure: the witness carries through bindings, locals, and
@@ -133,6 +145,13 @@ impl PartialEq for Value {
             // total: a malformed duplicate-name struct — refused at
             // every door, but representable — still equals itself.
             (Self::Struct(a), Self::Struct(b)) => struct_fields_eq(a, b, Value::eq),
+            (
+                Self::Decimal { unscaled, scale },
+                Self::Decimal {
+                    unscaled: other_unscaled,
+                    scale: other_scale,
+                },
+            ) => unscaled == other_unscaled && scale == other_scale,
             // One payload exists per evaluation; two witnesses can
             // only name the same thing.
             (Self::Payload, Self::Payload) => true,
@@ -215,6 +234,15 @@ pub trait Bindings {
             "`data` carries no payload in this environment",
         )))
     }
+
+    /// The bytes behind an [`Expr::Asset`] reference. The default
+    /// has no asset table.
+    ///
+    /// # Errors
+    /// When this environment carries no assets.
+    fn asset(&self, index: u32) -> Result<Value, Error> {
+        Err(fault(format!("asset {index} is not available here")))
+    }
 }
 
 impl Bindings for BTreeMap<String, Value> {
@@ -283,6 +311,10 @@ pub struct Tree {
 pub enum Expr {
     /// A literal value.
     Literal(Value),
+    /// A build-time asset by table index (D-2026-08-10-5): evaluates
+    /// to the blob's bytes through [`Bindings::asset`]; the HASH
+    /// seals the content digest, never the index or the path.
+    Asset(u32),
     /// A dotted access path, resolved through bindings at evaluation.
     Path(Vec<String>),
     /// Unary operation.
@@ -1086,7 +1118,7 @@ fn structural_depth(root: &Expr) -> usize {
     while let Some((expr, depth)) = stack.pop() {
         max = max.max(depth);
         match expr {
-            Expr::Literal(_) | Expr::Path(_) => {}
+            Expr::Literal(_) | Expr::Path(_) | Expr::Asset(_) => {}
             Expr::Unary { expr, .. } => stack.push((expr, depth + 1)),
             Expr::Binary { left, right, .. } => {
                 stack.push((left, depth + 1));
@@ -1133,7 +1165,7 @@ fn dismantle(root: Expr) {
     let mut stack = vec![root];
     while let Some(expr) = stack.pop() {
         match expr {
-            Expr::Literal(_) | Expr::Path(_) => {}
+            Expr::Literal(_) | Expr::Path(_) | Expr::Asset(_) => {}
             Expr::Unary { expr, .. } => stack.push(*expr),
             Expr::Binary { left, right, .. } => {
                 stack.push(*left);
@@ -1178,6 +1210,8 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
     };
     match expr {
         Expr::Literal(value) => Ok(literal_type(value)),
+        // Compiler-constructed only — CEL text never spells one.
+        Expr::Asset(_) => Ok(Type::Bytes),
         Expr::Path(segments) => {
             let dotted = segments.join(".");
             if let Some(ty) = signature.get(&dotted) {
@@ -1314,6 +1348,8 @@ fn literal_type(value: &Value) -> Type {
         // No struct type exists in the annotation subset; the value
         // carries its own witness and types as dynamic.
         Value::Struct(_) => Type::Dyn,
+        // The dynamic decimal types as Dyn until narrowing exists.
+        Value::Decimal { .. } => Type::Dyn,
         // A literal is never a witness; total anyway.
         Value::Payload => Type::Dyn,
     }
@@ -1417,6 +1453,7 @@ fn concrete_deep(value: Value, bindings: &dyn Bindings) -> Result<Value, Error> 
 fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
     match expr {
         Expr::Literal(value) => Ok(value.clone()),
+        Expr::Asset(index) => bindings.asset(*index),
         Expr::Path(segments) => {
             let dotted = segments.join(".");
             if let Some(value) = bindings.get(&dotted) {
@@ -1581,6 +1618,16 @@ fn eval_binary(
 fn values_equal(lhs: &Value, rhs: &Value) -> bool {
     match (lhs, rhs) {
         (Value::Bool(a), Value::Bool(b)) => a == b,
+        // Structural on the canonical pair — a dynamic decimal is
+        // minimal-scale by construction, so it never numerically
+        // equals an int it could have been (D-2026-08-10-7).
+        (
+            Value::Decimal { unscaled, scale },
+            Value::Decimal {
+                unscaled: other_unscaled,
+                scale: other_scale,
+            },
+        ) => unscaled == other_unscaled && scale == other_scale,
         (Value::Int(a), Value::Int(b)) => a == b,
         (Value::Uint(a), Value::Uint(b)) => a == b,
         (Value::Double(a), Value::Double(b)) => a == b,
