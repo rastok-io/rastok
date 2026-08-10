@@ -294,6 +294,23 @@ impl<'src> Parser<'src, '_> {
                             None => TopDecl::Error(self.recover(start)),
                         }),
                         "lab" => decls.push(self.lab_decl(start)),
+                        "type" => {
+                            self.bump();
+                            let decl = (|| {
+                                let name = self.name("a type name")?;
+                                self.expect(TokenKind::Eq, "`=`")?;
+                                let ty = self.type_ref()?;
+                                Some(crate::compiler::syntax::TypeDecl {
+                                    name,
+                                    ty,
+                                    span: self.span_from(start),
+                                })
+                            })();
+                            decls.push(match decl {
+                                Some(decl) => TopDecl::Type(decl),
+                                None => TopDecl::Error(self.recover(start)),
+                            });
+                        }
                         _ => {
                             self.error_expected("a top-level declaration");
                             self.bump();

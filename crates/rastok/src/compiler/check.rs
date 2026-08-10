@@ -47,6 +47,11 @@ pub const E_NAME_RESERVED: Code = Code::new("E-NAME-RESERVED");
 /// An `asset(…)` that cannot resolve at build: missing file, root
 /// escape, budget breach, or a malformed call; field `path`.
 pub const E_ASSET: Code = Code::new("E-ASSET");
+/// A named type declared twice in the unit; field `name`.
+pub const E_DUP_TYPE: Code = Code::new("E-DUP-TYPE");
+/// A named type that reaches itself through its own expansion, or
+/// one whose expansion exceeds the structural budgets; field `name`.
+pub const E_TYPE_RECURSIVE: Code = Code::new("E-TYPE-RECURSIVE");
 /// Diagnostic adapted from the CEL chain, span mapped to the source.
 pub const E_CEL_EXPR: Code = Code::new("E-CEL-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
@@ -161,6 +166,8 @@ pub fn check(
         in_lab: false,
         asset_root: asset_root.map(std::path::Path::to_path_buf),
         assets: Vec::new(),
+        type_decls: BTreeMap::new(),
+        type_stack: Vec::new(),
     };
     // No top-level declaration is silently ignored, and none is
     // silently dropped either: until unit composition and a real
@@ -177,6 +184,37 @@ pub fn check(
                     checker.deferred("a top-level val", val.span);
                 }
                 _ => {}
+            }
+        }
+    }
+    // Named types collect FIRST — unit-level, duplicates refused,
+    // every declaration cycle- and budget-checked before any use
+    // (D-2026-08-10-8).
+    for (_, tree) in &unit.files {
+        for decl in &tree.decls {
+            if let TopDecl::Type(type_decl) = decl {
+                if checker.type_decls.contains_key(&type_decl.name.text) {
+                    checker.bag.push(
+                        Diagnostic::new(
+                            E_DUP_TYPE,
+                            Phase::Resolve,
+                            format!("the type `{}` is already declared", type_decl.name.text),
+                        )
+                        .with_span(type_decl.name.span)
+                        .with_field("name", type_decl.name.text.clone()),
+                    );
+                    continue;
+                }
+                checker
+                    .type_decls
+                    .insert(type_decl.name.text.clone(), type_decl.ty.clone());
+            }
+        }
+    }
+    for (_, tree) in &unit.files {
+        for decl in &tree.decls {
+            if let TopDecl::Type(type_decl) = decl {
+                checker.validate_type_decl(type_decl);
             }
         }
     }
@@ -273,6 +311,11 @@ struct Checker<'bag, 'registry> {
     asset_root: Option<std::path::PathBuf>,
     /// The resolved blobs, deduplicated by digest.
     assets: Vec<crate::plan::AssetBlob>,
+    /// The unit's named types (D-2026-08-10-8): structural sugar,
+    /// pre-validated for cycles and budgets at collection.
+    type_decls: BTreeMap<String, crate::compiler::syntax::TypeRef>,
+    /// The expansion stack — a name on it twice is a cycle.
+    type_stack: Vec<String>,
 }
 
 impl Checker<'_, '_> {
@@ -1924,6 +1967,32 @@ impl Checker<'_, '_> {
             BaseType::Scalar(ScalarType::Duration) => (cel::Type::Duration, false),
             BaseType::Scalar(ScalarType::Timestamp) => (cel::Type::Timestamp, false),
             BaseType::Variant => (cel::Type::Dyn, false),
+            BaseType::Named(name) => {
+                // A named type is SUGAR (D-2026-08-10-8): expand and
+                // resolve structurally — renaming an alias is never
+                // an identity move. Cycles were refused at
+                // collection; an unknown name refuses here.
+                let Some(aliased) = self.type_decls.get(&name.text).cloned() else {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_RESOLVE_UNKNOWN,
+                            Phase::Resolve,
+                            format!("`{}` names no declared type", name.text),
+                        )
+                        .with_span(name.span)
+                        .with_field("name", name.text.clone()),
+                    );
+                    return None;
+                };
+                if self.type_stack.contains(&name.text) {
+                    // Belt to collection's braces.
+                    return None;
+                }
+                self.type_stack.push(name.text.clone());
+                let resolved = self.state_type(&aliased);
+                self.type_stack.pop();
+                return resolved;
+            }
             _ => {
                 self.deferred("this state type", ty.span);
                 return None;
@@ -2299,6 +2368,105 @@ impl Checker<'_, '_> {
                 None
             }
         }
+    }
+
+    /// Validates one named-type declaration at collection: cycles
+    /// refuse, and the EXPANDED tree answers to the structural
+    /// budgets — ≤ 4096 nodes, ≤ 256 fields per struct, ≤ 256 enum
+    /// symbols (D-2026-08-10-8). The 64 KiB canonical-byte budget
+    /// re-verifies at the plan validator once composite pins ship.
+    fn validate_type_decl(&mut self, decl: &crate::compiler::syntax::TypeDecl) {
+        let mut nodes = 0usize;
+        let mut stack: Vec<String> = Vec::new();
+        let breach = self.walk_type(&decl.ty, &mut nodes, &mut stack);
+        if let Some(detail) = breach {
+            self.bag.push(
+                Diagnostic::new(
+                    E_TYPE_RECURSIVE,
+                    Phase::Check,
+                    format!("the type `{}` does not expand: {detail}", decl.name.text),
+                )
+                .with_span(decl.name.span)
+                .with_field("name", decl.name.text.clone()),
+            );
+        }
+    }
+
+    /// Walks a type reference through its named expansions; returns
+    /// the refusal detail on a cycle or a budget breach.
+    fn walk_type(
+        &self,
+        ty: &crate::compiler::syntax::TypeRef,
+        nodes: &mut usize,
+        stack: &mut Vec<String>,
+    ) -> Option<String> {
+        use crate::compiler::syntax::BaseType;
+        const MAX_NODES: usize = 4096;
+        const MAX_FIELDS: usize = 256;
+        *nodes += 1;
+        if *nodes > MAX_NODES {
+            return Some(format!("the expansion exceeds {MAX_NODES} nodes"));
+        }
+        for base in &ty.alternatives {
+            match base {
+                BaseType::Named(name) => {
+                    if stack.contains(&name.text) {
+                        return Some(format!(
+                            "`{}` reaches itself — recursion refuses in v1",
+                            name.text
+                        ));
+                    }
+                    let Some(aliased) = self.type_decls.get(&name.text) else {
+                        // Unknown names refuse at USE sites with the
+                        // resolver's own diagnostic; collection only
+                        // guards structure.
+                        continue;
+                    };
+                    stack.push(name.text.clone());
+                    let aliased = aliased.clone();
+                    if let Some(detail) = self.walk_type(&aliased, nodes, stack) {
+                        return Some(detail);
+                    }
+                    stack.pop();
+                }
+                BaseType::Struct { fields, .. } => {
+                    if fields.len() > MAX_FIELDS {
+                        return Some(format!(
+                            "a struct with {} fields exceeds the {MAX_FIELDS}-field budget",
+                            fields.len()
+                        ));
+                    }
+                    for field in fields {
+                        if let Some(detail) = self.walk_type(&field.ty, nodes, stack) {
+                            return Some(detail);
+                        }
+                    }
+                }
+                BaseType::Enum(symbols) => {
+                    if symbols.len() > MAX_FIELDS {
+                        return Some(format!(
+                            "an enum with {} symbols exceeds the {MAX_FIELDS}-symbol budget",
+                            symbols.len()
+                        ));
+                    }
+                }
+                BaseType::Map(keys, values) => {
+                    if let Some(detail) = self.walk_type(keys, nodes, stack) {
+                        return Some(detail);
+                    }
+                    if let Some(detail) = self.walk_type(values, nodes, stack) {
+                        return Some(detail);
+                    }
+                }
+                BaseType::Array(inner) | BaseType::Table(inner) => {
+                    if let Some(detail) = self.walk_type(inner, nodes, stack) {
+                        return Some(detail);
+                    }
+                }
+                BaseType::Scalar(_) | BaseType::Variant => {}
+            }
+        }
+        None
     }
 
     /// Resolves `asset("path", content_type?)` at BUILD time

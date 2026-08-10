@@ -354,3 +354,50 @@ fn an_asset_emission_runs_and_carries_its_type() {
         )))),
     );
 }
+
+#[test]
+fn named_types_are_structural_sugar() {
+    // An alias resolves to its structure in a pin…
+    let aliased = "type Tag = text\n\ngraph g : App {\n  operator o {\n    input evt : Tag\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let first = compile(&[aliased], &Registry::m0()).expect("the alias resolves");
+    // …and RENAMING it is not an identity move: same structure, same
+    // hash (D-2026-08-10-8).
+    let renamed = "type Label = text\n\ngraph g : App {\n  operator o {\n    input evt : Label\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let second = compile(&[renamed], &Registry::m0()).expect("the rename resolves");
+    assert_eq!(first.hash, second.hash, "names are sugar, never identity");
+    // The bare structural spelling is the SAME program too.
+    let bare = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let third = compile(&[bare], &Registry::m0()).expect("the bare spelling");
+    assert_eq!(first.hash, third.hash, "the expansion IS the identity");
+}
+
+#[test]
+fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
+    // Duplicate.
+    let source = "type T = text\ntype T = int\n\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("duplicates refuse");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-DUP-TYPE"),
+        "{bag:?}"
+    );
+    // Cycle — the reform's own Node example refuses in v1.
+    let source = "type Node = struct { label: text, children: array<Node> }\n\ngraph g : App {\n  operator o {\n    input evt : Node\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("recursion refuses");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-TYPE-RECURSIVE"),
+        "{bag:?}"
+    );
+    // Unknown name at a use site.
+    let source = "graph g : App {\n  operator o {\n    input evt : Ghost\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let bag = compile(&[source], &Registry::m0()).expect_err("unknowns refuse");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-RESOLVE-UNKNOWN"),
+        "{bag:?}"
+    );
+}

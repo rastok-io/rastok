@@ -56,6 +56,9 @@ pub struct SyntaxTree {
 /// Top-level declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TopDecl {
+    /// `type Name = <type_ref>` — a UNIT-level structural alias
+    /// (D-2026-08-10-8): sugar the checker expands; never nominal.
+    Type(TypeDecl),
     /// `graph … { … }`, including the `: App` entry graph.
     Graph(GraphDecl),
     /// `val … = …`
@@ -668,6 +671,17 @@ pub enum BaseType {
     Enum(Vec<Name>),
     /// A named type, schema, or declared enum/union.
     Named(Name),
+}
+
+/// `type Name = <type_ref>` (D-2026-08-10-8).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeDecl {
+    /// The alias name.
+    pub name: Name,
+    /// The aliased structural type.
+    pub ty: TypeRef,
+    /// The whole declaration.
+    pub span: Span,
 }
 
 /// One field of a struct type.
