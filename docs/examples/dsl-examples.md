@@ -297,7 +297,7 @@ lab teams_inbound {    // binds to `graph teams_inbound : App` (declared in team
       }
 
       teams_in.out = {
-        meta.app.source = "teams"          // fixtures seed via meta.app — meta.sys is read-only, even in sim
+        meta.ext.source = "teams"          // the world's half seeds meta.ext — meta.sys is read-only, even in sim
         data = {
           type         = "message"
           from         = { aadObjectId = "abc-123" }
@@ -314,7 +314,8 @@ lab teams_inbound {    // binds to `graph teams_inbound : App` (declared in team
 }
 ```
 
-A fixture seeds inbound state through **`meta.app`** (writable) — never
+A fixture seeds inbound state through **`meta.ext`** (the world's
+zone, D-2026-08-10-1) — never
 by assigning `meta.sys.*`, which is read-only **absolutely, including in
 simulation** (the fixture stands in for the runtime but goes through the
 same braced envelope-form constructor, it does not bypass the invariant). See

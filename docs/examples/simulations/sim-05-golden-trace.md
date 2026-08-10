@@ -57,8 +57,8 @@ lab sim05 {
       mock notify {
         on in { out = { ok = true } }
       }
-      ping.out = { meta.app.user_id = "alice", data = { } }
-      ping.out = { meta.app.user_id = "alice", data = { } }
+      ping.out = { meta.ext.user_id = "alice", data = { } }
+      ping.out = { meta.ext.user_id = "alice", data = { } }
       expect "counted twice" notify.in count == 1 where data.n == 2
     }
   }

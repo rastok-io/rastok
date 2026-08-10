@@ -98,13 +98,26 @@ step touches `vm.rs` once.
    the connector-sheet items below.
 2. **The consolidated reform, THEN the `jsonl` codec** — the
    metadata/literal/IDL reform (D-2026-08-10-1 … -9) officially
-   PRECEDES this item: `jsonl` depends on the exact JSON numeric
-   canonicalization (D-2026-08-10-7), the house JSON reader, and the
-   codec regime of D-2026-08-10-4 — building it first would build it
-   twice. Then the codec itself: structured payloads across the
-   `Process` boundary, under the one byte discipline; unlocks
-   realistic `File` and HTTP payloads. (Package format: v5 replaces
-   the v4 mentioned in item 1's history — D-2026-08-10-9.)
+   PRECEDES this item, and **LANDED 2026-08-10** (`50306de` spec
+   closure; `58317cf` the three-zone meta model, static grid,
+   content-type lifecycle, and the v5 skeleton; `a986553` the
+   literal surface — punctuated braces, verbatim text, strict
+   base64, the house JSON reader with exact decimal numbers, and
+   digest-sealed assets; `10d2d5c` the structural type aliases;
+   `4344d55` the v5 tables stated). Two deliberate identity moves,
+   both pinned: the five-field spine with `mime` relocated to
+   `meta.ext.content_type`, and trees sealing `[type, root]` so
+   `json 1` and `1` are distinct programs. Deferred WITH their
+   reasons: `JoinMetaPlan` execution and the static presence
+   analysis (they land with the joins slice — reserved format keys
+   announced), `Encoding::Json` lazy decode (v1 decodes structured
+   bodies eagerly at the frontier), guest meta writes (guests read
+   only), the 64 KiB canonical-type-byte budget (with composite
+   pins), and the embedded asset-refusal gate (the loader's line —
+   the spike's package carries no assets). NEXT: the `jsonl` codec
+   itself — structured payloads across the `Process` boundary,
+   under the one byte discipline; unlocks realistic `File` and HTTP
+   payloads.
 3. **The error half of the language** — typed-error emissions from
    operators (`err = Kind {…}`) and mock `err` replies in the Lab.
    Referees can then provoke connector failures without adapters;

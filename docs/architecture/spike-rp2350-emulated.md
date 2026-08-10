@@ -66,14 +66,14 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (365-byte v4 package, full invariant validation + canonicity re-encode) | 4 205 | 210 k | 1.40 ms |
+| `plan::decode` (382-byte v5 package, full invariant validation + canonicity re-encode) | 4 269 | 213 k | 1.42 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and CEL bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32; min 1 801 / max 2 043) | 1 842 | **92 k** | **0.61 ms** |
+| relay transaction (avg of 32; min 1 838 / max 2 101) | 1 875 | **94 k** | **0.63 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled rounds) | 63 048 B (61.6 KiB) | < 128 KiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled rounds) | 63 172 B (61.7 KiB) | < 128 KiB ✓ |
 | Flash `.text` + `.rodata` (opt-level=z + LTO) | 163 + 30 = 193 KiB | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
@@ -90,12 +90,16 @@ Notes the numbers carry:
   integrity work done once at boot, and the price is stated rather
   than hidden. No criterion bounds boot cost; the transaction path
   is unchanged.
-- The true high-water mark (61.6 KiB) sits above the old sampled
+- The true high-water mark (61.7 KiB) sits above the old sampled
   figure (57.2 KiB), as a real peak must; the first M1 lift added
-  the ingress port to every inbound record (+688 B over 32 rounds).
+  the ingress port to every inbound record (+688 B over 32 rounds),
+  and the consolidated reform's five-field spine and ext zone
+  roughly cancelled out.
 - The semantic hash printed by the emulated kernel is byte-identical
-  to the host's: `e166cf4a…` — the identity function is the same
-  function everywhere.
+  to the host's: `0873d3b3…` — the identity function is the same
+  function everywhere. (The value MOVED with the reform's declared
+  identity change, D-2026-08-10-7: a compiled tree seals its static
+  type with its root, and echo's guard and relay are trees.)
 - The journal-growth incident of the first run stands: with a
   128 KiB arena, a ~44 KiB `Vec` doubling of the in-memory journal
   dies around round 60 — linear history growth, as designed; a

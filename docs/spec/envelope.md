@@ -484,7 +484,7 @@ that look like writes are not :
    `content_type` when `data` is replaced — a reformulation of the
    old "runtime nulls the hint" rule, executed at the same atomic
    construction point.
-3. **Simulation fixtures.** A fixture seeds inbound state through `meta.app`
+3. **Simulation fixtures.** A fixture seeds inbound state through `meta.ext`
    (writable) or a runtime-interpreted braced envelope-form builder — **never** by
    assigning `meta.sys.*`. Simulation stands in for the runtime, but it does so
    through the same constructor surface, not by violating the invariant. This

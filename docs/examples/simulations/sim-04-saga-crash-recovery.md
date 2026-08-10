@@ -75,7 +75,7 @@ lab sim04 {
       }
 
       bookings.out = {
-        meta.app.booking_id = "bk_7"
+        meta.ext.booking_id = "bk_7"
         data = { room = "12", amount = 250.00 }
       }
       crash after reserve.outbound_open#2        // the 2nd outbound open of reserve = the compensation's

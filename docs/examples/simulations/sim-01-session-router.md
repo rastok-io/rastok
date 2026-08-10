@@ -91,7 +91,7 @@ lab sim01 {
       }                                                          // → the Connector's timeout machinery works
 
       teams.out = {
-        meta.app.user_id = "alice"        // fixture seeds via meta.app — A2 (meta ⇒ full form)
+        meta.ext.user_id = "alice"        // fixture seeds via meta.app — A2 (meta ⇒ full form)
         data = { kind = "message", text = "Bonjour" }
       }
 

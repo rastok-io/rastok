@@ -62,18 +62,18 @@ lab sim02 {
 
       // ---- case A : the happy join -----------------------------------------
       orders.out = {
-        meta.app.order_id = "42"
+        meta.ext.order_id = "42"
         data = { total = 99.90 }
       }
       payments.out = {
-        meta.app.order_id = "42"
+        meta.ext.order_id = "42"
         data = { amount = 99.90 }
       }
       expect "42 settled" ledger.in where data.status == "settled" && data.amount == 99.90
 
       // ---- case B : the abandoned half --------------------------------------
       orders.out = {
-        meta.app.order_id = "43"
+        meta.ext.order_id = "43"
         data = { total = 10.00 }
       }
 

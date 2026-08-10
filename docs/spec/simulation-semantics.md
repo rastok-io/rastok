@@ -135,7 +135,7 @@ construct :
 
 ```rastok
 // INJECTION = the emission syntax (an inbound emission, scripted)
-orders.out = { meta.app.user_id = "alice", data = { kind = "message" } }
+orders.out = { meta.ext.user_id = "alice", data = { kind = "message" } }
 
 // MOCK = a scripted stand-in whose body is HANDLER grammar — nothing new
 mock bank {
@@ -170,7 +170,7 @@ replies) a braced value is classified ONCE by its top-level roots
   fresh `struct` payload (replacing `data` entirely) ; heritable metadata
   stays the input's (inbound defaults in fixtures).
 - **Only reserved roots** (`data`, `meta`) → the ENVELOPE
-  form : `{ meta.app.user_id = "alice", data = { kind = "message" } }`
+  form : `{ meta.ext.user_id = "alice", data = { kind = "message" } }`
   patches or builds the envelope itself ; a whole-`data` assignment makes
   the data fresh (`out = { data = "hello", meta.ext.content_type = "text/plain" }`
   is the non-struct spelling).

@@ -322,7 +322,7 @@ lab teams_inbound {
       }
 
       teams_in.out = {
-        meta.app.source = "teams"      // fixtures seed via meta.app — meta.sys is read-only, even in sim
+        meta.ext.source = "teams"      // the world's half seeds meta.ext — meta.sys is read-only, even in sim
         data = {
           type = "message"
           from = { aadObjectId = "abc-123" }

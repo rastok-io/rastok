@@ -312,7 +312,7 @@ side never arrives, the bounded join reports the technical
 
 ```rastok
 graph expense_approval : App {                     // `: App` marks the deployment entry
-  partition expense { key = meta.app.request_id ; lifetime = duration("72h") }
+  partition expense { key = meta.ext.request_id ; lifetime = duration("72h") }
   output rejection
 
   connector requests   : HttpServer { path = "/requests" }    // two independent sources
@@ -321,7 +321,7 @@ graph expense_approval : App {                     // `: App` marks the deployme
     url             = "https://accounting.internal/entries"
     effect          = irreversible
     behavior        = deterministic
-    idempotency_key = meta.app.request_id
+    idempotency_key = meta.ext.request_id
   }
 
   operator decide per expense {                    // state keyed by the expense
@@ -332,7 +332,7 @@ graph expense_approval : App {                     // `: App` marks the deployme
       where decision.data.approved
       within duration("48h") {
       approval = {
-        meta.app.request_id = request.meta.app.request_id   // a join picks explicitly; common fields merge (CommonOrAbsent)
+        meta.ext.request_id = request.meta.ext.request_id   // a join picks explicitly; common fields merge (CommonOrAbsent)
         data = { request_id = expense.key,
                         amount     = request.data.amount }
       }
@@ -342,7 +342,7 @@ graph expense_approval : App {                     // `: App` marks the deployme
       where !decision.data.approved
       within duration("48h") {
       rejection = {
-        meta.app.request_id = request.meta.app.request_id
+        meta.ext.request_id = request.meta.ext.request_id
         data = { request_id = expense.key,
                         amount     = request.data.amount,
                         reason     = decision.data.reason }
@@ -366,9 +366,9 @@ lab expense_approval {
         on in { out = { entry_id = "acc-1" } }
       }
       // …but DRIVE the sources by injection (they are inputs, not partners) :
-      decisions.out = { meta.app.request_id = "r-42",
+      decisions.out = { meta.ext.request_id = "r-42",
                                  data = { approved = true } }
-      requests.out  = { meta.app.request_id = "r-42",
+      requests.out  = { meta.ext.request_id = "r-42",
                                  data = { amount = 1250 } }
 
       expect "posted to accounting" accounting.in where
@@ -376,10 +376,10 @@ lab expense_approval {
     }
 
     scenario rejected "a rejection is a business outcome, not an accounting entry" {
-      decisions.out = { meta.app.request_id = "r-43",
+      decisions.out = { meta.ext.request_id = "r-43",
                                  data = { approved = false,
                                                  reason = "policy" } }
-      requests.out  = { meta.app.request_id = "r-43",
+      requests.out  = { meta.ext.request_id = "r-43",
                                  data = { amount = 1800 } }
 
       expect "rejection is explicit" app.rejection where
@@ -390,7 +390,7 @@ lab expense_approval {
     scenario approval_timeout "no decision within 48 hours; the join expires" {
       mock accounting { on in { out = { entry_id = "acc-1" } } }
 
-      requests.out = { meta.app.request_id = "r-7",
+      requests.out = { meta.ext.request_id = "r-7",
                                 data = { amount = 990 } }
       expect nothing accounting.in                   // window ① : nothing moves on arrival
 
@@ -510,7 +510,7 @@ lab agent_gateway {
         on in { out = { delivered = true } }   // an uncovered call fails the scenario loudly
       }
 
-      teams_in.out = { meta.app.session_key = "conv-1",
+      teams_in.out = { meta.ext.session_key = "conv-1",
                                 data = { type = "message", text = "Bonjour" } }
 
       expect "reply reaches the user" teams_out.in where
@@ -2165,7 +2165,7 @@ lab checkout {
       on in { out = { status = "charged" } }
     }
     scenario accepted {
-      orders.out = { meta.app.order_id = "o-1"
+      orders.out = { meta.ext.order_id = "o-1"
                               data = { amount = 120 } }
       expect "posted" ledger.in where data.status == "charged"
     }
@@ -2180,7 +2180,7 @@ lab checkout {
       on in { out = { delivered = true } }
     }
     scenario accepted {
-      orders.out = { meta.app.order_id = "o-2"
+      orders.out = { meta.ext.order_id = "o-2"
                               data = { amount = 120 } }
       expect "charged for real" ledger.in where data.status == "charged"
     }

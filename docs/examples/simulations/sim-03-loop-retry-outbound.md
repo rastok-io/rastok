@@ -69,8 +69,8 @@ lab sim03 {
       }
 
       orders.out = {
-        meta.app.order_id   = "42"
-        meta.app.payment_id = "pay_42"
+        meta.ext.order_id   = "42"
+        meta.ext.payment_id = "pay_42"
         data = { amount = 99.90 }
       }
       advance duration("30s")

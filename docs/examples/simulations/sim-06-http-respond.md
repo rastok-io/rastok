@@ -76,7 +76,7 @@ lab sim06 {
       }
 
       api.out = {
-        meta.app.request_id = "r-1"
+        meta.ext.request_id = "r-1"
         data = { q = "meaning of life?" }
       }
 
@@ -97,7 +97,7 @@ lab sim06 {
       }
 
       api.out = {
-        meta.app.request_id = "r-2"
+        meta.ext.request_id = "r-2"
         data = { q = "slow one" }
       }
 
@@ -122,9 +122,9 @@ lab sim06 {
 
       // three clients click within the same second (the business shape :
       // a shop's « help me choose » button, the evening a newsletter lands)
-      api.out = { meta.app.visitor = "v1"  data = { q = "summer jacket" } }
-      api.out = { meta.app.visitor = "v2"  data = { q = "office shoes" } }
-      api.out = { meta.app.visitor = "v3"  data = { q = "rain coat" } }
+      api.out = { meta.ext.visitor = "v1"  data = { q = "summer jacket" } }
+      api.out = { meta.ext.visitor = "v2"  data = { q = "office shoes" } }
+      api.out = { meta.ext.visitor = "v3"  data = { q = "rain coat" } }
 
       // the refusal is IMMEDIATE — zero virtual time has passed
       expect "the third hit the bound" app.err where err.kind == "Overloaded"
