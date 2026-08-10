@@ -5,6 +5,231 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-10-1 — Metadata has exactly three zones
+
+`meta.sys` (runtime-owned, read-only), `meta.app` (application-owned,
+read-write), `meta.ext` (external-boundary context, read-write). No
+other root exists: no bare field (`meta.customer_id` is invalid — the
+`meta.x ≡ meta.app.x` alias is REMOVED), no custom namespace at the
+root, no connector name in a meta path, no lexical scoping of meta
+references, no prefix-freedom machinery. `app` fields are INFERRED
+from the unit's writes (graph and lab alike): types unify across
+writers and a conflict refuses naming both sites; a read of a name
+written nowhere refuses (the existing CEL-grid rule); dotted names
+(`meta.app.audit.origin`) are plain field names, not a subspace
+mechanism. `ext`'s vocabulary is declared ONLY by connector contract
+sheets (a `Populates` row: fields and scalar types, unified across
+connectors — incompatible declarations refuse naming the connectors
+and types) plus the standard reserved field `content_type`
+(D-2026-08-10-4); handlers may REWRITE declared ext fields, never
+invent one — the application's own vocabulary belongs to `app`.
+Leaves stay `scalar | array<scalar>`; composites live in `data`. The
+physical form stays flat (`"app.customer_id"`, `"ext.content_type"`).
+`meta`, `data`, `sys`, `app`, and `ext` are refused as node names.
+**Supersedes:** the root alias and its write/read projection (round 5
+of M0); root custom namespaces (`meta.<custom>`); every intermediate
+proposal of connector-path namespaces, scoped resolution, shadowing,
+reach-through reads, and prefix-freedom (none implemented).
+**Rejected:** declared-only `app` fields (typo safety bought with
+ceremony; the grid refuses read-never-written names and unification
+refuses cross-writer drift — the write-only typo is the accepted
+price); per-connector namespaces (two connector types wanting one
+name, unanswerable join merges, renames rippling through readers).
+
+## D-2026-08-10-2 — Propagation is uniform; joins merge by value
+
+A single-input emission copies `app` and `ext` from the input, mints
+`sys` fresh, then applies the handler's explicit writes,
+last-write-wins per field. A join has NO implicit parent: for every
+field of the statically known universe (inferred `app` schema, sheet
+`ext` fields, standard fields), the merge is CommonOrAbsent — absent
+everywhere → absent; one distinct value → kept; conflicting values →
+absent — using each metadata type's canonical equality, never a map
+order or a scheduler order. The lowering emits a static
+`JoinMetaPlan`: per-field ops in canonical key order; the runtime
+executes a verdict. `content_type` participates in the fusion like
+any field, and the payload-coupling invalidation
+(D-2026-08-10-4) runs AFTER it. Reads never propagate — a `val`, a
+guard, or a dead computation changes no output metadata; only the
+merge and explicit writes do, and explicit writes win. In a join
+handler the read forms are `a.meta.*` / `a.data`; bare `data`
+refuses (two payloads, no referent), and the laziness witness is
+KEYED per input — `Payload(a)` / `Payload(b)`, one slot each.
+`meta.sys` never merges. **Rejected:** trigger-meta inheritance (an
+implicit parent by another name); runtime map iteration; static
+required-field contracts on merge outputs (they fell with declared
+`app` fields — the runtime grid, absent → err, remains the guard;
+recorded as a deliberate trade).
+
+## D-2026-08-10-3 — No history operator; the journal is not a handler input
+
+There is no `last`, no causal cursor, no per-plan history dependency,
+and no `HistoryUnavailable` in the language. If the application will
+need a value after its replacement, it copies it into `meta.app`
+while it is current — the same idiom the HttpServer `correlate` rule
+already mandates ("the author carries the token"). The separation is:
+`meta.ext` = the current external context; `meta.app` = what the
+application decides to keep; the journal = past versions, for audit,
+observation, replay, recovery, and diagnostics — never consulted
+during semantic evaluation. The VM needs no journal access to
+evaluate an expression. `last` stays unreserved. **Rejected:**
+`last(connector, path)` with causal-nearest semantics and a carried
+cursor (deterministic, but a hidden state machine the reader cannot
+see; the explicit copy is visible, cheap, and already the house
+idiom).
+
+## D-2026-08-10-4 — `content_type` is a standard `ext` field, coupled to the payload
+
+The canonical name is `content_type` (never `mime_type` — the value
+is the FULL Content-Type, parameters included, so the old name
+contradicted its own definition; the NiFi-lineage rename note dies).
+Type `text?`; read as `meta.ext.content_type`. There is no
+`meta.sys.content_type`, no `meta.app.content_type`, and no
+`Data::Encoded.content_type`; the `meta.sys` spine drops to FIVE
+fields (id, parent_id, origin_id, role, graph_version) and the seal
+registry's mime row moves to the ordinary `ext` seal — the field
+stays causal. `WriteTarget::MimeType` and `Draft.mime_type` die.
+Emission construction is atomic, in this order: (1) fuse or copy
+`app`/`ext` (D-2026-08-10-2); (2) decide the payload — a KEPT input
+witness or FRESH data; (3) if fresh, strike `content_type` from the
+base — the payload-coupling invariant: a content type never
+describes bytes it was not born with (the old ad-hoc mime-nulling
+rule REFORMULATED, not removed); (4) apply explicit writes, which
+win; (5) mint one envelope, `sys` fresh. No intermediate state is
+observable or journaled. Kept-witness forms keep representation AND
+content type: `out = .`, `out = data`, `val copy = data; out =
+copy`, the whole-data write `data = data`, a join's `out = a.data`.
+Inbound, the connector writes `ext.content_type` and
+selects/validates the INTERNAL encoding at the frontier; the core
+decodes with `Data::Encoded.encoding` alone, never consulting Meta;
+v1 decodes HTTP JSON eagerly at the connector — `Raw` is the only
+deferred regime until the core carries a decoder, and a JSON body is
+never parked under `Raw` where a structural access would materialize
+it as raw text. Outbound, a serializing codec dictates the produced
+content type and writes it; a byte pass-through uses the current
+value if present and compatible, else the connector's configuration,
+else `application/octet-stream`; a codec/content-type contradiction
+is a TYPED error, never a silently false header. The four planes
+stay distinct and get their table in envelope.md: logical type /
+internal encoding / connector codec / external content type.
+**Rejected:** `meta.app` placement (uniform inheritance makes a
+stale type lie by default — one magic field in an ordinary
+namespace); `Data::Encoded` placement (right coupling, wrong owner:
+re-labeling needed a dedicated function, connectors could not write
+it as ordinary context, and the journal already preserves replaced
+values, so replacement loses nothing).
+
+## D-2026-08-10-5 — Build-time bytes: `asset` and `base64`, content-typed at whole-data only
+
+`asset("path", content_type?)` and `base64(content_type?) { … }`
+construct, atomically, a fresh byte payload plus an explicit
+`ext.content_type` — desugared to a whole-data byte source and an
+ordinary `Ext` write, no dedicated plan op. The content-typed forms
+are legal ONLY in whole-data position (`out = asset(…)`,
+`data = asset(…)`): a nested field has no `meta.ext` of its own, so
+`{ document = asset("x", "ct") }` refuses with a dedicated
+diagnostic. The bare forms embed anywhere as plain bytes and, in
+whole-data position, leave `content_type` ABSENT — never inheriting
+the replaced payload's. `asset` invariants: build-time resolution
+only; path relative to the App root; escapes and missing files
+refuse at build; raw content, no normalization; the semantic hash
+seals the CONTENT DIGEST, never the path (spelling); the bytes live
+in a content-addressed package section outside the decoded body.
+Budgets: 8 MiB per asset and 32 MiB total by DEFAULT, overridable by
+an App-level declaration in the RKG source (there is no external
+config file — the App's own source is its configuration); breach
+refuses at build. v1 embedded targets refuse asset-bearing plans
+with a typed boot error — a 256 KiB heap cannot even verify a
+digest; selective loading waits for a real case. The VM never
+touches a filesystem; runtime files and URLs are Connectors'
+business. **Rejected:** no caps (a cap added later breaks existing
+apps; one relaxed later breaks nobody — the ratchet only turns one
+way); URLs; path-sealed identity.
+
+## D-2026-08-10-6 — Literal reform: punctuation decides, one spelling each
+
+`{ a = 1 }` is a struct; `{ "a": 1 }` is a map (text keys in this
+milestone); `{}` is the empty struct; `{:}` is the empty map; mixing
+`=` and `:` entries refuses. `map { … }` dies — superseding exactly
+that clause of D-2026-08-09-1 (its braced-classification core
+stands). The CEL MapLit aligns on the same punctuation: one map
+dialect per source file. `text { … }` is the verbatim text form:
+the first newline is excluded, the closing brace's column sets the
+margin stripped from every line, the trailing newline before the
+brace is excluded, UTF-8 mandatory, no interpolation and no escapes,
+braces must balance (the raw-block lexer's rule — content with
+unbalanced braces uses a CEL string or `base64`; a named
+limitation). `json <json-value>` replaces `json { { … } }`: object,
+array, string, number, true, false, null — always `variant`;
+duplicate keys refuse. `base64 { … }` is the SOLE inline binary:
+RFC 4648 standard alphabet, mandatory padding, ASCII whitespace
+ignored, URL-safe refused. `hex`, `bytes base64`, `bytes hex`, and
+`<type> file` die — `asset` (D-2026-08-10-5) replaces `file`.
+**Rejected:** type-directed braces (the syntax decides, never the
+expected type — the reform's founding rule); keeping `hex` (two
+spellings, one semantic).
+
+## D-2026-08-10-7 — JSON numbers are exact: decimal128-anchored, integers canonical
+
+A JSON number parses to an EXACT decimal — integer coefficient plus
+scale — bounded to 38 significant digits within decimal128's
+exponent range: the Arrow anchor (`decimal(p, s)` is already
+reserved in the type tree). Canonicalization: strip trailing zeros;
+a scale-0 value fitting i64 BECOMES `int` — so `1`, `1.0`, and `1e0`
+are one identity (int 1) and `-0` is int 0. A decimal therefore
+never carries an int-representable value, cross-kind equality is
+honestly false, and equality keeps agreeing with the canonical
+bytes. Beyond the budget: refusal — a build diagnostic in literals,
+a typed error at decode. "Numbers are lossless until narrowed" is
+honored by REFUSING loss: doubles arise only from explicit
+narrowing (`as double`), never from parsing. Implementation: a
+HOUSE JSON reader in rastok-core — the compiler's rustc-style spans
+must point into the `.rkg` (a dependency reports positions in its
+own stream, and silently keeps the last duplicate key), and the
+kernel keeps zero parsing dependencies (D-2026-08-01-1's and
+D-2026-08-03-1's clauses, not dependency-phobia) — with `serde_json`
+as a DEV-dependency differential oracle: every test input parses
+through both, values compared. **Rejected:** f64 by default (silent
+corruption of `19.99` and of integers beyond 2^53); unbounded
+bignum (a numeric tower this milestone does not need);
+`serde_json` in production (a seventy-percent fit — the missing
+thirty is exactly the diagnostic standard and the zero-dep kernel).
+
+## D-2026-08-10-8 — Named types are structural sugar
+
+`type Name = <type_ref>`: a unit-level namespace, duplicates
+refused, and the semantic hash seals the STRUCTURAL EXPANSION —
+renaming an alias without changing its structure is not an identity
+move (the sugar-insensitivity rule, D-2026-08-04-2, applied to
+types). Recursion refuses in v1: a recursive type is inexpressible
+in the plan's resolved-type tables and has no depth under
+`MAX_NESTING`; a μ-form waits for a nominal type table in the
+package, if evidence ever demands one. Budgets: nesting depth plus
+a TOTAL budget over nodes, fields, and bytes of the expanded tree.
+The type tree itself is unchanged — `scalar`, `struct`, `map`,
+`array`, `enum`, `union`, `variant`; `table` stays the relational
+view of `array<struct>`. `schema` is not introduced (it would only
+carry meaning under nominal identity, which is rejected).
+**Rejected:** nominal identity (renames would move hashes);
+recursion via named references (reopens the plan format and the
+depth budgets for no current need).
+
+## D-2026-08-10-9 — One format bump: v5
+
+The whole reform ships under ONE new package format. v5 carries: the
+`App`/`Ext` write targets (`CustomMeta` and `MimeType` die); the
+resolved `app`/`ext` schemas (they TRAVEL — the validator answers
+without a Registry, the round-2 doctrine); the `JoinMetaPlan` ops;
+the content-addressed asset section (digests and sizes in the body,
+bytes outside it); expanded named types; the structural budgets; the
+`decimal` canonical tag. It carries NOTHING for history lookups
+(D-2026-08-10-3). The v5 skeleton lands with the first serialized
+change and exactly one final number is published; v4 joins v1–v3 as
+unpublished drafts refused by number. **Rejected:** serial bumps
+(intermediate states that are neither v4 nor v5); waiting until the
+end to touch the format (every prior step would produce
+unrepresentable plans).
+
 ## D-2026-08-09-2 — The empty-struct literal moves the package to v4
 
 The reform's nested empty record (`parent = {}`) compiles to the one
