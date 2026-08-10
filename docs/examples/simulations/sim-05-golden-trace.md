@@ -84,7 +84,7 @@ for readability and are excluded from the causal-core fingerprint.
 ── ─────────── ────────────────────────────────────────────────────────────────
 1  INBOUND     { connector: "ping", inbound_seq: 0, committed_at: 0,
                  envelope: { id: A0 = H("ping"‖0), parent: ∅, origin: A0,
-                             role: default, graph_version: 1, mime_type: ∅,
+                             role: default, graph_version: 1,
                              meta.app: { user_id: "alice" },      ← sorted keys
                              data: struct {} } }
 2  TRANSACTION { node: "count", key: "alice", trigger: "p:in",

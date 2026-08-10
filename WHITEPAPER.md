@@ -332,7 +332,7 @@ graph expense_approval : App {                     // `: App` marks the deployme
       where decision.data.approved
       within duration("48h") {
       approval = {
-        meta.app = request.meta.app                // a join attributes meta explicitly
+        meta.app.request_id = request.meta.app.request_id   // a join picks explicitly; common fields merge (CommonOrAbsent)
         data = { request_id = expense.key,
                         amount     = request.data.amount }
       }
@@ -342,7 +342,7 @@ graph expense_approval : App {                     // `: App` marks the deployme
       where !decision.data.approved
       within duration("48h") {
       rejection = {
-        meta.app = request.meta.app
+        meta.app.request_id = request.meta.app.request_id
         data = { request_id = expense.key,
                         amount     = request.data.amount,
                         reason     = decision.data.reason }
@@ -366,9 +366,9 @@ lab expense_approval {
         on in { out = { entry_id = "acc-1" } }
       }
       // …but DRIVE the sources by injection (they are inputs, not partners) :
-      decisions.out = { meta.request_id = "r-42",
+      decisions.out = { meta.app.request_id = "r-42",
                                  data = { approved = true } }
-      requests.out  = { meta.request_id = "r-42",
+      requests.out  = { meta.app.request_id = "r-42",
                                  data = { amount = 1250 } }
 
       expect "posted to accounting" accounting.in where
@@ -376,10 +376,10 @@ lab expense_approval {
     }
 
     scenario rejected "a rejection is a business outcome, not an accounting entry" {
-      decisions.out = { meta.request_id = "r-43",
+      decisions.out = { meta.app.request_id = "r-43",
                                  data = { approved = false,
                                                  reason = "policy" } }
-      requests.out  = { meta.request_id = "r-43",
+      requests.out  = { meta.app.request_id = "r-43",
                                  data = { amount = 1800 } }
 
       expect "rejection is explicit" app.rejection where
@@ -390,7 +390,7 @@ lab expense_approval {
     scenario approval_timeout "no decision within 48 hours; the join expires" {
       mock accounting { on in { out = { entry_id = "acc-1" } } }
 
-      requests.out = { meta.request_id = "r-7",
+      requests.out = { meta.app.request_id = "r-7",
                                 data = { amount = 990 } }
       expect nothing accounting.in                   // window ① : nothing moves on arrival
 
@@ -510,7 +510,7 @@ lab agent_gateway {
         on in { out = { delivered = true } }   // an uncovered call fails the scenario loudly
       }
 
-      teams_in.out = { meta.session_key = "conv-1",
+      teams_in.out = { meta.app.session_key = "conv-1",
                                 data = { type = "message", text = "Bonjour" } }
 
       expect "reply reaches the user" teams_out.in where
@@ -711,10 +711,13 @@ Every message flowing through the graph is an **envelope** = `meta + data`:
 single carried payload. The postal metaphor fits: `meta` is what's written
 *on* the envelope, `data` is what's *inside*.
 
-`meta` is **namespaced**. `meta.sys` is the runtime's read-only spine —
+`meta` has exactly three zones. `meta.sys` is the runtime's read-only spine —
 identity, lineage, role; six fields, minted fresh at every hop.
-`meta.app` is the application's writable namespace, and bare `meta.x`
-resolves to it; custom namespaces (`meta.auth`, …) may be declared.
+`meta.app` is the application's writable zone — its fields DECLARED at
+graph level (`meta app { customer_id: text }`), a typo never minting a
+field — and `meta.ext` is the external-boundary context, written by
+connectors (their contract sheets declare its fields) and rewritable
+by handlers. There is no bare form: `meta.x` resolves to nothing.
 `meta` leaves are typed scalars (or scalar arrays) — composites belong in
 `data`. The normative field list, read-only rules, id derivation, storage
 form and birth stamps live in
@@ -722,7 +725,7 @@ form and birth stamps live in
 
 ```rastok
 out = {
-  meta.request_city = data.city                  // a scalar annotation, rides on the envelope
+  meta.app.request_city = data.city              // a scalar annotation, rides on the envelope
   data = { city = "Paris", country = "FR" }  // a typed record payload
 }
 ```
@@ -741,7 +744,7 @@ typed struct payload, the input's heritable metadata kept:
 out = { city = "Paris", country = "FR" }
 ```
 
-With only the reserved roots `data`, `meta`, and `mime_type` it is the
+With only the reserved roots `data` and `meta` it is the
 *envelope form* — the builder shown above, patching or rebuilding the
 envelope itself. Mixing the two refuses at compile time
 (`E-BRACE-MIXED`); business fields named like a reserved root take the
@@ -906,11 +909,16 @@ languages themselves.
 **Meta on a join.** `meta.sys` is always runtime-fresh on the emitted
 envelope — its `parent_id` is the envelope that *triggered* the
 transaction (envelope.md's cause table); the other contributors are
-recorded in the journal, not on the envelope. Each **writable** namespace (`meta.app`, any custom) of the
-emitted envelope must be **attributed explicitly** —
-`out = { meta.app = a.meta.app, meta.auth = b.meta.auth, … }` —
-otherwise the build fails. Single-input handlers inherit each namespace
-additively from their one parent.
+recorded in the journal, not on the envelope. The writable zones
+(`meta.app`, `meta.ext`) merge BY VALUE, per field: absent everywhere
+→ absent, one distinct value → kept, conflicting values → absent —
+and an explicit write always wins (`meta.app.request_id =
+a.meta.app.request_id` picks a side; two names keep both). A field a
+merge may have dropped is statically optional: a required read
+downstream refuses at compile time until an explicit write has
+chosen the value (D-2026-08-10-2). Single-input handlers copy each
+zone from their one parent; `meta.ext.content_type` follows the
+payload, not the merge (D-2026-08-10-4).
 
 **Lifecycle.** `on start` fires when a partition key is first seen;
 `on stop` when its `lifetime` expires. Inside any handler the **`stop`**
@@ -931,7 +939,7 @@ operator stats per session {
   on event { count = count + 1 }         // scalar state update : plain CEL
 
   on tick  {
-    metric = { meta.count_per_min = count }
+    metric = { meta.app.count_per_min = count }
     count  = 0
   }
 }
@@ -948,7 +956,7 @@ the `order` partition key):
 operator settle per order {
   on (invoice, payment) {
     out = {
-      meta.app = invoice.meta.app               // a join attributes meta explicitly (see below)
+      meta.app.invoice_id = invoice.meta.app.invoice_id   // a join picks explicitly; common fields merge (see below)
       data = { order_id = order.key,     // `order` = the partition → its key
                       amount   = invoice.data.amount,   // envelopes are named by PORT
                       paid     = payment.data.confirmed }
@@ -981,7 +989,7 @@ operator counter per session {
 
   on msg {
     count = count + 1                        // mutate ; reads below see the new value
-    out = { meta.count = count }
+    out = { meta.app.count = count }
   }
 }
 ```
@@ -992,7 +1000,7 @@ terminating expression language designed for safe embedding. Rastok
 uses it because expressions can be checked, bounded, and evaluated
 without granting ambient I/O. The right-hand side of an assignment is
 a CEL expression (§2.5): `count = count + 1`,
-`x = x * 2 + data.n`, `label = meta.region + "-" + tenant.key`. CEL is
+`x = x * 2 + data.n`, `label = meta.app.region + "-" + tenant.key`. CEL is
 total — no loops, no recursion, no side effects — so every state
 expression is statically checkable. Structural *reshaping* of documents
 (building nested JSON, filtering arrays) belongs to guest-language blocks
@@ -1003,7 +1011,7 @@ environment lookup, network access, or filesystem reads.
 **Emitting.**
 - A port emits **once per transaction** — the value of its *final* assignment
   (last-write-wins); a port never assigned emits nothing.
-- `out = { … }` with only reserved roots (`data`, `meta`, `mime_type`)
+- `out = { … }` with only reserved roots (`data`, `meta`)
   is the envelope form: it **inherits** the input (meta + data) and
   overrides only the listed fields — a *patch* ; a whole-`data`
   assignment makes the data fresh.
@@ -1033,10 +1041,10 @@ operator session_metric per session {
     count = count + 1
 
     out = {
-      meta.tenant_plan = tenant.?plan_tier.orValue("free")   // cross-partition read, with default
-      meta.session_id  = session.key                   // current partition's key
+      meta.app.tenant_plan = tenant.?plan_tier.orValue("free")   // cross-partition read, with default
+      meta.app.session_id = session.key                // current partition's key
       meta.trigger_id  = meta.sys.id                   // current envelope's derived id
-      meta.count       = count                         // my own state (new value, imperative)
+      meta.app.count      = count                      // my own state (new value, imperative)
     }
   }
 }
@@ -1093,13 +1101,13 @@ graph my_app : App {
 }
 
 operator pricing per tenant {
-  val TIERS = map { free = 0, pro = 99, enterprise = 999 }  // Operator-level constant
+  val TIERS = { "free": 0, "pro": 99, "enterprise": 999 }   // Operator-level constant (a map: `:` keys)
   var subscribed_tier: text = "free"                   // partition state
 
   on upgrade {
     val tier = data.new_tier                           // handler-local binding (val = DRY, used twice)
     subscribed_tier = tier
-    out = { meta.price = TIERS[tier] }        // all of it plain CEL
+    out = { meta.app.price = TIERS[tier] }    // all of it plain CEL
   }
 }
 ```
@@ -1135,7 +1143,7 @@ operator settings {
 
 operator stamp per tenant {
   on req {
-    out = { meta.rate_limit = settings.rate_limit }  // read the live knob
+    out = { meta.app.rate_limit = settings.rate_limit }  // read the live knob
   }
 }
 ```
@@ -1163,7 +1171,7 @@ an attribute value, a simulation expectation — is one expression in the
 [Common Expression Language](https://cel.dev):
 
 ```rastok
-on payment where data.amount > 100 && meta.region == "eu" { … }
+on payment where data.amount > 100 && meta.app.region == "eu" { … }
 count = count + 1
 key   = meta.app.session_id
 ```
@@ -1454,7 +1462,7 @@ operator counter per session {
 
   on msg {
     count = count + 1
-    out = { meta.count = count }
+    out = { meta.app.count = count }
   }
 }
 ```
@@ -2157,7 +2165,7 @@ lab checkout {
       on in { out = { status = "charged" } }
     }
     scenario accepted {
-      orders.out = { meta.order_id = "o-1"
+      orders.out = { meta.app.order_id = "o-1"
                               data = { amount = 120 } }
       expect "posted" ledger.in where data.status == "charged"
     }
@@ -2172,7 +2180,7 @@ lab checkout {
       on in { out = { delivered = true } }
     }
     scenario accepted {
-      orders.out = { meta.order_id = "o-2"
+      orders.out = { meta.app.order_id = "o-2"
                               data = { amount = 120 } }
       expect "charged for real" ledger.in where data.status == "charged"
     }

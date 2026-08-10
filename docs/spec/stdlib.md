@@ -101,6 +101,7 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 |---|---|
 | Role / Direction | HTTP endpoint; **inbound source** |
 | Ports | `out` (decoded requests); `in` (mode `respond`: the graph's answers); `err` |
+| Populates | `meta.ext` : `content_type` (the request's full Content-Type), `request_id: text?`, `path: text`, `method: text` — written once at ingress; handlers may rewrite, never invent (D-2026-08-10-1) |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
 | Attributes | `path`, `mode = ack (default) \| respond`, `codec`, `auth`, `timeout` (respond: the open-request budget), **`correlate = <CEL path on the response>`** (respond; default: lineage) |
 | Correlator | mode `respond`: **default = lineage** (`origin_id == R.id`) — valid on join-free return paths ONLY. **A return path crossing a root-mixing join ⇒ explicit `correlate` required (compile error otherwise)**: the join output inherits the TRIGGER's origin, creating a race. The author carries the token (`meta.app.request_id = meta.sys.id`) and attributes it through joins with the explicit-attribution rule; matching = correlate-value == the open request's root id. An orphan response (no open request — it already expired, the 504 went out) is **discarded-and-journaled** (the call-closed rule's cousin). |
@@ -121,6 +122,7 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 |---|---|
 | Role / Direction | HTTP calls; **outbound caller** |
 | Ports | `in` (requests), `out` (responses), `err` |
+| Populates | `meta.ext` : `content_type` (the response's Content-Type), `status: int` — on the reply envelope |
 | effect / behavior | **per-instance, both mandatory** |
 | Attributes | `url`/`base_url`+`path`, `method`, `codec`, `auth`, `tls`, `timeout`, `on_timeout = bypass (default) \| kill`, `idempotency_key` (mandatory when `irreversible`) |
 | Correlator | protocol-native: HTTP request ↔ response |
@@ -286,7 +288,7 @@ partition request {
 operator decide : Joiner per request {
   on (expense, decision) within duration("48h") {
     approval = {
-      meta.app = expense.meta.app
+      meta.app.request_id = expense.meta.app.request_id   // per-field pick (D-2026-08-10-2: the merge is automatic, picks are explicit)
       data = {
         request_id = request.key
         approved = decision.data.approved

@@ -169,13 +169,13 @@ replies) a braced value is classified ONCE by its top-level roots
 - **No reserved root** → a DATA RECORD : `{ status = "charged" }` builds a
   fresh `struct` payload (replacing `data` entirely) ; heritable metadata
   stays the input's (inbound defaults in fixtures).
-- **Only reserved roots** (`data`, `meta`, `mime_type`) → the ENVELOPE
+- **Only reserved roots** (`data`, `meta`) → the ENVELOPE
   form : `{ meta.app.user_id = "alice", data = { kind = "message" } }`
   patches or builds the envelope itself ; a whole-`data` assignment makes
-  the data fresh (`out = { data = "hello", mime_type = "text/plain" }` is
-  the non-struct spelling).
+  the data fresh (`out = { data = "hello", meta.ext.content_type = "text/plain" }`
+  is the non-struct spelling).
 - **A mix** → `E-BRACE-MIXED`, never a silent reinterpretation. Business
-  fields named `data`, `meta`, or `mime_type` take the explicit escape
+  fields named `data` or `meta` take the explicit escape
   `data = { … }`.
 
 `{}` is the empty record ; the exact re-emission of the current envelope

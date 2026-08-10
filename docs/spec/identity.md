@@ -134,10 +134,10 @@ a record is canonicalized (its full `meta.sys`, per envelope.md §1) :
 | 3 | origin_id | bytes(16) | |
 | 4 | role | text | value domain per envelope.md §1 ; omitted when `default` |
 | 5 | graph_version | uint (u64) | constant 1 in embedded/sim (§2) |
-| 6 | mime_type | text | omitted when null |
+| 6 | — | — | RETIRED (extend-only: never reused). Held `mime_type` until D-2026-08-10-4 moved the content type to `meta.ext.content_type`, sealed in key 9 like every ext field. |
 | 7 | tier2 | array | Tier-2 birth stamps (`saga_*`, `loop_*` — envelope.md §1.2), present only when born in scope ; the **sorted pair list** of the sub-form below — never `map` ; keys extend-only |
 | 8 | data | array | the tagged payload `[encoding_tag (uint), bytes]` (sub-form below) — opaque, zero-copy, compared as bytes and never re-encoded ; a typed err payload is an ordinary envelope, no separate key |
-| 9 | app_meta | array | the causal application metadata — a **canonical sorted list of triples `[namespace (text), field (text), tagged_value]`**, sorted UTF-8 by `(namespace, field)` ; the namespace distinguishes values such as `meta.app.x` and `meta.audit.x` ; `meta.app` + every custom namespace ; sealed because a handler reads them ; omitted when empty |
+| 9 | app_meta | array | the causal writable metadata — a **canonical sorted list of triples `[zone (text), field (text), tagged_value]`**, sorted UTF-8 by `(zone, field)` ; `zone` ∈ {`app`, `ext`} (D-2026-08-10-1 — root customs died), `field` is the flat dotted key (`audit.origin`) ; sealed because a handler reads them ; omitted when empty |
 
 **Record — shared header** (key `10` ; virtual time is an annotation, below) :
 
@@ -220,11 +220,11 @@ cannot diverge on bytes for the same journal :
   | 3 | long | CBOR integer (64-bit two's-complement range) |
   | 4 | float | IEEE-754 binary32, FIXED width (canonical NaN, −0.0 kept) |
   | 5 | double | IEEE-754 binary64, FIXED width (canonical NaN, −0.0 kept) |
-  | 6 | number | the dynamic numeric of `variant` — canonicalized by a FIXED rule : **`−0.0` FIRST → `double` (5) (preserving the sign — never fold to `long 0`)** ; then an integral value in i64 range → `long` (3) ; a non-integral value exactly representable in binary64 → `double` (5) ; anything beyond → TYPE ERROR unless declared `decimal`. Never encoded bare |
+  | 6 | number | the dynamic numeric of `variant` — canonicalized by a FIXED rule (revised by D-2026-08-10-7) : normalize the decimal (trailing zeros stripped) ; **`−0` → integer zero** ; a scale-0 value in the signed 64-bit range → the INTEGER domain at honest width (`int` (2) within 32 bits, `long` (3) beyond — the `int_tagged` rule) ; everything else → a DYNAMIC `decimal` (10) at MINIMAL scale, within the decimal128 budget (38 significant digits) ; beyond the budget → TYPE ERROR, never a silent narrowing. A `double` (5) arises only from explicit narrowing (`as double`), never from parsing ; a TYPED `−0.0` double keeps its sign (tags 4/5, unchanged). Never encoded bare |
   | 7 | bytes | CBOR byte string |
   | 8 | text | CBOR text string (UTF-8) |
   | 9 | null | CBOR null |
-  | 10 | decimal | `[unscaled (bytes, big-endian two's-complement, MINIMAL — no redundant sign byte ; zero = a single `0x00`), scale (INT, signed)]` ; **`scale` MUST equal the type's DECLARED scale `s` — never re-minimized**, so `decimal(p,2)` value `1` is always `[100, 2]`, never `[1, 0]` : minimal unscaled + declared scale give a value ONE byte sequence |
+  | 10 | decimal | `[unscaled (bytes, big-endian two's-complement, MINIMAL — no redundant sign byte ; zero = a single `0x00`), scale (INT, signed)]` ; two context rules, disjoint by construction : a TYPED `decimal(p, s)` seals at its **DECLARED scale** — never re-minimized, so `decimal(p,2)` value `1` is always `[100, 2]` ; a DYNAMIC decimal (a `variant` number, tag-6 rule) seals at its **MINIMAL scale** (trailing zeros stripped — it then never carries an integer-representable value, so the domains stay disjoint). Budget : 38 significant digits, decimal128 exponent range (D-2026-08-10-7) |
   | 11 | date | CBOR integer — days since 1970-01-01 |
   | 12 | timestamp | CBOR integer — **i64** NANOSECONDS since epoch, UTC (Arrow-anchored ; range ≈ 1677–2262 ; out of range = TYPE ERROR, never a bignum ; same bound as `duration`) |
   | 13 | timestamp_ntz | CBOR integer — **i64** NANOSECONDS, no zone (same bound) |
@@ -246,7 +246,7 @@ cannot diverge on bytes for the same journal :
   representations of envelope.md §5, `raw | avro | arrow-ipc`,
   extend-only, never renumbered : `1 = raw (identity bytes, no codec)
   · 2 = avro · 3 = arrow-ipc`. **A JSON payload is `[raw, bytes]` with
-  `mime_type = application/json`, NOT a separate tag** (the specification
+  `meta.ext.content_type = application/json`, NOT a separate tag** (the specification
   excludes a JSON tag) ; `json / protobuf / parquet / msgpack` are
   *boundary* codecs a Connector speaks on the wire, never internal
   `data` representations — so two runtimes cannot seal the same JSON as
@@ -323,4 +323,4 @@ executions differ on this field ?* Yes → annotation. No → core.
 
 | Causal core (in the canonical form, compared bytewise) | Annotations (recorded if useful, excluded from the form and the seal) |
 |---|---|
-| record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version, mime_type) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call key/digest/status) ; `data` bytes and typed err payloads | **virtual dated time** (derivable — annotation, simulation-semantics §6.1) ; wall-clock (`committed_at`) ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; all non-normative diagnostics |
+| record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call key/digest/status) ; `data` bytes and typed err payloads | **virtual dated time** (derivable — annotation, simulation-semantics §6.1) ; wall-clock (`committed_at`) ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; all non-normative diagnostics |

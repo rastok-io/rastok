@@ -18,6 +18,14 @@
 > The package is a TRANSPORT format: versioned and free to evolve by
 > version bump; none of v1, v2, or v3 was ever published and no
 > decoder reads them — each refuses by its number.
+> **Format v5 is DECIDED and forthcoming** (D-2026-08-10-9): the
+> three-zone metadata write targets and travelling schemas, the
+> `JoinMetaPlan` ops, the content-addressed asset section, expanded
+> named types, the structural budgets, and the revised numeric
+> canonicalization (D-2026-08-10-7). Its skeleton lands with the
+> reform's first serialized change; v4 then joins the refused
+> drafts. The v4 tables below describe the CURRENT reader until
+> that change lands.
 > Identity stays where it always was — the semantic hash over the
 > canonical HIR; the package merely carries a plan and proves it intact.
 

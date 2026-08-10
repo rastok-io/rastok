@@ -37,7 +37,7 @@ graph sim02 : App {
 
     on (order, payment) within duration("15m") {
       out = {
-        meta.app = order.meta.app                       // join : explicit namespace attribution
+        meta.app.order_ref = order.meta.app.order_ref   // join : explicit pick ; common fields merge (D-2026-08-10-2)
         data = {
           amount = payment.data.amount
           status = "settled"

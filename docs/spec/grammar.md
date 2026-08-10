@@ -29,7 +29,7 @@ Rules :
 - **Attributes always use `=`.** `command = "codex"`, `args = ["app-server"]`, `timeout = duration("5s")`. No exceptions.
 - **Type annotations always use `:`.** `input msg: struct`, `var count: int`, `connector X : HttpClient`. Never `=`.
 - **Sub-blocks never use `=`.** `env { ... }`, `auth oauth2_client_credentials { ... }`. The block name precedes braces directly.
-- **Tagged values are expressions, not special forms.** `restart = on_crash { ... }`, `Loop.backoff = exponential { ... }`, `data = map { ... }` — the right-hand side is `<tag> { ... }`, the value type decided by the tag (reserved keyword set). An UNTAGGED `{ … }` is the braced record literal (D-2026-08-09-1).
+- **Tagged values are expressions, not special forms.** `restart = on_crash { ... }`, `Loop.backoff = exponential { ... }`, `out = text { ... }` — the right-hand side is `<tag> { ... }`, the value type decided by the tag (reserved keyword set). An UNTAGGED `{ … }` is the braced literal — `=` entries build a struct, `:` entries a map (D-2026-08-10-6).
 - **The form is decided at the second token** — see `Formal grammar` at the bottom for the LL(1) decision table.
 
 Example mixing all forms :
@@ -359,7 +359,7 @@ operator counter {
 
   on msg {
     count = count + 1                         // mutate (plain CEL) ; reads below see the new value
-    out = { meta.count = count }              // default 'out' port
+    out = { meta.app.count = count }          // default 'out' port
   }
 }
 ```
@@ -369,7 +369,7 @@ There are no mutation shortcuts (`x++` / `x += v`) ; they are redundant with
 CEL. Structural reshaping stays in guest-language blocks (`jq { … }` /
 `sql { … }`).
 
-**Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only reserved roots (`data`, `meta`, `mime_type`) it is the ENVELOPE form : `out = { meta.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata. Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data`, `meta`, or `mime_type` take the explicit escape `data = { … }`. `out = .` re-emits the input envelope unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. Wall-clock time enters only through a `Clock` observed via `on <clock_port>` (see [WHITEPAPER.md §5](../../WHITEPAPER.md)).
+**Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only the reserved roots `data` and `meta` it is the ENVELOPE form : `out = { meta.app.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata per the uniform propagation rule (D-2026-08-10-2 ; `content_type` excluded — D-2026-08-10-4). Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data` or `meta` take the explicit escape `data = { … }`. `out = .` re-emits the input envelope unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. Wall-clock time enters only through a `Clock` observed via `on <clock_port>` (see [WHITEPAPER.md §5](../../WHITEPAPER.md)).
 
 ## Dynamic dispatch primitives (Router, Dispatch)
 
@@ -438,7 +438,7 @@ The "switch on a value" pattern (forward an envelope to one of a declared set of
 
 ```rastok
 operator forward : Router {
-  select = jq { .meta.target }
+  select = jq { .meta.app.target }
 }
 forward.a -> a_handler
 forward.b -> b_handler
@@ -457,7 +457,7 @@ operator session_counter per session {
 
   on msg {
     count = count + 1
-    out = { meta.count = count }
+    out = { meta.app.count = count }
   }
 }
 ```
@@ -476,7 +476,7 @@ operator user_workspace_quota per user, workspace {
 
 Without `per`, the Node has a single state cell shared across all envelopes (graph-scoped).
 
-Standard partitions (provided by the stdlib) include `tenant`, `session`, `request`, `user`, `workspace`. Runtime-managed envelope metadata (the 6-field `meta.sys` Tier 1 : `id`, `parent_id`, `origin_id`, `role`, `graph_version`, `mime_type` — see [envelope.md](envelope.md)) is read-only under `meta.sys.<field>` — the envelope is not a partition.
+Standard partitions (provided by the stdlib) include `tenant`, `session`, `request`, `user`, `workspace`. Runtime-managed envelope metadata (the 5-field `meta.sys` Tier 1 : `id`, `parent_id`, `origin_id`, `role`, `graph_version` — see [envelope.md](envelope.md)) is read-only under `meta.sys.<field>` — the envelope is not a partition.
 
 Custom partitions are first-class :
 
@@ -586,8 +586,8 @@ an inline sugar for local routing :
 
 ```rastok
 codex.out -> route jq {
-  if .meta.method == "item/agentMessage/delta" then ["aggregate", "typing"]
-  elif .meta.method == "turn/completed" then "flush"
+  if .meta.app.method == "item/agentMessage/delta" then ["aggregate", "typing"]
+  elif .meta.app.method == "turn/completed" then "flush"
   else []
   end
 } {
@@ -725,7 +725,7 @@ agent.out -> {
 }
 ```
 
-The runtime can attach `meta.direction = client_to_agent | agent_to_client` to differentiate.
+The runtime can attach `meta.ext.direction = client_to_agent | agent_to_client` to differentiate (a sheet-declared ext field).
 
 ### Edge config
 
@@ -851,10 +851,10 @@ Inside `Jaq { program = jq { ... } }`, the input visible to the program is the
       "parent_id":     "3a17…",
       "origin_id":     "0b44…",
       "role":          "default",
-      "graph_version": 42,
-      "mime_type":     "application/json"
+      "graph_version": 42
     },
-    "app": { "user_id": "user@example.test" }
+    "app": { "user_id": "user@example.test" },
+    "ext": { "content_type": "application/json" }
   },
   "data": { ... }
 }
@@ -869,7 +869,7 @@ scope. All ids are blake3-derived 128-bit values.)
 | `data`, `meta.app.*`, custom `meta.<ns>.*` | ✅ |
 | All of `meta.sys.*` | ❌ — runtime-managed, restored after the program runs |
 
-`meta` is **namespaced** typed attributes : each namespace (`sys`, `app`, or a custom one) is a flat struct whose leaves are scalars (`bool`, `number` = `int`/`long`/`float`/`double`, `text`, `uuid`, `timestamp`, `duration`, `enum`) or `array<scalar>`. No nesting — composites (`struct` / `map` / `array`) belong in `data`. Bare `meta.<field>` resolves to `meta.app`. `meta.sys` is read-only — its fixed 6-field Tier 1 (`id` / `parent_id` / `origin_id` / `role` / `graph_version` / `mime_type`, see [envelope.md](envelope.md)), plus the scope-conditional `saga_*` / `loop_*`. A Connector's **terminal envelope** (WHITEPAPER §2.7) does NOT extend it : the outcome lives in the typed error payload (`ProcessExited { exit_code, signal, run_id }`, … — terminal *by kind* ; see [stdlib.md](stdlib.md)). Absent-field semantics are fixed by the **CEL grid** : a `meta.app` name written nowhere in the graph = compile error ; a bare read whose field is absent at runtime routes the envelope to `err` (never a silent null) ; legitimate absence is explicit (`meta.app.?x.orValue(…)`). The jq rule *missing ≡ null* applies **only inside `jq { }` blocks** (extension). On the wire an absent key is simply **omitted**, never serialized as `key: null`.
+`meta` has exactly THREE zones (D-2026-08-10-1) : `sys` (runtime, read-only), `app` (application, read-write, DECLARED), `ext` (external-boundary context, read-write, sheet-declared). Each zone is a flat struct whose leaves are scalars (`bool`, `number` = `int`/`long`/`float`/`double`, `text`, `uuid`, `timestamp`, `duration`, `enum`) or `array<scalar>` — a field is one dotted key inside its zone (`app.audit.origin`), composites (`struct` / `map` / `array`) belong in `data`. There is NO bare form : `meta.customer_id` is invalid, no alias resolves it. `app` fields are declared at graph level (`meta app { customer_id: text }`), unified App-wide ; a write to an undeclared `app` field is a compile error — a typo never mints a field. `ext` fields come from the connector sheets' `Populates` rows plus the standard `content_type` ; handlers may rewrite them, never invent one. `meta.sys` is read-only — its fixed 5-field Tier 1 (`id` / `parent_id` / `origin_id` / `role` / `graph_version`, see [envelope.md](envelope.md)), plus the scope-conditional `saga_*` / `loop_*`. A Connector's **terminal envelope** (WHITEPAPER §2.7) does NOT extend it : the outcome lives in the typed error payload (`ProcessExited { exit_code, signal, run_id }`, … — terminal *by kind* ; see [stdlib.md](stdlib.md)). Absent-field semantics are fixed by the **CEL grid** : a read of an undeclared field = compile error ; a required read of a field a join merge may have dropped = compile error until an explicit write chooses the value (D-2026-08-10-2) ; a bare read whose field is absent at runtime routes the envelope to `err` — defense in depth, never the primary check ; legitimate absence is explicit (`meta.app.?x.orValue(…)`). The jq rule *missing ≡ null* applies **only inside `jq { }` blocks** (extension). On the wire an absent key is simply **omitted**, never serialized as `key: null`.
 
 ## Data : typed values and literals
 
@@ -882,13 +882,17 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 
 | Type      | Literal form                                  | Notes                                                          |
 |-----------|-----------------------------------------------|----------------------------------------------------------------|
-| `struct`  | `{ k = v, … }`                                | typed record — the braced literal (D-2026-08-09-1) ; schema inferred, or annotated `: <Schema>` |
-| `map`     | `map { k = v, … }`                            | dynamic string keys                                            |
+| `struct`  | `{ k = v, … }` ; `{}` empty                   | typed record — `=` decides (D-2026-08-10-6) ; schema inferred, or annotated `: <Schema>` |
+| `map`     | `{ "k": v, … }` ; `{:}` empty                 | text keys — `:` decides ; mixing `=` and `:` refuses           |
 | `array`   | `[ v, v, … ]`                                  | ordered sequence ; `array<struct>` is the relational `table` view |
-| `text`    | `text { "…" }`                                | string scalar (multi-line ok), UTF-8                           |
-| `bytes`   | `bytes base64 { "…" }` / `bytes hex { "…" }`  | raw bytes                                                      |
-| `variant` | `json { … }`                                  | dynamic / semi-structured, parsed lazily                       |
-| any type  | `<type> file { "…" }`                          | external resource, read lazily by the Connector                |
+| `text`    | `"…"` ; `text { … }`                          | CEL string, or the VERBATIM block — first newline excluded, margin set by the closing brace, no interpolation, braces balanced |
+| `bytes`   | `base64 { … }` ; `asset("path")`              | RFC 4648 standard, mandatory padding, ASCII whitespace ignored ; or build-time repo bytes (D-2026-08-10-5). `hex` and `bytes …` forms are DEAD |
+| `variant` | `json <json-value>`                           | any JSON value directly (`json { "k": 1 }`, `json [1]`, `json 42`) ; always `variant` ; duplicate keys refuse ; numbers exact per D-2026-08-10-7 |
+| whole payload | `asset("path", "content_type")` ; `base64("ct") { … }` | fresh bytes + `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
+
+The `<type> file { … }` forms are DEAD — `asset` replaces them for
+build-time resources ; runtime files and URLs are Connectors'
+business.
 
 Examples :
 
@@ -1277,9 +1281,15 @@ operator_body     ::= "{" ( port_decl | val_decl | var_decl
 graph_body        ::= ( port_decl | partition_decl | operator_decl | connector_decl
                        | val_decl | edge_decl
                        | defaults_block
+                       | meta_decl                             // `meta app { customer_id: text, audit.origin: text }` — the App-wide
+                                                               //   app-field schema (D-2026-08-10-1) ; any level, unified, conflicts refuse
+                       | type_decl                             // `type Person = struct { … }` — structural sugar (D-2026-08-10-8)
                        | graph_decl                            // graphs NEST (effects-and-sagas §7.2)
                        | attribute                             // aspect attributes : Saga.timeout = duration("10m"), name = …
                        | handler_decl )*                        // graph-level handlers (including Loop base cases)
+
+meta_decl         ::= "meta" "app" "{" ( field_decl ( ","? field_decl )* )? "}"   // dotted field names allowed (audit.origin: text)
+type_decl         ::= "type" IDENT "=" type_ref                                    // unit-level namespace ; duplicates refuse ; recursion refuses (v1)
 
 // A Node carrying `: Loop` must have exactly one qualified attribute:
 //   Loop.variant = measure { initial = 5; next = value - 1; until = value <= 0 }
@@ -1360,7 +1370,7 @@ lifetime_value    ::= cel_expr                                        // bare du
                     | "fixed" cel_expr                                 //   (constant, duration-typed)
                     | "window" cel_expr ( "tumbling" | "sliding" )     //   (constant, duration-typed)
 
-attribute         ::= lvalue "=" value                               // dotted keys allowed (jwt.cache_ttl = …, meta.sys.x = …)
+attribute         ::= lvalue "=" value                               // dotted keys allowed (jwt.cache_ttl = …)
 sub_block         ::= IDENT "{" struct_body "}"
 struct_body       ::= ( attr_or_block ( ","? attr_or_block )* )?
 attr_or_block     ::= lvalue "=" value                               // dotted key for an assignment (meta.app.label = … ; meta.sys is read-only)
@@ -1371,7 +1381,7 @@ attr_or_block     ::= lvalue "=" value                               // dotted k
 // leading-dot path forms.
 
 value             ::= tagged_value                                    // jq { … }, measure { … }, exponential { … }, …
-                    | tagged_block_value                              // map { … } — the EXPLICIT map spelling
+                    | tagged_block_value                              // text { … }, base64 { … } — tagged raw blocks
                     | braced_value                                    // { … } — the braced record ; classified in envelope positions
                     | "."                                             // identity — exact re-emission (envelope positions only)
                     | "nothing"                                       // emission positions : emit nothing
@@ -1419,7 +1429,7 @@ braced_value      ::= "{" struct_body "}"                             // the bra
                     // mock replies) the checker classifies the body ONCE by its
                     // top-level roots : no reserved root → a fresh data record
                     // (struct), heritable metadata kept ; only reserved roots
-                    // (data, meta, mime_type) → the envelope form (whole-data
+                    // (data, meta) → the envelope form (whole-data
                     // assignment = fresh build, otherwise a patch) ; a mix →
                     // E-BRACE-MIXED, wrap the data in `data = { … }`. `{}` is the
                     // empty record, never an identity. Elsewhere the body is
@@ -1430,8 +1440,10 @@ tagged_value      ::= TAG_KW ( "(" arg_list ")" )? ( "{" raw_or_struct "}" )?   
                                                     // jq(req) { ... }  raw body scoped to envelope `req` (join meta-attribution)
                                                     // bounded(64)      paren args
                                                     // measure { … } / exponential { … } / on_crash { backoff = … }  struct body
-tagged_block_value ::= "map" "{" struct_body "}"                     // map literal — the EXPLICIT spelling ; a braced
-                                                                      // record always builds a struct (D-2026-08-09-1)
+tagged_block_value ::= "text" RAW_BLOCK                              // verbatim text — margin set by the closing brace (D-2026-08-10-6)
+                    | "base64" ( "(" STRING ")" )? RAW_BLOCK          // inline bytes, optional content_type (whole-data only with it)
+                    | "json" json_value                               // any JSON value, delegated to the JSON reader — always variant
+                    | "asset" "(" STRING ( "," STRING )? ")"          // build-time repo bytes (path, content_type?) — D-2026-08-10-5
                                                                       // array literal : a CEL list expression `[v, v, …]`
 raw_or_struct     ::= /* tag-dependent : raw text for jq/bash/sql/python/rust/json ;
                        struct_body for the others (oauth2_client_credentials,
@@ -1623,7 +1635,7 @@ symbol of lookahead after the IDENT is consumed. The parser never needs to
 
 ### What this grammar excludes on purpose
 
-- **One braced form, classified once** (D-2026-08-09-1). `{ … }` is the record literal in every value position ; in ENVELOPE positions (handler emissions, fixture injections, mock replies) the checker classifies its top-level roots — no reserved root builds a fresh data record, only reserved roots (`data`, `meta`, `mime_type`) select the envelope form, a mix refuses with `E-BRACE-MIXED`. There is no `envelope { … }` keyword form and no `struct { … }` value literal ; `map { … }` is the explicit map spelling. No silent reinterpretation, LL(1)-clean.
+- **One braced form, classified once** (D-2026-08-09-1, punctuated by D-2026-08-10-6). `{ … }` with `=` entries is the struct literal, with `:` entries the map literal (`{}` empty struct, `{:}` empty map, mixing refuses) ; in ENVELOPE positions (handler emissions, fixture injections, mock replies) the checker classifies a struct-form body's top-level roots — no reserved root builds a fresh data record, only reserved roots (`data`, `meta`) select the envelope form, a mix refuses with `E-BRACE-MIXED`. There is no `envelope { … }` keyword form, no `struct { … }` value literal, and no `map { … }` spelling. No silent reinterpretation, LL(1)-clean.
 - **No tag aliasing** for user-defined languages without a sigil. If we ever allow user-defined tags, they must use a sigil (`@mylang { ... }`) so the lexer can recognise them at one token of lookahead without a global registry lookup.
 - **Separators are Scala-style, scoped by bracket.** Inside a **`{ }` block**
   (node body, `partition` block, inline `per { … }`, struct), a newline

@@ -13,14 +13,30 @@ on the outside, `data` is sealed inside.
 
 ```
 envelope = meta + data
-  meta.sys      reserved, READ-ONLY, runtime-owned          (this doc)
-  meta.app      the default namespace, writable             (bare meta.x == meta.app.x)
-  meta.<custom> writable namespaces, for grouping
-  data          the payload — any type, any encoding, lazy  (§5)
+  meta.sys   runtime-owned, READ-ONLY                       (this doc)
+  meta.app   application-owned, read-write, DECLARED        (D-2026-08-10-1)
+  meta.ext   external-boundary context, read-write          (D-2026-08-10-1/-4)
+  data       the payload — any type, any encoding, lazy     (§5)
 ```
 
-Each namespace's leaves are `scalar | array<scalar>` (flat — nested/heavy data
-goes in `data`). `meta.sys` is the subject of this document.
+Exactly three zones, no other root: there is NO bare field
+(`meta.customer_id` is invalid — no alias resolves it), no custom
+namespace at the root, and no connector name in a meta path.
+`app` is auto-available but its fields are DECLARED at graph level
+(`meta app { customer_id: text, audit.origin: text }`), unified
+App-wide; a write to an undeclared field refuses at check — a typo
+never mints a metadata field. `ext`'s vocabulary belongs to
+connector contract sheets (their `Populates` row, stdlib.md) plus
+the standard `content_type` (§5.2); handlers may rewrite declared
+ext fields, never invent one. Each zone's leaves are
+`scalar | array<scalar>` (flat — nested/heavy data goes in `data`);
+physically a field is ONE dotted string key inside its zone
+(`"app.audit.origin"`), and the CEL/guest projections nest by
+splitting on dots. Propagation is uniform on a single-input
+emission (`app` and `ext` copied, `sys` reminted, explicit writes
+last-write-wins) and merges BY VALUE at joins — CommonOrAbsent per
+field, `content_type` excluded (D-2026-08-10-2/-4). `meta.sys` is
+the subject of this document.
 
 
 ## 1. `meta.sys` — the reserved namespace
@@ -31,7 +47,7 @@ is not a write). It has two tiers.
 
 ### 1.1 Tier 1 — the spine (always present)
 
-Six fields, present on every envelope, owned by the spec's schema (so any
+Five fields, present on every envelope, owned by the spec's schema (so any
 Rastok tool of any version can read any envelope's header without knowing the
 emitting graph) :
 
@@ -42,7 +58,11 @@ emitting graph) :
 | `meta.sys.origin_id` | `uuid128` | the lineage root — the inbound ancestor's `id`. A root envelope is its own origin (`origin_id == id`). Exported as the OpenTelemetry trace id. Never `null`. |
 | `meta.sys.role` | `enum (extensible)` | the envelope's role : `default`, `compensate`, … Default value `default`. Omissible on the wire when `default`. |
 | `meta.sys.graph_version` | `u64` | sequential build number of the emitting graph ; the **manifest** (§4) maps it to the content hash, dev semver, commit, and schemas. |
-| `meta.sys.mime_type` | `text?` | the MIME type of `data`'s content (full Content-Type string) ; `null` when `data` is a structured in-memory value — **unless explicitly set at construction** (§6 : the constructor may attach a parse/content hint). |
+
+The external content type is NOT a `sys` field: it is the standard
+`ext` field `meta.ext.content_type` (§5.2, D-2026-08-10-4) — the
+full Content-Type string, parameters included, absent when the
+payload is a structured in-memory value.
 
 `uuid128` is a fixed 128-bit value. (The values are blake3-derived, not RFC
 UUIDs — see §2 — but the physical type is a 128-bit identifier.)
@@ -357,7 +377,8 @@ coherence debt.
 ```
 envelope (storage = wire) =
   header      meta.sys              → Avro ; schema owned by the SPEC
-  namespaces  meta.app + customs    → Avro ; schemas owned by the APP (via graph_version manifest)
+  zones       meta.app + meta.ext   → Avro ; app schema owned by the APP (graph_version manifest),
+                                      ext schema by the connector sheets + the standard fields
   data        (encoding_tag, bytes) → ANY registered codec — lazy
 ```
 
@@ -368,9 +389,23 @@ envelope (storage = wire) =
   `struct`, `table<…>`) comes from the graph schema via `graph_version`. The
   `encoding_tag` (how it is *represented now*) is dynamic, per-envelope, drawn
   from the runtime's internal representations : `raw | avro | arrow-ipc`. When
-  `encoding_tag = raw`, **`mime_type` is the parse hint** (`raw` +
+  `encoding_tag = raw`, **`meta.ext.content_type` is the parse hint** (`raw` +
   `application/json` → the JSON parser on first structural access). No separate
   `json` tag is needed — exactly how HTTP works.
+
+### 5.0 Four planes, never confused
+
+| Plane | Answers | Carried by |
+|---|---|---|
+| Logical type | what does CEL see? | the graph schema (`text`, `Invoice`, `variant`, …) |
+| Internal encoding | how are the bytes represented NOW? | `Data::Encoded.encoding` (`raw \| avro \| arrow-ipc`) |
+| Connector codec | how does a boundary serialize/deserialize? | the connector's `codec` attribute |
+| External content type | what does the outside world call this exchange? | `meta.ext.content_type` (§5.2) |
+
+The content type is neither a logical type nor an internal decode
+tag: a `json { … }` literal is a materialized `variant` VALUE and
+carries no content type — only a boundary that serializes it mints
+bytes and a matching `content_type`.
 
 ### 5.1 Lazy rules (Memory-Representation Polymorphism)
 
@@ -392,6 +427,26 @@ form to promote to ; the bytes *are* the value. The canonical thing is the
 codec for `data`.
 
 
+### 5.2 `meta.ext.content_type` — the payload-coupling invariant
+
+`content_type: text?` is the standard reserved `ext` field: the FULL
+external Content-Type (parameters included), written by inbound
+connectors, by the whole-payload constructors (`asset`, `base64` —
+D-2026-08-10-5), or by a handler. It is coupled to the payload, not
+inherited like ordinary context: emission construction (one atomic
+order, D-2026-08-10-4) fuses/copies `app` and `ext` WITHOUT it,
+decides the payload, then derives it — a kept witness `Payload(x)`
+takes input x's value; FRESH data leaves it ABSENT; an explicit
+write in the same emission wins. The decision follows the VALUE
+(the keyed witness), never the spelling: `out = .`, `out = data`,
+`out = a.data`, a local carrying the witness, a ternary's taken arm
+all preserve representation and content type together. Outbound, a
+serializing codec dictates and writes the produced value; a byte
+pass-through uses the current value if compatible, else the
+connector's configuration, else `application/octet-stream`; a
+codec/content-type contradiction is a typed error, never a silently
+false header.
+
 ## 6. Writing `meta.sys` — there is no write
 
 `meta.sys` is **read-only, absolutely — including in simulation**. The
@@ -400,12 +455,14 @@ that look like writes are not :
 
 1. **Inbound.** A boundary Connector sets the header from the transport (it is
    the runtime acting, not the app).
-2. **Emission constructor.** When a handler builds bytes, it declares
-   content metadata through the envelope constructor —
-   `out = { mime_type = "image/png", data = … }` — and the *runtime*
-   interprets that into `meta.sys`. The app never names `meta.sys` ; it passes
-   a hint the runtime owns. (The runtime nulls `mime_type` when `data` is
-   replaced by a structured value with no declared type.)
+2. **Emission constructor.** Content metadata is ordinary `ext`
+   writing now — `out = { data = …, meta.ext.content_type = "image/png" }`,
+   or the whole-payload constructors (`asset("…", "image/png")`,
+   `base64("image/png") { … }`). Nothing reaches `meta.sys`: the
+   payload-coupling invariant (§5.2) derives or strikes
+   `content_type` when `data` is replaced — a reformulation of the
+   old "runtime nulls the hint" rule, executed at the same atomic
+   construction point.
 3. **Simulation fixtures.** A fixture seeds inbound state through `meta.app`
    (writable) or a runtime-interpreted braced envelope-form builder — **never** by
    assigning `meta.sys.*`. Simulation stands in for the runtime, but it does so
@@ -488,9 +545,9 @@ canonical mapping :
 | `trace_id` | merged | → `origin_id` *is* the OTel trace id (§1.1). There is **no** `meta.sys.trace_*` field, now or planned. |
 | `direction` | removed | no use case (the stream-protocol "direction" of a *Connector* is a different thing and stays) |
 | `action` (`forward`/`compensate`) | renamed | → `role` (extensible enum, §1.1) |
-| `type` / `encoding` | removed as flat fields | typing is per-namespace (data, meta.app, customs), defined by the graph schema via `graph_version` ; the logical/physical split survives as a *schema* concept, not envelope fields |
+| `type` / `encoding` | removed as flat fields | typing is per-zone (data, meta.app, meta.ext), defined by the graph schema via `graph_version` ; the logical/physical split survives as a *schema* concept, not envelope fields |
 | `kind` | renamed | → `role` |
-| `mime` | renamed | → `mime_type` (NiFi lineage : `mime.type` is a NiFi CoreAttribute) |
+| `mime` | renamed, relocated | → `meta.ext.content_type` (full Content-Type, parameters included — D-2026-08-10-4 ; the earlier `meta.sys.mime_type` and its NiFi-lineage name die) |
 
 
 ## 10. Related docs

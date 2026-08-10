@@ -33,7 +33,7 @@ graph hello_echo {
   operator tag_received {
     on in {
       jq {
-        .meta.tag = "received"
+        .meta.app.tag = "received"
         | .data   = { echo: .data }
       }
     }
@@ -166,8 +166,8 @@ graph turn_stream {
   operator route {
 
     on in {
-      delta = jq { select(.meta.method == "item/agentMessage/delta") }
-      flush = jq { select(.meta.method == "turn/completed") }
+      delta = jq { select(.meta.app.method == "item/agentMessage/delta") }
+      flush = jq { select(.meta.app.method == "turn/completed") }
     }
   }
 
@@ -181,8 +181,8 @@ graph turn_stream {
 
     on flush {
       out = jq {
-        .meta.kind     = "jsonrpc.notification"
-        | .meta.method = "item/agentMessage"
+        .meta.app.kind     = "jsonrpc.notification"
+        | .meta.app.method = "item/agentMessage"
         | .data        = { method: "item/agentMessage", params: { message: $buffer } }
       }
       stop
@@ -338,7 +338,7 @@ graph city_weather {
 
     on in {
       count = count + 1
-      out = { meta.request_index = count }
+      out = { meta.app.request_index = count }
     }
   }
 
@@ -370,7 +370,7 @@ graph city_weather {
     on in {
       jq {
         .data = {
-          city:        .meta.request_city,
+          city:        .meta.app.request_city,
           temperature: .data.temp_c,
           condition:   .data.condition
         }
@@ -470,8 +470,8 @@ graph meta_control_plane {
   operator route_priority {
 
     on in {
-      urgent = jq { select(.meta.priority == "urgent") }
-      normal = jq { select(.meta.priority != "urgent") }
+      urgent = jq { select(.meta.app.priority == "urgent") }
+      normal = jq { select(.meta.app.priority != "urgent") }
     }
   }
 
@@ -545,9 +545,9 @@ graph quota_control : App {
         monthly_limit = jq { $PLAN_LIMITS[$plan] // $FALLBACK_LIMIT }   // reads the just-written plan
 
         updated = {
-          meta.tenant_id = tenant.key
-          meta.plan = plan
-          meta.monthly_limit = monthly_limit
+          meta.app.tenant_id = tenant.key
+          meta.app.plan = plan
+          meta.app.monthly_limit = monthly_limit
         }
       }
     }
@@ -564,16 +564,16 @@ graph quota_control : App {
 
         approval = jq {
           select($used_tokens <= $limit)
-          | .meta.quota_status = "approved"
-          | .meta.tokens_used  = $used_tokens
-          | .meta.tokens_limit = $limit
+          | .meta.app.quota_status = "approved"
+          | .meta.app.tokens_used  = $used_tokens
+          | .meta.app.tokens_limit = $limit
         }
 
         rejection = jq {
           select($used_tokens > $limit)
-          | .meta.quota_status = "rejected"
-          | .meta.tokens_used  = $used_tokens
-          | .meta.tokens_limit = $limit
+          | .meta.app.quota_status = "rejected"
+          | .meta.app.tokens_used  = $used_tokens
+          | .meta.app.tokens_limit = $limit
           | .data = {
               reason: $REJECT_REASON,
               tokens_used: $used_tokens,

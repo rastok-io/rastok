@@ -96,9 +96,15 @@ step touches `vm.rs` once.
    re-blessed, spike on v4 to the same hash); `FieldWrite` dropped
    its dead as-written path). The trio's own contract types join
    the connector-sheet items below.
-2. **The `jsonl` codec** — structured payloads across the `Process`
-   boundary, under the one byte discipline; unlocks realistic `File`
-   and HTTP payloads.
+2. **The consolidated reform, THEN the `jsonl` codec** — the
+   metadata/literal/IDL reform (D-2026-08-10-1 … -9) officially
+   PRECEDES this item: `jsonl` depends on the exact JSON numeric
+   canonicalization (D-2026-08-10-7), the house JSON reader, and the
+   codec regime of D-2026-08-10-4 — building it first would build it
+   twice. Then the codec itself: structured payloads across the
+   `Process` boundary, under the one byte discipline; unlocks
+   realistic `File` and HTTP payloads. (Package format: v5 replaces
+   the v4 mentioned in item 1's history — D-2026-08-10-9.)
 3. **The error half of the language** — typed-error emissions from
    operators (`err = Kind {…}`) and mock `err` replies in the Lab.
    Referees can then provoke connector failures without adapters;
