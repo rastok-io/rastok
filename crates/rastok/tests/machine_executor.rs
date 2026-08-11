@@ -507,7 +507,7 @@ fn the_connector_outcome_matches_the_reference_trace() {
     let outcome = executor.connector_outcome(
         &event,
         &node::Trigger::Port(node::Port::new("in").unwrap()),
-        request.meta().sys(),
+        request.meta(),
         ConsumedPosition {
             edge: String::from("shout.out>echo.in"),
             seq: 1,

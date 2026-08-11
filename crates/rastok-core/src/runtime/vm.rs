@@ -735,10 +735,18 @@ impl<'plan> Vm<'plan> {
                 node: Some(slot),
                 port: out,
             };
+            // The connector's own pin is the CONTRACT's reply type —
+            // a mock answering a record over jsonl is judged exactly
+            // like a real child would be shaped: array<variant> or
+            // the typed refusal (D-2026-08-11-1).
+            let contract_pin = match &self.plan.plan().nodes[slot.index()].kind {
+                NodeKind::Connector(spec) => crate::boundary::RequestCodec::of(spec).reply_type(),
+                NodeKind::Operator { .. } => None,
+            };
             if let Err(fault) = crate::runtime::crossing_pins_hold(
                 self.plan.plan(),
                 &from,
-                None,
+                contract_pin.as_ref(),
                 &crate::runtime::from_envelope_value(value),
             )
             .map_err(crate::runtime::PinViolation::into_fault)
@@ -763,7 +771,7 @@ impl<'plan> Vm<'plan> {
         let outcome = executor.connector_outcome(
             &event,
             &trigger,
-            request.envelope.meta().sys(),
+            request.envelope.meta(),
             ConsumedPosition {
                 edge: request.edge.clone(),
                 seq: request.seq,

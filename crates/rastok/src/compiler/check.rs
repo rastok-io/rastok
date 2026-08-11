@@ -584,6 +584,33 @@ impl Checker<'_, '_> {
         })
     }
 
+    /// A check-local view of a mocked connector with the contract's
+    /// reply type pinned on `out` (D-2026-08-11-1): a jsonl job
+    /// replies `array<variant>` in the real world, so mock replies
+    /// are judged against exactly that pin. Returns `None` when the
+    /// contract derives no reply type — `lines` stays untyped (the
+    /// frozen referee corpus mocks structured replies over it; its
+    /// honest typing belongs to the connector-sheet items).
+    fn mock_view(&self, node: &Node) -> Option<Node> {
+        let NodeRole::Connector { attributes, .. } = &node.role else {
+            return None;
+        };
+        let jsonl = attributes.iter().any(|attribute| {
+            attribute.name == "codec"
+                && matches!(&attribute.value, crate::compiler::hir::AttrValue::Word(word) if word == "jsonl")
+        });
+        if !jsonl {
+            return None;
+        }
+        let mut view = node.clone();
+        view.ports.push(crate::plan::PortDecl {
+            port: node::Port::new("out").unwrap_or_else(|_| unreachable!("`out` is a valid port")),
+            direction: node::Direction::Output,
+            ty: Some(cel::Type::List(Box::new(cel::Type::Dyn))),
+        });
+        Some(view)
+    }
+
     fn mocks(
         &mut self,
         decls: &[crate::compiler::syntax::MockDecl],
@@ -616,7 +643,14 @@ impl Checker<'_, '_> {
             }
             // A mock is a pure function of the request: its handlers
             // check like ordinary handlers, against the connector's
-            // own port table.
+            // own port table — WITH the contract's reply type pinned
+            // on `out` (D-2026-08-11-1): the real world shapes a
+            // jsonl reply as `array<variant>`, so a mock answering
+            // anything else is a false green the Lab must refuse.
+            // The pinned view is check-local: the plan's table (and
+            // the hash) never learn a trio port.
+            let mock_view = self.mock_view(node);
+            let node = mock_view.as_ref().unwrap_or(node);
             let signature = cel::Signature::new();
             let mut handlers = Vec::new();
             for handler in &decl.handlers {
@@ -3971,18 +4005,6 @@ impl Checker<'_, '_> {
         port_name: &str,
         span: Span,
     ) -> bool {
-        let scalar_pinned = matches!(
-            pinned,
-            cel::Type::Bool
-                | cel::Type::Int
-                | cel::Type::Uint
-                | cel::Type::Double
-                | cel::Type::Text
-                | cel::Type::Bytes
-                | cel::Type::Duration
-                | cel::Type::Timestamp
-                | cel::Type::Null
-        );
         let inherited_shape = || match origin {
             // A handler's Patch starts from the envelope it received,
             // whose data carries the activation port's pin.
@@ -4018,7 +4040,14 @@ impl Checker<'_, '_> {
                     tree.and_then(|tree| Self::constant_breach(pinned, tree, consts))
                 }
             }
-            DataShape::Struct => scalar_pinned.then(|| String::from("a built struct")),
+            // No pin type spells "struct" (records are inference
+            // territory), so a built struct conforms to `dyn` alone:
+            // a scalar pin cannot hold it, and neither can a
+            // composite one — a record is not an array<variant>
+            // (the jsonl reply pin, D-2026-08-11-1) nor a map.
+            DataShape::Struct => {
+                (!matches!(pinned, cel::Type::Dyn)).then(|| String::from("a built struct"))
+            }
         };
         let Some(found) = found else {
             return true;

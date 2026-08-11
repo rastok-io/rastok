@@ -125,12 +125,34 @@ pub enum RequestCodec {
 
 impl RequestCodec {
     /// Reads the codec from a connector spec; `lines` is the sheet
-    /// default.
+    /// default. A [`ValidatedExecutionPlan`] carries only `lines`
+    /// or `jsonl` (the validator holds the attribute's domain), so
+    /// the absent-attribute default is the ONLY path to `Lines`
+    /// here — nothing unknown is silently reinterpreted.
+    ///
+    /// [`ValidatedExecutionPlan`]: crate::plan::ValidatedExecutionPlan
     #[must_use]
     pub fn of(spec: &crate::plan::ConnectorSpec) -> Self {
         match spec.attribute("codec") {
             Some(crate::plan::AttrSetting::Word(word)) if word == "jsonl" => Self::Jsonl,
             _ => Self::Lines,
+        }
+    }
+
+    /// The type a job-mode reply crosses the `out` pin with — the
+    /// contract rule `Process(job, jsonl).out = array<variant>`
+    /// (D-2026-08-11-1), spelled once and consulted by the checker
+    /// (static mock replies) and the machine (every settled
+    /// outcome). `lines` stays untyped: the frozen referee corpus
+    /// mocks structured replies over it, and its honest typing
+    /// belongs to the connector-sheet items.
+    #[must_use]
+    pub fn reply_type(self) -> Option<crate::cel::Type> {
+        match self {
+            Self::Jsonl => Some(crate::cel::Type::List(alloc::boxed::Box::new(
+                crate::cel::Type::Dyn,
+            ))),
+            Self::Lines => None,
         }
     }
 }

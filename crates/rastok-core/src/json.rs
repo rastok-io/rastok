@@ -21,6 +21,16 @@ pub const MAX_SCALE: i32 = 6144;
 /// The lower scale bound (see [`MAX_SCALE`]).
 pub const MIN_SCALE: i32 = -6143;
 
+/// The decimal128 DOMAIN (D-2026-08-10-7) any decimal — declared
+/// scale included — must inhabit: at most [`MAX_DIGITS`]
+/// significant digits, scale within [`MIN_SCALE`]..=[`MAX_SCALE`].
+/// The machine's doors hold values to this before they travel;
+/// the writer keeps a defensive mirror.
+#[must_use]
+pub fn decimal_in_domain(unscaled: i128, scale: i32) -> bool {
+    (MIN_SCALE..=MAX_SCALE).contains(&scale) && unscaled.unsigned_abs() < 10_u128.pow(MAX_DIGITS)
+}
+
 /// The D-2026-08-10-7 invariants of a DYNAMIC decimal, shared by
 /// the package decoder and the plan validator (`encode ⇒ decode`
 /// demands one rule): budget bounds, minimal scale, and the
@@ -574,8 +584,12 @@ mod oracle {
 }
 
 /// Writes one envelope value as CANONICAL JSON (D-2026-08-11-1):
-/// object keys sorted bytewise (structs and maps alike — the seal's
-/// order), numbers exact (`int` plain, `decimal` in plain decimal
+/// object keys sorted by the key's UTF-8 bytes, structs and maps
+/// alike. NOTE this is the WRITER's own canonical order: the
+/// envelope seal sorts struct fields the same way but sorts MAP
+/// entries by their tagged CBOR bytes (length-prefixed, so `"b"`
+/// precedes `"aa"` there) — two authorities, two orders, both
+/// deterministic; the wire speaks the writer's. Numbers exact (`int` plain, `decimal` in plain decimal
 /// notation at its sealed scale, `double` shortest round-trip),
 /// strings JSON-escaped. These bytes are `request_digest` material —
 /// the writer is part of identity.
@@ -585,13 +599,26 @@ mod oracle {
 /// representation, and a non-finite `double` is not JSON.
 pub fn write_value(value: &crate::envelope::Value) -> Result<String, JsonError> {
     let mut out = String::new();
-    write_into(value, &mut out)?;
+    write_into(value, &mut out, 0)?;
     Ok(out)
 }
 
-fn write_into(value: &crate::envelope::Value, out: &mut String) -> Result<(), JsonError> {
+fn write_into(
+    value: &crate::envelope::Value,
+    out: &mut String,
+    depth: usize,
+) -> Result<(), JsonError> {
+    // The reader's nesting budget, mirrored: what the writer emits,
+    // the reader must accept.
+    if depth > MAX_DEPTH {
+        return Err(JsonError {
+            offset: 0,
+            message: String::from("nesting beyond the writer budget"),
+        });
+    }
     use crate::envelope::{Scalar, Value};
     match value {
+        Value::Null => out.push_str("null"),
         Value::Scalar(Scalar::Bool(v)) => out.push_str(if *v { "true" } else { "false" }),
         Value::Scalar(Scalar::Int(v)) => {
             out.push_str(&alloc::format!("{v}"));
@@ -621,7 +648,7 @@ fn write_into(value: &crate::envelope::Value, out: &mut String) -> Result<(), Js
             });
         }
         Value::Scalar(Scalar::Decimal { unscaled, scale }) => {
-            write_decimal(*unscaled, *scale, out);
+            write_decimal(*unscaled, *scale, out)?;
         }
         Value::Array(items) => {
             out.push('[');
@@ -629,12 +656,13 @@ fn write_into(value: &crate::envelope::Value, out: &mut String) -> Result<(), Js
                 if index > 0 {
                     out.push(',');
                 }
-                write_into(item, out)?;
+                write_into(item, out, depth + 1)?;
             }
             out.push(']');
         }
         Value::Struct(fields) => {
-            // Sorted bytewise — the canonical seal's order: two
+            // Sorted by the field name's UTF-8 bytes — here this
+            // coincides with the seal's struct order: two
             // by-name-equal values, one digest.
             let mut sorted: Vec<(&String, &Value)> =
                 fields.iter().map(|(name, value)| (name, value)).collect();
@@ -646,7 +674,7 @@ fn write_into(value: &crate::envelope::Value, out: &mut String) -> Result<(), Js
                 }
                 write_string(name, out);
                 out.push(':');
-                write_into(value, out)?;
+                write_into(value, out, depth + 1)?;
             }
             out.push('}');
         }
@@ -658,7 +686,7 @@ fn write_into(value: &crate::envelope::Value, out: &mut String) -> Result<(), Js
                 }
                 write_string(key, out);
                 out.push(':');
-                write_into(value, out)?;
+                write_into(value, out, depth + 1)?;
             }
             out.push('}');
         }
@@ -686,8 +714,17 @@ fn write_string(text: &str, out: &mut String) {
 
 /// Plain decimal notation at the sealed scale: `1999 / scale 2` is
 /// `19.99`; a negative scale appends zeros (`5 / scale -2` is
-/// `500` — unreachable for dynamic decimals, total anyway).
-fn write_decimal(unscaled: i128, scale: i32, out: &mut String) {
+/// `500` — unreachable for dynamic decimals, total anyway). The
+/// domain check is defensive: the doors hold every travelling
+/// decimal to [`decimal_in_domain`], so an out-of-domain scale here
+/// is a refusal, never a runaway allocation.
+fn write_decimal(unscaled: i128, scale: i32, out: &mut String) -> Result<(), JsonError> {
+    if !decimal_in_domain(unscaled, scale) {
+        return Err(JsonError {
+            offset: 0,
+            message: String::from("a decimal outside the decimal128 domain is not writable"),
+        });
+    }
     if unscaled < 0 {
         out.push('-');
     }
@@ -697,7 +734,7 @@ fn write_decimal(unscaled: i128, scale: i32, out: &mut String) {
         for _ in 0..scale.unsigned_abs() {
             out.push('0');
         }
-        return;
+        return Ok(());
     }
     let scale = scale as usize;
     if digits.len() > scale {
@@ -712,6 +749,7 @@ fn write_decimal(unscaled: i128, scale: i32, out: &mut String) {
         }
         out.push_str(&digits);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -793,6 +831,74 @@ mod writer_tests {
         assert!(write_value(&Value::Scalar(Scalar::Bytes(vec![1]))).is_err());
         assert!(write_value(&Value::Scalar(Scalar::Double(f64::NAN))).is_err());
         assert!(write_value(&Value::Scalar(Scalar::Double(f64::INFINITY))).is_err());
+    }
+
+    #[test]
+    fn the_wire_order_of_maps_is_the_keys_utf8_bytes() {
+        // {"b", "aa"}: the envelope SEAL orders `b` first (tagged
+        // CBOR bytes are length-prefixed); the WIRE orders `aa`
+        // first (plain UTF-8 key order). Both deterministic, each
+        // authority owns its own bytes — this pins the wire's.
+        let mut entries = alloc::collections::BTreeMap::new();
+        entries.insert(String::from("b"), Value::Scalar(Scalar::Int(1)));
+        entries.insert(String::from("aa"), Value::Scalar(Scalar::Int(2)));
+        assert_eq!(
+            write_value(&Value::Map(entries)).unwrap(),
+            r#"{"aa":2,"b":1}"#
+        );
+    }
+
+    #[test]
+    fn null_writes_as_null() {
+        assert_eq!(write_value(&Value::Null).unwrap(), "null");
+        let round = parse_value(&write_value(&Value::Array(vec![Value::Null])).unwrap()).unwrap();
+        assert_eq!(
+            round.0,
+            crate::cel::Value::List(vec![crate::cel::Value::Null])
+        );
+    }
+
+    #[test]
+    fn the_decimal_domain_bounds_hold_exactly() {
+        // Both edges write; one step beyond refuses — instantly,
+        // never as a runaway allocation.
+        for scale in [MIN_SCALE, MAX_SCALE] {
+            assert!(
+                write_value(&Value::Scalar(Scalar::Decimal { unscaled: 7, scale })).is_ok(),
+                "scale {scale} is inside the domain"
+            );
+        }
+        for scale in [MIN_SCALE - 1, MAX_SCALE + 1, i32::MIN, i32::MAX] {
+            assert!(
+                write_value(&Value::Scalar(Scalar::Decimal { unscaled: 7, scale })).is_err(),
+                "scale {scale} refuses"
+            );
+        }
+        let too_wide = 10_i128.pow(MAX_DIGITS);
+        assert!(
+            write_value(&Value::Scalar(Scalar::Decimal {
+                unscaled: too_wide,
+                scale: 2
+            }))
+            .is_err(),
+            "39 digits refuse"
+        );
+    }
+
+    #[test]
+    fn the_writer_mirrors_the_reader_nesting_budget() {
+        let nest = |depth: usize| {
+            let mut value = Value::Scalar(Scalar::Int(1));
+            for _ in 0..depth {
+                value = Value::Array(vec![value]);
+            }
+            value
+        };
+        assert!(write_value(&nest(MAX_DEPTH)).is_ok(), "the budget's edge");
+        assert!(
+            write_value(&nest(MAX_DEPTH + 1)).is_err(),
+            "one beyond refuses"
+        );
     }
 
     #[test]

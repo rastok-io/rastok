@@ -711,7 +711,11 @@ impl<'plan> TransactionExecutor<'plan> {
                     port: err,
                     index: 0,
                     envelope: Envelope::new(
-                        Meta::new(sys),
+                        // Uniform propagation (D-2026-08-10-2): the
+                        // error envelope inherits the input's zones;
+                        // its payload is fresh, so the carried
+                        // content_type is struck.
+                        inherit_zones(Meta::new(sys), delivery.envelope.meta()),
                         Data::materialized(envelope::Value::Map(payload)),
                     ),
                 }],
@@ -732,9 +736,10 @@ impl<'plan> TransactionExecutor<'plan> {
         &self,
         event: &BoundaryEvent,
         trigger: &node::Trigger,
-        request_sys: &MetaSys,
+        request_meta: &Meta,
         consumed: ConsumedPosition,
     ) -> TransactionOutcome {
+        let request_sys = request_meta.sys();
         let id = ids::emission_id(
             &event.connector_path,
             trigger,
@@ -770,7 +775,14 @@ impl<'plan> TransactionExecutor<'plan> {
                 Data::materialized(envelope::Value::Map(payload))
             }
         };
-        let envelope = Envelope::new(Meta::new(sys), data);
+        // Uniform propagation (D-2026-08-10-2): the outcome inherits
+        // the REQUEST's zones — an app token explicitly kept before
+        // the call survives the reply. The reply's payload is always
+        // fresh (the world answered), so the carried content_type is
+        // struck; minting one, and folding connector-written meta
+        // fields over these zones so they win, is the sheets'
+        // `Populates` business (nothing writes meta in v1).
+        let envelope = Envelope::new(inherit_zones(Meta::new(sys), request_meta), data);
         TransactionOutcome {
             record: TransactionRecord {
                 node_path: event.connector_path.clone(),
@@ -828,6 +840,18 @@ pub(crate) enum BuiltData {
     /// too, since the bridge preserves it — this variant simply
     /// skips a domain round trip the fold never needed.)
     Envelope(envelope::Value),
+}
+
+/// Folds the input envelope's zones onto a fresh emission meta —
+/// the uniform-propagation rule (D-2026-08-10-2) for envelopes the
+/// MACHINE mints (connector outcomes, typed errors): `app` carries
+/// whole, `ext` carries minus `content_type` (the minted payload is
+/// always fresh). Builder emissions spell the same rule through
+/// [`Built`].
+fn inherit_zones(meta: Meta, input: &Meta) -> Meta {
+    let mut ext = input.ext().clone();
+    ext.remove("content_type");
+    meta.with_app(input.app().clone()).with_ext(ext)
 }
 
 fn emitted_content(
@@ -1010,7 +1034,20 @@ impl PinViolation {
 /// resolving by "first found".
 pub(crate) fn value_well_formed(value: &envelope::Value) -> Result<(), Fault> {
     match value {
-        envelope::Value::Scalar(_) => Ok(()),
+        // A decimal must inhabit the decimal128 domain
+        // (D-2026-08-10-7) BEFORE it travels: an unbounded scale
+        // reaching a writer would be a runaway allocation, so the
+        // door refuses it typed instead.
+        envelope::Value::Scalar(envelope::Scalar::Decimal { unscaled, scale }) => {
+            if crate::json::decimal_in_domain(*unscaled, *scale) {
+                Ok(())
+            } else {
+                Err(Fault::Unrepresentable(alloc::format!(
+                    "a decimal outside the decimal128 domain (unscaled {unscaled}, scale {scale})"
+                )))
+            }
+        }
+        envelope::Value::Null | envelope::Value::Scalar(_) => Ok(()),
         envelope::Value::Struct(fields) => {
             let mut seen = alloc::collections::BTreeSet::new();
             for (name, value) in fields {
@@ -1230,6 +1267,28 @@ pub(crate) fn conformance_fault(
         | (cel::Type::Double, cel::Value::Double(_))
         | (cel::Type::Duration, cel::Value::Duration(_))
         | (cel::Type::Timestamp, cel::Value::Timestamp(_)) => None,
+        // Composite judges are structural: every element must hold
+        // its element type. `array<variant>` — the jsonl reply pin —
+        // admits any element, `null` included.
+        (cel::Type::List(inner), cel::Value::List(items)) => items
+            .iter()
+            .find_map(|item| conformance_fault(name, inner, item))
+            .map(|violation| ConformanceViolation {
+                name: String::from(name),
+                expected: declared.clone(),
+                found: ValueKind::List,
+                reason: violation.reason,
+            }),
+        (cel::Type::Map(inner), cel::Value::Map(entries)) => entries
+            .values()
+            .find_map(|item| conformance_fault(name, inner, item))
+            .map(|violation| ConformanceViolation {
+                name: String::from(name),
+                expected: declared.clone(),
+                found: ValueKind::Map,
+                reason: violation.reason,
+            }),
+        (cel::Type::Null, cel::Value::Null) => None,
         (_, cel::Value::Bool(_)) => mismatch(),
         (_, cel::Value::Int(_) | cel::Value::Uint(_)) => mismatch(),
         (_, cel::Value::Double(_)) => mismatch(),
@@ -1544,6 +1603,7 @@ fn nested_zone_meta(zone: &envelope::Namespace) -> cel::Value {
 
 pub(crate) fn from_envelope_value(value: &envelope::Value) -> cel::Value {
     match value {
+        envelope::Value::Null => cel::Value::Null,
         envelope::Value::Scalar(scalar) => from_scalar(scalar),
         // The logical type CROSSES the bridge: a struct stays a
         // struct through bindings, locals, and ternaries — tag 17
@@ -1627,7 +1687,8 @@ pub fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, Fault> {
                 .map(|(name, item)| Ok((name.clone(), to_envelope_value(item)?)))
                 .collect::<Result<_, Fault>>()?,
         ),
-        other @ (cel::Value::Duration(_) | cel::Value::Timestamp(_) | cel::Value::Null) => {
+        cel::Value::Null => envelope::Value::Null,
+        other @ (cel::Value::Duration(_) | cel::Value::Timestamp(_)) => {
             return Err(Fault::Unrepresentable(format!("{other:?}")));
         }
     })

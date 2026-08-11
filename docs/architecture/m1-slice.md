@@ -132,7 +132,23 @@ step touches `vm.rs` once.
    an unserializable request refuses BEFORE any open fact, empty
    stdout is the empty array, and the digest is canonical across
    struct spellings. `mode = service` keeps its deferral — the
-   stream machinery is its own slice. Unlocks realistic `File`
+   stream machinery is its own slice. The same-day review round
+   sharpened five edges (amendment on D-2026-08-11-1): `null`
+   executes (the envelope domain gained tag 9's value — `json
+   null` runs, a `null` line decodes), the reply shape is a real
+   pin (`reply_type` = `array<variant>`, judged at check for mocks
+   and at every settled outcome — the record-mock false green
+   refuses; `lines` stays untyped by NAME, its typing lands with
+   the connector sheets), the plan validator holds the codec's
+   domain (`UnknownCodec` — no validated plan silently runs as
+   `lines`), framing is exact (a lone `\n` refuses; ASCII-only
+   line padding), and the decimal128 domain is held at the doors
+   with a writer-side budget mirror. The round also applied
+   uniform propagation (D-2026-08-10-2) to MACHINE-minted
+   envelopes: connector outcomes and typed errors now inherit the
+   request's `app`/`ext` zones (content_type struck — the reply's
+   payload is fresh), proven by an app-token round trip through a
+   REAL `cat` and through a mock. Unlocks realistic `File`
    and HTTP payloads.
 3. **The error half of the language** — typed-error emissions from
    operators (`err = Kind {…}`) and mock `err` replies in the Lab.

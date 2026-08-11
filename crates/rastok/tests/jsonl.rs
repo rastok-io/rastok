@@ -188,37 +188,215 @@ fn the_request_digest_is_canonical_across_spellings() {
     );
 }
 
-#[test]
-fn a_mocked_jsonl_graph_runs_in_the_lab() {
-    // The Lab replaces the process: the mock answers structured
-    // values directly, and the graph's guards read them — the codec
-    // is the WORLD's business, not the simulation's.
-    let source = r#"
+/// The one sift graph BOTH worlds run: a jsonl reply is
+/// `array<variant>`, so the graph reads `data[0]` — in the Lab
+/// against a mock, and against a real `cat` echoing the line back.
+const SIFT_GRAPH: &str = r#"
 graph g : App {
   connector shell : Process {
     mode = job ; command = "cat"
     codec = jsonl
     effect = idempotent ; behavior = deterministic
+    timeout = duration("5s")
   }
 
   operator sift {
-    on in where data.status == "ok" { out = data.value }
+    on in where data[0]["status"] == "ok" { out = data[0]["value"] }
   }
 
   . -> shell
   shell.out -> sift
   sift -> .
 }
+"#;
+
+#[test]
+fn a_mocked_jsonl_graph_runs_in_the_lab() {
+    // The Lab replaces the process — but the mock must speak the
+    // WIRE's shape (`array<variant>`, D-2026-08-11-1): the reply is
+    // written as the real decode would deliver it, and the graph
+    // reads `data[0]` the same way in both worlds.
+    let source = format!(
+        r#"{SIFT_GRAPH}
+lab g {{
+  simulation probing on app {{
+    mock shell {{
+      on in {{ out = json [{{"status": "ok", "value": 7}}] }}
+    }}
+
+    scenario s "a structured reply routes by its fields" {{
+      app.in = {{ q = 1 }}
+      expect "the sifted value" app.out count == 1 where data == 7
+    }}
+  }}
+}}
+"#
+    );
+    let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    for run in &runs {
+        assert!(run.report.passed(), "{:#?}", run.report.failures);
+    }
+}
+
+#[test]
+fn the_same_sift_graph_runs_against_a_real_child() {
+    // `cat` echoes the canonical line; the decode delivers
+    // `[{"status": "ok", "value": 7}]` and the SAME graph the mock
+    // satisfied sifts the real reply — mock and world, one shape.
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert(
+        String::from("status"),
+        Value::Scalar(Scalar::Text(String::from("ok"))),
+    );
+    fields.insert(String::from("value"), Value::Scalar(Scalar::Int(7)));
+    let (outputs, errors) = drive(SIFT_GRAPH, Value::Map(fields));
+    assert_eq!(errors, Vec::<Value>::new(), "no fault");
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(
+        outputs[0].envelope.data(),
+        &Data::materialized(Value::Scalar(Scalar::Int(7))),
+        "the sifted value crossed both worlds identically"
+    );
+}
+
+#[test]
+fn a_record_mock_reply_on_jsonl_refuses_at_check() {
+    // A mock answering a bare record over a jsonl connector is the
+    // false green the contract pin closes: the real world would
+    // deliver an array, so the checker refuses the reply's shape.
+    let source = format!(
+        r#"{SIFT_GRAPH}
+lab g {{
+  simulation probing on app {{
+    mock shell {{
+      on in {{ out = {{ status = "ok", value = 7 }} }}
+    }}
+
+    scenario s "never runs" {{
+      app.in = {{ q = 1 }}
+      expect "unreachable" app.out count == 1
+    }}
+  }}
+}}
+"#
+    );
+    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the shape must refuse");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-PORT-TYPE"),
+        "the contract pin speaks: {bag:?}"
+    );
+}
+
+#[test]
+fn a_null_line_is_the_null_value() {
+    // `null` is a JSON value like any other (D-2026-08-11-1): a
+    // line carrying it decodes to the null element, never a
+    // DecodeError.
+    let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"null\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
+    let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
+    assert_eq!(errors, Vec::<Value>::new(), "no fault");
+    assert_eq!(
+        outputs[0].envelope.data(),
+        &Data::materialized(Value::Array(vec![Value::Null])),
+        "null rides the array"
+    );
+}
+
+#[test]
+fn json_null_is_an_executable_value() {
+    // The decision says `json` covers the JSON model exactly —
+    // including `null`, which must EXECUTE, not merely compile.
+    let source =
+        "graph g : App {\n  operator o {\n    on in { out = json null }\n  }\n  . -> o -> .\n}\n";
+    let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
+    assert_eq!(errors, Vec::<Value>::new(), "no fault");
+    assert_eq!(
+        outputs[0].envelope.data(),
+        &Data::materialized(Value::Null),
+        "the null value crosses"
+    );
+}
+
+#[test]
+fn an_app_token_survives_the_world() {
+    // Uniform propagation (D-2026-08-10-2) across a REAL call: a
+    // token explicitly kept in meta.app before the request must
+    // still be there on the reply — the exact idiom that replaced
+    // `last`.
+    let source = r#"
+graph g : App {
+  connector shell : Process {
+    mode = job ; command = "cat"
+    codec = jsonl
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("5s")
+  }
+
+  operator stamp {
+    on in { out = { data = data, meta.app.token = "tok" } }
+  }
+
+  operator probe {
+    on in where meta.app.token == "tok" { out = meta.app.token }
+  }
+
+  . -> stamp -> shell
+  shell.out -> probe
+  probe -> .
+}
+"#;
+    let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
+    assert_eq!(errors, Vec::<Value>::new(), "no fault");
+    assert_eq!(outputs.len(), 1, "the token survived the call");
+    assert_eq!(
+        outputs[0].envelope.data(),
+        &Data::materialized(Value::Scalar(Scalar::Text(String::from("tok"))))
+    );
+}
+
+#[test]
+fn an_app_token_survives_the_mocked_world_too() {
+    // The SAME propagation rule holds in the Lab: a mock's reply
+    // envelope inherits the request's app zone, so the token idiom
+    // simulates exactly as it runs.
+    let source = r#"
+graph g : App {
+  connector shell : Process {
+    mode = job ; command = "cat"
+    codec = jsonl
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("5s")
+  }
+
+  operator stamp {
+    on in { out = { data = data, meta.app.token = "tok" } }
+  }
+
+  operator probe {
+    on in where meta.app.token == "tok" { out = meta.app.token }
+  }
+
+  . -> stamp -> shell
+  shell.out -> probe
+  probe -> .
+}
 
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = { status = "ok", value = 7 } }
+      on in { out = json [1] }
     }
 
-    scenario s "a structured reply routes by its fields" {
-      app.in = { q = 1 }
-      expect "the sifted value" app.out count == 1 where data == 7
+    scenario s "the token survives the mock" {
+      app.in = 1
+      expect "the token on out" app.out count == 1 where data == "tok"
     }
   }
 }
@@ -232,4 +410,56 @@ lab g {
     for run in &runs {
         assert!(run.report.passed(), "{:#?}", run.report.failures);
     }
+}
+
+#[test]
+fn an_out_of_domain_decimal_refuses_at_the_door() {
+    // A public injection carrying an unbounded scale must refuse
+    // TYPED at the door — never reach a writer as a runaway
+    // allocation (D-2026-08-10-7).
+    let compilation = compile(&[CAT_JSONL], &Registry::m0()).expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let refused = vm.inject(
+        &mut journal,
+        InboundSubmission {
+            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: Draft {
+                data: Data::materialized(Value::Scalar(Scalar::Decimal {
+                    unscaled: 5,
+                    scale: i32::MIN,
+                })),
+                ext: Namespace::new(),
+            },
+            sequence: SubmissionSequence::Next,
+        },
+    );
+    assert!(refused.is_err(), "the door refuses, instantly and typed");
+}
+
+#[test]
+fn a_validated_plan_never_carries_an_unknown_codec() {
+    // The validator holds the codec's domain: a crafted package
+    // with `codec = bogus` must never earn a ValidatedExecutionPlan
+    // and quietly run as `lines`.
+    let compilation = compile(&[CAT_JSONL], &Registry::m0()).expect("a valid plan");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            for (name, setting) in &mut spec.attributes {
+                if name == "codec" {
+                    *setting = rastok::plan::AttrSetting::Word(String::from("bogus"));
+                }
+            }
+        }
+    }
+    let refused = rastok::plan::ValidatedExecutionPlan::try_from(plan);
+    assert!(
+        matches!(
+            refused,
+            Err(rastok::plan::PlanValidationError::UnknownCodec { .. })
+        ),
+        "the domain holds: {refused:?}"
+    );
 }

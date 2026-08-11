@@ -109,6 +109,9 @@ pub enum Scalar {
 /// machine's doors, never resolved by "first found".
 #[derive(Debug, Clone)]
 pub enum Value {
+    /// The JSON model's absent value — `json null` and jsonl lines
+    /// carry it; identity tag 9, shared with the CEL twin.
+    Null,
     /// Scalar leaf.
     Scalar(Scalar),
     /// Named fields in declaration order.
@@ -122,6 +125,7 @@ pub enum Value {
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Null, Self::Null) => true,
             (Self::Scalar(a), Self::Scalar(b)) => a == b,
             // Sorted-field comparison — by name like the canonical
             // seal, total on malformed duplicates (the cel twin

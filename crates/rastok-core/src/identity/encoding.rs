@@ -19,6 +19,7 @@ use crate::canonical_cbor::{Value as Cbor, encode};
 pub fn value_tagged(value: &crate::envelope::Value) -> Cbor {
     use crate::envelope::Value;
     match value {
+        Value::Null => Cbor::Array(vec![Cbor::Uint(9), Cbor::Null]),
         Value::Scalar(Scalar::Bool(v)) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Bool(*v)]),
         Value::Scalar(Scalar::Int(v)) => int_tagged(*v),
         Value::Scalar(Scalar::Double(v)) => {

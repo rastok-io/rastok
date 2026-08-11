@@ -162,7 +162,10 @@ default: zero hidden shared state.
 line, both directions, the JSON model exactly (`variant`).
 OUTBOUND, the request value serializes CANONICALLY — these bytes are
 `request_digest` material, so the writer is part of identity: object
-keys sorted bytewise (structs and maps alike — the seal's order),
+keys sorted by their UTF-8 bytes (structs and maps alike — the
+wire's own canonical order; the envelope seal orders map entries by
+tagged CBOR bytes, which differs: `{"b", "aa"}` seals `b` first and
+writes `aa` first),
 numbers exact (`int` as the integer, `decimal` in plain decimal
 notation at its sealed scale, `double` in shortest round-trip form),
 strings JSON-escaped, one trailing `\n`. Unserializable requests
@@ -174,7 +177,15 @@ EAGERLY through the house JSON reader (D-2026-08-10-4/-7): exact
 numbers, duplicate keys refused; a line that does not parse — an
 interior empty line included — is `DecodeError` with the offending
 line in the payload; the single trailing newline's empty tail is
-framing, not a line; empty stdout is the empty array.
+framing, not a line; empty stdout is the empty array — but a LONE
+`\n` is one empty line and refuses (the framing is judged before
+the terminator is stripped). A line's padding is JSON's own
+whitespace alphabet (space, tab, CR) and nothing wider; `null` is a
+value like any other and decodes to the null element. The reply's
+shape is a REAL pin: `Process(job, jsonl).out = array<variant>`,
+consulted by the checker (a mock answering anything else refuses at
+check) and by the machine (every settled outcome is judged against
+it) — the Lab and the world see one shape.
 
 **`mode = service` (the declared resident)**: long-running. `codec` frames
 line by line. With `correlate = data.id`, **stdout splits**: lines whose id

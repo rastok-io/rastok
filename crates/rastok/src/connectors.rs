@@ -358,15 +358,23 @@ impl Run {
 /// garbage line refuses with the offending line in the message.
 fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, String> {
     let mut items = Vec::new();
-    let body = stdout.strip_suffix('\n').unwrap_or(stdout);
-    if body.is_empty() {
-        // Empty stdout is the empty array.
+    // EMPTY stdout is the empty array; a lone `\n` is one empty
+    // line and refuses below — the framing is judged before the
+    // terminator is stripped, so no invalid line is silently lost.
+    if stdout.is_empty() {
         return Ok(items);
     }
+    let body = stdout.strip_suffix('\n').unwrap_or(stdout);
     for line in body.split('\n') {
         let (value, consumed) = rastok_core::json::parse_value(line)
             .map_err(|error| format!("line `{line}` does not parse: {}", error.message))?;
-        if line[consumed..].trim_start().is_empty() {
+        // JSON's own whitespace alphabet, exactly (space, tab, CR —
+        // LF cannot appear inside a line): a non-breaking space is
+        // trailing content, not padding.
+        if line[consumed..]
+            .bytes()
+            .all(|byte| matches!(byte, b' ' | b'\t' | b'\r'))
+        {
             let value = rastok_core::runtime::to_envelope_value(&value)
                 .map_err(|fault| format!("line `{line}` is not representable: {fault}"))?;
             items.push(value);
@@ -874,6 +882,37 @@ graph unframeable : App {
                 .iter()
                 .any(|record| matches!(record, Record::Outbound(_))),
             "no open fact for an unattemptable effect"
+        );
+    }
+
+    /// The framing table of D-2026-08-11-1, exactly: empty stdout
+    /// is the empty array, a lone `\n` is one empty line and
+    /// refuses, JSON's own whitespace alphabet pads a line and
+    /// nothing else does.
+    #[test]
+    fn the_jsonl_framing_table_holds() {
+        use rastok_core::envelope::{Scalar, Value};
+        assert_eq!(super::decode_jsonl(""), Ok(vec![]), "empty stdout");
+        assert!(
+            super::decode_jsonl("\n").is_err(),
+            "a lone newline is one EMPTY line, refused — never silently lost"
+        );
+        assert_eq!(
+            super::decode_jsonl("1\n"),
+            Ok(vec![Value::Scalar(Scalar::Int(1))])
+        );
+        assert!(
+            super::decode_jsonl("1\n\n").is_err(),
+            "an interior empty line refuses"
+        );
+        assert_eq!(
+            super::decode_jsonl("1 \t\r\n"),
+            Ok(vec![Value::Scalar(Scalar::Int(1))]),
+            "JSON's whitespace pads a line"
+        );
+        assert!(
+            super::decode_jsonl("1\u{a0}\n").is_err(),
+            "a non-breaking space is trailing content, not padding"
         );
     }
 }

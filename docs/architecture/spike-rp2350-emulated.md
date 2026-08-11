@@ -74,7 +74,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 | Resource | Value | Criterion |
 |---|---|---|
 | Heap high-water mark (allocator-tracked, 32 journaled rounds) | 63 172 B (61.7 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 163 + 30 = 193 KiB | < 1 MiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 204 + 32 = 236 KiB (re-measured 2026-08-11) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
@@ -90,6 +90,13 @@ Notes the numbers carry:
   integrity work done once at boot, and the price is stated rather
   than hidden. No criterion bounds boot cost; the transaction path
   is unchanged.
+- Flash grew from 193 KiB to 236 KiB (`.text` 208 588 B +
+  `.rodata` 33 200 B, re-measured 2026-08-11): the consolidated
+  reform's decoders and the jsonl codec's canonical writer link
+  into the kernel even for a `lines` plan — the core is one crate,
+  and dead-code elimination keeps what the plan decoder can reach.
+  The 1 MiB criterion holds with a 4.3× margin; trimming by feature
+  gate is noted, not needed.
 - The true high-water mark (61.7 KiB) sits above the old sampled
   figure (57.2 KiB), as a real peak must; the first M1 lift added
   the ingress port to every inbound record (+688 B over 32 rounds),
@@ -134,7 +141,8 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 instrumentation.** All four criteria of record hold: no patched
 dependencies, 92 k instructions per relay transaction against the
 150 k bound (1.6×), a 61.6 KiB true high-water mark against 128 KiB,
-193 KiB of flash against 1 MiB. The margins are thinner than first
+236 KiB of flash against 1 MiB (re-measured 2026-08-11). The
+margins are thinner than first
 claimed and are reported as measured. The option stays dormant as
 planned — no embedded chantier opens. Silicon confirmation (volet B)
 pending an RP2350 board; a NO-GO there would name flash wait states

@@ -10,9 +10,13 @@
 The first structured codec (M1 item 2): `codec = jsonl` on
 `Process`, job mode — one JSON value per line, the JSON model
 exactly. The OUTBOUND serialization is CANONICAL because its bytes
-are `request_digest` material: object keys sorted bytewise for
-structs and maps alike (the canonical seal's own order — two values
-one identity owns must not produce two digests), `int` as the plain
+are `request_digest` material: object keys sorted by their UTF-8
+bytes, structs and maps alike — two values one identity owns must
+not produce two digests. This is the WIRE's canonical order, not
+the seal's: the envelope seal sorts map entries by their tagged
+CBOR bytes (length-prefixed, so `"b"` precedes `"aa"` there) while
+the wire writes `"aa"` before `"b"`; both are deterministic, and
+each authority owns its own bytes. `int` writes as the plain
 integer, `decimal` in plain decimal notation at its sealed scale
 (the exact number survives the wire round-trip), `double` in
 shortest round-trip form, one trailing newline. Refusals are typed
@@ -28,6 +32,32 @@ stream machinery. **Rejected:** insertion-order object keys (two
 by-name-equal values would carry two digests); base64-ing `bytes`
 into strings (a silent representation change the reader could not
 undo); skipping unparseable lines (a lost line is a lost fact).
+
+*Amended 2026-08-11 (review round):* five sharpenings, each with
+its regression. (1) **`null` executes** — the envelope domain
+gained its null value (identity tag 9, shared with the CEL twin),
+so `json null` runs and a `null` line decodes; "the JSON model
+exactly" is now literally true and the refused forms remain
+exactly bytes, encoded payloads, and non-finite doubles.
+(2) **The reply's type is a real pin** — the contract rule
+`Process(job, jsonl).out = array<variant>` is spelled once
+(`RequestCodec::reply_type`) and consulted by the checker (a mock
+answering a bare record refuses at check) and by the machine
+(every settled outcome is judged against it): mock and world, one
+shape. `lines` stays untyped by NAME — the frozen referee corpus
+mocks structured replies over it; its honest typing lands with the
+connector sheets. (3) **The codec's domain is validity** — the plan
+validator refuses any `codec` outside `lines | jsonl`
+(`UnknownCodec`), so no ValidatedExecutionPlan is ever silently
+reinterpreted as `lines`. (4) **Framing is exact** — empty stdout
+is the empty array but a LONE `\n` is one empty line and refuses
+(the framing is judged before the terminator is stripped); a line's
+padding is JSON's own whitespace alphabet, nothing wider — a
+non-breaking space is trailing content. (5) **The decimal128 domain
+is held at the doors** — `value_well_formed` refuses an
+out-of-domain coefficient or scale before it travels, and the
+writer keeps a defensive mirror plus the reader's nesting budget:
+a hostile scale is a typed refusal, never a runaway allocation.
 
 ## D-2026-08-10-1 — Metadata has exactly three zones
 
