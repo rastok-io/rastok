@@ -5,6 +5,30 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-11-1 — The jsonl wire is canonical, both ways
+
+The first structured codec (M1 item 2): `codec = jsonl` on
+`Process`, job mode — one JSON value per line, the JSON model
+exactly. The OUTBOUND serialization is CANONICAL because its bytes
+are `request_digest` material: object keys sorted bytewise for
+structs and maps alike (the canonical seal's own order — two values
+one identity owns must not produce two digests), `int` as the plain
+integer, `decimal` in plain decimal notation at its sealed scale
+(the exact number survives the wire round-trip), `double` in
+shortest round-trip form, one trailing newline. Refusals are typed
+`DecodeError`, never silent: `bytes` and encoded payloads have no
+JSON form (`lines` carries opaque text/bytes; a `bytes` codec stays
+reserved), and a non-finite double is not JSON. INBOUND decodes
+eagerly through the house reader — exact numbers, duplicate keys
+refused, the offending line carried in the error payload, empty
+stdout = the empty array, the trailing newline's empty tail is
+framing. The reply of a job is `data = array<variant>` (the sheet's
+rule, possibly length 1). Service mode stays deferred with its
+stream machinery. **Rejected:** insertion-order object keys (two
+by-name-equal values would carry two digests); base64-ing `bytes`
+into strings (a silent representation change the reader could not
+undo); skipping unparseable lines (a lost line is a lost fact).
+
 ## D-2026-08-10-1 — Metadata has exactly three zones
 
 `meta.sys` (runtime-owned, read-only), `meta.app` (application-owned,

@@ -572,3 +572,250 @@ mod oracle {
         }
     }
 }
+
+/// Writes one envelope value as CANONICAL JSON (D-2026-08-11-1):
+/// object keys sorted bytewise (structs and maps alike — the seal's
+/// order), numbers exact (`int` plain, `decimal` in plain decimal
+/// notation at its sealed scale, `double` shortest round-trip),
+/// strings JSON-escaped. These bytes are `request_digest` material —
+/// the writer is part of identity.
+///
+/// # Errors
+/// A located refusal for the valueless forms: `bytes` has no JSON
+/// representation, and a non-finite `double` is not JSON.
+pub fn write_value(value: &crate::envelope::Value) -> Result<String, JsonError> {
+    let mut out = String::new();
+    write_into(value, &mut out)?;
+    Ok(out)
+}
+
+fn write_into(value: &crate::envelope::Value, out: &mut String) -> Result<(), JsonError> {
+    use crate::envelope::{Scalar, Value};
+    match value {
+        Value::Scalar(Scalar::Bool(v)) => out.push_str(if *v { "true" } else { "false" }),
+        Value::Scalar(Scalar::Int(v)) => {
+            out.push_str(&alloc::format!("{v}"));
+        }
+        Value::Scalar(Scalar::Double(v)) => {
+            if !v.is_finite() {
+                return Err(JsonError {
+                    offset: 0,
+                    message: String::from("a non-finite double is not JSON"),
+                });
+            }
+            // Rust's shortest round-trip formatting; an integral
+            // double keeps a fraction so it never reads back as int.
+            let text = alloc::format!("{v}");
+            out.push_str(&text);
+            if !text.contains(['.', 'e', 'E']) {
+                out.push_str(".0");
+            }
+        }
+        Value::Scalar(Scalar::Text(v)) => write_string(v, out),
+        Value::Scalar(Scalar::Bytes(_)) => {
+            return Err(JsonError {
+                offset: 0,
+                message: String::from(
+                    "bytes have no JSON form — the lines codec carries opaque payloads",
+                ),
+            });
+        }
+        Value::Scalar(Scalar::Decimal { unscaled, scale }) => {
+            write_decimal(*unscaled, *scale, out);
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_into(item, out)?;
+            }
+            out.push(']');
+        }
+        Value::Struct(fields) => {
+            // Sorted bytewise — the canonical seal's order: two
+            // by-name-equal values, one digest.
+            let mut sorted: Vec<(&String, &Value)> =
+                fields.iter().map(|(name, value)| (name, value)).collect();
+            sorted.sort_by(|a, b| a.0.cmp(b.0));
+            out.push('{');
+            for (index, (name, value)) in sorted.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_string(name, out);
+                out.push(':');
+                write_into(value, out)?;
+            }
+            out.push('}');
+        }
+        Value::Map(entries) => {
+            out.push('{');
+            for (index, (key, value)) in entries.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_string(key, out);
+                out.push(':');
+                write_into(value, out)?;
+            }
+            out.push('}');
+        }
+    }
+    Ok(())
+}
+
+fn write_string(text: &str, out: &mut String) {
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            control if (control as u32) < 0x20 => {
+                out.push_str(&alloc::format!("\\u{:04x}", control as u32));
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+}
+
+/// Plain decimal notation at the sealed scale: `1999 / scale 2` is
+/// `19.99`; a negative scale appends zeros (`5 / scale -2` is
+/// `500` — unreachable for dynamic decimals, total anyway).
+fn write_decimal(unscaled: i128, scale: i32, out: &mut String) {
+    if unscaled < 0 {
+        out.push('-');
+    }
+    let digits = alloc::format!("{}", unscaled.unsigned_abs());
+    if scale <= 0 {
+        out.push_str(&digits);
+        for _ in 0..scale.unsigned_abs() {
+            out.push('0');
+        }
+        return;
+    }
+    let scale = scale as usize;
+    if digits.len() > scale {
+        let point = digits.len() - scale;
+        out.push_str(&digits[..point]);
+        out.push('.');
+        out.push_str(&digits[point..]);
+    } else {
+        out.push_str("0.");
+        for _ in 0..scale - digits.len() {
+            out.push('0');
+        }
+        out.push_str(&digits);
+    }
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+    use crate::envelope::{Scalar, Value};
+    use alloc::vec;
+
+    #[test]
+    fn the_writer_is_canonical_and_exact() {
+        // Struct keys sort — two by-name-equal values, one byte
+        // sequence (the digest rule).
+        let ab = Value::Struct(vec![
+            (String::from("b"), Value::Scalar(Scalar::Int(2))),
+            (String::from("a"), Value::Scalar(Scalar::Int(1))),
+        ]);
+        assert_eq!(write_value(&ab).unwrap(), "{\"a\":1,\"b\":2}");
+        // Decimal at its sealed scale, exact.
+        assert_eq!(
+            write_value(&Value::Scalar(Scalar::Decimal {
+                unscaled: 1999,
+                scale: 2
+            }))
+            .unwrap(),
+            "19.99"
+        );
+        assert_eq!(
+            write_value(&Value::Scalar(Scalar::Decimal {
+                unscaled: 5,
+                scale: 4
+            }))
+            .unwrap(),
+            "0.0005"
+        );
+        // An integral double keeps its fraction — it must not read
+        // back as int.
+        assert_eq!(
+            write_value(&Value::Scalar(Scalar::Double(2.0))).unwrap(),
+            "2.0"
+        );
+        // Escapes.
+        assert_eq!(
+            write_value(&Value::Scalar(Scalar::Text(String::from("a\"\n")))).unwrap(),
+            "\"a\\\"\\n\""
+        );
+    }
+
+    #[test]
+    fn the_writer_round_trips_through_the_reader() {
+        use crate::runtime::to_envelope_value;
+        let value = Value::Struct(vec![
+            (
+                String::from("price"),
+                Value::Scalar(Scalar::Decimal {
+                    unscaled: 1999,
+                    scale: 2,
+                }),
+            ),
+            (String::from("n"), Value::Scalar(Scalar::Int(42))),
+            (
+                String::from("tags"),
+                Value::Array(vec![Value::Scalar(Scalar::Text(String::from("x")))]),
+            ),
+        ]);
+        let written = write_value(&value).unwrap();
+        let (read, _) = parse_value(&written).expect("the writer's output parses");
+        let back = to_envelope_value(&read).expect("representable");
+        // A struct reads back as a MAP (the JSON model) — compare
+        // through a second write: one canonical byte sequence.
+        assert_eq!(
+            write_value(&back).unwrap(),
+            written,
+            "byte-stable round trip"
+        );
+    }
+
+    #[test]
+    fn the_valueless_forms_refuse() {
+        assert!(write_value(&Value::Scalar(Scalar::Bytes(vec![1]))).is_err());
+        assert!(write_value(&Value::Scalar(Scalar::Double(f64::NAN))).is_err());
+        assert!(write_value(&Value::Scalar(Scalar::Double(f64::INFINITY))).is_err());
+    }
+
+    #[test]
+    fn the_oracle_agrees_with_the_writer() {
+        // serde_json parses everything the writer emits (common
+        // domain: no decimals beyond f64 here).
+        let value = Value::Map(
+            [
+                (
+                    String::from("k\n"),
+                    Value::Array(vec![
+                        Value::Scalar(Scalar::Bool(true)),
+                        Value::Scalar(Scalar::Int(-3)),
+                    ]),
+                ),
+                (String::from("z"), Value::Scalar(Scalar::Double(1.5))),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let written = write_value(&value).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+        assert_eq!(parsed["k\n"][1], serde_json::json!(-3));
+        assert_eq!(parsed["z"], serde_json::json!(1.5));
+    }
+}

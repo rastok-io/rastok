@@ -114,10 +114,26 @@ step touches `vm.rs` once.
    bodies eagerly at the frontier), guest meta writes (guests read
    only), the 64 KiB canonical-type-byte budget (with composite
    pins), and the embedded asset-refusal gate (the loader's line —
-   the spike's package carries no assets). NEXT: the `jsonl` codec
-   itself — structured payloads across the `Process` boundary,
-   under the one byte discipline; unlocks realistic `File` and HTTP
-   payloads.
+   the spike's package carries no assets). The `jsonl` codec
+   itself **LANDED 2026-08-11** (D-2026-08-11-1): the canonical
+   JSON writer joined the house reader in the core
+   (`json::write_value` — struct AND map keys sorted bytewise
+   because the line is `request_digest` material, decimals in
+   plain notation at their sealed scale, doubles shortest
+   round-trip with a forced fraction; bytes, encoded payloads and
+   non-finite doubles refuse typed); the boundary dispatches on
+   `RequestCodec` (`codec = jsonl` on the sheet, `prepare_jsonl`
+   frames ONE canonical line); the `Process` adapter decodes
+   stdout line by line through the house reader into
+   `data = array<variant>`, the offending line riding every
+   `DecodeError`; the checker's jsonl deferral lifted. Proven
+   against REAL children: a decimal round-trips exactly through
+   `cat`, multiple lines decode in order, garbage refuses typed,
+   an unserializable request refuses BEFORE any open fact, empty
+   stdout is the empty array, and the digest is canonical across
+   struct spellings. `mode = service` keeps its deferral — the
+   stream machinery is its own slice. Unlocks realistic `File`
+   and HTTP payloads.
 3. **The error half of the language** — typed-error emissions from
    operators (`err = Kind {…}`) and mock `err` replies in the Lab.
    Referees can then provoke connector failures without adapters;

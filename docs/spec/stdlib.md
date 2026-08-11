@@ -158,6 +158,24 @@ graph decision — a Loop — never a supervisor reflex). `per` still
 orders (alice's conversions run serially) — it shares nothing. The safe
 default: zero hidden shared state.
 
+**The `jsonl` wire (D-2026-08-11-1).** One JSON value per `\n`-framed
+line, both directions, the JSON model exactly (`variant`).
+OUTBOUND, the request value serializes CANONICALLY — these bytes are
+`request_digest` material, so the writer is part of identity: object
+keys sorted bytewise (structs and maps alike — the seal's order),
+numbers exact (`int` as the integer, `decimal` in plain decimal
+notation at its sealed scale, `double` in shortest round-trip form),
+strings JSON-escaped, one trailing `\n`. Unserializable requests
+refuse TYPED as `DecodeError` before any open fact: `bytes` (no JSON
+form — `lines` or a future `bytes` codec carry those), a
+non-finite `double`, and any ENCODED payload (`jsonl` frames the
+JSON model, not opaque representations). INBOUND, each line decodes
+EAGERLY through the house JSON reader (D-2026-08-10-4/-7): exact
+numbers, duplicate keys refused; a line that does not parse — an
+interior empty line included — is `DecodeError` with the offending
+line in the payload; the single trailing newline's empty tail is
+framing, not a line; empty stdout is the empty array.
+
 **`mode = service` (the declared resident)**: long-running. `codec` frames
 line by line. With `correlate = data.id`, **stdout splits**: lines whose id
 matches an open call are its response (OUTBOUND closed, emitted on `out`,

@@ -65,6 +65,7 @@ pub struct Process<'plan> {
 #[derive(Debug)]
 struct Run {
     call_ref: crate::boundary::CallRef,
+    codec: crate::boundary::RequestCodec,
     child: std::process::Child,
     chunks: std::sync::mpsc::Receiver<Chunk>,
     stdout: Vec<u8>,
@@ -195,6 +196,7 @@ impl<'plan> Process<'plan> {
         }
         Ok(Run {
             call_ref: intent.call_ref,
+            codec: crate::boundary::RequestCodec::of(spec),
             child,
             chunks,
             stdout: Vec::new(),
@@ -322,11 +324,23 @@ impl Run {
                 data: Data::materialized(Value::Map(payload)),
             })
         } else {
-            // `codec = lines`, job mode: the whole stdout, one blob.
             match String::from_utf8(std::mem::take(&mut self.stdout)) {
-                Ok(text) => {
-                    CallOutcome::Success(Data::materialized(Value::Scalar(Scalar::Text(text))))
-                }
+                Ok(text) => match self.codec {
+                    // `codec = lines`, job mode: the whole stdout,
+                    // one text blob.
+                    crate::boundary::RequestCodec::Lines => {
+                        CallOutcome::Success(Data::materialized(Value::Scalar(Scalar::Text(text))))
+                    }
+                    // `codec = jsonl`, job mode: the decoded lines,
+                    // `data = array<variant>` (D-2026-08-11-1). The
+                    // house reader owns the numbers; an unparseable
+                    // line — an interior empty one included — is a
+                    // typed DecodeError carrying the offending line.
+                    crate::boundary::RequestCodec::Jsonl => match decode_jsonl(&text) {
+                        Ok(items) => CallOutcome::Success(Data::materialized(Value::Array(items))),
+                        Err(message) => failure("DecodeError", message),
+                    },
+                },
                 Err(_) => failure("DecodeError", "stdout is not valid UTF-8".to_string()),
             }
         };
@@ -335,6 +349,34 @@ impl Run {
             outcome,
         }
     }
+}
+
+/// Decodes a complete jsonl stdout into its line values
+/// (D-2026-08-11-1): each `\n`-framed line through the house
+/// reader — exact numbers, duplicate keys refused; the trailing
+/// newline's empty tail is framing; an interior empty or trailing
+/// garbage line refuses with the offending line in the message.
+fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, String> {
+    let mut items = Vec::new();
+    let body = stdout.strip_suffix('\n').unwrap_or(stdout);
+    if body.is_empty() {
+        // Empty stdout is the empty array.
+        return Ok(items);
+    }
+    for line in body.split('\n') {
+        let (value, consumed) = rastok_core::json::parse_value(line)
+            .map_err(|error| format!("line `{line}` does not parse: {}", error.message))?;
+        if line[consumed..].trim_start().is_empty() {
+            let value = rastok_core::runtime::to_envelope_value(&value)
+                .map_err(|fault| format!("line `{line}` is not representable: {fault}"))?;
+            items.push(value);
+        } else {
+            return Err(format!(
+                "line `{line}` carries trailing content after its JSON value"
+            ));
+        }
+    }
+    Ok(items)
 }
 
 impl Partner for Process<'_> {

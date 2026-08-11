@@ -113,6 +113,68 @@ impl PreparedRequest {
 /// # Errors
 ///
 /// The decode reason when the data cannot be framed as a line.
+/// The request-framing codec of a connector — read once from the
+/// spec, dispatched here (D-2026-08-11-1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestCodec {
+    /// Text lines — opaque payloads pass through.
+    Lines,
+    /// One JSON value per line, the JSON model exactly.
+    Jsonl,
+}
+
+impl RequestCodec {
+    /// Reads the codec from a connector spec; `lines` is the sheet
+    /// default.
+    #[must_use]
+    pub fn of(spec: &crate::plan::ConnectorSpec) -> Self {
+        match spec.attribute("codec") {
+            Some(crate::plan::AttrSetting::Word(word)) if word == "jsonl" => Self::Jsonl,
+            _ => Self::Lines,
+        }
+    }
+}
+
+/// Frames one request under the given codec.
+///
+/// # Errors
+/// The typed decode refusal, when the payload has no frame under
+/// this codec.
+pub fn prepare_request(
+    codec: RequestCodec,
+    data: &envelope::Data,
+) -> Result<PreparedRequest, String> {
+    match codec {
+        RequestCodec::Lines => prepare_lines(data),
+        RequestCodec::Jsonl => prepare_jsonl(data),
+    }
+}
+
+/// Frames a request as ONE canonical JSON line (D-2026-08-11-1):
+/// the writer's bytes are `request_digest` material. Encoded
+/// payloads and byte scalars refuse typed — `jsonl` frames the JSON
+/// model, not opaque representations.
+///
+/// # Errors
+/// The typed decode refusal.
+pub fn prepare_jsonl(data: &envelope::Data) -> Result<PreparedRequest, String> {
+    use envelope::Data;
+    let value = match data {
+        Data::Materialized(value) => value,
+        Data::Encoded { encoding, .. } => {
+            return Err(alloc::format!(
+                "the jsonl codec frames the JSON model; the request is {encoding:?}-encoded"
+            ));
+        }
+    };
+    let mut line = crate::json::write_value(value)
+        .map_err(|error| alloc::format!("the request has no JSON form: {}", error.message))?;
+    line.push('\n');
+    Ok(PreparedRequest::seal(line.into_bytes()))
+}
+
+/// Prepares the plain-text request wire: raw bytes or the textual
+/// scalar's UTF-8 form, exactly as before the codec split.
 pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
     use envelope::{Data, Encoding, Scalar, Value};
     let bytes = match data {

@@ -569,7 +569,10 @@ impl<'plan> Vm<'plan> {
                 node::Effect::Class(class) => class,
                 node::Effect::None => unreachable!("an effectless connector opens no calls"),
             };
-            match crate::boundary::prepare_lines(queued.envelope.data()) {
+            match crate::boundary::prepare_request(
+                crate::boundary::RequestCodec::of(spec),
+                queued.envelope.data(),
+            ) {
                 Err(_) => None,
                 Ok(prepared) => {
                     let emitting_id = queued.envelope.meta().sys().id();
@@ -834,7 +837,10 @@ impl<'plan> Vm<'plan> {
         // one value carried by the intent — nobody recomputes. An
         // unframeable request is a typed decode error before any
         // open fact exists.
-        let prepared = match crate::boundary::prepare_lines(delivery.envelope.data()) {
+        let prepared = match crate::boundary::prepare_request(
+            crate::boundary::RequestCodec::of(spec),
+            delivery.envelope.data(),
+        ) {
             Ok(prepared) => prepared,
             Err(message) => {
                 let executor = TransactionExecutor::new(self.plan, self.graph_version);
