@@ -119,8 +119,8 @@ step touches `vm.rs` once.
    JSON writer joined the house reader in the core
    (`json::write_value` — struct AND map keys sorted bytewise
    because the line is `request_digest` material, decimals in
-   plain notation at their sealed scale, doubles shortest
-   round-trip with a forced fraction; bytes, encoded payloads and
+   plain notation at their sealed scale, doubles in true
+   shortest round-trip form; bytes, encoded payloads and
    non-finite doubles refuse typed); the boundary dispatches on
    `RequestCodec` (`codec = jsonl` on the sheet, `prepare_jsonl`
    frames ONE canonical line); the `Process` adapter decodes

@@ -175,18 +175,34 @@ impl RequestCodec {
     }
 }
 
-/// The EFFECTIVE `out` pin of a connector — the one semantic
-/// authority (D-2026-08-11-1, amended): the checker's edge audit,
-/// the mock-reply judge, the plan validator, and the machine all
-/// consult this same derivation. Scoped to the `Process` contract;
-/// any other sheet derives nothing until it lands with its own
-/// rules.
+/// The EFFECTIVE pin of a connector port, as a PURE function of
+/// (contract, port, codec word) — the one semantic authority
+/// (D-2026-08-11-1, amended twice): the checker's edge audit and
+/// mock-reply judge reach it through their HIR adapter, the plan
+/// validator and the machine through [`connector_out_pin`]. Scoped
+/// to the `Process` contract's `out`; any other sheet derives
+/// nothing until it lands with its own rules.
 #[must_use]
-pub fn connector_out_pin(spec: &crate::plan::ConnectorSpec) -> Option<crate::cel::Type> {
-    if spec.contract != "Process" {
+pub fn effective_pin(
+    contract: &str,
+    port: &str,
+    codec_word: Option<&str>,
+) -> Option<crate::cel::Type> {
+    if contract != "Process" || port != "out" {
         return None;
     }
-    RequestCodec::of(spec).reply_type()
+    RequestCodec::from_word(codec_word).reply_type()
+}
+
+/// [`effective_pin`]'s plan-side adapter: the connector spec's
+/// `out` pin.
+#[must_use]
+pub fn connector_out_pin(spec: &crate::plan::ConnectorSpec) -> Option<crate::cel::Type> {
+    let word = match spec.attribute("codec") {
+        Some(crate::plan::AttrSetting::Word(word)) => Some(word.as_str()),
+        _ => None,
+    };
+    effective_pin(&spec.contract, "out", word)
 }
 
 /// Frames one request under the given codec.

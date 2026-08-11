@@ -4250,9 +4250,8 @@ fn node_port_pin(node: &Node, port: &node::Port) -> Option<cel::Type> {
         .find(|decl| decl.port == *port)
         .and_then(|decl| decl.ty.clone())
         .or_else(|| {
-            if port.name() != "out" {
-                return None;
-            }
+            // The HIR adapter of `boundary::effective_pin` — the
+            // derivation itself lives in ONE place.
             let NodeRole::Connector {
                 trait_name,
                 attributes,
@@ -4261,19 +4260,16 @@ fn node_port_pin(node: &Node, port: &node::Port) -> Option<cel::Type> {
             else {
                 return None;
             };
-            if trait_name != "Process" {
-                return None;
-            }
             let word = attributes.iter().find_map(|attribute| {
                 if attribute.name != "codec" {
                     return None;
                 }
                 match &attribute.value {
-                    crate::compiler::hir::AttrValue::Word(word) => Some(Some(word.as_str())),
-                    crate::compiler::hir::AttrValue::Const(_) => Some(None),
+                    crate::compiler::hir::AttrValue::Word(word) => Some(word.as_str()),
+                    crate::compiler::hir::AttrValue::Const(_) => None,
                 }
-            })?;
-            rastok_core::boundary::RequestCodec::from_word(word).reply_type()
+            });
+            rastok_core::boundary::effective_pin(trait_name, port.name(), word)
         })
 }
 

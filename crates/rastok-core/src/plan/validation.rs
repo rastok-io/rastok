@@ -52,9 +52,16 @@ pub enum PlanValidationError {
         /// The repeated attribute.
         name: String,
     },
-    /// A connector's `codec` is outside the runtime's dispatch
-    /// domain — accepting it would silently run as `lines`.
+    /// A `Process` connector's `codec` is outside the runtime's
+    /// dispatch domain — accepting it would silently run as
+    /// `lines`.
     UnknownCodec {
+        /// The declaring node.
+        node: node::Path,
+    },
+    /// A `Process` connector carries no `codec` at all — the sheet
+    /// requires one, so a plan without it never left the compiler.
+    MissingCodec {
         /// The declaring node.
         node: node::Path,
     },
@@ -282,6 +289,12 @@ impl core::fmt::Display for PlanValidationError {
                 write!(
                     f,
                     "invalid plan: `{node}` carries a codec outside the dispatch domain (lines | jsonl)"
+                )
+            }
+            Self::MissingCodec { node } => {
+                write!(
+                    f,
+                    "invalid plan: `{node}` is a Process connector without a codec — the sheet requires one"
                 )
             }
             Self::DuplicateHandler { node, activation } => {
@@ -735,19 +748,28 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     value_expressible(value)?;
                 }
             }
-            // The codec's DOMAIN is part of validity: the runtime
-            // dispatches on it, so an unknown or mistyped `codec`
-            // must never earn a ValidatedExecutionPlan and quietly
-            // run as `lines` (D-2026-08-11-1).
-            if let Some(setting) = spec.attribute("codec") {
-                let known = matches!(
-                    setting,
-                    crate::plan::AttrSetting::Word(word) if word == "lines" || word == "jsonl"
-                );
-                if !known {
-                    return Err(PlanValidationError::UnknownCodec {
-                        node: node.path.clone(),
-                    });
+            // The codec rule is the PROCESS contract's, not the
+            // attribute name's: the runtime dispatches on it, so a
+            // `Process` plan must carry `codec` (the sheet requires
+            // it) and carry it inside the dispatch domain — an
+            // unknown or absent one must never earn a
+            // ValidatedExecutionPlan and quietly run as `lines`
+            // (D-2026-08-11-1, second amendment). Another sheet
+            // spelling its own `codec` vocabulary is untouched.
+            if spec.contract == "Process" {
+                match spec.attribute("codec") {
+                    Some(crate::plan::AttrSetting::Word(word))
+                        if word == "lines" || word == "jsonl" => {}
+                    Some(_) => {
+                        return Err(PlanValidationError::UnknownCodec {
+                            node: node.path.clone(),
+                        });
+                    }
+                    None => {
+                        return Err(PlanValidationError::MissingCodec {
+                            node: node.path.clone(),
+                        });
+                    }
                 }
             }
             let mut attributes = BTreeSet::new();

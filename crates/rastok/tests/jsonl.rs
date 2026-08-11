@@ -463,3 +463,50 @@ fn a_validated_plan_never_carries_an_unknown_codec() {
         "the domain holds: {refused:?}"
     );
 }
+
+#[test]
+fn a_process_plan_without_a_codec_never_validates() {
+    // The sheet REQUIRES codec, so a Process plan without one never
+    // left the compiler: a crafted package omitting it must refuse
+    // instead of silently running as `lines`.
+    let compilation = compile(&[CAT_JSONL], &Registry::m0()).expect("a valid plan");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            spec.attributes.retain(|(name, _)| name != "codec");
+        }
+    }
+    let refused = rastok::plan::ValidatedExecutionPlan::try_from(plan);
+    assert!(
+        matches!(
+            refused,
+            Err(rastok::plan::PlanValidationError::MissingCodec { .. })
+        ),
+        "presence is part of validity: {refused:?}"
+    );
+}
+
+#[test]
+fn another_contracts_codec_vocabulary_is_untouched() {
+    // The codec rule is the PROCESS contract's, not the attribute
+    // name's: a sheet spelling its own `codec = json` must not be
+    // refused by Process's domain.
+    let compilation = compile(&[CAT_JSONL], &Registry::m0()).expect("a valid plan");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            spec.contract = String::from("Custom");
+            for (name, setting) in &mut spec.attributes {
+                if name == "codec" {
+                    *setting = rastok::plan::AttrSetting::Word(String::from("json"));
+                }
+            }
+        }
+    }
+    let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan);
+    assert!(
+        validated.is_ok(),
+        "another sheet's vocabulary validates: {:?}",
+        validated.err()
+    );
+}
