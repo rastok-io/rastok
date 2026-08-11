@@ -584,33 +584,6 @@ impl Checker<'_, '_> {
         })
     }
 
-    /// A check-local view of a mocked connector with the contract's
-    /// reply type pinned on `out` (D-2026-08-11-1): a jsonl job
-    /// replies `array<variant>` in the real world, so mock replies
-    /// are judged against exactly that pin. Returns `None` when the
-    /// contract derives no reply type — `lines` stays untyped (the
-    /// frozen referee corpus mocks structured replies over it; its
-    /// honest typing belongs to the connector-sheet items).
-    fn mock_view(&self, node: &Node) -> Option<Node> {
-        let NodeRole::Connector { attributes, .. } = &node.role else {
-            return None;
-        };
-        let jsonl = attributes.iter().any(|attribute| {
-            attribute.name == "codec"
-                && matches!(&attribute.value, crate::compiler::hir::AttrValue::Word(word) if word == "jsonl")
-        });
-        if !jsonl {
-            return None;
-        }
-        let mut view = node.clone();
-        view.ports.push(crate::plan::PortDecl {
-            port: node::Port::new("out").unwrap_or_else(|_| unreachable!("`out` is a valid port")),
-            direction: node::Direction::Output,
-            ty: Some(cel::Type::List(Box::new(cel::Type::Dyn))),
-        });
-        Some(view)
-    }
-
     fn mocks(
         &mut self,
         decls: &[crate::compiler::syntax::MockDecl],
@@ -643,14 +616,10 @@ impl Checker<'_, '_> {
             }
             // A mock is a pure function of the request: its handlers
             // check like ordinary handlers, against the connector's
-            // own port table — WITH the contract's reply type pinned
-            // on `out` (D-2026-08-11-1): the real world shapes a
-            // jsonl reply as `array<variant>`, so a mock answering
-            // anything else is a false green the Lab must refuse.
-            // The pinned view is check-local: the plan's table (and
-            // the hash) never learn a trio port.
-            let mock_view = self.mock_view(node);
-            let node = mock_view.as_ref().unwrap_or(node);
+            // own port table — which answers the contract's
+            // EFFECTIVE out pin (`node_port_pin`): a jsonl mock is
+            // judged against `array<variant>` exactly like the edge
+            // audit and the machine judge it.
             let signature = cel::Signature::new();
             let mut handlers = Vec::new();
             for handler in &decl.handlers {
@@ -2313,11 +2282,7 @@ impl Checker<'_, '_> {
                         // A pinned output holds its emissions to the
                         // contract — ONE conformance notion, every
                         // EmitValue form.
-                        if let Some(expected) = node
-                            .ports
-                            .iter()
-                            .find(|decl| decl.port == port)
-                            .and_then(|decl| decl.ty.clone())
+                        if let Some(expected) = node_port_pin(node, &port)
                             && !self.port_conforms(
                                 &expected,
                                 &emit,
@@ -4274,9 +4239,48 @@ enum DataShape<'a> {
     Struct,
 }
 
+/// The pin a node's port carries: its table entry when declared, or
+/// the connector contract's EFFECTIVE out pin — the checker-side
+/// face of `rastok_core::boundary::connector_out_pin`, so the edge
+/// audit, the mock-reply judge, the plan validator, and the machine
+/// all speak the ONE derivation (D-2026-08-11-1, amended).
+fn node_port_pin(node: &Node, port: &node::Port) -> Option<cel::Type> {
+    node.ports
+        .iter()
+        .find(|decl| decl.port == *port)
+        .and_then(|decl| decl.ty.clone())
+        .or_else(|| {
+            if port.name() != "out" {
+                return None;
+            }
+            let NodeRole::Connector {
+                trait_name,
+                attributes,
+                ..
+            } = &node.role
+            else {
+                return None;
+            };
+            if trait_name != "Process" {
+                return None;
+            }
+            let word = attributes.iter().find_map(|attribute| {
+                if attribute.name != "codec" {
+                    return None;
+                }
+                match &attribute.value {
+                    crate::compiler::hir::AttrValue::Word(word) => Some(Some(word.as_str())),
+                    crate::compiler::hir::AttrValue::Const(_) => Some(None),
+                }
+            })?;
+            rastok_core::boundary::RequestCodec::from_word(word).reply_type()
+        })
+}
+
 /// The pinned type of an edge endpoint, when its port declares one:
-/// a node's table entry, or a declared boundary port — the implicit
-/// trio and unannotated ports answer `None` (inference territory).
+/// a node's table entry (the connector's effective out pin
+/// included), or a declared boundary port — the implicit trio and
+/// unannotated ports answer `None` (inference territory).
 fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<cel::Type> {
     let precise = |ty: cel::Type| match ty {
         // A `variant` pin is an explicit "anything" — inference
@@ -4295,13 +4299,8 @@ fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<cel::Type>
             .nodes
             .iter()
             .find(|node| &node.path == path)
-            .and_then(|node| {
-                node.ports
-                    .iter()
-                    .find(|decl| decl.port == endpoint.port)
-                    .and_then(|decl| decl.ty.clone())
-                    .and_then(precise)
-            }),
+            .and_then(|node| node_port_pin(node, &endpoint.port))
+            .and_then(precise),
     }
 }
 

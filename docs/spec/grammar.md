@@ -1,7 +1,8 @@
 # Rastok DSL — Grammar notes
 
-> **Status: Normative — under review.** The parser does not exist yet; this
-> document is the syntactic contract it will honor.
+> **Status: Normative.** The parser exists and honors this contract
+> for the implemented subset; forms not yet executable are marked or
+> refused with named deferrals (`E-CHECK-DEFERRED`).
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md). Concepts like `Operator`, `Connector`, event-driven transaction, the parameterization grid behind the named archetypes (Reducer, Aggregator, Window, Joiner), the dynamic dispatch primitives, and the partition model are introduced there. This document is the grammar ; foundations is the constitution.
 >
@@ -39,7 +40,7 @@ connector codex : Process {        // type annotation with ":"
   command  = "codex"               // attribute "="
   args     = ["app-server"]        // list value
   mode     = service
-  codec    = "jsonl"
+  codec    = jsonl
   protocol = "jsonrpc"
   effect   = idempotent
   behavior = probabilistic
@@ -70,7 +71,7 @@ graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly o
   durability = local                 // app-level attributes live here
   partition session { key = meta.app.session_key ; lifetime = duration("2h") }
 
-  connector inbound : HttpServer { path = "/teams/webhook" ; codec = "json" }
+  connector inbound : HttpServer { path = "/teams/webhook" ; codec = json }
 
   graph sessions per session {       // a graph DECLARES → it IS an instance (a composite Node),
     max_instances = 1000             //   keyed by `per` like any node ; Dispatch knobs are
@@ -82,7 +83,7 @@ graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly o
     codex.out -> out
   }
 
-  connector outbound : HttpClient { url = env("TEAMS_URL") ; codec = "json"
+  connector outbound : HttpClient { url = env("TEAMS_URL") ; codec = json
                                     effect = idempotent ; behavior = deterministic }
 
   inbound.out -> sessions.in         // graphs WIRE BY NAME, like every node
@@ -245,7 +246,7 @@ graph sessions per session {
     cwd      = cwd                        // graph-level val, by name
     env { CODEX_HOME = codex_home }
 
-    codec    = "jsonl"
+    codec    = jsonl
     protocol = "jsonrpc"
     effect   = idempotent
     behavior = probabilistic
@@ -266,7 +267,7 @@ graph teams_inbound {
   // Top-level → implicitly singleton.
   connector inbound : HttpServer {
     listen = ":8080"
-    codec  = "json"
+    codec  = json
   }
 
   // `sessions` — declared above, at the unit's top level — is

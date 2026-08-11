@@ -470,7 +470,7 @@ graph sessions per session {          // declaration = instantiation; `per` = on
     args    = ["app-server"]
     mode    = service                              // resident child process, one per session
     cwd     = cwd
-    codec   = "jsonl"
+    codec   = jsonl
     effect  = idempotent
     behavior = probabilistic
     timeout = duration("120s")                                 // per-call budget
@@ -808,7 +808,7 @@ defines them):
 
 ```
 connector <name> : <NativeType> [per <partition>] {
-  <attr> = <value>           // e.g., url = "...", codec = "json" ; Connectors declare NO ports
+  <attr> = <value>           // e.g., url = "...", codec = json ; Connectors declare NO ports
   on <trigger> { ... }       // (the type + codec define in/out/err)
 }
 ```

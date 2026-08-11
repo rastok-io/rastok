@@ -124,28 +124,46 @@ pub enum RequestCodec {
 }
 
 impl RequestCodec {
-    /// Reads the codec from a connector spec; `lines` is the sheet
-    /// default. A [`ValidatedExecutionPlan`] carries only `lines`
-    /// or `jsonl` (the validator holds the attribute's domain), so
-    /// the absent-attribute default is the ONLY path to `Lines`
-    /// here — nothing unknown is silently reinterpreted.
+    /// Reads the codec word — the PROCESS sheet's framing rule,
+    /// scoped to that contract: `codec` is a sheet-local name, not
+    /// a global one, so a future sheet spelling its own `codec`
+    /// vocabulary is untouched by this mapping.
+    #[must_use]
+    pub fn from_word(word: Option<&str>) -> Self {
+        match word {
+            Some("jsonl") => Self::Jsonl,
+            _ => Self::Lines,
+        }
+    }
+
+    /// Reads the codec from a `Process` connector spec. A
+    /// [`ValidatedExecutionPlan`] holds the attribute's domain AND
+    /// its presence for `Process` (the sheet requires it), so on a
+    /// validated plan the word is always there and always known —
+    /// nothing unknown is silently reinterpreted. A non-`Process`
+    /// contract answers `Lines` here only because nothing but
+    /// `Process` executes in v1; its framing question lands with
+    /// its sheet.
     ///
     /// [`ValidatedExecutionPlan`]: crate::plan::ValidatedExecutionPlan
     #[must_use]
     pub fn of(spec: &crate::plan::ConnectorSpec) -> Self {
+        if spec.contract != "Process" {
+            return Self::Lines;
+        }
         match spec.attribute("codec") {
-            Some(crate::plan::AttrSetting::Word(word)) if word == "jsonl" => Self::Jsonl,
+            Some(crate::plan::AttrSetting::Word(word)) => Self::from_word(Some(word)),
             _ => Self::Lines,
         }
     }
 
     /// The type a job-mode reply crosses the `out` pin with — the
     /// contract rule `Process(job, jsonl).out = array<variant>`
-    /// (D-2026-08-11-1), spelled once and consulted by the checker
-    /// (static mock replies) and the machine (every settled
-    /// outcome). `lines` stays untyped: the frozen referee corpus
-    /// mocks structured replies over it, and its honest typing
-    /// belongs to the connector-sheet items.
+    /// (D-2026-08-11-1). `lines` stays untyped: the frozen referee
+    /// corpus mocks structured replies over it, and its honest
+    /// typing belongs to the connector-sheet items. Callers reach
+    /// this through [`connector_out_pin`] — the ONE effective-pin
+    /// authority.
     #[must_use]
     pub fn reply_type(self) -> Option<crate::cel::Type> {
         match self {
@@ -155,6 +173,20 @@ impl RequestCodec {
             Self::Lines => None,
         }
     }
+}
+
+/// The EFFECTIVE `out` pin of a connector — the one semantic
+/// authority (D-2026-08-11-1, amended): the checker's edge audit,
+/// the mock-reply judge, the plan validator, and the machine all
+/// consult this same derivation. Scoped to the `Process` contract;
+/// any other sheet derives nothing until it lands with its own
+/// rules.
+#[must_use]
+pub fn connector_out_pin(spec: &crate::plan::ConnectorSpec) -> Option<crate::cel::Type> {
+    if spec.contract != "Process" {
+        return None;
+    }
+    RequestCodec::of(spec).reply_type()
 }
 
 /// Frames one request under the given codec.

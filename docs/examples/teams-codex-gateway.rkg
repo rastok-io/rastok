@@ -42,7 +42,7 @@ graph sessions per session {          // declaration = instance
       CODEX_HOME = codex_home
       RUST_LOG   = "info"
     }
-    codec = "jsonl"
+    codec = jsonl
     protocol = "jsonrpc"
     effect = idempotent
     behavior = probabilistic
@@ -58,7 +58,7 @@ graph sessions per session {          // declaration = instance
 
   connector codex_logs : File {
     path = "/var/codex/" + session.key + "/codex.stderr.log"
-    codec = "text"
+    codec = text
   }
 
   in        -> codex.in { capacity = 1024, backpressure = block }
@@ -83,7 +83,7 @@ graph teams_inbound : App {
 
   connector teams_in : HttpServer {
     listen = ":8080/adapters/teams/webhook"
-    codec = "json"
+    codec = json
     protocol = "teams_activity"
 
     hmac = env("TEAMS_HMAC_SECRET")
@@ -234,7 +234,7 @@ graph teams_inbound : App {
     base_url = env("TEAMS_SERVICE_URL")
     path = "/v3/conversations/" + meta.app.conversation_id + "/activities"   // per-call CEL
     method = "POST"
-    codec = "json"
+    codec = json
     protocol = "teams_activity"
     effect = irreversible
     behavior = deterministic

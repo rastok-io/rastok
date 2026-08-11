@@ -22,7 +22,7 @@ graph agent_gateway : App {
   connector local_ai_agent : Process {
     command = "codex"
     args = ["app-server"]
-    codec = "jsonl"
+    codec = jsonl
     effect = idempotent
     behavior = probabilistic
     // in = stdin (prompt), out = stdout (answer) — Process defaults
@@ -30,7 +30,7 @@ graph agent_gateway : App {
 
   connector audit_log : File {
     path = "/var/log/rastok/audit.jsonl"
-    codec = "jsonl"
+    codec = jsonl
     effect = irreversible
     idempotency_key = meta.sys.id
     behavior = deterministic

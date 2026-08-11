@@ -59,6 +59,30 @@ out-of-domain coefficient or scale before it travels, and the
 writer keeps a defensive mirror plus the reader's nesting budget:
 a hostile scale is a typed refusal, never a runaway allocation.
 
+*Amended 2026-08-11 (second round):* four more edges.
+(1) **The effective pin is ONE derivation** —
+`boundary::connector_out_pin` (Process-scoped) is the single
+semantic authority; the checker's port-pin lookup (edge audit AND
+mock-reply judge), the plan validator's edge audit, and the
+machine's settle judge all consult it. A `shell.out -> sink.scalar`
+edge from a jsonl connector to an `int` port now refuses at CHECK
+(E-PORT-TYPE, `List(Dyn)` vs `Int`) instead of surfacing as a
+runtime fault. (2) **`codec` is the Process sheet's name, not a
+global one** — the validator's domain-and-presence rule fires only
+for `spec.contract == "Process"` (the sheet REQUIRES the attribute,
+so a Process plan without one — `MissingCodec` — never left the
+compiler); a future sheet spelling its own `codec` vocabulary is
+untouched. (3) **Doubles write TRUE shortest round-trip** — the
+forced `.0` is gone: the inbound domain is dynamic, so an integral
+double's line legitimately reads back as `int` (the static tag does
+not survive the wire), and forcing a fraction only made the form
+non-shortest against this decision's own words. (4) **The wire is
+GOLDEN** — `examples/jsonl.rkg` pins the fixture's semantic hash,
+its package, and a full Lab trace whose OUTBOUND record seals the
+canonical line's `request_digest` (key 43), verified equal to the
+digest re-derived from `prepare_jsonl`: a change to the canonical
+form must re-bless the trace with its reason.
+
 ## D-2026-08-10-1 — Metadata has exactly three zones
 
 `meta.sys` (runtime-owned, read-only), `meta.app` (application-owned,

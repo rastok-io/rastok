@@ -630,13 +630,13 @@ fn write_into(
                     message: String::from("a non-finite double is not JSON"),
                 });
             }
-            // Rust's shortest round-trip formatting; an integral
-            // double keeps a fraction so it never reads back as int.
-            let text = alloc::format!("{v}");
-            out.push_str(&text);
-            if !text.contains(['.', 'e', 'E']) {
-                out.push_str(".0");
-            }
+            // Rust's shortest round-trip formatting, and NOTHING
+            // more: the inbound domain is dynamic, so an integral
+            // double's line legitimately reads back as int — the
+            // static tag does not survive the wire, and forcing a
+            // fraction would only make the form non-shortest
+            // (D-2026-08-11-1, amended).
+            out.push_str(&alloc::format!("{v}"));
         }
         Value::Scalar(Scalar::Text(v)) => write_string(v, out),
         Value::Scalar(Scalar::Bytes(_)) => {
@@ -784,12 +784,19 @@ mod writer_tests {
             .unwrap(),
             "0.0005"
         );
-        // An integral double keeps its fraction — it must not read
-        // back as int.
+        // An integral double writes SHORTEST — and its line reads
+        // back as int (the inbound domain is dynamic; the static
+        // tag does not survive the wire).
         assert_eq!(
             write_value(&Value::Scalar(Scalar::Double(2.0))).unwrap(),
-            "2.0"
+            "2"
         );
+        assert_eq!(
+            write_value(&Value::Scalar(Scalar::Double(2.5))).unwrap(),
+            "2.5"
+        );
+        let (round, _) = parse_value("2").unwrap();
+        assert_eq!(round, crate::cel::Value::Int(2));
         // Escapes.
         assert_eq!(
             write_value(&Value::Scalar(Scalar::Text(String::from("a\"\n")))).unwrap(),

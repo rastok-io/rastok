@@ -148,7 +148,19 @@ step touches `vm.rs` once.
    envelopes: connector outcomes and typed errors now inherit the
    request's `app`/`ext` zones (content_type struck — the reply's
    payload is fresh), proven by an app-token round trip through a
-   REAL `cat` and through a mock. Unlocks realistic `File`
+   REAL `cat` and through a mock. A second same-day round unified
+   the effective pin into ONE derivation
+   (`boundary::connector_out_pin`, consulted by the checker's edge
+   audit and mock judge, the plan validator, and the machine — a
+   jsonl-to-`int` edge now refuses at CHECK), scoped the codec rule
+   to the Process contract (domain AND presence — the sheet
+   requires it), aligned doubles with the decision's own words
+   (true shortest round-trip, no forced fraction — an integral
+   double's line reads back as `int`, the inbound domain being
+   dynamic), swept the dead `codec = "…"` spelling from the docs,
+   and added the jsonl golden fixture (`examples/jsonl.rkg`: hash +
+   package + Lab trace sealing the canonical line's
+   `request_digest`). Unlocks realistic `File`
    and HTTP payloads.
 3. **The error half of the language** — typed-error emissions from
    operators (`err = Kind {…}`) and mock `err` replies in the Lab.

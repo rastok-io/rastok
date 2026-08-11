@@ -897,11 +897,26 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // lookups dereference safely.
     let pin_of = |endpoint: &EndpointRef| -> Option<cel::Type> {
         let decl_ty = match endpoint.node {
-            Some(slot) => plan.nodes[slot.index()]
-                .ports
-                .iter()
-                .find(|decl| decl.port == endpoint.port)
-                .and_then(|decl| decl.ty.clone()),
+            Some(slot) => {
+                let node = &plan.nodes[slot.index()];
+                node.ports
+                    .iter()
+                    .find(|decl| decl.port == endpoint.port)
+                    .and_then(|decl| decl.ty.clone())
+                    .or_else(|| {
+                        // The connector contract's EFFECTIVE out pin
+                        // — the same authority the checker, the
+                        // mock judge, and the machine consult
+                        // (D-2026-08-11-1, amended).
+                        if endpoint.port.name() != "out" {
+                            return None;
+                        }
+                        match &node.kind {
+                            NodeKind::Connector(spec) => crate::boundary::connector_out_pin(spec),
+                            NodeKind::Operator => None,
+                        }
+                    })
+            }
             None => plan
                 .boundary
                 .iter()

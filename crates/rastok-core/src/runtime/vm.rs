@@ -738,10 +738,11 @@ impl<'plan> Vm<'plan> {
             // The connector's own pin is the CONTRACT's reply type —
             // a mock answering a record over jsonl is judged exactly
             // like a real child would be shaped: array<variant> or
-            // the typed refusal (D-2026-08-11-1).
+            // the typed refusal. `connector_out_pin` is the ONE
+            // effective-pin authority (D-2026-08-11-1, amended).
             let contract_pin = match &self.plan.plan().nodes[slot.index()].kind {
-                NodeKind::Connector(spec) => crate::boundary::RequestCodec::of(spec).reply_type(),
-                NodeKind::Operator { .. } => None,
+                NodeKind::Connector(spec) => crate::boundary::connector_out_pin(spec),
+                NodeKind::Operator => None,
             };
             if let Err(fault) = crate::runtime::crossing_pins_hold(
                 self.plan.plan(),

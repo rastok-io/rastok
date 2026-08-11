@@ -1,0 +1,29 @@
+graph relay : App {
+  connector shell : Process {
+    mode = job ; command = "cat"
+    codec = jsonl
+    effect = idempotent ; behavior = deterministic
+    timeout = duration("5s")
+  }
+
+  operator sift {
+    on in where data[0]["status"] == "ok" { out = data[0]["value"] }
+  }
+
+  . -> shell
+  shell.out -> sift
+  sift -> .
+}
+
+lab relay {
+  simulation golden on app {
+    mock shell {
+      on in { out = json [{"status": "ok", "value": 7}] }
+    }
+
+    scenario roundtrip "a struct request opens one canonical line; the mock answers the wire's shape" {
+      app.in = { price = json 19.99, n = 42 }
+      expect "sifted" app.out count == 1 where data == 7
+    }
+  }
+}

@@ -27,7 +27,7 @@ Three nodes, one chain. Useful as a parser smoke test.
 graph hello_echo {
   connector inbound : HttpServer {
     listen = ":8080/echo"
-    codec = "json"
+    codec = json
   }
 
   operator tag_received {
@@ -41,7 +41,7 @@ graph hello_echo {
 
   connector log : File {
     path = "/var/log/rastok/echo.ndjson"
-    codec = "ndjson"
+    codec = ndjson
     append = true
     rotate = "100 MiB"
   }
@@ -88,7 +88,7 @@ graph sessions per session {   // declaration = instance
       RUST_LOG   = "info"
     }
 
-    codec = "jsonl"
+    codec = jsonl
     protocol = "jsonrpc"
     effect = idempotent
     behavior = probabilistic
@@ -107,7 +107,7 @@ graph sessions per session {   // declaration = instance
 
   connector codex_logs : File {
     path = "/var/codex/" + session.key + "/codex.stderr.log"
-    codec = "text"
+    codec = text
   }
 
   in         -> codex.in   { capacity = 1024, backpressure = block }
@@ -128,7 +128,7 @@ key, lifetime and per-instance `val`s all come from the graph's own
 graph teams_inbound {
   connector teams_in : HttpServer {
     listen = ":8080/adapters/teams/webhook"
-    codec = "json"
+    codec = json
     protocol = "teams_activity"
   }
 
@@ -221,7 +221,7 @@ graph teams_outbound {
     base_url = env("TEAMS_SERVICE_URL")
     path = "/v3/conversations/" + meta.app.conversation_id + "/activities"   // per-call CEL
     method = "POST"
-    codec = "json"
+    codec = json
     protocol = "teams_activity"
     effect = irreversible
     behavior = deterministic
@@ -452,7 +452,7 @@ without creating mutable state.
 graph meta_control_plane {
   connector inbound : HttpServer {
     listen = ":8080/events"
-    codec = "json"
+    codec = json
   }
 
   operator normalize_meta {
@@ -478,12 +478,12 @@ graph meta_control_plane {
 
   connector urgent_log : File {
     path = "/var/log/rastok/urgent.ndjson"
-    codec = "ndjson"
+    codec = ndjson
   }
 
   connector normal_log : File {
     path = "/var/log/rastok/normal.ndjson"
-    codec = "ndjson"
+    codec = ndjson
   }
 
   inbound.out          -> normalize_meta.in
