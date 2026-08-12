@@ -20,20 +20,87 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 /// The default stdout cap for a job run, per the contract sheet's
-/// Parses a declared size ("8MiB", "512KiB", "100B", bare bytes).
-fn parse_size(text: &str) -> Option<usize> {
-    let text = text.trim();
-    let split = text.find(|c: char| !c.is_ascii_digit())?;
-    let (digits, suffix) = text.split_at(split);
-    let base: usize = digits.parse().ok()?;
-    let factor = match suffix.trim() {
-        "B" => 1,
-        "KiB" => 1024,
-        "MiB" => 1024 * 1024,
-        "GiB" => 1024 * 1024 * 1024,
-        _ => return None,
-    };
-    base.checked_mul(factor)
+/// The job profile's RESOLVED settings — one pure conversion from
+/// the travelling spec, judged in full BEFORE any effect
+/// (D-2026-08-12-1, review round): every Defaulted attribute must
+/// be present (the checker injected it; absence is a violated
+/// invariant), every value must inhabit its domain, and nothing is
+/// silently dropped or re-defaulted. The adapter consumes THIS,
+/// never the raw attribute table.
+#[derive(Debug)]
+struct ProcessSettings {
+    command: String,
+    args: Vec<String>,
+    codec: crate::boundary::RequestCodec,
+    max_output: usize,
+}
+
+impl ProcessSettings {
+    fn try_from(spec: &rastok_core::plan::ConnectorSpec) -> Result<Self, String> {
+        let unresolved = |name: &str| {
+            format!(
+                "the plan violates the Process contract: `{name}` is unresolved \
+                 (a Defaulted attribute must travel in the plan)"
+            )
+        };
+        match spec.attribute("mode") {
+            Some(AttrSetting::Word(word)) if word == "job" => {}
+            Some(AttrSetting::Word(word)) => {
+                return Err(format!("the `{word}` mode has no adapter in this build"));
+            }
+            _ => return Err(unresolved("mode")),
+        }
+        match spec.attribute("on_timeout") {
+            Some(AttrSetting::Word(word)) if word == "kill" => {}
+            Some(_) => {
+                return Err(String::from(
+                    "`on_timeout` is fixed to `kill` for `Process(mode = job)`",
+                ));
+            }
+            None => return Err(unresolved("on_timeout")),
+        }
+        let Some(AttrSetting::Value(cel::Value::Text(command))) = spec.attribute("command") else {
+            return Err(String::from("the command attribute is not text"));
+        };
+        let args = match spec.attribute("args") {
+            Some(AttrSetting::Value(cel::Value::List(items))) => {
+                let mut args = Vec::with_capacity(items.len());
+                for item in items {
+                    match item {
+                        cel::Value::Text(text) => args.push(text.clone()),
+                        other => {
+                            return Err(format!(
+                                "an argument is not text: {other:?} — nothing is dropped \
+                                 silently"
+                            ));
+                        }
+                    }
+                }
+                args
+            }
+            _ => return Err(unresolved("args")),
+        };
+        let max_output = match spec.attribute("max_output") {
+            Some(AttrSetting::Value(cel::Value::Text(text))) => {
+                match crate::contract::byte_size(text) {
+                    Some(size) => size,
+                    None => return Err(format!("max_output `{text}` is not a size")),
+                }
+            }
+            _ => return Err(unresolved("max_output")),
+        };
+        if let Some(setting) = spec.attribute("timeout")
+            && !matches!(setting, AttrSetting::Value(cel::Value::Duration(_)))
+        {
+            return Err(String::from("the timeout attribute is not a duration"));
+        }
+        Ok(Self {
+            command: command.clone(),
+            args,
+            codec: crate::boundary::RequestCodec::of(spec),
+            max_output,
+        })
+    }
 }
 
 /// The `Process` adapter, job mode: one envelope, one spawn. stdin
@@ -113,62 +180,21 @@ impl<'plan> Process<'plan> {
                 "the intent names no planned connector".to_string(),
             ));
         };
-        let Some(AttrSetting::Value(cel::Value::Text(command))) = spec.attribute("command") else {
-            return Err(failure(
-                "SpawnFailed",
-                "the command attribute is not text".to_string(),
-            ));
-        };
-        // Defaulted attributes TRAVEL (D-2026-08-12-1): the checker
-        // injected `args = []` if the author omitted it, so absence
-        // here is a violated invariant — an edge defense, never a
-        // second semantic authority.
-        let args: Vec<String> = match spec.attribute("args") {
-            Some(AttrSetting::Value(cel::Value::List(items))) => items
-                .iter()
-                .filter_map(|item| match item {
-                    cel::Value::Text(text) => Some(text.clone()),
-                    _ => None,
-                })
-                .collect(),
-            _ => {
-                return Err(failure(
-                    "SpawnFailed",
-                    "the plan violates the Process contract: `args` is unresolved \
-                     (a Defaulted attribute must travel in the plan)"
-                        .to_string(),
-                ));
-            }
+        // ONE pure conversion judges the whole travelling sheet
+        // before any effect; a refusal here is a violated invariant,
+        // typed, never a silent re-default.
+        let settings = match ProcessSettings::try_from(spec) {
+            Ok(settings) => settings,
+            Err(message) => return Err(failure("SpawnFailed", message)),
         };
         // The machine prepared and sealed the bytes; the adapter
         // TRANSPORTS them — recomputing would reopen the gap between
         // sealed and sent.
         let framed = intent.prepared.bytes().to_vec();
         let _ = request;
-        let max_output = match spec.attribute("max_output") {
-            Some(AttrSetting::Value(cel::Value::Text(text))) => match parse_size(text) {
-                Some(size) => size,
-                None => {
-                    return Err(failure(
-                        "SpawnFailed",
-                        format!("max_output `{text}` is not a size"),
-                    ));
-                }
-            },
-            // The normative default travels in the plan
-            // (D-2026-08-12-1) — absence is a violated invariant.
-            _ => {
-                return Err(failure(
-                    "SpawnFailed",
-                    "the plan violates the Process contract: `max_output` is unresolved \
-                     (a Defaulted attribute must travel in the plan)"
-                        .to_string(),
-                ));
-            }
-        };
-        let mut builder = Command::new(command);
+        let mut builder = Command::new(&settings.command);
         builder
-            .args(&args)
+            .args(&settings.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -213,12 +239,12 @@ impl<'plan> Process<'plan> {
         }
         Ok(Run {
             call_ref: intent.call_ref,
-            codec: crate::boundary::RequestCodec::of(spec),
+            codec: settings.codec,
             child,
             chunks,
             stdout: Vec::new(),
             stderr: Vec::new(),
-            max_output,
+            max_output: settings.max_output,
             overflowed: false,
             out_eof: false,
             err_eof: false,

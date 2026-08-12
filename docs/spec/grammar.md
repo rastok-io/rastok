@@ -14,16 +14,19 @@
 
 `.rkg` — short for "rastok graph". Examples in `docs/*.rkg`.
 
-## Syntax conventions — three forms, no exceptions
+## Syntax conventions — two forms, no exceptions
 
-The DSL uses three syntactic forms and only three. Every line in an `.rkg`
-file is one of them.
+The DSL uses two syntactic forms and only two (D-2026-08-12-1).
+Every line in an `.rkg` file is one of them.
 
 | Form | Shape | Meaning |
 |---|---|---|
-| **Attribute** | `name = value` | scalar / list / tagged value assigned to a key |
-| **Unlabeled block** | `name { ... }` | named sub-object |
+| **Attribute** | `name = value` | any value — scalar, composite, or tagged — assigned to a key |
 | **Labeled block** | `keyword <label> [: <Type>] { ... }` | reserved-keyword declaration (`operator`, `connector`, `graph`, `simulation`, `defaults`, `on`) |
+
+The former unlabeled block (`name { … }`, the named sub-object) is a
+DEAD form: the parser still recognizes it to refuse with the
+migration « write `name = { … }` ».
 
 Rules :
 
@@ -1291,7 +1294,9 @@ connector_decl    ::= "connector" IDENT ":" type_annotation per_clause? operator
 type_annotation   ::= IDENT ( "+" IDENT )*
 
 operator_body     ::= "{" ( port_decl | val_decl | var_decl
-                          | handler_decl | attribute | sub_block )* "}"
+                          | handler_decl | attribute )* "}"
+                                                                      // sub_block is DEAD (D-2026-08-12-1); parsed only to refuse
+                                                                      //   with its migration hint
 
 graph_body        ::= ( port_decl | partition_decl | operator_decl | connector_decl
                        | val_decl | edge_decl
@@ -1479,9 +1484,10 @@ tagged_block_value ::= "text" RAW_BLOCK                              // verbatim
                     | "json" json_value                               // any JSON value, delegated to the JSON reader — always variant
                     | "asset" "(" STRING ( "," STRING )? ")"          // build-time repo bytes (path, content_type?) — D-2026-08-10-5
                                                                       // array literal : a CEL list expression `[v, v, …]`
-raw_or_struct     ::= /* tag-dependent : raw text for jq/bash/sql/python/rust/json ;
-                       struct_body for the others (oauth2_client_credentials,
-                       exponential, …) */
+raw_body          ::= /* raw text, lexically opaque — every live tag's body
+                       is raw (guests, text, base64, data formats); the
+                       struct-bodied initializer tags are DEAD
+                       (D-2026-08-12-1) */
 arg_list          ::= ( value ( "," value )* )?
 
 defaults_block    ::= "defaults" "{" struct_body "}"
@@ -1637,7 +1643,7 @@ parser never needs to peek further than one token.
 | `operator_body` | `var` | `var_decl` |
 | `operator_body` | `on` | `handler_decl` |
 | `operator_body` | IDENT — next is `=` | `attribute` |
-| `operator_body` | IDENT — next is `{` | `sub_block` |
+| `operator_body` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
 | `trigger` | `start` / `stop` | lifecycle handler |
 | `trigger` | `compensate` | saga compensation handler (only valid on a Connector with `effect = compensable`) |
 | `trigger` | `(` | join handler `(a, b)` (presence) |
@@ -1648,8 +1654,8 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | `(` | tuple multi-emit `(a, b) = (e1, e2)` |
 | `handler_body` (statement) | `lvalue` (IDENT, dotted ok — e.g. `meta.app.label`) — next is `=` or `:` | assignment / port emit (`= nothing` = no emit ; `meta.sys` is read-only, never an lvalue) |
 | `handler_body` (statement) | TAG_KW / `{` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
-| `attr_or_block` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
-| `attr_or_block` | IDENT — next is `{` | `sub_block` |
+| `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
+| `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
 | `value` | TAG_KW | `tagged_value` |
 | `value` | `text` / `base64` / `json` / `asset` | `tagged_block_value` (verbatim / bytes / json_value / build-time bytes) |
 | `value` | `{` — then `}` / `:` / STRING / IDENT | `braced_value` : empty struct / empty map / map_entries / struct_entries |

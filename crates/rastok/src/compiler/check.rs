@@ -1730,20 +1730,19 @@ impl Checker<'_, '_> {
                 refuse(self.bag, &attribute.name, span, detail);
             }
         }
-        if deferred_profile {
-            // No required-check, no injection: the deferral already
-            // refused the compilation honestly.
-            return;
-        }
-        // 4. Required attributes of the composed sheet.
+        // 4. Required attributes — the COMMON sheet is known and
+        // fully owed even under a deferred profile; only the
+        // deferred profile's own attributes wait with it.
         let composed: Vec<&contract::AttributeSpec> = contract
             .common
             .iter()
-            .chain(
+            .chain(if deferred_profile {
+                &[] as &[contract::AttributeSpec]
+            } else {
                 profile
                     .map(|profile| profile.attributes)
-                    .unwrap_or_default(),
-            )
+                    .unwrap_or_default()
+            })
             .collect();
         for spec in &composed {
             if spec.presence == contract::Presence::Required
@@ -1762,6 +1761,11 @@ impl Checker<'_, '_> {
                     .with_field("attribute", spec.name),
                 );
             }
+        }
+        if deferred_profile {
+            // No injection: the deferral already refused the
+            // compilation honestly.
+            return;
         }
         // 5. Defaults become EFFECTIVE HIR (D-2026-08-12-1): the
         // selector's word first, then every absent Defaulted
@@ -3933,7 +3937,22 @@ impl Checker<'_, '_> {
                     }
                 }
                 StructEntry::Block { name, .. } => {
-                    self.deferred("a block inside an envelope builder", name.span);
+                    // A nested block is a DEAD form (D-2026-08-12-1)
+                    // — the migration speaks, never a generic
+                    // deferral.
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTRACT_ATTR,
+                            Phase::Check,
+                            format!(
+                                "`{name} {{ … }}` is no longer a form; write `{name} = {{ … }}` \
+                                 (or dotted `{name}.field = …` entries)",
+                                name = name.text
+                            ),
+                        )
+                        .with_span(name.span)
+                        .with_field("attribute", name.text.clone()),
+                    );
                 }
             }
         }
@@ -4031,7 +4050,18 @@ impl Checker<'_, '_> {
                     }
                 }
                 StructEntry::Block { name, .. } => {
-                    self.deferred("a block inside a record", name.span);
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTRACT_ATTR,
+                            Phase::Check,
+                            format!(
+                                "`{name} {{ … }}` is no longer a form; write `{name} = {{ … }}`",
+                                name = name.text
+                            ),
+                        )
+                        .with_span(name.span)
+                        .with_field("attribute", name.text.clone()),
+                    );
                 }
             }
         }

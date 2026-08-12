@@ -177,6 +177,10 @@ pub enum ValueDomain {
     TextList,
     /// A constant duration value.
     Duration,
+    /// A constant byte-size string (`"8MiB"`) — judged by
+    /// [`byte_size`], the ONE parser the contract and the adapter
+    /// share: what validates is what executes.
+    ByteSize,
     /// A CEL path over runtime data (`correlate = data.id`) — not a
     /// boot-phase constant. Deferred-only.
     CelPath,
@@ -194,7 +198,7 @@ impl ValueDomain {
     pub fn implemented(&self) -> bool {
         matches!(
             self,
-            Self::Choice(_) | Self::Text | Self::TextList | Self::Duration
+            Self::Choice(_) | Self::Text | Self::TextList | Self::Duration | Self::ByteSize
         )
     }
 
@@ -212,8 +216,34 @@ impl ValueDomain {
                 _ => false,
             },
             Self::Duration => matches!(value, cel::Value::Duration(_)),
+            Self::ByteSize => {
+                matches!(value, cel::Value::Text(text) if byte_size(text).is_some())
+            }
         }
     }
+}
+
+/// Reads a declared byte size (`"8MiB"`, `"512KiB"`, `"100B"`) — an
+/// explicit unit is required. The ONE rule shared by the contract's
+/// domain judgement and the adapter's budget: a size the checker
+/// accepted is a size the runtime enforces.
+#[must_use]
+pub fn byte_size(text: &str) -> Option<usize> {
+    let text = text.trim();
+    let split = text.find(|c: char| !c.is_ascii_digit())?;
+    let (digits, suffix) = text.split_at(split);
+    if digits.is_empty() {
+        return None;
+    }
+    let base: usize = digits.parse().ok()?;
+    let factor = match suffix.trim() {
+        "B" => 1,
+        "KiB" => 1024,
+        "MiB" => 1024 * 1024,
+        "GiB" => 1024 * 1024 * 1024,
+        _ => return None,
+    };
+    base.checked_mul(factor)
 }
 
 /// Why a contract sheet cannot enter the registry — the sheet is an
@@ -243,6 +273,9 @@ pub enum SheetDefect {
     SelectorCollision(&'static str),
     /// A `Choice` domain lists one word twice.
     DuplicateChoice(&'static str),
+    /// A sheet name (port, attribute, selector, profile word,
+    /// choice word, or error kind) the DSL cannot express.
+    InexpressibleName(&'static str),
     /// A deferred-only domain sits in an AVAILABLE profile or the
     /// common sheet.
     UnimplementedDomain(&'static str),
@@ -280,6 +313,12 @@ impl core::fmt::Display for SheetDefect {
             Self::DuplicateChoice(name) => {
                 write!(f, "`{name}`'s choice domain lists one word twice")
             }
+            Self::InexpressibleName(name) => {
+                write!(
+                    f,
+                    "`{name}` is not expressible in the DSL's identifier grammar"
+                )
+            }
             Self::UnimplementedDomain(name) => write!(
                 f,
                 "`{name}` carries a deferred-only domain outside a deferred profile"
@@ -292,6 +331,19 @@ impl core::fmt::Display for SheetDefect {
 }
 
 impl std::error::Error for SheetDefect {}
+
+/// Whether a sheet-declared name is expressible in the DSL — the
+/// identifier grammar the sheet's ports, attributes, selector,
+/// profile words, choice words and error kinds must all satisfy: an
+/// admitted sheet is an authority, so nothing inexpressible enters.
+fn expressible_name(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        && !text.as_bytes()[0].is_ascii_digit()
+        && !matches!(text, "true" | "false" | "null")
+}
 
 /// Judges one default against its spec — compiling a CEL default
 /// through the real chain (closed signature, no consts: a standard
@@ -340,23 +392,37 @@ fn validate_attributes(
 ) -> Result<(), SheetDefect> {
     let mut local = std::collections::BTreeSet::new();
     for spec in specs {
+        if !expressible_name(spec.name) {
+            return Err(SheetDefect::InexpressibleName(spec.name));
+        }
         if !local.insert(spec.name) || seen.contains(spec.name) {
             return Err(SheetDefect::DuplicateAttribute(spec.name));
         }
         if let ValueDomain::Choice(words) = &spec.domain {
             let mut unique = std::collections::BTreeSet::new();
-            if !words.iter().all(|word| unique.insert(*word)) {
-                return Err(SheetDefect::DuplicateChoice(spec.name));
+            for word in *words {
+                if !expressible_name(word) {
+                    return Err(SheetDefect::InexpressibleName(word));
+                }
+                if !unique.insert(*word) {
+                    return Err(SheetDefect::DuplicateChoice(spec.name));
+                }
             }
         }
-        if !spec.domain.implemented() {
+        if spec.domain.implemented() {
+            validate_default(spec)?;
+        } else {
             if !deferred_profile {
                 return Err(SheetDefect::UnimplementedDomain(spec.name));
             }
-        } else {
-            // A deferred profile's implemented-domain defaults still
-            // validate; deferred-only domains carry no default.
-            validate_default(spec)?;
+            // A domain nobody can judge carries no default — a
+            // default that cannot be validated is a lie waiting.
+            if matches!(spec.presence, Presence::Defaulted(_)) {
+                return Err(SheetDefect::InvalidDefault {
+                    attribute: spec.name,
+                    reason: String::from("a deferred-only domain cannot carry a default"),
+                });
+            }
         }
     }
     Ok(())
@@ -376,7 +442,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                 .map(|name| (*name, crate::node::Direction::Output)),
         )
     {
-        if crate::node::Port::new(name.to_string()).is_err() {
+        if !expressible_name(name) || crate::node::Port::new(name.to_string()).is_err() {
             return Err(SheetDefect::InvalidPortName(name));
         }
         if !seen.insert(name) {
@@ -399,11 +465,17 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
         names.insert(spec.name);
     }
     if let Some(selector) = &contract.selector {
+        if !expressible_name(selector.attribute) {
+            return Err(SheetDefect::InexpressibleName(selector.attribute));
+        }
         if names.contains(selector.attribute) {
             return Err(SheetDefect::SelectorCollision(selector.attribute));
         }
         let mut words = std::collections::BTreeSet::new();
         for profile in selector.profiles {
+            if !expressible_name(profile.word) {
+                return Err(SheetDefect::InexpressibleName(profile.word));
+            }
             if !words.insert(profile.word) {
                 return Err(SheetDefect::DuplicateProfile(profile.word));
             }
@@ -431,6 +503,9 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
     }
     let mut kinds = std::collections::BTreeSet::new();
     for kind in contract.error_set {
+        if !expressible_name(kind) {
+            return Err(SheetDefect::InexpressibleName(kind));
+        }
         if !kinds.insert(*kind) {
             return Err(SheetDefect::DuplicateErrorKind(kind));
         }

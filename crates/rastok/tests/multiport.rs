@@ -852,19 +852,20 @@ fn a_block_entry_carries_its_root_into_the_classification() {
         }),
         "the block's name is the offending field: {bag:?}"
     );
-    // And a `meta { … }` block ALONE is the envelope form — it lands
-    // on the builder's honest deferral, never silently a record.
+    // And a `meta { … }` block ALONE still classifies as the
+    // envelope form — then refuses as the DEAD block spelling with
+    // its migration (dotted `meta.field = …` entries), never
+    // silently a record (D-2026-08-12-1).
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta { flag = true }\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("the block form defers");
+    let bag = compile(&[source], &Registry::m0()).expect_err("the dead block refuses");
     assert!(
         bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code().as_str() == "E-CHECK-DEFERRED"
+            diagnostic.code().as_str() == "E-CONTRACT-ATTR"
                 && diagnostic
-                    .fields()
-                    .iter()
-                    .any(|(_, value)| value.contains("envelope builder"))
+                    .message()
+                    .contains("`meta { … }` is no longer a form")
         }),
-        "the envelope form's deferral, not a record: {bag:?}"
+        "the migration speaks on the envelope side too: {bag:?}"
     );
 }
 

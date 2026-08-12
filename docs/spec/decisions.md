@@ -61,7 +61,9 @@ injects the contract's default — a `Choice` word directly, a CEL
 default through the SAME chain as author expressions (compile →
 const-eval → domain judgement) — into the HIR BEFORE
 canonicalization, so omission and the exact spelling of the
-default are ONE identity (same HIR, hash, plan). This does not
+default are ONE identity — same canonical identity (hash) and same
+plan; the raw HIR keeps source order with injected defaults
+appended, and canonicalization erases the difference. This does not
 merge distinct constant expressions (`duration("60s")` and
 `duration("1m")` keep two trees). `Optional` absence is a real
 state that survives into the plan. The plan carries EFFECTIVE

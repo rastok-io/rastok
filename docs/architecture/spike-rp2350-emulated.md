@@ -68,7 +68,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 |---|---|---|---|
 | `plan::decode` (416-byte v5 package, full invariant validation + canonicity re-encode; re-measured 2026-08-12 — the three injected default attributes ride the package) | 4 663 | 233 k | 1.55 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and CEL bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32; min 1 838 / max 2 101) | 1 875 | **94 k** | **0.63 ms** |
+| relay transaction (avg of 32; min 1 842 / max 2 106; re-measured 2026-08-12) | 1 885 | **94 k** | **0.63 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |

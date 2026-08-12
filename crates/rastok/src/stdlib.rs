@@ -82,12 +82,12 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                 support: ProfileSupport::Available,
                 attributes: &[
                     AttributeSpec {
-                        // A size string ("8MiB"); a dedicated size
-                        // domain can come with the adapter that
-                        // enforces it.
+                        // Judged by `contract::byte_size` — the same
+                        // parser the adapter enforces the budget
+                        // with (D-2026-08-12-1, review round).
                         name: "max_output",
                         presence: Presence::Defaulted(DefaultValue::CelExpression(r#""8MiB""#)),
-                        domain: ValueDomain::Text,
+                        domain: ValueDomain::ByteSize,
                     },
                     AttributeSpec {
                         // Bypassing a detached one-shot is
@@ -148,8 +148,8 @@ impl Registry {
     /// and the guest languages with no available frontend.
     #[must_use]
     pub fn m0() -> Self {
-        Self {
-            connectors: vec![PROCESS],
+        let base = Self {
+            connectors: Vec::new(),
             declared: DECLARED.to_vec(),
             guests: vec![
                 GuestContract {
@@ -161,7 +161,12 @@ impl Registry {
                     available: false,
                 },
             ],
-        }
+        };
+        // The standard catalogue walks through the SAME door as any
+        // extension: a defect in a standard sheet is a build bug,
+        // surfaced at construction — never an unvalidated authority.
+        base.try_with(PROCESS)
+            .unwrap_or_else(|defect| unreachable!("the standard sheet holds: {defect}"))
     }
 }
 

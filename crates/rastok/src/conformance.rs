@@ -267,18 +267,32 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
                 .push(format!("the sheet names an invalid port `{port}`"));
         }
     }
-    let mut seen = BTreeSet::new();
-    let profile_attrs = contract
-        .selector
-        .iter()
-        .flat_map(|selector| selector.profiles.iter())
-        .flat_map(|profile| profile.attributes.iter());
-    for attribute in contract.common.iter().chain(profile_attrs) {
-        if !seen.insert(attribute.name) {
+    // Duplicates are judged BY SCOPE: within the common sheet,
+    // within one profile, and between common and a profile — never
+    // between two sibling profiles (the selected profile
+    // disambiguates them).
+    let mut common = BTreeSet::new();
+    for attribute in contract.common {
+        if !common.insert(attribute.name) {
             report.violations.push(format!(
                 "the sheet declares attribute `{}` twice",
                 attribute.name
             ));
+        }
+    }
+    for profile in contract
+        .selector
+        .iter()
+        .flat_map(|selector| selector.profiles.iter())
+    {
+        let mut scope = common.clone();
+        for attribute in profile.attributes {
+            if !scope.insert(attribute.name) {
+                report.violations.push(format!(
+                    "the sheet declares attribute `{}` twice in `{}`'s scope",
+                    attribute.name, profile.word
+                ));
+            }
         }
     }
 }

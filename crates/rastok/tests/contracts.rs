@@ -384,6 +384,107 @@ fn mode_service_defers_before_validating_its_attributes() {
     );
 }
 
+/// Mutates the compiled plan's connector spec, runs it against the
+/// REAL adapter, and returns the one typed error payload's message —
+/// the shared probe for every violated-invariant case.
+fn run_mutated(mutate: impl Fn(&mut rastok::plan::ConnectorSpec)) -> (String, String) {
+    let compilation = compile_one(&process_graph(FULL)).expect("valid");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            mutate(spec);
+        }
+    }
+    let validated =
+        rastok::plan::ValidatedExecutionPlan::try_from(plan).expect("structurally valid");
+    let mut journal = rastok::journal::MemJournal::new(rastok::plan::GraphVersion(1));
+    let mut vm = rastok::runtime::vm::Vm::boot(&validated, rastok::plan::GraphVersion(1));
+    let mut world = rastok::connectors::Process::new(&validated);
+    vm.inject(
+        &mut journal,
+        rastok::boundary::InboundSubmission {
+            authority: rastok::boundary::IngressAuthority::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
+            port: rastok::node::Port::new("in").unwrap(),
+            draft: rastok::boundary::Draft {
+                data: rastok::envelope::Data::materialized(rastok::envelope::Value::Scalar(
+                    rastok::envelope::Scalar::Text(String::from("x")),
+                )),
+                ext: rastok::envelope::Namespace::new(),
+            },
+            sequence: rastok::boundary::SubmissionSequence::Next,
+        },
+    )
+    .expect("injection lands");
+    vm.drain(&mut journal).expect("the request opens");
+    for _ in 0..200 {
+        if vm.is_stable() && !vm.has_open_obligations() {
+            break;
+        }
+        vm.pump(&mut journal, &mut world)
+            .expect("the world answers");
+        vm.drain(&mut journal).expect("the reply routes");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let errors = vm.errors();
+    assert_eq!(errors.len(), 1, "one typed violation");
+    let rastok::envelope::Data::Materialized(rastok::envelope::Value::Map(payload)) =
+        errors[0].data()
+    else {
+        panic!("a typed error payload");
+    };
+    let Some(rastok::envelope::Value::Scalar(rastok::envelope::Scalar::Text(kind))) =
+        payload.get("kind")
+    else {
+        panic!("a kind: {payload:?}");
+    };
+    let Some(rastok::envelope::Value::Map(detail)) = payload.get("detail") else {
+        panic!("the violated invariant is named: {payload:?}");
+    };
+    let Some(rastok::envelope::Value::Scalar(rastok::envelope::Scalar::Text(message))) =
+        detail.get("message")
+    else {
+        panic!("a message: {detail:?}");
+    };
+    (kind.clone(), message.clone())
+}
+
+#[test]
+fn the_adapter_refuses_every_stripped_default_individually() {
+    // Each Defaulted attribute is defended on its own — the review
+    // caught `mode` and `on_timeout` unguarded, and a joint strip
+    // exercising only the first refusal.
+    for name in ["mode", "on_timeout", "args", "max_output"] {
+        let (kind, message) = run_mutated(|spec| {
+            spec.attributes.retain(|(attr, _)| attr != name);
+        });
+        assert_eq!(kind, "SpawnFailed", "{name}");
+        assert!(
+            message.contains("unresolved"),
+            "`{name}` names the violated invariant: {message}"
+        );
+    }
+}
+
+#[test]
+fn the_adapter_drops_no_argument_silently() {
+    // A non-text element in `args` is a refusal, never a
+    // filter_map hole.
+    let (kind, message) = run_mutated(|spec| {
+        for (name, setting) in &mut spec.attributes {
+            if name == "args" {
+                *setting = rastok::plan::AttrSetting::Value(rastok::cel::Value::List(vec![
+                    rastok::cel::Value::Text(String::from("ok")),
+                    rastok::cel::Value::Int(7),
+                ]));
+            }
+        }
+    });
+    assert_eq!(kind, "SpawnFailed");
+    assert!(message.contains("not text"), "{message}");
+}
+
 #[test]
 fn the_adapter_refuses_an_incomplete_plan_instead_of_defaulting() {
     // A crafted plan stripped of its Defaulted attributes must
@@ -451,6 +552,192 @@ fn the_adapter_refuses_an_incomplete_plan_instead_of_defaulting() {
         panic!("a message: {detail:?}");
     };
     assert!(message.contains("unresolved"), "{message}");
+}
+
+#[test]
+fn the_new_discriminant_words_parse_as_words() {
+    // The review's blocker: `exponential` INSIDE a struct is a bare
+    // word, never a resurrected dead-initializer refusal — the form
+    // (word alone vs word + `(`/`{`) decides.
+    let source = process_graph(&format!("{FULL}\n    bogus = {{ curve = exponential }}"));
+    let bag = compile_one(&source).expect_err("bogus is not on the sheet");
+    assert!(
+        !bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-PARSE-EXPECTED"),
+        "the parser preempts nothing: {bag:?}"
+    );
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-CONTRACT-ATTR"
+                && d.message().contains("not on the contract sheet")),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn a_bare_tag_word_is_judged_by_the_contract() {
+    // `codec = json`: `json` is a TAG WORD, but the word ALONE is a
+    // choice for the contract to judge — it must never eat the next
+    // line as a JSON value.
+    let source = process_graph(
+        "    command = \"cat\" ; codec = json\n    effect = idempotent ; behavior = deterministic",
+    );
+    refusal_with(
+        &source,
+        "E-CONTRACT-ATTR",
+        "expected one of [\"jsonl\", \"lines\"], got `json`",
+    );
+}
+
+#[test]
+fn tag_words_serve_as_choice_words_on_another_sheet() {
+    // A future sheet may spell `text`, `json` or `unbounded` as
+    // closed choices — the parser leaves the words to the contract.
+    const CHOICES: &[AttributeSpec] = &[
+        AttributeSpec {
+            name: "behavior",
+            presence: Presence::Required,
+            domain: ValueDomain::Choice(&["deterministic"]),
+        },
+        AttributeSpec {
+            name: "effect",
+            presence: Presence::Required,
+            domain: ValueDomain::Choice(&["idempotent"]),
+        },
+        AttributeSpec {
+            name: "framing",
+            presence: Presence::Required,
+            domain: ValueDomain::Choice(&["text", "json", "unbounded"]),
+        },
+    ];
+    let registry = Registry::m0()
+        .try_with(sheet(CHOICES, None))
+        .expect("a valid sheet");
+    for word in ["text", "json", "unbounded"] {
+        let source = format!(
+            "graph g : App {{\n  connector p : Probe {{\n    framing = {word}\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> p -> .\n}}\n"
+        );
+        let result = compile(&[source.as_str()], &registry);
+        assert!(result.is_ok(), "`framing = {word}` compiles: {result:?}");
+    }
+}
+
+#[test]
+fn max_output_is_judged_at_check_not_at_spawn() {
+    // The ByteSize domain closes the review's false green: a
+    // non-size refuses at CHECK, through the same parser the
+    // adapter enforces the budget with.
+    let source = process_graph(&format!("{FULL}\n    max_output = \"banana\""));
+    refusal_with(&source, "E-CONTRACT-ATTR", "ByteSize");
+    assert_eq!(rastok::contract::byte_size("8MiB"), Some(8 * 1024 * 1024));
+    assert_eq!(rastok::contract::byte_size("banana"), None);
+    assert_eq!(
+        rastok::contract::byte_size("1024"),
+        None,
+        "an explicit unit is required"
+    );
+}
+
+#[test]
+fn a_deferred_profile_still_owes_the_common_sheet() {
+    // `mode = service` alone: the deferral speaks AND the common
+    // Required attributes are still owed.
+    let source = process_graph("    mode = service");
+    let bag = compile_one(&source).expect_err("must refuse");
+    for name in ["`command`", "`codec`", "`effect`", "`behavior`"] {
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|d| d.code().as_str() == "E-CONTRACT-REQUIRED" && d.message().contains(name)),
+            "missing required refusal for {name}: {bag:?}"
+        );
+    }
+}
+
+#[test]
+fn sibling_profiles_may_share_an_attribute_name() {
+    // The selected profile disambiguates — only common-vs-profile
+    // and within-scope duplicates are defects.
+    const SHARED: &AttributeSpec = &AttributeSpec {
+        name: "shared",
+        presence: Presence::Optional,
+        domain: ValueDomain::Text,
+    };
+    const SELECTOR: ProfileSelector = ProfileSelector {
+        attribute: "mode",
+        default: Some("a"),
+        profiles: &[
+            Profile {
+                word: "a",
+                support: ProfileSupport::Available,
+                attributes: std::slice::from_ref(SHARED),
+            },
+            Profile {
+                word: "b",
+                support: ProfileSupport::Available,
+                attributes: std::slice::from_ref(SHARED),
+            },
+        ],
+    };
+    assert!(Registry::m0().try_with(sheet(&[], Some(SELECTOR))).is_ok());
+}
+
+#[test]
+fn an_inexpressible_sheet_name_is_a_sheet_defect() {
+    let bad_port = ConnectorContract {
+        name: "Probe",
+        input_ports: &["bad port"],
+        output_ports: &["out", "err"],
+        common: &[],
+        selector: None,
+        error_set: &[],
+    };
+    assert_eq!(
+        Registry::m0().try_with(bad_port).unwrap_err(),
+        SheetDefect::InvalidPortName("bad port")
+    );
+    const BAD_ATTR: &[AttributeSpec] = &[AttributeSpec {
+        name: "not a name",
+        presence: Presence::Optional,
+        domain: ValueDomain::Text,
+    }];
+    assert_eq!(
+        Registry::m0().try_with(sheet(BAD_ATTR, None)).unwrap_err(),
+        SheetDefect::InexpressibleName("not a name")
+    );
+}
+
+#[test]
+fn a_deferred_domain_carries_no_default() {
+    const LIE: ProfileSelector = ProfileSelector {
+        attribute: "mode",
+        default: Some("a"),
+        profiles: &[Profile {
+            word: "a",
+            support: ProfileSupport::Deferred("someday"),
+            attributes: &[AttributeSpec {
+                name: "x",
+                presence: Presence::Defaulted(DefaultValue::CelExpression("[]")),
+                domain: ValueDomain::Struct,
+            }],
+        }],
+    };
+    assert!(matches!(
+        Registry::m0().try_with(sheet(&[], Some(LIE))).unwrap_err(),
+        SheetDefect::InvalidDefault { attribute: "x", .. }
+    ));
+}
+
+#[test]
+fn a_nested_block_entry_names_its_migration() {
+    let source = "graph g : App {\n  operator o {\n    on in { out = { parent { child = 1 } } }\n  }\n  . -> o -> .\n}\n";
+    refusal_with(
+        source,
+        "E-CONTRACT-ATTR",
+        "`parent { … }` is no longer a form; write `parent = { … }`",
+    );
 }
 
 #[test]

@@ -1555,7 +1555,32 @@ impl<'src> Parser<'src, '_> {
                 Value::Identity(token.span)
             }
             (TokenKind::Ident, "json") => {
-                self.bump();
+                let ident = self.bump();
+                // A BARE `json` — end of statement, or nothing on
+                // its line — is an ordinary word for the contract to
+                // judge (`codec = json` on a future sheet), never a
+                // truncated literal eating the next line
+                // (D-2026-08-12-1).
+                let next = self.peek();
+                let terminator = matches!(
+                    next.kind,
+                    TokenKind::Semi
+                        | TokenKind::Comma
+                        | TokenKind::RBrace
+                        | TokenKind::RParen
+                        | TokenKind::Eof
+                );
+                let ident_end = ident.span.range().end;
+                let gap_breaks = self
+                    .lexer
+                    .source_from(ident_end)
+                    .get(..next.span.range().start.saturating_sub(ident_end))
+                    .is_some_and(|gap| gap.contains('\n'));
+                if terminator || gap_breaks {
+                    self.lexer.rewind(next.span.range().start);
+                    self.peeked = Some(ident);
+                    return Value::Cel(self.cel(position));
+                }
                 // Delegate ONE complete JSON value to the house
                 // reader from the raw source (D-2026-08-10-6): the
                 // reader returns the consumed length and the parser
@@ -1598,49 +1623,70 @@ impl<'src> Parser<'src, '_> {
                 self.bump();
                 Value::Nothing(token.span)
             }
-            (TokenKind::Ident, tag) if TAG_WORDS.contains(&tag) => self.tagged_value(),
-            // A dead initializer spelling refuses with its exact
-            // migration (D-2026-08-12-1) — never a generic CEL error.
-            (TokenKind::Ident, tag) if DEAD_INITIALIZER_TAGS.contains(&tag) => {
-                let tag = tag.to_string();
-                let token = self.bump();
-                self.bag.push(
-                    Diagnostic::new(
-                        E_PARSE_EXPECTED,
-                        Phase::Parse,
-                        format!(
-                            "`{tag} {{ … }}` is a dead tagged-initializer spelling; write a \
-                             braced struct (`name = {{ … }}`) — a former discriminant becomes \
-                             a field (D-2026-08-12-1)"
-                        ),
-                    )
-                    .with_span(token.span)
-                    .with_field("tag", tag),
-                );
-                // Swallow `(args)` and `{ body }` so one fault
-                // speaks once.
-                if self.eat(TokenKind::LParen).is_some() {
-                    let mut depth = 1u32;
-                    while depth > 0 {
-                        match self.peek().kind {
-                            TokenKind::Eof => break,
-                            TokenKind::LParen => depth += 1,
-                            TokenKind::RParen => depth -= 1,
-                            _ => {}
-                        }
-                        self.bump();
-                    }
+            (TokenKind::Ident, tag)
+                if TAG_WORDS.contains(&tag) || DEAD_INITIALIZER_TAGS.contains(&tag) =>
+            {
+                // The form decides (D-2026-08-12-1): a word followed
+                // by `(` or `{` is a tag (or a dead initializer
+                // refusing with its migration); the word ALONE is an
+                // ordinary word, judged by the contract — the parser
+                // preempts nothing.
+                let dead = DEAD_INITIALIZER_TAGS.contains(&tag);
+                let ident = self.bump();
+                let next = self.peek();
+                let follows = matches!(next.kind, TokenKind::LParen | TokenKind::LBrace);
+                self.lexer.rewind(next.span.range().start);
+                self.peeked = Some(ident);
+                if !follows {
+                    return Value::Cel(self.cel(position));
                 }
-                if self.peek().kind == TokenKind::LBrace {
-                    self.skip_balanced_block();
+                if !dead {
+                    return self.tagged_value();
                 }
-                Value::Cel(CelExpr {
-                    text: String::new(),
-                    span: token.span,
-                })
+                self.dead_initializer(tag.to_string())
             }
             _ => Value::Cel(self.cel(position)),
         }
+    }
+
+    /// The dead-initializer refusal (D-2026-08-12-1): one migration
+    /// diagnostic, the whole spelling swallowed so one fault speaks
+    /// once. The caller verified the tag is followed by `(` or `{`.
+    fn dead_initializer(&mut self, tag: String) -> Value {
+        let token = self.bump();
+        self.bag.push(
+            Diagnostic::new(
+                E_PARSE_EXPECTED,
+                Phase::Parse,
+                format!(
+                    "`{tag} {{ … }}` is a dead tagged-initializer spelling; write a \
+                     braced struct (`name = {{ … }}`) — a former discriminant becomes \
+                     a field (D-2026-08-12-1)"
+                ),
+            )
+            .with_span(token.span)
+            .with_field("tag", tag),
+        );
+        // Swallow `(args)` and `{ body }` so one fault speaks once.
+        if self.eat(TokenKind::LParen).is_some() {
+            let mut depth = 1u32;
+            while depth > 0 {
+                match self.peek().kind {
+                    TokenKind::Eof => break,
+                    TokenKind::LParen => depth += 1,
+                    TokenKind::RParen => depth -= 1,
+                    _ => {}
+                }
+                self.bump();
+            }
+        }
+        if self.peek().kind == TokenKind::LBrace {
+            self.skip_balanced_block();
+        }
+        Value::Cel(CelExpr {
+            text: String::new(),
+            span: token.span,
+        })
     }
 
     fn tagged_value(&mut self) -> Value {
