@@ -854,6 +854,125 @@ fn a_nested_block_entry_names_its_migration() {
 }
 
 #[test]
+fn the_recovery_form_is_silent_in_every_position() {
+    // The Value::Error arm matrix (D-2026-08-12-1, review round):
+    // var initializer, local val, state write, tag argument, asset
+    // argument — the parser's one voice, no wildcard second.
+    for (label, source) in [
+        (
+            "var initializer",
+            "graph g : App {\n  operator o {\n    var v : int = measure { x = 1 }\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "local val",
+            "graph g : App {\n  operator o {\n    on in {\n      val x = on_crash { y = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "state write",
+            "graph g : App {\n  operator o {\n    var v : int = 0\n    on in {\n      v = exponential { y = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "tag argument",
+            "graph g : App {\n  operator o {\n    on in { out = base64(measure { z = 1 }) { SGVsbG8= } }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "asset argument",
+            "graph g : App {\n  operator o {\n    on in { out = asset(fibonacci { z = 1 }) }\n  }\n  . -> o -> .\n}\n",
+        ),
+    ] {
+        let bag = compile_one(source).expect_err(label);
+        assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
+        assert_eq!(
+            bag.diagnostics()[0].code().as_str(),
+            "E-PARSE-EXPECTED",
+            "{label}: the parser's voice alone"
+        );
+    }
+}
+
+#[test]
+fn a_json_recovery_follows_the_position_terminators() {
+    // The review's blocker: `;`-separated statements, struct
+    // fields, paren tuples, and MULTILINE faulty json all recover
+    // at their own terminator — one voice, siblings preserved.
+    for (label, source) in [
+        (
+            "semicolon statement",
+            "graph g : App {\n  operator o {\n    on in { out = json ???; out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "struct field",
+            "graph g : App {\n  operator o {\n    on in { out = { bad = json ???, ok = 1 } }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "multiline json",
+            "graph g : App {\n  operator o {\n    on in {\n      out = json {\n        \"a\": ???\n      }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+        ),
+    ] {
+        let bag = compile_one(source).expect_err(label);
+        assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
+        assert_eq!(
+            bag.diagnostics()[0].code().as_str(),
+            "E-JSON-VALUE",
+            "{label}"
+        );
+    }
+    // The positive twin proves the SIBLING really lives there: with
+    // the fault healed, the handler carries BOTH emissions.
+    let healed = "graph g : App {\n  operator o {\n    on in { out = json 1; out = data }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile_one(healed).expect("valid");
+    let handler = &compilation.plan.plan().handlers[0];
+    let emissions = handler
+        .body
+        .iter()
+        .filter(|step| matches!(step, rastok::plan::Step::Emit { .. }))
+        .count();
+    assert_eq!(emissions, 2, "both emissions live in the tree");
+}
+
+#[test]
+fn dead_and_reserved_parens_are_opaque_too() {
+    for (label, source) in [
+        (
+            "dead initializer with alien parens",
+            "graph g : App {\n  operator o {\n    on in { out = on_crash('@') { weird = '@' } }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "reserved format with alien parens",
+            "graph g : App {\n  operator o {\n    on in { out = protobuf('@') { message X {} } }\n  }\n  . -> o -> .\n}\n",
+        ),
+    ] {
+        let bag = compile_one(source).expect_err(label);
+        assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
+    }
+}
+
+#[test]
+fn an_invalid_selector_selects_no_implicit_profile() {
+    // `mode =` is PresentInvalid — the compiler never pretends
+    // `mode = job` about a mode the author wrote and got wrong: one
+    // parser voice, no belongs-to-job claim.
+    let source = "graph g : App {\n  connector shell : Process {\n    mode =\n    restart = whatever\n    command = \"printf\"\n    codec = lines\n    effect = idempotent\n    behavior = deterministic\n  }\n  . -> shell -> .\n}\n";
+    let bag = compile_one(source).expect_err("must refuse");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-PARSE-EXPECTED");
+}
+
+#[test]
+fn a_duplicate_attribute_is_syntactic() {
+    // `command =` then `command = "ok"`: the first value failed, the
+    // NAME was still written — the duplicate refuses.
+    let source = "graph g : App {\n  connector shell : Process {\n    command =\n    command = \"printf\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> shell -> .\n}\n";
+    let bag = compile_one(source).expect_err("must refuse");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.message().contains("declared twice")),
+        "{bag:?}"
+    );
+}
+
+#[test]
 fn an_omitted_value_never_absorbs_the_next_line() {
     // The review's blocker: `command =` must diagnose EXACTLY ONCE,
     // at the empty position, and the NEXT attribute must survive —

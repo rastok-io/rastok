@@ -387,6 +387,80 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Consumes one raw balanced-delimiter region — the OPEN byte is
+    /// expected at the current position — string-aware, without host
+    /// tokenization. Error recovery for dead/reserved forms: nothing
+    /// here speaks.
+    pub fn skip_balanced_raw(&mut self, open: u8, close: u8) {
+        let bytes = self.source.as_bytes();
+        let mut depth: u32 = 0;
+        let mut in_string = false;
+        while let Some(&byte) = bytes.get(self.pos) {
+            if in_string {
+                match byte {
+                    b'\\' => {
+                        self.pos = (self.pos + 2).min(bytes.len());
+                        continue;
+                    }
+                    b'"' => in_string = false,
+                    _ => {}
+                }
+                self.pos += 1;
+                continue;
+            }
+            self.pos += 1;
+            match byte {
+                b'"' => in_string = true,
+                _ if byte == open => depth += 1,
+                _ if byte == close => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Skips OPAQUELY forward to the first terminator of
+    /// `terminators` valid at delimiter depth zero — string-aware
+    /// (double quotes with backslash escapes), never consuming the
+    /// terminator, never moving backward. Error RECOVERY only: the
+    /// skipped bytes were already diagnosed, so nothing here speaks
+    /// (D-2026-08-12-1, review round).
+    pub fn skip_to_recovery_point(&mut self, terminators: &TerminatorSet) {
+        let bytes = self.source.as_bytes();
+        let mut depth: u32 = 0;
+        let mut in_string = false;
+        while let Some(&byte) = bytes.get(self.pos) {
+            if in_string {
+                match byte {
+                    b'\\' => {
+                        self.pos = (self.pos + 2).min(bytes.len());
+                        continue;
+                    }
+                    b'"' => in_string = false,
+                    _ => {}
+                }
+                self.pos += 1;
+                continue;
+            }
+            if depth == 0
+                && (terminators.bytes.contains(&byte) || (terminators.newline && byte == b'\n'))
+            {
+                return;
+            }
+            match byte {
+                b'"' => in_string = true,
+                b'{' | b'[' | b'(' => depth += 1,
+                b'}' | b']' | b')' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            self.pos += 1;
+        }
+    }
+
     fn at_terminator(&self, byte: u8, terminators: &TerminatorSet) -> bool {
         if terminators.bytes.contains(&byte) {
             return true;

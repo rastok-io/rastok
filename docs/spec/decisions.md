@@ -106,12 +106,16 @@ it travels as its own fact and refuses as `CaptureFailed` — its own
 kind in the Process error set (an I/O loss is not invalid content),
 with a CLOSED, EMPTY payload: the OS detail and the failing stream
 would race between two pumps. `Interrupted` retries; truncated
-bytes are never presented as the whole. When BOTH terminal facts
-are observed, the verdict reduces by fixed PRIORITY —
-`OutputOverflow` outranks `CaptureFailed`, whatever order the pumps
-delivered them in — and the kill happens at the first drain
-containing any terminal fact (what a later drain would have shown
-is unknowable by construction). Adding the kind to the
+bytes are never presented as the whole. When several terminal facts
+are observed, the verdict reduces by FULL fixed priority —
+`Budget` over `Capacity` over `CaptureFailed`, whatever order the
+pumps delivered them in: `Budget` is deterministic in the observed
+totals, so a later budget crossing UPGRADES an earlier capacity
+refusal, and the environmental facts never mask it. The kill
+happens at the first BOUNDED drain containing any terminal fact
+(one drain takes at most a channel's worth, so control always
+returns; what a later drain would have shown is unknowable by
+construction). Adding the kind to the
 travelling error set is a DECLARED identity move — every Process
 graph moved once (echo/spike `c75b840d…`). `ExecFailed` has ONE shape — `{ exit_code, stderr }`,
 a wait/OS bookkeeping fault reporting `exit_code = -1` with the

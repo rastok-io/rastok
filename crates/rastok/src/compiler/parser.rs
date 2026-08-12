@@ -27,6 +27,10 @@ pub const E_PARSE_EXPECTED: Code = Code::new("E-PARSE-EXPECTED");
 /// Diagnostic for grammatical syntax outside the implemented subset.
 pub const E_PARSE_DEFERRED: Code = Code::new("E-PARSE-DEFERRED");
 
+/// Diagnostic for a `json` literal the house reader refuses — its
+/// own code: JSON is not CEL (D-2026-08-12-1, review round).
+pub const E_JSON_VALUE: Code = Code::new("E-JSON-VALUE");
+
 /// Terminators for attribute, initializer, and emission positions.
 const ATTR_POSITION: TerminatorSet = TerminatorSet {
     bytes: b";}",
@@ -1558,7 +1562,9 @@ impl<'src> Parser<'src, '_> {
                 ),
             };
             if missing {
-                let at = Span::new(self.source_id, self.last_end..self.last_end + 1);
+                // An empty range: the fault is a POINT (possibly
+                // EOF), per Span's own contract.
+                let at = Span::new(self.source_id, self.last_end..self.last_end);
                 self.bag.push(
                     Diagnostic::new(
                         E_PARSE_EXPECTED,
@@ -1566,7 +1572,8 @@ impl<'src> Parser<'src, '_> {
                         "expected a value before the end of the line",
                     )
                     .with_span(at)
-                    .with_field("expected", "a value"),
+                    .with_field("expected", "a value")
+                    .with_field("found", "end of line"),
                 );
                 return Value::Error(at);
             }
@@ -1638,30 +1645,32 @@ impl<'src> Parser<'src, '_> {
                         }
                     }
                     Err(error) => {
-                        let at = start + lead + error.offset;
+                        let source_len = self.lexer.source_from(0).len();
+                        let at = (start + lead + error.offset).min(source_len);
+                        // An EOF point is an EMPTY range (Span's own
+                        // contract); anything else underlines one
+                        // byte.
+                        let end = (at + 1).min(source_len);
                         self.bag.push(
                             crate::diagnostics::Diagnostic::new(
-                                crate::compiler::check::E_CEL_EXPR,
+                                E_JSON_VALUE,
                                 crate::diagnostics::Phase::Parse,
                                 format!("the JSON value does not read: {}", error.message),
                             )
-                            .with_span(Span::new(self.source_id, at..at + 1))
+                            .with_span(Span::new(self.source_id, at..end))
                             .with_field("detail", error.message),
                         );
-                        // Resynchronize AT the position's boundary:
-                        // consume the faulty value up to (not
-                        // including) the newline, so the next
-                        // construct is never re-read or absorbed
-                        // (D-2026-08-12-1, review round).
-                        let line_end = self
-                            .lexer
-                            .source_from(start + lead)
-                            .find('\n')
-                            .map_or(self.lexer.source_from(0).len(), |offset| {
-                                start + lead + offset
-                            });
-                        self.lexer.skip_to(line_end);
-                        self.last_end = line_end;
+                        // Resynchronize at the POSITION's boundary:
+                        // the faulty value is consumed opaquely —
+                        // string-aware, depth-balanced — up to (not
+                        // including) the first terminator this
+                        // position recognizes, never backward of
+                        // the fault. The next construct is never
+                        // re-read or absorbed (D-2026-08-12-1,
+                        // review round).
+                        self.lexer.skip_to(start + lead);
+                        self.lexer.skip_to_recovery_point(position);
+                        self.last_end = start + lead;
                         Value::Error(Span::new(self.source_id, start..start))
                     }
                 }
@@ -1694,17 +1703,12 @@ impl<'src> Parser<'src, '_> {
                     // deferral, never a struct misreading.
                     let token = self.bump();
                     self.deferred("a reserved data-format body", token.span);
-                    if self.eat(TokenKind::LParen).is_some() {
-                        let mut depth = 1u32;
-                        while depth > 0 {
-                            match self.peek().kind {
-                                TokenKind::Eof => break,
-                                TokenKind::LParen => depth += 1,
-                                TokenKind::RParen => depth -= 1,
-                                _ => {}
-                            }
-                            self.bump();
-                        }
+                    if self.peek().kind == TokenKind::LParen {
+                        // The RAW skipper consumes the balanced
+                        // parens without host tokenization — alien
+                        // bytes stay silent.
+                        self.unpeek();
+                        self.lexer.skip_balanced_raw(b'(', b')');
                     }
                     if self.peek().kind == TokenKind::LBrace {
                         self.bump();
@@ -1739,23 +1743,20 @@ impl<'src> Parser<'src, '_> {
                 ),
             )
             .with_span(token.span)
+            .with_field("expected", "a braced struct value (`name = { … }`)")
+            .with_field("found", format!("the dead initializer tag `{tag}`"))
             .with_field("tag", tag),
         );
         // Swallow `(args)` and `{ body }` so one fault speaks once —
         // the body through the RAW lexer: a dead form may carry
         // bytes the host lexer refuses, and the migration must stay
         // the only voice (D-2026-08-12-1, review round).
-        if self.eat(TokenKind::LParen).is_some() {
-            let mut depth = 1u32;
-            while depth > 0 {
-                match self.peek().kind {
-                    TokenKind::Eof => break,
-                    TokenKind::LParen => depth += 1,
-                    TokenKind::RParen => depth -= 1,
-                    _ => {}
-                }
-                self.bump();
-            }
+        if self.peek().kind == TokenKind::LParen {
+            // The RAW skipper consumes the balanced parens without
+            // host tokenization — alien bytes stay silent, the one
+            // diagnostic already spoke.
+            self.unpeek();
+            self.lexer.skip_balanced_raw(b'(', b')');
         }
         if self.peek().kind == TokenKind::LBrace {
             self.bump();

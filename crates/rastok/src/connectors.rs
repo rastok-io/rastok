@@ -171,6 +171,11 @@ impl CaptureOverflowReason {
     }
 }
 
+/// One drain's bound AND the pump channel's capacity — shared, so a
+/// drain can always empty what a full channel holds and hand back
+/// control.
+const CHANNEL_CAPACITY: usize = 64;
+
 /// The machine-produced kinds a bound Process world can emit beside
 /// the adapter's own — required at binding for the same
 /// stranded-call reason. The spelling is the machine's own constant:
@@ -432,11 +437,14 @@ struct Run {
     group_killed: bool,
 }
 
-/// The capture state, child-free and PURE: chunks are absorbed one
-/// by one, and the terminal verdict reduces by fixed PRIORITY over
-/// everything observed up to the drain that tripped it —
-/// `OutputOverflow` over `CaptureFailed` — never by the arrival
-/// order of two racing pumps (D-2026-08-12-1, review round).
+/// The CHILD-FREE capture state (`try_reserve` consults the host,
+/// so absorption is not pure — the terminal REDUCER is): chunks are
+/// absorbed one by one, and the verdict reduces by full fixed
+/// PRIORITY over everything observed up to the tripping drain —
+/// `Budget` over `Capacity` over `CaptureFailed` — never by the
+/// arrival order of two racing pumps (D-2026-08-12-1, review
+/// round). `Budget` is a pure function of the observed totals, so
+/// it must outrank the environmental facts in EVERY order.
 #[derive(Debug)]
 struct Capture {
     stdout: Vec<u8>,
@@ -458,6 +466,10 @@ struct Capture {
     read_failure: bool,
     out_eof: bool,
     err_eof: bool,
+    /// TEST SEAM: forces `try_reserve` refusal so the Capacity path
+    /// is provable without a real memory shortage. Always false in
+    /// production construction.
+    capacity_refused: bool,
 }
 
 impl Capture {
@@ -472,39 +484,52 @@ impl Capture {
             read_failure: false,
             out_eof: false,
             err_eof: false,
+            capacity_refused: false,
         }
     }
 
-    /// Absorbs one chunk under the aggregate budget.
+    /// Absorbs one chunk under the aggregate budget. `Budget` may
+    /// UPGRADE an earlier `Capacity` verdict (it is deterministic in
+    /// the observed totals); nothing downgrades.
     fn absorb(&mut self, chunk: Chunk) {
-        match chunk {
-            Chunk::Out(bytes) => {
-                self.observed_out = self.observed_out.saturating_add(bytes.len() as u64);
-                if self.overflow.is_none() {
-                    if self.observed_out.saturating_add(self.observed_err) > self.max_output {
-                        self.overflow = Some(CaptureOverflowReason::Budget);
-                    } else if self.stdout.try_reserve(bytes.len()).is_err() {
-                        self.overflow = Some(CaptureOverflowReason::Capacity);
-                    } else {
-                        self.stdout.extend_from_slice(&bytes);
-                    }
-                }
+        let (bytes, is_out) = match chunk {
+            Chunk::Out(bytes) => (bytes, true),
+            Chunk::Err(bytes) => (bytes, false),
+            Chunk::OutEof => {
+                self.out_eof = true;
+                return;
             }
-            Chunk::Err(bytes) => {
-                self.observed_err = self.observed_err.saturating_add(bytes.len() as u64);
-                if self.overflow.is_none() {
-                    if self.observed_out.saturating_add(self.observed_err) > self.max_output {
-                        self.overflow = Some(CaptureOverflowReason::Budget);
-                    } else if self.stderr.try_reserve(bytes.len()).is_err() {
-                        self.overflow = Some(CaptureOverflowReason::Capacity);
-                    } else {
-                        self.stderr.extend_from_slice(&bytes);
-                    }
-                }
+            Chunk::ErrEof => {
+                self.err_eof = true;
+                return;
             }
-            Chunk::OutEof => self.out_eof = true,
-            Chunk::ErrEof => self.err_eof = true,
-            Chunk::ReadFailed => self.read_failure = true,
+            Chunk::ReadFailed => {
+                self.read_failure = true;
+                return;
+            }
+        };
+        if is_out {
+            self.observed_out = self.observed_out.saturating_add(bytes.len() as u64);
+        } else {
+            self.observed_err = self.observed_err.saturating_add(bytes.len() as u64);
+        }
+        if self.observed_out.saturating_add(self.observed_err) > self.max_output {
+            // Deterministic in the totals — outranks Capacity in
+            // every order.
+            self.overflow = Some(CaptureOverflowReason::Budget);
+        }
+        if self.overflow.is_some() {
+            return;
+        }
+        let buffer = if is_out {
+            &mut self.stdout
+        } else {
+            &mut self.stderr
+        };
+        if self.capacity_refused || buffer.try_reserve(bytes.len()).is_err() {
+            self.overflow = Some(CaptureOverflowReason::Capacity);
+        } else {
+            buffer.extend_from_slice(&bytes);
         }
     }
 
@@ -670,7 +695,7 @@ impl<'plan> Process<'plan> {
         // Bounded channel: the pumps block when the collector lags,
         // so an unread flood costs at most the channel's window —
         // the cap is a memory bound, not just a reply bound.
-        let (sender, chunks) = std::sync::mpsc::sync_channel(64);
+        let (sender, chunks) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
         match child.stdout.take() {
             Some(pipe) => {
                 let sender = sender.clone();
@@ -758,7 +783,12 @@ impl Run {
     /// (D-2026-08-12-1, review round); the verdict reduces by fixed
     /// priority in [`Capture::verdict`].
     fn collect(&mut self) -> bool {
-        for chunk in self.chunks.try_iter() {
+        // BOUNDED: `try_iter` walks a live channel that concurrent
+        // pumps keep feeding — one drain takes at most a channel's
+        // worth, so the return to the scheduler (and the kill on a
+        // terminal fact) stays guaranteed under an infinite
+        // producer.
+        for chunk in self.chunks.try_iter().take(CHANNEL_CAPACITY) {
             self.capture.absorb(chunk);
         }
         self.capture.verdict().is_some()
@@ -1309,8 +1339,8 @@ graph capped : App {
     fn a_stderr_flood_counts_against_the_aggregate_budget() {
         // D-2026-08-12-1 (review round): max_output is the AGGREGATE
         // capture budget — stderr crossing it is the SAME typed
-        // verdict, with the tripping stream named; bytes are never
-        // silently dropped.
+        // verdict ({limit, reason} — no stream, no size: no
+        // journaled thread race); bytes are never silently dropped.
         let source = r#"
 graph hoarse : App {
   connector noisy : Process {
@@ -1477,6 +1507,41 @@ graph unframeable : App {
         let mut capture = Capture::new(50);
         capture.absorb(Chunk::Out(vec![0u8; 10]));
         assert_eq!(capture.verdict(), None);
+        // FULL priority: Budget > Capacity in BOTH orders — the
+        // budget verdict is deterministic in the totals, so a later
+        // budget crossing UPGRADES an earlier capacity refusal.
+        let mut capture = Capture::new(50);
+        capture.capacity_refused = true;
+        capture.absorb(Chunk::Out(vec![0u8; 10]));
+        assert!(matches!(
+            capture.verdict(),
+            Some(ProcessFailure::OutputOverflow {
+                reason: CaptureOverflowReason::Capacity,
+                ..
+            })
+        ));
+        capture.absorb(Chunk::Err(vec![0u8; 64]));
+        assert!(
+            matches!(
+                capture.verdict(),
+                Some(ProcessFailure::OutputOverflow {
+                    reason: CaptureOverflowReason::Budget,
+                    ..
+                })
+            ),
+            "Budget upgrades Capacity, whatever the order"
+        );
+        let mut capture = Capture::new(50);
+        capture.absorb(Chunk::Out(vec![0u8; 64]));
+        capture.capacity_refused = true;
+        capture.absorb(Chunk::Err(vec![0u8; 8]));
+        assert!(matches!(
+            capture.verdict(),
+            Some(ProcessFailure::OutputOverflow {
+                reason: CaptureOverflowReason::Budget,
+                ..
+            })
+        ));
     }
 
     #[test]

@@ -249,8 +249,10 @@ fn json_refusals_are_located() {
         )
         .expect_err("must refuse");
         assert!(
-            bag.diagnostics().iter().any(|d| !d.spans().is_empty()),
-            "`{wrong}` refusal carries a span: {bag:?}"
+            bag.diagnostics()
+                .iter()
+                .any(|d| !d.spans().is_empty() && d.code().as_str() == "E-JSON-VALUE"),
+            "`{wrong}` refusal carries a span and the JSON code: {bag:?}"
         );
     }
 }

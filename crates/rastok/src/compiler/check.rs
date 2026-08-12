@@ -1550,6 +1550,12 @@ impl Checker<'_, '_> {
         // default. The admitted words are derived from the profiles.
         let mut profile: Option<&contract::Profile> = None;
         let mut selector_written = false;
+        // The selector itself is three-state: WRITTEN-BUT-INVALID
+        // (its value failed to check, so it reached no HIR) selects
+        // NO implicit profile — the compiler never pretends
+        // `mode = job` about a mode the author wrote and got wrong
+        // (D-2026-08-12-1, review round).
+        let mut selector_invalid = false;
         if let Some(selector) = &contract.selector {
             let words: Vec<&str> = selector
                 .profiles
@@ -1580,6 +1586,10 @@ impl Checker<'_, '_> {
                         }
                     }
                 }
+                None if written_names.contains(selector.attribute) => {
+                    selector_invalid = true;
+                    None
+                }
                 None => selector.default.map(String::from),
             };
             match word {
@@ -1600,7 +1610,7 @@ impl Checker<'_, '_> {
                         return;
                     }
                 },
-                None if selector_written => return,
+                None if selector_written || selector_invalid => return,
                 None => {
                     self.bag.push(
                         Diagnostic::new(
@@ -1857,6 +1867,10 @@ impl Checker<'_, '_> {
     ) {
         let mut signature = graph_signature.clone();
         let mut consts = graph_consts.clone();
+        // Duplicate attributes are a SYNTACTIC property: a name
+        // written twice refuses even when its first value failed to
+        // check (D-2026-08-12-1, review round).
+        let mut written_attributes = std::collections::BTreeSet::new();
         let mut declared_names: std::collections::BTreeSet<String> =
             std::collections::BTreeSet::new();
         // Pass one: everything except handlers, so the port table and
@@ -1939,11 +1953,7 @@ impl Checker<'_, '_> {
                         .join(".");
                     if node.connector_trait().is_none() {
                         self.deferred("an operator attribute", attribute.span);
-                    } else if node
-                        .attributes()
-                        .iter()
-                        .any(|existing| existing.name == name)
-                    {
+                    } else if !written_attributes.insert(name.clone()) {
                         self.bag.push(
                             Diagnostic::new(
                                 E_CONTRACT_ATTR,
