@@ -184,11 +184,18 @@ fn process_profile() -> Profile {
                 input: "salut",
             },
         ],
-        unprovable: vec![(
-            "StderrLine",
-            "the M0 job adapter folds stderr into the ExecFailed detail; \
-             StderrLine events arrive with the service mode",
-        )],
+        unprovable: vec![
+            (
+                "StderrLine",
+                "the M0 job adapter folds stderr into the ExecFailed detail; \
+                 StderrLine events arrive with the service mode",
+            ),
+            (
+                "CaptureFailed",
+                "a pipe READ error cannot be provoked portably from a real child; \
+                 the pump seam is unit-tested with an injected failing reader",
+            ),
+        ],
         mute_source: Some(MUTE.into()),
         interleave: Some(InterleaveProbe {
             source: PAIR.into(),
@@ -205,7 +212,7 @@ fn process_passes_the_whole_battery() {
         &Registry::try_m0().expect("the standard catalogue holds"),
         &mut ProcessFactory,
     );
-    assert_conformant(&report, &["StderrLine"]);
+    assert_conformant(&report, &["StderrLine", "CaptureFailed"]);
     assert_eq!(
         report.proven_kinds,
         vec![

@@ -1618,10 +1618,7 @@ impl<'src> Parser<'src, '_> {
                             .with_field("detail", error.message),
                         );
                         self.lexer.skip_to(start + lead);
-                        Value::Cel(CelExpr {
-                            text: String::new(),
-                            span: Span::new(self.source_id, start..start),
-                        })
+                        Value::Error(Span::new(self.source_id, start..start))
                     }
                 }
             }
@@ -1647,7 +1644,9 @@ impl<'src> Parser<'src, '_> {
                     return Value::Cel(self.cel(position));
                 }
                 if RESERVED_FORMAT_TAGS.contains(&tag) {
-                    // A reserved format's body is OPAQUE — one named
+                    // A reserved format's body is OPAQUE — the RAW
+                    // lexer consumes it (brace-balanced, string
+                    // aware, no host tokenization), one named
                     // deferral, never a struct misreading.
                     let token = self.bump();
                     self.deferred("a reserved data-format body", token.span);
@@ -1664,12 +1663,12 @@ impl<'src> Parser<'src, '_> {
                         }
                     }
                     if self.peek().kind == TokenKind::LBrace {
-                        self.skip_balanced_block();
+                        self.bump();
+                        self.unpeek();
+                        let raw = self.lexer.raw_block(self.bag);
+                        self.last_end = raw.span.range().end;
                     }
-                    return Value::Cel(CelExpr {
-                        text: String::new(),
-                        span: token.span,
-                    });
+                    return Value::Error(token.span);
                 }
                 if !dead {
                     return self.tagged_value();
@@ -1714,10 +1713,7 @@ impl<'src> Parser<'src, '_> {
         if self.peek().kind == TokenKind::LBrace {
             self.skip_balanced_block();
         }
-        Value::Cel(CelExpr {
-            text: String::new(),
-            span: token.span,
-        })
+        Value::Error(token.span)
     }
 
     fn tagged_value(&mut self) -> Value {
@@ -1856,10 +1852,8 @@ impl<'src> Parser<'src, '_> {
                 // stray `"k": v` inside refuses in the entry loop.
                 match self.struct_entries() {
                     Some(body) => Value::Braced(body),
-                    None => Value::Cel(CelExpr {
-                        text: String::new(),
-                        span: self.peek().span,
-                    }),
+                    // The entry loop already spoke.
+                    None => Value::Error(self.peek().span),
                 }
             }
         }

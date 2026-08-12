@@ -32,6 +32,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
+/// The machine-produced timeout kind — ONE spelling, shared with
+/// every adapter binding that must declare it (D-2026-08-12-1,
+/// review round).
+pub const TIMEOUT_EXPIRED: &str = "TimeoutExpired";
+
 /// A machine fault; the step that raised it committed nothing, and
 /// the work that triggered it stays reserved — a retry sees it again.
 /// A machine-integrity refusal — never a business error.
@@ -548,7 +553,7 @@ impl<'plan> Vm<'plan> {
                     port: node::Port::new("err")
                         .unwrap_or_else(|_| unreachable!("`err` is a valid port")),
                     outcome: CallOutcome::Failure(crate::boundary::TypedError {
-                        kind: String::from("TimeoutExpired"),
+                        kind: String::from(TIMEOUT_EXPIRED),
                         data: Data::materialized(crate::envelope::Value::Map(BTreeMap::new())),
                     }),
                 },
@@ -674,7 +679,7 @@ impl<'plan> Vm<'plan> {
                         port: node::Port::new("err")
                             .unwrap_or_else(|_| unreachable!("`err` is a valid port")),
                         outcome: CallOutcome::Failure(crate::boundary::TypedError {
-                            kind: String::from("TimeoutExpired"),
+                            kind: String::from(TIMEOUT_EXPIRED),
                             data: Data::materialized(crate::envelope::Value::Map(BTreeMap::new())),
                         }),
                     },

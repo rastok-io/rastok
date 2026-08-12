@@ -395,11 +395,6 @@ impl Checker<'_, '_> {
     /// Compiles one CEL span, adapting native diagnostics onto the
     /// source with offset-mapped spans.
     fn cel(&mut self, expr: &CelExpr, signature: &cel::Signature) -> Option<cel::Tree> {
-        if expr.text.is_empty() {
-            // The parser's error placeholder: it already spoke — one
-            // fault, one voice.
-            return None;
-        }
         match cel::compile(&expr.text, signature) {
             Ok(tree) => {
                 self.collect_meta_reads(&tree.root, expr.span);
@@ -1357,6 +1352,8 @@ impl Checker<'_, '_> {
             self.deferred("a typed val", val.span);
         }
         match &val.value {
+            // The parser already spoke for its recovery form.
+            SynValue::Error(_) => None,
             SynValue::Cel(expr) => self.constant(expr, signature, consts),
             _ => {
                 self.deferred("a non-expression val initializer", val.span);
@@ -2275,6 +2272,8 @@ impl Checker<'_, '_> {
         span: Span,
     ) -> Option<AttrValue> {
         match value {
+            // The parser already spoke for its recovery form.
+            SynValue::Error(_) => None,
             SynValue::Cel(expr) if is_bare_word(&expr.text) => {
                 Some(AttrValue::Word(expr.text.clone()))
             }
@@ -3153,6 +3152,8 @@ impl Checker<'_, '_> {
         at: Span,
     ) -> Option<cel::Tree> {
         match value {
+            // The parser already spoke for its recovery form.
+            SynValue::Error(_) => None,
             SynValue::Cel(expr) => self.cel(expr, signature),
             SynValue::Json { value, .. } => Some(literal_tree(value.clone(), cel::Type::Dyn)),
             SynValue::BracedMap(entries) => self.map_value_tree(entries, signature, at),
@@ -3516,6 +3517,8 @@ impl Checker<'_, '_> {
         at: Span,
     ) -> Option<EmitValue> {
         match value {
+            // The parser already spoke for its recovery form.
+            SynValue::Error(_) => None,
             SynValue::Identity(_) => Some(EmitValue::Identity),
             SynValue::Braced(body) => self.braced(body, signature, at),
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
@@ -3938,6 +3941,7 @@ impl Checker<'_, '_> {
                                 value: literal_tree(value.clone(), cel::Type::Dyn),
                             });
                         }
+                        SynValue::Error(_) => {}
                         _ => self.deferred("a nested envelope builder", key.span),
                     }
                 }
@@ -4051,6 +4055,7 @@ impl Checker<'_, '_> {
                                 });
                             }
                         }
+                        SynValue::Error(_) => {}
                         _ => self.deferred("this record field value form", key.span),
                     }
                 }

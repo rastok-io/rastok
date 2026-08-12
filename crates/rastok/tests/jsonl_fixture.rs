@@ -33,7 +33,10 @@ fn compilation() -> rastok::compiler::Compilation {
 // are injected into the effective HIR before the hash — this
 // fixture gained `args = []`, `max_output = "8MiB"` and
 // `on_timeout = kill` (`mode = job` was written).
-const JSONL_HASH: &str = "343412636d7e8a519746ff6361f73670041e795a9ac52533ec6c77d95370e0aa";
+// DELIBERATE MOVE 2026-08-12, same day (review round): the Process
+// error_set gained `CaptureFailed` — a pipe READ fault is its own
+// kind, and the set travels in the plan.
+const JSONL_HASH: &str = "60f45914b07ab1a962de3d59e64457cbafb5d87829091d80d5d3dd5ddaa4d7fa";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

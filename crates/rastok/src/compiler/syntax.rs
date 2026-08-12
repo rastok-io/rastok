@@ -534,6 +534,11 @@ pub enum Value {
     },
     /// `nothing` — emit nothing.
     Nothing(Span),
+    /// The parser's RECOVERY form: a diagnostic was already pushed
+    /// for this span, and the checker stays silent — one fault, one
+    /// voice. Never a user state: a genuinely empty expression
+    /// still diagnoses (D-2026-08-12-1, review round).
+    Error(Span),
     /// `jq { … }`, `bounded(64)`, `exponential { … }`, …
     Tagged(TaggedValue),
 }

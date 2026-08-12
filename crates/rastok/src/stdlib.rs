@@ -125,6 +125,10 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
     error_set: &[
         "SpawnFailed",
         "DecodeError",
+        // A pipe READ failed: incomplete capture for an I/O reason,
+        // distinct from invalid content (D-2026-08-12-1, review
+        // round). Closed, empty payload.
+        "CaptureFailed",
         "StderrLine",
         "TimeoutExpired",
         "ExecFailed",

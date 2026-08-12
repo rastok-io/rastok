@@ -126,9 +126,15 @@ enum ProcessFailure {
     /// The OS refused a launch — or an intent reached an unbound
     /// path (the edge defense).
     SpawnFailed { message: String },
-    /// The reply's bytes cannot be delivered faithfully: undecodable
-    /// content, or a stream whose READ failed mid-run.
+    /// The reply's CONTENT is invalid: JSON, UTF-8, framing — the
+    /// offending detail rides the payload.
     DecodeError { message: String },
+    /// A pipe READ failed mid-run: the capture is incomplete for an
+    /// I/O reason, not a content one. The payload is CLOSED and
+    /// empty — the OS detail is scheduling-adjacent telemetry, and
+    /// two racing pump failures must not journal their order
+    /// (D-2026-08-12-1, review round).
+    CaptureFailed {},
     /// The run ended without a clean success. ONE shape
     /// (D-2026-08-12-1, review round): a wait/OS bookkeeping fault
     /// reports `exit_code = -1` with the fault in `stderr` — the
@@ -139,50 +145,80 @@ enum ProcessFailure {
     /// threads have no total order, so naming the crossing stream
     /// or a drained byte-count would journal a thread race
     /// (D-2026-08-12-1, review round). `limit` is the declared
-    /// budget; `reason` ∈ `budget | capacity`.
-    OutputOverflow { limit: u64, reason: &'static str },
+    /// budget.
+    OutputOverflow {
+        limit: u64,
+        reason: CaptureOverflowReason,
+    },
+}
+
+/// Why a capture stopped — a CLOSED domain, rendered to text only
+/// at the envelope frontier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureOverflowReason {
+    /// The declared aggregate budget was crossed.
+    Budget,
+    /// The host's capture allocation refused (`try_reserve`).
+    Capacity,
+}
+
+impl CaptureOverflowReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Budget => "budget",
+            Self::Capacity => "capacity",
+        }
+    }
 }
 
 /// The machine-produced kinds a bound Process world can emit beside
 /// the adapter's own — required at binding for the same
-/// stranded-call reason.
-const MACHINE_EMITS: &[&str] = &["TimeoutExpired"];
+/// stranded-call reason. The spelling is the machine's own constant:
+/// one authority across the crates.
+const MACHINE_EMITS: &[&str] = &[crate::runtime::vm::TIMEOUT_EXPIRED];
+
+/// Seals variant ↔ canonical name ↔ binding list in ONE declaration:
+/// `kind()` is generated as an exhaustive match, so a new variant
+/// cannot exist without a name here — and `KINDS` is derived from
+/// the same list, never a parallel one.
+macro_rules! process_failure_names {
+    ($(($variant:ident, $name:literal)),+ $(,)?) => {
+        impl ProcessFailure {
+            /// Every kind the ADAPTER emits — derived from the one
+            /// declaration below.
+            const KINDS: &'static [&'static str] = &[$($name),+];
+
+            /// The canonical kind — EXHAUSTIVE: a new variant fails
+            /// to compile here until it joins the declaration.
+            const fn kind(&self) -> &'static str {
+                match self {
+                    $(Self::$variant { .. } => $name),+
+                }
+            }
+        }
+    };
+}
+
+process_failure_names!(
+    (SpawnFailed, "SpawnFailed"),
+    (DecodeError, "DecodeError"),
+    (CaptureFailed, "CaptureFailed"),
+    (ExecFailed, "ExecFailed"),
+    (OutputOverflow, "OutputOverflow"),
+);
 
 impl ProcessFailure {
-    /// Every kind the ADAPTER emits. `kind_count` is an exhaustive
-    /// match: adding a variant breaks compilation there, and the
-    /// length assertion in the tests then forces this list.
-    const KINDS: &'static [&'static str] =
-        &["SpawnFailed", "DecodeError", "ExecFailed", "OutputOverflow"];
-
-    #[cfg(test)]
-    fn kind_count(sample: &Self) -> usize {
-        // EXHAUSTIVE — a new variant fails to compile here first.
-        match sample {
-            Self::SpawnFailed { .. }
-            | Self::DecodeError { .. }
-            | Self::ExecFailed { .. }
-            | Self::OutputOverflow { .. } => Self::KINDS.len(),
-        }
-    }
-
     fn into_outcome(self) -> CallOutcome {
-        let (kind, payload) = match self {
-            Self::SpawnFailed { message } => {
+        let kind = self.kind();
+        let payload = match self {
+            Self::CaptureFailed {} => BTreeMap::new(),
+            Self::SpawnFailed { message } | Self::DecodeError { message } => {
                 let mut payload = BTreeMap::new();
                 payload.insert(
                     String::from("message"),
                     Value::Scalar(Scalar::Text(message)),
                 );
-                ("SpawnFailed", payload)
-            }
-            Self::DecodeError { message } => {
-                let mut payload = BTreeMap::new();
-                payload.insert(
-                    String::from("message"),
-                    Value::Scalar(Scalar::Text(message)),
-                );
-                ("DecodeError", payload)
+                payload
             }
             Self::ExecFailed { exit_code, stderr } => {
                 let mut payload = BTreeMap::new();
@@ -191,7 +227,7 @@ impl ProcessFailure {
                     Value::Scalar(Scalar::Int(exit_code)),
                 );
                 payload.insert(String::from("stderr"), Value::Scalar(Scalar::Text(stderr)));
-                ("ExecFailed", payload)
+                payload
             }
             Self::OutputOverflow { limit, reason } => {
                 let mut payload = BTreeMap::new();
@@ -201,9 +237,9 @@ impl ProcessFailure {
                 );
                 payload.insert(
                     String::from("reason"),
-                    Value::Scalar(Scalar::Text(String::from(reason))),
+                    Value::Scalar(Scalar::Text(String::from(reason.as_str()))),
                 );
-                ("OutputOverflow", payload)
+                payload
             }
         };
         CallOutcome::Failure(TypedError {
@@ -403,11 +439,11 @@ struct Run {
     /// host's capture capacity spoke. No stream, no byte-count —
     /// the two pumps have no total order, and the journal must not
     /// record a thread race (D-2026-08-12-1, review round).
-    overflow: Option<&'static str>,
+    overflow: Option<CaptureOverflowReason>,
     /// A pipe read failed: the capture is incomplete and the reply
-    /// refuses as a typed DecodeError — truncated bytes are never
-    /// presented as the whole.
-    read_failure: Option<String>,
+    /// refuses as the typed CaptureFailed — truncated bytes are
+    /// never presented as the whole.
+    read_failure: bool,
     out_eof: bool,
     err_eof: bool,
     exit: Option<std::process::ExitStatus>,
@@ -425,8 +461,9 @@ enum Chunk {
     ErrEof,
     /// A pipe READ failed mid-run — not end-of-stream: the captured
     /// bytes are incomplete and must never be presented as the
-    /// whole (D-2026-08-12-1, review round).
-    ReadFailed(String),
+    /// whole. Carries NOTHING: the OS detail would race between two
+    /// failing pumps (D-2026-08-12-1, review round).
+    ReadFailed,
 }
 
 impl<'plan> Process<'plan> {
@@ -456,10 +493,12 @@ impl<'plan> Process<'plan> {
                 // another contract would receive its intents HERE
                 // and strand them open: the binding refuses it. A
                 // pure source (no incoming edge) is merely skipped.
-                // The world that binds EVERY callable connector to
-                // exactly one adapter — a BoundExecutionPlan — is
-                // the named design for the second adapter (m1-slice,
-                // the connector items).
+                // The BoundExecutionPlan router is the second
+                // adapter's named design, with obligations BY ROLE:
+                // an outbound caller binds to exactly one Partner,
+                // an inbound source to exactly one ingress
+                // provider, a both-roles connector to both
+                // (m1-slice, the connector items).
                 if spec.contract != "Process" {
                     let slot = crate::plan::Slot::new(
                         u32::try_from(
@@ -585,7 +624,7 @@ impl<'plan> Process<'plan> {
             observed_err: 0,
             max_output: settings.max_output,
             overflow: None,
-            read_failure: None,
+            read_failure: false,
             out_eof: false,
             err_eof: false,
             exit: None,
@@ -630,10 +669,10 @@ fn pump_pipe<P: Read>(
             }
             // A signal is not a verdict — read again.
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(error) => {
+            Err(_) => {
                 // A failed READ is not an EOF: the loss travels as
                 // its own fact, then the stream closes.
-                let _ = sender.send(Chunk::ReadFailed(error.to_string()));
+                let _ = sender.send(Chunk::ReadFailed);
                 let _ = sender.send(eof);
                 return;
             }
@@ -660,9 +699,9 @@ impl Run {
                     self.observed_out = self.observed_out.saturating_add(bytes.len() as u64);
                     if self.overflow.is_none() {
                         if self.observed_out.saturating_add(self.observed_err) > self.max_output {
-                            self.overflow = Some("budget");
+                            self.overflow = Some(CaptureOverflowReason::Budget);
                         } else if self.stdout.try_reserve(bytes.len()).is_err() {
-                            self.overflow = Some("capacity");
+                            self.overflow = Some(CaptureOverflowReason::Capacity);
                         } else {
                             self.stdout.extend_from_slice(&bytes);
                         }
@@ -672,9 +711,9 @@ impl Run {
                     self.observed_err = self.observed_err.saturating_add(bytes.len() as u64);
                     if self.overflow.is_none() {
                         if self.observed_out.saturating_add(self.observed_err) > self.max_output {
-                            self.overflow = Some("budget");
+                            self.overflow = Some(CaptureOverflowReason::Budget);
                         } else if self.stderr.try_reserve(bytes.len()).is_err() {
-                            self.overflow = Some("capacity");
+                            self.overflow = Some(CaptureOverflowReason::Capacity);
                         } else {
                             self.stderr.extend_from_slice(&bytes);
                         }
@@ -682,12 +721,12 @@ impl Run {
                 }
                 Chunk::OutEof => self.out_eof = true,
                 Chunk::ErrEof => self.err_eof = true,
-                Chunk::ReadFailed(error) => {
-                    self.read_failure.get_or_insert(error);
+                Chunk::ReadFailed => {
+                    self.read_failure = true;
                 }
             }
         }
-        self.overflow.is_some() || self.read_failure.is_some()
+        self.overflow.is_some() || self.read_failure
     }
 
     /// The typed capture verdict — the declared limit and the
@@ -697,7 +736,7 @@ impl Run {
     fn overflow_outcome(&self) -> CallOutcome {
         ProcessFailure::OutputOverflow {
             limit: self.max_output,
-            reason: self.overflow.unwrap_or("budget"),
+            reason: self.overflow.unwrap_or(CaptureOverflowReason::Budget),
         }
         .into_outcome()
     }
@@ -715,11 +754,8 @@ impl Run {
         self.collect();
         let outcome = if self.overflow.is_some() {
             self.overflow_outcome()
-        } else if let Some(error) = self.read_failure.take() {
-            ProcessFailure::DecodeError {
-                message: format!("a stream could not be read to its end: {error}"),
-            }
-            .into_outcome()
+        } else if self.read_failure {
+            ProcessFailure::CaptureFailed {}.into_outcome()
         } else if !status.success() {
             ProcessFailure::ExecFailed {
                 // Killed by a signal: no exit code exists.
@@ -817,13 +853,7 @@ impl Partner for Process<'_> {
                 let outcome = if run.overflow.is_some() {
                     run.overflow_outcome()
                 } else {
-                    ProcessFailure::DecodeError {
-                        message: format!(
-                            "a stream could not be read to its end: {}",
-                            run.read_failure.take().unwrap_or_default()
-                        ),
-                    }
-                    .into_outcome()
+                    ProcessFailure::CaptureFailed {}.into_outcome()
                 };
                 answers.push(Response {
                     call_ref: run.call_ref,
@@ -1340,17 +1370,67 @@ graph unframeable : App {
         );
     }
 
+    /// A scripted reader for the pump seam: each step answers one
+    /// `read` call.
+    struct ScriptedRead(std::vec::IntoIter<Result<Vec<u8>, std::io::ErrorKind>>);
+
+    impl Read for ScriptedRead {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.next() {
+                None => Ok(0),
+                Some(Ok(bytes)) => {
+                    buffer[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                Some(Err(kind)) => Err(std::io::Error::from(kind)),
+            }
+        }
+    }
+
+    #[test]
+    fn the_pump_retries_interrupted_and_reports_read_failures() {
+        // Interrupted, then bytes, then EOF: the bytes survive.
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        pump_pipe(
+            ScriptedRead(
+                vec![Err(std::io::ErrorKind::Interrupted), Ok(b"ok".to_vec())].into_iter(),
+            ),
+            &sender,
+            Chunk::Out,
+            Chunk::OutEof,
+        );
+        let chunks: Vec<Chunk> = receiver.try_iter().collect();
+        assert!(matches!(&chunks[0], Chunk::Out(bytes) if bytes == b"ok"));
+        assert!(matches!(chunks[1], Chunk::OutEof));
+        // A definitive error: ReadFailed travels as its own fact,
+        // THEN the stream closes.
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        pump_pipe(
+            ScriptedRead(
+                vec![Ok(b"partial".to_vec()), Err(std::io::ErrorKind::BrokenPipe)].into_iter(),
+            ),
+            &sender,
+            Chunk::Out,
+            Chunk::OutEof,
+        );
+        let chunks: Vec<Chunk> = receiver.try_iter().collect();
+        assert!(matches!(&chunks[0], Chunk::Out(bytes) if bytes == b"partial"));
+        assert!(matches!(chunks[1], Chunk::ReadFailed));
+        assert!(matches!(chunks[2], Chunk::OutEof));
+    }
+
     #[test]
     fn every_adapter_kind_is_in_the_binding_list() {
-        // `kind_count` is an EXHAUSTIVE match: a new ProcessFailure
-        // variant breaks compilation there first, and this length
-        // assertion then forces KINDS (and the binding subset) to
-        // follow.
+        // Variant, canonical name and binding list come from ONE
+        // declaration (`process_failure_names!` — `kind()` is an
+        // exhaustive match, so a new variant cannot compile without
+        // joining it); here the declared list meets the sheet.
         assert_eq!(
-            ProcessFailure::kind_count(&ProcessFailure::SpawnFailed {
+            ProcessFailure::SpawnFailed {
                 message: String::new()
-            }),
-            ProcessFailure::KINDS.len()
+            }
+            .kind(),
+            "SpawnFailed"
         );
         for kind in ProcessFailure::KINDS {
             assert!(

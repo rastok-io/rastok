@@ -971,6 +971,9 @@ graph m0_probe : App {
         // `on_timeout = kill` on this probe) — omission and the
         // exact spelling of a default are ONE identity, so every
         // Process-carrying graph moved once.
+        // DELIBERATE MOVE 2026-08-12, same day (review round): the
+        // Process error_set gained `CaptureFailed` (a pipe READ
+        // fault is its own kind), and the set travels in the plan.
         let hash = compile(
             &[M0_PROBE],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -979,7 +982,7 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "c9866b385dfbc9fc640de608f5dcd70eb166be98d16de88bedfb49ba7beae1e6"
+            "20479b25d045023614f7ac3d0da80a362918091994c7f85d60a204de730f6349"
         );
     }
 

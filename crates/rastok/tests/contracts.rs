@@ -465,6 +465,7 @@ fn the_binding_refuses_every_undeclared_adapter_error() {
     for kind in [
         "SpawnFailed",
         "DecodeError",
+        "CaptureFailed",
         "ExecFailed",
         "OutputOverflow",
         // Machine-produced, still part of the bound world's
@@ -853,6 +854,37 @@ fn a_nested_block_entry_names_its_migration() {
 }
 
 #[test]
+fn an_omitted_expression_always_diagnoses() {
+    // The review's blocker: the recovery form is Value::Error, never
+    // an empty CelExpr a user could also produce — a genuinely
+    // omitted expression must diagnose, everywhere.
+    for (label, source) in [
+        (
+            "out =",
+            "graph g : App {\n  operator o {\n    on in {\n      out =\n    }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "val x =",
+            "graph g : App {\n  val x =\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "attribute without a value",
+            "graph g : App {\n  connector shell : Process {\n    command =\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> shell -> .\n}\n",
+        ),
+        (
+            "guard without an expression",
+            "graph g : App {\n  operator o {\n    on in where {\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+        ),
+    ] {
+        let bag = compile_one(source).expect_err(label);
+        assert!(
+            !bag.diagnostics().is_empty(),
+            "`{label}` must speak: {bag:?}"
+        );
+    }
+}
+
+#[test]
 fn a_reserved_format_body_defers_once_and_opaquely() {
     // `avro { … }` is a reserved word with no living form: ONE
     // named deferral, the body consumed opaquely — never five
@@ -864,6 +896,41 @@ fn a_reserved_format_body_defers_once_and_opaquely() {
         bag.diagnostics()[0]
             .message()
             .contains("a reserved data-format body"),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn a_reserved_format_body_is_lexically_opaque() {
+    // The body never meets the host lexer: characters RKG cannot
+    // tokenize, braces inside quotes, and nesting all pass under
+    // the ONE deferral; an unterminated block is the raw lexer's
+    // own fault.
+    for (label, body) in [
+        ("host-unknown characters", "option strange = '@';"),
+        ("braces inside strings", r#"x = "{{{" ; y = '}'"#),
+        ("nested blocks", "outer { inner { '@' } }"),
+    ] {
+        let source = format!(
+            "graph g : App {{\n  operator o {{\n    on in {{ out = protobuf {{ {body} }} }}\n  }}\n  . -> o -> .\n}}\n"
+        );
+        let bag = compile_one(&source).expect_err(label);
+        assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
+        assert!(
+            bag.diagnostics()[0]
+                .message()
+                .contains("a reserved data-format body"),
+            "{label}: {bag:?}"
+        );
+    }
+    // Unterminated: the raw lexer speaks, and nothing else cascades
+    // beyond the parse of the truncated remainder.
+    let source = "graph g : App {\n  operator o {\n    on in { out = avro { never closed\n";
+    let bag = compile_one(source).expect_err("unterminated refuses");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.message().contains("a reserved data-format body")),
         "{bag:?}"
     );
 }
