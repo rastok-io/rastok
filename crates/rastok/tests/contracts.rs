@@ -908,6 +908,10 @@ fn a_json_recovery_follows_the_position_terminators() {
             "multiline json",
             "graph g : App {\n  operator o {\n    on in {\n      out = json {\n        \"a\": ???\n      }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
         ),
+        (
+            "paren position",
+            "graph g : App {\n  operator o {\n    on in { out = asset(json ???, \"text/plain\"); out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
     ] {
         let bag = compile_one(source).expect_err(label);
         assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
@@ -932,6 +936,8 @@ fn a_json_recovery_follows_the_position_terminators() {
 
 #[test]
 fn dead_and_reserved_parens_are_opaque_too() {
+    // Including DELIMITERS inside both quote styles: a quoted paren
+    // is content, never structure (the review's probe).
     for (label, source) in [
         (
             "dead initializer with alien parens",
@@ -940,6 +946,22 @@ fn dead_and_reserved_parens_are_opaque_too() {
         (
             "reserved format with alien parens",
             "graph g : App {\n  operator o {\n    on in { out = protobuf('@') { message X {} } }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "single-quoted open paren",
+            "graph g : App {\n  operator o {\n    on in { out = on_crash('(') { weird = '@' }; out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "single-quoted close paren",
+            "graph g : App {\n  operator o {\n    on in { out = protobuf(')') { message X {} }; out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "double-quoted open paren",
+            "graph g : App {\n  operator o {\n    on in { out = on_crash(\"(\") { weird = '@' }; out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "double-quoted close paren",
+            "graph g : App {\n  operator o {\n    on in { out = protobuf(\")\") { message X {} }; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
     ] {
         let bag = compile_one(source).expect_err(label);

@@ -1603,25 +1603,17 @@ impl<'src> Parser<'src, '_> {
                 // A BARE `json` — end of statement, or nothing on
                 // its line — is an ordinary word for the contract to
                 // judge (`codec = json` on a future sheet), never a
-                // truncated literal eating the next line
-                // (D-2026-08-12-1).
-                let next = self.peek();
-                let terminator = matches!(
-                    next.kind,
-                    TokenKind::Semi
-                        | TokenKind::Comma
-                        | TokenKind::RBrace
-                        | TokenKind::RParen
-                        | TokenKind::Eof
-                );
-                let ident_end = ident.span.range().end;
-                let gap_breaks = self
-                    .lexer
-                    .source_from(ident_end)
-                    .get(..next.span.range().start.saturating_sub(ident_end))
-                    .is_some_and(|gap| gap.contains('\n'));
-                if terminator || gap_breaks {
-                    self.lexer.rewind(next.span.range().start);
+                // truncated literal eating the next line. The
+                // decision is a RAW byte inspection: the delegated
+                // body must never meet the host lexer, not even for
+                // one peeked token (D-2026-08-12-1, review round).
+                let bare = match self.lexer.significant_byte_on_line() {
+                    None => true,
+                    Some(byte) => {
+                        matches!(byte, b';' | b',' | b'}' | b')') || position.bytes.contains(&byte)
+                    }
+                };
+                if bare {
                     self.peeked = Some(ident);
                     return Value::Cel(self.cel(position));
                 }
@@ -1669,8 +1661,8 @@ impl<'src> Parser<'src, '_> {
                         // re-read or absorbed (D-2026-08-12-1,
                         // review round).
                         self.lexer.skip_to(start + lead);
-                        self.lexer.skip_to_recovery_point(position);
-                        self.last_end = start + lead;
+                        let end = self.lexer.skip_json_recovery(position);
+                        self.last_end = end;
                         Value::Error(Span::new(self.source_id, start..start))
                     }
                 }
@@ -1708,7 +1700,7 @@ impl<'src> Parser<'src, '_> {
                         // parens without host tokenization — alien
                         // bytes stay silent.
                         self.unpeek();
-                        self.lexer.skip_balanced_raw(b'(', b')');
+                        self.lexer.skip_balanced_raw(b'(', b')', self.bag);
                     }
                     if self.peek().kind == TokenKind::LBrace {
                         self.bump();
@@ -1756,7 +1748,7 @@ impl<'src> Parser<'src, '_> {
             // host tokenization — alien bytes stay silent, the one
             // diagnostic already spoke.
             self.unpeek();
-            self.lexer.skip_balanced_raw(b'(', b')');
+            self.lexer.skip_balanced_raw(b'(', b')', self.bag);
         }
         if self.peek().kind == TokenKind::LBrace {
             self.bump();
@@ -2122,6 +2114,39 @@ fn simple_scalar(word: &str) -> Option<ScalarType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_recovery_keeps_the_sibling_in_the_tree() {
+        // The FAULTY source itself: the first emission is the
+        // recovery form, the SECOND statement survives in the AST —
+        // not merely a healed twin (D-2026-08-12-1, review round).
+        let mut bag = Bag::new();
+        let tree = parse(
+            SourceId::new(0),
+            "graph g : App {\n  operator o {\n    on in { out = json ???; out = data }\n  }\n  . -> o -> .\n}\n",
+            &mut bag,
+        );
+        assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("a graph");
+        };
+        let GraphItem::Operator(operator) = &graph.body[0] else {
+            panic!("an operator: {:?}", graph.body[0]);
+        };
+        let OperatorItem::Handler(handler) = &operator.body[0] else {
+            panic!("a handler");
+        };
+        let statements = handler.body.as_ref().expect("a body");
+        assert_eq!(statements.len(), 2, "both statements live");
+        let Statement::Assign { value, .. } = &statements[0] else {
+            panic!("first statement: {:?}", statements[0]);
+        };
+        assert!(matches!(value, Value::Error(_)), "the recovery form");
+        let Statement::Assign { value, .. } = &statements[1] else {
+            panic!("second statement: {:?}", statements[1]);
+        };
+        assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+    }
 
     fn parse_clean(source: &str) -> SyntaxTree {
         let mut bag = Bag::new();

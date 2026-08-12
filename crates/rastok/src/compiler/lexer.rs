@@ -391,47 +391,45 @@ impl<'a> Lexer<'a> {
     /// expected at the current position — string-aware, without host
     /// tokenization. Error recovery for dead/reserved forms: nothing
     /// here speaks.
-    pub fn skip_balanced_raw(&mut self, open: u8, close: u8) {
+    pub fn skip_balanced_raw(&mut self, open: u8, close: u8, bag: &mut Bag) {
         let bytes = self.source.as_bytes();
         let mut depth: u32 = 0;
-        let mut in_string = false;
         while let Some(&byte) = bytes.get(self.pos) {
-            if in_string {
-                match byte {
-                    b'\\' => {
-                        self.pos = (self.pos + 2).min(bytes.len());
-                        continue;
-                    }
-                    b'"' => in_string = false,
-                    _ => {}
-                }
-                self.pos += 1;
-                continue;
-            }
-            self.pos += 1;
             match byte {
-                b'"' => in_string = true,
-                _ if byte == open => depth += 1,
+                // BOTH quote styles, like every opaque scanner — a
+                // delimiter inside either kind of string is content,
+                // never structure (D-2026-08-12-1, review round).
+                b'"' | b'\'' => self.skip_quoted(bag, byte),
+                _ if byte == open => {
+                    depth += 1;
+                    self.pos += 1;
+                }
                 _ if byte == close => {
                     depth = depth.saturating_sub(1);
+                    self.pos += 1;
                     if depth == 0 {
                         return;
                     }
                 }
-                _ => {}
+                _ => self.pos += 1,
             }
         }
     }
 
-    /// Skips OPAQUELY forward to the first terminator of
-    /// `terminators` valid at delimiter depth zero — string-aware
-    /// (double quotes with backslash escapes), never consuming the
-    /// terminator, never moving backward. Error RECOVERY only: the
-    /// skipped bytes were already diagnosed, so nothing here speaks
-    /// (D-2026-08-12-1, review round).
-    pub fn skip_to_recovery_point(&mut self, terminators: &TerminatorSet) {
+    /// Skips OPAQUELY over a FAULTY JSON value to the position's
+    /// recovery point — never consuming the terminator, never moving
+    /// backward — and returns the final offset. JSON's own grammar
+    /// drives the walk (D-2026-08-12-1, review round): a STACK of
+    /// expected closers (`{`→`}`, `[`→`]` — a closer of another type
+    /// never pops), double-quote strings with escapes, and STRONG
+    /// boundaries — `;` and `)` cannot appear in JSON outside a
+    /// string, so they stop the walk at ANY depth; `,`, `}` and the
+    /// newline stop only at depth zero when the position knows them.
+    /// A mismatched closer stops too: under-consuming garbage beats
+    /// absorbing a sibling. Error recovery only — nothing speaks.
+    pub fn skip_json_recovery(&mut self, terminators: &TerminatorSet) -> usize {
         let bytes = self.source.as_bytes();
-        let mut depth: u32 = 0;
+        let mut expected: Vec<u8> = Vec::new();
         let mut in_string = false;
         while let Some(&byte) = bytes.get(self.pos) {
             if in_string {
@@ -446,19 +444,33 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 continue;
             }
-            if depth == 0
+            // Strong boundaries: impossible in JSON outside strings.
+            if byte == b';' || byte == b')' {
+                return self.pos;
+            }
+            if expected.is_empty()
                 && (terminators.bytes.contains(&byte) || (terminators.newline && byte == b'\n'))
             {
-                return;
+                return self.pos;
             }
             match byte {
                 b'"' => in_string = true,
-                b'{' | b'[' | b'(' => depth += 1,
-                b'}' | b']' | b')' => depth = depth.saturating_sub(1),
+                b'{' => expected.push(b'}'),
+                b'[' => expected.push(b']'),
+                b'}' | b']' => {
+                    if expected.last() == Some(&byte) {
+                        expected.pop();
+                    } else {
+                        // A closer that matches nothing — a
+                        // boundary, not JSON.
+                        return self.pos;
+                    }
+                }
                 _ => {}
             }
             self.pos += 1;
         }
+        self.pos
     }
 
     fn at_terminator(&self, byte: u8, terminators: &TerminatorSet) -> bool {
