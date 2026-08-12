@@ -13,7 +13,10 @@ use rastok::contract::{
 };
 
 fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
-    compile(&[source], &Registry::m0())
+    compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
 }
 
 fn process_graph(body: &str) -> String {
@@ -63,7 +66,10 @@ fn a_duplicate_attribute_is_a_sheet_defect() {
         },
     ];
     assert_eq!(
-        Registry::m0().try_with(sheet(DUP, None)).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(DUP, None))
+            .unwrap_err(),
         SheetDefect::DuplicateAttribute("x")
     );
 }
@@ -87,7 +93,8 @@ fn a_duplicate_profile_is_a_sheet_defect() {
         ],
     };
     assert_eq!(
-        Registry::m0()
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(TWICE)))
             .unwrap_err(),
         SheetDefect::DuplicateProfile("a")
@@ -106,7 +113,8 @@ fn an_unknown_default_profile_is_a_sheet_defect() {
         }],
     };
     assert_eq!(
-        Registry::m0()
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(GHOST)))
             .unwrap_err(),
         SheetDefect::UnknownDefaultProfile("ghost")
@@ -130,7 +138,8 @@ fn a_selector_colliding_with_an_attribute_is_a_sheet_defect() {
         }],
     };
     assert_eq!(
-        Registry::m0()
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
             .try_with(sheet(MODE, Some(SELECTOR)))
             .unwrap_err(),
         SheetDefect::SelectorCollision("mode")
@@ -145,7 +154,10 @@ fn an_uncompilable_cel_default_is_a_sheet_defect() {
         domain: ValueDomain::Text,
     }];
     assert!(matches!(
-        Registry::m0().try_with(sheet(BAD, None)).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(BAD, None))
+            .unwrap_err(),
         SheetDefect::InvalidDefault { attribute: "x", .. }
     ));
 }
@@ -159,7 +171,10 @@ fn a_default_outside_its_domain_is_a_sheet_defect() {
         domain: ValueDomain::Text,
     }];
     assert!(matches!(
-        Registry::m0().try_with(sheet(MISFIT, None)).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(MISFIT, None))
+            .unwrap_err(),
         SheetDefect::InvalidDefault { attribute: "x", .. }
     ));
     // A Choice default must be a word of the domain.
@@ -169,7 +184,10 @@ fn a_default_outside_its_domain_is_a_sheet_defect() {
         domain: ValueDomain::Choice(&["real"]),
     }];
     assert!(matches!(
-        Registry::m0().try_with(sheet(OUTSIDE, None)).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(OUTSIDE, None))
+            .unwrap_err(),
         SheetDefect::InvalidDefault { attribute: "y", .. }
     ));
 }
@@ -182,7 +200,10 @@ fn a_duplicate_choice_word_is_a_sheet_defect() {
         domain: ValueDomain::Choice(&["a", "a"]),
     }];
     assert_eq!(
-        Registry::m0().try_with(sheet(DUP, None)).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(DUP, None))
+            .unwrap_err(),
         SheetDefect::DuplicateChoice("x")
     );
 }
@@ -195,7 +216,10 @@ fn a_deferred_only_domain_needs_a_deferred_profile() {
         domain: ValueDomain::CelPath,
     }];
     assert_eq!(
-        Registry::m0().try_with(sheet(RAW, None)).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(RAW, None))
+            .unwrap_err(),
         SheetDefect::UnimplementedDomain("correlate")
     );
 }
@@ -433,13 +457,41 @@ fn the_binding_drops_no_argument_silently() {
 }
 
 #[test]
-fn the_binding_refuses_another_contract_and_unknown_codecs() {
-    // The Process boundary is structural AND pre-journal: another
-    // contract's spec refuses by NAME at bind.
-    let message = bind_error(|spec| {
-        spec.contract = String::from("Custom");
-    });
-    assert!(message.contains("`Custom` connector"), "{message}");
+fn the_binding_refuses_every_undeclared_adapter_error() {
+    // The review's blocker: an error the adapter REALLY produces but
+    // the spec does not declare would be refused at the PlanGate
+    // after consumption — a stranded open call. The binding proves
+    // the subset up front.
+    for kind in ["SpawnFailed", "DecodeError", "ExecFailed", "OutputOverflow"] {
+        let message = bind_error(|spec| {
+            spec.error_set.retain(|declared| declared != kind);
+        });
+        assert!(
+            message.contains(kind) && message.contains("error_set"),
+            "`{kind}` must be declared: {message}"
+        );
+    }
+}
+
+#[test]
+fn the_binding_serves_process_only_and_unknown_codecs_never_arrive() {
+    // A SPECIALIZED adapter: another contract simply does not bind —
+    // try_new succeeds and the foreign connector is unserved (its
+    // start answers a typed refusal); the global BoundExecutionPlan
+    // world is the named design for the second adapter.
+    let compilation = compile_one(&process_graph(FULL)).expect("valid");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            spec.contract = String::from("Custom");
+        }
+    }
+    let validated =
+        rastok::plan::ValidatedExecutionPlan::try_from(plan).expect("structurally valid");
+    assert!(
+        rastok::connectors::Process::try_new(&validated).is_ok(),
+        "a foreign contract is skipped, not refused"
+    );
     // An unknown codec cannot even reach the binding: the plan
     // validator refuses it first (the adapter's exhaustive match is
     // the belt BEHIND that door).
@@ -520,7 +572,10 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         domain: ValueDomain::Choice(&[]),
     }];
     assert_eq!(
-        Registry::m0().try_with(sheet(EMPTY, None)).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(EMPTY, None))
+            .unwrap_err(),
         SheetDefect::EmptyChoice("x")
     );
     const NOBODY: ProfileSelector = ProfileSelector {
@@ -529,7 +584,8 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         profiles: &[],
     };
     assert_eq!(
-        Registry::m0()
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(NOBODY)))
             .unwrap_err(),
         SheetDefect::NoProfiles("mode")
@@ -540,7 +596,10 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         domain: ValueDomain::Choice(&["nothing"]),
     }];
     assert_eq!(
-        Registry::m0().try_with(sheet(SENTINEL, None)).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(SENTINEL, None))
+            .unwrap_err(),
         SheetDefect::InexpressibleName("nothing"),
         "the parser turns `nothing` into the no-emission sentinel"
     );
@@ -553,8 +612,212 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         error_set: &[],
     };
     assert_eq!(
-        Registry::m0().try_with(unnameable).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(unnameable)
+            .unwrap_err(),
         SheetDefect::InexpressibleName("Not A Name")
+    );
+}
+
+#[test]
+fn the_new_discriminant_words_parse_as_words() {
+    // The review's blocker: `exponential` INSIDE a struct is a bare
+    // word, never a resurrected dead-initializer refusal — the form
+    // (word alone vs word + `(`/`{`) decides.
+    let source = process_graph(&format!("{FULL}\n    bogus = {{ curve = exponential }}"));
+    let bag = compile_one(&source).expect_err("bogus is not on the sheet");
+    assert!(
+        !bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-PARSE-EXPECTED"),
+        "the parser preempts nothing: {bag:?}"
+    );
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-CONTRACT-ATTR"
+                && d.message().contains("not on the contract sheet")),
+        "{bag:?}"
+    );
+}
+
+#[test]
+fn a_bare_tag_word_is_judged_by_the_contract() {
+    // `codec = json`: `json` is a TAG WORD, but the word ALONE is a
+    // choice for the contract to judge — it must never eat the next
+    // line as a JSON value.
+    let source = process_graph(
+        "    command = \"cat\" ; codec = json\n    effect = idempotent ; behavior = deterministic",
+    );
+    refusal_with(
+        &source,
+        "E-CONTRACT-ATTR",
+        "expected one of [\"jsonl\", \"lines\"], got `json`",
+    );
+}
+
+#[test]
+fn tag_words_serve_as_choice_words_on_another_sheet() {
+    // A future sheet may spell `text`, `json` or `unbounded` as
+    // closed choices — the parser leaves the words to the contract.
+    const CHOICES: &[AttributeSpec] = &[
+        AttributeSpec {
+            name: "behavior",
+            presence: Presence::Required,
+            domain: ValueDomain::Choice(&["deterministic"]),
+        },
+        AttributeSpec {
+            name: "effect",
+            presence: Presence::Required,
+            domain: ValueDomain::Choice(&["idempotent"]),
+        },
+        AttributeSpec {
+            name: "framing",
+            presence: Presence::Required,
+            domain: ValueDomain::Choice(&["text", "json", "unbounded"]),
+        },
+    ];
+    let registry = Registry::try_m0()
+        .expect("the standard catalogue holds")
+        .try_with(sheet(CHOICES, None))
+        .expect("a valid sheet");
+    for word in ["text", "json", "unbounded"] {
+        let source = format!(
+            "graph g : App {{\n  connector p : Probe {{\n    framing = {word}\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> p -> .\n}}\n"
+        );
+        let result = compile(&[source.as_str()], &registry);
+        assert!(result.is_ok(), "`framing = {word}` compiles: {result:?}");
+    }
+}
+
+#[test]
+fn max_output_is_judged_at_check_not_at_spawn() {
+    // The ByteSize domain closes the review's false green: a
+    // non-size refuses at CHECK, through the same parser the
+    // adapter enforces the budget with.
+    let source = process_graph(&format!("{FULL}\n    max_output = \"banana\""));
+    refusal_with(&source, "E-CONTRACT-ATTR", "ByteSize");
+    assert_eq!(rastok::contract::byte_size("8MiB"), Some(8 * 1024 * 1024));
+    assert_eq!(rastok::contract::byte_size("banana"), None);
+    assert_eq!(
+        rastok::contract::byte_size("1024"),
+        None,
+        "an explicit unit is required"
+    );
+}
+
+#[test]
+fn a_deferred_profile_still_owes_the_common_sheet() {
+    // `mode = service` alone: the deferral speaks AND the common
+    // Required attributes are still owed.
+    let source = process_graph("    mode = service");
+    let bag = compile_one(&source).expect_err("must refuse");
+    for name in ["`command`", "`codec`", "`effect`", "`behavior`"] {
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|d| d.code().as_str() == "E-CONTRACT-REQUIRED" && d.message().contains(name)),
+            "missing required refusal for {name}: {bag:?}"
+        );
+    }
+}
+
+#[test]
+fn sibling_profiles_may_share_an_attribute_name() {
+    // The selected profile disambiguates — only common-vs-profile
+    // and within-scope duplicates are defects.
+    const SHARED: &AttributeSpec = &AttributeSpec {
+        name: "shared",
+        presence: Presence::Optional,
+        domain: ValueDomain::Text,
+    };
+    const SELECTOR: ProfileSelector = ProfileSelector {
+        attribute: "mode",
+        default: Some("a"),
+        profiles: &[
+            Profile {
+                word: "a",
+                support: ProfileSupport::Available,
+                attributes: std::slice::from_ref(SHARED),
+            },
+            Profile {
+                word: "b",
+                support: ProfileSupport::Available,
+                attributes: std::slice::from_ref(SHARED),
+            },
+        ],
+    };
+    assert!(
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(&[], Some(SELECTOR)))
+            .is_ok()
+    );
+}
+
+#[test]
+fn an_inexpressible_sheet_name_is_a_sheet_defect() {
+    let bad_port = ConnectorContract {
+        name: "Probe",
+        input_ports: &["bad port"],
+        output_ports: &["out", "err"],
+        common: &[],
+        selector: None,
+        error_set: &[],
+    };
+    assert_eq!(
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(bad_port)
+            .unwrap_err(),
+        SheetDefect::InvalidPortName("bad port")
+    );
+    const BAD_ATTR: &[AttributeSpec] = &[AttributeSpec {
+        name: "not a name",
+        presence: Presence::Optional,
+        domain: ValueDomain::Text,
+    }];
+    assert_eq!(
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(BAD_ATTR, None))
+            .unwrap_err(),
+        SheetDefect::InexpressibleName("not a name")
+    );
+}
+
+#[test]
+fn a_deferred_domain_carries_no_default() {
+    const LIE: ProfileSelector = ProfileSelector {
+        attribute: "mode",
+        default: Some("a"),
+        profiles: &[Profile {
+            word: "a",
+            support: ProfileSupport::Deferred("someday"),
+            attributes: &[AttributeSpec {
+                name: "x",
+                presence: Presence::Defaulted(DefaultValue::CelExpression("[]")),
+                domain: ValueDomain::Struct,
+            }],
+        }],
+    };
+    assert!(matches!(
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(&[], Some(LIE)))
+            .unwrap_err(),
+        SheetDefect::InvalidDefault { attribute: "x", .. }
+    ));
+}
+
+#[test]
+fn a_nested_block_entry_names_its_migration() {
+    let source = "graph g : App {\n  operator o {\n    on in { out = { parent { child = 1 } } }\n  }\n  . -> o -> .\n}\n";
+    refusal_with(
+        source,
+        "E-CONTRACT-ATTR",
+        "`parent { … }` is no longer a form; write `parent = { … }`",
     );
 }
 

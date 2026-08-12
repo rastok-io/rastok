@@ -159,7 +159,7 @@ values and never reintroduces a default.
 | `behavior` | common | choice, typed | **Required** |
 | `timeout` | common | CEL → `duration` | Optional — a true optional: no budget declared, no budget |
 | `env` | common | composite map — **deferred** (named diagnostic until composite domains land; the canonical spelling will be `env = { "K": v }`) | — |
-| `max_output` | job | byte size: `<digits><unit>`, unit ∈ `B \| KiB \| MiB \| GiB` (explicit, required), ASCII whitespace tolerated around and between, ≤ 4 GiB (syntax bound; the host must also be able to buffer the budget — judged at adapter binding) — one parser (`contract::byte_size`) judges at check AND enforces at run | Defaulted(`"8MiB"`) |
+| `max_output` | job | byte size: `<digits><unit>`, unit ∈ `B \| KiB \| MiB \| GiB` (explicit, required), ASCII whitespace tolerated around and between, ≤ 4 GiB (syntax bound; the adapter binding additionally proves the budget is REPRESENTABLE on this host — at most `isize::MAX` — while actual allocation is judged chunk by chunk at intake via `try_reserve`, surfacing as the typed overflow, never an abort) — one parser (`contract::byte_size`) judges at check AND enforces at run | Defaulted(`"8MiB"`) |
 | `on_timeout` | job | choice `kill` (one word — "fixed to `kill`") | Defaulted(`kill`) |
 | `correlate` | service | CEL path over runtime data (deferred-only domain) | Optional |
 | `restart` | service | struct (deferred-only domain) | Optional |

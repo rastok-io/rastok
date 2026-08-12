@@ -20,7 +20,11 @@ fn example() -> PathBuf {
 
 fn compilation() -> rastok::compiler::Compilation {
     let source = std::fs::read_to_string(example()).expect("the example reads");
-    compile(&[source.as_str()], &Registry::m0()).expect("a valid unit")
+    compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit")
 }
 
 /// The identity move of the typed-port lift, pinned to the byte:

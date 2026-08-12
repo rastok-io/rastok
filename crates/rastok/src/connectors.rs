@@ -55,10 +55,15 @@ enum ProcessSettingsError {
     UnknownCodec(String),
     /// `max_output` is not a declared byte size.
     NotASize(String),
-    /// A budget this HOST cannot buffer (`usize` narrower than the
-    /// declared size) — target-independent validation, host-capacity
-    /// binding.
+    /// A budget this host's `Vec` cannot even EXPRESS
+    /// (`> isize::MAX` on this target) — representability, not a
+    /// memory promise.
     HostCapacity(u64),
+    /// An error kind this adapter really produces is missing from
+    /// the spec's declared set — its response would be refused at
+    /// the PlanGate after consumption, leaving the call open
+    /// forever.
+    UndeclaredError(&'static str),
     /// `timeout` is not a duration.
     TimeoutNotDuration,
 }
@@ -96,18 +101,34 @@ impl core::fmt::Display for ProcessSettingsError {
             Self::NotASize(text) => write!(f, "max_output `{text}` is not a size"),
             Self::HostCapacity(size) => write!(
                 f,
-                "this host cannot buffer a {size}-byte budget (its address width is narrower)"
+                "this host cannot express a {size}-byte buffer (beyond its Vec limit)"
+            ),
+            Self::UndeclaredError(kind) => write!(
+                f,
+                "the adapter produces `{kind}` but the spec's error_set does not declare it — \
+                 its response would strand the call open"
             ),
             Self::TimeoutNotDuration => write!(f, "the timeout attribute is not a duration"),
         }
     }
 }
 
+/// Every error kind THIS adapter can hand the machine in job mode —
+/// the binding proves each is declared in the spec's error set, so no
+/// real response can be refused at the PlanGate after the dispatcher
+/// consumed the event (a stranded open call).
+const PROCESS_EMITS: &[&str] = &["SpawnFailed", "DecodeError", "ExecFailed", "OutputOverflow"];
+
 impl ProcessSettings {
     fn try_from(spec: &rastok_core::plan::ConnectorSpec) -> Result<Self, ProcessSettingsError> {
         use ProcessSettingsError as E;
         if spec.contract != "Process" {
             return Err(E::NotProcess(spec.contract.clone()));
+        }
+        for kind in PROCESS_EMITS {
+            if !spec.error_set.iter().any(|declared| declared == kind) {
+                return Err(E::UndeclaredError(kind));
+            }
         }
         match spec.attribute("mode") {
             Some(AttrSetting::Word(word)) if word == "job" => {}
@@ -153,10 +174,14 @@ impl ProcessSettings {
                 match crate::contract::byte_size(text) {
                     Some(size) => {
                         // The SYNTAX bound is target-independent
-                        // (contract::MAX_BYTE_SIZE); whether THIS
-                        // host can buffer the budget is the
-                        // adapter's binding question.
-                        if usize::try_from(size).is_err() {
+                        // (contract::MAX_BYTE_SIZE). The binding
+                        // proves REPRESENTABILITY on this host — a
+                        // `Vec` holds at most `isize::MAX` bytes —
+                        // never that the memory exists: allocation
+                        // is judged at intake, chunk by chunk,
+                        // through `try_reserve`.
+                        let vec_limit = u64::try_from(isize::MAX).unwrap_or(u64::MAX);
+                        if size > vec_limit {
                             return Err(E::HostCapacity(size));
                         }
                         size
@@ -278,6 +303,16 @@ impl<'plan> Process<'plan> {
         let mut settings = std::collections::BTreeMap::new();
         for node in &plan.plan().nodes {
             if let NodeKind::Connector(spec) = &node.kind {
+                // A SPECIALIZED adapter: only `Process` contracts
+                // bind here — another contract is simply not served
+                // (its start answers a typed refusal). The world
+                // that binds EVERY callable connector to exactly one
+                // adapter — a BoundExecutionPlan — is the named
+                // design for the second adapter (m1-slice, the
+                // connector items).
+                if spec.contract != "Process" {
+                    continue;
+                }
                 match ProcessSettings::try_from(spec) {
                     Ok(resolved) => {
                         settings.insert(node.path.clone(), resolved);
@@ -306,7 +341,9 @@ impl<'plan> Process<'plan> {
         let Some(settings) = self.settings.get(&intent.connector_path) else {
             return Err(failure(
                 "SpawnFailed",
-                "the intent names no planned connector".to_string(),
+                "no Process binding serves this connector (unknown path, or another \
+                 contract this specialized adapter does not carry)"
+                    .to_string(),
             ));
         };
         // The machine prepared and sealed the bytes; the adapter
@@ -433,7 +470,13 @@ impl Run {
                 Chunk::Out(bytes) => {
                     self.observed_out = self.observed_out.saturating_add(bytes.len() as u64);
                     if !self.overflowed {
-                        if self.observed_out > self.max_output {
+                        if self.observed_out > self.max_output
+                            || self.stdout.try_reserve(bytes.len()).is_err()
+                        {
+                            // Past the budget — or past what this
+                            // host can actually allocate: the run
+                            // ends as the typed overflow, never an
+                            // abort.
                             self.overflowed = true;
                         } else {
                             self.stdout.extend_from_slice(&bytes);
@@ -442,7 +485,9 @@ impl Run {
                 }
                 Chunk::Err(bytes) => {
                     self.observed_err = self.observed_err.saturating_add(bytes.len() as u64);
-                    if self.observed_err <= self.max_output {
+                    if self.observed_err <= self.max_output
+                        && self.stderr.try_reserve(bytes.len()).is_ok()
+                    {
                         self.stderr.extend_from_slice(&bytes);
                     }
                 }
@@ -706,7 +751,11 @@ graph real : App {
     /// declared budgets expire for real and the scheduler — never
     /// the adapter — mints the timeouts.
     fn run(source: &str, text: &str) -> (MemJournal, Vec<Envelope>, Vec<Envelope>) {
-        let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+        let compilation = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         let mut world = Process::try_new(&compilation.plan).expect("the plan binds");

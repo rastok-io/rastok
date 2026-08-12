@@ -575,7 +575,11 @@ mod tests {
         let source = format!(
             "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> echo -> .\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
         );
-        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+        let compilation = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid unit");
         let mock = &compilation.labs[0].simulations[0].mocks[0];
         let path = node::Path::new(["echo"]).unwrap();
         let mut mocks: BTreeMap<node::Path, &crate::compiler::hir::Mock> = BTreeMap::new();
@@ -714,7 +718,11 @@ lab m0_probe {
 "#;
 
     fn reports() -> Vec<ScenarioReport> {
-        let compilation = compile(&[PROBE_WITH_LAB], &Registry::m0()).expect("a valid unit");
+        let compilation = compile(
+            &[PROBE_WITH_LAB],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid unit");
         assert_eq!(compilation.labs.len(), 1);
         run(&compilation.plan, GraphVersion(1), &compilation.labs[0])
             .into_iter()
@@ -750,7 +758,11 @@ lab m0_probe {
             "expect \"the echo came back\" app.out count == 1 where data.echoed == true",
             "expect \"the departure\" shout.out count == 1 where data == \"salut\"",
         );
-        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+        let compilation = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
         assert!(
             runs[0].report.passed(),
@@ -768,7 +780,11 @@ lab m0_probe {
             "where data.echoed == true",
             "where data.missing_field == true",
         );
-        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+        let compilation = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
         assert!(!runs[0].report.passed());
         assert!(
@@ -781,7 +797,11 @@ lab m0_probe {
     #[test]
     fn a_broken_expectation_fails_loudly_not_silently() {
         let source = PROBE_WITH_LAB.replace("data.echoed == true", "data.echoed == false");
-        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+        let compilation = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
         let roundtrip = &runs[0].report;
         assert!(!roundtrip.passed());
@@ -814,7 +834,11 @@ lab m0_probe {
   }
 }
 "#;
-        let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+        let compilation = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
         assert!(
             runs[0].report.passed(),
@@ -848,7 +872,11 @@ lab m0_probe {
   }
 }
 "#;
-        let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+        let compilation = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
         assert!(!runs[0].report.passed());
         assert!(runs[0].report.failures[0].contains("uncovered call"));

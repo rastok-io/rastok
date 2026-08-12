@@ -18,7 +18,11 @@ fn emitted(body: &str) -> rastok::envelope::Data {
     let source = format!(
         "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
     );
-    let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -42,10 +46,13 @@ fn hash_of(body: &str) -> String {
     let source = format!(
         "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
     );
-    compile(&[source.as_str()], &Registry::m0())
-        .expect("a valid plan")
-        .hash
-        .to_string()
+    compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan")
+    .hash
+    .to_string()
 }
 
 #[test]
@@ -84,7 +91,11 @@ fn base64_refusals_are_located() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("must refuse");
+        let bag = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("must refuse");
         assert!(
             bag.diagnostics()
                 .iter()
@@ -103,7 +114,11 @@ fn base64_with_a_content_type_is_whole_payload() {
     use rastok::runtime::vm::Vm;
 
     let source = "graph g : App {\n  operator o {\n    on in { out = base64(\"image/png\") { AAEC } }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -161,7 +176,11 @@ fn mixing_struct_and_map_punctuation_refuses() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("never mixed");
+        let bag = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("never mixed");
         assert!(
             bag.diagnostics()
                 .iter()
@@ -224,7 +243,11 @@ fn json_refusals_are_located() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("must refuse");
+        let bag = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("must refuse");
         assert!(
             bag.diagnostics().iter().any(|d| !d.spans().is_empty()),
             "`{wrong}` refusal carries a span: {bag:?}"
@@ -261,8 +284,12 @@ fn assets_resolve_at_build_and_seal_by_content() {
     // Whole-data with a content type, plus a second use of the SAME
     // content under a different path: one deduplicated blob.
     let source = "graph g : App {\n  operator o {\n    on in { out = asset(\"assets/logo.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/same.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    let compilation = compile_with_assets(&[source], &Registry::m0(), Some(&root))
-        .expect("assets resolve at build");
+    let compilation = compile_with_assets(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+        Some(&root),
+    )
+    .expect("assets resolve at build");
     assert_eq!(
         compilation.plan.assets.len(),
         1,
@@ -271,8 +298,12 @@ fn assets_resolve_at_build_and_seal_by_content() {
     // The hash seals the CONTENT digest, not the path: the same
     // program via the other spelling is the same identity.
     let swapped = "graph g : App {\n  operator o {\n    on in { out = asset(\"assets/same.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/logo.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    let other = compile_with_assets(&[swapped], &Registry::m0(), Some(&root))
-        .expect("the swapped spelling compiles");
+    let other = compile_with_assets(
+        &[swapped],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+        Some(&root),
+    )
+    .expect("the swapped spelling compiles");
     assert_eq!(compilation.hash, other.hash, "the path is spelling");
     // And the v5 package round-trips the blob with a verified digest.
     let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
@@ -290,8 +321,12 @@ fn asset_refusals_are_named() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile_with_assets(&[source.as_str()], &Registry::m0(), root)
-            .expect_err("must refuse");
+        let bag = compile_with_assets(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+            root,
+        )
+        .expect_err("must refuse");
         assert!(
             bag.diagnostics()
                 .iter()
@@ -323,8 +358,12 @@ fn an_asset_emission_runs_and_carries_its_type() {
     file.write_all(b"PDFISH").unwrap();
 
     let source = "graph g : App {\n  operator o {\n    on in { out = asset(\"report.bin\", \"application/pdf\") }\n  }\n  . -> o -> .\n}\n";
-    let compilation =
-        compile_with_assets(&[source], &Registry::m0(), Some(&root)).expect("a valid plan");
+    let compilation = compile_with_assets(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+        Some(&root),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -358,15 +397,27 @@ fn an_asset_emission_runs_and_carries_its_type() {
 fn named_types_are_structural_sugar() {
     // An alias resolves to its structure in a pin…
     let aliased = "type Tag = text\n\ngraph g : App {\n  operator o {\n    input evt : Tag\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
-    let first = compile(&[aliased], &Registry::m0()).expect("the alias resolves");
+    let first = compile(
+        &[aliased],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the alias resolves");
     // …and RENAMING it is not an identity move: same structure, same
     // hash (D-2026-08-10-8).
     let renamed = "type Label = text\n\ngraph g : App {\n  operator o {\n    input evt : Label\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
-    let second = compile(&[renamed], &Registry::m0()).expect("the rename resolves");
+    let second = compile(
+        &[renamed],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the rename resolves");
     assert_eq!(first.hash, second.hash, "names are sugar, never identity");
     // The bare structural spelling is the SAME program too.
     let bare = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
-    let third = compile(&[bare], &Registry::m0()).expect("the bare spelling");
+    let third = compile(
+        &[bare],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the bare spelling");
     assert_eq!(first.hash, third.hash, "the expansion IS the identity");
 }
 
@@ -374,7 +425,11 @@ fn named_types_are_structural_sugar() {
 fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
     // Duplicate.
     let source = "type T = text\ntype T = int\n\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("duplicates refuse");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("duplicates refuse");
     assert!(
         bag.diagnostics()
             .iter()
@@ -383,7 +438,11 @@ fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
     );
     // Cycle — the reform's own Node example refuses in v1.
     let source = "type Node = struct { label: text, children: array<Node> }\n\ngraph g : App {\n  operator o {\n    input evt : Node\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("recursion refuses");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("recursion refuses");
     assert!(
         bag.diagnostics()
             .iter()
@@ -392,7 +451,11 @@ fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
     );
     // Unknown name at a use site.
     let source = "graph g : App {\n  operator o {\n    input evt : Ghost\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("unknowns refuse");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("unknowns refuse");
     assert!(
         bag.diagnostics()
             .iter()
@@ -433,7 +496,11 @@ fn bare_forms_embed_in_records_and_typed_forms_refuse_there() {
     );
     // A content-typed form nested in a record refuses with the rule.
     let source = "graph g : App {\n  operator o {\n    on in { out = { document = base64(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("whole-payload only");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("whole-payload only");
     assert!(
         bag.diagnostics()
             .iter()
@@ -454,7 +521,11 @@ fn the_carry_survives_a_dead_earlier_write() {
     // final value is the input payload, so the representation and
     // its content type CARRY (the reviewer's counter-example).
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        data = \"temp\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
@@ -503,7 +574,11 @@ fn inject_holds_the_ext_zone_to_the_schema() {
 
     let source =
         "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
@@ -532,7 +607,11 @@ fn a_zone_alias_cannot_dodge_the_grid() {
     // `val m = meta.app; out = m.ghost` must refuse at CHECK — a
     // zone is not a value (the reviewer's escape).
     let source = "graph g : App {\n  operator o {\n    on in {\n      val m = meta.app\n      out = m.ghost\n    }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("the alias refuses");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the alias refuses");
     assert!(
         bag.diagnostics()
             .iter()
@@ -545,7 +624,11 @@ fn a_zone_alias_cannot_dodge_the_grid() {
 fn a_non_meta_typed_app_write_refuses_or_converts() {
     // An array<scalar> write now CONVERTS (spec-admitted meta)…
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.tags = [\"a\", \"b\"]\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    compile(&[source], &Registry::m0()).expect("array<scalar> is legal meta");
+    compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("array<scalar> is legal meta");
     // …and a Dyn-typed content_type that turns out non-text faults
     // TYPED at the runtime write, never a silent int.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
@@ -554,7 +637,11 @@ fn a_non_meta_typed_app_write_refuses_or_converts() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
     let source = "graph g : App {\n  operator o {\n    on in { out = { data = \"x\", meta.ext.content_type = data } }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("Dyn passes the static gate");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("Dyn passes the static gate");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -586,7 +673,11 @@ fn the_meta_type_grid_is_closed_end_to_end() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{\n      out = {{\n        {body}\n        data = data\n      }}\n    }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err(what);
+        let bag = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err(what);
         assert!(
             bag.diagnostics()
                 .iter()
@@ -602,7 +693,11 @@ fn the_meta_type_grid_is_closed_end_to_end() {
     use rastok::runtime::vm::Vm;
     let source =
         "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
@@ -630,7 +725,11 @@ fn the_meta_type_grid_is_closed_end_to_end() {
 fn a_branch_alias_cannot_dodge_the_grid_either() {
     // The refined escape: a projected BRANCH leaving as a value.
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.audit.origin = \"x\"\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      val m = meta.app.audit\n      out = m\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("a branch is not a value");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("a branch is not a value");
     assert!(
         bag.diagnostics()
             .iter()
@@ -639,7 +738,11 @@ fn a_branch_alias_cannot_dodge_the_grid_either() {
     );
     // And a sys LEAF takes no extra segments.
     let source = "graph g : App {\n  operator o {\n    on in where meta.sys.id.extra == \"x\" { out = data }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("a leaf nests nothing");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("a leaf nests nothing");
     assert!(
         bag.diagnostics()
             .iter()
@@ -654,10 +757,13 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     // A NON-minimal decimal (unscaled divisible by 10) cannot obtain
     // validation — exactly what the decoder would refuse.
     let source = "graph g : App {\n  operator o {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> o -> .\n}\n";
-    let mut plan = compile(&[source], &Registry::m0())
-        .expect("a valid plan")
-        .plan
-        .into_inner();
+    let mut plan = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan")
+    .plan
+    .into_inner();
     plan.nodes
         .iter_mut()
         .find(|node| node.path.to_string() == "o")
@@ -674,10 +780,13 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     // A blob lying about its digest cannot obtain validation.
     let source =
         "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
-    let mut plan = compile(&[source], &Registry::m0())
-        .expect("a valid plan")
-        .plan
-        .into_inner();
+    let mut plan = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan")
+    .plan
+    .into_inner();
     plan.assets.push(AssetBlob {
         digest: [0; 32],
         bytes: vec![1, 2, 3],
@@ -716,8 +825,18 @@ fn asset_order_is_digest_canonical() {
     // the same package bytes: the table is digest-sorted at seal.
     let ab = "graph g : App {\n  operator o {\n    on in { out = asset(\"a.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"b.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
     let ba = "graph g : App {\n  operator o {\n    on in { out = asset(\"b.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"a.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    let first = compile_with_assets(&[ab], &Registry::m0(), Some(&root)).expect("compiles");
-    let second = compile_with_assets(&[ba], &Registry::m0(), Some(&root)).expect("compiles");
+    let first = compile_with_assets(
+        &[ab],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+        Some(&root),
+    )
+    .expect("compiles");
+    let second = compile_with_assets(
+        &[ba],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+        Some(&root),
+    )
+    .expect("compiles");
     let table_first: Vec<[u8; 32]> = first.plan.assets.iter().map(|blob| blob.digest).collect();
     let table_second: Vec<[u8; 32]> = second.plan.assets.iter().map(|blob| blob.digest).collect();
     assert_eq!(table_first, table_second, "one canonical table");
@@ -732,7 +851,11 @@ fn the_review_round_three_matrix_holds() {
     use rastok::envelope::{Data, Scalar, Value};
     // uint refuses statically — the runtime cannot represent it.
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.n = 3u\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("uint refuses at check");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("uint refuses at check");
     assert!(
         bag.diagnostics()
             .iter()
@@ -747,7 +870,11 @@ fn the_review_round_three_matrix_holds() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.x = 1\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.x = data\n        data = data\n      }\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("Dyn passes the static gate");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("Dyn passes the static gate");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -769,8 +896,11 @@ fn the_review_round_three_matrix_holds() {
     assert_eq!(vm.errors().len(), 1, "the typed fault leaves on err");
     // app.content_type is an ORDINARY app field — no special rule.
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.content_type = 7\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    compile(&[source], &Registry::m0())
-        .expect("app.content_type is application vocabulary, int included");
+    compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("app.content_type is application vocabulary, int included");
     // The whole-data content-typed builder forms run.
     let Data::Materialized(value) =
         emitted("{ data = base64(\"image/png\") { AAEC }, meta.app.tag = \"x\" }")
@@ -797,7 +927,11 @@ fn deep_structural_types_meet_the_depth_budget() {
     let source = format!(
         "type Deep = {ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
     );
-    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the depth budget");
+    let bag = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the depth budget");
     let hit = bag
         .diagnostics()
         .iter()
@@ -830,8 +964,12 @@ fn lab_assets_never_reach_the_production_plan() {
         let source = format!(
             "graph g : App {{\n  connector shell : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> shell -> .\n}}\n\nlab g {{\n  simulation probing on app {{\n    scenario s \"lab asset\" {{\n      {body}\n      expect \"out\" app.out count == 1\n    }}\n  }}\n}}\n"
         );
-        let bag = compile_with_assets(&[source.as_str()], &Registry::m0(), Some(&root))
-            .expect_err("a lab asset refuses");
+        let bag = compile_with_assets(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+            Some(&root),
+        )
+        .expect_err("a lab asset refuses");
         assert!(
             bag.diagnostics()
                 .iter()
@@ -848,10 +986,13 @@ fn the_validator_only_admits_executable_schemas() {
     let base = "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     // A uint schema entry: no value can ever satisfy it — named as
     // the TYPE refusal it is.
-    let mut plan = compile(&[base], &Registry::m0())
-        .expect("valid")
-        .plan
-        .into_inner();
+    let mut plan = compile(
+        &[base],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("valid")
+    .plan
+    .into_inner();
     plan.app_schema = vec![(String::from("n"), rastok::cel::Type::Uint)];
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -859,10 +1000,13 @@ fn the_validator_only_admits_executable_schemas() {
     ));
     // A branch under the implicit ext leaf: a PREFIX collision with
     // the implicit `content_type`.
-    let mut plan = compile(&[base], &Registry::m0())
-        .expect("valid")
-        .plan
-        .into_inner();
+    let mut plan = compile(
+        &[base],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("valid")
+    .plan
+    .into_inner();
     plan.ext_schema = vec![(String::from("content_type.foo"), rastok::cel::Type::Text)];
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -870,10 +1014,13 @@ fn the_validator_only_admits_executable_schemas() {
     ));
     // Malformed dotted keys — unreachable by the projection.
     for bad in ["", ".origin", "a.", "a..b"] {
-        let mut plan = compile(&[base], &Registry::m0())
-            .expect("valid")
-            .plan
-            .into_inner();
+        let mut plan = compile(
+            &[base],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("valid")
+        .plan
+        .into_inner();
         plan.app_schema = vec![(String::from(bad), rastok::cel::Type::Text)];
         assert!(
             matches!(
@@ -896,7 +1043,11 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
     use rastok::runtime::vm::Vm;
 
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.price = data\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -947,7 +1098,11 @@ fn values_nest_recursively_across_struct_and_map() {
     // A non-empty STRUCT inside a map: inexpressible in v1, deferred
     // BY NAME (the D-6 amendment) — dynamic nesting spells `json`.
     let source = "graph g : App {\n  operator o {\n    on in { out = { \"row\": { x = 1 } } }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("deferred by name");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("deferred by name");
     assert!(
         bag.diagnostics()
             .iter()
@@ -984,7 +1139,11 @@ fn broken_type_declarations_refuse_even_unused() {
         let source = format!(
             "type Broken = {source_ty}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err(what);
+        let bag = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err(what);
         let hit = bag
             .diagnostics()
             .iter()
@@ -1011,7 +1170,11 @@ fn broken_type_declarations_refuse_even_unused() {
     let source = format!(
         "type Wide = {wide}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n"
     );
-    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("node budget");
+    let bag = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("node budget");
     assert!(
         bag.diagnostics()
             .iter()
@@ -1026,7 +1189,11 @@ fn map_keys_keep_their_string_semantics() {
     // A duplicate key refuses AT CHECK, on the SECOND key — the
     // registered code, never an internal-plan surprise.
     let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\": 1, \"a\": 2 } }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("duplicates refuse");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("duplicates refuse");
     let hit = bag
         .diagnostics()
         .iter()
@@ -1041,7 +1208,11 @@ fn map_keys_keep_their_string_semantics() {
     // And the decoded key is REALLY the newline form: two escaped
     // twins collide as duplicates.
     let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\\nb\": 1, \"a\\nb\": 2 } }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("decoded twins collide");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("decoded twins collide");
     assert!(
         bag.diagnostics()
             .iter()
@@ -1068,7 +1239,11 @@ fn content_type_arguments_are_literals_only() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("shape exactness");
+        let bag = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("shape exactness");
         // ONE contractual diagnostic — never a cascade.
         assert_eq!(
             bag.diagnostics().len(),
@@ -1096,8 +1271,16 @@ fn alias_and_bare_spellings_share_the_node_budget() {
         (0..4096).map(|_| "T").collect::<Vec<_>>().join(" | ")
     );
     assert_eq!(
-        compile(&[at_budget_bare.as_str()], &Registry::m0()).is_ok(),
-        compile(&[at_budget_aliased.as_str()], &Registry::m0()).is_ok(),
+        compile(
+            &[at_budget_bare.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds")
+        )
+        .is_ok(),
+        compile(
+            &[at_budget_aliased.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds")
+        )
+        .is_ok(),
         "sugar carries no budget weight"
     );
     let over_bare = format!(
@@ -1108,15 +1291,31 @@ fn alias_and_bare_spellings_share_the_node_budget() {
         "type T = text\ntype Wide = {}\n\ngraph g : App {{\n  operator o {{\n    on in {{ out = data }}\n  }}\n  . -> o -> .\n}}\n",
         (0..4097).map(|_| "T").collect::<Vec<_>>().join(" | ")
     );
-    assert!(compile(&[over_bare.as_str()], &Registry::m0()).is_err());
-    assert!(compile(&[over_aliased.as_str()], &Registry::m0()).is_err());
+    assert!(
+        compile(
+            &[over_bare.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds")
+        )
+        .is_err()
+    );
+    assert!(
+        compile(
+            &[over_aliased.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds")
+        )
+        .is_err()
+    );
 }
 
 #[test]
 fn nested_content_type_gets_its_own_diagnostic() {
     // The dedicated code, on the TAG's span — never E-META-ZONE.
     let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("placement");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("placement");
     let hit = bag
         .diagnostics()
         .iter()
@@ -1132,7 +1331,11 @@ fn nested_content_type_gets_its_own_diagnostic() {
     // Arity refuses FIRST: a malformed call is malformed wherever
     // it sits.
     let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"a\", \"b\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("arity");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("arity");
     assert!(
         bag.diagnostics()
             .iter()
@@ -1158,7 +1361,11 @@ fn alias_chains_meet_their_own_budget() {
     source.push_str(
         "\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
     );
-    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the alias budget");
+    let bag = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the alias budget");
     assert!(
         bag.diagnostics().iter().any(|d| {
             d.code().as_str() == "E-TYPE-BUDGET"
@@ -1174,7 +1381,11 @@ fn alias_chains_meet_their_own_budget() {
     source.push_str(
         "\ngraph g : App {\n  operator o {\n    input evt : T99\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n",
     );
-    compile(&[source.as_str()], &Registry::m0()).expect("a hundred links resolve");
+    compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a hundred links resolve");
 }
 
 #[test]
@@ -1183,7 +1394,11 @@ fn a_misplaced_malformed_call_refuses_once_for_the_malformation() {
     // call with a NON-STRING argument gets the argument truth, one
     // diagnostic, never E-CONTENT-TYPE noise.
     let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"image/\" + \"png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("argument truth first");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("argument truth first");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     assert!(
         bag.diagnostics()[0].message().contains("STRING literal"),
@@ -1214,16 +1429,26 @@ fn the_alias_boundary_keeps_its_variable() {
         source.push_str(&graph_with(&format!("T{n}")));
         source
     };
-    let bare = compile(&[graph_with("text").as_str()], &Registry::m0())
-        .expect("bare")
-        .hash;
+    let bare = compile(
+        &[graph_with("text").as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("bare")
+    .hash;
     for n in [255, 256] {
-        let aliased = compile(&[chain(n).as_str()], &Registry::m0())
-            .unwrap_or_else(|bag| panic!("{n} links must compile: {bag:?}"))
-            .hash;
+        let aliased = compile(
+            &[chain(n).as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap_or_else(|bag| panic!("{n} links must compile: {bag:?}"))
+        .hash;
         assert_eq!(aliased, bare, "{n} links: the variable survives as sugar");
     }
-    let bag = compile(&[chain(257).as_str()], &Registry::m0()).expect_err("257 refuses");
+    let bag = compile(
+        &[chain(257).as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("257 refuses");
     assert!(
         bag.diagnostics().iter().any(|d| {
             d.code().as_str() == "E-TYPE-BUDGET"
@@ -1246,12 +1471,18 @@ fn the_alias_boundary_keeps_its_variable() {
         source.push_str(&port_with("T256"));
         source
     };
-    let bare_port = compile(&[port_with("text").as_str()], &Registry::m0())
-        .expect("bare port")
-        .hash;
-    let aliased_port = compile(&[port_chain.as_str()], &Registry::m0())
-        .expect("256 links pin the port")
-        .hash;
+    let bare_port = compile(
+        &[port_with("text").as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("bare port")
+    .hash;
+    let aliased_port = compile(
+        &[port_chain.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("256 links pin the port")
+    .hash;
     assert_eq!(aliased_port, bare_port, "the port pin survives as sugar");
 }
 
@@ -1260,7 +1491,11 @@ fn the_shape_gate_owns_the_body_and_speaks_once() {
     // A content-typed base64 with NO body is a malformed CALL —
     // the body is shape, never placement.
     let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"image/png\") } }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("the body is shape");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the body is shape");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     assert!(
         bag.diagnostics()[0].message().contains("needs a body"),
@@ -1276,7 +1511,11 @@ fn the_shape_gate_owns_the_body_and_speaks_once() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {tag} }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("bare refuses");
+        let bag = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("bare refuses");
         assert_eq!(
             bag.diagnostics().len(),
             1,
@@ -1285,7 +1524,11 @@ fn the_shape_gate_owns_the_body_and_speaks_once() {
     }
     // Both asset arguments faulty: the PATH speaks first.
     let source = "graph g : App {\n  operator o {\n    on in { out = asset(\"a\" + \".bin\", \"x\" + \"y\") }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("path first");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("path first");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     let hit = &bag.diagnostics()[0];
     assert_eq!(
@@ -1313,7 +1556,11 @@ fn empty_parentheses_speak_once_through_the_checker() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("refuses");
+        let bag = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("refuses");
         assert_eq!(bag.diagnostics().len(), 1, "`{body}` speaks once: {bag:?}");
         assert!(
             bag.diagnostics()[0].message().contains(expect),

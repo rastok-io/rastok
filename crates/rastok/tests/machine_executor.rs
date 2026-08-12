@@ -44,7 +44,11 @@ on in where data.text != "" {
 "#;
 
 fn probe() -> (ValidatedExecutionPlan, Slot) {
-    let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[M0_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let slot = Slot::new(
         u32::try_from(
             compilation
@@ -85,7 +89,11 @@ fn trigger_in() -> node::Trigger {
 fn an_identity_emission_inherits_everything_but_its_spine() {
     let source =
         "graph g : App {\n  operator relay {\n    on in { out = . }\n  }\n  . -> relay -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
     let state = PartitionState::new()
@@ -234,7 +242,11 @@ fn metadata_writes_land_where_the_spec_says() {
     // `meta.ext.content_type` is the standard ext field, and a
     // metadata-only patch never transcodes the payload.
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.flag = \"yes\"\n        meta.app.audit.origin = \"trace\"\n        meta.ext.content_type = \"text/x-rastok\"\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
     let state = PartitionState::new()

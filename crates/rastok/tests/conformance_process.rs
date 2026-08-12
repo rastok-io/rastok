@@ -200,7 +200,11 @@ fn process_profile() -> Profile {
 
 #[test]
 fn process_passes_the_whole_battery() {
-    let report = verify(&process_profile(), &Registry::m0(), &mut ProcessFactory);
+    let report = verify(
+        &process_profile(),
+        &Registry::try_m0().expect("the standard catalogue holds"),
+        &mut ProcessFactory,
+    );
     assert_conformant(&report, &["StderrLine"]);
     assert_eq!(
         report.proven_kinds,
@@ -258,7 +262,11 @@ fn an_undeclared_kind_fails_the_battery() {
         mute_source: None,
         interleave: None,
     };
-    let report = verify(&profile, &Registry::m0(), &mut LiarFactory);
+    let report = verify(
+        &profile,
+        &Registry::try_m0().expect("the standard catalogue holds"),
+        &mut LiarFactory,
+    );
     assert!(!report.conformant());
     assert!(
         report
@@ -324,7 +332,11 @@ fn crossed_concurrent_replies_fail_the_battery() {
             b: "volt 232",
         }),
     };
-    let report = verify(&profile, &Registry::m0(), &mut SwapperFactory);
+    let report = verify(
+        &profile,
+        &Registry::try_m0().expect("the standard catalogue holds"),
+        &mut SwapperFactory,
+    );
     assert!(
         report
             .violations

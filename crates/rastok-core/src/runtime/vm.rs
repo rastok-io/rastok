@@ -53,6 +53,15 @@ pub enum VmError {
     /// A causal closure arrived for a call this machine holds no
     /// pending request for — an integrity breach, never a silence.
     MissingPending(CallRef),
+    /// A plan state the validator's invariants exclude reached the
+    /// machine anyway — the typed belt behind those doors, never a
+    /// panic and never a data-representation fault.
+    PlanInvariant {
+        /// The offending node.
+        node: node::Path,
+        /// The violated invariant.
+        reason: &'static str,
+    },
     /// An injection at a port that is not a graph input — neither the
     /// implicit `in` nor a declared boundary input. Checked sources
     /// never build one; the raw API is verified, not trusted.
@@ -85,6 +94,9 @@ impl fmt::Display for VmError {
             }
             Self::MissingPending(_) => {
                 f.write_str("a closure settled a call with no pending request")
+            }
+            Self::PlanInvariant { node, reason } => {
+                write!(f, "`{node}` violates a validated-plan invariant: {reason}")
             }
             Self::UnknownIngress(port) => {
                 write!(f, "`{port}` is not an input of this graph")
@@ -569,12 +581,10 @@ impl<'plan> Vm<'plan> {
             // (`EffectlessCallee`); this is the typed belt behind
             // that door, never a panic.
             let node::Effect::Class(effect) = spec.effect else {
-                return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
-                    alloc::format!(
-                        "`{}` opens a call without an effect class — a validated plan cannot",
-                        planned.path
-                    ),
-                )));
+                return Err(VmError::PlanInvariant {
+                    node: planned.path.clone(),
+                    reason: "a delivery opened a call on a connector without an effect class",
+                });
             };
             match crate::boundary::prepare_request(
                 crate::boundary::RequestCodec::of(spec),
@@ -844,12 +854,10 @@ impl<'plan> Vm<'plan> {
         // The typed belt behind the validator's `EffectlessCallee`
         // door — never a panic.
         let node::Effect::Class(effect) = spec.effect else {
-            return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
-                alloc::format!(
-                    "`{}` opens a call without an effect class — a validated plan cannot",
-                    planned.path
-                ),
-            )));
+            return Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "a delivery opened a call on a connector without an effect class",
+            });
         };
         let emitting_id = delivery.envelope.meta().sys().id();
         // The machine prepares ONCE, in the boundary vocabulary: the

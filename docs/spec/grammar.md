@@ -1253,12 +1253,25 @@ explicitly restated **once**, in its implicit direction, and the
 restatement never enters the serialized table; a second explicit
 declaration, or a contradictory direction, is `E-PORT-CONFLICT`
 (D-2026-08-08-1).
-A user-defined identifier may not collide with `DECL_KW`, `TYPE_KW`
-or `LITERAL_KW`. `TAG_KW` words are reserved only WHEN THE FORM makes
-them tags — followed by `(` or `{`, or (for `json`) by a same-line
-JSON value; the word ALONE is an ordinary bare word the contract
-judges (`codec = json` is a choice word, D-2026-08-12-1). Three
-sub-categories exist within `TAG_KW`: the special value tags
+Reservation is BY POSITION, never a global ban on a spelling
+(D-2026-08-12-1):
+
+- **Declaration positions** (node, port, val/var, partition, type
+  names): `DECL_KW` may not be shadowed; everything else — `TYPE_KW`
+  and `TAG_KW` included — is judged by the position's own grammar.
+- **Type positions**: `TYPE_KW` words mean their type (`text` names
+  the text type there); a user type name may not collide with them.
+- **Attribute names**: any expressible identifier; dots are owner
+  qualification only.
+- **Bare-word VALUE positions**: any expressible word the contract's
+  choice domain admits — `codec = json`, `framing = text` and
+  `capacity = unbounded` are all legal choice words, because a
+  `TAG_KW` word is a tag only WHEN ITS FORM follows: `(` or `{`
+  after it, or (for `json`) a same-line JSON value. `LITERAL_KW`
+  words and the `nothing` sentinel keep their literal meaning and
+  cannot serve as contract choices.
+
+Three sub-categories exist within `TAG_KW`: the special value tags
 (`text`, `base64`, `json`, `asset` — each with its own reader), the
 foreign/guest tags (`jq`, `bash`, `sql`, `python`, `rust`, and the
 data formats), and the expression-space constructors (`bounded`,

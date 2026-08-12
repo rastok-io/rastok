@@ -4791,7 +4791,12 @@ mod tests {
         let unit = Unit {
             files: vec![(SourceId::new(0), tree)],
         };
-        let hir = check(&unit, &contract::Registry::m0(), &mut bag, None);
+        let hir = check(
+            &unit,
+            &contract::Registry::try_m0().expect("the standard catalogue holds"),
+            &mut bag,
+            None,
+        );
         (hir, bag)
     }
 

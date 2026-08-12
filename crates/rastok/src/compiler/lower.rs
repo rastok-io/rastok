@@ -823,7 +823,11 @@ graph m0_probe : App {
 
     #[test]
     fn the_m0_probe_compiles_to_a_plan() {
-        let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
+        let compilation = compile(
+            &[M0_PROBE],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan");
         assert!(compilation.warnings.is_empty());
         let plan = &compilation.plan;
         assert_eq!(plan.nodes.len(), 2);
@@ -856,7 +860,11 @@ graph m0_probe : App {
 
     #[test]
     fn the_mandatory_axes_ship_typed() {
-        let compilation = compile(&[M0_PROBE], &Registry::m0()).unwrap();
+        let compilation = compile(
+            &[M0_PROBE],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap();
         let spec = compilation.plan.nodes[1].connector().unwrap();
         assert_eq!(
             spec.effect,
@@ -870,8 +878,18 @@ graph m0_probe : App {
 
     #[test]
     fn the_hash_ignores_formatting_and_declaration_order() {
-        let original = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
-        let same = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
+        let original = compile(
+            &[M0_PROBE],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap()
+        .hash;
+        let same = compile(
+            &[M0_PROBE],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap()
+        .hash;
         assert_eq!(original, same);
         // Same program: comments added, attributes spaced differently,
         // operator declared before the connector.
@@ -896,23 +914,43 @@ graph m0_probe : App {
 }
 "#;
         assert_eq!(
-            compile(&[reordered], &Registry::m0()).unwrap().hash,
+            compile(
+                &[reordered],
+                &Registry::try_m0().expect("the standard catalogue holds")
+            )
+            .unwrap()
+            .hash,
             original
         );
     }
 
     #[test]
     fn the_hash_is_sensitive_to_meaning() {
-        let original = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
+        let original = compile(
+            &[M0_PROBE],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap()
+        .hash;
         let renamed = M0_PROBE.replace("shout", "whisper");
         assert_ne!(
-            compile(&[renamed.as_str()], &Registry::m0()).unwrap().hash,
+            compile(
+                &[renamed.as_str()],
+                &Registry::try_m0().expect("the standard catalogue holds")
+            )
+            .unwrap()
+            .hash,
             original,
             "renaming a node is an identity change - no alpha-equivalence"
         );
         let regexed = M0_PROBE.replace("data.text != \"\"", "data.text != \"x\"");
         assert_ne!(
-            compile(&[regexed.as_str()], &Registry::m0()).unwrap().hash,
+            compile(
+                &[regexed.as_str()],
+                &Registry::try_m0().expect("the standard catalogue holds")
+            )
+            .unwrap()
+            .hash,
             original,
             "a CEL expression is identity material"
         );
@@ -933,7 +971,12 @@ graph m0_probe : App {
         // `on_timeout = kill` on this probe) — omission and the
         // exact spelling of a default are ONE identity, so every
         // Process-carrying graph moved once.
-        let hash = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
+        let hash = compile(
+            &[M0_PROBE],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap()
+        .hash;
         assert_eq!(
             hash.to_string(),
             "c9866b385dfbc9fc640de608f5dcd70eb166be98d16de88bedfb49ba7beae1e6"
@@ -945,8 +988,17 @@ graph m0_probe : App {
         let bare = "graph g : App {\n  operator o { on in { out = . } }\n  . -> o -> .\n}\n";
         let with_port =
             "graph g : App {\n  input feed\n  operator o { on in { out = . } }\n  . -> o -> .\n}\n";
-        let bare_hash = compile(&[bare], &Registry::m0()).unwrap().hash;
-        let ported = compile(&[with_port], &Registry::m0()).unwrap();
+        let bare_hash = compile(
+            &[bare],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap()
+        .hash;
+        let ported = compile(
+            &[with_port],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap();
         assert_ne!(
             ported.hash, bare_hash,
             "a declared boundary port is identity"
@@ -959,8 +1011,16 @@ graph m0_probe : App {
     fn the_plan_and_the_hash_share_one_edge_order() {
         let forward = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
         let reordered = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
-        let one = compile(&[forward], &Registry::m0()).unwrap();
-        let two = compile(&[reordered], &Registry::m0()).unwrap();
+        let one = compile(
+            &[forward],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap();
+        let two = compile(
+            &[reordered],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap();
         assert_eq!(one.hash, two.hash);
         assert_eq!(one.plan.edges, two.plan.edges);
     }
@@ -974,12 +1034,12 @@ graph m0_probe : App {
         };
         let one = compile(
             &[with_attrs("    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n").as_str()],
-            &Registry::m0(),
+            &Registry::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         let two = compile(
             &[with_attrs("    behavior = deterministic ; effect = idempotent\n    codec = lines ; command = \"cat\"\n").as_str()],
-            &Registry::m0(),
+            &Registry::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         assert_eq!(one.hash, two.hash);
@@ -993,8 +1053,16 @@ graph m0_probe : App {
                 "graph g : App {{\n  operator o {{\n    on in where size({map}) > 0 {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
             )
         };
-        let forward = compile(&[with_map("{'a': 1, 'b': 2}").as_str()], &Registry::m0()).unwrap();
-        let reversed = compile(&[with_map("{'b': 2, 'a': 1}").as_str()], &Registry::m0()).unwrap();
+        let forward = compile(
+            &[with_map("{'a': 1, 'b': 2}").as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap();
+        let reversed = compile(
+            &[with_map("{'b': 2, 'a': 1}").as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap();
         assert_eq!(forward.hash, reversed.hash);
         assert_eq!(forward.plan, reversed.plan);
     }
@@ -1002,7 +1070,11 @@ graph m0_probe : App {
     #[test]
     fn inferred_ports_travel_in_the_plan() {
         let source = "graph g : App {\n  input feed\n  output sink\n  operator o {\n    on event { result = . }\n  }\n  .feed -> o.event\n  o.result -> .sink\n}\n";
-        let compilation = compile(&[source], &Registry::m0()).unwrap();
+        let compilation = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap();
         let ports = &compilation.plan.nodes[0].ports;
         assert_eq!(ports.len(), 2);
         assert!(ports.iter().any(|decl| decl.port.name() == "event"));
@@ -1016,8 +1088,16 @@ graph m0_probe : App {
                 "graph g : App {{\n  operator o {{\n    val threshold = {n}\n    on in where data.n > threshold {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
             )
         };
-        let five = compile(&[with_val("5").as_str()], &Registry::m0()).unwrap();
-        let six = compile(&[with_val("6").as_str()], &Registry::m0()).unwrap();
+        let five = compile(
+            &[with_val("5").as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap();
+        let six = compile(
+            &[with_val("6").as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap();
         // A local constant is identity material...
         assert_ne!(five.hash, six.hash);
         // ...and the shipped guard carries its value: no free
@@ -1035,7 +1115,7 @@ graph m0_probe : App {
     fn a_plan_with_errors_is_unrepresentable() {
         let bag = compile(
             &["graph g : App {\n  connector c : Process { }\n  . -> c -> .\n}\n"],
-            &Registry::m0(),
+            &Registry::try_m0().expect("the standard catalogue holds"),
         )
         .expect_err("missing mandatory attributes must refuse");
         assert!(bag.has_errors());
@@ -1043,7 +1123,12 @@ graph m0_probe : App {
 
     #[test]
     fn versions_alias_the_hash_through_the_manifest() {
-        let hash = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
+        let hash = compile(
+            &[M0_PROBE],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap()
+        .hash;
         let mut manifest = Manifest::embedded();
         assert_eq!(manifest.allocate(hash), Some(GraphVersion(1)));
         assert_eq!(manifest.hash_of(GraphVersion(1)), Some(hash));

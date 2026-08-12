@@ -89,7 +89,11 @@ fn avro_ext() -> rastok::envelope::Namespace {
 }
 
 fn lab_passes(source: &str) {
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),
@@ -116,7 +120,11 @@ fn refusal_code(graph: &str, injection: &str) -> Vec<&'static str> {
         "{graph}\nlab merge {{\n  simulation probing on app {{\n    scenario s \"x\" {{\n      \
          {injection} = {{v = 1}}\n      expect \"y\" app.out count == 1\n    }}\n  }}\n}}\n"
     );
-    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the scenario refuses");
+    let bag = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the scenario refuses");
     bag.diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str())
@@ -180,7 +188,11 @@ fn the_machine_verifies_the_ingress_port() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::{Vm, VmError};
 
-    let compilation = compile(&[MERGER_GRAPH], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[MERGER_GRAPH],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let submission = |port: &str| InboundSubmission {
@@ -288,7 +300,11 @@ fn a_pinned_input_types_the_handler_data() {
     // `data` is TEXT in this handler — multiplying it must refuse at
     // check; with the old `dyn`, this compiled and faulted at run.
     let source = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data * 2 }\n  }\n  . -> o.evt\n  o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("text times int refuses");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("text times int refuses");
     assert!(
         bag.diagnostics()
             .iter()
@@ -300,7 +316,11 @@ fn a_pinned_input_types_the_handler_data() {
 #[test]
 fn an_emission_against_a_pinned_output_refuses() {
     let source = "graph g : App {\n  operator o {\n    output score : int\n    on in { score = \"nope\" }\n  }\n  . -> o\n  o.score -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("a text emission into an int port");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("a text emission into an int port");
     assert!(
         bag.diagnostics()
             .iter()
@@ -312,7 +332,11 @@ fn an_emission_against_a_pinned_output_refuses() {
 #[test]
 fn mismatched_pinned_edge_ends_refuse() {
     let source = "graph g : App {\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("int wired into text");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("int wired into text");
     assert!(
         bag.diagnostics()
             .iter()
@@ -324,7 +348,11 @@ fn mismatched_pinned_edge_ends_refuse() {
 #[test]
 fn a_typed_injection_refuses_by_contract() {
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = \"text\"\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("a text injection into an int input");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("a text injection into an int input");
     assert!(
         bag.diagnostics()
             .iter()
@@ -336,7 +364,11 @@ fn a_typed_injection_refuses_by_contract() {
 #[test]
 fn typed_ports_travel_in_the_package() {
     use rastok::plan;
-    let compilation = compile(&[TYPED], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[TYPED],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let gauge = compilation
         .plan
         .plan()
@@ -374,8 +406,16 @@ fn the_annotation_is_identity() {
     // by the annotation are two identities.
     let annotated = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
     let bare = annotated.replace(" : text", "");
-    let one = compile(&[annotated], &Registry::m0()).expect("a valid plan");
-    let two = compile(&[bare.as_str()], &Registry::m0()).expect("a valid plan");
+    let one = compile(
+        &[annotated],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
+    let two = compile(
+        &[bare.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     assert_ne!(one.hash, two.hash, "the annotation is identity material");
     assert_ne!(one.plan, two.plan);
 }
@@ -387,7 +427,11 @@ fn expect_refusal(expectation: &str) -> Vec<&'static str> {
         "{MERGER_GRAPH}\nlab merge {{\n  simulation probing on app {{\n    scenario s \"x\" {{\n      \
          app.alpha = {{v = 1}}\n      {expectation}\n    }}\n  }}\n}}\n"
     );
-    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the expectation refuses");
+    let bag = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the expectation refuses");
     bag.diagnostics()
         .iter()
         .map(|diagnostic| diagnostic.code().as_str())
@@ -422,7 +466,11 @@ fn gauge_graph(body: &str) -> String {
 
 fn conformance_refuses(body: &str) {
     let source = gauge_graph(body);
-    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the pin holds");
+    let bag = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the pin holds");
     assert!(
         bag.diagnostics()
             .iter()
@@ -452,20 +500,28 @@ fn conforming_forms_pass() {
     // Data with the right type and range.
     compile(
         &[gauge_graph("score = size(data)").as_str()],
-        &Registry::m0(),
+        &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("int through the int pin");
     // Patch, whole-data write of the pinned type.
     compile(
         &[gauge_graph("score = {data = 7}").as_str()],
-        &Registry::m0(),
+        &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a whole-data write of the pinned type");
     // Nothing produces nothing.
-    compile(&[gauge_graph("score = nothing").as_str()], &Registry::m0()).expect("nothing conforms");
+    compile(
+        &[gauge_graph("score = nothing").as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("nothing conforms");
     // Identity through matching pins.
     let echoed = "graph g : App {\n  operator o {\n    input evt : text\n    output echo : text\n\n    on evt {\n      echo = .\n    }\n  }\n\n  . -> o.evt\n  o.echo -> .\n}\n";
-    compile(&[echoed], &Registry::m0()).expect("text through the text pin, unchanged");
+    compile(
+        &[echoed],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("text through the text pin, unchanged");
 }
 
 #[test]
@@ -476,7 +532,11 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
         )
     };
     // The reviewer's map through the int input.
-    let bag = compile(&[inject("{v = 1}").as_str()], &Registry::m0()).expect_err("a map breaches");
+    let bag = compile(
+        &[inject("{v = 1}").as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("a map breaches");
     assert!(
         bag.diagnostics()
             .iter()
@@ -484,8 +544,11 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
         "{bag:?}"
     );
     // The bound, at ingress.
-    let bag =
-        compile(&[inject("2147483648").as_str()], &Registry::m0()).expect_err("the bound holds");
+    let bag = compile(
+        &[inject("2147483648").as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the bound holds");
     assert!(
         bag.diagnostics()
             .iter()
@@ -493,7 +556,11 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
         "{bag:?}"
     );
     // A conforming constant passes.
-    compile(&[inject("7").as_str()], &Registry::m0()).expect("an int through the int input");
+    compile(
+        &[inject("7").as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an int through the int input");
 }
 
 // ===== the resolved contract table travels in the plan =====
@@ -526,7 +593,8 @@ fn a_contract_port_table_travels_without_the_registry() {
         selector: None,
         error_set: &["ProbeFailed"],
     };
-    let registry = Registry::m0()
+    let registry = Registry::try_m0()
+        .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
     // The table TRAVELS today; EXECUTING a named connector port is
@@ -594,7 +662,8 @@ fn a_named_connector_edge_defers_by_name() {
         selector: None,
         error_set: &["ProbeFailed"],
     };
-    let registry = Registry::m0()
+    let registry = Registry::try_m0()
+        .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
     // The Partner seam does not speak named connector ports yet:
@@ -620,7 +689,7 @@ fn the_fold_follows_the_runtime_order() {
     // The reverse order ends on the written int and conforms.
     compile(
         &[gauge_graph("score = {\n        data.x = 2\n        data = 1\n      }").as_str()],
-        &Registry::m0(),
+        &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the final whole-data write decides");
 }
@@ -630,7 +699,11 @@ fn a_metadata_only_injection_still_carries_the_draft_struct() {
     // The draft is BORN a struct (`lab::draft`); patching only meta
     // does not change what crosses the pinned scalar input.
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = {meta.tag = \"x\"}\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("the draft map breaches the int pin");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the draft map breaches the int pin");
     assert!(
         bag.diagnostics()
             .iter()
@@ -652,7 +725,11 @@ fn the_braced_record_is_physically_a_struct() {
     use rastok::runtime::vm::Vm;
 
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        v = 7\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -757,7 +834,11 @@ fn an_empty_brace_is_an_empty_record() {
     use rastok::runtime::vm::Vm;
 
     let source = "graph g : App {\n  operator o {\n    on in { out = {} }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -793,7 +874,11 @@ fn a_whole_data_write_is_the_payload_itself() {
 
     let source =
         "graph g : App {\n  operator o {\n    on in { out = {data = 1} }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -822,7 +907,11 @@ fn a_mixed_brace_refuses_with_the_dedicated_diagnostic() {
     // An ordinary field beside a reserved root is never silently
     // reinterpreted — E-BRACE-MIXED names the offending field.
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        v = 1\n        meta.flag = true\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("the mix refuses");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the mix refuses");
     assert!(
         bag.diagnostics().iter().any(|diagnostic| {
             diagnostic.code().as_str() == "E-BRACE-MIXED"
@@ -841,7 +930,11 @@ fn a_block_entry_carries_its_root_into_the_classification() {
     // names the block, because a sub-block's root is its name, not
     // an empty string.
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        ordinary { x = 1 }\n        meta.flag = true\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("the mix refuses");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the mix refuses");
     assert!(
         bag.diagnostics().iter().any(|diagnostic| {
             diagnostic.code().as_str() == "E-BRACE-MIXED"
@@ -857,7 +950,11 @@ fn a_block_entry_carries_its_root_into_the_classification() {
     // its migration (dotted `meta.field = …` entries), never
     // silently a record (D-2026-08-12-1).
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta { flag = true }\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("the dead block refuses");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the dead block refuses");
     assert!(
         bag.diagnostics().iter().any(|diagnostic| {
             diagnostic.code().as_str() == "E-CONTRACT-ATTR"
@@ -881,7 +978,11 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     use rastok::runtime::vm::Vm;
 
     let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut app = Namespace::new();
@@ -941,7 +1042,11 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
+        let compilation = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
@@ -987,8 +1092,16 @@ fn the_empty_record_travels_and_hashes_stably() {
     // literal survives the package round trip, revalidates, and the
     // hash is deterministic across compiles.
     let source = "graph g : App {\n  operator o {\n    on in { out = { parent = {} } }\n  }\n  . -> o -> .\n}\n";
-    let first = compile(&[source], &Registry::m0()).expect("a valid plan");
-    let second = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let first = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
+    let second = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     assert_eq!(first.hash, second.hash, "the hash is stable");
     let bytes = rastok::plan::encode(&first.plan, &first.hash);
     // `decode` re-validates: the empty-record literal is inside the
@@ -1090,18 +1203,23 @@ fn a_defective_sheet_is_held_at_the_door() {
     // defect that would have split the checker from the validator
     // through the old Registry fallback.
     assert_eq!(
-        Registry::m0().try_with(sheet(&["out"], &[])).unwrap_err(),
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(sheet(&["out"], &[]))
+            .unwrap_err(),
         SheetDefect::MisdirectedDefault("out")
     );
     // One name in both directions.
     assert_eq!(
-        Registry::m0()
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
             .try_with(sheet(&["request"], &["request"]))
             .unwrap_err(),
         SheetDefect::ConflictingPort("request")
     );
     // The shipped M0 sheet passes its own door.
-    Registry::m0()
+    Registry::try_m0()
+        .expect("the standard catalogue holds")
         .try_with(rastok::stdlib::PROCESS)
         .expect("the Process sheet is valid");
 }
@@ -1118,7 +1236,11 @@ fn boundary_outputs_carry_their_port() {
     use rastok::runtime::vm::Vm;
 
     let graph = &SORTER[..SORTER.find("lab ").expect("the lab block")];
-    let compilation = compile(&[graph], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[graph],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -1167,7 +1289,11 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     use rastok::runtime::vm::Vm;
 
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let submission = InboundSubmission {
@@ -1297,10 +1423,13 @@ lab g {
 fn the_validator_refuses_mismatched_edge_pins() {
     use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
     let compiled = || {
-        compile(&[TYPED], &Registry::m0())
-            .expect("a valid plan")
-            .plan
-            .into_inner()
+        compile(
+            &[TYPED],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan")
+        .plan
+        .into_inner()
     };
     // Node target: retune `gauge.evt` to int under a text source.
     let mut plan = compiled();
@@ -1328,10 +1457,13 @@ fn the_validator_refuses_mismatched_edge_pins() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gauge.rkg"),
     )
     .expect("the example reads");
-    let mut plan = compile(&[gauge.as_str()], &Registry::m0())
-        .expect("a valid plan")
-        .plan
-        .into_inner();
+    let mut plan = compile(
+        &[gauge.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan")
+    .plan
+    .into_inner();
     let measure = plan
         .boundary
         .iter_mut()
@@ -1349,7 +1481,11 @@ fn a_named_constant_answers_like_its_literal() {
     // `val huge = 2147483648` then `score = huge` must refuse exactly
     // like the literal — the visible constants feed the bound check.
     let source = "graph g : App {\n  operator o {\n    val huge = 2147483648\n    output score : int\n    on in { score = huge }\n  }\n  . -> o\n  o.score -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("the alias breaches like the literal");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the alias breaches like the literal");
     assert!(
         bag.diagnostics()
             .iter()
@@ -1367,14 +1503,25 @@ fn a_variant_pin_is_inference_territory_everywhere() {
     // an edge disagree: checker, validator, and runtime share the
     // rule.
     let flexible = "graph g : App {\n  operator o {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  . -> o\n  o.flexible -> .\n}\n";
-    compile(&[flexible], &Registry::m0()).expect("an int through a variant pin");
+    compile(
+        &[flexible],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an int through a variant pin");
 
     let variant_to_int = "graph g : App {\n  operator a {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  operator b {\n    input evt : int\n    on evt { out = data }\n  }\n  . -> a\n  a.flexible -> b.evt\n  b -> .\n}\n";
-    compile(&[variant_to_int], &Registry::m0()).expect("variant -> int is inference territory");
+    compile(
+        &[variant_to_int],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("variant -> int is inference territory");
 
     let int_to_variant = "graph g : App {\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : variant\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
-    let compilation =
-        compile(&[int_to_variant], &Registry::m0()).expect("int -> variant is inference territory");
+    let compilation = compile(
+        &[int_to_variant],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("int -> variant is inference territory");
 
     // The same rule holds for a raw plan re-earning the type after
     // the trip — a Dyn/Int pinned edge is never a mismatch.
@@ -1416,7 +1563,11 @@ lab g {
   }
 }
 "#;
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),
@@ -1477,7 +1628,11 @@ lab g {
   }
 }
 "#;
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),
@@ -1513,7 +1668,11 @@ fn the_bare_data_relay_preserves_the_logical_type() {
 
     let source =
         "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let relay = |data: Value| {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
@@ -1560,7 +1719,11 @@ fn an_ingress_pin_violation_is_a_named_error() {
     use rastok::runtime::vm::{Vm, VmError};
 
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let error = vm
@@ -1623,7 +1786,11 @@ lab g {
   }
 }
 "#;
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),
@@ -1707,7 +1874,8 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
         selector: None,
         error_set: &["ProbeFailed"],
     };
-    let registry = Registry::m0()
+    let registry = Registry::try_m0()
+        .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
     let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay -> probe -> .\n}\n";
@@ -1786,7 +1954,11 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{\n      {body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
+        let compilation = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
@@ -1861,7 +2033,11 @@ lab g {
   }
 }
 "#;
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),
@@ -1884,7 +2060,11 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
 
     let source =
         "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -1932,7 +2112,11 @@ fn a_spawn_failure_cannot_cross_a_pin() {
     use rastok::runtime::vm::Vm;
 
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"/definitely/not/a/binary\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator sink {\n    input evt : int\n    on evt { out = data }\n  }\n\n  . -> shell\n  shell.err -> sink.evt\n  shell.out -> .\n  sink -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world =
@@ -2018,7 +2202,11 @@ lab g {
   }
 }
 "#;
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),
@@ -2053,10 +2241,13 @@ fn a_struct_constant_cannot_enter_a_plan() {
     // (the tables refuse the form). The validator holds the line.
     use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
     let source = "graph g : App {\n  operator relay {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> relay -> .\n}\n";
-    let mut plan = compile(&[source], &Registry::m0())
-        .expect("a valid plan")
-        .plan
-        .into_inner();
+    let mut plan = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan")
+    .plan
+    .into_inner();
     let relay = plan
         .nodes
         .iter_mut()
@@ -2086,7 +2277,11 @@ fn data_materializes_only_on_demand() {
     use rastok::runtime::vm::Vm;
 
     let run = |source: &str| {
-        let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+        let compilation = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
@@ -2155,7 +2350,11 @@ fn short_circuits_never_demand_the_data() {
     use rastok::runtime::vm::Vm;
 
     let run = |source: &str| {
-        let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+        let compilation = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
@@ -2221,7 +2420,11 @@ fn the_carry_is_as_lazy_as_the_name() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
+        let compilation = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         vm.inject(
@@ -2307,7 +2510,11 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     use rastok::runtime::vm::Vm;
 
     let source = "graph g : App {\n  operator o {\n    on in where size(data) > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -2392,7 +2599,11 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     use rastok::runtime::vm::Vm;
 
     let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let error = vm
@@ -2429,7 +2640,11 @@ fn the_conformance_judgement_is_matchable() {
     use rastok_core::runtime::{ConformanceReason, ValueKind};
 
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let submission = |data: Value| InboundSubmission {

@@ -26,7 +26,11 @@ fn packaged_example() -> (
     Vec<u8>,
 ) {
     let source = std::fs::read_to_string(example()).expect("the example reads");
-    let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     (compilation.plan, compilation.hash, bytes)
 }
@@ -173,7 +177,11 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
         let source = format!(
             "graph probe : App {{\n  operator o {{\n    on in {{ out = {literal} }}\n  }}\n\n  . -> o -> .\n}}\n"
         );
-        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
+        let compilation = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan");
         let bytes = plan::encode(&compilation.plan, &compilation.hash);
         let (decoded, _) = plan::decode(&bytes).expect("the package opens");
         assert_eq!(
@@ -344,7 +352,11 @@ fn a_program_beyond_the_nesting_budget_refuses_by_name() {
     // an internal-plan error, and never as an encoded package that
     // no decoder reads.
     let source = nested_additions(200);
-    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("beyond the budget");
+    let bag = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("beyond the budget");
     assert!(
         bag.diagnostics()
             .iter()
@@ -366,7 +378,11 @@ fn a_nan_plan_equals_itself_across_the_trip() {
     // claim the header test makes — "structural equality across the
     // trip" — instead of a plan that stops equalling itself.
     let source = "graph g : App {\n  operator o {\n    var seen : double = 0.0 / 0.0\n\n    on in {\n      out = data\n    }\n  }\n\n  . -> o -> .\n}\n";
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     let (decoded, _) = plan::decode(&bytes).expect("the package opens");
     assert_eq!(decoded, compilation.plan, "NaN included");
@@ -381,7 +397,11 @@ fn the_zero_signs_are_two_plans() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    var seen : double = {zero}\n\n    on in {{\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n"
         );
-        compile(&[source.as_str()], &Registry::m0()).expect("a valid plan")
+        compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan")
     };
     let positive = with_zero("0.0");
     let negative = with_zero("-0.0");
@@ -407,7 +427,11 @@ fn a_hostile_depth_source_refuses_and_the_process_survives() {
         // so only the post-parse gate can catch it — and the refused
         // 30 000-deep tree must be dismantled iteratively.
         let chain = nested_additions(30_000);
-        let bag = compile(&[chain.as_str()], &Registry::m0()).expect_err("beyond the budget");
+        let bag = compile(
+            &[chain.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("beyond the budget");
         assert!(
             bag.diagnostics()
                 .iter()
@@ -422,7 +446,11 @@ fn a_hostile_depth_source_refuses_and_the_process_survives() {
             "(".repeat(5_000),
             ")".repeat(5_000),
         );
-        let bag = compile(&[tower.as_str()], &Registry::m0()).expect_err("beyond the guard");
+        let bag = compile(
+            &[tower.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("beyond the guard");
         assert!(
             bag.diagnostics()
                 .iter()
@@ -453,7 +481,11 @@ fn a_hostile_depth_source_refuses_and_the_process_survives() {
 #[test]
 fn a_deep_but_budgeted_program_rides_the_round_trip() {
     let source = nested_additions(100);
-    let compilation = compile(&[source.as_str()], &Registry::m0()).expect("within the budget");
+    let compilation = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("within the budget");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     let (decoded, declared) = plan::decode(&bytes).expect("what encode accepts, decode reads");
     assert_eq!(decoded, compilation.plan);
@@ -475,8 +507,16 @@ fn the_depth_boundaries_are_exact() {
             ")".repeat(n),
         )
     };
-    compile(&[parens(127).as_str()], &Registry::m0()).expect("127 pairs fit the parser guard");
-    let bag = compile(&[parens(128).as_str()], &Registry::m0()).expect_err("the 128th refuses");
+    compile(
+        &[parens(127).as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("127 pairs fit the parser guard");
+    let bag = compile(
+        &[parens(128).as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the 128th refuses");
     let depth = bag
         .diagnostics()
         .iter()
@@ -496,11 +536,18 @@ fn the_depth_boundaries_are_exact() {
     // reach level 127 and ride the round trip; the 120th reaches the
     // reader's exact budget and refuses at PLAN, same payload.
     let deep_ok = nested_additions(119);
-    let compilation = compile(&[deep_ok.as_str()], &Registry::m0()).expect("119 additions fit");
+    let compilation = compile(
+        &[deep_ok.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("119 additions fit");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     plan::decode(&bytes).expect("the deepest accepted program reads back");
-    let bag =
-        compile(&[nested_additions(120).as_str()], &Registry::m0()).expect_err("the 120th refuses");
+    let bag = compile(
+        &[nested_additions(120).as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the 120th refuses");
     let depth = bag
         .diagnostics()
         .iter()

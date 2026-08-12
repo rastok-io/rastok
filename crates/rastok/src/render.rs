@@ -127,7 +127,10 @@ mod tests {
         // leaving by an input port.
         let source =
             "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
-        let Err(bag) = compile(&[source], &Registry::m0()) else {
+        let Err(bag) = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        ) else {
             panic!("the direction is violated");
         };
         let mut sources = Sources::new();
@@ -152,7 +155,10 @@ mod tests {
     fn rendering_is_total_even_without_sources() {
         let source =
             "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
-        let Err(bag) = compile(&[source], &Registry::m0()) else {
+        let Err(bag) = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        ) else {
             panic!("the direction is violated");
         };
         let rendered = render_all(bag.diagnostics(), &Sources::new());

@@ -91,7 +91,11 @@ fn submission(text: &str) -> InboundSubmission {
 }
 
 fn run_probe() -> (MemJournal, Vec<rastok::runtime::vm::BoundaryOutput>) {
-    let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[M0_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
@@ -161,7 +165,11 @@ fn two_runs_produce_identical_journals() {
 
 #[test]
 fn a_typed_failure_leaves_by_the_err_edge_or_stops() {
-    let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[M0_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld {
@@ -194,7 +202,11 @@ fn a_typed_failure_leaves_by_the_err_edge_or_stops() {
 
 #[test]
 fn an_invented_error_kind_is_refused_loudly() {
-    let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[M0_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, submission("salut")).unwrap();
@@ -245,7 +257,11 @@ on in {
   . -> pick -> .
 }
 "#;
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, submission("salut")).unwrap();
@@ -333,7 +349,11 @@ impl Journal for FlakyJournal {
 
 #[test]
 fn a_refused_commit_leaves_the_delivery_replayable() {
-    let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[M0_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = FlakyJournal {
         refuse_commits: true,
         ..FlakyJournal::healthy(GraphVersion(1))
@@ -378,7 +398,11 @@ on in where data.text != "" {
 
 #[test]
 fn a_silent_partner_expires_into_a_typed_timeout() {
-    let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[TIMED_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, submission("salut")).unwrap();
@@ -422,7 +446,11 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
     // call-closed rule applies even to a call that expires
     // before it started: the queued request's call opens and
     // closes at the expiry, back to back.
-    let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[TIMED_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
@@ -519,7 +547,11 @@ on in { out = data.text }
   shout -> beta -> nothing
 }
 "#;
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
@@ -539,7 +571,11 @@ on in { out = data.text }
 
 #[test]
 fn an_answer_and_an_expiry_race_to_a_single_closure() {
-    let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[TIMED_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
@@ -569,7 +605,11 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
 
 #[test]
 fn a_late_answer_is_a_reported_observation_not_a_silence() {
-    let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[TIMED_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, submission("salut")).unwrap();
@@ -597,7 +637,11 @@ fn a_refused_expiry_stays_armed_and_replays() {
     // obligation and its delivery are either fully resolved or
     // replayable — never half-consumed, never duplicated.
     // Case: the pending call's Timeout closure is refused.
-    let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[TIMED_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = FlakyJournal {
         refuse_closes: true,
         ..FlakyJournal::healthy(GraphVersion(1))
@@ -624,7 +668,11 @@ fn a_refused_expiry_stays_armed_and_replays() {
 #[test]
 fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
     // Case: the queued delivery's open fact is refused at expiry.
-    let compilation = compile(&[TIMED_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[TIMED_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
@@ -646,7 +694,7 @@ fn a_refused_commit_on_an_unframeable_expiry_loses_nothing() {
     // transaction's commit is refused — the delivery must stay.
     let compilation = compile(
         &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  . -> wrap -> echo -> nothing\n}\n"],
-        &Registry::m0(),
+        &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
@@ -702,7 +750,11 @@ fn a_refused_commit_on_an_unframeable_expiry_loses_nothing() {
 
 #[test]
 fn a_suspended_call_keeps_its_mailbox_claimed() {
-    let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[M0_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
@@ -725,7 +777,11 @@ fn a_suspended_call_keeps_its_mailbox_claimed() {
 
 #[test]
 fn a_filtered_input_reaches_stability_without_output() {
-    let compilation = compile(&[M0_PROBE], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[M0_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, submission("")).unwrap();

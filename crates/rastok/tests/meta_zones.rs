@@ -11,7 +11,11 @@ use rastok::compiler::compile;
 use rastok::contract::Registry;
 
 fn refuses_with(source: &str, code: &str) -> Vec<String> {
-    let bag = compile(&[source], &Registry::m0()).expect_err("the source must refuse");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the source must refuse");
     let hits: Vec<String> = bag
         .diagnostics()
         .iter()
@@ -66,20 +70,36 @@ fn inference_is_order_independent() {
     // and the same semantic hash.
     let ab = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let ba = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.second = 2\n        meta.app.first = \"a\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let first = compile(&[ab], &Registry::m0()).expect("a valid plan");
-    let second = compile(&[ba], &Registry::m0()).expect("a valid plan");
+    let first = compile(
+        &[ab],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
+    let second = compile(
+        &[ba],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     // The write ORDER is identity (the fold executes in order), so
     // the hashes differ — but both compile, and reading either
     // field is legal in both:
     let reads = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in where meta.app.first == \"a\" { out = data }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    compile(&[reads], &Registry::m0()).expect("a downstream read of an inferred field");
+    compile(
+        &[reads],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a downstream read of an inferred field");
     let _ = (first, second);
 }
 
 #[test]
 fn a_type_conflict_names_both_sites() {
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.flag = \"text\"\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.flag = 7\n        data = data\n      }\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    let bag = compile(&[source], &Registry::m0()).expect_err("one field, one type");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("one field, one type");
     let hit = bag
         .diagnostics()
         .iter()
@@ -106,7 +126,11 @@ fn a_reserved_node_name_refuses() {
         let source = format!(
             "graph g : App {{\n  operator {name} {{\n    on in {{ out = data }}\n  }}\n  . -> {name} -> .\n}}\n"
         );
-        let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("reserved");
+        let bag = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("reserved");
         assert!(
             bag.diagnostics()
                 .iter()
@@ -192,7 +216,11 @@ lab g {
   }
 }
 "#;
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),
@@ -212,8 +240,16 @@ fn the_lab_never_moves_the_production_hash() {
     let with_lab = format!(
         "{graph}\nlab g {{\n  simulation probing on app {{\n    scenario s \"observes\" {{\n      app.in = {{ v = 1 }}\n      expect \"out\" app.out count == 1 where meta.app.kept == \"x\"\n    }}\n  }}\n}}\n"
     );
-    let bare = compile(&[graph], &Registry::m0()).expect("the bare graph");
-    let inhabited = compile(&[with_lab.as_str()], &Registry::m0()).expect("the graph with a lab");
+    let bare = compile(
+        &[graph],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the bare graph");
+    let inhabited = compile(
+        &[with_lab.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the graph with a lab");
     assert_eq!(bare.hash, inhabited.hash, "the Lab is not identity");
     assert_eq!(
         rastok::plan::encode(&bare.plan, &bare.hash),
@@ -237,7 +273,11 @@ fn content_type_follows_the_payload_not_the_merge() {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
         );
-        let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid plan");
+        let compilation = compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         let mut ext = Namespace::new();

@@ -16,7 +16,11 @@ use rastok::runtime::vm::Vm;
 
 /// Injects, drains, and pumps a REAL child process to quiescence.
 fn drive(source: &str, data: Value) -> (Vec<rastok::runtime::vm::BoundaryOutput>, Vec<Value>) {
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world =
@@ -233,7 +237,11 @@ lab g {{
 }}
 "#
     );
-    let compilation = compile(&[source.as_str()], &Registry::m0()).expect("a valid unit");
+    let compilation = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),
@@ -286,7 +294,11 @@ lab g {{
 }}
 "#
     );
-    let bag = compile(&[source.as_str()], &Registry::m0()).expect_err("the shape must refuse");
+    let bag = compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the shape must refuse");
     assert!(
         bag.diagnostics()
             .iter()
@@ -402,7 +414,11 @@ lab g {
   }
 }
 "#;
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid unit");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),
@@ -418,7 +434,11 @@ fn an_out_of_domain_decimal_refuses_at_the_door() {
     // A public injection carrying an unbounded scale must refuse
     // TYPED at the door — never reach a writer as a runaway
     // allocation (D-2026-08-10-7).
-    let compilation = compile(&[CAT_JSONL], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[CAT_JSONL],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let refused = vm.inject(
@@ -444,7 +464,11 @@ fn a_validated_plan_never_carries_an_unknown_codec() {
     // The validator holds the codec's domain: a crafted package
     // with `codec = bogus` must never earn a ValidatedExecutionPlan
     // and quietly run as `lines`.
-    let compilation = compile(&[CAT_JSONL], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[CAT_JSONL],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
@@ -470,7 +494,11 @@ fn a_process_plan_without_a_codec_never_validates() {
     // The sheet REQUIRES codec, so a Process plan without one never
     // left the compiler: a crafted package omitting it must refuse
     // instead of silently running as `lines`.
-    let compilation = compile(&[CAT_JSONL], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[CAT_JSONL],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
@@ -492,7 +520,11 @@ fn another_contracts_codec_vocabulary_is_untouched() {
     // The codec rule is the PROCESS contract's, not the attribute
     // name's: a sheet spelling its own `codec = json` must not be
     // refused by Process's domain.
-    let compilation = compile(&[CAT_JSONL], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[CAT_JSONL],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {

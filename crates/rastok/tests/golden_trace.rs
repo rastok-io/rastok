@@ -65,7 +65,11 @@ impl Partner for EchoWorld {
 // `#[test]` bodies.)
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 fn run(source: &str) -> Vec<Record> {
-    let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
@@ -161,9 +165,11 @@ fn the_m0_probe_trace_matches_its_golden() {
 #[test]
 fn the_lab_scenario_matches_its_stored_golden() {
     let source = std::fs::read_to_string(example()).expect("the example reads");
-    let compilation =
-        rastok::compiler::compile(&[source.as_str()], &rastok::contract::Registry::m0())
-            .expect("a valid unit");
+    let compilation = rastok::compiler::compile(
+        &[source.as_str()],
+        &rastok::contract::Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),

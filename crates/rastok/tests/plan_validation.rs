@@ -37,10 +37,13 @@ graph probe : App {
 "#;
 
 fn raw_probe() -> ExecutionPlan {
-    compile(&[PROBE], &Registry::m0())
-        .expect("a valid plan")
-        .plan
-        .into_inner()
+    compile(
+        &[PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan")
+    .plan
+    .into_inner()
 }
 
 fn port(name: &str) -> Port {
@@ -65,8 +68,11 @@ graph probe : App {
   . -> o -> .
 }
 "#;
-    compile(&[source], &Registry::m0())
-        .expect("a program the checker accepts must validate at the plan");
+    compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a program the checker accepts must validate at the plan");
 }
 
 #[test]
@@ -87,8 +93,11 @@ graph g : App {
   . -> o -> .
 }
 "#;
-    let compilation =
-        compile(&[source], &Registry::m0()).expect("a same-direction redeclaration is a no-op");
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a same-direction redeclaration is a no-op");
     assert!(
         compilation.plan.plan().boundary.is_empty(),
         "the defaults never enter the declared table"
@@ -114,7 +123,11 @@ graph g : App {
   . -> o -> .
 }
 "#;
-    let bag = compile(&[source], &Registry::m0()).expect_err("the repetition refuses");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the repetition refuses");
     assert!(
         bag.diagnostics()
             .iter()
@@ -141,7 +154,11 @@ graph probe : App {
   . -> o -> .
 }
 "#;
-    let bag = compile(&[source], &Registry::m0()).expect_err("the redeclaration refuses");
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("the redeclaration refuses");
     assert!(
         bag.diagnostics()
             .iter()
@@ -606,8 +623,16 @@ fn handler_declaration_order_is_not_identity() {
         "on b { out = data }\n    on a { out = data }",
         1,
     );
-    let one = compile(&[TWO_TRIGGERS], &Registry::m0()).expect("a valid plan");
-    let two = compile(&[swapped.as_str()], &Registry::m0()).expect("a valid plan");
+    let one = compile(
+        &[TWO_TRIGGERS],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
+    let two = compile(
+        &[swapped.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
     assert_eq!(one.hash, two.hash, "same identity");
     assert_eq!(one.plan, two.plan, "same canonical plan");
 }
@@ -630,10 +655,13 @@ fn a_duplicated_handler_refuses() {
 
 #[test]
 fn reordered_handlers_are_not_canonical() {
-    let mut plan = compile(&[TWO_TRIGGERS], &Registry::m0())
-        .expect("a valid plan")
-        .plan
-        .into_inner();
+    let mut plan = compile(
+        &[TWO_TRIGGERS],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan")
+    .plan
+    .into_inner();
     plan.handlers.swap(0, 1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -739,9 +767,12 @@ fn what_the_type_accepts_the_format_reads_back() {
     // the type accepts must ride the full round trip, and the first
     // refusal must be the typed budget, exactly at the reader's
     // bound. `encode ⇒ decode` is total — no gap at the boundary.
-    let hash = compile(&[PROBE], &Registry::m0())
-        .expect("a valid plan")
-        .hash;
+    let hash = compile(
+        &[PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan")
+    .hash;
     let mut plan = raw_probe();
     let mut last_accepted = None;
     let mut refused = false;

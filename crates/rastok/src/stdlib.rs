@@ -144,17 +144,6 @@ const DECLARED: &[&str] = &[
 ];
 
 impl Registry {
-    /// The M0 registry: the `Process` sheet, the declared catalogue,
-    /// and the guest languages with no available frontend.
-    #[must_use]
-    pub fn m0() -> Self {
-        // A standard-sheet defect is a broken BUILD, pinned by the
-        // suite (`the_process_sheet_holds_its_own_door`); the panic
-        // cannot fire in a released binary. Callers who want the
-        // fallible door use [`Registry::try_m0`].
-        Self::try_m0().unwrap_or_else(|defect| unreachable!("the standard sheet holds: {defect}"))
-    }
-
     /// The M0 registry through its fallible door — the same
     /// validation any extension walks.
     ///
@@ -190,7 +179,7 @@ mod tests {
 
     #[test]
     fn the_registry_resolves_the_three_availabilities() {
-        let registry = Registry::m0();
+        let registry = Registry::try_m0().expect("the standard catalogue holds");
         assert!(matches!(
             registry.connector("Process"),
             Availability::Available(contract) if contract.name == "Process"
@@ -218,7 +207,7 @@ mod tests {
 
     #[test]
     fn guests_are_declared_but_unavailable() {
-        let registry = Registry::m0();
+        let registry = Registry::try_m0().expect("the standard catalogue holds");
         assert_eq!(
             registry.guest("jq").map(|guest| guest.available),
             Some(false)
