@@ -361,6 +361,18 @@ impl<'a> Lexer<'a> {
     /// (D-2026-08-12-1, review round).
     #[must_use]
     pub fn significant_byte_on_line(&self) -> Option<u8> {
+        self.significant_on_line().map(|(_, byte)| byte)
+    }
+
+    /// The line-local probe WITH its offset: the position of the
+    /// first significant byte on the current line, and that byte.
+    /// The trivia rule is the HOST's exactly — ASCII spacing and
+    /// comments that stay on the line — so a caller handing the
+    /// remainder to a foreign reader starts AT this offset: the
+    /// reader never sees host trivia, and never applies its own
+    /// (Unicode) idea of whitespace (D-2026-08-12-1, review round).
+    #[must_use]
+    pub fn significant_on_line(&self) -> Option<(usize, u8)> {
         let bytes = self.source.as_bytes();
         let mut pos = self.pos;
         loop {
@@ -382,24 +394,42 @@ impl<'a> Lexer<'a> {
                     }
                     pos = end;
                 }
-                byte => return Some(byte),
+                byte => return Some((pos, byte)),
             }
         }
     }
 
     /// Consumes one raw balanced-delimiter region — the OPEN byte is
-    /// expected at the current position — string-aware, without host
-    /// tokenization. Error recovery for dead/reserved forms: nothing
-    /// here speaks.
-    pub fn skip_balanced_raw(&mut self, open: u8, close: u8, bag: &mut Bag) {
+    /// expected at the current position — with BOTH quote styles
+    /// protected (a delimiter inside either kind of string is
+    /// content, never structure). ABSOLUTELY SILENT: this is error
+    /// recovery for dead/reserved forms, the one diagnostic already
+    /// spoke, and even an unterminated string in the swallowed text
+    /// adds no second voice — the quotes are skipped locally, not
+    /// through `skip_quoted` (which diagnoses)
+    /// (D-2026-08-12-1, review round).
+    pub fn skip_balanced_raw(&mut self, open: u8, close: u8) {
         let bytes = self.source.as_bytes();
         let mut depth: u32 = 0;
+        let mut quote: Option<u8> = None;
         while let Some(&byte) = bytes.get(self.pos) {
+            if let Some(active) = quote {
+                match byte {
+                    b'\\' => {
+                        self.pos = (self.pos + 2).min(bytes.len());
+                        continue;
+                    }
+                    _ if byte == active => quote = None,
+                    _ => {}
+                }
+                self.pos += 1;
+                continue;
+            }
             match byte {
-                // BOTH quote styles, like every opaque scanner — a
-                // delimiter inside either kind of string is content,
-                // never structure (D-2026-08-12-1, review round).
-                b'"' | b'\'' => self.skip_quoted(bag, byte),
+                b'"' | b'\'' => {
+                    quote = Some(byte);
+                    self.pos += 1;
+                }
                 _ if byte == open => {
                     depth += 1;
                     self.pos += 1;
@@ -670,6 +700,36 @@ fn punctuation(byte: u8) -> Option<TokenKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_recovery_never_pops_a_mismatched_closer() {
+        // The typed stack (D-2026-08-12-1, review round): a closer
+        // of another type STOPS the walk — it never pops — and the
+        // returned offset points exactly at it.
+        let terminators = TerminatorSet {
+            bytes: b"}",
+            newline: true,
+            arrow: false,
+            keywords: &[],
+        };
+        // `[` opened, `}` arrives: stop BEFORE `}`, stack unpopped.
+        let mut lexer = Lexer::new(SourceId::new(0), "[1, 2 } tail");
+        let end = lexer.skip_json_recovery(&terminators);
+        assert_eq!(end, 6, "stops at the mismatched `}}`");
+        // `{` opened, `]` arrives: stop BEFORE `]`.
+        let mut lexer = Lexer::new(SourceId::new(0), "{\"a\": 1 ] tail");
+        let end = lexer.skip_json_recovery(&terminators);
+        assert_eq!(end, 8, "stops at the mismatched `]`");
+        // Strong boundaries hold at ANY depth.
+        let mut lexer = Lexer::new(SourceId::new(0), "{\"a\": ???; tail");
+        let end = lexer.skip_json_recovery(&terminators);
+        assert_eq!(end, 9, "`;` stops inside the open brace");
+        // A matched closer pops and the walk continues to the
+        // position's own terminator.
+        let mut lexer = Lexer::new(SourceId::new(0), "{\"a\": [1]} }");
+        let end = lexer.skip_json_recovery(&terminators);
+        assert_eq!(end, 11, "balanced json consumed, position `}}` kept");
+    }
 
     fn lex(source: &str) -> (Vec<(TokenKind, &str)>, Bag) {
         let mut bag = Bag::new();

@@ -909,8 +909,20 @@ fn a_json_recovery_follows_the_position_terminators() {
             "graph g : App {\n  operator o {\n    on in {\n      out = json {\n        \"a\": ???\n      }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
         ),
         (
-            "paren position",
+            "paren position (comma boundary)",
             "graph g : App {\n  operator o {\n    on in { out = asset(json ???, \"text/plain\"); out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "paren position (close-paren boundary)",
+            "graph g : App {\n  operator o {\n    on in { out = asset(json ???); out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "host-alien first byte",
+            "graph g : App {\n  operator o {\n    on in { out = json @; out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "host-alien slash",
+            "graph g : App {\n  operator o {\n    on in { out = json 'x'; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
     ] {
         let bag = compile_one(source).expect_err(label);
@@ -932,6 +944,63 @@ fn a_json_recovery_follows_the_position_terminators() {
         .filter(|step| matches!(step, rastok::plan::Step::Emit { .. }))
         .count();
     assert_eq!(emissions, 2, "both emissions live in the tree");
+}
+
+#[test]
+fn a_semicolon_at_json_depth_is_a_strong_boundary() {
+    // `;` cannot appear in JSON outside a string: the walk stops at
+    // ANY depth, the sibling survives, and the two residual closer
+    // errors are the file's REAL brace imbalance (the unterminated
+    // json `{` — accepted as necessarily ambiguous).
+    let source = "graph g : App {\n  operator o {\n    on in { out = json { \"a\": ???; out = data } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile_one(source).expect_err("must refuse");
+    let errors: Vec<_> = bag
+        .diagnostics()
+        .iter()
+        .filter(|d| d.code().as_str().starts_with("E-"))
+        .collect();
+    assert_eq!(errors.len(), 3, "{bag:?}");
+    assert_eq!(errors[0].code().as_str(), "E-JSON-VALUE");
+    assert!(
+        errors[1..]
+            .iter()
+            .all(|d| d.code().as_str() == "E-PARSE-EXPECTED"),
+        "the tail is the real imbalance: {bag:?}"
+    );
+}
+
+#[test]
+fn json_trivia_belongs_to_the_host() {
+    // A same-line comment between the tag and the body is HOST
+    // trivia — the reader never sees it, and the identity is the
+    // same as the uncommented spelling.
+    let commented = "graph g : App {\n  operator o {\n    on in { out = json /* c */ 1 }\n  }\n  . -> o -> .\n}\n";
+    let plain =
+        "graph g : App {\n  operator o {\n    on in { out = json 1 }\n  }\n  . -> o -> .\n}\n";
+    let a = compile_one(commented).expect("valid");
+    let b = compile_one(plain).expect("valid");
+    assert_eq!(
+        a.hash.to_string(),
+        b.hash.to_string(),
+        "host trivia is not identity"
+    );
+    // An NBSP is NOT host trivia — it is the JSON body's first byte
+    // and refuses as JSON: the boundary never depends on Unicode
+    // trim_start.
+    let nbsp = "graph g : App {\n  operator o {\n    on in { out = json \u{a0}1 }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile_one(nbsp).expect_err("must refuse");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-JSON-VALUE");
+    // A comment crossing the line means NO body on the line: bare
+    // word — never a truncated JSON literal.
+    let crossing = "graph g : App {\n  operator o {\n    on in { out = json /* c\n*/ 1 }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile_one(crossing).expect_err("must refuse");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .all(|d| d.code().as_str() != "E-JSON-VALUE"),
+        "bare word, not a JSON literal: {bag:?}"
+    );
 }
 
 #[test]

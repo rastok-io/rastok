@@ -1607,26 +1607,28 @@ impl<'src> Parser<'src, '_> {
                 // decision is a RAW byte inspection: the delegated
                 // body must never meet the host lexer, not even for
                 // one peeked token (D-2026-08-12-1, review round).
-                let bare = match self.lexer.significant_byte_on_line() {
-                    None => true,
-                    Some(byte) => {
-                        matches!(byte, b';' | b',' | b'}' | b')') || position.bytes.contains(&byte)
+                let body = match self.lexer.significant_on_line() {
+                    None => None,
+                    Some((_, byte))
+                        if matches!(byte, b';' | b',' | b'}' | b')')
+                            || position.bytes.contains(&byte) =>
+                    {
+                        None
                     }
+                    Some((offset, _)) => Some(offset),
                 };
-                if bare {
+                let Some(start) = body else {
                     self.peeked = Some(ident);
                     return Value::Cel(self.cel(position));
-                }
+                };
                 // Delegate ONE complete JSON value to the house
-                // reader from the raw source (D-2026-08-10-6): the
-                // reader returns the consumed length and the parser
-                // resumes exactly after it.
-                self.unpeek();
-                let start = self.last_end;
-                let tail = self.lexer.source_from(start);
-                // Skip the whitespace between the tag and the value.
-                let lead = tail.len() - tail.trim_start().len();
-                match rastok_core::json::parse_value(tail.trim_start()) {
+                // reader from the raw source (D-2026-08-10-6),
+                // starting AT the probe's offset: the host trivia
+                // (comments included) stays the host's, and the
+                // reader never applies its own idea of whitespace —
+                // an NBSP is a significant byte, refused as JSON.
+                let lead = 0;
+                match rastok_core::json::parse_value(self.lexer.source_from(start)) {
                     Ok((value, consumed)) => {
                         let end = start + lead + consumed;
                         self.lexer.skip_to(end);
@@ -1700,7 +1702,7 @@ impl<'src> Parser<'src, '_> {
                         // parens without host tokenization — alien
                         // bytes stay silent.
                         self.unpeek();
-                        self.lexer.skip_balanced_raw(b'(', b')', self.bag);
+                        self.lexer.skip_balanced_raw(b'(', b')');
                     }
                     if self.peek().kind == TokenKind::LBrace {
                         self.bump();
@@ -1748,7 +1750,7 @@ impl<'src> Parser<'src, '_> {
             // host tokenization — alien bytes stay silent, the one
             // diagnostic already spoke.
             self.unpeek();
-            self.lexer.skip_balanced_raw(b'(', b')', self.bag);
+            self.lexer.skip_balanced_raw(b'(', b')');
         }
         if self.peek().kind == TokenKind::LBrace {
             self.bump();
