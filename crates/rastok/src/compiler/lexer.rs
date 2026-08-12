@@ -353,6 +353,40 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// The first significant byte ON THE CURRENT LINE, or `None`
+    /// when only trivia remains before the newline (or the end of
+    /// input). A newline-terminated value position asks this BEFORE
+    /// any dispatch: an omitted value must diagnose where it is
+    /// missing, never absorb the next line's construct
+    /// (D-2026-08-12-1, review round).
+    #[must_use]
+    pub fn significant_byte_on_line(&self) -> Option<u8> {
+        let bytes = self.source.as_bytes();
+        let mut pos = self.pos;
+        loop {
+            match *bytes.get(pos)? {
+                b'\n' => return None,
+                b' ' | b'\t' | b'\r' => pos += 1,
+                b'/' if bytes.get(pos + 1) == Some(&b'/') => {
+                    while pos < bytes.len() && bytes[pos] != b'\n' {
+                        pos += 1;
+                    }
+                }
+                b'/' if bytes.get(pos + 1) == Some(&b'*') => {
+                    let end = self.source[pos + 2..]
+                        .find("*/")
+                        .map(|end| pos + 2 + end + 2)?;
+                    if self.source[pos..end].contains('\n') {
+                        // The comment swallows the rest of the line.
+                        return None;
+                    }
+                    pos = end;
+                }
+                byte => return Some(byte),
+            }
+        }
+    }
+
     fn at_terminator(&self, byte: u8, terminators: &TerminatorSet) -> bool {
         if terminators.bytes.contains(&byte) {
             return true;

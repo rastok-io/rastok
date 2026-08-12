@@ -1524,6 +1524,28 @@ impl Checker<'_, '_> {
                 .with_field("detail", detail),
             );
         };
+        // PRESENCE is three-state (D-2026-08-12-1, review round):
+        // absent / present-valid / present-INVALID. The written set
+        // is SYNTACTIC — an attribute whose value failed to check is
+        // still WRITTEN: it is neither "missing" (no Required
+        // refusal) nor defaultable (no injection into an already
+        // fautive compilation).
+        let written_names: std::collections::BTreeSet<String> = decl
+            .body
+            .iter()
+            .filter_map(|item| match item {
+                OperatorItem::Attribute(attribute) => Some(
+                    attribute
+                        .target
+                        .segments
+                        .iter()
+                        .map(|segment| segment.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("."),
+                ),
+                _ => None,
+            })
+            .collect();
         // 1. The PROFILE: the selector's written word, or its
         // default. The admitted words are derived from the profiles.
         let mut profile: Option<&contract::Profile> = None;
@@ -1747,12 +1769,7 @@ impl Checker<'_, '_> {
             })
             .collect();
         for spec in &composed {
-            if spec.presence == contract::Presence::Required
-                && !node
-                    .attributes()
-                    .iter()
-                    .any(|attribute| attribute.name == spec.name)
-            {
+            if spec.presence == contract::Presence::Required && !written_names.contains(spec.name) {
                 self.bag.push(
                     Diagnostic::new(
                         E_CONTRACT_REQUIRED,
@@ -1777,6 +1794,7 @@ impl Checker<'_, '_> {
         let mut injected: Vec<Attribute> = Vec::new();
         if let Some(selector) = &contract.selector
             && !selector_written
+            && !written_names.contains(selector.attribute)
             && let Some(word) = selector.default
         {
             injected.push(Attribute {
@@ -1788,11 +1806,7 @@ impl Checker<'_, '_> {
             let contract::Presence::Defaulted(default) = &spec.presence else {
                 continue;
             };
-            if node
-                .attributes()
-                .iter()
-                .any(|attribute| attribute.name == spec.name)
-            {
+            if written_names.contains(spec.name) {
                 continue;
             }
             let value = match default {
@@ -2155,6 +2169,8 @@ impl Checker<'_, '_> {
                 }
                 Some(constant)
             }
+            // The parser already spoke for its recovery form.
+            Some(SynValue::Error(_)) => return None,
             Some(_) => {
                 self.deferred("a non-expression var initializer", decl.span);
                 return None;
@@ -2391,6 +2407,8 @@ impl Checker<'_, '_> {
         for statement in body {
             match statement {
                 SynStatement::Val(val) => match &val.value {
+                    // The parser already spoke for its recovery form.
+                    SynValue::Error(_) => {}
                     SynValue::Cel(expr) => {
                         if self.bindable(&val.name, &signature)
                             && let Some(tree) = self.cel(expr, &signature)
@@ -2419,6 +2437,9 @@ impl Checker<'_, '_> {
                     let name = &target.segments[0];
                     if let Some(var) = node.vars.iter().find(|var| var.name == name.text) {
                         match value {
+                            // The parser already spoke for its
+                            // recovery form.
+                            SynValue::Error(_) => {}
                             SynValue::Cel(expr) => {
                                 if let Some(tree) = self.cel(expr, &signature) {
                                     if tree.ty != var.ty
@@ -2562,6 +2583,8 @@ impl Checker<'_, '_> {
         // concatenated spelling is not the grammar's STRING.
         let string_arg = |checker: &mut Self, value: &SynValue| -> Option<String> {
             match value {
+                // The parser already spoke for its recovery form.
+                SynValue::Error(_) => None,
                 SynValue::StrLit { raw, span } => checker.decode_string(raw, *span),
                 SynValue::Cel(expr) => {
                     refuse(
@@ -2669,6 +2692,9 @@ impl Checker<'_, '_> {
                 };
                 let asset_string = |checker: &mut Self, value: &SynValue| -> Option<String> {
                     match value {
+                        // The parser already spoke for its recovery
+                        // form.
+                        SynValue::Error(_) => None,
                         SynValue::StrLit { raw, span } => checker.decode_string(raw, *span),
                         SynValue::Cel(expr) => {
                             refuse_asset(

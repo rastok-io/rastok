@@ -179,9 +179,11 @@ step touches `vm.rs` once.
    the checker INJECTS every omitted default (`mode = job`,
    `args = []`, `max_output = "8MiB"`, `on_timeout = kill`) into
    the effective HIR before the hash — omission ≡ exact spelling,
-   a DECLARED identity move (every Process graph moved: echo/spike
-   `d0bc5576…`, jsonl fixture `3434 1263…`, probe `c986 6b38…`;
-   gauge, connector-free, pinned immobile as witness). The plan
+   a DECLARED identity move (every Process graph moved — the hashes
+   of that day, since superseded by the review rounds' second move:
+   echo/spike `d0bc5576…` → `c75b840d…`, jsonl fixture
+   `34341263…` → `60f45914…`, probe `c9866b38…` → `20479b25…`;
+   gauge, connector-free, pinned immobile as witness of both). The plan
    carries effective attributes only; the adapter's silent
    `8 MiB`/empty-args fallbacks became typed invariant refusals.
    `codec` stays Required (reaffirmed), `AttrDomain::Forbidden`

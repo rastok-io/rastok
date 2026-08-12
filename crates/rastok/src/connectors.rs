@@ -427,6 +427,18 @@ struct Run {
     codec: crate::boundary::RequestCodec,
     child: std::process::Child,
     chunks: std::sync::mpsc::Receiver<Chunk>,
+    capture: Capture,
+    exit: Option<std::process::ExitStatus>,
+    group_killed: bool,
+}
+
+/// The capture state, child-free and PURE: chunks are absorbed one
+/// by one, and the terminal verdict reduces by fixed PRIORITY over
+/// everything observed up to the drain that tripped it —
+/// `OutputOverflow` over `CaptureFailed` — never by the arrival
+/// order of two racing pumps (D-2026-08-12-1, review round).
+#[derive(Debug)]
+struct Capture {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     /// Bytes SEEN on each stream, in u64 — the budget judge, so the
@@ -446,8 +458,71 @@ struct Run {
     read_failure: bool,
     out_eof: bool,
     err_eof: bool,
-    exit: Option<std::process::ExitStatus>,
-    group_killed: bool,
+}
+
+impl Capture {
+    fn new(max_output: u64) -> Self {
+        Self {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            observed_out: 0,
+            observed_err: 0,
+            max_output,
+            overflow: None,
+            read_failure: false,
+            out_eof: false,
+            err_eof: false,
+        }
+    }
+
+    /// Absorbs one chunk under the aggregate budget.
+    fn absorb(&mut self, chunk: Chunk) {
+        match chunk {
+            Chunk::Out(bytes) => {
+                self.observed_out = self.observed_out.saturating_add(bytes.len() as u64);
+                if self.overflow.is_none() {
+                    if self.observed_out.saturating_add(self.observed_err) > self.max_output {
+                        self.overflow = Some(CaptureOverflowReason::Budget);
+                    } else if self.stdout.try_reserve(bytes.len()).is_err() {
+                        self.overflow = Some(CaptureOverflowReason::Capacity);
+                    } else {
+                        self.stdout.extend_from_slice(&bytes);
+                    }
+                }
+            }
+            Chunk::Err(bytes) => {
+                self.observed_err = self.observed_err.saturating_add(bytes.len() as u64);
+                if self.overflow.is_none() {
+                    if self.observed_out.saturating_add(self.observed_err) > self.max_output {
+                        self.overflow = Some(CaptureOverflowReason::Budget);
+                    } else if self.stderr.try_reserve(bytes.len()).is_err() {
+                        self.overflow = Some(CaptureOverflowReason::Capacity);
+                    } else {
+                        self.stderr.extend_from_slice(&bytes);
+                    }
+                }
+            }
+            Chunk::OutEof => self.out_eof = true,
+            Chunk::ErrEof => self.err_eof = true,
+            Chunk::ReadFailed => self.read_failure = true,
+        }
+    }
+
+    /// The terminal verdict over everything observed so far — the
+    /// fixed-priority reducer: a budget/capacity overflow outranks a
+    /// read loss, whatever order the pumps delivered them in.
+    fn verdict(&self) -> Option<ProcessFailure> {
+        if let Some(reason) = self.overflow {
+            return Some(ProcessFailure::OutputOverflow {
+                limit: self.max_output,
+                reason,
+            });
+        }
+        if self.read_failure {
+            return Some(ProcessFailure::CaptureFailed {});
+        }
+        None
+    }
 }
 
 /// One drained slice of a pipe, or its end-of-stream marker — the
@@ -618,15 +693,7 @@ impl<'plan> Process<'plan> {
             codec: settings.codec,
             child,
             chunks,
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-            observed_out: 0,
-            observed_err: 0,
-            max_output: settings.max_output,
-            overflow: None,
-            read_failure: false,
-            out_eof: false,
-            err_eof: false,
+            capture: Capture::new(settings.max_output),
             exit: None,
             group_killed: false,
         })
@@ -686,59 +753,15 @@ fn pump_pipe<P: Read>(
 }
 
 impl Run {
-    /// Drains arrived chunks. `max_output` is the AGGREGATE capture
-    /// budget across stdout and stderr (D-2026-08-12-1, review
-    /// round): the total is judged in u64 BEFORE any byte is stored,
-    /// the chunk that would cross is never appended, and a failed
-    /// `try_reserve` trips the same verdict with its own reason —
-    /// neither stream ever loses bytes silently.
+    /// Drains arrived chunks into the capture state. `max_output`
+    /// is the AGGREGATE budget across stdout and stderr
+    /// (D-2026-08-12-1, review round); the verdict reduces by fixed
+    /// priority in [`Capture::verdict`].
     fn collect(&mut self) -> bool {
         for chunk in self.chunks.try_iter() {
-            match chunk {
-                Chunk::Out(bytes) => {
-                    self.observed_out = self.observed_out.saturating_add(bytes.len() as u64);
-                    if self.overflow.is_none() {
-                        if self.observed_out.saturating_add(self.observed_err) > self.max_output {
-                            self.overflow = Some(CaptureOverflowReason::Budget);
-                        } else if self.stdout.try_reserve(bytes.len()).is_err() {
-                            self.overflow = Some(CaptureOverflowReason::Capacity);
-                        } else {
-                            self.stdout.extend_from_slice(&bytes);
-                        }
-                    }
-                }
-                Chunk::Err(bytes) => {
-                    self.observed_err = self.observed_err.saturating_add(bytes.len() as u64);
-                    if self.overflow.is_none() {
-                        if self.observed_out.saturating_add(self.observed_err) > self.max_output {
-                            self.overflow = Some(CaptureOverflowReason::Budget);
-                        } else if self.stderr.try_reserve(bytes.len()).is_err() {
-                            self.overflow = Some(CaptureOverflowReason::Capacity);
-                        } else {
-                            self.stderr.extend_from_slice(&bytes);
-                        }
-                    }
-                }
-                Chunk::OutEof => self.out_eof = true,
-                Chunk::ErrEof => self.err_eof = true,
-                Chunk::ReadFailed => {
-                    self.read_failure = true;
-                }
-            }
+            self.capture.absorb(chunk);
         }
-        self.overflow.is_some() || self.read_failure
-    }
-
-    /// The typed capture verdict — the declared limit and the
-    /// reason, nothing schedule-dependent: the two pumps have no
-    /// total order, so a tripping stream or a drained byte-count
-    /// would journal a thread race.
-    fn overflow_outcome(&self) -> CallOutcome {
-        ProcessFailure::OutputOverflow {
-            limit: self.max_output,
-            reason: self.overflow.unwrap_or(CaptureOverflowReason::Budget),
-        }
-        .into_outcome()
+        self.capture.verdict().is_some()
     }
 
     /// Whether the reply is final: the child exited and both streams
@@ -746,25 +769,23 @@ impl Run {
     /// guaranteed: at the leader's exit [`Process::events`] kills the
     /// remaining group, so the pipes close and the EOFs follow.
     fn finished(&self) -> bool {
-        self.exit.is_some() && self.out_eof && self.err_eof
+        self.exit.is_some() && self.capture.out_eof && self.capture.err_eof
     }
 
     /// The reply of a finished run.
     fn settle(mut self, status: std::process::ExitStatus) -> Response {
         self.collect();
-        let outcome = if self.overflow.is_some() {
-            self.overflow_outcome()
-        } else if self.read_failure {
-            ProcessFailure::CaptureFailed {}.into_outcome()
+        let outcome = if let Some(failure) = self.capture.verdict() {
+            failure.into_outcome()
         } else if !status.success() {
             ProcessFailure::ExecFailed {
                 // Killed by a signal: no exit code exists.
                 exit_code: status.code().map_or(-1, i64::from),
-                stderr: String::from_utf8_lossy(&self.stderr).into_owned(),
+                stderr: String::from_utf8_lossy(&self.capture.stderr).into_owned(),
             }
             .into_outcome()
         } else {
-            match String::from_utf8(std::mem::take(&mut self.stdout)) {
+            match String::from_utf8(std::mem::take(&mut self.capture.stdout)) {
                 Ok(text) => match self.codec {
                     // `codec = lines`, job mode: the whole stdout,
                     // one text blob.
@@ -850,11 +871,11 @@ impl Partner for Process<'_> {
                 // the whole process group dies now, and the answer
                 // is the matching typed refusal.
                 kill_group(&mut run.child);
-                let outcome = if run.overflow.is_some() {
-                    run.overflow_outcome()
-                } else {
-                    ProcessFailure::CaptureFailed {}.into_outcome()
-                };
+                let outcome = run
+                    .capture
+                    .verdict()
+                    .unwrap_or(ProcessFailure::CaptureFailed {})
+                    .into_outcome();
                 answers.push(Response {
                     call_ref: run.call_ref,
                     outcome,
@@ -1417,6 +1438,45 @@ graph unframeable : App {
         assert!(matches!(&chunks[0], Chunk::Out(bytes) if bytes == b"partial"));
         assert!(matches!(chunks[1], Chunk::ReadFailed));
         assert!(matches!(chunks[2], Chunk::OutEof));
+    }
+
+    #[test]
+    fn the_capture_verdict_is_priority_not_arrival_order() {
+        // The reducer's rule (D-2026-08-12-1, review round): among
+        // the terminal facts observed up to the tripping drain,
+        // OutputOverflow outranks CaptureFailed — whichever order
+        // the two pumps delivered them in.
+        let both_orders = [
+            [Chunk::ReadFailed, Chunk::Out(vec![0u8; 64])],
+            [Chunk::Out(vec![0u8; 64]), Chunk::ReadFailed],
+        ];
+        for chunks in both_orders {
+            let mut capture = Capture::new(50);
+            for chunk in chunks {
+                capture.absorb(chunk);
+            }
+            assert!(
+                matches!(
+                    capture.verdict(),
+                    Some(ProcessFailure::OutputOverflow {
+                        limit: 50,
+                        reason: CaptureOverflowReason::Budget,
+                    })
+                ),
+                "priority decides, never arrival order"
+            );
+        }
+        // A read loss alone IS the verdict.
+        let mut capture = Capture::new(50);
+        capture.absorb(Chunk::ReadFailed);
+        assert!(matches!(
+            capture.verdict(),
+            Some(ProcessFailure::CaptureFailed {})
+        ));
+        // Under budget, no verdict.
+        let mut capture = Capture::new(50);
+        capture.absorb(Chunk::Out(vec![0u8; 10]));
+        assert_eq!(capture.verdict(), None);
     }
 
     #[test]

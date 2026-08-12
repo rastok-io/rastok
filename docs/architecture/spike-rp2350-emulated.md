@@ -68,7 +68,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 |---|---|---|---|
 | `plan::decode` (430-byte v5 package, full invariant validation + canonicity re-encode; re-measured 2026-08-12 — the injected defaults AND the CaptureFailed error kind ride the package) | 4 763 | 238 k | 1.59 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and CEL bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32; min 1 842 / max 2 106; re-measured 2026-08-12) | 1 885 | **94 k** | **0.63 ms** |
+| relay transaction (avg of 32; re-measured 2026-08-12 — run-to-run jitter of a few ticks on avg/max is expected under QEMU icount) | ~1 883–1 885 (min 1 842 / max ~2 106–2 110) | **94 k** | **0.63 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
@@ -104,12 +104,11 @@ Notes the numbers carry:
   roughly cancelled out.
 - The semantic hash printed by the emulated kernel is byte-identical
   to the host's: `c75b840d…` — the identity function is the same
-  function everywhere. (The value has moved twice, both times as a
-  declared identity move: with D-2026-08-10-7 — a compiled tree
-  seals its static type with its root, and echo's guard and relay
-  are trees — and on 2026-08-12 with D-2026-08-12-1's default
-  injection: the EFFECTIVE sheet is identity, so every
-  Process-carrying graph moved once more.)
+  function everywhere. (Three declared identity moves so far: with
+  D-2026-08-10-7 — a compiled tree seals its static type with its
+  root — then twice on 2026-08-12 with D-2026-08-12-1: the default
+  injection made the EFFECTIVE sheet identity, and the Process
+  error set gained `CaptureFailed`, which travels in the plan.)
 - The journal-growth incident of the first run stands: with a
   128 KiB arena, a ~44 KiB `Vec` doubling of the in-memory journal
   dies around round 60 — linear history growth, as designed; a

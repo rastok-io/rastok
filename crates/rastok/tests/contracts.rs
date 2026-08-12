@@ -854,6 +854,49 @@ fn a_nested_block_entry_names_its_migration() {
 }
 
 #[test]
+fn an_omitted_value_never_absorbs_the_next_line() {
+    // The review's blocker: `command =` must diagnose EXACTLY ONCE,
+    // at the empty position, and the NEXT attribute must survive —
+    // written-but-invalid is neither "missing" nor defaultable, so
+    // no Required cascade and no MissingCodec artifact.
+    let source = "graph g : App {\n  connector shell : Process {\n    command =\n    codec = lines\n    effect = idempotent\n    behavior = deterministic\n  }\n  . -> shell -> .\n}\n";
+    let bag = compile_one(source).expect_err("must refuse");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    let diagnostic = &bag.diagnostics()[0];
+    assert_eq!(diagnostic.code().as_str(), "E-PARSE-EXPECTED");
+    assert!(
+        diagnostic
+            .message()
+            .contains("expected a value before the end of the line"),
+        "{diagnostic:?}"
+    );
+    // The span sits on the `command =` line (line 3 starts at 39).
+    let span = diagnostic.spans()[0].range();
+    let line = source[..span.start].matches('\n').count() + 1;
+    assert_eq!(line, 3, "the diagnostic points at the EMPTY position");
+    // In a handler: `val x =` keeps the following emission.
+    let source = "graph g : App {\n  operator o {\n    on in {\n      val x =\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile_one(source).expect_err("must refuse");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-PARSE-EXPECTED");
+}
+
+#[test]
+fn a_json_error_resynchronizes_at_the_line_boundary() {
+    // The faulty value is consumed to its line's end — one voice,
+    // and the next emission survives in the tree.
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = json ???\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile_one(source).expect_err("must refuse");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    assert!(
+        bag.diagnostics()[0]
+            .message()
+            .contains("the JSON value does not read"),
+        "{bag:?}"
+    );
+}
+
+#[test]
 fn an_omitted_expression_always_diagnoses() {
     // The review's blocker: the recovery form is Value::Error, never
     // an empty CelExpr a user could also produce — a genuinely
@@ -923,8 +966,9 @@ fn a_reserved_format_body_is_lexically_opaque() {
             "{label}: {bag:?}"
         );
     }
-    // Unterminated: the raw lexer speaks, and nothing else cascades
-    // beyond the parse of the truncated remainder.
+    // Unterminated: the named deferral is present; the truncated
+    // remainder ALSO surfaces its missing closers (pinned as-is —
+    // an unterminated block genuinely breaks everything after it).
     let source = "graph g : App {\n  operator o {\n    on in { out = avro { never closed\n";
     let bag = compile_one(source).expect_err("unterminated refuses");
     assert!(

@@ -1540,6 +1540,37 @@ impl<'src> Parser<'src, '_> {
 
     /// A value position; `position` chooses the CEL terminators.
     fn value(&mut self, position: &TerminatorSet) -> Value {
+        // A newline-terminated position must hold a value ON ITS
+        // LINE: an omitted value diagnoses HERE and consumes
+        // nothing — it never absorbs the next line's construct
+        // (D-2026-08-12-1, review round). `;` and `}` end the
+        // statement the same way a newline would.
+        if position.newline {
+            let missing = match &self.peeked {
+                Some(token) => {
+                    token.kind == TokenKind::Eof
+                        || token.newline_before
+                        || matches!(token.kind, TokenKind::Semi | TokenKind::RBrace)
+                }
+                None => matches!(
+                    self.lexer.significant_byte_on_line(),
+                    None | Some(b';' | b'}')
+                ),
+            };
+            if missing {
+                let at = Span::new(self.source_id, self.last_end..self.last_end + 1);
+                self.bag.push(
+                    Diagnostic::new(
+                        E_PARSE_EXPECTED,
+                        Phase::Parse,
+                        "expected a value before the end of the line",
+                    )
+                    .with_span(at)
+                    .with_field("expected", "a value"),
+                );
+                return Value::Error(at);
+            }
+        }
         // Probe by shape before touching the token stream: CEL text
         // may open with bytes this lexer rejects (`!`, `'`, `-(`), so
         // only builder-shaped input is tokenized here.
@@ -1617,7 +1648,20 @@ impl<'src> Parser<'src, '_> {
                             .with_span(Span::new(self.source_id, at..at + 1))
                             .with_field("detail", error.message),
                         );
-                        self.lexer.skip_to(start + lead);
+                        // Resynchronize AT the position's boundary:
+                        // consume the faulty value up to (not
+                        // including) the newline, so the next
+                        // construct is never re-read or absorbed
+                        // (D-2026-08-12-1, review round).
+                        let line_end = self
+                            .lexer
+                            .source_from(start + lead)
+                            .find('\n')
+                            .map_or(self.lexer.source_from(0).len(), |offset| {
+                                start + lead + offset
+                            });
+                        self.lexer.skip_to(line_end);
+                        self.last_end = line_end;
                         Value::Error(Span::new(self.source_id, start..start))
                     }
                 }
@@ -1697,7 +1741,10 @@ impl<'src> Parser<'src, '_> {
             .with_span(token.span)
             .with_field("tag", tag),
         );
-        // Swallow `(args)` and `{ body }` so one fault speaks once.
+        // Swallow `(args)` and `{ body }` so one fault speaks once —
+        // the body through the RAW lexer: a dead form may carry
+        // bytes the host lexer refuses, and the migration must stay
+        // the only voice (D-2026-08-12-1, review round).
         if self.eat(TokenKind::LParen).is_some() {
             let mut depth = 1u32;
             while depth > 0 {
@@ -1711,7 +1758,10 @@ impl<'src> Parser<'src, '_> {
             }
         }
         if self.peek().kind == TokenKind::LBrace {
-            self.skip_balanced_block();
+            self.bump();
+            self.unpeek();
+            let raw = self.lexer.raw_block(self.bag);
+            self.last_end = raw.span.range().end;
         }
         Value::Error(token.span)
     }
