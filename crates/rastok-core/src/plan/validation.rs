@@ -65,6 +65,14 @@ pub enum PlanValidationError {
         /// The declaring node.
         node: node::Path,
     },
+    /// A connector some edge DELIVERS TO declares `Effect::None` —
+    /// a delivery opens a call, and a call needs an effect class.
+    /// (A source connector with no incoming edge may honestly be
+    /// effectless.)
+    EffectlessCallee {
+        /// The declaring node.
+        node: node::Path,
+    },
     /// One node declares two handlers for one activation — the
     /// second would silently shadow the first at dispatch.
     DuplicateHandler {
@@ -295,6 +303,12 @@ impl core::fmt::Display for PlanValidationError {
                 write!(
                     f,
                     "invalid plan: `{node}` is a Process connector without a codec — the sheet requires one"
+                )
+            }
+            Self::EffectlessCallee { node } => {
+                write!(
+                    f,
+                    "invalid plan: `{node}` receives deliveries but declares no effect class — a call cannot open without one"
                 )
             }
             Self::DuplicateHandler { node, activation } => {
@@ -702,7 +716,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             port: decl.port.clone(),
         });
     }
-    for node in &plan.nodes {
+    for (node_index, node) in plan.nodes.iter().enumerate() {
         if let Some(decl) = node.ports.iter().find(|decl| implicit(&decl.port)) {
             return Err(PlanValidationError::ImplicitPortDeclared {
                 node: Some(node.path.clone()),
@@ -756,6 +770,24 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             // ValidatedExecutionPlan and quietly run as `lines`
             // (D-2026-08-11-1, second amendment). Another sheet
             // spelling its own `codec` vocabulary is untouched.
+            // The REAL effect invariant (D-2026-08-12-1, review
+            // round): any connector a delivery can reach opens a
+            // call, and the machine dispatches on its effect CLASS —
+            // `Effect::None` there would be a machine fault, so it
+            // never validates. A pure source (no incoming edge)
+            // stays free to be effectless.
+            if spec.effect == node::Effect::None {
+                let slot = crate::plan::Slot::new(u32::try_from(node_index).unwrap_or(u32::MAX));
+                let receives = plan
+                    .edges
+                    .iter()
+                    .any(|edge| edge.to.as_ref().is_some_and(|to| to.node == Some(slot)));
+                if receives {
+                    return Err(PlanValidationError::EffectlessCallee {
+                        node: node.path.clone(),
+                    });
+                }
+            }
             if spec.contract == "Process" {
                 match spec.attribute("codec") {
                     Some(crate::plan::AttrSetting::Word(word))

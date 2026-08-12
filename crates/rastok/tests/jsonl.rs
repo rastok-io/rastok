@@ -19,7 +19,8 @@ fn drive(source: &str, data: Value) -> (Vec<rastok::runtime::vm::BoundaryOutput>
     let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    let mut world = rastok::connectors::Process::new(&compilation.plan);
+    let mut world =
+        rastok::connectors::Process::try_new(&compilation.plan).expect("the plan binds");
     vm.inject(
         &mut journal,
         InboundSubmission {

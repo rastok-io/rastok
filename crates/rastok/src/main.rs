@@ -94,7 +94,14 @@ fn load(paths: &[String]) -> Result<(Compilation, Sources), ExitCode> {
         .get(app_index)
         .and_then(|path| std::path::Path::new(path).parent())
         .map(std::path::Path::to_path_buf);
-    match rastok::compiler::compile_with_assets(&refs, &Registry::m0(), asset_root.as_deref()) {
+    let registry = match Registry::try_m0() {
+        Ok(registry) => registry,
+        Err(defect) => {
+            eprintln!("error: the standard catalogue is broken: {defect}");
+            std::process::exit(2);
+        }
+    };
+    match rastok::compiler::compile_with_assets(&refs, &registry, asset_root.as_deref()) {
         Ok(compilation) => {
             let warnings = render_all(&compilation.warnings, &sources);
             if !warnings.is_empty() {
@@ -131,7 +138,13 @@ fn run(paths: &[String]) -> ExitCode {
     let version = GraphVersion(1);
     let mut journal = MemJournal::new(version);
     let mut vm = Vm::boot(&compilation.plan, version);
-    let mut world = connectors::Process::new(&compilation.plan);
+    let mut world = match connectors::Process::try_new(&compilation.plan) {
+        Ok(world) => world,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let authority = match node::Path::new(["cli"]) {
         Ok(path) => path,
         Err(_) => return ExitCode::FAILURE,

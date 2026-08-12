@@ -565,9 +565,16 @@ impl<'plan> Vm<'plan> {
             let NodeKind::Connector(spec) = &planned.kind else {
                 unreachable!("budgets arm connectors only")
             };
-            let effect = match spec.effect {
-                node::Effect::Class(class) => class,
-                node::Effect::None => unreachable!("an effectless connector opens no calls"),
+            // Validation refuses an effectless callee
+            // (`EffectlessCallee`); this is the typed belt behind
+            // that door, never a panic.
+            let node::Effect::Class(effect) = spec.effect else {
+                return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
+                    alloc::format!(
+                        "`{}` opens a call without an effect class — a validated plan cannot",
+                        planned.path
+                    ),
+                )));
             };
             match crate::boundary::prepare_request(
                 crate::boundary::RequestCodec::of(spec),
@@ -834,11 +841,15 @@ impl<'plan> Vm<'plan> {
         let NodeKind::Connector(spec) = &planned.kind else {
             unreachable!("routed here by kind");
         };
-        let effect = match spec.effect {
-            node::Effect::Class(class) => class,
-            node::Effect::None => {
-                unreachable!("an effectless connector opens no calls")
-            }
+        // The typed belt behind the validator's `EffectlessCallee`
+        // door — never a panic.
+        let node::Effect::Class(effect) = spec.effect else {
+            return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
+                alloc::format!(
+                    "`{}` opens a call without an effect class — a validated plan cannot",
+                    planned.path
+                ),
+            )));
         };
         let emitting_id = delivery.envelope.meta().sys().id();
         // The machine prepares ONCE, in the boundary vocabulary: the

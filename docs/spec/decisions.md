@@ -56,8 +56,9 @@ and every attribute carries a `Presence`
 (`Required | Optional | Defaulted(DefaultValue)`) and a
 `ValueDomain` (`Choice | Text | TextList | Duration | ByteSize`
 implemented — `ByteSize` added in the review round: a declared size
-is `<digits><unit>` with unit ∈ `B | KiB | MiB | GiB`, surrounding
-whitespace tolerated, an explicit unit required, at most 4 GiB
+is `<digits><unit>` with unit ∈ `B | KiB | MiB | GiB`, ASCII
+whitespace tolerated around the size and between digits and unit,
+an explicit unit required, at most 4 GiB
 (target-independent: the parse is `u64` on every machine, and the
 adapter compares lengths in `u64` — what validates is what
 executes); `CelPath`, `Struct`, `Map` declared and admitted only

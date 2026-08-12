@@ -55,6 +55,10 @@ enum ProcessSettingsError {
     UnknownCodec(String),
     /// `max_output` is not a declared byte size.
     NotASize(String),
+    /// A budget this HOST cannot buffer (`usize` narrower than the
+    /// declared size) — target-independent validation, host-capacity
+    /// binding.
+    HostCapacity(u64),
     /// `timeout` is not a duration.
     TimeoutNotDuration,
 }
@@ -68,8 +72,8 @@ impl core::fmt::Display for ProcessSettingsError {
             ),
             Self::Unresolved(name) => write!(
                 f,
-                "the plan violates the Process contract: `{name}` is unresolved (a Defaulted \
-                 attribute must travel in the plan)"
+                "the plan violates the Process contract: `{name}` is missing from the \
+                 travelling sheet (the compiler resolves every attribute before a plan leaves)"
             ),
             Self::UnknownMode(word) => {
                 write!(f, "the `{word}` mode has no adapter in this build")
@@ -90,6 +94,10 @@ impl core::fmt::Display for ProcessSettingsError {
                 "`{word}` is outside the codec dispatch domain (lines | jsonl)"
             ),
             Self::NotASize(text) => write!(f, "max_output `{text}` is not a size"),
+            Self::HostCapacity(size) => write!(
+                f,
+                "this host cannot buffer a {size}-byte budget (its address width is narrower)"
+            ),
             Self::TimeoutNotDuration => write!(f, "the timeout attribute is not a duration"),
         }
     }
@@ -143,7 +151,16 @@ impl ProcessSettings {
         let max_output = match spec.attribute("max_output") {
             Some(AttrSetting::Value(cel::Value::Text(text))) => {
                 match crate::contract::byte_size(text) {
-                    Some(size) => size,
+                    Some(size) => {
+                        // The SYNTAX bound is target-independent
+                        // (contract::MAX_BYTE_SIZE); whether THIS
+                        // host can buffer the budget is the
+                        // adapter's binding question.
+                        if usize::try_from(size).is_err() {
+                            return Err(E::HostCapacity(size));
+                        }
+                        size
+                    }
                     None => return Err(E::NotASize(text.clone())),
                 }
             }
@@ -180,10 +197,35 @@ impl ProcessSettings {
 /// belong to the service-mode stream machinery.
 #[derive(Debug)]
 pub struct Process<'plan> {
-    plan: &'plan crate::plan::ValidatedExecutionPlan,
+    /// The borrow anchoring this world to its VALIDATED plan for
+    /// the whole run — the settings below were resolved from it at
+    /// binding, and the proof may not be dropped or replaced while
+    /// children fly.
+    _plan: &'plan crate::plan::ValidatedExecutionPlan,
+    /// Every Process connector's settings, resolved ONCE at binding
+    /// — before any journaled open, so a configuration defect is a
+    /// bind error, never a `SpawnFailed` impersonating the OS.
+    settings: std::collections::BTreeMap<crate::node::Path, ProcessSettings>,
     runs: Vec<Run>,
     answers: Vec<Response>,
 }
+
+/// Why a plan cannot BIND to the Process adapter — surfaced at
+/// construction, before the machine opens anything.
+#[derive(Debug)]
+pub struct ProcessBindError {
+    /// The refusing connector.
+    pub node: crate::node::Path,
+    reason: ProcessSettingsError,
+}
+
+impl core::fmt::Display for ProcessBindError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "`{}` cannot bind: {}", self.node, self.reason)
+    }
+}
+
+impl std::error::Error for ProcessBindError {}
 
 /// One in-flight child.
 #[derive(Debug)]
@@ -194,6 +236,11 @@ struct Run {
     chunks: std::sync::mpsc::Receiver<Chunk>,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
+    /// Bytes SEEN on each stream, in u64 — the budget judge, so the
+    /// buffers never hold a byte past the cap and a 32-bit host
+    /// never allocates toward a bound its `Vec` cannot express.
+    observed_out: u64,
+    observed_err: u64,
     max_output: u64,
     overflowed: bool,
     out_eof: bool,
@@ -214,41 +261,53 @@ enum Chunk {
 }
 
 impl<'plan> Process<'plan> {
-    /// An adapter serving every `Process` connector of one plan —
-    /// a VALIDATED one: the adapter never runs a plan whose
-    /// structural invariants nobody proved (D-2026-08-12-1, review
-    /// round).
-    #[must_use]
-    pub fn new(plan: &'plan crate::plan::ValidatedExecutionPlan) -> Self {
-        Self {
-            plan,
+    /// Binds an adapter to every `Process` connector of one
+    /// VALIDATED plan, resolving all settings up front: a
+    /// configuration defect refuses HERE — before any journaled
+    /// open — and `SpawnFailed` is reserved for the OS actually
+    /// refusing a launch (D-2026-08-12-1, review rounds).
+    ///
+    /// # Errors
+    ///
+    /// The first connector that cannot bind, with its typed reason
+    /// (another contract entirely, an unresolved attribute, a value
+    /// outside its domain, or a budget this host cannot buffer).
+    pub fn try_new(
+        plan: &'plan crate::plan::ValidatedExecutionPlan,
+    ) -> Result<Self, ProcessBindError> {
+        let mut settings = std::collections::BTreeMap::new();
+        for node in &plan.plan().nodes {
+            if let NodeKind::Connector(spec) = &node.kind {
+                match ProcessSettings::try_from(spec) {
+                    Ok(resolved) => {
+                        settings.insert(node.path.clone(), resolved);
+                    }
+                    Err(reason) => {
+                        return Err(ProcessBindError {
+                            node: node.path.clone(),
+                            reason,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            _plan: plan,
+            settings,
             runs: Vec::new(),
             answers: Vec::new(),
-        }
+        })
     }
 
     fn launch(&mut self, intent: &Intent, request: &Envelope) -> Result<Run, CallOutcome> {
-        let Some(spec) = self
-            .plan
-            .nodes
-            .iter()
-            .find(|node| node.path == intent.connector_path)
-            .and_then(|node| match &node.kind {
-                NodeKind::Connector(spec) => Some(spec),
-                NodeKind::Operator => None,
-            })
-        else {
+        // Settings were resolved ONCE at binding; an unknown path
+        // here is an integrity breach of the intent, not a config
+        // fault.
+        let Some(settings) = self.settings.get(&intent.connector_path) else {
             return Err(failure(
                 "SpawnFailed",
                 "the intent names no planned connector".to_string(),
             ));
-        };
-        // ONE pure conversion judges the whole travelling sheet
-        // before any effect; a refusal here is a violated invariant,
-        // typed, never a silent re-default.
-        let settings = match ProcessSettings::try_from(spec) {
-            Ok(settings) => settings,
-            Err(error) => return Err(failure("SpawnFailed", error.to_string())),
         };
         // The machine prepared and sealed the bytes; the adapter
         // TRANSPORTS them — recomputing would reopen the gap between
@@ -307,6 +366,8 @@ impl<'plan> Process<'plan> {
             chunks,
             stdout: Vec::new(),
             stderr: Vec::new(),
+            observed_out: 0,
+            observed_err: 0,
             max_output: settings.max_output,
             overflowed: false,
             out_eof: false,
@@ -361,21 +422,27 @@ fn pump_pipe<P: Read>(
 }
 
 impl Run {
-    /// Drains arrived chunks, checking the cap per chunk; past the
-    /// cap nothing more is stored — the bound is enforced at intake.
+    /// Drains arrived chunks. The budget is judged in u64 BEFORE any
+    /// byte is stored: the chunk that would cross the cap is never
+    /// appended (no allocation toward an inexpressible bound on a
+    /// 32-bit host), and stderr obeys the same discipline — it
+    /// cannot exceed the cap by a chunk.
     fn collect(&mut self) -> bool {
         for chunk in self.chunks.try_iter() {
             match chunk {
                 Chunk::Out(bytes) => {
+                    self.observed_out = self.observed_out.saturating_add(bytes.len() as u64);
                     if !self.overflowed {
-                        self.stdout.extend_from_slice(&bytes);
-                        if self.stdout.len() as u64 > self.max_output {
+                        if self.observed_out > self.max_output {
                             self.overflowed = true;
+                        } else {
+                            self.stdout.extend_from_slice(&bytes);
                         }
                     }
                 }
                 Chunk::Err(bytes) => {
-                    if (self.stderr.len() as u64) < self.max_output {
+                    self.observed_err = self.observed_err.saturating_add(bytes.len() as u64);
+                    if self.observed_err <= self.max_output {
                         self.stderr.extend_from_slice(&bytes);
                     }
                 }
@@ -402,7 +469,7 @@ impl Run {
             payload.insert(
                 String::from("size"),
                 Value::Scalar(Scalar::Int(
-                    i64::try_from(self.stdout.len()).unwrap_or(i64::MAX),
+                    i64::try_from(self.observed_out).unwrap_or(i64::MAX),
                 )),
             );
             CallOutcome::Failure(TypedError {
@@ -516,7 +583,7 @@ impl Partner for Process<'_> {
                 payload.insert(
                     String::from("size"),
                     Value::Scalar(Scalar::Int(
-                        i64::try_from(run.stdout.len()).unwrap_or(i64::MAX),
+                        i64::try_from(run.observed_out).unwrap_or(i64::MAX),
                     )),
                 );
                 answers.push(Response {
@@ -642,7 +709,7 @@ graph real : App {
         let compilation = compile(&[source], &Registry::m0()).expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-        let mut world = Process::new(&compilation.plan);
+        let mut world = Process::try_new(&compilation.plan).expect("the plan binds");
         vm.inject(&mut journal, submission(text)).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {

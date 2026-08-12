@@ -1,3 +1,6 @@
+// A test harness drives the OS on purpose; the frontier lints
+// guard the core modules, not the evidence.
+#![allow(clippy::expect_used)]
 //! `Process` re-expressed on the conformance harness: the profile is
 //! the whole suite — probes, provocations, and the stated gap — and
 //! the battery holds the adapter to the ten contract cases. A second
@@ -150,7 +153,7 @@ struct ProcessFactory;
 
 impl AdapterFactory for ProcessFactory {
     fn make<'plan>(&mut self, plan: &'plan ValidatedExecutionPlan) -> Box<dyn Partner + 'plan> {
-        Box::new(Process::new(plan))
+        Box::new(Process::try_new(plan).expect("the plan binds"))
     }
 }
 

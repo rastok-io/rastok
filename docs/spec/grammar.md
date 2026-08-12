@@ -1253,8 +1253,16 @@ explicitly restated **once**, in its implicit direction, and the
 restatement never enters the serialized table; a second explicit
 declaration, or a contradictory direction, is `E-PORT-CONFLICT`
 (D-2026-08-08-1).
-A user-defined identifier may not collide with `DECL_KW`, `TYPE_KW`,
-`TAG_KW` or `LITERAL_KW`. Concrete NodeType names such as `HttpServer`,
+A user-defined identifier may not collide with `DECL_KW`, `TYPE_KW`
+or `LITERAL_KW`. `TAG_KW` words are reserved only WHEN THE FORM makes
+them tags — followed by `(` or `{`, or (for `json`) by a same-line
+JSON value; the word ALONE is an ordinary bare word the contract
+judges (`codec = json` is a choice word, D-2026-08-12-1). Three
+sub-categories exist within `TAG_KW`: the special value tags
+(`text`, `base64`, `json`, `asset` — each with its own reader), the
+foreign/guest tags (`jq`, `bash`, `sql`, `python`, `rust`, and the
+data formats), and the expression-space constructors (`bounded`,
+`unbounded`, `regex`). Concrete NodeType names such as `HttpServer`,
 `Process` and `Postgres` are ordinary PascalCase identifiers resolved
 later by the stdlib registry, not lexer keywords.
 
@@ -1658,9 +1666,9 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | TAG_KW / `{` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
 | `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
-| `value` | TAG_KW — next is `(` or `{` | `tagged_value` (a dead-initializer tag refuses with its migration) |
-| `value` | TAG_KW — word alone | CEL expression / bare word, judged by the contract |
-| `value` | `text` / `base64` / `json` / `asset` | `tagged_block_value` (verbatim / bytes / json_value / build-time bytes) |
+| `value` | special value tag (`text`/`base64`/`json`/`asset`) — its form follows (`{`, `(`, or a same-line JSON value for `json`) | `tagged_block_value` (verbatim / bytes / json_value / build-time bytes) |
+| `value` | other TAG_KW — next is `(` or `{` | `tagged_value` (a dead-initializer tag refuses with its migration) |
+| `value` | any TAG_KW — word alone | CEL expression / bare word, judged by the contract |
 | `value` | `{` — then `}` / `:` / STRING / IDENT | `braced_value` : empty struct / empty map / map_entries / struct_entries |
 | `value` | `.` (envelope position) | identity — exact re-emission |
 | `value` | `nothing` (emission position) | no-emit |

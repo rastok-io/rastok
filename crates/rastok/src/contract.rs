@@ -236,14 +236,16 @@ pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
 /// is a size the runtime enforces, on every target width.
 #[must_use]
 pub fn byte_size(text: &str) -> Option<u64> {
-    let text = text.trim();
+    // ASCII whitespace exactly — the normative rule is byte-level
+    // deterministic, no Unicode class in sight.
+    let text = text.trim_matches(|c: char| c.is_ascii_whitespace());
     let split = text.find(|c: char| !c.is_ascii_digit())?;
     let (digits, suffix) = text.split_at(split);
     if digits.is_empty() {
         return None;
     }
     let base: u64 = digits.parse().ok()?;
-    let factor: u64 = match suffix.trim() {
+    let factor: u64 = match suffix.trim_matches(|c: char| c.is_ascii_whitespace()) {
         "B" => 1,
         "KiB" => 1024,
         "MiB" => 1024 * 1024,
