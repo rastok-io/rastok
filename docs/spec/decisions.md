@@ -54,9 +54,14 @@ node declaration resolves a contract, the contract may select a
 PROFILE through one attribute (`Process`: `mode`, default `job`),
 and every attribute carries a `Presence`
 (`Required | Optional | Defaulted(DefaultValue)`) and a
-`ValueDomain` (`Choice | Text | TextList | Duration` implemented;
-`CelPath`, `Struct`, `Map` declared and admitted only behind a
-DEFERRED profile). `Defaulted` absence is sugar: the checker
+`ValueDomain` (`Choice | Text | TextList | Duration | ByteSize`
+implemented — `ByteSize` added in the review round: a declared size
+is `<digits><unit>` with unit ∈ `B | KiB | MiB | GiB`, surrounding
+whitespace tolerated, an explicit unit required, at most 4 GiB
+(target-independent: the parse is `u64` on every machine, and the
+adapter compares lengths in `u64` — what validates is what
+executes); `CelPath`, `Struct`, `Map` declared and admitted only
+behind a DEFERRED profile). `Defaulted` absence is sugar: the checker
 injects the contract's default — a `Choice` word directly, a CEL
 default through the SAME chain as author expressions (compile →
 const-eval → domain judgement) — into the HIR BEFORE

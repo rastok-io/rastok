@@ -148,6 +148,21 @@ impl Registry {
     /// and the guest languages with no available frontend.
     #[must_use]
     pub fn m0() -> Self {
+        // A standard-sheet defect is a broken BUILD, pinned by the
+        // suite (`the_process_sheet_holds_its_own_door`); the panic
+        // cannot fire in a released binary. Callers who want the
+        // fallible door use [`Registry::try_m0`].
+        Self::try_m0().unwrap_or_else(|defect| unreachable!("the standard sheet holds: {defect}"))
+    }
+
+    /// The M0 registry through its fallible door — the same
+    /// validation any extension walks.
+    ///
+    /// # Errors
+    ///
+    /// The first [`crate::contract::SheetDefect`] of the standard
+    /// catalogue.
+    pub fn try_m0() -> Result<Self, crate::contract::SheetDefect> {
         let base = Self {
             connectors: Vec::new(),
             declared: DECLARED.to_vec(),
@@ -163,10 +178,8 @@ impl Registry {
             ],
         };
         // The standard catalogue walks through the SAME door as any
-        // extension: a defect in a standard sheet is a build bug,
-        // surfaced at construction — never an unvalidated authority.
+        // extension — never an unvalidated authority.
         base.try_with(PROCESS)
-            .unwrap_or_else(|defect| unreachable!("the standard sheet holds: {defect}"))
     }
 }
 

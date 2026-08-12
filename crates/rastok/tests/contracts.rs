@@ -741,6 +741,113 @@ fn a_nested_block_entry_names_its_migration() {
 }
 
 #[test]
+fn byte_size_is_target_independent_and_bounded() {
+    use rastok::contract::{MAX_BYTE_SIZE, byte_size};
+    assert_eq!(byte_size("4294967295B"), Some(u64::from(u32::MAX)));
+    assert_eq!(
+        byte_size("4294967296B"),
+        Some(4 * 1024 * 1024 * 1024),
+        "u32::MAX + 1 fits — the parse is u64 on EVERY machine"
+    );
+    assert_eq!(byte_size("4GiB"), Some(MAX_BYTE_SIZE), "the bound itself");
+    assert_eq!(byte_size("4294967297B"), None, "one beyond refuses");
+    assert_eq!(byte_size("5GiB"), None);
+    assert_eq!(
+        byte_size("999999999999999999999GiB"),
+        None,
+        "overflow refuses, never wraps"
+    );
+    assert_eq!(
+        byte_size("8 MiB"),
+        Some(8 * 1024 * 1024),
+        "interior space tolerated"
+    );
+    assert_eq!(byte_size("0B"), Some(0), "a zero budget is declarable");
+}
+
+#[test]
+fn the_adapter_refuses_another_contract_and_unknown_codecs() {
+    // The Process boundary is structural: another contract's spec —
+    // even one carrying identical attributes — refuses by NAME, and
+    // an unknown codec word never falls back to lines.
+    let (kind, message) = run_mutated(|spec| {
+        spec.contract = String::from("Custom");
+    });
+    assert_eq!(kind, "SpawnFailed");
+    assert!(message.contains("`Custom` connector"), "{message}");
+    // An unknown codec cannot even reach the adapter: the plan
+    // validator refuses it first (the adapter's own exhaustive
+    // match is the belt BEHIND that door, not a second authority).
+    let compilation = compile_one(&process_graph(FULL)).expect("valid");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            for (name, setting) in &mut spec.attributes {
+                if name == "codec" {
+                    *setting = rastok::plan::AttrSetting::Word(String::from("bogus"));
+                }
+            }
+        }
+    }
+    assert!(
+        matches!(
+            rastok::plan::ValidatedExecutionPlan::try_from(plan),
+            Err(rastok::plan::PlanValidationError::UnknownCodec { .. })
+        ),
+        "the validator speaks before the adapter ever could"
+    );
+}
+
+#[test]
+fn an_unsatisfiable_sheet_never_enters_the_registry() {
+    // An empty choice, a selector with no profile, a `nothing`
+    // choice word, an inexpressible contract name — each refuses at
+    // the door.
+    const EMPTY: &[AttributeSpec] = &[AttributeSpec {
+        name: "x",
+        presence: Presence::Optional,
+        domain: ValueDomain::Choice(&[]),
+    }];
+    assert_eq!(
+        Registry::m0().try_with(sheet(EMPTY, None)).unwrap_err(),
+        SheetDefect::EmptyChoice("x")
+    );
+    const NOBODY: ProfileSelector = ProfileSelector {
+        attribute: "mode",
+        default: None,
+        profiles: &[],
+    };
+    assert_eq!(
+        Registry::m0()
+            .try_with(sheet(&[], Some(NOBODY)))
+            .unwrap_err(),
+        SheetDefect::NoProfiles("mode")
+    );
+    const SENTINEL: &[AttributeSpec] = &[AttributeSpec {
+        name: "x",
+        presence: Presence::Optional,
+        domain: ValueDomain::Choice(&["nothing"]),
+    }];
+    assert_eq!(
+        Registry::m0().try_with(sheet(SENTINEL, None)).unwrap_err(),
+        SheetDefect::InexpressibleName("nothing"),
+        "the parser turns `nothing` into the no-emission sentinel"
+    );
+    let unnameable = ConnectorContract {
+        name: "Not A Name",
+        input_ports: &["in"],
+        output_ports: &["out", "err"],
+        common: &[],
+        selector: None,
+        error_set: &[],
+    };
+    assert_eq!(
+        Registry::m0().try_with(unnameable).unwrap_err(),
+        SheetDefect::InexpressibleName("Not A Name")
+    );
+}
+
+#[test]
 fn gauge_without_a_connector_is_immobile() {
     // The witness that the identity move is SCOPED: no connector,
     // no injected attribute, no movement.

@@ -34,7 +34,7 @@ use crate::contract::{ConnectorContract, Registry};
 use crate::envelope::{Data, Namespace, Scalar, Value};
 use crate::journal::{Closure, MemJournal, OutboundStatus, Record};
 use crate::node;
-use crate::plan::{ExecutionPlan, GraphVersion};
+use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::Vm;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// generic method carries that lifetime cleanly.
 pub trait AdapterFactory {
     /// A fresh adapter for one compiled probe.
-    fn make<'plan>(&mut self, plan: &'plan ExecutionPlan) -> Box<dyn Partner + 'plan>;
+    fn make<'plan>(&mut self, plan: &'plan ValidatedExecutionPlan) -> Box<dyn Partner + 'plan>;
 }
 
 /// One way to force one declared error kind out of the adapter.

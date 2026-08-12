@@ -163,7 +163,7 @@ pub enum DefaultValue {
 
 /// The value domain of a contract attribute.
 ///
-/// The first four are implemented; the rest are DECLARED for
+/// The first five are implemented; the rest are DECLARED for
 /// deferred profiles (the sheet says exactly what it knows) and
 /// admitted only behind [`ProfileSupport::Deferred`] —
 /// [`validate_sheet`] holds that line.
@@ -223,27 +223,35 @@ impl ValueDomain {
     }
 }
 
+/// The normative ceiling of a declared byte size: 4 GiB, inclusive
+/// — target-independent, so the same source validates identically
+/// on every machine (a 32-bit host compares lengths in `u64` and
+/// never allocates the bound up front).
+pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+
 /// Reads a declared byte size (`"8MiB"`, `"512KiB"`, `"100B"`) — an
-/// explicit unit is required. The ONE rule shared by the contract's
-/// domain judgement and the adapter's budget: a size the checker
-/// accepted is a size the runtime enforces.
+/// explicit unit is required, and the result is bounded by
+/// [`MAX_BYTE_SIZE`]. The ONE rule shared by the contract's domain
+/// judgement and the adapter's budget: a size the checker accepted
+/// is a size the runtime enforces, on every target width.
 #[must_use]
-pub fn byte_size(text: &str) -> Option<usize> {
+pub fn byte_size(text: &str) -> Option<u64> {
     let text = text.trim();
     let split = text.find(|c: char| !c.is_ascii_digit())?;
     let (digits, suffix) = text.split_at(split);
     if digits.is_empty() {
         return None;
     }
-    let base: usize = digits.parse().ok()?;
-    let factor = match suffix.trim() {
+    let base: u64 = digits.parse().ok()?;
+    let factor: u64 = match suffix.trim() {
         "B" => 1,
         "KiB" => 1024,
         "MiB" => 1024 * 1024,
         "GiB" => 1024 * 1024 * 1024,
         _ => return None,
     };
-    base.checked_mul(factor)
+    let size = base.checked_mul(factor)?;
+    (size <= MAX_BYTE_SIZE).then_some(size)
 }
 
 /// Why a contract sheet cannot enter the registry — the sheet is an
@@ -273,6 +281,11 @@ pub enum SheetDefect {
     SelectorCollision(&'static str),
     /// A `Choice` domain lists one word twice.
     DuplicateChoice(&'static str),
+    /// A `Choice` domain with no word at all — an attribute nobody
+    /// could ever write.
+    EmptyChoice(&'static str),
+    /// A selector with no profile — nothing to select.
+    NoProfiles(&'static str),
     /// A sheet name (port, attribute, selector, profile word,
     /// choice word, or error kind) the DSL cannot express.
     InexpressibleName(&'static str),
@@ -313,6 +326,15 @@ impl core::fmt::Display for SheetDefect {
             Self::DuplicateChoice(name) => {
                 write!(f, "`{name}`'s choice domain lists one word twice")
             }
+            Self::EmptyChoice(name) => {
+                write!(
+                    f,
+                    "`{name}`'s choice domain is empty — nothing could satisfy it"
+                )
+            }
+            Self::NoProfiles(attribute) => {
+                write!(f, "the `{attribute}` selector has no profile to select")
+            }
             Self::InexpressibleName(name) => {
                 write!(
                     f,
@@ -337,12 +359,16 @@ impl std::error::Error for SheetDefect {}
 /// profile words, choice words and error kinds must all satisfy: an
 /// admitted sheet is an authority, so nothing inexpressible enters.
 fn expressible_name(text: &str) -> bool {
+    // `nothing` is excluded with the literals: the parser turns it
+    // into the no-emission sentinel, so it can never reach an
+    // `AttrValue::Word`. (Finer per-position grammars — contract
+    // name vs attribute vs choice word — come with real cases.)
     !text.is_empty()
         && text
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         && !text.as_bytes()[0].is_ascii_digit()
-        && !matches!(text, "true" | "false" | "null")
+        && !matches!(text, "true" | "false" | "null" | "nothing")
 }
 
 /// Judges one default against its spec — compiling a CEL default
@@ -399,6 +425,9 @@ fn validate_attributes(
             return Err(SheetDefect::DuplicateAttribute(spec.name));
         }
         if let ValueDomain::Choice(words) = &spec.domain {
+            if words.is_empty() {
+                return Err(SheetDefect::EmptyChoice(spec.name));
+            }
             let mut unique = std::collections::BTreeSet::new();
             for word in *words {
                 if !expressible_name(word) {
@@ -430,6 +459,9 @@ fn validate_attributes(
 
 /// Holds a sheet to the rules the checker will assume forever after.
 pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
+    if !expressible_name(contract.name) {
+        return Err(SheetDefect::InexpressibleName(contract.name));
+    }
     let mut seen = std::collections::BTreeSet::new();
     for (name, direction) in contract
         .input_ports
@@ -467,6 +499,9 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
     if let Some(selector) = &contract.selector {
         if !expressible_name(selector.attribute) {
             return Err(SheetDefect::InexpressibleName(selector.attribute));
+        }
+        if selector.profiles.is_empty() {
+            return Err(SheetDefect::NoProfiles(selector.attribute));
         }
         if names.contains(selector.attribute) {
             return Err(SheetDefect::SelectorCollision(selector.attribute));

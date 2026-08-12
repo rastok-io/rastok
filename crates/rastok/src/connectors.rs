@@ -13,54 +13,106 @@
 use crate::boundary::{CallOutcome, Intent, Partner, Response, TypedError};
 use crate::cel;
 use crate::envelope::{Data, Envelope, Scalar, Value};
-use crate::plan::{AttrSetting, ExecutionPlan, NodeKind};
+use crate::plan::{AttrSetting, NodeKind};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-/// The default stdout cap for a job run, per the contract sheet's
 /// The job profile's RESOLVED settings — one pure conversion from
 /// the travelling spec, judged in full BEFORE any effect
-/// (D-2026-08-12-1, review round): every Defaulted attribute must
-/// be present (the checker injected it; absence is a violated
-/// invariant), every value must inhabit its domain, and nothing is
-/// silently dropped or re-defaulted. The adapter consumes THIS,
-/// never the raw attribute table.
+/// (D-2026-08-12-1, review rounds): the contract must be `Process`,
+/// every Defaulted attribute must be present (the checker injected
+/// it; absence is a violated invariant), every value must inhabit
+/// its domain — the codec exhaustively, with NO fallback — and
+/// nothing is silently dropped or re-defaulted. The adapter
+/// consumes THIS, never the raw attribute table.
 #[derive(Debug)]
 struct ProcessSettings {
     command: String,
     args: Vec<String>,
     codec: crate::boundary::RequestCodec,
-    max_output: usize,
+    max_output: u64,
+}
+
+/// A violated `Process` invariant — typed, so the refusal names the
+/// exact door instead of concatenating prose at the fault site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProcessSettingsError {
+    /// The spec belongs to another contract entirely.
+    NotProcess(String),
+    /// A Defaulted attribute did not travel in the plan.
+    Unresolved(&'static str),
+    /// A mode this build has no adapter for.
+    UnknownMode(String),
+    /// `on_timeout` is fixed to `kill` on a job.
+    OnTimeoutNotKill,
+    /// The command is not text.
+    CommandNotText,
+    /// An argument is not text — nothing is dropped silently.
+    ArgNotText(String),
+    /// A codec word outside the dispatch domain.
+    UnknownCodec(String),
+    /// `max_output` is not a declared byte size.
+    NotASize(String),
+    /// `timeout` is not a duration.
+    TimeoutNotDuration,
+}
+
+impl core::fmt::Display for ProcessSettingsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NotProcess(contract) => write!(
+                f,
+                "the plan hands a `{contract}` connector to the Process adapter"
+            ),
+            Self::Unresolved(name) => write!(
+                f,
+                "the plan violates the Process contract: `{name}` is unresolved (a Defaulted \
+                 attribute must travel in the plan)"
+            ),
+            Self::UnknownMode(word) => {
+                write!(f, "the `{word}` mode has no adapter in this build")
+            }
+            Self::OnTimeoutNotKill => {
+                write!(
+                    f,
+                    "`on_timeout` is fixed to `kill` for `Process(mode = job)`"
+                )
+            }
+            Self::CommandNotText => write!(f, "the command attribute is not text"),
+            Self::ArgNotText(value) => write!(
+                f,
+                "an argument is not text: {value} — nothing is dropped silently"
+            ),
+            Self::UnknownCodec(word) => write!(
+                f,
+                "`{word}` is outside the codec dispatch domain (lines | jsonl)"
+            ),
+            Self::NotASize(text) => write!(f, "max_output `{text}` is not a size"),
+            Self::TimeoutNotDuration => write!(f, "the timeout attribute is not a duration"),
+        }
+    }
 }
 
 impl ProcessSettings {
-    fn try_from(spec: &rastok_core::plan::ConnectorSpec) -> Result<Self, String> {
-        let unresolved = |name: &str| {
-            format!(
-                "the plan violates the Process contract: `{name}` is unresolved \
-                 (a Defaulted attribute must travel in the plan)"
-            )
-        };
+    fn try_from(spec: &rastok_core::plan::ConnectorSpec) -> Result<Self, ProcessSettingsError> {
+        use ProcessSettingsError as E;
+        if spec.contract != "Process" {
+            return Err(E::NotProcess(spec.contract.clone()));
+        }
         match spec.attribute("mode") {
             Some(AttrSetting::Word(word)) if word == "job" => {}
-            Some(AttrSetting::Word(word)) => {
-                return Err(format!("the `{word}` mode has no adapter in this build"));
-            }
-            _ => return Err(unresolved("mode")),
+            Some(AttrSetting::Word(word)) => return Err(E::UnknownMode(word.clone())),
+            _ => return Err(E::Unresolved("mode")),
         }
         match spec.attribute("on_timeout") {
             Some(AttrSetting::Word(word)) if word == "kill" => {}
-            Some(_) => {
-                return Err(String::from(
-                    "`on_timeout` is fixed to `kill` for `Process(mode = job)`",
-                ));
-            }
-            None => return Err(unresolved("on_timeout")),
+            Some(_) => return Err(E::OnTimeoutNotKill),
+            None => return Err(E::Unresolved("on_timeout")),
         }
         let Some(AttrSetting::Value(cel::Value::Text(command))) = spec.attribute("command") else {
-            return Err(String::from("the command attribute is not text"));
+            return Err(E::CommandNotText);
         };
         let args = match spec.attribute("args") {
             Some(AttrSetting::Value(cel::Value::List(items))) => {
@@ -68,36 +120,44 @@ impl ProcessSettings {
                 for item in items {
                     match item {
                         cel::Value::Text(text) => args.push(text.clone()),
-                        other => {
-                            return Err(format!(
-                                "an argument is not text: {other:?} — nothing is dropped \
-                                 silently"
-                            ));
-                        }
+                        other => return Err(E::ArgNotText(format!("{other:?}"))),
                     }
                 }
                 args
             }
-            _ => return Err(unresolved("args")),
+            _ => return Err(E::Unresolved("args")),
+        };
+        // EXHAUSTIVE: the adapter never re-interprets an unknown or
+        // missing codec as `lines` — the fallback lives nowhere on
+        // this path.
+        let codec = match spec.attribute("codec") {
+            Some(AttrSetting::Word(word)) if word == "lines" => {
+                crate::boundary::RequestCodec::Lines
+            }
+            Some(AttrSetting::Word(word)) if word == "jsonl" => {
+                crate::boundary::RequestCodec::Jsonl
+            }
+            Some(AttrSetting::Word(word)) => return Err(E::UnknownCodec(word.clone())),
+            _ => return Err(E::Unresolved("codec")),
         };
         let max_output = match spec.attribute("max_output") {
             Some(AttrSetting::Value(cel::Value::Text(text))) => {
                 match crate::contract::byte_size(text) {
                     Some(size) => size,
-                    None => return Err(format!("max_output `{text}` is not a size")),
+                    None => return Err(E::NotASize(text.clone())),
                 }
             }
-            _ => return Err(unresolved("max_output")),
+            _ => return Err(E::Unresolved("max_output")),
         };
         if let Some(setting) = spec.attribute("timeout")
             && !matches!(setting, AttrSetting::Value(cel::Value::Duration(_)))
         {
-            return Err(String::from("the timeout attribute is not a duration"));
+            return Err(E::TimeoutNotDuration);
         }
         Ok(Self {
             command: command.clone(),
             args,
-            codec: crate::boundary::RequestCodec::of(spec),
+            codec,
             max_output,
         })
     }
@@ -120,7 +180,7 @@ impl ProcessSettings {
 /// belong to the service-mode stream machinery.
 #[derive(Debug)]
 pub struct Process<'plan> {
-    plan: &'plan ExecutionPlan,
+    plan: &'plan crate::plan::ValidatedExecutionPlan,
     runs: Vec<Run>,
     answers: Vec<Response>,
 }
@@ -134,7 +194,7 @@ struct Run {
     chunks: std::sync::mpsc::Receiver<Chunk>,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
-    max_output: usize,
+    max_output: u64,
     overflowed: bool,
     out_eof: bool,
     err_eof: bool,
@@ -154,9 +214,12 @@ enum Chunk {
 }
 
 impl<'plan> Process<'plan> {
-    /// An adapter serving every `Process` connector of one plan.
+    /// An adapter serving every `Process` connector of one plan —
+    /// a VALIDATED one: the adapter never runs a plan whose
+    /// structural invariants nobody proved (D-2026-08-12-1, review
+    /// round).
     #[must_use]
-    pub fn new(plan: &'plan ExecutionPlan) -> Self {
+    pub fn new(plan: &'plan crate::plan::ValidatedExecutionPlan) -> Self {
         Self {
             plan,
             runs: Vec::new(),
@@ -185,7 +248,7 @@ impl<'plan> Process<'plan> {
         // typed, never a silent re-default.
         let settings = match ProcessSettings::try_from(spec) {
             Ok(settings) => settings,
-            Err(message) => return Err(failure("SpawnFailed", message)),
+            Err(error) => return Err(failure("SpawnFailed", error.to_string())),
         };
         // The machine prepared and sealed the bytes; the adapter
         // TRANSPORTS them — recomputing would reopen the gap between
@@ -306,13 +369,13 @@ impl Run {
                 Chunk::Out(bytes) => {
                     if !self.overflowed {
                         self.stdout.extend_from_slice(&bytes);
-                        if self.stdout.len() > self.max_output {
+                        if self.stdout.len() as u64 > self.max_output {
                             self.overflowed = true;
                         }
                     }
                 }
                 Chunk::Err(bytes) => {
-                    if self.stderr.len() < self.max_output {
+                    if (self.stderr.len() as u64) < self.max_output {
                         self.stderr.extend_from_slice(&bytes);
                     }
                 }

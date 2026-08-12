@@ -14,10 +14,12 @@
 
 `.rkg` — short for "rastok graph". Examples in `docs/*.rkg`.
 
-## Syntax conventions — two forms, no exceptions
+## Syntax conventions — two configuration forms, no exceptions
 
-The DSL uses two syntactic forms and only two (D-2026-08-12-1).
-Every line in an `.rkg` file is one of them.
+Configuration and block declarations use two syntactic forms and
+only two (D-2026-08-12-1). (Edges, `val`/`var` bindings, port and
+type declarations have their own productions below — this rule
+governs how a node is CONFIGURED.)
 
 | Form | Shape | Meaning |
 |---|---|---|
@@ -1656,7 +1658,8 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | TAG_KW / `{` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
 | `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
-| `value` | TAG_KW | `tagged_value` |
+| `value` | TAG_KW — next is `(` or `{` | `tagged_value` (a dead-initializer tag refuses with its migration) |
+| `value` | TAG_KW — word alone | CEL expression / bare word, judged by the contract |
 | `value` | `text` / `base64` / `json` / `asset` | `tagged_block_value` (verbatim / bytes / json_value / build-time bytes) |
 | `value` | `{` — then `}` / `:` / STRING / IDENT | `braced_value` : empty struct / empty map / map_entries / struct_entries |
 | `value` | `.` (envelope position) | identity — exact re-emission |

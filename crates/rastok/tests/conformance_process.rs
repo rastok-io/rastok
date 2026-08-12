@@ -11,7 +11,7 @@ use rastok::conformance::{
 use rastok::connectors::Process;
 use rastok::contract::Registry;
 use rastok::envelope::{Data, Envelope, Value};
-use rastok::plan::ExecutionPlan;
+use rastok::plan::ValidatedExecutionPlan;
 use rastok::stdlib::PROCESS;
 
 const HAPPY: &str = r#"
@@ -149,7 +149,7 @@ graph pair : App {
 struct ProcessFactory;
 
 impl AdapterFactory for ProcessFactory {
-    fn make<'plan>(&mut self, plan: &'plan ExecutionPlan) -> Box<dyn Partner + 'plan> {
+    fn make<'plan>(&mut self, plan: &'plan ValidatedExecutionPlan) -> Box<dyn Partner + 'plan> {
         Box::new(Process::new(plan))
     }
 }
@@ -237,7 +237,7 @@ impl Partner for Liar {
 struct LiarFactory;
 
 impl AdapterFactory for LiarFactory {
-    fn make<'plan>(&mut self, _plan: &'plan ExecutionPlan) -> Box<dyn Partner + 'plan> {
+    fn make<'plan>(&mut self, _plan: &'plan ValidatedExecutionPlan) -> Box<dyn Partner + 'plan> {
         Box::new(Liar {
             pending: Vec::new(),
         })
@@ -299,7 +299,7 @@ impl Partner for Swapper {
 struct SwapperFactory;
 
 impl AdapterFactory for SwapperFactory {
-    fn make<'plan>(&mut self, _plan: &'plan ExecutionPlan) -> Box<dyn Partner + 'plan> {
+    fn make<'plan>(&mut self, _plan: &'plan ValidatedExecutionPlan) -> Box<dyn Partner + 'plan> {
         Box::new(Swapper {
             pending: Vec::new(),
         })
