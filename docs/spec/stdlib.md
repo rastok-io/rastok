@@ -139,7 +139,7 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | effect / behavior | **per-instance, both mandatory** |
 | Attributes | the normative table below (D-2026-08-12-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
 | Correlator | see modes below |
-| Error set | `SpawnFailed`, `DecodeError` (the offending line in payload — never silent), `StderrLine` (stderr output; route it or write `-> nothing`), `TimeoutExpired`, `ExecFailed { exit_code, stderr }` (job), `OutputOverflow { size }` (job), `ProcessExited { exit_code, signal, run_id }` (service: the **terminal** error — terminal BY KIND; its data lives in the typed payload, `meta.sys` stays closed) |
+| Error set | `SpawnFailed`, `DecodeError` (the offending line in payload — never silent), `StderrLine` (stderr output; route it or write `-> nothing`), `TimeoutExpired`, `ExecFailed { exit_code, stderr }` (job), `OutputOverflow { size, stream, reason }` (job — `reason` = declared budget crossed, or the host's capture capacity refused), `ProcessExited { exit_code, signal, run_id }` (service: the **terminal** error — terminal BY KIND; its data lives in the typed payload, `meta.sys` stays closed) |
 | Instances | see modes below |
 | Journal / sim | OUTBOUND records per call (job: per run); spontaneous emissions = INBOUND roots; mocked in scenarios |
 
@@ -173,9 +173,16 @@ one there refuses by NAME (« `restart` belongs to
 lineage)**: one envelope = one spawn. stdin = the request (codec-framed);
 stdout, complete at exit, = **one reply envelope**: `codec =
 lines` → `data = text` (the whole stdout, one blob); `codec = jsonl` →
-`data = array<variant>` (the decoded lines — possibly length 1). The buffer
-is bounded: **`max_output = 8MiB` (default)**; exceeded → typed err
-`OutputOverflow { size }` + the run is killed. exit ≠ 0 / signal →
+`data = array<variant>` (the decoded lines — possibly length 1). The CAPTURE is
+bounded: **`max_output = 8MiB` (default)** is the AGGREGATE budget
+across stdout and stderr (D-2026-08-12-1, review round) — the total
+is judged before any byte is stored, so neither stream ever loses
+bytes silently; crossing it → typed err
+`OutputOverflow { size, stream, reason }` + the run is killed.
+`reason` distinguishes `budget` (the declared cap) from `capacity`
+(the host's capture allocation refused — judged chunk by chunk via
+`try_reserve`; the pump's own bounded 8 KiB chunk copies remain
+ordinary allocations). exit ≠ 0 / signal →
 `ExecFailed`. The **process boundary IS the correlation** — `correlate` is a
 compile error here. `timeout` = the whole-run budget; `on_timeout = kill`
 **forced** (bypassing a detached run is meaningless). `restart` is likewise

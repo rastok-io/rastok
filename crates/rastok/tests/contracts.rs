@@ -474,11 +474,19 @@ fn the_binding_refuses_every_undeclared_adapter_error() {
 }
 
 #[test]
-fn the_binding_serves_process_only_and_unknown_codecs_never_arrive() {
-    // A SPECIALIZED adapter: another contract simply does not bind —
-    // try_new succeeds and the foreign connector is unserved (its
-    // start answers a typed refusal); the global BoundExecutionPlan
-    // world is the named design for the second adapter.
+fn a_callable_foreign_connector_refuses_at_bind() {
+    // The review's blocker: in a single-Partner world, a CALLABLE
+    // connector of another contract would receive its intents at
+    // the Process adapter and strand them open — the binding
+    // refuses it by name. A PURE SOURCE (no incoming edge) is
+    // merely skipped: nothing will ever call it.
+    let message = bind_error(|spec| {
+        spec.contract = String::from("Custom");
+    });
+    assert!(
+        message.contains("callable `Custom` connector has no adapter"),
+        "{message}"
+    );
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
@@ -486,12 +494,18 @@ fn the_binding_serves_process_only_and_unknown_codecs_never_arrive() {
             spec.contract = String::from("Custom");
         }
     }
-    let validated =
-        rastok::plan::ValidatedExecutionPlan::try_from(plan).expect("structurally valid");
-    assert!(
-        rastok::connectors::Process::try_new(&validated).is_ok(),
-        "a foreign contract is skipped, not refused"
-    );
+    // Sever every edge DELIVERING to the connector: a pure source.
+    plan.edges.retain(|edge| {
+        edge.to
+            .as_ref()
+            .is_none_or(|to| to.node != Some(rastok::plan::Slot::new(0)))
+    });
+    if let Ok(validated) = rastok::plan::ValidatedExecutionPlan::try_from(plan) {
+        assert!(
+            rastok::connectors::Process::try_new(&validated).is_ok(),
+            "a pure foreign source binds as a no-op"
+        );
+    }
     // An unknown codec cannot even reach the binding: the plan
     // validator refuses it first (the adapter's exhaustive match is
     // the belt BEHIND that door).

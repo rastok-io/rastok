@@ -1256,9 +1256,9 @@ declaration, or a contradictory direction, is `E-PORT-CONFLICT`
 Reservation is BY POSITION, never a global ban on a spelling
 (D-2026-08-12-1):
 
-- **Declaration positions** (node, port, val/var, partition, type
-  names): `DECL_KW` may not be shadowed; everything else — `TYPE_KW`
-  and `TAG_KW` included — is judged by the position's own grammar.
+- **Declaration positions** (node, port, val/var, partition names):
+  `DECL_KW` may not be shadowed; everything else — `TYPE_KW` and
+  `TAG_KW` included — is judged by the position's own grammar.
 - **Type positions**: `TYPE_KW` words mean their type (`text` names
   the text type there); a user type name may not collide with them.
 - **Attribute names**: any expressible identifier; dots are owner
@@ -1507,10 +1507,13 @@ tagged_block_value ::= "text" RAW_BLOCK                              // verbatim
                     | "json" json_value                               // any JSON value, delegated to the JSON reader — always variant
                     | "asset" "(" STRING ( "," STRING )? ")"          // build-time repo bytes (path, content_type?) — D-2026-08-10-5
                                                                       // array literal : a CEL list expression `[v, v, …]`
-raw_body          ::= /* raw text, lexically opaque — every live tag's body
-                       is raw (guests, text, base64, data formats); the
-                       struct-bodied initializer tags are DEAD
-                       (D-2026-08-12-1) */
+raw_body          ::= /* raw text, lexically opaque. The LIVE raw-bodied
+                       tags are exactly the guests (jq, bash, sql, python,
+                       rust) and the raw literals (text, base64). The data
+                       formats (avro, protobuf, parquet, msgpack, csv) are
+                       RESERVED words with no living form yet — their
+                       bodies defer by name. The struct-bodied initializer
+                       tags are DEAD (D-2026-08-12-1) */
 arg_list          ::= ( value ( "," value )* )?
 
 defaults_block    ::= "defaults" "{" struct_body "}"

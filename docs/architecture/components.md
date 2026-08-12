@@ -89,7 +89,7 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 │                     #   Presence, DefaultValue, ValueDomain, profiles, Registry,
 │                     #   validate_sheet — compiler-layer data, never serialized
 ├── stdlib.rs         # the standard CATALOGUE instancing that metamodel (PROCESS,
-│                     #   the declared names, GuestContract, Registry::m0())
+│                     #   the declared names, GuestContract, Registry::try_m0())
 ├── golden.rs         # Trace, Divergence — projection, seal, diff, CBOR both ways
 ├── connectors.rs     # Process (async, group-terminated) — transports prepared bytes
 ├── lab.rs            # run → ScenarioRun { report, records } ; the mock partner
