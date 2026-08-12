@@ -64,11 +64,7 @@ pub enum ProcessSettingsError {
     /// the PlanGate after consumption, leaving the call open
     /// forever.
     UndeclaredError(&'static str),
-    /// A CALLABLE connector of another contract, in a world whose
-    /// only Partner is this adapter: its intents would arrive here
-    /// and strand open. (The global BoundExecutionPlan router is the
-    /// second adapter's design.)
-    UnservedConnector(String),
+
     /// `timeout` is not a duration.
     TimeoutNotDuration,
 }
@@ -113,51 +109,107 @@ impl core::fmt::Display for ProcessSettingsError {
                 "the adapter produces `{kind}` but the spec's error_set does not declare it — \
                  its response would strand the call open"
             ),
-            Self::UnservedConnector(contract) => write!(
-                f,
-                "a callable `{contract}` connector has no adapter in this world — its calls \
-                 would strand open (the global binder is the second adapter's design)"
-            ),
+
             Self::TimeoutNotDuration => write!(f, "the timeout attribute is not a duration"),
         }
     }
 }
 
-/// Every error kind this WORLD can hand the machine for a bound
-/// Process — the adapter's own emissions plus the machine-produced
-/// `TimeoutExpired` — as an ENUM, so emitting and declaring share
-/// one authority: a new `failure(...)` site cannot exist without a
-/// variant, and every variant is proven declared at binding (no
-/// real response can be refused at the PlanGate after the
-/// dispatcher consumed the event — a stranded open call).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProcessFailureKind {
-    SpawnFailed,
-    DecodeError,
-    ExecFailed,
-    OutputOverflow,
-    /// Machine-produced on expiry — never emitted by the adapter,
-    /// still part of the bound world's vocabulary.
-    TimeoutExpired,
+/// Every failure THIS adapter can hand the machine, with its payload
+/// SHAPE sealed beside its kind — one authority: a new emission site
+/// cannot exist without a variant, `into_outcome` is the only
+/// `TypedError` builder, and every kind is proven declared at
+/// binding (no real response can be refused at the PlanGate after
+/// the dispatcher consumed the event — a stranded open call).
+#[derive(Debug, Clone, PartialEq)]
+enum ProcessFailure {
+    /// The OS refused a launch — or an intent reached an unbound
+    /// path (the edge defense).
+    SpawnFailed { message: String },
+    /// The reply's bytes cannot be delivered faithfully: undecodable
+    /// content, or a stream whose READ failed mid-run.
+    DecodeError { message: String },
+    /// The run ended without a clean success. ONE shape
+    /// (D-2026-08-12-1, review round): a wait/OS bookkeeping fault
+    /// reports `exit_code = -1` with the fault in `stderr` — the
+    /// spec's `{ exit_code, stderr }`, never a second form.
+    ExecFailed { exit_code: i64, stderr: String },
+    /// The AGGREGATE capture budget or the host's capture capacity
+    /// was crossed. No `stream`, no exact `size`: the two pump
+    /// threads have no total order, so naming the crossing stream
+    /// or a drained byte-count would journal a thread race
+    /// (D-2026-08-12-1, review round). `limit` is the declared
+    /// budget; `reason` ∈ `budget | capacity`.
+    OutputOverflow { limit: u64, reason: &'static str },
 }
 
-impl ProcessFailureKind {
-    const ALL: &'static [Self] = &[
-        Self::SpawnFailed,
-        Self::DecodeError,
-        Self::ExecFailed,
-        Self::OutputOverflow,
-        Self::TimeoutExpired,
-    ];
+/// The machine-produced kinds a bound Process world can emit beside
+/// the adapter's own — required at binding for the same
+/// stranded-call reason.
+const MACHINE_EMITS: &[&str] = &["TimeoutExpired"];
 
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::SpawnFailed => "SpawnFailed",
-            Self::DecodeError => "DecodeError",
-            Self::ExecFailed => "ExecFailed",
-            Self::OutputOverflow => "OutputOverflow",
-            Self::TimeoutExpired => "TimeoutExpired",
+impl ProcessFailure {
+    /// Every kind the ADAPTER emits. `kind_count` is an exhaustive
+    /// match: adding a variant breaks compilation there, and the
+    /// length assertion in the tests then forces this list.
+    const KINDS: &'static [&'static str] =
+        &["SpawnFailed", "DecodeError", "ExecFailed", "OutputOverflow"];
+
+    #[cfg(test)]
+    fn kind_count(sample: &Self) -> usize {
+        // EXHAUSTIVE — a new variant fails to compile here first.
+        match sample {
+            Self::SpawnFailed { .. }
+            | Self::DecodeError { .. }
+            | Self::ExecFailed { .. }
+            | Self::OutputOverflow { .. } => Self::KINDS.len(),
         }
+    }
+
+    fn into_outcome(self) -> CallOutcome {
+        let (kind, payload) = match self {
+            Self::SpawnFailed { message } => {
+                let mut payload = BTreeMap::new();
+                payload.insert(
+                    String::from("message"),
+                    Value::Scalar(Scalar::Text(message)),
+                );
+                ("SpawnFailed", payload)
+            }
+            Self::DecodeError { message } => {
+                let mut payload = BTreeMap::new();
+                payload.insert(
+                    String::from("message"),
+                    Value::Scalar(Scalar::Text(message)),
+                );
+                ("DecodeError", payload)
+            }
+            Self::ExecFailed { exit_code, stderr } => {
+                let mut payload = BTreeMap::new();
+                payload.insert(
+                    String::from("exit_code"),
+                    Value::Scalar(Scalar::Int(exit_code)),
+                );
+                payload.insert(String::from("stderr"), Value::Scalar(Scalar::Text(stderr)));
+                ("ExecFailed", payload)
+            }
+            Self::OutputOverflow { limit, reason } => {
+                let mut payload = BTreeMap::new();
+                payload.insert(
+                    String::from("limit"),
+                    Value::Scalar(Scalar::Int(i64::try_from(limit).unwrap_or(i64::MAX))),
+                );
+                payload.insert(
+                    String::from("reason"),
+                    Value::Scalar(Scalar::Text(String::from(reason))),
+                );
+                ("OutputOverflow", payload)
+            }
+        };
+        CallOutcome::Failure(TypedError {
+            kind: String::from(kind),
+            data: Data::materialized(Value::Map(payload)),
+        })
     }
 }
 
@@ -167,13 +219,9 @@ impl ProcessSettings {
         if spec.contract != "Process" {
             return Err(E::NotProcess(spec.contract.clone()));
         }
-        for kind in ProcessFailureKind::ALL {
-            if !spec
-                .error_set
-                .iter()
-                .any(|declared| declared == kind.as_str())
-            {
-                return Err(E::UndeclaredError(kind.as_str()));
+        for kind in ProcessFailure::KINDS.iter().chain(MACHINE_EMITS) {
+            if !spec.error_set.iter().any(|declared| declared == kind) {
+                return Err(E::UndeclaredError(kind));
             }
         }
         match spec.attribute("mode") {
@@ -287,14 +335,43 @@ pub struct Process<'plan> {
 pub struct ProcessBindError {
     /// The refusing connector.
     pub node: crate::node::Path,
-    reason: ProcessSettingsError,
+    reason: ProcessBindReason,
+}
+
+/// The two REAL bind authorities, kept apart (D-2026-08-12-1,
+/// review round): a Process spec whose settings refuse, or a world
+/// this single-Partner adapter cannot cover — the distinction the
+/// future BoundExecutionPlan router will inherit.
+#[derive(Debug)]
+pub enum ProcessBindReason {
+    /// The Process spec itself refuses.
+    Settings(ProcessSettingsError),
+    /// A CALLABLE connector of another contract: its intents would
+    /// arrive at this adapter and strand open.
+    UnservedConnector {
+        /// The foreign contract's name.
+        contract: String,
+    },
+}
+
+impl core::fmt::Display for ProcessBindReason {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Settings(error) => error.fmt(f),
+            Self::UnservedConnector { contract } => write!(
+                f,
+                "a callable `{contract}` connector has no adapter in this world — its calls \
+                 would strand open (the global binder is the second adapter's design)"
+            ),
+        }
+    }
 }
 
 impl ProcessBindError {
     /// The typed reason — callers can dispatch on it instead of
     /// parsing prose.
     #[must_use]
-    pub fn reason(&self) -> &ProcessSettingsError {
+    pub fn reason(&self) -> &ProcessBindReason {
         &self.reason
     }
 }
@@ -322,10 +399,15 @@ struct Run {
     observed_out: u64,
     observed_err: u64,
     max_output: u64,
-    /// The capture verdict: which stream tripped, and whether the
-    /// DECLARED budget or the host's capture capacity did — nothing
-    /// is ever dropped silently on either stream.
-    overflow: Option<(&'static str, &'static str)>,
+    /// The capture verdict: whether the DECLARED budget or the
+    /// host's capture capacity spoke. No stream, no byte-count —
+    /// the two pumps have no total order, and the journal must not
+    /// record a thread race (D-2026-08-12-1, review round).
+    overflow: Option<&'static str>,
+    /// A pipe read failed: the capture is incomplete and the reply
+    /// refuses as a typed DecodeError — truncated bytes are never
+    /// presented as the whole.
+    read_failure: Option<String>,
     out_eof: bool,
     err_eof: bool,
     exit: Option<std::process::ExitStatus>,
@@ -341,6 +423,10 @@ enum Chunk {
     Err(Vec<u8>),
     OutEof,
     ErrEof,
+    /// A pipe READ failed mid-run — not end-of-stream: the captured
+    /// bytes are incomplete and must never be presented as the
+    /// whole (D-2026-08-12-1, review round).
+    ReadFailed(String),
 }
 
 impl<'plan> Process<'plan> {
@@ -393,7 +479,9 @@ impl<'plan> Process<'plan> {
                     if callable {
                         return Err(ProcessBindError {
                             node: node.path.clone(),
-                            reason: ProcessSettingsError::UnservedConnector(spec.contract.clone()),
+                            reason: ProcessBindReason::UnservedConnector {
+                                contract: spec.contract.clone(),
+                            },
                         });
                     }
                     continue;
@@ -405,7 +493,7 @@ impl<'plan> Process<'plan> {
                     Err(reason) => {
                         return Err(ProcessBindError {
                             node: node.path.clone(),
-                            reason,
+                            reason: ProcessBindReason::Settings(reason),
                         });
                     }
                 }
@@ -424,12 +512,12 @@ impl<'plan> Process<'plan> {
         // here is an integrity breach of the intent, not a config
         // fault.
         let Some(settings) = self.settings.get(&intent.connector_path) else {
-            return Err(failure(
-                ProcessFailureKind::SpawnFailed,
-                "no Process binding serves this connector (unknown path, or another \
-                 contract this specialized adapter does not carry)"
+            return Err(ProcessFailure::SpawnFailed {
+                message: "no Process binding serves this connector (unknown path, or another \
+                          contract this specialized adapter does not carry)"
                     .to_string(),
-            ));
+            }
+            .into_outcome());
         };
         // The machine prepared and sealed the bytes; the adapter
         // TRANSPORTS them — recomputing would reopen the gap between
@@ -448,7 +536,12 @@ impl<'plan> Process<'plan> {
         std::os::unix::process::CommandExt::process_group(&mut builder, 0);
         let mut child = match builder.spawn() {
             Ok(child) => child,
-            Err(error) => return Err(failure(ProcessFailureKind::SpawnFailed, error.to_string())),
+            Err(error) => {
+                return Err(ProcessFailure::SpawnFailed {
+                    message: error.to_string(),
+                }
+                .into_outcome());
+            }
         };
         // Detached pipe pumps: chunks flow through the channel; the
         // threads die with their pipes and are never waited on.
@@ -492,6 +585,7 @@ impl<'plan> Process<'plan> {
             observed_err: 0,
             max_output: settings.max_output,
             overflow: None,
+            read_failure: None,
             out_eof: false,
             err_eof: false,
             exit: None,
@@ -530,7 +624,16 @@ fn pump_pipe<P: Read>(
     let mut buffer = [0u8; 8192];
     loop {
         match pipe.read(&mut buffer) {
-            Ok(0) | Err(_) => {
+            Ok(0) => {
+                let _ = sender.send(eof);
+                return;
+            }
+            // A signal is not a verdict — read again.
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => {
+                // A failed READ is not an EOF: the loss travels as
+                // its own fact, then the stream closes.
+                let _ = sender.send(Chunk::ReadFailed(error.to_string()));
                 let _ = sender.send(eof);
                 return;
             }
@@ -557,9 +660,9 @@ impl Run {
                     self.observed_out = self.observed_out.saturating_add(bytes.len() as u64);
                     if self.overflow.is_none() {
                         if self.observed_out.saturating_add(self.observed_err) > self.max_output {
-                            self.overflow = Some(("stdout", "budget"));
+                            self.overflow = Some("budget");
                         } else if self.stdout.try_reserve(bytes.len()).is_err() {
-                            self.overflow = Some(("stdout", "capacity"));
+                            self.overflow = Some("capacity");
                         } else {
                             self.stdout.extend_from_slice(&bytes);
                         }
@@ -569,9 +672,9 @@ impl Run {
                     self.observed_err = self.observed_err.saturating_add(bytes.len() as u64);
                     if self.overflow.is_none() {
                         if self.observed_out.saturating_add(self.observed_err) > self.max_output {
-                            self.overflow = Some(("stderr", "budget"));
+                            self.overflow = Some("budget");
                         } else if self.stderr.try_reserve(bytes.len()).is_err() {
-                            self.overflow = Some(("stderr", "capacity"));
+                            self.overflow = Some("capacity");
                         } else {
                             self.stderr.extend_from_slice(&bytes);
                         }
@@ -579,35 +682,24 @@ impl Run {
                 }
                 Chunk::OutEof => self.out_eof = true,
                 Chunk::ErrEof => self.err_eof = true,
+                Chunk::ReadFailed(error) => {
+                    self.read_failure.get_or_insert(error);
+                }
             }
         }
-        self.overflow.is_some()
+        self.overflow.is_some() || self.read_failure.is_some()
     }
 
-    /// The typed capture verdict — observed volume, the tripping
-    /// stream, and whether the budget or the host's capacity spoke.
+    /// The typed capture verdict — the declared limit and the
+    /// reason, nothing schedule-dependent: the two pumps have no
+    /// total order, so a tripping stream or a drained byte-count
+    /// would journal a thread race.
     fn overflow_outcome(&self) -> CallOutcome {
-        let (stream, reason) = self.overflow.unwrap_or(("stdout", "budget"));
-        let mut payload = BTreeMap::new();
-        payload.insert(
-            String::from("size"),
-            Value::Scalar(Scalar::Int(
-                i64::try_from(self.observed_out.saturating_add(self.observed_err))
-                    .unwrap_or(i64::MAX),
-            )),
-        );
-        payload.insert(
-            String::from("stream"),
-            Value::Scalar(Scalar::Text(String::from(stream))),
-        );
-        payload.insert(
-            String::from("reason"),
-            Value::Scalar(Scalar::Text(String::from(reason))),
-        );
-        CallOutcome::Failure(TypedError {
-            kind: String::from("OutputOverflow"),
-            data: Data::materialized(Value::Map(payload)),
-        })
+        ProcessFailure::OutputOverflow {
+            limit: self.max_output,
+            reason: self.overflow.unwrap_or("budget"),
+        }
+        .into_outcome()
     }
 
     /// Whether the reply is final: the child exited and both streams
@@ -620,29 +712,21 @@ impl Run {
 
     /// The reply of a finished run.
     fn settle(mut self, status: std::process::ExitStatus) -> Response {
-        let overflowed = self.collect() || self.overflow.is_some();
-        let outcome = if overflowed {
+        self.collect();
+        let outcome = if self.overflow.is_some() {
             self.overflow_outcome()
+        } else if let Some(error) = self.read_failure.take() {
+            ProcessFailure::DecodeError {
+                message: format!("a stream could not be read to its end: {error}"),
+            }
+            .into_outcome()
         } else if !status.success() {
-            let mut payload = BTreeMap::new();
-            payload.insert(
-                String::from("exit_code"),
-                match status.code() {
-                    Some(code) => Value::Scalar(Scalar::Int(i64::from(code))),
-                    // Killed by a signal: no exit code exists.
-                    None => Value::Scalar(Scalar::Int(-1)),
-                },
-            );
-            payload.insert(
-                String::from("stderr"),
-                Value::Scalar(Scalar::Text(
-                    String::from_utf8_lossy(&self.stderr).into_owned(),
-                )),
-            );
-            CallOutcome::Failure(TypedError {
-                kind: String::from("ExecFailed"),
-                data: Data::materialized(Value::Map(payload)),
-            })
+            ProcessFailure::ExecFailed {
+                // Killed by a signal: no exit code exists.
+                exit_code: status.code().map_or(-1, i64::from),
+                stderr: String::from_utf8_lossy(&self.stderr).into_owned(),
+            }
+            .into_outcome()
         } else {
             match String::from_utf8(std::mem::take(&mut self.stdout)) {
                 Ok(text) => match self.codec {
@@ -658,13 +742,13 @@ impl Run {
                     // typed DecodeError carrying the offending line.
                     crate::boundary::RequestCodec::Jsonl => match decode_jsonl(&text) {
                         Ok(items) => CallOutcome::Success(Data::materialized(Value::Array(items))),
-                        Err(message) => failure(ProcessFailureKind::DecodeError, message),
+                        Err(message) => ProcessFailure::DecodeError { message }.into_outcome(),
                     },
                 },
-                Err(_) => failure(
-                    ProcessFailureKind::DecodeError,
-                    "stdout is not valid UTF-8".to_string(),
-                ),
+                Err(_) => ProcessFailure::DecodeError {
+                    message: "stdout is not valid UTF-8".to_string(),
+                }
+                .into_outcome(),
             }
         };
         Response {
@@ -726,10 +810,21 @@ impl Partner for Process<'_> {
         let mut still_running = Vec::new();
         for mut run in self.runs.drain(..) {
             if run.collect() {
-                // The cap is a hard guarantee: tripped at intake, the
-                // whole process group dies now.
+                // A tripped cap or a failed read is a hard verdict:
+                // the whole process group dies now, and the answer
+                // is the matching typed refusal.
                 kill_group(&mut run.child);
-                let outcome = run.overflow_outcome();
+                let outcome = if run.overflow.is_some() {
+                    run.overflow_outcome()
+                } else {
+                    ProcessFailure::DecodeError {
+                        message: format!(
+                            "a stream could not be read to its end: {}",
+                            run.read_failure.take().unwrap_or_default()
+                        ),
+                    }
+                    .into_outcome()
+                };
                 answers.push(Response {
                     call_ref: run.call_ref,
                     outcome,
@@ -745,7 +840,14 @@ impl Partner for Process<'_> {
                         kill_group(&mut run.child);
                         answers.push(Response {
                             call_ref,
-                            outcome: failure(ProcessFailureKind::ExecFailed, error.to_string()),
+                            // ONE ExecFailed shape: a wait/OS
+                            // bookkeeping fault reports exit_code -1
+                            // with the fault in stderr.
+                            outcome: ProcessFailure::ExecFailed {
+                                exit_code: -1,
+                                stderr: format!("wait failed: {error}"),
+                            }
+                            .into_outcome(),
                         });
                         continue;
                     }
@@ -782,18 +884,6 @@ impl Partner for Process<'_> {
             kill_group(&mut run.child);
         }
     }
-}
-
-fn failure(kind: ProcessFailureKind, message: String) -> CallOutcome {
-    let mut payload = BTreeMap::new();
-    payload.insert(
-        String::from("message"),
-        Value::Scalar(Scalar::Text(message)),
-    );
-    CallOutcome::Failure(TypedError {
-        kind: String::from(kind.as_str()),
-        data: Data::materialized(Value::Map(payload)),
-    })
 }
 
 #[cfg(test)]
@@ -1200,11 +1290,11 @@ graph hoarse : App {
         let Some(Value::Map(detail)) = payload.get("detail") else {
             panic!("the payload rides detail: {payload:?}");
         };
-        assert_eq!(
-            detail.get("stream"),
-            Some(&Value::Scalar(Scalar::Text(String::from("stderr")))),
-            "{detail:?}"
-        );
+        // No `stream`, no byte-count: the two pumps have no total
+        // order, and the journal must not record a thread race —
+        // the payload carries the declared limit and the reason.
+        assert_eq!(detail.get("stream"), None, "{detail:?}");
+        assert_eq!(detail.get("limit"), Some(&Value::Scalar(Scalar::Int(50))));
         assert_eq!(
             detail.get("reason"),
             Some(&Value::Scalar(Scalar::Text(String::from("budget"))))
@@ -1248,6 +1338,29 @@ graph unframeable : App {
                 .any(|record| matches!(record, Record::Outbound(_))),
             "no open fact for an unattemptable effect"
         );
+    }
+
+    #[test]
+    fn every_adapter_kind_is_in_the_binding_list() {
+        // `kind_count` is an EXHAUSTIVE match: a new ProcessFailure
+        // variant breaks compilation there first, and this length
+        // assertion then forces KINDS (and the binding subset) to
+        // follow.
+        assert_eq!(
+            ProcessFailure::kind_count(&ProcessFailure::SpawnFailed {
+                message: String::new()
+            }),
+            ProcessFailure::KINDS.len()
+        );
+        for kind in ProcessFailure::KINDS {
+            assert!(
+                crate::stdlib::PROCESS.error_set.contains(kind),
+                "`{kind}` must be on the sheet"
+            );
+        }
+        for kind in MACHINE_EMITS {
+            assert!(crate::stdlib::PROCESS.error_set.contains(kind));
+        }
     }
 
     /// The framing table of D-2026-08-11-1, exactly: empty stdout

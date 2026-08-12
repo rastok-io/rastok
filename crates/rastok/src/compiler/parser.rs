@@ -116,6 +116,12 @@ const TAG_WORDS: &[&str] = &[
     "regex",
 ];
 
+/// The RESERVED data-format tags: words the catalogue holds with no
+/// living form yet. A body after one is consumed OPAQUELY — never
+/// read as an RKG struct — and defers with ONE named diagnostic
+/// (D-2026-08-12-1, review round).
+const RESERVED_FORMAT_TAGS: &[&str] = &["avro", "protobuf", "parquet", "msgpack", "csv"];
+
 /// The tagged-initializer spellings D-2026-08-12-1 killed — kept
 /// only to refuse with a useful migration.
 const DEAD_INITIALIZER_TAGS: &[&str] = &[
@@ -1639,6 +1645,31 @@ impl<'src> Parser<'src, '_> {
                 self.peeked = Some(ident);
                 if !follows {
                     return Value::Cel(self.cel(position));
+                }
+                if RESERVED_FORMAT_TAGS.contains(&tag) {
+                    // A reserved format's body is OPAQUE — one named
+                    // deferral, never a struct misreading.
+                    let token = self.bump();
+                    self.deferred("a reserved data-format body", token.span);
+                    if self.eat(TokenKind::LParen).is_some() {
+                        let mut depth = 1u32;
+                        while depth > 0 {
+                            match self.peek().kind {
+                                TokenKind::Eof => break,
+                                TokenKind::LParen => depth += 1,
+                                TokenKind::RParen => depth -= 1,
+                                _ => {}
+                            }
+                            self.bump();
+                        }
+                    }
+                    if self.peek().kind == TokenKind::LBrace {
+                        self.skip_balanced_block();
+                    }
+                    return Value::Cel(CelExpr {
+                        text: String::new(),
+                        span: token.span,
+                    });
                 }
                 if !dead {
                     return self.tagged_value();

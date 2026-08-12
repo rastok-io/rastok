@@ -462,7 +462,16 @@ fn the_binding_refuses_every_undeclared_adapter_error() {
     // the spec does not declare would be refused at the PlanGate
     // after consumption — a stranded open call. The binding proves
     // the subset up front.
-    for kind in ["SpawnFailed", "DecodeError", "ExecFailed", "OutputOverflow"] {
+    for kind in [
+        "SpawnFailed",
+        "DecodeError",
+        "ExecFailed",
+        "OutputOverflow",
+        // Machine-produced, still part of the bound world's
+        // vocabulary — a travelling error_set may not contradict
+        // what the scheduler emits.
+        "TimeoutExpired",
+    ] {
         let message = bind_error(|spec| {
             spec.error_set.retain(|declared| declared != kind);
         });
@@ -495,17 +504,25 @@ fn a_callable_foreign_connector_refuses_at_bind() {
         }
     }
     // Sever every edge DELIVERING to the connector: a pure source.
-    plan.edges.retain(|edge| {
-        edge.to
-            .as_ref()
-            .is_none_or(|to| to.node != Some(rastok::plan::Slot::new(0)))
-    });
-    if let Ok(validated) = rastok::plan::ValidatedExecutionPlan::try_from(plan) {
-        assert!(
-            rastok::connectors::Process::try_new(&validated).is_ok(),
-            "a pure foreign source binds as a no-op"
-        );
-    }
+    // The slot is DERIVED from the node, never hard-coded to the
+    // lowering order.
+    let slot = rastok::plan::Slot::new(
+        u32::try_from(
+            plan.nodes
+                .iter()
+                .position(|node| matches!(&node.kind, rastok::plan::NodeKind::Connector(_)))
+                .expect("the connector exists"),
+        )
+        .expect("a small plan"),
+    );
+    plan.edges
+        .retain(|edge| edge.to.as_ref().is_none_or(|to| to.node != Some(slot)));
+    let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan)
+        .expect("the foreign pure source remains structurally valid");
+    assert!(
+        rastok::connectors::Process::try_new(&validated).is_ok(),
+        "a pure foreign source binds as a no-op"
+    );
     // An unknown codec cannot even reach the binding: the plan
     // validator refuses it first (the adapter's exhaustive match is
     // the belt BEHIND that door).
@@ -832,6 +849,22 @@ fn a_nested_block_entry_names_its_migration() {
         source,
         "E-CONTRACT-ATTR",
         "`parent { … }` is no longer a form; write `parent = { … }`",
+    );
+}
+
+#[test]
+fn a_reserved_format_body_defers_once_and_opaquely() {
+    // `avro { … }` is a reserved word with no living form: ONE
+    // named deferral, the body consumed opaquely — never five
+    // struct-parse errors.
+    let source = "graph g : App {\n  operator o {\n    on in { out = avro { \"type\": \"record\", \"name\": \"X\" } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile_one(source).expect_err("reserved defers");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    assert!(
+        bag.diagnostics()[0]
+            .message()
+            .contains("a reserved data-format body"),
+        "{bag:?}"
     );
 }
 

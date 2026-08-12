@@ -153,6 +153,28 @@ out-of-domain coefficient or scale before it travels, and the
 writer keeps a defensive mirror plus the reader's nesting budget:
 a hostile scale is a typed refusal, never a runaway allocation.
 
+*Amended 2026-08-12 (Process capture):* `max_output` is the
+AGGREGATE capture budget across stdout and stderr, judged in `u64`
+before any byte is stored — neither stream ever loses bytes
+silently, and a stderr flood trips the same verdict. The
+`OutputOverflow` payload is `{ limit, reason }` with
+`reason ∈ budget | capacity` (the host's capture allocation refused
+via `try_reserve`): NO `stream` field and NO exact `size` — the two
+pump threads have no total order, so naming the crossing stream or
+a drained byte-count would journal a thread race, unstable across
+runs of a deterministic program. A pipe READ error is not an EOF:
+it travels as its own fact and refuses as a typed `DecodeError`
+(truncated bytes are never presented as the whole; `Interrupted`
+retries). `ExecFailed` has ONE shape — `{ exit_code, stderr }`,
+a wait/OS bookkeeping fault reporting `exit_code = -1` with the
+fault in `stderr`. The adapter's emissions are an enum
+(`ProcessFailure`) whose payload shapes seal with their kinds; the
+binding proves adapter kinds ∪ machine kinds (`TimeoutExpired`)
+⊆ the travelling `error_set`, and a CALLABLE connector of another
+contract refuses at binding (`UnservedConnector`) — the global
+`BoundExecutionPlan` router being the second adapter's named
+design.
+
 *Amended 2026-08-11 (second round):* four more edges.
 (1) **The effective pin is ONE derivation** —
 `boundary::connector_out_pin` (Process-scoped) is the single

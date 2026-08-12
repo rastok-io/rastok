@@ -207,7 +207,13 @@ step touches `vm.rs` once.
    re-emitted envelope; never a silent pick.
 6. **`File` connector** — the first new adapter on the conformance
    harness: the half-day claim gets its first real measurement, with
-   no network in the way.
+   no network in the way. OPENS WITH the global binder decision
+   (D-2026-08-12-1, review rounds): today's world is single-Partner
+   (`Process::try_new` refuses any callable connector it does not
+   serve), and a second adapter needs the `BoundExecutionPlan`
+   router — every callable connector bound to exactly ONE adapter,
+   bind → VM → journal, so nothing opens against a world that
+   cannot execute it. Design to arbitrate at this item's start.
 7. **`HttpClient`** — outbound calls under declared budgets, on the
    harness. Decision point before code: hand-rolled bounded HTTP/1.1
    versus a vetted dependency, and whether TLS enters M1 at all (the

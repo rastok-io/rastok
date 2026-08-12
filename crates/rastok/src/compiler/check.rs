@@ -395,6 +395,11 @@ impl Checker<'_, '_> {
     /// Compiles one CEL span, adapting native diagnostics onto the
     /// source with offset-mapped spans.
     fn cel(&mut self, expr: &CelExpr, signature: &cel::Signature) -> Option<cel::Tree> {
+        if expr.text.is_empty() {
+            // The parser's error placeholder: it already spoke — one
+            // fault, one voice.
+            return None;
+        }
         match cel::compile(&expr.text, signature) {
             Ok(tree) => {
                 self.collect_meta_reads(&tree.root, expr.span);
