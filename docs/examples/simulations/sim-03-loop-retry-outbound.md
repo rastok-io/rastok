@@ -35,12 +35,13 @@ graph sim03 : App {
     behavior        = deterministic
     idempotency_key = meta.app.payment_id            // STABLE business key — the §4.3 norm
     timeout         = duration("10s")
-    Loop.variant = measure {
+    Loop.variant = {
+      kind = measure
       initial = 3
       next = value - 1
       until = value <= 0
     }
-    Loop.backoff = constant { delay = duration("5s") }
+    Loop.backoff = { curve = constant, delay = duration("5s") }
     on err where !err.transient                       // base case : permanent err
     on err where err.transient { }                    // iterating case (TimeoutExpired is transient)
   }

@@ -474,7 +474,7 @@ graph sessions per session {          // declaration = instantiation; `per` = on
     effect  = idempotent
     behavior = probabilistic
     timeout = duration("120s")                                 // per-call budget
-    restart = on_crash { backoff = "1s..30s", max_attempts = 5 }
+    restart = { backoff = "1s..30s", max_attempts = 5 }
   }
 
   in        -> codex.in { capacity = 1024, backpressure = block }
@@ -1353,7 +1353,8 @@ journaled:
 
   ```rastok
   graph refine: Loop {
-    Loop.variant = measure {
+    Loop.variant = {
+      kind = measure
       initial = 10
       next = value - 1
       until = value <= 0
@@ -1415,7 +1416,7 @@ the close code / reason for a `WebSocket`, the final status for a
 transaction. The outcome lives in the typed error payload; `meta.sys`
 stays closed (its five fields never grow per-Connector). `out`
 stays the data stream; a graph that reacts to termination wires
-`process.err -> …`. `restart = on_crash { … }` (a Connector attribute)
+`process.err -> …`. `restart = { … }` (a Connector attribute)
 spawns a fresh instance — a new `run_id`, a new partition instance — with
 no cascade to any enclosing partition.
 

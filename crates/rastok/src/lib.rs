@@ -16,6 +16,7 @@ pub use rastok_core::{
 pub mod compiler;
 pub mod conformance;
 pub mod connectors;
+pub mod contract;
 pub mod diagnostics;
 pub mod golden;
 pub mod lab;

@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::stdlib::Registry;
+use rastok::contract::Registry;
 
 fn refuses_with(source: &str, code: &str) -> Vec<String> {
     let bag = compile(&[source], &Registry::m0()).expect_err("the source must refuse");

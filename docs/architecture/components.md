@@ -85,7 +85,11 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 ├── diagnostics.rs    # Diagnostic, Code, Severity, Phase, Span, Bag
 ├── compiler.rs       # facade : parse → check → hash → lower
 │   └── compiler/     #   lexer, syntax, parser, hir (graph + lab), check, lower
-├── stdlib.rs         # declarative Connector/guest contracts (the checker's view)
+├── contract.rs       # the node-contract METAMODEL (D-2026-08-12-1): AttributeSpec,
+│                     #   Presence, DefaultValue, ValueDomain, profiles, Registry,
+│                     #   validate_sheet — compiler-layer data, never serialized
+├── stdlib.rs         # the standard CATALOGUE instancing that metamodel (PROCESS,
+│                     #   the declared names, GuestContract, Registry::m0())
 ├── golden.rs         # Trace, Divergence — projection, seal, diff, CBOR both ways
 ├── connectors.rs     # Process (async, group-terminated) — transports prepared bytes
 ├── lab.rs            # run → ScenarioRun { report, records } ; the mock partner
@@ -165,7 +169,11 @@ cannot be constructed, and the stdlib's pre-declared `none` connectors
 (Clock, Calendar, HttpServer) are representable
 ([effects-and-sagas.md §2.1–2.2](../spec/effects-and-sagas.md),
 [stdlib.md §2](../spec/stdlib.md), [loop.md](../spec/loop.md)). The checker reads Connector
-contracts from `stdlib` (§3.7), never from adapter code. `Hir` is the
+contracts from `stdlib` (§3.7) through the `contract` metamodel,
+never from adapter code — and it INJECTS every omitted `Defaulted`
+attribute into the effective HIR (D-2026-08-12-1), so the plan
+carries effective attributes only and adapters never reintroduce a
+default. `Hir` is the
 spec's own name for the checked form ([identity.md §1](../spec/identity.md):
 "blake3(canonical HIR)"), and the hash covers the production graph
 only — the lab never enters it.

@@ -11,12 +11,12 @@
 
 use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
 use rastok::compiler::Compilation;
+use rastok::contract::Registry;
 use rastok::envelope::{Data, Namespace, Scalar, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
 use rastok::render::{Sources, render_all};
 use rastok::runtime::vm::Vm;
-use rastok::stdlib::Registry;
 use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;

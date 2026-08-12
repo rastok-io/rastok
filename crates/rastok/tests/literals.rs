@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::stdlib::Registry;
+use rastok::contract::Registry;
 
 fn emitted(body: &str) -> rastok::envelope::Data {
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};

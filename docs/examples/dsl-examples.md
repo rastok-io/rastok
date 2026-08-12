@@ -83,9 +83,9 @@ graph sessions per session {   // declaration = instance
     args = ["app-server"]
     mode = service
     cwd = cwd                              // graph-level val, by name
-    env {
-      CODEX_HOME = codex_home
-      RUST_LOG   = "info"
+    env = {
+      "CODEX_HOME": codex_home
+      "RUST_LOG": "info"
     }
 
     codec = jsonl
@@ -94,7 +94,7 @@ graph sessions per session {   // declaration = instance
     behavior = probabilistic
     // in = stdin, out = stdout, err = stderr (Process defaults)
 
-    init {
+    init = {
       message = {
         method = "initialize"
         params = { clientInfo = { name = "rastok" } }
@@ -102,7 +102,7 @@ graph sessions per session {   // declaration = instance
       timeout = duration("15s")
     }
     kill = process_group
-    restart = on_crash { backoff = "1s..30s", max_attempts = 5 }
+    restart = { backoff = "1s..30s", max_attempts = 5 }
   }
 
   connector codex_logs : File {
@@ -228,7 +228,8 @@ graph teams_outbound {
     idempotency_key = meta.app.delivery_id
     // in = request, out = response (HttpClient defaults)
 
-    auth = oauth2_client_credentials {
+    auth = {
+      scheme = oauth2_client_credentials
       token_endpoint = env("TEAMS_TOKEN_ENDPOINT")
       client_id      = env("TEAMS_BOT_APP_ID")
       client_secret  = env("TEAMS_BOT_PASSWORD")
@@ -236,12 +237,13 @@ graph teams_outbound {
       refresh_before = duration("10m")
     }
     // retry is expressed by the Loop aspect
-    Loop.variant = measure {
+    Loop.variant = {
+      kind = measure
       initial = 3
       next = value - 1
       until = value <= 0
     }
-    Loop.backoff = exponential { initial = duration("200ms") }
+    Loop.backoff = { curve = exponential, initial = duration("200ms") }
     on err where err.transient { }               // iterating case : runtime re-injects
     rate_limit = "10/s per meta.app.session_key"
   }
@@ -612,7 +614,7 @@ the optional read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
 | Type | `variant`, scalar (`text`/`int`/`bytes`/…), `struct { … }`, `map<text, V>`, `array<T>`, `enum`, `union`, `T?` |
 | State field | `var <name>: <type> [= <default>]` |
 | Connector attribute | `<name> = <value>` |
-| Tagged-value attribute | `<name> = <tag> { ... }` (`restart = on_crash { ... }`, `Loop.backoff = exponential { ... }`) |
+| Tagged-value attribute | `<name> = <tag> { ... }` (`restart = { ... }`, `Loop.backoff = { curve = exponential, ... }`) |
 | Handler | `on <trigger> [where … having … within … last …] { ... }` (`on (a, b)` join, `on start`, `on stop`) |
 | State read (inside jq) | `$<name>` (bare `<name>` in DSL) |
 | State write | `<name> = <expr>` |

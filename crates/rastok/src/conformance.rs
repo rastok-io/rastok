@@ -30,12 +30,12 @@
 
 use crate::boundary::{Draft, InboundSubmission, IngressAuthority, Partner, SubmissionSequence};
 use crate::compiler::compile;
+use crate::contract::{ConnectorContract, Registry};
 use crate::envelope::{Data, Namespace, Scalar, Value};
 use crate::journal::{Closure, MemJournal, OutboundStatus, Record};
 use crate::node;
 use crate::plan::{ExecutionPlan, GraphVersion};
 use crate::runtime::vm::Vm;
-use crate::stdlib::{ConnectorContract, Registry};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Builds one fresh adapter per battery run. A trait rather than a
@@ -268,7 +268,12 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
         }
     }
     let mut seen = BTreeSet::new();
-    for attribute in contract.attributes {
+    let profile_attrs = contract
+        .selector
+        .iter()
+        .flat_map(|selector| selector.profiles.iter())
+        .flat_map(|profile| profile.attributes.iter());
+    for attribute in contract.common.iter().chain(profile_attrs) {
         if !seen.insert(attribute.name) {
             report.violations.push(format!(
                 "the sheet declares attribute `{}` twice",

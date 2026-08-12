@@ -19,9 +19,9 @@ pub use check::Unit;
 pub use hir::Hir;
 pub use syntax::SyntaxTree;
 
+use crate::contract;
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId};
 use crate::plan::{PlanValidationError, SemanticHash, SymbolTable, ValidatedExecutionPlan};
-use crate::stdlib;
 
 /// The lowering emitted a plan the validator refuses — a compiler
 /// defect surfaced through the ordinary error path, never a panic.
@@ -56,7 +56,7 @@ pub struct Compilation {
 ///
 /// Returns the full diagnostic bag when parsing or checking rejects
 /// the unit; no plan exists in that case, by construction.
-pub fn compile(sources: &[&str], registry: &stdlib::Registry) -> Result<Compilation, Bag> {
+pub fn compile(sources: &[&str], registry: &contract::Registry) -> Result<Compilation, Bag> {
     compile_with_assets(sources, registry, None)
 }
 
@@ -90,7 +90,7 @@ pub fn app_source_index(sources: &[&str]) -> Option<usize> {
 /// As [`compile`].
 pub fn compile_with_assets(
     sources: &[&str],
-    registry: &stdlib::Registry,
+    registry: &contract::Registry,
     asset_root: Option<&std::path::Path>,
 ) -> Result<Compilation, Bag> {
     let mut bag = Bag::new();

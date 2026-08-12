@@ -162,6 +162,31 @@ step touches `vm.rs` once.
    package + Lab trace sealing the canonical line's
    `request_digest`). Unlocks realistic `File`
    and HTTP payloads.
+   **Post-M1.2 interlude, LANDED 2026-08-12** (D-2026-08-12-1,
+   before item 3): the node-contract METAMODEL and the uniform
+   attribute syntax. One rule — every attribute is `name = value`,
+   four value families (bare choice word / CEL expression / braced
+   literal / foreign literal); configuration sub-blocks
+   (`env { … }`) and tagged initializers (`on_crash { … }`,
+   `measure { … }`) are dead forms refusing with migration hints, a
+   former discriminant now a closed-choice FIELD. The
+   `rastok::contract` module owns the metamodel (AttributeSpec with
+   `Presence::{Required, Optional, Defaulted}`, `ValueDomain`,
+   profiles with `ProfileSupport::Deferred`, sheet validation
+   including compiled CEL defaults); `stdlib` keeps the catalogue.
+   `Process` resolves `mode` as a profile selector (default `job`;
+   `service` known-but-deferred with deferred-only domains), and
+   the checker INJECTS every omitted default (`mode = job`,
+   `args = []`, `max_output = "8MiB"`, `on_timeout = kill`) into
+   the effective HIR before the hash — omission ≡ exact spelling,
+   a DECLARED identity move (every Process graph moved: echo/spike
+   `d0bc5576…`, jsonl fixture `3434 1263…`, probe `c986 6b38…`;
+   gauge, connector-free, pinned immobile as witness). The plan
+   carries effective attributes only; the adapter's silent
+   `8 MiB`/empty-args fallbacks became typed invariant refusals.
+   `codec` stays Required (reaffirmed), `AttrDomain::Forbidden`
+   died (a field of another profile is ABSENT, the diagnostic names
+   the owner), v5 unchanged structurally.
 3. **The error half of the language** — typed-error emissions from
    operators (`err = Kind {…}`) and mock `err` replies in the Lab.
    Referees can then provoke connector failures without adapters;

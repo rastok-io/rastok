@@ -187,12 +187,13 @@ connector reserve : Postgres + Loop {        // inside a `: Saga` graph
   effect  = compensable
   behavior = deterministic
   idempotency_key = meta.app.order_id + "/reserve"
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     initial = 5
     next = value - 1
     until = value <= 0
   }
-  Loop.backoff = exponential { initial = duration("200ms") }
+  Loop.backoff = { curve = exponential, initial = duration("200ms") }
   on err where err.transient { }             // iterating case : runtime re-injects
   on compensate {
     idempotency_key = meta.app.order_id + "/unreserve"   // its OWN operation
@@ -209,7 +210,7 @@ transient regardless of direction.
 When two distinct policies are required, delegate the compensation to
 its own Loop-wrapped Connector — see [loop.md §7.1](loop.md#71-same-node-composition).
 
-An inline `retry = exponential { … }` attribute is not legal inside
+An inline `retry = { curve = exponential, … }` attribute is not legal inside
 `on compensate { … }`: it would duplicate `Loop` for the same semantics.
 There is exactly one mechanism for bounded repetition, used uniformly.
 

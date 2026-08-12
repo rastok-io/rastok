@@ -11,7 +11,7 @@
 //! reason.
 
 use rastok::compiler::compile;
-use rastok::stdlib::Registry;
+use rastok::contract::Registry;
 use std::path::{Path, PathBuf};
 
 fn example() -> PathBuf {
@@ -25,7 +25,11 @@ fn compilation() -> rastok::compiler::Compilation {
 
 /// The fixture's identity, pinned to the byte. It moves only when
 /// the language does — deliberately, re-blessed in review.
-const JSONL_HASH: &str = "932c28624ad5ba5f55ba0e6345efcb9bca091d9ac0a36e20bd807c844da88591";
+// DELIBERATE MOVE 2026-08-12 (D-2026-08-12-1): contract defaults
+// are injected into the effective HIR before the hash — this
+// fixture gained `args = []`, `max_output = "8MiB"` and
+// `on_timeout = kill` (`mode = job` was written).
+const JSONL_HASH: &str = "343412636d7e8a519746ff6361f73670041e795a9ac52533ec6c77d95370e0aa";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

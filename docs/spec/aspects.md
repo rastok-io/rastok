@@ -45,12 +45,13 @@ connector pay : HttpClient + Loop {
   url     = "..."
   effect  = irreversible
   idempotency_key = meta.app.payment_id
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     initial = 5
     next = value - 1
     until = value <= 0
   }
-  Loop.backoff = exponential { initial = duration("200ms") }
+  Loop.backoff = { curve = exponential, initial = duration("200ms") }
   on err where !err.transient
   on err where err.transient { }
 }
@@ -60,12 +61,13 @@ connector pay : HttpClient + Loop {
 connector reserve : Postgres + Loop {
   query   = "INSERT ..."
   effect  = compensable
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     initial = 5
     next = value - 1
     until = value <= 0
   }
-  Loop.backoff = exponential { initial = duration("200ms") }
+  Loop.backoff = { curve = exponential, initial = duration("200ms") }
   on err where err.transient { }
   on compensate {
     idempotency_key = meta.app.order_id + "/unreserve"    // its own operation
@@ -80,7 +82,8 @@ graph payment : Saga {
 
 // Graph with two aspects — using the `.` boundary sugar (equivalent to `in -> … -> out`)
 graph robust_payment : Saga + Loop {
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     initial = 3
     next = value - 1
     until = value <= 0
@@ -90,7 +93,8 @@ graph robust_payment : Saga + Loop {
 
 // Operator with one aspect (mono-node intra-transaction loop)
 operator refine : Loop {
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     source = data.remaining_steps
     until = data.error_margin < 0.001
     limit = 100
@@ -177,7 +181,7 @@ The two initially specified aspects pass all five tests strongly.
 | Aspect | What it scopes | Spec | Passes |
 |---|---|---|---|
 | **`Saga`** | long-running, compensation-based workflow ; lifecycle = `open → committed / rolling_back → rolled_back / rollback_failed` | [effects-and-sagas.md](effects-and-sagas.md) | T1-T5 ✅ |
-| **`Loop`** | bounded tail-recursive iteration for retry, convergence, and counted work; lifecycle = `running → committed / variant_violated / exhausted / exited_on_err`; configured by the qualified `Loop.variant = measure { ... }` attribute | [loop.md](loop.md) | T1-T5 ✅ |
+| **`Loop`** | bounded tail-recursive iteration for retry, convergence, and counted work; lifecycle = `running → committed / variant_violated / exhausted / exited_on_err`; configured by the qualified `Loop.variant = { ... }` attribute | [loop.md](loop.md) | T1-T5 ✅ |
 
 
 ### 3.3 Deferred candidates
@@ -263,7 +267,7 @@ compiler rejects them elsewhere.
 
 ```rastok
 operator x {
-  Loop.variant = measure {               // ❌ compile error: the qualified
+  Loop.variant = {               // ❌ compile error: the qualified
     initial = 100                        //    attribute requires `: Loop`
     next = value - 1
     until = value <= 0
@@ -271,7 +275,7 @@ operator x {
 }
 
 operator x : Loop {
-  Loop.variant = measure {               // ✅ legal
+  Loop.variant = {               // ✅ legal
     initial = 100
     next = value - 1
     until = value <= 0
@@ -323,7 +327,8 @@ Two graphs nested do the same with proper bracketing :
 graph outer : Saga {
   ...
   graph inner : Loop {
-    Loop.variant = measure {
+    Loop.variant = {
+      kind = measure
       initial = 5
       next = value - 1
       until = value <= 0

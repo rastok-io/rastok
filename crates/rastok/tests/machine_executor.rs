@@ -20,8 +20,8 @@ use std::collections::BTreeMap;
 
 use rastok::boundary::TypedError;
 use rastok::compiler::compile;
+use rastok::contract::Registry;
 use rastok::envelope::Encoding;
-use rastok::stdlib::Registry;
 
 const M0_PROBE: &str = r#"
 graph m0_probe : App {

@@ -228,7 +228,7 @@ connector codex : Process {
   mode       = service
   timeout    = duration("30s")
   on_timeout = bypass               // the INSTANCE's fate on expiry : bypass (default) or kill
-  restart    = on_crash { … }       // respawn policy after any instance death
+  restart    = { … }                // respawn policy after any instance death (a struct — D-2026-08-12-1)
 }
 ```
 
@@ -242,7 +242,7 @@ The fragment omits unrelated required `Process` attributes.
   policy alone decides respawn.
 
 Compositions, not new mechanisms : *restart-on-timeout* =
-`on_timeout = kill` + `restart = on_crash { … }` ; *die-without-respawn* =
+`on_timeout = kill` + `restart = { … }` ; *die-without-respawn* =
 `kill` with no restart policy. A wedged resident process that must restart
 uses `kill` (fresh `run_id` plus its protocol-specific resume operation);
 the conservative default stays `bypass`.

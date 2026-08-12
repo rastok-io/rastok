@@ -9,9 +9,10 @@ use rastok::conformance::{
     AdapterFactory, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
 };
 use rastok::connectors::Process;
+use rastok::contract::Registry;
 use rastok::envelope::{Data, Envelope, Value};
 use rastok::plan::ExecutionPlan;
-use rastok::stdlib::{PROCESS, Registry};
+use rastok::stdlib::PROCESS;
 
 const HAPPY: &str = r#"
 graph happy : App {

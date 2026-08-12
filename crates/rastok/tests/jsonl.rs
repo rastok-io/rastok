@@ -8,11 +8,11 @@
 
 use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
 use rastok::compiler::compile;
+use rastok::contract::Registry;
 use rastok::envelope::{Data, Namespace, Scalar, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
 use rastok::runtime::vm::Vm;
-use rastok::stdlib::Registry;
 
 /// Injects, drains, and pumps a REAL child process to quiescence.
 fn drive(source: &str, data: Value) -> (Vec<rastok::runtime::vm::BoundaryOutput>, Vec<Value>) {

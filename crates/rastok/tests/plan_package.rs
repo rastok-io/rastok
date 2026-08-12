@@ -12,8 +12,8 @@
 
 use rastok::canonical_cbor::{Value as Cbor, decode, encode};
 use rastok::compiler::compile;
+use rastok::contract::Registry;
 use rastok::plan::{self, DecodeError};
-use rastok::stdlib::Registry;
 use std::path::PathBuf;
 
 fn example() -> PathBuf {

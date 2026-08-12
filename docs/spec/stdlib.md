@@ -137,11 +137,37 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Role / Direction | child process over stdio; **both** (caller + source) |
 | Ports | `in` → stdin; `out` ← stdout; `err` ← stderr + lifecycle |
 | effect / behavior | **per-instance, both mandatory** |
-| Attributes | `command`, `args`, `env { }`, `mode = job (default) \| service`, `codec = jsonl \| lines` (`bytes` **reserved** — the framing question), `correlate = <CEL path>` (service only), `timeout`, `on_timeout`, `restart` (service only — a compile error on a job) |
+| Attributes | the normative table below (D-2026-08-12-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
 | Correlator | see modes below |
 | Error set | `SpawnFailed`, `DecodeError` (the offending line in payload — never silent), `StderrLine` (stderr output; route it or write `-> nothing`), `TimeoutExpired`, `ExecFailed { exit_code, stderr }` (job), `OutputOverflow { size }` (job), `ProcessExited { exit_code, signal, run_id }` (service: the **terminal** error — terminal BY KIND; its data lives in the typed payload, `meta.sys` stays closed) |
 | Instances | see modes below |
 | Journal / sim | OUTBOUND records per call (job: per run); spontaneous emissions = INBOUND roots; mocked in scenarios |
+
+**The attribute table (D-2026-08-12-1).** `mode` is the PROFILE
+selector; its omission selects `job` and the checker materializes
+`mode = job` into the effective HIR — omission and the exact
+spelling of a default are one identity (hash included). The plan
+carries the EFFECTIVE attributes; the adapter consumes resolved
+values and never reintroduces a default.
+
+| Attribute | Profile | Domain | Presence |
+|---|---|---|---|
+| `command` | common | CEL → `text` | **Required** |
+| `args` | common | CEL → `array<text>` | Defaulted(`[]`) — omission ≡ `[]`; `null` refuses (no domain is implicitly nullable) |
+| `codec` | common | choice `lines \| jsonl` (`bytes` **reserved**) | **Required** — the framing is never chosen silently (D-2026-08-11-1) |
+| `effect` | common | choice, typed | **Required** |
+| `behavior` | common | choice, typed | **Required** |
+| `timeout` | common | CEL → `duration` | Optional — a true optional: no budget declared, no budget |
+| `env` | common | composite map — **deferred** (named diagnostic until composite domains land; the canonical spelling will be `env = { "K": v }`) | — |
+| `max_output` | job | CEL → `text` (a size string) | Defaulted(`"8MiB"`) |
+| `on_timeout` | job | choice `kill` (one word — "fixed to `kill`") | Defaulted(`kill`) |
+| `correlate` | service | CEL path over runtime data (deferred-only domain) | Optional |
+| `restart` | service | struct (deferred-only domain) | Optional |
+
+`correlate` and `restart` do NOT exist on the job profile: writing
+one there refuses by NAME (« `restart` belongs to
+`Process(mode = service)` and is not applicable to
+`Process(mode = job)` ») — never a generic "forbidden".
 
 **`mode = job` (default — the Unix one-shot; systemd `Type=oneshot`, k8s Job
 lineage)**: one envelope = one spawn. stdin = the request (codec-framed);

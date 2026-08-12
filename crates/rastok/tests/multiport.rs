@@ -10,7 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::stdlib::Registry;
+use rastok::contract::Registry;
 
 /// One input fanning to two named outputs through named node ports.
 const SORTER: &str = r#"
@@ -500,8 +500,8 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
 
 #[test]
 fn a_contract_port_table_travels_without_the_registry() {
+    use rastok::contract::{AttributeSpec, ConnectorContract, Presence, ValueDomain};
     use rastok::plan;
-    use rastok::stdlib::{AttrDomain, AttributeSpec, ConnectorContract};
 
     // A future-shaped contract: named ports beside the trio — what
     // File and the HTTP pair will declare. The m1-slice transport
@@ -511,18 +511,19 @@ fn a_contract_port_table_travels_without_the_registry() {
         name: "Probe",
         input_ports: &["in", "request"],
         output_ports: &["out", "err", "response"],
-        attributes: &[
-            AttributeSpec {
-                name: "effect",
-                required: true,
-                domain: AttrDomain::Word(&["idempotent"]),
-            },
+        common: &[
             AttributeSpec {
                 name: "behavior",
-                required: true,
-                domain: AttrDomain::Word(&["deterministic"]),
+                presence: Presence::Required,
+                domain: ValueDomain::Choice(&["deterministic"]),
+            },
+            AttributeSpec {
+                name: "effect",
+                presence: Presence::Required,
+                domain: ValueDomain::Choice(&["idempotent"]),
             },
         ],
+        selector: None,
         error_set: &["ProbeFailed"],
     };
     let registry = Registry::m0()
@@ -573,23 +574,24 @@ fn a_contract_port_table_travels_without_the_registry() {
 
 #[test]
 fn a_named_connector_edge_defers_by_name() {
-    use rastok::stdlib::{AttrDomain, AttributeSpec, ConnectorContract};
+    use rastok::contract::{AttributeSpec, ConnectorContract, Presence, ValueDomain};
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
         name: "Probe",
         input_ports: &["in", "request"],
         output_ports: &["out", "err", "response"],
-        attributes: &[
-            AttributeSpec {
-                name: "effect",
-                required: true,
-                domain: AttrDomain::Word(&["idempotent"]),
-            },
+        common: &[
             AttributeSpec {
                 name: "behavior",
-                required: true,
-                domain: AttrDomain::Word(&["deterministic"]),
+                presence: Presence::Required,
+                domain: ValueDomain::Choice(&["deterministic"]),
+            },
+            AttributeSpec {
+                name: "effect",
+                presence: Presence::Required,
+                domain: ValueDomain::Choice(&["idempotent"]),
             },
         ],
+        selector: None,
         error_set: &["ProbeFailed"],
     };
     let registry = Registry::m0()
@@ -1072,13 +1074,14 @@ lab g {
 
 #[test]
 fn a_defective_sheet_is_held_at_the_door() {
-    use rastok::stdlib::{ConnectorContract, SheetDefect};
+    use rastok::contract::{ConnectorContract, SheetDefect};
     let sheet = |input_ports: &'static [&'static str], output_ports: &'static [&'static str]| {
         ConnectorContract {
             name: "Bad",
             input_ports,
             output_ports,
-            attributes: &[],
+            common: &[],
+            selector: None,
             error_set: &[],
         }
     };
@@ -1682,24 +1685,25 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     // not know refuses by IGNORANCE (WrongPortDirection). Vm::boot
     // therefore never accepts a plan this machine cannot execute
     // faithfully.
+    use rastok::contract::{AttributeSpec, ConnectorContract, Presence, ValueDomain};
     use rastok::plan::{Edge, EndpointRef, Slot, ValidatedExecutionPlan};
-    use rastok::stdlib::{AttrDomain, AttributeSpec, ConnectorContract};
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
         name: "Probe",
         input_ports: &["in", "request"],
         output_ports: &["out", "err", "response"],
-        attributes: &[
-            AttributeSpec {
-                name: "effect",
-                required: true,
-                domain: AttrDomain::Word(&["idempotent"]),
-            },
+        common: &[
             AttributeSpec {
                 name: "behavior",
-                required: true,
-                domain: AttrDomain::Word(&["deterministic"]),
+                presence: Presence::Required,
+                domain: ValueDomain::Choice(&["deterministic"]),
+            },
+            AttributeSpec {
+                name: "effect",
+                presence: Presence::Required,
+                domain: ValueDomain::Choice(&["idempotent"]),
             },
         ],
+        selector: None,
         error_set: &["ProbeFailed"],
     };
     let registry = Registry::m0()

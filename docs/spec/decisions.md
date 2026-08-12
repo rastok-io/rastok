@@ -5,6 +5,92 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-12-1 — Node attributes: one syntax, one contract metamodel
+
+A configurable property of a Node is an **Attribute**, and every
+attribute is written `name = value` — no other form. The value
+belongs to exactly one of FOUR families:
+
+1. **Bare word** — a closed choice owned by the contract
+   (`mode = job`, `codec = jsonl`). `mode = "job"` is NOT
+   equivalent: it supplies CEL text where the contract expects a
+   choice.
+2. **Expression** — CEL, constant in boot-phase positions. A tag
+   with parenthesized positional arguments and NO body lives here
+   (`duration("5s")`, `bounded(64)`, `asset("logo.png", ct?)` —
+   `asset` merely resolves at build time).
+3. **Braced literal** — struct (`=` entries) or map (`:` entries),
+   `{}` / `{:}` for the empty forms, replaced ATOMICALLY (no
+   implicit patch: `tls.verify = true` is not a patch of `tls`).
+4. **Foreign literal** — `Tag [(binding args)] body`, the body
+   owned by the tag's reader: guests (`jq`, `sql`, `bash`, …, with
+   optional binding `jq(request) { … }`), the raw literals `text`
+   and `base64(ct?)`, the data formats (`avro`, `protobuf`,
+   `parquet`, `msgpack`, `csv` — reserved), and `json <value>`,
+   whose grammar is self-delimiting and therefore needs no braces
+   (`json 1`, `json null` — the M1.2 `[type, root]` identity is
+   untouched).
+
+**Killed, without replacement:** (a) configuration sub-blocks —
+`env { … }`, `init { … }`, `tls { … }`, `jwt { … }`, and the named
+form `auth oauth2_client_credentials { … }` are no longer forms;
+the canonical spelling is a braced-literal attribute
+(`env = { "K": v }`). This removes the property/namespace
+ambiguity, the implicit `env.X` flattening, and group activation
+rules. (b) **Tagged initializers** — `on_crash { … }`,
+`measure { … }`, `exponential { … }`, `linear`, `constant`,
+`fibonacci`, `oauth2_client_credentials` leave the tag vocabulary
+entirely: a plain struct plus the attribute's name suffices, and
+where a DISCRIMINANT existed it becomes a closed-choice FIELD of
+the struct (`Loop.backoff = { curve = exponential, … }`,
+`auth = { scheme = oauth2_client_credentials, … }`). Both dead
+forms refuse with a migration hint, never a generic error. Dotted
+attribute names remain ONLY for owner qualification
+(`Loop.backoff`, `Saga.timeout`).
+
+**The contract metamodel** (module `rastok::contract`, compiler
+layer — never serialized, nothing enters `rastok-core::node`): a
+node declaration resolves a contract, the contract may select a
+PROFILE through one attribute (`Process`: `mode`, default `job`),
+and every attribute carries a `Presence`
+(`Required | Optional | Defaulted(DefaultValue)`) and a
+`ValueDomain` (`Choice | Text | TextList | Duration` implemented;
+`CelPath`, `Struct`, `Map` declared and admitted only behind a
+DEFERRED profile). `Defaulted` absence is sugar: the checker
+injects the contract's default — a `Choice` word directly, a CEL
+default through the SAME chain as author expressions (compile →
+const-eval → domain judgement) — into the HIR BEFORE
+canonicalization, so omission and the exact spelling of the
+default are ONE identity (same HIR, hash, plan). This does not
+merge distinct constant expressions (`duration("60s")` and
+`duration("1m")` keep two trees). `Optional` absence is a real
+state that survives into the plan. The plan carries EFFECTIVE
+attributes only (existing `ConnectorSpec.attributes` pairs — v5
+untouched); adapters CONSUME resolved values and never
+reintroduce a default (an incomplete plan is a violated
+invariant, not something to complete silently).
+`AttrDomain::Forbidden` is REMOVED without replacement: a field of
+another profile is simply absent from the current one, and the
+diagnostic names it (« `restart` belongs to
+`Process(mode = service)` … »); a fixed value is a one-word
+`Choice` (« `on_timeout` is fixed to `kill` … »). Profile
+availability is the BUILD's fact (`ProfileSupport::Deferred`),
+distinct from the contract knowing the profile; `mode = service`
+defers before any service-attribute validation. The `Process`
+table: `command` Required, `args` Defaulted(`[]`) (absence ≡ `[]`;
+`null` refuses — a domain admits `null` only if explicitly
+nullable), `codec` Required (REAFFIRMED: framing changes bytes,
+digest, reply type and error surface — never chosen silently;
+D-2026-08-11-1 holds), `effect`/`behavior` Required, `timeout`
+Optional, and on the job profile `max_output`
+Defaulted(`"8MiB"`), `on_timeout` Choice(`kill`) Defaulted.
+**Rejected:** structured constructors with named parenthesized
+arguments (`on_crash(backoff = …)`) — a struct field does the
+same job inside the one braced form; a `DefaultValue` algebra
+beyond `Choice`/`CelExpression` (text, lists, durations are
+already CEL); serializing any of the metamodel; `ReadOnly` or
+`NotApplicable` in the value domain.
+
 ## D-2026-08-11-1 — The jsonl wire is canonical, both ways
 
 The first structured codec (M1 item 2): `codec = jsonl` on

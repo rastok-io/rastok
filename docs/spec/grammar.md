@@ -27,10 +27,10 @@ file is one of them.
 
 Rules :
 
-- **Attributes always use `=`.** `command = "codex"`, `args = ["app-server"]`, `timeout = duration("5s")`. No exceptions.
+- **Attributes always use `=`.** `command = "codex"`, `args = ["app-server"]`, `timeout = duration("5s")`, `env = { "HOME": "/tmp" }`. No exceptions — there are NO configuration sub-blocks (`env { … }`, `init { … }`, `tls { … }`, `auth oauth2_client_credentials { … }` are dead forms; they refuse with a migration hint, D-2026-08-12-1).
 - **Type annotations always use `:`.** `input msg: struct`, `var count: int`, `connector X : HttpClient`. Never `=`.
-- **Sub-blocks never use `=`.** `env { ... }`, `auth oauth2_client_credentials { ... }`. The block name precedes braces directly.
-- **Tagged values are expressions, not special forms.** `restart = on_crash { ... }`, `Loop.backoff = exponential { ... }`, `out = text { ... }` — the right-hand side is `<tag> { ... }`, the value type decided by the tag (reserved keyword set). An UNTAGGED `{ … }` is the braced literal — `=` entries build a struct, `:` entries a map (D-2026-08-10-6).
+- **An attribute value belongs to one of FOUR families** (D-2026-08-12-1): a BARE WORD from the contract's closed choice (`mode = job`); a CEL EXPRESSION, where a tag with positional arguments and no body is an ordinary call (`duration("5s")`, `asset("logo.png")`); a BRACED LITERAL — `=` entries build a struct, `:` entries a map (D-2026-08-10-6), replaced atomically, never patched; or a FOREIGN LITERAL `tag [(binding)] body` whose body belongs to the tag's reader (`sql { … }`, `text { … }`, `base64(ct) { … }`, `jq(request) { … }`, `json <value>` — self-delimiting). Tagged INITIALIZERS (`on_crash { … }`, `measure { … }`, `exponential { … }`) are dead: a plain struct plus the attribute's name suffices, a former discriminant is a closed-choice FIELD (`Loop.backoff = { curve = exponential, … }`).
+- **Dotted attribute names are owner qualification ONLY** (`Loop.backoff`, `Saga.timeout`, `HttpClient.timeout`) — never a patch path into a composite value.
 - **The form is decided at the second token** — see `Formal grammar` at the bottom for the LL(1) decision table.
 
 Example mixing all forms :
@@ -46,11 +46,11 @@ connector codex : Process {        // type annotation with ":"
   behavior = probabilistic
   // in / out / err = stdin / stdout / stderr (Process defaults — Connectors declare no ports)
 
-  init {                           // sub-block : startup handshake
+  init = {                         // composite attribute : startup handshake
     message = { method = "initialize" }
     timeout = duration("15s")
   }
-  restart  = on_crash {            // tagged value
+  restart  = {                     // struct value ; the attribute names it
     backoff = "1s..30s"
     max_attempts = 5
   }
@@ -168,10 +168,11 @@ Supporting concepts :
   ports). Connected to other Nodes via DAG edges.
 - **state binding** — a Node's typed access to a partition's key instance. Declared via `per <partition>` on the Node. *Not* an arrow in the DAG ; it is a binding to a partition-keyed state cell held by the runtime.
 - **external configuration** — (Connector only) attributes such as URL,
-  path, command, codec, protocol, timeout, retry policy, etc. Attributes
-  may be grouped into **namespaces** at the Connector implementer's
-  discretion (`env { … }`, `jwt { cache_ttl = … }`, `tls { … }`) — sugar
-  for flat prefixed attributes (`jwt.cache_ttl`).
+  path, command, codec, protocol, timeout, retry policy, etc. A grouped
+  configuration is a COMPOSITE attribute (`env = { … }`,
+  `jwt = { cache_ttl = … }`, `tls = { … }`) — one value, replaced
+  atomically; there is no namespace sugar and no flat-prefix
+  flattening (D-2026-08-12-1).
 
 This keeps protocol layers separate :
 
@@ -244,7 +245,7 @@ graph sessions per session {
     args     = ["app-server"]
     mode     = service
     cwd      = cwd                        // graph-level val, by name
-    env { CODEX_HOME = codex_home }
+    env = { "CODEX_HOME": codex_home }
 
     codec    = jsonl
     protocol = "jsonrpc"
@@ -252,7 +253,7 @@ graph sessions per session {
     behavior = probabilistic
     // in / out / err = stdin / stdout / stderr (Process defaults — no port declaration)
 
-    init {
+    init = {
       message = { method = "initialize" }
       timeout = duration("10s")
     }
@@ -791,7 +792,7 @@ Writing two arrows in opposite directions gives a compile error. Express the sam
 
 | Need | Pattern |
 |---|---|
-| Retry on failure | The `: Loop` aspect on the Connector (`Loop.variant = measure { initial = N ; next = value - 1 ; until = value <= 0 }`; `Loop.backoff = exponential { … }`; `on err where err.transient { }`) — see [loop.md](loop.md) |
+| Retry on failure | The `: Loop` aspect on the Connector (`Loop.variant = { kind = measure, initial = N, next = value - 1, until = value <= 0 }`; `Loop.backoff = { curve = exponential, … }`; `on err where err.transient { }`) — see [loop.md](loop.md) |
 | DLQ + replay | Failed → `Memory`; operations tooling reads a bounded snapshot, then injects selected values as roots of a new run |
 | Iterative refinement, fixed N | Static unfolding : `step -> step -> step` |
 | Iterative refinement, dynamic N | the bounded `: Loop` aspect |
@@ -1202,16 +1203,16 @@ TYPE_KW    = { "variant",                                             // the val
                "bytes", "text", "null",
                "decimal", "date", "timestamp", "timestamp_ntz",      // scalar logical
                "time", "uuid", "duration" }
-TAG_KW     = { "jq", "bash", "sql", "python", "rust",
-               "json", "avro", "protobuf", "parquet", "msgpack",     // wire codecs — `json` doubles as the json_value literal tag (D-2026-08-10-6)
+TAG_KW     = { "jq", "bash", "sql", "python", "rust",                // guests — raw bodies
+               "json", "avro", "protobuf", "parquet", "msgpack",     // data formats — `json` is the self-delimiting json_value literal (D-2026-08-10-6)
                "base64", "csv",                                       // `hex` and `file` are DEAD (D-2026-08-10-5/-6)
                "text",                                                // the verbatim block tag (also a TYPE_KW — position disambiguates)
-               "asset",                                               // build-time repo bytes (D-2026-08-10-5)
-               "oauth2_client_credentials",
-               "measure",                                             // Loop.variant value (loop.md §2)
-               "exponential", "linear", "constant", "fibonacci",     // backoff constructors (loop.md §4)
-               "on_crash",                                           // policy constructor (restart = on_crash { … })
-               "bounded", "unbounded", "regex" }
+               "asset",                                               // build-time repo bytes (D-2026-08-10-5) — parens, no body
+               "bounded", "unbounded", "regex" }                      // expression-space constructors
+// Tagged INITIALIZERS are DEAD (D-2026-08-12-1): oauth2_client_credentials,
+// measure, exponential, linear, constant, fibonacci, on_crash left the
+// vocabulary — a plain struct with a closed-choice discriminant FIELD
+// replaces each one.
 LITERAL_KW = { "true", "false", "null", "nothing",
                "block", "drop_oldest", "drop_newest", "error",
                "cascade", "mirror", "none", "local", "global",   // none/local/global = durability scopes ; none/cascade/mirror = close policy
@@ -1228,9 +1229,10 @@ LITERAL_KW = { "true", "false", "null", "nothing",
 
 `DECL_KW` introduces declarations, labeled blocks, handler clauses
 (`where`/`having`/`within`/`last`) and the narrowing operator `as`.
-`TAG_KW` introduces tagged-value expressions (`jq { ... }`,
-`jq(req) { ... }`, `bounded(64)`, `exponential { ... }`, `on_crash { ... }`,
-`measure { ... }`). `TYPE_KW` names the value-type tree — `variant` (top), the
+`TAG_KW` introduces foreign-literal expressions (`jq { ... }`,
+`jq(req) { ... }`, `base64(ct) { ... }`, `json <value>`) and the
+expression-space constructors (`bounded(64)` — parens, no body).
+`TYPE_KW` names the value-type tree — `variant` (top), the
 composites, and the scalar physical / logical types. `LITERAL_KW` are enum-like
 idents allowed as scalar values.
 
@@ -1303,9 +1305,10 @@ type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL o
                                                                   //   tree ≤ 4096 nodes, ≤ 256 fields/struct, ≤ 64 KiB (D-2026-08-10-8)
 
 // A Node carrying `: Loop` must have exactly one qualified attribute:
-//   Loop.variant = measure { initial = 5; next = value - 1; until = value <= 0 }
-// This uses the ordinary `attribute` and `tagged_value` productions. Semantic
-// validation of the measure fields and bounds is specified in loop.md §2/§8.
+//   Loop.variant = { kind = measure, initial = 5, next = value - 1, until = value <= 0 }
+// This uses the ordinary `attribute` and `braced_value` productions
+// (D-2026-08-12-1 — the discriminant is a closed-choice field). Semantic
+// validation of the fields and bounds is specified in loop.md §2/§8.
 
 per_clause        ::= "per" ( IDENT ( "," IDENT )*                   // reference declared partition(s) ; composite = tuple
                             | partition_inline )                      // inline ANONYMOUS partition (private to this node ; no name ⇒ no cross-partition read, no <part>.key reference)
@@ -1381,17 +1384,18 @@ lifetime_value    ::= cel_expr                                        // bare du
                     | "fixed" cel_expr                                 //   (constant, duration-typed)
                     | "window" cel_expr ( "tumbling" | "sliding" )     //   (constant, duration-typed)
 
-attribute         ::= lvalue "=" value                               // dotted keys allowed (jwt.cache_ttl = …)
-sub_block         ::= IDENT "{" struct_body "}"
-struct_body       ::= ( attr_or_block ( ","? attr_or_block )* )?
-attr_or_block     ::= lvalue "=" value                               // dotted key for an assignment (meta.app.label = … ; meta.sys is read-only)
-                    | IDENT "{" struct_body "}"                       // single IDENT for a sub-block (env { … })
+attribute         ::= lvalue "=" value                               // dots = owner qualification ONLY (Loop.backoff = …)
+struct_body       ::= ( attr_entry ( ","? attr_entry )* )?
+attr_entry        ::= lvalue "=" value                               // dotted key for an assignment (meta.app.label = … ; meta.sys is read-only)
+// sub_block (IDENT "{" struct_body "}") is a DEAD form (D-2026-08-12-1):
+// the parser still recognizes it to refuse with the migration hint
+// « `env { … }` is no longer a configuration form; write `env = { … }` ».
 
 // ============ VALUES : builders by prefix, CEL for everything scalar ============
 // CEL is the core's expression grammar. There are no `ref`, `interp`, or
 // leading-dot path forms.
 
-value             ::= tagged_value                                    // jq { … }, measure { … }, exponential { … }, …
+value             ::= tagged_value                                    // jq { … }, sql { … } — foreign literals
                     | tagged_block_value                              // text { … }, base64 { … } — tagged raw blocks
                     | braced_value                                    // { … } — the braced record ; classified in envelope positions
                     | "."                                             // identity — exact re-emission (envelope positions only)
@@ -1465,11 +1469,11 @@ json_value        ::= JSON_VALUE                                      // one com
                     // empty record, never an identity. Elsewhere the body is
                     // simply a record. (simulation-semantics.md §4)
 
-tagged_value      ::= TAG_KW ( "(" arg_list ")" )? ( "{" raw_or_struct "}" )?   // at least one of (args) / {block}
+tagged_value      ::= TAG_KW ( "(" arg_list ")" )? ( "{" raw_body "}" )?   // at least one of (args) / {block}
                                                     // jq { ... }       raw body
                                                     // jq(req) { ... }  raw body scoped to envelope `req` (join meta-attribution)
-                                                    // bounded(64)      paren args
-                                                    // measure { … } / exponential { … } / on_crash { backoff = … }  struct body
+                                                    // bounded(64)      paren args, no body — expression space
+                                                    // a TAG with a struct body is a DEAD form (D-2026-08-12-1)
 tagged_block_value ::= "text" RAW_BLOCK                              // verbatim text — margin set by the closing brace (D-2026-08-10-6)
                     | "base64" ( "(" STRING ")" )? RAW_BLOCK          // inline bytes, optional content_type (whole-data only with it)
                     | "json" json_value                               // any JSON value, delegated to the JSON reader — always variant

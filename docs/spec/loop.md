@@ -19,7 +19,8 @@ stack frame. The runtime model is tail recursion over immutable envelopes.
 Every Loop declares exactly one qualified attribute:
 
 ```rastok
-Loop.variant = measure {
+Loop.variant = {
+  kind = measure
   initial = 10
   next = value - 1
   until = value <= 0
@@ -39,7 +40,8 @@ The `: Loop` annotation is legal on every Node family:
 graph refine : Loop {
   input in: struct { error_margin: double, remaining_steps: int }
 
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     source = data.remaining_steps
     until = data.error_margin < 0.001
     limit = 100
@@ -50,7 +52,8 @@ graph refine : Loop {
 
 // Operator: one pure handler is applied again.
 operator repeat : Loop {
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     initial = 10
     next = value - 1
     until = value <= 0
@@ -63,12 +66,14 @@ operator repeat : Loop {
 connector pay : HttpClient + Loop {
   url = "https://payments.example"
 
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     initial = 5
     next = value - 1
     until = value <= 0
   }
-  Loop.backoff = exponential {
+  Loop.backoff = {
+    curve = exponential
     initial = duration("100ms")
     max = duration("5s")
   }
@@ -112,7 +117,8 @@ expressions. They cannot read a clock, perform I/O, or mutate state.
 ### 2.1 Counted form
 
 ```rastok
-Loop.variant = measure {
+Loop.variant = {
+  kind = measure
   initial = 10
   next = value - 1
   until = value <= 0
@@ -142,7 +148,8 @@ graph drain : Loop {
     remaining: int
   }
 
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     source = data.remaining
     until = value <= 0
     limit = 10_000
@@ -204,7 +211,8 @@ technical exhaustion into a business outcome.
 `Loop.backoff` is optional and applies between applications:
 
 ```rastok
-Loop.backoff = exponential {
+Loop.backoff = {
+  curve = exponential
   initial = duration("100ms")
   factor = 2.0
   max = duration("5s")
@@ -253,7 +261,8 @@ or nested lexically.
 connector reserve : HttpClient + Saga + Loop {
   effect = compensable
 
-  Loop.variant = measure {
+  Loop.variant = {
+    kind = measure
     initial = 5
     next = value - 1
     until = value <= 0
@@ -374,7 +383,8 @@ executable checks in §2.3 and §12 are normative.
 For the counted declaration
 
 ```rastok
-Loop.variant = measure {
+Loop.variant = {
+  kind = measure
   initial = 5
   next = value - 1
   until = value <= 0

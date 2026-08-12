@@ -90,7 +90,12 @@ const RAW_TAGS: &[&str] = &[
     "jq", "bash", "sql", "python", "rust", "json", "text", "base64",
 ];
 
-/// Tag words that open tagged-value expressions.
+/// Tag words that open tagged-value expressions: foreign literals
+/// (guests, raw literals, data formats, `json`) and the
+/// expression-space constructors. Tagged INITIALIZERS left the
+/// vocabulary (D-2026-08-12-1) — a plain struct with a
+/// closed-choice discriminant field replaces each one, and the
+/// dead spelling refuses with its migration hint.
 const TAG_WORDS: &[&str] = &[
     "jq",
     "bash",
@@ -106,6 +111,14 @@ const TAG_WORDS: &[&str] = &[
     "csv",
     "text",
     "asset",
+    "bounded",
+    "unbounded",
+    "regex",
+];
+
+/// The tagged-initializer spellings D-2026-08-12-1 killed — kept
+/// only to refuse with a useful migration.
+const DEAD_INITIALIZER_TAGS: &[&str] = &[
     "oauth2_client_credentials",
     "measure",
     "exponential",
@@ -113,9 +126,6 @@ const TAG_WORDS: &[&str] = &[
     "constant",
     "fibonacci",
     "on_crash",
-    "bounded",
-    "unbounded",
-    "regex",
 ];
 
 /// Parses one `.rkg` source into a syntax tree, accumulating
@@ -1589,6 +1599,46 @@ impl<'src> Parser<'src, '_> {
                 Value::Nothing(token.span)
             }
             (TokenKind::Ident, tag) if TAG_WORDS.contains(&tag) => self.tagged_value(),
+            // A dead initializer spelling refuses with its exact
+            // migration (D-2026-08-12-1) — never a generic CEL error.
+            (TokenKind::Ident, tag) if DEAD_INITIALIZER_TAGS.contains(&tag) => {
+                let tag = tag.to_string();
+                let token = self.bump();
+                self.bag.push(
+                    Diagnostic::new(
+                        E_PARSE_EXPECTED,
+                        Phase::Parse,
+                        format!(
+                            "`{tag} {{ … }}` is a dead tagged-initializer spelling; write a \
+                             braced struct (`name = {{ … }}`) — a former discriminant becomes \
+                             a field (D-2026-08-12-1)"
+                        ),
+                    )
+                    .with_span(token.span)
+                    .with_field("tag", tag),
+                );
+                // Swallow `(args)` and `{ body }` so one fault
+                // speaks once.
+                if self.eat(TokenKind::LParen).is_some() {
+                    let mut depth = 1u32;
+                    while depth > 0 {
+                        match self.peek().kind {
+                            TokenKind::Eof => break,
+                            TokenKind::LParen => depth += 1,
+                            TokenKind::RParen => depth -= 1,
+                            _ => {}
+                        }
+                        self.bump();
+                    }
+                }
+                if self.peek().kind == TokenKind::LBrace {
+                    self.skip_balanced_block();
+                }
+                Value::Cel(CelExpr {
+                    text: String::new(),
+                    span: token.span,
+                })
+            }
             _ => Value::Cel(self.cel(position)),
         }
     }

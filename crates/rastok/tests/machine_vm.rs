@@ -18,9 +18,9 @@ use rastok::boundary::{
     CallOutcome, Draft, IngressAuthority, Response, SubmissionSequence, TypedError,
 };
 use rastok::compiler::compile;
+use rastok::contract::Registry;
 use rastok::envelope::{Encoding, Namespace, Scalar, Value};
 use rastok::journal::{MemJournal, OutboundStatus, Record};
-use rastok::stdlib::Registry;
 
 const M0_PROBE: &str = r#"
 graph m0_probe : App {

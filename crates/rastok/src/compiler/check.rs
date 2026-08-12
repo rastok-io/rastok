@@ -17,9 +17,9 @@ use crate::compiler::syntax::{
     OperatorItem, PortRef, ScalarType, Statement as SynStatement, StructBody, StructEntry,
     SyntaxTree, TopDecl, Trigger as SynTrigger, TypeRef, ValDecl, Value as SynValue, VarDecl,
 };
+use crate::contract;
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 use crate::node;
-use crate::stdlib;
 use std::collections::BTreeMap;
 
 /// Diagnostic for a unit without exactly one `: App` graph.
@@ -157,7 +157,7 @@ pub struct Unit {
 #[must_use]
 pub fn check(
     unit: &Unit,
-    registry: &stdlib::Registry,
+    registry: &contract::Registry,
     bag: &mut Bag,
     asset_root: Option<&std::path::Path>,
 ) -> Option<Hir> {
@@ -350,7 +350,7 @@ pub fn check(
 
 struct Checker<'bag, 'registry> {
     bag: &'bag mut Bag,
-    registry: &'registry stdlib::Registry,
+    registry: &'registry contract::Registry,
     /// The `ext` vocabulary the instantiated connectors' sheets
     /// declare — the standard `content_type` is always known.
     ext_fields: std::collections::BTreeSet<String>,
@@ -1411,7 +1411,7 @@ impl Checker<'_, '_> {
         // that validator has no Registry to consult (m1-slice's
         // transport rule). Types join when the sheets carry them.
         let (error_set, contract_ports) = match self.registry.connector(&trait_name) {
-            stdlib::Availability::Available(contract) => {
+            contract::Availability::Available(contract) => {
                 let mut ports = Vec::new();
                 for (name, direction) in contract
                     .input_ports
@@ -1453,16 +1453,22 @@ impl Checker<'_, '_> {
             handlers: Vec::new(),
         };
         self.node_body(&decl.body, &mut node, graph_signature, graph_consts, true);
-        self.contract(&node, decl);
+        self.contract(&mut node, decl);
         Some(node)
     }
 
-    /// Validates a connector declaration against its contract sheet.
-    fn contract(&mut self, node: &Node, decl: &ConnectorDecl) {
+    /// Validates a connector declaration against its contract sheet
+    /// (D-2026-08-12-1): resolve the contract, resolve the PROFILE
+    /// through the selector (written or defaulted), validate the
+    /// written attributes against the composed sheet, then inject
+    /// the contract's defaults into the effective HIR — BEFORE
+    /// canonicalization, so omission and the exact spelling of a
+    /// default are one identity.
+    fn contract(&mut self, node: &mut Node, decl: &ConnectorDecl) {
         let symbol = &decl.annotation.symbols[0];
         let contract = match self.registry.connector(&symbol.text) {
-            stdlib::Availability::Available(contract) => contract,
-            stdlib::Availability::Declared => {
+            contract::Availability::Available(contract) => contract,
+            contract::Availability::Declared => {
                 self.bag.push(
                     Diagnostic::new(
                         E_CONNECTOR_UNAVAILABLE,
@@ -1477,7 +1483,7 @@ impl Checker<'_, '_> {
                 );
                 return;
             }
-            stdlib::Availability::Unknown => {
+            contract::Availability::Unknown => {
                 self.bag.push(
                     Diagnostic::new(
                         E_CONNECTOR_UNAVAILABLE,
@@ -1504,67 +1510,171 @@ impl Checker<'_, '_> {
                 })
                 .unwrap_or(decl.span)
         };
-        // Sheet-forbidden attributes refuse on the declaration itself,
-        // before any value evaluation.
+        let refuse = |bag: &mut Bag, name: &str, span: Span, detail: String| {
+            bag.push(
+                Diagnostic::new(
+                    E_CONTRACT_ATTR,
+                    Phase::Check,
+                    format!("`{name}` violates the {} sheet: {detail}", contract.name),
+                )
+                .with_span(span)
+                .with_field("attribute", name.to_string())
+                .with_field("detail", detail),
+            );
+        };
+        // 1. The PROFILE: the selector's written word, or its
+        // default. The admitted words are derived from the profiles.
+        let mut profile: Option<&contract::Profile> = None;
+        let mut selector_written = false;
+        if let Some(selector) = &contract.selector {
+            let words: Vec<&str> = selector
+                .profiles
+                .iter()
+                .map(|profile| profile.word)
+                .collect();
+            let written = node
+                .attributes()
+                .iter()
+                .find(|attribute| attribute.name == selector.attribute)
+                .cloned();
+            let word: Option<String> = match &written {
+                Some(attribute) => {
+                    selector_written = true;
+                    match &attribute.value {
+                        AttrValue::Word(word) => Some(word.clone()),
+                        AttrValue::Const(_) => {
+                            refuse(
+                                self.bag,
+                                selector.attribute,
+                                span_of(selector.attribute),
+                                format!(
+                                    "the profile selector expects one of {words:?} as a bare \
+                                     word, not a CEL expression"
+                                ),
+                            );
+                            None
+                        }
+                    }
+                }
+                None => selector.default.map(String::from),
+            };
+            match word {
+                Some(word) => match contract.profile(&word) {
+                    Some(found) => {
+                        profile = Some(found);
+                        if let contract::ProfileSupport::Deferred(reason) = found.support {
+                            self.deferred(reason, span_of(selector.attribute));
+                        }
+                    }
+                    None => {
+                        refuse(
+                            self.bag,
+                            selector.attribute,
+                            span_of(selector.attribute),
+                            format!("expected one of {words:?}, got `{word}`"),
+                        );
+                        return;
+                    }
+                },
+                None if selector_written => return,
+                None => {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTRACT_REQUIRED,
+                            Phase::Check,
+                            format!(
+                                "the {} sheet requires `{}` (no default profile)",
+                                contract.name, selector.attribute
+                            ),
+                        )
+                        .with_span(decl.span)
+                        .with_field("attribute", selector.attribute),
+                    );
+                    return;
+                }
+            }
+        }
+        let deferred_profile = matches!(
+            profile.map(|profile| profile.support),
+            Some(contract::ProfileSupport::Deferred(_))
+        );
+        // 2. NAME-level judgement is SYNTACTIC — an attribute whose
+        // value failed to check still deserves the precise refusal
+        // ("belongs to another profile" / "not on the sheet").
         for item in &decl.body {
             let OperatorItem::Attribute(attribute) = item else {
                 continue;
             };
-            if attribute.target.segments.len() != 1 {
+            let name = attribute
+                .target
+                .segments
+                .iter()
+                .map(|segment| segment.text.as_str())
+                .collect::<Vec<_>>()
+                .join(".");
+            if contract
+                .selector
+                .as_ref()
+                .is_some_and(|selector| selector.attribute == name)
+            {
                 continue;
             }
-            let name = &attribute.target.segments[0].text;
-            if let Some(stdlib::AttributeSpec {
-                domain: stdlib::AttrDomain::Forbidden(reason),
-                ..
-            }) = contract.attribute(name)
-            {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_CONTRACT_ATTR,
-                        Phase::Check,
-                        format!("`{name}` violates the {} sheet: {reason}", contract.name),
-                    )
-                    .with_span(attribute.span)
-                    .with_field("attribute", name.clone())
-                    .with_field("detail", *reason),
+            if contract.attribute(profile, &name).is_some() {
+                continue;
+            }
+            if let Some(owner) = contract.owning_profile(&name) {
+                let selector = contract
+                    .selector
+                    .as_ref()
+                    .map_or("mode", |selector| selector.attribute);
+                let current = profile.map_or("?", |profile| profile.word);
+                refuse(
+                    self.bag,
+                    &name,
+                    attribute.span,
+                    format!(
+                        "`{name}` belongs to `{contract}({selector} = {owner})` and is not \
+                         applicable to `{contract}({selector} = {current})`",
+                        contract = contract.name,
+                        owner = owner.word,
+                    ),
+                );
+            } else {
+                refuse(
+                    self.bag,
+                    &name,
+                    attribute.span,
+                    String::from("not on the contract sheet"),
                 );
             }
         }
+        // 3. Every checked attribute's VALUE against its domain.
         for attribute in node.attributes() {
-            if matches!(
-                contract.attribute(&attribute.name),
-                Some(stdlib::AttributeSpec {
-                    domain: stdlib::AttrDomain::Forbidden(_),
-                    ..
-                })
-            ) {
+            if contract
+                .selector
+                .as_ref()
+                .is_some_and(|selector| selector.attribute == attribute.name)
+            {
                 continue;
             }
             let span = span_of(&attribute.name);
-            let Some(spec) = contract.attribute(&attribute.name) else {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_CONTRACT_ATTR,
-                        Phase::Check,
-                        format!(
-                            "`{}` is not on the {} contract sheet",
-                            attribute.name, contract.name
-                        ),
-                    )
-                    .with_span(span)
-                    .with_field("attribute", attribute.name.clone())
-                    .with_field("detail", "not on the contract sheet"),
-                );
+            let Some(spec) = contract.attribute(profile, &attribute.name) else {
+                // The syntactic pre-pass already refused the name.
                 continue;
             };
+            if deferred_profile
+                && contract
+                    .common
+                    .iter()
+                    .all(|common| common.name != attribute.name)
+            {
+                // A deferred profile's own attributes are declared,
+                // not validated — the deferral already spoke.
+                continue;
+            }
             let fault: Option<String> = match (&spec.domain, &attribute.value) {
-                (stdlib::AttrDomain::Forbidden(reason), _) => Some((*reason).to_string()),
-                (stdlib::AttrDomain::Word(words), AttrValue::Word(word)) => {
+                (contract::ValueDomain::Choice(words), AttrValue::Word(word)) => {
                     if words.contains(&word.as_str()) {
-                        if attribute.name == "mode" && word == "service" {
-                            self.deferred("the Process service mode", span);
-                        }
                         // The runtime companions — idempotency keys
                         // and `on compensate` — are not executable in
                         // this subset; admitting the words without
@@ -1573,50 +1683,70 @@ impl Checker<'_, '_> {
                             self.deferred("compensable and irreversible effects", span);
                         }
                         None
+                    } else if let [only] = words {
+                        let current = profile.map_or("?", |profile| profile.word);
+                        let selector = contract
+                            .selector
+                            .as_ref()
+                            .map_or("mode", |selector| selector.attribute);
+                        Some(format!(
+                            "`{name}` is fixed to `{only}` for `{contract}({selector} = \
+                             {current})`",
+                            name = attribute.name,
+                            contract = contract.name,
+                        ))
                     } else {
                         Some(format!("expected one of {words:?}, got `{word}`"))
                     }
                 }
-                (stdlib::AttrDomain::Text, AttrValue::Const(constant))
-                    if matches!(constant.value, cel::Value::Text(_)) =>
-                {
-                    None
-                }
-                (stdlib::AttrDomain::TextList, AttrValue::Const(constant)) => {
+                (contract::ValueDomain::Choice(words), AttrValue::Const(constant)) => {
                     match &constant.value {
-                        cel::Value::List(items)
-                            if items.iter().all(|item| matches!(item, cel::Value::Text(_))) =>
-                        {
-                            None
-                        }
-                        _ => Some(String::from("expected a list of text values")),
+                        cel::Value::Text(text) if words.contains(&text.as_str()) => Some(format!(
+                            "expected one of {words:?} as a bare word; `\"{text}\"` is CEL \
+                             text — write `{text}`"
+                        )),
+                        _ => Some(format!("expected one of {words:?} as a bare word")),
                     }
                 }
-                (stdlib::AttrDomain::Duration, AttrValue::Const(constant))
-                    if matches!(constant.value, cel::Value::Duration(_)) =>
-                {
-                    None
+                (
+                    contract::ValueDomain::Text
+                    | contract::ValueDomain::TextList
+                    | contract::ValueDomain::Duration,
+                    AttrValue::Word(word),
+                ) => Some(format!(
+                    "expected a CEL expression fitting the {:?} domain; `{word}` is a bare word",
+                    spec.domain
+                )),
+                (domain, AttrValue::Const(constant)) if domain.implemented() => {
+                    if domain.admits(&constant.value) {
+                        None
+                    } else {
+                        Some(format!("the value does not fit the {domain:?} domain"))
+                    }
                 }
                 (domain, _) => Some(format!("the value does not fit the {domain:?} domain")),
             };
             if let Some(detail) = fault {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_CONTRACT_ATTR,
-                        Phase::Check,
-                        format!(
-                            "`{}` violates the {} sheet: {detail}",
-                            attribute.name, contract.name
-                        ),
-                    )
-                    .with_span(span)
-                    .with_field("attribute", attribute.name.clone())
-                    .with_field("detail", detail),
-                );
+                refuse(self.bag, &attribute.name, span, detail);
             }
         }
-        for spec in contract.attributes {
-            if spec.required
+        if deferred_profile {
+            // No required-check, no injection: the deferral already
+            // refused the compilation honestly.
+            return;
+        }
+        // 4. Required attributes of the composed sheet.
+        let composed: Vec<&contract::AttributeSpec> = contract
+            .common
+            .iter()
+            .chain(
+                profile
+                    .map(|profile| profile.attributes)
+                    .unwrap_or_default(),
+            )
+            .collect();
+        for spec in &composed {
+            if spec.presence == contract::Presence::Required
                 && !node
                     .attributes()
                     .iter()
@@ -1632,6 +1762,55 @@ impl Checker<'_, '_> {
                     .with_field("attribute", spec.name),
                 );
             }
+        }
+        // 5. Defaults become EFFECTIVE HIR (D-2026-08-12-1): the
+        // selector's word first, then every absent Defaulted
+        // attribute — a Choice word directly, a CEL default through
+        // the SAME chain as author expressions (closed signature, no
+        // consts: a standard contract reads nothing).
+        let mut injected: Vec<Attribute> = Vec::new();
+        if let Some(selector) = &contract.selector
+            && !selector_written
+            && let Some(word) = selector.default
+        {
+            injected.push(Attribute {
+                name: selector.attribute.to_string(),
+                value: AttrValue::Word(word.to_string()),
+            });
+        }
+        for spec in &composed {
+            let contract::Presence::Defaulted(default) = &spec.presence else {
+                continue;
+            };
+            if node
+                .attributes()
+                .iter()
+                .any(|attribute| attribute.name == spec.name)
+            {
+                continue;
+            }
+            let value = match default {
+                contract::DefaultValue::Choice(word) => Some(AttrValue::Word(word.to_string())),
+                contract::DefaultValue::CelExpression(source) => self
+                    .constant(
+                        &CelExpr {
+                            text: (*source).to_string(),
+                            span: decl.span,
+                        },
+                        &cel::Signature::new(),
+                        &BTreeMap::new(),
+                    )
+                    .map(AttrValue::Const),
+            };
+            if let Some(value) = value {
+                injected.push(Attribute {
+                    name: spec.name.to_string(),
+                    value,
+                });
+            }
+        }
+        if let NodeRole::Connector { attributes, .. } = &mut node.role {
+            attributes.extend(injected);
         }
     }
 
@@ -1766,7 +1945,21 @@ impl Checker<'_, '_> {
                     }
                 }
                 OperatorItem::SubBlock(block) => {
-                    self.deferred("a connector namespace block", block.span);
+                    // A configuration sub-block is a DEAD form
+                    // (D-2026-08-12-1) — refused with its migration,
+                    // never a generic error.
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTRACT_ATTR,
+                            Phase::Check,
+                            format!(
+                                "`{name} {{ … }}` is no longer a configuration form; write `{name} = {{ … }}`",
+                                name = block.name.text
+                            ),
+                        )
+                        .with_span(block.span)
+                        .with_field("attribute", block.name.text.clone()),
+                    );
                 }
                 OperatorItem::Handler(_) => {}
                 OperatorItem::Error(_) => {}
@@ -4568,7 +4761,7 @@ mod tests {
         let unit = Unit {
             files: vec![(SourceId::new(0), tree)],
         };
-        let hir = check(&unit, &stdlib::Registry::m0(), &mut bag, None);
+        let hir = check(&unit, &contract::Registry::m0(), &mut bag, None);
         (hir, bag)
     }
 
@@ -4620,7 +4813,11 @@ graph m0_probe : App {
         let echo = &hir.app.nodes[0];
         assert_eq!(echo.category(), node::Kind::Connector);
         assert_eq!(echo.connector_trait(), Some("Process"));
-        assert_eq!(echo.attributes().len(), 5);
+        // The EFFECTIVE sheet (D-2026-08-12-1): the five written
+        // attributes plus the injected defaults — `args = []` and,
+        // on the job profile, `max_output = "8MiB"` and
+        // `on_timeout = kill`. `mode` was written here.
+        assert_eq!(echo.attributes().len(), 8);
         assert_eq!(
             echo.attributes()[0].value,
             AttrValue::Word(String::from("job"))
@@ -4755,7 +4952,9 @@ graph m0_probe : App {
     }
 
     #[test]
-    fn correlate_on_a_job_carries_the_sheet_reason() {
+    fn correlate_on_a_job_names_the_owning_profile() {
+        // D-2026-08-12-1: a field of another profile is ABSENT here,
+        // and the diagnostic names its owner — never "forbidden".
         let source = "graph g : App {\n  connector c : Process {\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n    correlate = data.id\n  }\n  . -> c -> .\n}\n";
         let (_, bag) = check_source(source);
         let diagnostic = bag
@@ -4763,7 +4962,20 @@ graph m0_probe : App {
             .iter()
             .find(|diagnostic| diagnostic.code() == E_CONTRACT_ATTR)
             .expect("the correlate refusal");
-        assert!(diagnostic.message().contains("process boundary"));
+        assert!(
+            diagnostic
+                .message()
+                .contains("belongs to `Process(mode = service)`"),
+            "{}",
+            diagnostic.message()
+        );
+        assert!(
+            diagnostic
+                .message()
+                .contains("not applicable to `Process(mode = job)`"),
+            "{}",
+            diagnostic.message()
+        );
     }
 
     #[test]

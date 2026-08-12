@@ -11,7 +11,7 @@
 //! ingress port as key 24.
 
 use rastok::compiler::compile;
-use rastok::stdlib::Registry;
+use rastok::contract::Registry;
 use std::path::{Path, PathBuf};
 
 fn example() -> PathBuf {

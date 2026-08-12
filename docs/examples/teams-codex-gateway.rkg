@@ -8,7 +8,7 @@
 //   - inference-first ports : Connectors declare none (their type + codec
 //     define them) ; nodes lean on the default in/out/err ; extra ports are
 //     declared by NAME only (types inferred ; annotate `: T` only to pin)
-//   - Connector-property namespaces (env { … }, jwt { … }, auth = … { … })
+//   - Composite configuration attributes (env = { … }, jwt = { … }, auth = { … })
 //   - handler guards, the `data` payload, meta.sys / meta.app, partitions,
 //     deterministic simulations
 //
@@ -38,9 +38,9 @@ graph sessions per session {          // declaration = instance
     args = ["app-server"]
     mode = service
     cwd = cwd                              // graph-level val, by name
-    env {
-      CODEX_HOME = codex_home
-      RUST_LOG   = "info"
+    env = {
+      "CODEX_HOME": codex_home
+      "RUST_LOG": "info"
     }
     codec = jsonl
     protocol = "jsonrpc"
@@ -48,12 +48,12 @@ graph sessions per session {          // declaration = instance
     behavior = probabilistic
     // in / out / err = stdin / stdout / stderr (Process defaults, typed by codec)
 
-    init {
+    init = {
       message = { method = "initialize" }
       timeout = duration("10s")
     }
     kill = process_group
-    restart = on_crash { backoff = "1s..30s", max_attempts = 5 }
+    restart = { backoff = "1s..30s", max_attempts = 5 }
   }
 
   connector codex_logs : File {
@@ -88,7 +88,7 @@ graph teams_inbound : App {
 
     hmac = env("TEAMS_HMAC_SECRET")
     nonce_ttl = duration("5m")
-    jwt {
+    jwt = {
       jwks_url   = "https://login.botframework.com/v1/.well-known/keys"
       cache_ttl  = duration("24h")
       audience   = env("TEAMS_BOT_APP_ID")
@@ -242,14 +242,16 @@ graph teams_inbound : App {
 
     rate_limit = "10/s per meta.app.session_key"
     // retry = the Loop aspect
-    Loop.variant = measure {
+    Loop.variant = {
+      kind = measure
       initial = 3
       next = value - 1
       until = value <= 0
     }
-    Loop.backoff = exponential { initial = duration("200ms") }
+    Loop.backoff = { curve = exponential, initial = duration("200ms") }
     on err where err.transient { }
-    auth = oauth2_client_credentials {
+    auth = {
+      scheme = oauth2_client_credentials
       token_endpoint = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
       client_id = env("TEAMS_BOT_APP_ID")
       client_secret = env("TEAMS_BOT_PASSWORD")

@@ -20,9 +20,6 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 /// The default stdout cap for a job run, per the contract sheet's
-/// `max_output = 8MiB` default.
-const DEFAULT_MAX_OUTPUT: usize = 8 * 1024 * 1024;
-
 /// Parses a declared size ("8MiB", "512KiB", "100B", bare bytes).
 fn parse_size(text: &str) -> Option<usize> {
     let text = text.trim();
@@ -122,6 +119,10 @@ impl<'plan> Process<'plan> {
                 "the command attribute is not text".to_string(),
             ));
         };
+        // Defaulted attributes TRAVEL (D-2026-08-12-1): the checker
+        // injected `args = []` if the author omitted it, so absence
+        // here is a violated invariant — an edge defense, never a
+        // second semantic authority.
         let args: Vec<String> = match spec.attribute("args") {
             Some(AttrSetting::Value(cel::Value::List(items))) => items
                 .iter()
@@ -130,7 +131,14 @@ impl<'plan> Process<'plan> {
                     _ => None,
                 })
                 .collect(),
-            _ => Vec::new(),
+            _ => {
+                return Err(failure(
+                    "SpawnFailed",
+                    "the plan violates the Process contract: `args` is unresolved \
+                     (a Defaulted attribute must travel in the plan)"
+                        .to_string(),
+                ));
+            }
         };
         // The machine prepared and sealed the bytes; the adapter
         // TRANSPORTS them — recomputing would reopen the gap between
@@ -147,7 +155,16 @@ impl<'plan> Process<'plan> {
                     ));
                 }
             },
-            _ => DEFAULT_MAX_OUTPUT,
+            // The normative default travels in the plan
+            // (D-2026-08-12-1) — absence is a violated invariant.
+            _ => {
+                return Err(failure(
+                    "SpawnFailed",
+                    "the plan violates the Process contract: `max_output` is unresolved \
+                     (a Defaulted attribute must travel in the plan)"
+                        .to_string(),
+                ));
+            }
         };
         let mut builder = Command::new(command);
         builder
@@ -487,11 +504,11 @@ mod tests {
     use super::*;
     use crate::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
     use crate::compiler::compile;
+    use crate::contract::Registry;
     use crate::envelope::Namespace;
     use crate::journal::{MemJournal, OutboundStatus, Record};
     use crate::plan::GraphVersion;
     use crate::runtime::vm::Vm;
-    use crate::stdlib::Registry;
 
     const CAT_PROBE: &str = r#"
 graph real : App {

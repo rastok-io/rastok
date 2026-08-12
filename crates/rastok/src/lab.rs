@@ -566,7 +566,7 @@ impl Partner for MockPartner<'_> {
 mod tests {
     use super::*;
     use crate::compiler::compile;
-    use crate::stdlib::Registry;
+    use crate::contract::Registry;
 
     /// Drives the scripted partner directly with an OPAQUE request:
     /// the branch and statement structure decides the demand, so a

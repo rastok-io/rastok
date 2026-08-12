@@ -12,13 +12,13 @@ use rastok::boundary::{
     SubmissionSequence,
 };
 use rastok::compiler::compile;
+use rastok::contract::Registry;
 use rastok::envelope::{Data, Encoding, Envelope, Namespace, Scalar, Value};
 use rastok::golden::{Trace, diff, project};
 use rastok::journal::{MemJournal, Record};
 use rastok::node;
 use rastok::plan::GraphVersion;
 use rastok::runtime::vm::Vm;
-use rastok::stdlib::Registry;
 use std::path::Path;
 
 const M0_PROBE: &str = r#"
@@ -162,7 +162,7 @@ fn the_m0_probe_trace_matches_its_golden() {
 fn the_lab_scenario_matches_its_stored_golden() {
     let source = std::fs::read_to_string(example()).expect("the example reads");
     let compilation =
-        rastok::compiler::compile(&[source.as_str()], &rastok::stdlib::Registry::m0())
+        rastok::compiler::compile(&[source.as_str()], &rastok::contract::Registry::m0())
             .expect("a valid unit");
     let runs = rastok::lab::run(
         &compilation.plan,

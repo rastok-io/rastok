@@ -799,8 +799,8 @@ impl Writer<'_> {
 #[cfg(test)]
 mod tests {
     use crate::compiler::compile;
+    use crate::contract::Registry;
     use crate::plan::{AttrSetting, Emission, GraphVersion, Manifest, Step};
-    use crate::stdlib::Registry;
     use crate::{cel, node};
 
     const M0_PROBE: &str = r#"
@@ -927,10 +927,16 @@ graph m0_probe : App {
         // tree seals its STATIC TYPE with its root, so `json 1`
         // (variant) and `1` (int) are distinct programs — every
         // tree-carrying graph moved once.
+        // DELIBERATE MOVE 2026-08-12 (D-2026-08-12-1): contract
+        // defaults are injected into the effective HIR before the
+        // hash (`args = []`, `max_output = "8MiB"`,
+        // `on_timeout = kill` on this probe) — omission and the
+        // exact spelling of a default are ONE identity, so every
+        // Process-carrying graph moved once.
         let hash = compile(&[M0_PROBE], &Registry::m0()).unwrap().hash;
         assert_eq!(
             hash.to_string(),
-            "4fb25ffd66db564568c5bbd384a27f8f529344e5db4f3465a920fcf8d72161fe"
+            "c9866b385dfbc9fc640de608f5dcd70eb166be98d16de88bedfb49ba7beae1e6"
         );
     }
 

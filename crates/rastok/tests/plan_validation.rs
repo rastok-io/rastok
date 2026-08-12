@@ -10,11 +10,11 @@
 use rastok::canonical_cbor::MAX_NESTING;
 use rastok::cel;
 use rastok::compiler::compile;
+use rastok::contract::Registry;
 use rastok::node::{Direction, Port};
 use rastok::plan::{
     self, Edge, EndpointRef, ExecutionPlan, PlanValidationError, Slot, Step, ValidatedExecutionPlan,
 };
-use rastok::stdlib::Registry;
 
 const PROBE: &str = r#"
 graph probe : App {

@@ -119,7 +119,7 @@ fn locate(text: &str, offset: usize) -> (usize, usize, &str) {
 mod tests {
     use super::*;
     use crate::compiler::compile;
-    use crate::stdlib::Registry;
+    use crate::contract::Registry;
 
     #[test]
     fn a_semantic_refusal_renders_with_its_source_line() {
