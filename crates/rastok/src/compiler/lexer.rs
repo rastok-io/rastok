@@ -168,7 +168,9 @@ pub enum AssignmentHead {
 pub enum RegionHead {
     /// The host tokenizes: a builder form or a statement opener.
     Structural,
-    /// A CEL region: delegate before any tokenization.
+    /// CEL-shaped: in VALUE positions, delegate before any
+    /// tokenization; in STATEMENT position, a bare-expression
+    /// ERROR (no implicit yield, review rounds 7–8).
     Cel,
 }
 
@@ -400,8 +402,9 @@ impl<'a> Lexer<'a> {
     }
 
     /// How a STATEMENT opens: with a structural token the host may
-    /// tokenize (`}`/`;`/`(`/a word/EOF), or as a bare CEL yield
-    /// whose region must never meet the host vocabulary. With
+    /// tokenize (`}`/`;`/`(`/a word/EOF), or as a bare expression —
+    /// a statement ERROR whose bytes still never meet the host
+    /// vocabulary outside a scratch bag. With
     /// [`Self::tag_opener_on_line`] and the line questions, this is
     /// one of THE named finite-byte-lookahead points of the grammar:
     /// CEL regions may open with bytes the host refuses, so the
@@ -465,19 +468,24 @@ impl<'a> Lexer<'a> {
     /// is the CEL prefix; anything else — a single-quoted CEL
     /// string included — is untouched for the value dispatch.
     pub fn string_argument(&mut self, bag: &mut Bag) -> StringArgument<'a> {
+        // ONE trivia policy: a paren position is newline-free, so
+        // BOTH probes cross lines — the opening string may sit on
+        // the next line, and so may its boundary or continuation
+        // (review round 8).
         let opens_string = match &self.lookahead {
             Some(token) => token.kind == TokenKind::Str,
-            None => matches!(self.significant_on_line(), Some((_, b'"'))),
+            None => self.first_significant_byte() == Some(b'"'),
         };
         if !opens_string {
             return StringArgument::NotAString;
         }
         let token = self.next(bag);
         let alone = match &self.lookahead {
-            Some(follower) => {
-                matches!(follower.kind, TokenKind::Comma | TokenKind::RParen)
-            }
-            None => matches!(self.significant_on_line(), None | Some((_, b',' | b')'))),
+            Some(follower) => matches!(
+                follower.kind,
+                TokenKind::Comma | TokenKind::RParen | TokenKind::Eof
+            ),
+            None => matches!(self.first_significant_byte(), None | Some(b',' | b')')),
         };
         if alone {
             StringArgument::Alone(token)
@@ -517,55 +525,6 @@ impl<'a> Lexer<'a> {
             b':' => Some(AssignmentHead::Typed),
             _ => None,
         }
-    }
-
-    /// Swallows a refused BARE-EXPRESSION statement to its boundary,
-    /// silently (the one refusal voice already spoke) and WITHOUT
-    /// tokenizing — the garbage is CEL-shaped, outside the host
-    /// vocabulary. The walk is the BALANCED rule, the mirror of the
-    /// verbatim contract: delimiters balance, comments are trivia,
-    /// and every other byte — quotes included — is ordinary, so an
-    /// unclosed garbage string can never drag the swallow past the
-    /// statement's own closers. Returns the swallowed range.
-    pub fn swallow_bare_statement(
-        &mut self,
-        terminators: &TerminatorSet,
-    ) -> core::ops::Range<usize> {
-        let start = match self.lookahead.take() {
-            Some(token) => token.span.range().start,
-            None => self.pos,
-        };
-        let bytes = self.source.as_bytes();
-        let mut depth: u32 = 0;
-        while let Some(&byte) = bytes.get(self.pos) {
-            if byte == b'/'
-                && let Some(comment) = rastok_core::trivia::comment_at(self.source, self.pos)
-            {
-                if !comment.terminated || (terminators.newline && comment.multiline && depth == 0) {
-                    break;
-                }
-                self.pos = comment.end;
-                continue;
-            }
-            if depth == 0 && self.at_terminator(byte, terminators) {
-                break;
-            }
-            match byte {
-                b'(' | b'[' | b'{' => {
-                    depth += 1;
-                    self.pos += 1;
-                }
-                b')' | b']' | b'}' => {
-                    if depth == 0 {
-                        break;
-                    }
-                    depth -= 1;
-                    self.pos += 1;
-                }
-                _ => self.pos += 1,
-            }
-        }
-        start..self.pos
     }
 
     /// The tag-opener question: does a `(` or `{` follow ON THE

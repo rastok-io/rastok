@@ -223,6 +223,59 @@ impl<'src> Parser<'src, '_> {
         );
     }
 
+    /// Consumes a refused bare statement to its STRONG boundary —
+    /// host lexemes into a scratch bag (the one refusal voice
+    /// already spoke; the garbage's own lexical complaints stay
+    /// silent). Strong boundaries: `;`, a depth-zero `}`, the next
+    /// line's first lexeme, EOF. PROGRESSION IS STRUCTURAL: the
+    /// first lexeme is consumed unconditionally unless it is `;`,
+    /// `}` or EOF — which the statement loop itself consumes or
+    /// breaks on (review round 8: a lone `)` looped forever).
+    fn skip_bare_statement(&mut self, tail_of_consumed: bool) -> core::ops::Range<usize> {
+        let mut scratch = Bag::new();
+        let mut depth: u32 = 0;
+        let mut consumed_any = tail_of_consumed;
+        let start = self.lexer.peek(&mut scratch).span.range().start;
+        let mut end = start;
+        loop {
+            let token = self.lexer.peek(&mut scratch);
+            let boundary = match token.kind {
+                TokenKind::Eof | TokenKind::Semi => true,
+                TokenKind::RBrace if depth == 0 => true,
+                _ => consumed_any && token.newline_before,
+            };
+            if boundary {
+                break;
+            }
+            let token = self.lexer.next(&mut scratch);
+            consumed_any = true;
+            end = token.span.range().end;
+            match token.kind {
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RBrace => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        self.last_end = self.last_end.max(end);
+        start..end
+    }
+
+    fn bare_statement_refusal(&mut self, range: core::ops::Range<usize>) -> Statement {
+        let span = Span::new(self.source_id, range.start..range.end.max(range.start));
+        self.bag.push(
+            Diagnostic::new(
+                E_PARSE_EXPECTED,
+                Phase::Parse,
+                "a bare expression is not a statement; write `out = <value>` \
+                 (or `err = Kind { … }`)",
+            )
+            .with_span(span)
+            .with_field("expected", "a statement")
+            .with_field("found", "a bare expression"),
+        );
+        Statement::Error(ErrorNode { span })
+    }
+
     /// Skips tokens until a top-of-declaration keyword or the closing
     /// brace of the current block, balancing nested braces.
     fn recover(&mut self, start: usize) -> ErrorNode {
@@ -1163,28 +1216,14 @@ impl<'src> Parser<'src, '_> {
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut statements = Vec::new();
         loop {
-            // Classified by the lexer: a CEL-shaped opener means a
-            // BARE EXPRESSION — not a statement since the implicit
-            // yield's removal (D-2026-08-13-1, review round 7). One
-            // refusal voice, the line swallowed WITHOUT meeting the
-            // host vocabulary.
+            // Classified by the lexer: a non-structural opener means
+            // a BARE EXPRESSION — a statement ERROR since the
+            // implicit yield's removal (D-2026-08-13-1, rounds 7–8).
+            // One refusal voice; classic host-lexeme recovery with
+            // structural progression.
             if self.lexer.statement_head() == crate::compiler::lexer::RegionHead::Cel {
-                self.lexer.advance_to_significant(self.bag);
-                let range = self.lexer.swallow_bare_statement(&ATTR_POSITION);
-                let span = Span::new(self.source_id, range.start..range.end);
-                self.bag.push(
-                    Diagnostic::new(
-                        E_PARSE_EXPECTED,
-                        Phase::Parse,
-                        "a bare expression is not a statement; write `out = <value>` \
-                         (or `err = Kind { … }`)",
-                    )
-                    .with_span(span)
-                    .with_field("expected", "a statement")
-                    .with_field("found", "a bare expression"),
-                );
-                self.last_end = range.end;
-                statements.push(Statement::Error(ErrorNode { span }));
+                let range = self.skip_bare_statement(false);
+                statements.push(self.bare_statement_refusal(range));
                 continue;
             }
             let token = self.peek();
@@ -1224,58 +1263,64 @@ impl<'src> Parser<'src, '_> {
         Some(statements)
     }
 
-    /// An IDENT-led statement: assignment, typed-error emission, or an
-    /// implicit yield whose expression starts with a path.
+    /// An IDENT-led statement: an assignment or a typed-error
+    /// emission — a bare expression refuses (no implicit yield,
+    /// review rounds 7–8).
+    /// The word-set a single bare word can open as a VALUE FORM —
+    /// consumed by its REAL dispatch when refused as a statement,
+    /// so a bare `text { … }` is framed by the verbatim reader,
+    /// never by a recovery scanner (review round 8).
+    fn is_form_word(word: &str) -> bool {
+        word == "nothing"
+            || word == "json"
+            || TAG_WORDS.contains(&word)
+            || DEAD_INITIALIZER_TAGS.contains(&word)
+            || RESERVED_FORMAT_TAGS.contains(&word)
+    }
+
     fn assign_statement(&mut self, start: usize) -> Statement {
-        let Some(target) = self.lvalue() else {
-            return Statement::Error(self.recover(start));
-        };
-        // The follower is PROBED, never tokenized before the
-        // decision — bare-expression bytes after a path stay outside
-        // the host vocabulary (review round 7; the implicit yield is
-        // REMOVED, so a non-assignment refuses here).
-        let Some(head) = self.lexer.assignment_follows() else {
-            let range = self.lexer.swallow_bare_statement(&ATTR_POSITION);
-            let span = Span::new(self.source_id, start..range.end);
-            self.bag.push(
-                Diagnostic::new(
-                    E_PARSE_EXPECTED,
-                    Phase::Parse,
-                    "a bare expression is not a statement; write `out = <value>` \
-                     (or `err = Kind { … }`)",
-                )
-                .with_span(span)
-                .with_field("expected", "`=` or `:` after the assignment target")
-                .with_field("found", "a bare expression"),
-            );
-            self.last_end = range.end;
-            return Statement::Error(ErrorNode { span });
-        };
-        let _ = head;
-        match self.peek().kind {
-            TokenKind::Eq if target.segments.len() == 1 && target.segments[0].text == "err" => {
+        let first = self.bump();
+        let mut segments = vec![Name {
+            text: String::from(first.text),
+            span: first.span,
+        }];
+        while self.lexer.dot_follows() {
+            self.bump();
+            let Some(segment) = self.name("a path segment") else {
+                return Statement::Error(self.recover(start));
+            };
+            segments.push(segment);
+        }
+        let target_span = self.span_from(start);
+        // ONE typed lookahead DRIVES the production (review round 8):
+        // the probe decides without tokenizing, and the arms consume
+        // what the probe proved.
+        match self.lexer.assignment_follows() {
+            Some(crate::compiler::lexer::AssignmentHead::Plain) => {
                 self.bump();
-                match self.name("an error kind") {
-                    Some(kind) => {
-                        let body = if self.peek().kind == TokenKind::LBrace {
-                            self.struct_body()
-                        } else {
-                            None
-                        };
-                        Statement::ErrEmit { kind, body }
-                    }
-                    None => Statement::Error(self.recover(start)),
+                if segments.len() == 1 && segments[0].text == "err" {
+                    return match self.name("an error kind") {
+                        Some(kind) => {
+                            let body = if self.peek().kind == TokenKind::LBrace {
+                                self.struct_body()
+                            } else {
+                                None
+                            };
+                            Statement::ErrEmit { kind, body }
+                        }
+                        None => Statement::Error(self.recover(start)),
+                    };
                 }
-            }
-            TokenKind::Eq => {
-                self.bump();
                 Statement::Assign {
-                    target,
+                    target: LValue {
+                        span: target_span,
+                        segments,
+                    },
                     ty: None,
                     value: self.value(&ATTR_POSITION),
                 }
             }
-            TokenKind::Colon => {
+            Some(crate::compiler::lexer::AssignmentHead::Typed) => {
                 self.bump();
                 let Some(ty) = self.type_ref() else {
                     return Statement::Error(self.recover(start));
@@ -1284,16 +1329,34 @@ impl<'src> Parser<'src, '_> {
                     return Statement::Error(self.recover(start));
                 }
                 Statement::Assign {
-                    target,
+                    target: LValue {
+                        span: target_span,
+                        segments,
+                    },
                     ty: Some(ty),
                     value: self.value(&ATTR_POSITION),
                 }
             }
-            _ => {
-                // The probe proved `=` or `:` — this arm is
-                // unreachable; refuse defensively, never silently.
-                self.error_expected("`=`");
-                Statement::Error(self.recover(start))
+            None => {
+                // A bare expression. A single FORM word is consumed
+                // by its real dispatch (the verbatim reader, the
+                // json reader, a guest framer, the dead refusals) —
+                // then the statement-position voice; anything else
+                // takes the classic recovery.
+                if segments.len() == 1 && Self::is_form_word(first.text) {
+                    let value = self.ident_tail(first, &ATTR_POSITION);
+                    let end = self.last_end.max(start);
+                    if matches!(value, Value::Error(_)) {
+                        // The form's own voice spoke; the recovery
+                        // form carries the statement.
+                        return Statement::Error(ErrorNode {
+                            span: Span::new(self.source_id, start..end),
+                        });
+                    }
+                    return self.bare_statement_refusal(start..end);
+                }
+                let range = self.skip_bare_statement(true);
+                self.bare_statement_refusal(start..range.end.max(start))
             }
         }
     }
@@ -2694,12 +2757,117 @@ mod tests {
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), balanced, &mut bag);
         assert!(bag.diagnostics().is_empty(), "balanced: {bag:?}");
+        // The balanced twin also keeps its sibling whole.
+        let with_sibling = "graph g : App {\n  operator o {\n    on in {\n      out = text { a \"{x}\" b }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+        let (statements, bag) = handler_statements(with_sibling);
+        assert!(bag.diagnostics().is_empty(), "balanced + sibling: {bag:?}");
+        assert_eq!(statements.len(), 2, "{statements:?}");
+        // A quoted LONE closer ends the block early — the documented
+        // limitation. The FIRST voice is pinned: the host meets the
+        // remainder (`\" b }`) as an unterminated string anchored
+        // AFTER the early close; the cascade that follows belongs to
+        // the mis-framed remainder, not to the framer.
         let lone_closer = "graph g : App {\n  operator o {\n    on in { out = text { a \"}\" b } }\n  }\n  . -> o -> .\n}\n";
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), lone_closer, &mut bag);
+        assert!(!bag.diagnostics().is_empty(), "the limitation refuses");
+        let first = &bag.diagnostics()[0];
+        let early_close = lone_closer.find("\"}\"").unwrap() + 1;
         assert!(
-            !bag.diagnostics().is_empty(),
-            "a quoted lone closer ends the block early — the documented limitation"
+            first.spans()[0].range().start > early_close,
+            "the first voice is anchored past the early close: {first:?}"
+        );
+    }
+
+    #[test]
+    fn every_recovery_terminates_and_keeps_the_structure() {
+        // Review round 8's blockers: a lone closer looped the
+        // compiler forever, and the recovery scanner absorbed
+        // siblings and closers. Every row must TERMINATE (the test
+        // completing is the proof), refuse with voices that never
+        // include a cascade over the sibling, and keep the sibling
+        // and the handler's closer in the tree.
+        for (label, garbage) in [
+            ("lone close paren", ")"),
+            ("lone close bracket", "]"),
+            ("unclosed call", "data("),
+            ("single-quoted brace", "data + 'a}b'"),
+            ("braced garbage", "{ a = 1 }"),
+            ("alien bytes", "@ # $"),
+        ] {
+            let source = format!(
+                "graph g : App {{\n  operator o {{\n    on in {{\n      {garbage}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            );
+            let (statements, bag) = handler_statements(&source);
+            assert!(!bag.diagnostics().is_empty(), "{label}: the refusal speaks");
+            assert!(
+                bag.diagnostics()
+                    .iter()
+                    .all(|d| d.code() == E_PARSE_EXPECTED),
+                "{label}: no foreign voice — {bag:?}"
+            );
+            let last = statements.len() - 1;
+            let Statement::Assign { value, .. } = &statements[last] else {
+                panic!("{label}: the sibling lives: {statements:?}");
+            };
+            assert!(
+                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn parenthesized_arguments_share_one_trivia_policy() {
+        // Review round 8: a paren position is newline-free, and the
+        // string-argument probes must cross lines exactly like the
+        // position itself — opening, boundary, and continuation.
+        let multiline_string = "graph g : App {\n  operator o {\n    on in { out = asset(\n  \"README.md\"\n) }\n  }\n  . -> o -> .\n}\n";
+        let (statements, bag) = handler_statements(multiline_string);
+        assert!(bag.diagnostics().is_empty(), "multiline string: {bag:?}");
+        let Statement::Assign {
+            value: Value::Tagged(call),
+            ..
+        } = &statements[0]
+        else {
+            panic!("the asset call: {:?}", statements[0]);
+        };
+        assert!(
+            matches!(&call.args[0], Value::StrLit { raw, .. } if raw == "\"README.md\""),
+            "the STRING literal is read across the line: {:?}",
+            call.args[0]
+        );
+        let commented = "graph g : App {\n  operator o {\n    on in { out = asset( /* path */ \"a.bin\" ) }\n  }\n  . -> o -> .\n}\n";
+        let (statements, bag) = handler_statements(commented);
+        assert!(
+            bag.diagnostics().is_empty(),
+            "comment before string: {bag:?}"
+        );
+        let Statement::Assign {
+            value: Value::Tagged(call),
+            ..
+        } = &statements[0]
+        else {
+            panic!("the asset call: {:?}", statements[0]);
+        };
+        assert!(matches!(&call.args[0], Value::StrLit { .. }));
+        // A string CONTINUING on the next line is the CEL prefix —
+        // one argument, and the parse terminates.
+        let continued = "graph g : App {\n  operator o {\n    on in { out = bounded(\"x\"\n  + \"y\") }\n  }\n  . -> o -> .\n}\n";
+        let (statements, bag) = handler_statements(continued);
+        assert!(bag.diagnostics().is_empty(), "continuation: {bag:?}");
+        let Statement::Assign {
+            value: Value::Tagged(call),
+            ..
+        } = &statements[0]
+        else {
+            panic!("the bounded call: {:?}", statements[0]);
+        };
+        assert_eq!(call.args.len(), 1, "{:?}", call.args);
+        assert!(
+            matches!(&call.args[0], Value::Cel(expr) if expr.text.contains("+")),
+            "the continuation is ONE CEL argument: {:?}",
+            call.args[0]
         );
     }
 

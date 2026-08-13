@@ -58,19 +58,21 @@ the VERBATIM regions (`verbatim_region` — `text`/`base64`: braces
 balance, every other byte is ordinary data, quotes and apostrophes
 included, no escapes); and the GUEST regions (`guest_region` —
 jq/bash/sql/python/rust: the frozen contract, dual-quote opacity,
-awaiting the guest slice's framer arbitration). The host lexes the
-CEL OPERATOR SUPERSET maximal-munch (`==` `!=` `<=` `>=` `&&`
-`||` `*` `/` `%` `-`), so a peek after a consumed path never
-faults on a legal continuation and `=` vs `==` is a KIND question
-— `data == data` is a yield, never a phantom assignment; a
+awaiting the guest slice's framer arbitration). The host munches
+ITS OWN comparison lexemes (`==` `!=` `<=` `>=` — the simulation
+expect grammar; never a copy of CEL's vocabulary), and a
 single-quoted string is ONE opaque Error lexeme (CEL's spelling,
 named as such once). The parser receives head CLASSIFICATIONS
 (`statement_head`/`value_head` → Structural | Cel), never a raw
-byte. Dead/reserved recoveries walk HOST LEXEMES into a scratch
-bag (a closer inside a comment is trivia and never closes; the
-garbage's own diagnostics stay silent — the one migration voice
-already spoke); the parser's error recovery skips lexemes to a
-sync set, never bytes.
+byte. EVERY recovery walks HOST LEXEMES into a scratch bag with
+STRUCTURAL progression (review round 8 — a recovery that consumes
+nothing is a hang): dead/reserved bodies to their balanced closer
+(a closer inside a comment is trivia and never closes), a refused
+bare statement to its strong boundary (`;`, a depth-zero `}`, the
+next line — a bare FORM word is first consumed by its REAL
+dispatch, so a bare `text { … }` is framed by the verbatim
+reader); the garbage's own diagnostics stay silent — the one
+refusal voice already spoke.
 
 **The guest frontier is atomic.** A guest body reaches its
 sub-compiler as ONE region lexeme — exact bytes, exact span, no

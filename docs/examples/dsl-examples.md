@@ -32,7 +32,7 @@ graph hello_echo {
 
   operator tag_received {
     on in {
-      jq {
+      out = jq {
         .meta.app.tag = "received"
         | .data   = { echo: .data }
       }
@@ -51,9 +51,9 @@ graph hello_echo {
 }
 ```
 
-`tag_received` declares no ports : it uses the default `in` and `out`.
-Its single output means the trailing `jq { ... }` in `on in` is the
-**implicit yield** to `out` ; the explicit form is `out = jq { ... }`.
+`tag_received` declares no ports : it uses the default `in` and `out`,
+and the handler writes it explicitly — `out = jq { ... }` (there is no
+implicit yield, D-2026-08-13-1).
 
 ## 2. Codex session — one `Process` Connector, multi-port stdio bridge
 
