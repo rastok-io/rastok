@@ -1,14 +1,15 @@
-//! Hand-written lexer for `.rkg` source.
+//! Hand-written lexer for `.rkg` source — the ONE owner of the byte
+//! cursor and the token lookahead (D-2026-08-13-1, review round 5).
 //!
-//! Two scanning modes, per the delimitation rules of `grammar.md`:
-//!
-//! - [`Lexer::next_token`] — ordinary tokens; whitespace, newlines, and
-//!   comments are skipped. Keywords are not distinguished here: every
-//!   word is an [`TokenKind::Ident`], and the parser decides by
-//!   position (field names may reuse type words).
-//! - [`Lexer::cel_expr`] — an opaque CEL expression span, scanned at
-//!   bracket depth 0 until the position's terminator set. The
-//!   terminator is never consumed; the parser resumes on it.
+//! The parser reads complete lexemes through [`Lexer::peek`] and
+//! [`Lexer::next`] (keywords are not distinguished: every word is an
+//! [`TokenKind::Ident`], the parser deciding by position), consumes
+//! sub-language regions as COMPLETE specialized lexemes
+//! ([`Lexer::cel_region`], [`Lexer::json_tail`], [`Lexer::raw_block`],
+//! [`Lexer::swallow_opaque_on_line`]), and asks the named
+//! finite-byte-lookahead questions ([`Lexer::shape`],
+//! [`Lexer::tag_opener_on_line`], the line questions). It never
+//! touches bytes.
 //!
 //! Tokens borrow their text from the source; the lexer copies nothing.
 
@@ -74,7 +75,7 @@ pub enum TokenKind {
     Arrow,
     /// `<->`
     BiArrow,
-    /// Opaque CEL expression span, produced only by [`Lexer::cel_expr`].
+    /// Opaque CEL expression span, produced only by [`Lexer::cel_region`].
     CelExpr,
     /// Opaque raw guest text, produced only by [`Lexer::raw_block`].
     RawText,
@@ -132,8 +133,9 @@ pub enum JsonTail {
     /// A follower that is neither a document nor the boundary — the
     /// reserved word admits no CEL continuation.
     BadForm {
-        /// The follower's offset (diagnostic anchor).
-        at: usize,
+        /// The diagnostic anchor: the follower's byte (an EMPTY
+        /// range at EOF, per Span's own contract).
+        anchor: Span,
         /// One past the recovery's last consumed byte.
         recovered_to: usize,
     },
@@ -146,23 +148,30 @@ pub enum JsonTail {
 /// recovery consumed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonRefusal {
-    /// The opener's offset (the span the recovery form carries).
-    pub opener: usize,
-    /// The faulty byte's offset (diagnostic anchor).
-    pub at: usize,
+    /// The recovery form's span (the opener, an empty range).
+    pub opener: Span,
+    /// The diagnostic anchor: the faulty byte (an EMPTY range at
+    /// EOF, per Span's own contract).
+    pub anchor: Span,
     /// The reader's message.
     pub message: String,
     /// One past the recovery's last consumed byte.
     pub recovered_to: usize,
 }
 
-/// Hand-written scanner over one UTF-8 source.
+/// Hand-written scanner over one UTF-8 source — and the ONE owner
+/// of both the byte cursor and the token lookahead (D-2026-08-13-1,
+/// review round 5): the parser reads complete lexemes through
+/// [`Self::peek`]/[`Self::next`] and asks semantic questions; it
+/// never touches bytes, and no path can combine a buffered lexeme
+/// with a second read of the same bytes outside this impl.
 #[derive(Debug)]
 pub struct Lexer<'a> {
     source: &'a str,
     source_id: SourceId,
     pos: usize,
     newline_before: bool,
+    lookahead: Option<Token<'a>>,
 }
 
 impl<'a> Lexer<'a> {
@@ -174,11 +183,29 @@ impl<'a> Lexer<'a> {
             source_id,
             pos: 0,
             newline_before: false,
+            lookahead: None,
+        }
+    }
+
+    /// The buffered next lexeme — lexing it if none is buffered.
+    pub fn peek(&mut self, bag: &mut Bag) -> Token<'a> {
+        if self.lookahead.is_none() {
+            self.lookahead = Some(self.next_token(bag));
+        }
+        self.lookahead
+            .unwrap_or_else(|| unreachable!("just filled"))
+    }
+
+    /// Consumes and returns the next lexeme.
+    pub fn next(&mut self, bag: &mut Bag) -> Token<'a> {
+        match self.lookahead.take() {
+            Some(token) => token,
+            None => self.next_token(bag),
         }
     }
 
     /// The next ordinary token; [`TokenKind::Eof`] at the end, forever.
-    pub fn next_token(&mut self, bag: &mut Bag) -> Token<'a> {
+    fn next_token(&mut self, bag: &mut Bag) -> Token<'a> {
         self.skip_trivia(bag);
         let start = self.pos;
         let Some(byte) = self.peek_byte() else {
@@ -235,7 +262,7 @@ impl<'a> Lexer<'a> {
     /// `terminators` — the delimitation rules of `grammar.md`. Quoted
     /// strings (both CEL quote styles) are skipped opaquely; any
     /// closing bracket below depth 0 also terminates.
-    pub fn cel_expr(&mut self, terminators: &TerminatorSet, bag: &mut Bag) -> Token<'a> {
+    fn cel_expr(&mut self, terminators: &TerminatorSet, bag: &mut Bag) -> Token<'a> {
         while matches!(self.peek_byte(), Some(b' ' | b'\t' | b'\r')) {
             self.pos += 1;
         }
@@ -258,8 +285,182 @@ impl<'a> Lexer<'a> {
     /// diagnostics and prefix slices; cursor re-syncs happen only
     /// inside the lexer's own delegation methods.
     #[must_use]
-    pub fn source_from(&self, offset: usize) -> &'a str {
-        &self.source[offset..]
+    /// The dispatch shape: the first byte of the next significant
+    /// input — from the buffered lexeme when one exists, from a
+    /// read-only byte probe otherwise. With
+    /// [`Self::tag_opener_on_line`] and the line questions, this is
+    /// THE named finite-byte-lookahead point of the grammar
+    /// (D-2026-08-13-1, review round 5): CEL regions may open with
+    /// bytes the host vocabulary refuses, so production choice needs
+    /// one byte, never a tokenization.
+    pub fn shape(&mut self) -> Option<u8> {
+        match &self.lookahead {
+            Some(token) if token.kind == TokenKind::Eof => None,
+            Some(token) => token.text.bytes().next(),
+            None => self.first_significant_byte(),
+        }
+    }
+
+    /// Whether a newline-terminated position is MISSING its value:
+    /// nothing significant before the line's end, or the statement
+    /// enders `;`/`}` — asked of the buffered lexeme when one
+    /// exists.
+    pub fn value_missing_on_line(&mut self) -> bool {
+        match &self.lookahead {
+            Some(token) => {
+                token.kind == TokenKind::Eof
+                    || token.newline_before
+                    || matches!(token.kind, TokenKind::Semi | TokenKind::RBrace)
+            }
+            None => matches!(self.significant_byte_on_line(), None | Some(b';' | b'}')),
+        }
+    }
+
+    /// Whether NOTHING significant remains on the current line.
+    pub fn line_exhausted(&mut self) -> bool {
+        match &self.lookahead {
+            Some(token) => token.kind == TokenKind::Eof || token.newline_before,
+            None => self.significant_on_line().is_none(),
+        }
+    }
+
+    /// The tag-opener question: does a `(` or `{` follow ON THE
+    /// SAME LINE? Answered from the buffered lexeme when one exists
+    /// (its `newline_before` decides), from a read-only byte probe
+    /// otherwise — a tag is a tag only WITH its same-line opener.
+    pub fn tag_opener_on_line(&mut self) -> Option<u8> {
+        if let Some(token) = &self.lookahead {
+            if token.newline_before {
+                return None;
+            }
+            return match token.kind {
+                TokenKind::LParen => Some(b'('),
+                TokenKind::LBrace => Some(b'{'),
+                _ => None,
+            };
+        }
+        match self.significant_on_line() {
+            Some((_, byte @ (b'(' | b'{'))) => Some(byte),
+            _ => None,
+        }
+    }
+
+    /// Swallows one opaque balanced region opening with `open` on
+    /// the current line — the dead-initializer and reserved-format
+    /// recovery, ABSOLUTELY SILENT (their bodies may carry bytes the
+    /// host refuses; the one migration diagnostic already spoke).
+    /// Composes with the buffer: a buffered opener is consumed into
+    /// the region. Returns whether a region was swallowed.
+    pub fn swallow_opaque_on_line(&mut self, open: u8) -> bool {
+        let close = match open {
+            b'(' => b')',
+            b'{' => b'}',
+            _ => return false,
+        };
+        if let Some(token) = &self.lookahead {
+            let matches_open = !token.newline_before
+                && ((open == b'(' && token.kind == TokenKind::LParen)
+                    || (open == b'{' && token.kind == TokenKind::LBrace));
+            if !matches_open {
+                return false;
+            }
+            // The cursor already sits past the buffered opener.
+            self.lookahead = None;
+            self.skip_balanced_raw_at(open, close, 1);
+            return true;
+        }
+        match self.significant_on_line() {
+            Some((offset, byte)) if byte == open => {
+                self.pos = offset;
+                self.skip_balanced_raw_at(open, close, 0);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The mirror of the terminator test, asked of a buffered
+    /// lexeme: would the region scan terminate IMMEDIATELY on it?
+    /// A boundary lexeme belongs to the HOST and must survive.
+    fn token_terminates(token: &Token<'_>, terminators: &TerminatorSet) -> bool {
+        if token.kind == TokenKind::Eof {
+            return true;
+        }
+        if token.newline_before && terminators.newline {
+            return true;
+        }
+        if matches!(
+            token.kind,
+            TokenKind::RParen | TokenKind::RBrack | TokenKind::RBrace
+        ) {
+            return true;
+        }
+        if let Some(byte) = token.text.as_bytes().first()
+            && terminators.bytes.contains(byte)
+        {
+            return true;
+        }
+        if terminators.arrow && token.kind == TokenKind::Arrow {
+            return true;
+        }
+        token.kind == TokenKind::Ident && terminators.keywords.contains(&token.text)
+    }
+
+    /// A COMPLETE CEL region lexeme to the position's FOLLOW
+    /// (D-2026-08-13-1, review round 5) — the one producer the
+    /// parser consumes as a grammatical unit. `prefix_start` names
+    /// the already-consumed lexeme(s) beginning the expression; the
+    /// stitching re-read of that immutable slice happens HERE, under
+    /// the same owner as the buffer and the cursor. A buffered
+    /// boundary lexeme ends the region before itself and SURVIVES;
+    /// a buffered opener deepens the scan it already entered.
+    pub fn cel_region(
+        &mut self,
+        prefix_start: Option<usize>,
+        terminators: &TerminatorSet,
+        bag: &mut Bag,
+    ) -> Token<'a> {
+        if let Some(token) = &self.lookahead {
+            let start = prefix_start.unwrap_or_else(|| token.span.range().start);
+            if Self::token_terminates(token, terminators) {
+                let end = token.span.range().start.max(start);
+                return self.stitched(start, end);
+            }
+            let depth = match self.lookahead.take().map(|token| token.kind) {
+                Some(TokenKind::LParen | TokenKind::LBrack | TokenKind::LBrace) => 1,
+                _ => 0,
+            };
+            self.cel_scan(depth, terminators, bag);
+            return self.stitched(start, self.pos);
+        }
+        match prefix_start {
+            Some(start) => {
+                self.cel_scan(0, terminators, bag);
+                self.stitched(start, self.pos)
+            }
+            None => {
+                // Same-line comments before a value are trivia; a
+                // bare newline is not — it still reads as an empty
+                // expression.
+                self.advance_within_line();
+                self.cel_expr(terminators, bag)
+            }
+        }
+    }
+
+    /// The stitched region token: `source[start..end]`, its OWN end
+    /// trimmed (ASCII, newline included — never a Unicode trim).
+    fn stitched(&self, start: usize, end: usize) -> Token<'a> {
+        let end = start
+            + self.source[start..end]
+                .trim_end_matches([' ', '\t', '\r', '\n'])
+                .len();
+        Token {
+            kind: TokenKind::CelExpr,
+            text: &self.source[start..end],
+            span: Span::new(self.source_id, start..end),
+            newline_before: false,
+        }
     }
 
     /// The WHOLE `json` continuation, one probe and one atomic
@@ -286,11 +487,12 @@ impl<'a> Lexer<'a> {
                 },
                 Err(error) => {
                     let at = (offset + error.offset).min(self.source.len());
+                    let end = (at + 1).min(self.source.len());
                     self.pos = offset;
                     let recovered_to = self.skip_json_recovery(terminators);
                     JsonTail::Unreadable(JsonRefusal {
-                        opener: offset,
-                        at,
+                        opener: Span::new(self.source_id, offset..offset),
+                        anchor: Span::new(self.source_id, at..end),
                         message: error.message,
                         recovered_to,
                     })
@@ -308,43 +510,10 @@ impl<'a> Lexer<'a> {
         // newline-ended position (review round 4).
         self.pos = offset;
         let recovered_to = self.skip_bad_form(terminators);
+        let end = (offset + 1).min(self.source.len());
         JsonTail::BadForm {
-            at: offset,
+            anchor: Span::new(self.source_id, offset..end),
             recovered_to,
-        }
-    }
-
-    /// Scans a CEL continuation from the CURRENT position to the
-    /// position's terminator, but reports the token from
-    /// `text_start` — the left-factored prefix the parser already
-    /// consumed (D-2026-08-13-1): re-reading the immutable
-    /// `source[text_start..end]` slice is a bounded re-read, never
-    /// a parser rewind.
-    pub fn cel_expr_from(
-        &mut self,
-        text_start: usize,
-        depth: u32,
-        terminators: &TerminatorSet,
-        bag: &mut Bag,
-    ) -> Token<'a> {
-        // `depth` counts the openers the caller already consumed:
-        // a dropped `(`/`[` peek left the cursor INSIDE its region,
-        // and the scan must not break on the matching closer.
-        self.cel_scan(depth, terminators, bag);
-        // The stitched slice trims its OWN end: an empty continuation
-        // leaves the whitespace skipped before the terminator inside
-        // `text_start..end`, and the inner trim never saw it.
-        let end = self.pos.max(text_start);
-        let end = self
-            .source
-            .as_bytes()
-            .get(text_start..end)
-            .map_or(end, |stitched| text_start + stitched.trim_ascii_end().len());
-        Token {
-            kind: TokenKind::CelExpr,
-            text: &self.source[text_start..end],
-            span: Span::new(self.source_id, text_start..end),
-            newline_before: false,
         }
     }
 
@@ -446,16 +615,20 @@ impl<'a> Lexer<'a> {
     /// Consumes trivia so an opaque scan starts at significant input.
     /// Needed before a shape-dispatched CEL scan: the scan itself
     /// treats a leading newline as an empty expression, but the
-    /// newline separating two statements is not part of either.
+    /// newline separating two statements is not part of either. A
+    /// no-op when a lexeme is buffered — its peek consumed the
+    /// trivia already.
     pub fn advance_to_significant(&mut self, bag: &mut Bag) {
-        self.skip_trivia(bag);
+        if self.lookahead.is_none() {
+            self.skip_trivia(bag);
+        }
     }
 
     /// Consumes horizontal trivia — spaces and comments — up to the
     /// next newline outside a comment. A value scan starts past its
     /// same-line trivia, while a bare newline still reads as an empty
     /// expression, per the delimitation rules.
-    pub fn advance_within_line(&mut self) {
+    fn advance_within_line(&mut self) {
         loop {
             match self.peek_byte() {
                 Some(b' ' | b'\t' | b'\r') => self.pos += 1,
@@ -482,7 +655,7 @@ impl<'a> Lexer<'a> {
     /// value positions: CEL text must reach the CEL chain untouched,
     /// never partially interpreted — or rejected — by this lexer.
     #[must_use]
-    pub fn first_significant_byte(&self) -> Option<u8> {
+    fn first_significant_byte(&self) -> Option<u8> {
         let bytes = self.source.as_bytes();
         let mut pos = self.pos;
         loop {
@@ -506,7 +679,7 @@ impl<'a> Lexer<'a> {
     /// missing, never absorb the next line's construct
     /// (D-2026-08-12-1, review round).
     #[must_use]
-    pub fn significant_byte_on_line(&self) -> Option<u8> {
+    fn significant_byte_on_line(&self) -> Option<u8> {
         self.significant_on_line().map(|(_, byte)| byte)
     }
 
@@ -518,7 +691,7 @@ impl<'a> Lexer<'a> {
     /// reader never sees host trivia, and never applies its own
     /// (Unicode) idea of whitespace (D-2026-08-12-1, review round).
     #[must_use]
-    pub fn significant_on_line(&self) -> Option<(usize, u8)> {
+    fn significant_on_line(&self) -> Option<(usize, u8)> {
         let bytes = self.source.as_bytes();
         let mut pos = self.pos;
         loop {
@@ -535,27 +708,6 @@ impl<'a> Lexer<'a> {
                 byte => return Some((pos, byte)),
             }
         }
-    }
-
-    /// Consumes one raw balanced-delimiter region — the OPEN byte is
-    /// expected at the current position — with BOTH quote styles
-    /// protected (a delimiter inside either kind of string is
-    /// content, never structure). ABSOLUTELY SILENT: this is error
-    /// recovery for dead/reserved forms, the one diagnostic already
-    /// spoke, and even an unterminated string in the swallowed text
-    /// adds no second voice — the quotes are skipped locally, not
-    /// through `skip_quoted` (which diagnoses)
-    /// (D-2026-08-12-1, review round).
-    pub fn skip_balanced_raw(&mut self, open: u8, close: u8) {
-        self.skip_balanced_raw_at(open, close, 0);
-    }
-
-    /// The same silent walk when the caller already consumed the
-    /// opener (a buffered peek left the cursor INSIDE the region):
-    /// the walk starts one level deep and consumes through the
-    /// matching closer (D-2026-08-13-1, review round 4).
-    pub fn skip_balanced_raw_inside(&mut self, open: u8, close: u8) {
-        self.skip_balanced_raw_at(open, close, 1);
     }
 
     fn skip_balanced_raw_at(&mut self, open: u8, close: u8, initial: u32) {
@@ -605,7 +757,7 @@ impl<'a> Lexer<'a> {
     /// whole, an unbalanced one (`json(1` …) ends at its line.
     /// Quoted content (both styles) is opaque; `;` always stops; a
     /// closer the garbage did not open stops (it is the CALLER's).
-    pub fn skip_bad_form(&mut self, terminators: &TerminatorSet) -> usize {
+    fn skip_bad_form(&mut self, terminators: &TerminatorSet) -> usize {
         let bytes = self.source.as_bytes();
         let mut expected: Vec<u8> = Vec::new();
         let mut quote: Option<u8> = None;
@@ -620,6 +772,20 @@ impl<'a> Lexer<'a> {
                     _ => {}
                 }
                 self.pos += 1;
+                continue;
+            }
+            if byte == b'/'
+                && let Some(comment) = rastok_core::trivia::comment_at(self.source, self.pos)
+            {
+                // Trivia in the garbage too: a boundary byte inside
+                // a comment never bounds. An unterminated or
+                // line-crossing comment ends the walk at a
+                // newline-ended position — the comment stays the
+                // HOST's.
+                if !comment.terminated || (terminators.newline && comment.multiline) {
+                    return self.pos;
+                }
+                self.pos = comment.end;
                 continue;
             }
             if byte == b';' {
@@ -665,7 +831,7 @@ impl<'a> Lexer<'a> {
     /// newline stop only at depth zero when the position knows them.
     /// A mismatched closer stops too: under-consuming garbage beats
     /// absorbing a sibling. Error recovery only — nothing speaks.
-    pub fn skip_json_recovery(&mut self, terminators: &TerminatorSet) -> usize {
+    fn skip_json_recovery(&mut self, terminators: &TerminatorSet) -> usize {
         let bytes = self.source.as_bytes();
         let mut expected: Vec<u8> = Vec::new();
         let mut in_string = false;

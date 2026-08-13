@@ -1503,17 +1503,29 @@ tag_args          ::= ( value ( "," value )* ","? )?                  // PAREN p
 tag_body          ::= "{" RAW_TEXT "}"                                // RAW_TAGS only — a struct body on a tag is a DEAD form
                                                                       //   the parser refuses with its migration (D-2026-08-12-1)
 
-                    // The dispatch consumes ONE token, then decides on a RAW same-line
-                    // byte probe sharing the host trivia rules — never a second consumer,
-                    // never a cursor move backward (the lexer exposes no repositioning
-                    // primitive). A tag's opener sits on the TAG's line : the probe is
-                    // line-scoped by design. Inside braced_value, ONE token decides
-                    // struct/map/empty : "}" → {} struct ; ":" → {:} map ; STRING →
-                    // map_entries ; IDENT → struct_entries. The host grammar is predictive
-                    // (LL(1)) up to the explicit point where it delegates a region to CEL,
-                    // JSON, or a guest reader — each byte has one lexical authority, and
-                    // comments are trivia in CEL regions too, terminating a value only at
-                    // depth zero of a newline-ended position (D-2026-08-13-1).
+                    // THE LEXER/PARSER FRONTIER (D-2026-08-13-1, review round 5) : the
+                    // lexer owns the byte cursor AND the token lookahead ; the parser
+                    // reads complete lexemes (peek/next) and consumes sub-language
+                    // regions as COMPLETE specialized lexemes — a CEL region, a json
+                    // document (or its complete refusal), a raw guest body, an opaque
+                    // dead/reserved region. It never touches bytes, and no path can
+                    // combine a buffered lexeme with a second read of the same bytes.
+                    // The named finite-byte-lookahead points — lexer-owned QUESTIONS,
+                    // the only byte-driven production choices : `shape` (a CEL region
+                    // may open with bytes outside the host vocabulary), the tag-opener
+                    // question (a tag's `(`/`{` sits on the TAG's line), and the line
+                    // questions (value-missing, line-exhausted). Inside braced_value,
+                    // ONE lexeme decides struct/map/empty : "}" → {} struct ; ":" →
+                    // {:} map ; STRING → map_entries ; IDENT → struct_entries. The
+                    // host grammar is predictive (LL(1)) up to those named points and
+                    // its delegations — each byte has one lexical authority, comments
+                    // are trivia in CEL regions AND in recoveries (a boundary byte
+                    // inside a comment never bounds), and a line's end can only end a
+                    // value at depth zero of a newline-ended position. Parser error
+                    // recovery skips LEXEMES to a sync set ; a dead struct body is
+                    // recovered with host lexemes (a `}` in a comment never closes
+                    // it) ; dead-initializer and reserved-format bodies are OPAQUE
+                    // regions (their bytes may be host-alien, documented).
 
 cel_expr          ::= /* a CEL expression (homegrown parser+checker+eval).
                        Pure-CEL subset : literals, member/index access, operators, ternary,

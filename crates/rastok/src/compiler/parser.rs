@@ -141,7 +141,6 @@ const DEAD_INITIALIZER_TAGS: &[&str] = &[
 pub fn parse(source_id: SourceId, source: &str, bag: &mut Bag) -> SyntaxTree {
     Parser {
         lexer: Lexer::new(source_id, source),
-        peeked: None,
         source_id,
         last_end: 0,
         bag,
@@ -151,25 +150,20 @@ pub fn parse(source_id: SourceId, source: &str, bag: &mut Bag) -> SyntaxTree {
 
 struct Parser<'src, 'bag> {
     lexer: Lexer<'src>,
-    peeked: Option<Token<'src>>,
     source_id: SourceId,
     last_end: usize,
     bag: &'bag mut Bag,
 }
 
 impl<'src> Parser<'src, '_> {
-    // ----- token plumbing -----
+    // ----- token plumbing (the lexer owns the lookahead) -----
 
     fn peek(&mut self) -> Token<'src> {
-        if self.peeked.is_none() {
-            self.peeked = Some(self.lexer.next_token(self.bag));
-        }
-        self.peeked.unwrap_or_else(|| unreachable!("just filled"))
+        self.lexer.peek(self.bag)
     }
 
     fn bump(&mut self) -> Token<'src> {
-        let token = self.peek();
-        self.peeked = None;
+        let token = self.lexer.next(self.bag);
         if token.kind != TokenKind::Eof {
             self.last_end = token.span.range().end;
         }
@@ -264,24 +258,6 @@ impl<'src> Parser<'src, '_> {
             text: String::from(token.text),
             span: token.span,
         })
-    }
-
-    fn cel(&mut self, terminators: &TerminatorSet) -> CelExpr {
-        if let Some(token) = &self.peeked {
-            // The peeked token IS the expression's first piece: the
-            // continuation re-reads the immutable prefix slice.
-            let start = token.span.range().start;
-            return self.cel_from(start, terminators);
-        }
-        // Same-line comments before a value are trivia; a bare
-        // newline is not — it still reads as an empty expression.
-        self.lexer.advance_within_line();
-        let token = self.lexer.cel_expr(terminators, self.bag);
-        self.last_end = token.span.range().end;
-        CelExpr {
-            text: String::from(token.text),
-            span: token.span,
-        }
     }
 
     // ----- productions -----
@@ -1183,11 +1159,7 @@ impl<'src> Parser<'src, '_> {
     /// parser's lexer: anything that does not shape like a Rastok
     /// construct is handed to the CEL chain untouched.
     fn shape(&mut self) -> Option<u8> {
-        match &self.peeked {
-            Some(token) if token.kind == TokenKind::Eof => None,
-            Some(token) => token.text.bytes().next(),
-            None => self.lexer.first_significant_byte(),
-        }
+        self.lexer.shape()
     }
 
     fn statements(&mut self) -> Option<Vec<Statement>> {
@@ -1202,10 +1174,9 @@ impl<'src> Parser<'src, '_> {
             );
             if !statement_shaped {
                 // The separating newline is trivia; the yield's own
-                // scan must start past it.
-                if self.peeked.is_none() {
-                    self.lexer.advance_to_significant(self.bag);
-                }
+                // scan must start past it (a no-op when a lexeme is
+                // already buffered — the peek consumed the trivia).
+                self.lexer.advance_to_significant(self.bag);
                 let value = self.value(&ATTR_POSITION);
                 if matches!(&value, Value::Cel(cel) if cel.text.is_empty()) {
                     // Guaranteed progress: an empty scan consumed
@@ -1540,19 +1511,8 @@ impl<'src> Parser<'src, '_> {
         // nothing — it never absorbs the next line's construct
         // (D-2026-08-12-1, review round). `;` and `}` end the
         // statement the same way a newline would.
-        if position.newline {
-            let missing = match &self.peeked {
-                Some(token) => {
-                    token.kind == TokenKind::Eof
-                        || token.newline_before
-                        || matches!(token.kind, TokenKind::Semi | TokenKind::RBrace)
-                }
-                None => matches!(
-                    self.lexer.significant_byte_on_line(),
-                    None | Some(b';' | b'}')
-                ),
-            };
-            if missing {
+        if position.newline && self.lexer.value_missing_on_line() {
+            {
                 // An empty range: the fault is a POINT (possibly
                 // EOF), per Span's own contract.
                 let at = Span::new(self.source_id, self.last_end..self.last_end);
@@ -1612,8 +1572,7 @@ impl<'src> Parser<'src, '_> {
         if word == "json" {
             return self.json_tail(&ident, position);
         }
-        let follower = self.lexer.significant_on_line().map(|(_, byte)| byte);
-        if follower.is_none() && position.newline {
+        if self.lexer.line_exhausted() && position.newline {
             // Nothing significant follows on the line and the line
             // ends the value: the word stands alone. No scan — a
             // comment crossing the line stays HOST trivia, and an
@@ -1624,7 +1583,8 @@ impl<'src> Parser<'src, '_> {
                 span: ident.span,
             });
         }
-        let opens = matches!(follower, Some(b'(' | b'{'));
+        let opener = self.lexer.tag_opener_on_line();
+        let opens = opener.is_some();
         if DEAD_INITIALIZER_TAGS.contains(&word) && opens {
             return self.dead_initializer(&ident);
         }
@@ -1633,12 +1593,8 @@ impl<'src> Parser<'src, '_> {
             // consume it, one named deferral, never a struct
             // misreading.
             self.deferred("a reserved data-format body", ident.span);
-            if self.lexer.significant_on_line().map(|(_, byte)| byte) == Some(b'(') {
-                self.lexer.skip_balanced_raw(b'(', b')');
-            }
-            if self.lexer.significant_on_line().map(|(_, byte)| byte) == Some(b'{') {
-                self.lexer.skip_balanced_raw(b'{', b'}');
-            }
+            self.lexer.swallow_opaque_on_line(b'(');
+            self.lexer.swallow_opaque_on_line(b'{');
             return Value::Error(ident.span);
         }
         if TAG_WORDS.contains(&word) && opens {
@@ -1667,7 +1623,10 @@ impl<'src> Parser<'src, '_> {
                     span: Span::new(self.source_id, range.start..range.end),
                 }
             }
-            crate::compiler::lexer::JsonTail::BadForm { at, recovered_to } => {
+            crate::compiler::lexer::JsonTail::BadForm {
+                anchor,
+                recovered_to,
+            } => {
                 self.bag.push(
                     crate::diagnostics::Diagnostic::new(
                         E_JSON_VALUE,
@@ -1676,36 +1635,27 @@ impl<'src> Parser<'src, '_> {
                          is CEL's — write it directly, or `decimal(\"…\")` for an exact \
                          number",
                     )
-                    .with_span(Span::new(
-                        self.source_id,
-                        at..(at + 1).min(self.source_len()),
-                    ))
+                    .with_span(anchor)
                     .with_field("detail", "not a document after `json`"),
                 );
                 self.last_end = recovered_to;
+                let at = anchor.range().start;
                 Value::Error(Span::new(self.source_id, at..at))
             }
             crate::compiler::lexer::JsonTail::Unreadable(refusal) => {
-                // An EOF point is an EMPTY range (Span's own
-                // contract); anything else underlines one byte.
-                let end = (refusal.at + 1).min(self.source_len());
                 self.bag.push(
                     crate::diagnostics::Diagnostic::new(
                         E_JSON_VALUE,
                         crate::diagnostics::Phase::Parse,
                         format!("the JSON value does not read: {}", refusal.message),
                     )
-                    .with_span(Span::new(self.source_id, refusal.at..end))
+                    .with_span(refusal.anchor)
                     .with_field("detail", refusal.message.clone()),
                 );
                 self.last_end = refusal.recovered_to;
-                Value::Error(Span::new(self.source_id, refusal.opener..refusal.opener))
+                Value::Error(refusal.opener)
             }
         }
-    }
-
-    fn source_len(&self) -> usize {
-        self.lexer.source_from(0).len()
     }
 
     /// The CEL continuation of an already-consumed prefix: the END
@@ -1713,65 +1663,20 @@ impl<'src> Parser<'src, '_> {
     /// `source[prefix_start..end]` slice — a bounded re-read, never
     /// a rewind (D-2026-08-13-1). Any peeked token is DROPPED (its
     /// bytes sit inside the slice).
-    /// Whether the region scan would terminate IMMEDIATELY on this
-    /// already-peeked token — the exact mirror of the lexer's
-    /// terminator test, asked of a token instead of a byte. A
-    /// boundary token belongs to the HOST: the continuation is empty
-    /// and the peek MUST survive (D-2026-08-13-1, review round —
-    /// dropping it lost `}` / `;` / next-line statements).
-    fn boundary_for(token: &Token<'_>, position: &TerminatorSet) -> bool {
-        if token.kind == TokenKind::Eof {
-            return true;
-        }
-        if token.newline_before && position.newline {
-            return true;
-        }
-        if matches!(
-            token.kind,
-            TokenKind::RParen | TokenKind::RBrack | TokenKind::RBrace
-        ) {
-            // Any closer below depth 0 terminates, set or not.
-            return true;
-        }
-        if let Some(byte) = token.text.as_bytes().first()
-            && position.bytes.contains(byte)
-        {
-            return true;
-        }
-        if position.arrow && token.kind == TokenKind::Arrow {
-            return true;
-        }
-        token.kind == TokenKind::Ident && position.keywords.contains(&token.text)
+    fn cel(&mut self, terminators: &TerminatorSet) -> CelExpr {
+        self.cel_lexeme(None, terminators)
     }
 
     fn cel_from(&mut self, prefix_start: usize, position: &TerminatorSet) -> CelExpr {
-        if let Some(token) = &self.peeked
-            && Self::boundary_for(token, position)
-        {
-            // The prefix IS the whole expression; the boundary
-            // token stays buffered for the host.
-            let end = token.span.range().start.max(prefix_start);
-            let source = self.lexer.source_from(0);
-            let end = prefix_start
-                + source[prefix_start..end]
-                    .trim_end_matches([' ', '\t', '\r', '\n'])
-                    .len();
-            return CelExpr {
-                text: String::from(&source[prefix_start..end]),
-                span: Span::new(self.source_id, prefix_start..end),
-            };
-        }
-        // A dropped peek is re-read through the immutable prefix
-        // slice; `(`/`[`/`{` left the cursor past the opener — the
-        // continuation starts one level deep.
-        let depth = match self.peeked.take().map(|token| token.kind) {
-            Some(TokenKind::LParen | TokenKind::LBrack | TokenKind::LBrace) => 1,
-            _ => 0,
-        };
-        let token = self
-            .lexer
-            .cel_expr_from(prefix_start, depth, position, self.bag);
-        self.last_end = token.span.range().end;
+        self.cel_lexeme(Some(prefix_start), position)
+    }
+
+    /// One COMPLETE CEL region lexeme from the lexer — the parser
+    /// consumes it as a grammatical unit and never touches bytes
+    /// (D-2026-08-13-1, review round 5).
+    fn cel_lexeme(&mut self, prefix_start: Option<usize>, position: &TerminatorSet) -> CelExpr {
+        let token = self.lexer.cel_region(prefix_start, position, self.bag);
+        self.last_end = self.last_end.max(token.span.range().end);
         CelExpr {
             text: String::from(token.text),
             span: token.span,
@@ -1799,15 +1704,11 @@ impl<'src> Parser<'src, '_> {
             .with_field("tag", tag),
         );
         // Swallow `(args)` and `{ body }` so one fault speaks once —
-        // everything through the RAW skippers: a dead form may
-        // carry bytes the host lexer refuses, and the migration
-        // must stay the only voice (D-2026-08-12-1, review round).
-        if self.lexer.significant_on_line().map(|(_, byte)| byte) == Some(b'(') {
-            self.lexer.skip_balanced_raw(b'(', b')');
-        }
-        if self.lexer.significant_on_line().map(|(_, byte)| byte) == Some(b'{') {
-            self.lexer.skip_balanced_raw(b'{', b'}');
-        }
+        // through the OPAQUE region API: a dead form may carry bytes
+        // the host lexer refuses, and the migration must stay the
+        // only voice (D-2026-08-12-1, review round).
+        self.lexer.swallow_opaque_on_line(b'(');
+        self.lexer.swallow_opaque_on_line(b'{');
         Value::Error(token.span)
     }
 
@@ -1883,12 +1784,29 @@ impl<'src> Parser<'src, '_> {
                     .with_field("expected", "parenthesized arguments")
                     .with_field("found", "a struct body"),
                 );
-                // The `{` sits BUFFERED (the peek advanced the
-                // lexer past it): consume the peek, then swallow
-                // from INSIDE the region — one voice, nothing left
-                // behind (review round 4).
+                // Swallow the braced garbage with HOST LEXEMES —
+                // review round 5: a `}` inside a comment is trivia
+                // to the token stream, so it can never close the
+                // region early. A scratch bag keeps the swallow
+                // silent (the one migration voice already spoke).
                 self.bump();
-                self.lexer.skip_balanced_raw_inside(b'{', b'}');
+                let mut depth: u32 = 1;
+                let mut scratch = Bag::new();
+                loop {
+                    let token = self.lexer.next(&mut scratch);
+                    match token.kind {
+                        TokenKind::Eof => break,
+                        TokenKind::LBrace => depth += 1,
+                        TokenKind::RBrace => {
+                            depth -= 1;
+                            if depth == 0 {
+                                self.last_end = token.span.range().end;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 return Value::Error(tag.span);
             }
         } else {
@@ -2525,6 +2443,64 @@ mod tests {
         let (statements, bag) = handler_statements(source);
         assert_eq!(bag.diagnostics().len(), 1, "paren position: {bag:?}");
         assert_eq!(statements.len(), 2, "the statement sibling lives");
+    }
+
+    #[test]
+    fn a_comment_never_leaks_a_boundary_into_a_recovery() {
+        // Review round 5's proofs: comments are trivia to EVERY
+        // recovery — a `;`/`}`/`)` inside one can never bound or
+        // close a region, whatever the faulty form. One voice,
+        // sibling kept, closers kept, span on the initial fault.
+        for (label, source, code) in [
+            (
+                "bad json form + block comment hiding `;` and `}`",
+                "graph g : App {\n  operator o {\n    on in {\n      out = json foo /* ; } */\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                E_JSON_VALUE,
+            ),
+            (
+                "bad json form + line comment hiding `;` and `}`",
+                "graph g : App {\n  operator o {\n    on in {\n      out = json foo // ; }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                E_JSON_VALUE,
+            ),
+            (
+                "dead struct body + comment hiding `}`",
+                "graph g : App {\n  operator o {\n    on in {\n      out = bounded { /* } */ x = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                E_PARSE_EXPECTED,
+            ),
+            (
+                "dead initializer + comment before its opener",
+                "graph g : App {\n  operator o {\n    on in {\n      out = on_crash /* ) */ (foo)\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                E_PARSE_EXPECTED,
+            ),
+        ] {
+            let (statements, bag) = handler_statements(source);
+            assert_eq!(bag.diagnostics().len(), 1, "{label}: one voice — {bag:?}");
+            assert_eq!(bag.diagnostics()[0].code(), code, "{label}");
+            let fault = source.find("out = ").expect("the faulty line") + "out = ".len();
+            assert!(
+                bag.diagnostics()[0].spans()[0].range().start >= fault,
+                "{label}: the span sits on the fault"
+            );
+            assert_eq!(
+                statements.len(),
+                2,
+                "{label}: the sibling lives — {statements:?}"
+            );
+            let Statement::Assign { value, .. } = &statements[0] else {
+                panic!("{label}: first statement: {:?}", statements[0]);
+            };
+            assert!(
+                matches!(value, Value::Error(_)),
+                "{label}: the recovery form"
+            );
+            let Statement::Assign { value, .. } = &statements[1] else {
+                panic!("{label}: second statement: {:?}", statements[1]);
+            };
+            assert!(
+                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                "{label}"
+            );
+        }
     }
 
     fn parse_clean(source: &str) -> SyntaxTree {

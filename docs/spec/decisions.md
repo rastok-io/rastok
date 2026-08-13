@@ -5,209 +5,114 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
-## D-2026-08-13-1 — A monotone parser, json documents, and `decimal(…)`
+## D-2026-08-13-1 — A lexeme-stream parser, json documents, and `decimal(…)`
 
-The value parser is stabilized around three commitments.
+Consolidated after five adversarial review rounds (the round-by-round
+history lives in Git; the drafts each round superseded are named at
+the end). The CURRENT rule:
 
-**The cursor never moves backward.** Classification OBSERVES form
-(a raw byte probe sharing the lexer's exact trivia rules, or one
-peeked token); once a branch is chosen, ONE consumer owns the
-bytes and every advance is forward — recovery included. The
-identifier prefix is left-factored: `value ::= … | IDENT
-ident_tail`, and a consumed prefix is never handed back — a CEL
-continuation re-reads the immutable `source[prefix_start..end]`
-slice, which is a bounded re-read, not a parser rewind. The same
-factoring serves statements (`IDENT path_tail statement_tail`:
-`= value` makes the consumed path the lvalue; anything else makes
-it a CEL prefix — no try-and-rewind). `Lexer::rewind` is deleted:
-the invariant is the absence of the method. The host grammar is
-LL(1) after this factoring; sub-languages are selected by an
-explicit syntactic form and then read by their dedicated reader,
-each byte having exactly one lexical authority (host trivia before
-an opener belongs to the host — commented and uncommented
-spellings share one AST, one plan, one hash; the JSON reader owns
-its self-delimiting braces; raw bodies sit between host-owned
-delimiters).
+**One owner for the bytes.** The lexer owns the byte cursor AND the
+token lookahead; the parser reads complete lexemes through
+`peek`/`next`, asks semantic questions, and never touches bytes — no
+path can combine a buffered lexeme with a second read of the same
+bytes, because both live under one impl. No repositioning primitive
+exists: every cursor write is a locally-derived forward offset
+inside the lexer method that owns it. The identifier prefix is
+left-factored (`value ::= … | IDENT value_after_ident`); a consumed
+prefix is never handed back — a CEL continuation is ONE complete
+`CEL_EXPR` lexeme the lexer stitches from the immutable source
+slice, boundary lexemes surviving (the mirror of the terminator
+test, asked of the buffered token). The named finite-byte-lookahead
+points — the ONLY places a production choice reads a byte, all
+lexer-owned questions: `shape` (CEL regions may open with bytes the
+host vocabulary refuses), `tag_opener_on_line`, and the line
+questions (`value_missing_on_line`, `line_exhausted`).
 
-**`json` takes a DOCUMENT.** `json { … }` and `json [ … ]` are the
-only literal forms; the scalar spellings (`json 2`, `json true`,
-`json null`, `json "x"`) are REMOVED — scalars are CEL's
-(`2`, `true`, `null`, `"x"`), and the removal costs nothing
-because exactness moved to `decimal(…)` (below). A scalar after
-`json` refuses with the migration hint; a bare `json` at the end
-of a value is an ordinary word for the contract to judge; any
-other continuation is a CEL expression beginning with the word
-`json`. The runtime jsonl codec is UNTOUCHED: scalar lines remain
-valid wire documents. `json [1] ≠ [1]` keeps the prefix's meaning
-(the sealed `[type, root]` identity of D-2026-08-10-6 is
-unchanged for documents).
+**Specialized lexemes.** Sub-languages are lexical delegations
+returning complete lexemes or complete refusals: the CEL region
+(`cel_region`), the json continuation (`json_tail` — see below),
+raw guest bodies (`raw_block`), and the opaque dead/reserved
+regions (`swallow_opaque_on_line` — their bodies may carry bytes
+the host refuses, and the one migration diagnostic already spoke).
+A DEAD STRUCT BODY on a tag is recovered with HOST lexemes (a `}`
+inside a comment is trivia to the token stream and can never close
+the region); the parser's error recovery skips lexemes to a sync
+set, never bytes.
 
-**`decimal("…")` is CEL's exact-number constructor** — exactness
-is a capability of the expression language, not a side effect of
-a JSON prefix. The argument is a standard JSON number; the scale
-is DECLARED — as written: `decimal("1.50")` is `{unscaled 150,
-scale 2}`, trailing zeros significant, exponents reaching
-negative scales — with the full decimal128 domain of the Rust
-type (38 significant digits, scale ∈ [−6143, +6144]), matching
-SQL NUMERIC semantics. The D-2026-08-10-7 integer fold applies to
-the WRITTEN scale: `decimal("2")` is `Int(2)` (scale ≤ 0 fitting
-i64 folds), while `decimal("2.0")` is `{20, 1}` — a declared
-decimal. Structural equality distinguishes scales
-(`{150,2} ≠ {15,1}`): the constructor preserves what you wrote;
-dynamic decimals inside json documents keep their MINIMAL-scale
-rule unchanged. Statically the result is `variant`, like every
-dynamic decimal. **Rejected:** keeping `json <number>` alive as
-the exactness door (a data-format prefix is the wrong owner);
-minimal-scale normalization in the constructor (it would erase
-declared NUMERIC scale); adding a second number grammar (the
-house JSON number rules are THE rules).
+**Trivia has one authority.** `rastok_core::trivia::comment_at` is
+the single recognizer of the comment FACT (span, terminated,
+multiline); the host trivia, the probes, the region scans and the
+CEL lexer each apply their own POLICY to it. Comments are trivia
+inside CEL regions (the CEL lexer accepts `//` per cel-spec and the
+host's `/* … */`), inside recoveries (a boundary byte inside a
+comment never bounds), and a line's end can only end a value at
+depth ZERO of a newline-ended position — a commented spelling
+compiles to the same tree, plan, and hash as the plain one,
+whatever the expression's shape.
+
+**`json` is a RESERVED whole keyword** — with `nothing`, the
+expression literals (`true`/`false`/`null`), and, for nodes, the
+envelope surfaces. ONE naming policy refuses them at every live
+declaration door (graph, lab, boundary and node ports, nodes,
+val/var/let, type names — `E-NAME-RESERVED`, at the declaration); a
+user `type` may not spell a builtin type (`is_builtin_type_name` is
+the one vocabulary authority); `DECL_KW` words stay
+position-decided. `json`'s follower decides TOTALLY: `{`/`[` on the
+line open the DOCUMENT (the reader owns its self-delimiting
+braces; duplicate keys refuse; numbers exact and value-canonical);
+the position's boundary leaves the bare word (a contract may judge
+it); ANY other follower is an invalid json form — E-JSON-VALUE with
+its migration, recovered by the HOST-bounded walk (a newline is a
+strong boundary at a newline-ended position even inside a paren the
+garbage opened; a balanced same-line form swallows whole). The
+JSON-document recovery follows JSON's own delimiters instead. The
+scalar spellings (`json 2`, `json true`, `json null`, `json "x"`)
+are REMOVED; `json [1] ≠ [1]` keeps the prefix's meaning (the
+sealed `[type, root]` identity of D-2026-08-10-6 is unchanged for
+documents); the runtime jsonl codec is untouched.
+
+**`decimal("…")` is CEL's exact-number constructor** — exactness is
+a capability of the expression language, not a side effect of a
+JSON prefix. The argument is a standard JSON number; the scale is
+DECLARED — `decimal("1.50")` is `{unscaled 150, scale 2}`, trailing
+zeros significant, the full decimal128 domain (38 significant
+digits, scale ∈ [−6143, +6144], SQL NUMERIC semantics). The
+D-2026-08-10-7 integer fold applies to the WRITTEN scale
+(`decimal("2")` is `Int(2)`; `decimal("2.0")` is `{20, 1}`).
+Structural equality distinguishes scales. A name never changes
+validity: `val p = decimal("1.50")` folds to a declared-scale
+constant, and the validator and decoder share
+`declared_decimal_well_formed` (budgets + the written-scale fold).
+The wire seals a decimal at the scale it CARRIES — three origins,
+one rule: typed = declared, document = minimal (at the reader),
+constructor = declared (identity.md tags 6/10). Statically
+`decimal("…")` is `Dyn` in this build; inferring a true
+`decimal(p, s)` static type is the long-term path and awaits the
+type-system slice.
 
 Consequence — **package format v6**: `decimal` enters the plan's
-call alphabet (fn id 4), and a new id extends the format's
-vocabulary, so the categorical rule bumps the version (v5 joins
-the refused drafts, future versions refuse by number). No
-identity moves: the semantic hash covers the HIR canonical form,
-not the package (v4 precedent) — goldens re-bless for the
-version byte alone, and the embedded spike re-proves the same
-hash on target.
+call alphabet (fn id 4); the categorical rule bumps the version
+(v5 joins the refused drafts, future versions refuse by number).
+No identity moves: the semantic hash covers the HIR canonical
+form, not the package (v4 precedent) — goldens re-blessed for the
+version byte alone, and the embedded spike re-proves the same hash
+on target.
 
-Amended (review round, 2026-08-13) — the adversarial review found
-the invariant incompletely held; the following are normative:
-
-- **`{` and `[` are `json`'s ONLY special followers.** The scalar
-  "refusal with a hint" is DEAD: any non-document follower is a
-  CEL continuation beginning with the word `json`, judged by CEL
-  (`val json = 2 … json - 1` is a subtraction; `json 2` fails as
-  two adjacent CEL terms). No `scalar_start` classification
-  exists.
-- **A boundary token survives the peek.** When the buffered token
-  is one the region scan would terminate on immediately (the
-  mirror of the terminator test: a closer, a set byte, a
-  line-crossing token at a newline-ended position, the position's
-  keyword, EOF), the consumed prefix IS the whole expression and
-  the token stays the HOST's — dropping it lost `}`, absorbed
-  `;`-siblings, and swallowed next-line statements.
-- **Trivia has one authority in CEL regions too.** The region
-  scan treats comments as trivia (a terminator inside one never
-  terminates; at a newline-ended position the value ends BEFORE a
-  comment running to or across the line's end), and the CEL lexer
-  recognizes `//` (per cel-spec) and the host's `/* … */` — a
-  commented spelling compiles to the same tree, plan, and hash as
-  the plain one, whatever the expression's shape.
-- **No backward primitive exists.** `Lexer::skip_to` is deleted
-  with `rewind`; `advance_to` REFUSES (asserts) a backward offset
-  instead of clamping it silently. A tag argument that starts
-  with a string and continues (`f("x" + y)`) stitches the CEL
-  continuation from the immutable prefix slice — never a cursor
-  jump back.
-- **A name never changes validity: the plan-constant decimal rule
-  is DECLARED-scale.** `val p = decimal("1.50")` folds to the
-  constant `{150, 2}`; the validator and the decoder share
-  `declared_decimal_well_formed` (decimal128 budgets + the
-  written-scale integer fold). Document-origin values keep the
-  minimal-scale rule at their READER. The wire seals a decimal at
-  the scale it CARRIES — three origins (typed = declared,
-  document = minimal, constructor = declared), one seal rule
-  (identity.md tags 6/10 updated).
-- **The same-line-opener rule is global**: every tag's `(`/`{`
-  sits on the tag's line — the probe is line-scoped by design; a
-  tag word without its same-line opener is an ordinary CEL word.
-- Statically `decimal("…")` stays `Dyn` in this build; inferring
-  a true `decimal(p, s)` static type is the long-term path and
-  awaits the type-system slice.
-
-Supersedes, by name: the `json <value>` clause of D-2026-08-12-1
-(family 4 — now documents only); the `json <json-value>` scalar
-enumeration of D-2026-08-10-6 (its braced-map/array clauses
-stand); the "`json null` runs" example of D-2026-08-12-1's null-executes
-amendment (the null VALUE still executes — spelled `json [null]`
-in a document, or by a decoded `null` line; the bare emission
-stays deferred with its static type).
-
-Amended (review round 2, 2026-08-13) — four more commitments:
-
-- **A line's end can only end a value at depth ZERO.** The comment
-  rule mirrors the newline's exactly: inside brackets, `//`
-  consumes to its line's end and the expression continues, and a
-  `/* … */` is trivia even across lines; only at depth zero of a
-  newline-ended position does a comment reaching the line's end
-  close the value. (`size([1, // first\n 2])` compiles, same hash
-  as its uncommented twin.)
-- **`json` and `nothing` are RESERVED, unmaskable words.** They
-  refuse in every binding-introducing position the build supports
-  (val/var/let at every level, node names, declared ports, type
-  names) with E-NAME-RESERVED, at the declaration — so `json[0]`
-  can only ever be the document `[0]`, never an indexing. A
-  contract's closed-choice WORD is not a binding and stays free.
-  (Partitions and join aliases defer as whole constructs today;
-  the guard extends with them.)
-- **The comment is ONE lexical fact.** `rastok_core::trivia::comment_at`
-  is the single recognizer (span, terminated, multiline); the host
-  trivia, the line probes, the CEL region scan, and the CEL lexer
-  each apply their own POLICY to that one fact — no hand-rolled
-  copies remain.
-- **No public repositioning primitive exists.** The json-document
-  delegation is one atomic lexer method (probe, read, forward
-  re-sync — success or recovery); `advance_to` is private to the
-  lexer. Backward movement is not expressible from the parser.
-
-Statically `decimal("…")` staying `Dyn`, and the one-seal-rule
-decimal model, are unchanged by this round.
-
-Amended (review round 3, 2026-08-13) — closing the authorities:
-
-- **ONE naming policy** (`guard_binding_name`) at every live
-  declaration door: graph names, lab names, boundary ports, node
-  ports, nodes, val/var/let, type names. The reserved set grows to
-  the expression literals (`true`/`false`/`null` — a masked literal
-  is a shadow CEL can never read), and a user `type` may not spell
-  a BUILTIN type (the builtin resolves first; the declaration was
-  silently dead — `type text = int` compiled to the same program
-  as its absence). `DECL_KW` words are NOT reserved — declaration
-  positions are structural; the earlier grammar draft claiming
-  `DECL_KW` unmaskable is superseded by the enforced section.
-- **`json` is a whole keyword.** Its follower decides TOTALLY:
-  `{`/`[` open the document; the position's boundary leaves the
-  bare word (a contract Word); ANY other follower is an invalid
-  json form (E-JSON-VALUE, forward recovery) — no CEL fallback
-  exists, since the reserved word can never be a name. `json`
-  leaves RAW_TAGS/TAG_WORDS (its entries were dead). The recovery
-  stack tracks garbage-opened parens (`json(1)` swallows whole;
-  a CALLER's `)` still stops the walk on an empty stack).
-- **A struct body on a tag refuses in the parser** — the AST's
-  `TaggedBody::Struct` variant is DELETED; the grammar's dead-form
-  note is now the code's behavior (D-2026-08-12-1 alignment).
-- **No panic on the new paths**: the double probes and their
-  `unreachable!` bridges are gone (if-let guards; the json
-  continuation is ONE lexer call), and the `advance_to` primitive
-  is deleted outright — every cursor write is a locally-derived
-  forward offset inside the owning method.
-- The grammar's normative text loses its pre-factoring twins
-  (`tagged_value`/`tagged_block_value`/`arg_list` fold into
-  `value_after_ident`), the predictive table points at the
-  factored family, and the recovery prose no longer describes a
-  backward walk.
-
-Amended (review round 4, 2026-08-13) — the recovery frontiers:
-
-- **A buffered token never leaks into a raw swallow.** The
-  dead-struct-body refusal consumes its peeked `{` and swallows
-  from INSIDE the region (`skip_balanced_raw_inside`, initial
-  depth 1) — one voice, the sibling and the closers intact.
-- **Two recovery invariants, two walks.** The JSON-document
-  recovery follows JSON's own delimiters (`{}`/`[]`; `;` and `)`
-  strong — parens do not exist in JSON). The BadForm walk is
-  HOST-bounded: at a newline-ended position the newline is a
-  STRONG boundary even inside a paren the garbage opened — a
-  balanced same-line `json(1)` swallows whole, an unbalanced
-  `json(1` ends at its line, and the sibling lives in every case.
-- The grammar, the AST docs, the tag vocabulary lists and the
-  diagnostic text finish the `json`-is-reserved sweep (`json`
-  leaves the TAG_KW terminal list; `json_after_ident`'s third arm
-  is the refusal, never `cel_continuation`).
-- `is_builtin_type_name` is the ONE builtin-type authority (scalar
-  and composite words alike), owned by the parser next to the
-  grammar that reads it.
+**Superseded drafts, by name** (their text lives in Git history):
+the `json <value>` clause of D-2026-08-12-1 (family 4 — documents
+only now) and its "`json null` runs" example (the null VALUE still
+executes — `json [null]`, or a decoded `null` line; the bare
+emission stays deferred with its static type); the
+`json <json-value>` scalar enumeration of D-2026-08-10-6 (its
+braced-map/array clauses stand); the grammar draft claiming
+`DECL_KW` unmaskable; this decision's own round-1 "scalar refusal
+with a hint" and round-1/2 "any other follower is CEL" clauses
+(both fell when `json` became fully reserved); the round-3
+paren-tracking in the json recovery (split into the two walks);
+and the round-2/3 probe/stitch surface
+(`significant_on_line`-as-parser-API, `cel_expr_from`,
+`skip_balanced_raw*`, `advance_to`, `source_from`, the parser-side
+lookahead) — all replaced by the lexeme-stream frontier above.
 
 ## D-2026-08-12-1 — Node attributes: one syntax, one contract metamodel
 
