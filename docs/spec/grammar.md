@@ -544,7 +544,10 @@ optional, needed only to **pin** a type/schema (`output x: T`), or to
 document a node with no handler (e.g. a saga) or a graph's public
 interface. Direction is carried by the keyword, not the name. The names
 **`in` / `out` / `err`** are *default ports* — pre-bound, stdio-aligned
-(a `Process`'s in/out/err are its stdin/stdout/stderr). Conventions :
+(a `Process` maps them onto stdin/stdout/stderr — a transport analogy:
+`out` is stdout decoded by the codec, and `err` speaks the TYPED error
+model, stderr lines arriving as `StderrLine` envelopes alongside the
+lifecycle kinds of the declared error set). Conventions :
 
 - ports are named for their role, **no direction suffix** (`event`, `delta`, `flush`)
 - a single-input / single-output node just uses the defaults `in` and `out`

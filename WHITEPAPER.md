@@ -786,8 +786,13 @@ The port-declaration keywords are **`input`** and **`output`**; the names
 **`in`**, **`out`** and **`err`** are *default ports*, pre-bound and
 non-reserved (usable without declaration, redefinable). `in` is the
 default input; `out` and `err` are default outputs. This mirrors Unix
-stdio exactly — a `Process` Connector's `in` / `out` / `err` *are* its
-stdin / stdout / stderr.
+stdio — a `Process` Connector maps `in` / `out` / `err` onto
+stdin / stdout / stderr. The mapping is a transport analogy, not an
+identity: `out` carries stdout *decoded by the declared codec*, and
+`err` speaks the typed error model — a stderr line arrives as a
+`StderrLine { … }` envelope, alongside the lifecycle kinds
+(`SpawnFailed`, `TimeoutExpired`, `ExecFailed { exit_code, stderr }`,
+…) from the connector's declared error set.
 
 ```rastok
 operator <name> [: <trait + aspects>] [per <partition>] {
