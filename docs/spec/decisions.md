@@ -188,6 +188,27 @@ Amended (review round 3, 2026-08-13) — closing the authorities:
   factored family, and the recovery prose no longer describes a
   backward walk.
 
+Amended (review round 4, 2026-08-13) — the recovery frontiers:
+
+- **A buffered token never leaks into a raw swallow.** The
+  dead-struct-body refusal consumes its peeked `{` and swallows
+  from INSIDE the region (`skip_balanced_raw_inside`, initial
+  depth 1) — one voice, the sibling and the closers intact.
+- **Two recovery invariants, two walks.** The JSON-document
+  recovery follows JSON's own delimiters (`{}`/`[]`; `;` and `)`
+  strong — parens do not exist in JSON). The BadForm walk is
+  HOST-bounded: at a newline-ended position the newline is a
+  STRONG boundary even inside a paren the garbage opened — a
+  balanced same-line `json(1)` swallows whole, an unbalanced
+  `json(1` ends at its line, and the sibling lives in every case.
+- The grammar, the AST docs, the tag vocabulary lists and the
+  diagnostic text finish the `json`-is-reserved sweep (`json`
+  leaves the TAG_KW terminal list; `json_after_ident`'s third arm
+  is the refusal, never `cel_continuation`).
+- `is_builtin_type_name` is the ONE builtin-type authority (scalar
+  and composite words alike), owned by the parser next to the
+  grammar that reads it.
+
 ## D-2026-08-12-1 — Node attributes: one syntax, one contract metamodel
 
 A configurable property of a Node is an **Attribute**, and every

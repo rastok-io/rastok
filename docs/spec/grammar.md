@@ -904,7 +904,7 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 | `array`   | `[ v, v, … ]`                                  | ordered sequence ; `array<struct>` is the relational `table` view |
 | `text`    | `"…"` ; `text { … }`                          | CEL string, or the VERBATIM block — first newline excluded, margin set by the closing brace, no interpolation, braces balanced |
 | `bytes`   | `base64 { … }` ; `asset("path")`              | RFC 4648 standard, mandatory padding, ASCII whitespace ignored ; or build-time repo bytes (D-2026-08-10-5). `hex` and `bytes …` forms are DEAD |
-| `variant` | `json <json-document>`                        | a JSON DOCUMENT (`json { "k": 1 }`, `json [1]`) ; always `variant` ; duplicate keys refuse ; numbers exact per D-2026-08-10-7 ; `{`/`[` are the ONLY special followers — any other spelling is CEL beginning with the word `json` (scalars are CEL's, exact numbers `decimal("…")`, D-2026-08-13-1) |
+| `variant` | `json <json-document>`                        | a JSON DOCUMENT (`json { "k": 1 }`, `json [1]`) ; always `variant` ; duplicate keys refuse ; numbers exact per D-2026-08-10-7 ; `{`/`[` are the ONLY special followers — any other spelling is an INVALID json form, refused with the migration (scalars are CEL's, exact numbers `decimal("…")`, D-2026-08-13-1) |
 | whole payload | `asset("path", "content_type")` ; `base64("ct") { … }` | fresh bytes + `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
 
 The `<type> file { … }` forms are DEAD — `asset` replaces them for
@@ -1219,7 +1219,7 @@ TYPE_KW    = { "variant",                                             // the val
                "decimal", "date", "timestamp", "timestamp_ntz",      // scalar logical
                "time", "uuid", "duration" }
 TAG_KW     = { "jq", "bash", "sql", "python", "rust",                // guests — raw bodies
-               "json", "avro", "protobuf", "parquet", "msgpack",     // data formats — `json` takes a self-delimiting DOCUMENT ({…}/[…]; scalars are dead, D-2026-08-13-1)
+               "avro", "protobuf", "parquet", "msgpack",             // data formats (reserved) — `json` is NOT here: a RESERVED word with its own total continuation (D-2026-08-13-1)
                "base64", "csv",                                       // `hex` and `file` are DEAD (D-2026-08-10-5/-6)
                "text",                                                // the verbatim block tag (also a TYPE_KW — position disambiguates)
                "asset",                                               // build-time repo bytes (D-2026-08-10-5) — parens, no body
@@ -1245,7 +1245,7 @@ LITERAL_KW = { "true", "false", "null", "nothing",
 `DECL_KW` introduces declarations, labeled blocks, handler clauses
 (`where`/`having`/`within`/`last`) and the narrowing operator `as`.
 `TAG_KW` introduces foreign-literal expressions (`jq { ... }`,
-`jq(req) { ... }`, `base64(ct) { ... }`, `json { ... }`/`json [ ... ]`) and the
+`jq(req) { ... }`, `base64(ct) { ... }`) and the
 expression-space constructors (`bounded(64)` — parens, no body).
 `TYPE_KW` names the value-type tree — `variant` (top), the
 composites, and the scalar physical / logical types. `LITERAL_KW` are enum-like
@@ -1484,8 +1484,11 @@ value_after_ident ::= ε                                               // nothin
 
 json_after_ident  ::= JSON_OBJECT                                     // { … } on the SAME line — the document reader owns the braces
                     | JSON_ARRAY                                      // [ … ] on the SAME line
-                    | cel_continuation                                // ANY other follower : CEL beginning with the word `json`
-                                                                      //   (`{`/`[` are json's ONLY special followers, D-2026-08-13-1)
+                    | ε                                               // the position's boundary : the bare word stands alone (a
+                                                                      //   contract may judge the Word)
+                                                                      // ANY other follower is an INVALID json form (E-JSON-VALUE,
+                                                                      //   host-bounded forward recovery) — the reserved word never
+                                                                      //   begins a CEL expression (D-2026-08-13-1, review round 3)
 
 cel_non_ident_start ::= cel_expr                                      // the region scan starts AT the current token (a literal,
                                                                       //   `-`, `(`, `[`, a string, …)

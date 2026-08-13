@@ -303,9 +303,11 @@ impl<'a> Lexer<'a> {
         }
         // A follower that is neither a document nor the boundary:
         // the json form is invalid — `json` cannot begin a CEL
-        // expression, being reserved (review round 3).
+        // expression, being reserved (review round 3). The walk is
+        // the HOST-bounded one: garbage never crosses the line of a
+        // newline-ended position (review round 4).
         self.pos = offset;
-        let recovered_to = self.skip_json_recovery(terminators);
+        let recovered_to = self.skip_bad_form(terminators);
         JsonTail::BadForm {
             at: offset,
             recovered_to,
@@ -545,8 +547,20 @@ impl<'a> Lexer<'a> {
     /// through `skip_quoted` (which diagnoses)
     /// (D-2026-08-12-1, review round).
     pub fn skip_balanced_raw(&mut self, open: u8, close: u8) {
+        self.skip_balanced_raw_at(open, close, 0);
+    }
+
+    /// The same silent walk when the caller already consumed the
+    /// opener (a buffered peek left the cursor INSIDE the region):
+    /// the walk starts one level deep and consumes through the
+    /// matching closer (D-2026-08-13-1, review round 4).
+    pub fn skip_balanced_raw_inside(&mut self, open: u8, close: u8) {
+        self.skip_balanced_raw_at(open, close, 1);
+    }
+
+    fn skip_balanced_raw_at(&mut self, open: u8, close: u8, initial: u32) {
         let bytes = self.source.as_bytes();
-        let mut depth: u32 = 0;
+        let mut depth: u32 = initial;
         let mut quote: Option<u8> = None;
         while let Some(&byte) = bytes.get(self.pos) {
             if let Some(active) = quote {
@@ -582,6 +596,64 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Skips a NON-JSON garbage form (a `json` follower that opens
+    /// no document, D-2026-08-13-1 review round 4) to the HOST
+    /// position's boundary. Unlike the JSON-document recovery, the
+    /// bound is the position itself: at a newline-ended position the
+    /// newline is a STRONG boundary even inside a paren the garbage
+    /// opened — a balanced same-line form (`json(1)`) is swallowed
+    /// whole, an unbalanced one (`json(1` …) ends at its line.
+    /// Quoted content (both styles) is opaque; `;` always stops; a
+    /// closer the garbage did not open stops (it is the CALLER's).
+    pub fn skip_bad_form(&mut self, terminators: &TerminatorSet) -> usize {
+        let bytes = self.source.as_bytes();
+        let mut expected: Vec<u8> = Vec::new();
+        let mut quote: Option<u8> = None;
+        while let Some(&byte) = bytes.get(self.pos) {
+            if let Some(active) = quote {
+                match byte {
+                    b'\\' => {
+                        self.pos = (self.pos + 2).min(bytes.len());
+                        continue;
+                    }
+                    _ if byte == active => quote = None,
+                    _ => {}
+                }
+                self.pos += 1;
+                continue;
+            }
+            if byte == b';' {
+                return self.pos;
+            }
+            if terminators.newline && byte == b'\n' {
+                return self.pos;
+            }
+            if expected.is_empty() && terminators.bytes.contains(&byte) {
+                return self.pos;
+            }
+            match byte {
+                b'"' | b'\'' => {
+                    quote = Some(byte);
+                }
+                b'(' => expected.push(b')'),
+                b'{' => expected.push(b'}'),
+                b'[' => expected.push(b']'),
+                b')' | b'}' | b']' => {
+                    if expected.last() == Some(&byte) {
+                        expected.pop();
+                    } else {
+                        // A closer the garbage never opened — the
+                        // caller's, a boundary.
+                        return self.pos;
+                    }
+                }
+                _ => {}
+            }
+            self.pos += 1;
+        }
+        self.pos
+    }
+
     /// Skips OPAQUELY over a FAULTY JSON value to the position's
     /// recovery point — never consuming the terminator, never moving
     /// backward — and returns the final offset. JSON's own grammar
@@ -610,11 +682,10 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 continue;
             }
-            // Strong boundaries: impossible in JSON outside strings.
-            // A `)` matching a paren the GARBAGE opened (`json(1)`,
-            // review round 3) pops instead — the CALLER's `)` always
-            // arrives with an empty stack and still stops the walk.
-            if byte == b';' || (byte == b')' && expected.last() != Some(&b')')) {
+            // Strong boundaries: impossible in JSON outside strings
+            // (a non-json BadForm walks `skip_bad_form` instead —
+            // review round 4 split the two invariants).
+            if byte == b';' || byte == b')' {
                 return self.pos;
             }
             if expected.is_empty()
@@ -626,8 +697,7 @@ impl<'a> Lexer<'a> {
                 b'"' => in_string = true,
                 b'{' => expected.push(b'}'),
                 b'[' => expected.push(b']'),
-                b'(' => expected.push(b')'),
-                b'}' | b']' | b')' => {
+                b'}' | b']' => {
                     if expected.last() == Some(&byte) {
                         expected.pop();
                     } else {

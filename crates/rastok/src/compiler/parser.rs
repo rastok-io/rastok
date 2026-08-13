@@ -93,9 +93,10 @@ const SYNC_WORDS: &[&str] = &[
 const RAW_TAGS: &[&str] = &["jq", "bash", "sql", "python", "rust", "text", "base64"];
 
 /// Tag words that open tagged-value expressions: foreign literals
-/// (guests, raw literals, data formats, `json`) and the
-/// expression-space constructors. Tagged INITIALIZERS left the
-/// vocabulary (D-2026-08-12-1) — a plain struct with a
+/// (guests, raw literals, data formats) and the expression-space
+/// constructors. `json` is NOT here — a RESERVED word with its own
+/// total continuation (D-2026-08-13-1). Tagged INITIALIZERS left
+/// the vocabulary (D-2026-08-12-1) — a plain struct with a
 /// closed-choice discriminant field replaces each one, and the
 /// dead spelling refuses with its migration hint.
 const TAG_WORDS: &[&str] = &[
@@ -1671,7 +1672,7 @@ impl<'src> Parser<'src, '_> {
                     crate::diagnostics::Diagnostic::new(
                         E_JSON_VALUE,
                         crate::diagnostics::Phase::Parse,
-                        "`json` takes a document ({ … } or [ … }) on its line; a scalar \
+                        "`json` takes a document ({ … } or [ … ]) on its line; a scalar \
                          is CEL's — write it directly, or `decimal(\"…\")` for an exact \
                          number",
                     )
@@ -1882,7 +1883,12 @@ impl<'src> Parser<'src, '_> {
                     .with_field("expected", "parenthesized arguments")
                     .with_field("found", "a struct body"),
                 );
-                self.lexer.skip_balanced_raw(b'{', b'}');
+                // The `{` sits BUFFERED (the peek advanced the
+                // lexer past it): consume the peek, then swallow
+                // from INSIDE the region — one voice, nothing left
+                // behind (review round 4).
+                self.bump();
+                self.lexer.skip_balanced_raw_inside(b'{', b'}');
                 return Value::Error(tag.span);
             }
         } else {
@@ -2158,11 +2164,17 @@ impl<'src> Parser<'src, '_> {
     }
 }
 
-/// Whether `word` spells a builtin scalar type — the type-name
-/// guard's question (review round 3).
+/// Whether `word` spells ANY builtin type — scalar or composite.
+/// The ONE authority the type-name guard asks (review round 4): a
+/// vocabulary extension lands here, next to the grammar that reads
+/// it, so a user `type` can never silently shadow a new builtin.
 #[must_use]
-pub fn simple_scalar_word(word: &str) -> bool {
+pub fn is_builtin_type_name(word: &str) -> bool {
     simple_scalar(word).is_some()
+        || matches!(
+            word,
+            "variant" | "struct" | "map" | "array" | "table" | "enum" | "union" | "decimal"
+        )
 }
 
 fn simple_scalar(word: &str) -> Option<ScalarType> {
@@ -2269,7 +2281,7 @@ mod tests {
             ("dead tag + parens", "exponential(1, 2)", "error"),
             ("dead tag + brace", "measure { x = 1 }", "error"),
             ("reserved format + brace", "avro { x }", "error"),
-            // `json`: a document, or CEL's word.
+            // `json`: a document, the bare word, or an invalid form.
             ("json + object", "json {\"a\": 1}", "json"),
             ("json + array", "json [1]", "json"),
             // `json` is a RESERVED word (D-2026-08-13-1, review
@@ -2414,6 +2426,105 @@ mod tests {
                 assert_eq!(expr.text, expression, "{label}: the exact expression");
             }
         }
+    }
+
+    /// The handler statements of a one-operator graph, with the
+    /// parse bag — the recovery proofs read the AST directly.
+    fn handler_statements(source: &str) -> (Vec<Statement>, Bag) {
+        let mut bag = Bag::new();
+        let tree = parse(SourceId::new(0), source, &mut bag);
+        let TopDecl::Graph(graph) = &tree.decls[0] else {
+            panic!("a graph");
+        };
+        let GraphItem::Operator(operator) = &graph.body[0] else {
+            panic!("an operator: {:?}", graph.body[0]);
+        };
+        let OperatorItem::Handler(handler) = &operator.body[0] else {
+            panic!("a handler");
+        };
+        (handler.body.clone().expect("a body"), bag)
+    }
+
+    #[test]
+    fn a_dead_struct_body_keeps_the_sibling_and_the_closers() {
+        // Review round 4's blocker: the buffered `{` leaked — four
+        // voices, the sibling and both closers lost. One voice now,
+        // the region swallowed whole, everything after intact.
+        for (label, source) in [
+            (
+                "no args",
+                "graph g : App {\n  operator o {\n    on in {\n      out = bounded { x = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+            ),
+            (
+                "with args",
+                "graph g : App {\n  operator o {\n    on in {\n      out = regex(\"x\") { y = 2 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+            ),
+        ] {
+            let (statements, bag) = handler_statements(source);
+            assert_eq!(bag.diagnostics().len(), 1, "{label}: one voice — {bag:?}");
+            assert_eq!(
+                bag.diagnostics()[0].code(),
+                E_PARSE_EXPECTED,
+                "{label}: the migration voice"
+            );
+            assert_eq!(statements.len(), 2, "{label}: the sibling lives");
+            let Statement::Assign { value, .. } = &statements[0] else {
+                panic!("{label}: first statement: {:?}", statements[0]);
+            };
+            assert!(
+                matches!(value, Value::Error(_)),
+                "{label}: the recovery form"
+            );
+            let Statement::Assign { value, .. } = &statements[1] else {
+                panic!("{label}: second statement: {:?}", statements[1]);
+            };
+            assert!(
+                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bad_json_form_stays_inside_its_position() {
+        // Review round 4's blocker: the garbage-opened paren pulled
+        // the walk across the line. The BadForm walk is HOST-bounded:
+        // a balanced same-line form swallows whole, an unbalanced one
+        // ends at its line, and a parenthesized position stops at its
+        // own boundary — the sibling lives in every case.
+        for (label, source, statements_wanted) in [
+            (
+                "balanced same line + sibling",
+                "graph g : App {\n  operator o {\n    on in {\n      out = json(1)\n      typo = data\n    }\n  }\n  . -> o -> .\n}\n",
+                2,
+            ),
+            (
+                "unbalanced + newline + sibling",
+                "graph g : App {\n  operator o {\n    on in {\n      out = json(1\n      typo = data\n    }\n  }\n  . -> o -> .\n}\n",
+                2,
+            ),
+        ] {
+            let (statements, bag) = handler_statements(source);
+            assert_eq!(bag.diagnostics().len(), 1, "{label}: one voice — {bag:?}");
+            assert_eq!(
+                statements.len(),
+                statements_wanted,
+                "{label}: {statements:?}"
+            );
+            let Statement::Assign { value, .. } = &statements[1] else {
+                panic!("{label}: second statement: {:?}", statements[1]);
+            };
+            assert!(
+                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                "{label}"
+            );
+        }
+        // A parenthesized position: the BadForm stops at the `,`, the
+        // sibling ARGUMENT lives.
+        let source = "graph g : App {\n  operator o {\n    on in { out = asset(json @, \"text/plain\"); out = data }\n  }\n  . -> o -> .\n}\n";
+        let (statements, bag) = handler_statements(source);
+        assert_eq!(bag.diagnostics().len(), 1, "paren position: {bag:?}");
+        assert_eq!(statements.len(), 2, "the statement sibling lives");
     }
 
     fn parse_clean(source: &str) -> SyntaxTree {

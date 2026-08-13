@@ -2257,12 +2257,7 @@ impl Checker<'_, '_> {
         if !self.guard_binding_name(name, "a type name") {
             return false;
         }
-        let builtin = crate::compiler::parser::simple_scalar_word(&name.text)
-            || matches!(
-                name.text.as_str(),
-                "variant" | "struct" | "map" | "array" | "table" | "enum" | "union" | "decimal"
-            );
-        if !builtin {
+        if !crate::compiler::parser::is_builtin_type_name(&name.text) {
             return true;
         }
         self.bag.push(

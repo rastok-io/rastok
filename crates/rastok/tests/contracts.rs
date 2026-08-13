@@ -676,7 +676,7 @@ fn the_new_discriminant_words_parse_as_words() {
 
 #[test]
 fn a_bare_tag_word_is_judged_by_the_contract() {
-    // `codec = json`: `json` is a TAG WORD, but the word ALONE is a
+    // `codec = json`: `json` is a RESERVED word, but the word ALONE is a
     // choice for the contract to judge — it must never eat the next
     // line as a JSON value.
     let source = process_graph(
@@ -934,14 +934,60 @@ fn json_and_nothing_are_unmaskable() {
             "type json = int\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
-            "declared port json",
+            "declared node port json",
             "graph g : App {\n  operator o {\n    output json\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        // The round-3 holes, pinned: the graph's own name, the lab
+        // that binds to it, and the BOUNDARY ports (a different
+        // checker route than node ports — the exact miss).
+        (
+            "graph named json",
+            "graph json : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "graph named nothing",
+            "graph nothing : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "boundary output json",
+            "graph g : App {\n  output json\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "boundary input nothing",
+            "graph g : App {\n  input nothing\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "lab named json",
+            "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\nlab json {\n}\n",
+        ),
+        // The expression literals: a masked one is a shadow CEL can
+        // never read (review round 3).
+        (
+            "val true",
+            "graph g : App {\n  operator o {\n    val true = 1\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "var false",
+            "graph g : App {\n  operator o {\n    var false : int = 0\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "val null",
+            "graph g : App {\n  operator o {\n    val null = 1\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        // A user type may not SPELL a builtin: the builtin resolves
+        // first and the declaration is silently dead (proved by the
+        // identical hash before the guard).
+        (
+            "type spelling a builtin",
+            "type text = int\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
         ),
     ] {
         let bag = compile_one(source).expect_err(label);
         assert!(
             bag.diagnostics().iter().any(|d| {
-                d.code().as_str() == "E-NAME-RESERVED" && d.message().contains("reserved word")
+                d.code().as_str() == "E-NAME-RESERVED"
+                    && (d.message().contains("reserved word")
+                        || d.message().contains("builtin type"))
             }),
             "{label}: {bag:?}"
         );
