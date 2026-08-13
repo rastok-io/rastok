@@ -1657,19 +1657,6 @@ impl<'src> Parser<'src, '_> {
     /// only — the delegated body never meets the host lexer.
     fn json_tail(&mut self, ident: &Token<'_>, position: &TerminatorSet) -> Value {
         let probe = self.lexer.significant_on_line();
-        let scalar_start = |offset: usize, byte: u8| -> bool {
-            match byte {
-                b'0'..=b'9' | b'-' | b'"' => true,
-                b't' | b'f' | b'n' => {
-                    let tail = self.lexer.source_from(offset);
-                    let word: &str = &tail[..tail
-                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                        .unwrap_or(tail.len())];
-                    matches!(word, "true" | "false" | "null")
-                }
-                _ => false,
-            }
-        };
         match probe {
             Some((offset, byte @ (b'{' | b'['))) => {
                 let _ = byte;
@@ -1711,25 +1698,6 @@ impl<'src> Parser<'src, '_> {
                     }
                 }
             }
-            Some((offset, byte)) if scalar_start(offset, byte) => {
-                // The dead scalar spellings (D-2026-08-13-1): the
-                // migration is the one voice, the garbage consumed
-                // forward to the position's boundary.
-                self.bag.push(
-                    crate::diagnostics::Diagnostic::new(
-                        E_JSON_VALUE,
-                        crate::diagnostics::Phase::Parse,
-                        "`json` takes a document ({ … } or [ … }); a scalar is CEL's — write \
-                         it directly, or `decimal(\"…\")` for an exact number",
-                    )
-                    .with_span(Span::new(self.source_id, offset..offset + 1))
-                    .with_field("detail", "a scalar after `json`"),
-                );
-                self.lexer.advance_to(offset);
-                let end = self.lexer.skip_json_recovery(position);
-                self.last_end = end;
-                Value::Error(Span::new(self.source_id, offset..offset))
-            }
             None if position.newline => {
                 // Nothing significant on the line and the line ends
                 // the value: the bare word stands alone, span exact —
@@ -1751,11 +1719,59 @@ impl<'src> Parser<'src, '_> {
     /// `source[prefix_start..end]` slice — a bounded re-read, never
     /// a rewind (D-2026-08-13-1). Any peeked token is DROPPED (its
     /// bytes sit inside the slice).
+    /// Whether the region scan would terminate IMMEDIATELY on this
+    /// already-peeked token — the exact mirror of the lexer's
+    /// terminator test, asked of a token instead of a byte. A
+    /// boundary token belongs to the HOST: the continuation is empty
+    /// and the peek MUST survive (D-2026-08-13-1, review round —
+    /// dropping it lost `}` / `;` / next-line statements).
+    fn boundary_for(token: &Token<'_>, position: &TerminatorSet) -> bool {
+        if token.kind == TokenKind::Eof {
+            return true;
+        }
+        if token.newline_before && position.newline {
+            return true;
+        }
+        if matches!(
+            token.kind,
+            TokenKind::RParen | TokenKind::RBrack | TokenKind::RBrace
+        ) {
+            // Any closer below depth 0 terminates, set or not.
+            return true;
+        }
+        if let Some(byte) = token.text.as_bytes().first()
+            && position.bytes.contains(byte)
+        {
+            return true;
+        }
+        if position.arrow && token.kind == TokenKind::Arrow {
+            return true;
+        }
+        token.kind == TokenKind::Ident && position.keywords.contains(&token.text)
+    }
+
     fn cel_from(&mut self, prefix_start: usize, position: &TerminatorSet) -> CelExpr {
-        // A dropped `(`/`[` peek left the cursor past the opener —
-        // the continuation starts one level deep.
+        if let Some(token) = &self.peeked
+            && Self::boundary_for(token, position)
+        {
+            // The prefix IS the whole expression; the boundary
+            // token stays buffered for the host.
+            let end = token.span.range().start.max(prefix_start);
+            let source = self.lexer.source_from(0);
+            let end = prefix_start
+                + source[prefix_start..end]
+                    .trim_end_matches([' ', '\t', '\r', '\n'])
+                    .len();
+            return CelExpr {
+                text: String::from(&source[prefix_start..end]),
+                span: Span::new(self.source_id, prefix_start..end),
+            };
+        }
+        // A dropped peek is re-read through the immutable prefix
+        // slice; `(`/`[`/`{` left the cursor past the opener — the
+        // continuation starts one level deep.
         let depth = match self.peeked.take().map(|token| token.kind) {
-            Some(TokenKind::LParen | TokenKind::LBrack) => 1,
+            Some(TokenKind::LParen | TokenKind::LBrack | TokenKind::LBrace) => 1,
             _ => 0,
         };
         let token = self
@@ -1828,12 +1844,11 @@ impl<'src> Parser<'src, '_> {
                     if matches!(self.peek().kind, TokenKind::Comma | TokenKind::RParen) {
                         args.push(Value::StrLit { raw, span });
                     } else {
-                        // Part of a larger expression — hand the
-                        // WHOLE span back to the CEL sub-parser.
-                        self.peeked = None;
-                        self.lexer.skip_to(start);
-                        self.last_end = start;
-                        args.push(self.value(&PAREN_POSITION));
+                        // Part of a larger expression: the string is
+                        // the CEL prefix, and the continuation
+                        // re-reads the immutable slice — forward
+                        // only, never a cursor jump back.
+                        args.push(Value::Cel(self.cel_from(start, &PAREN_POSITION)));
                     }
                 } else {
                     args.push(self.value(&PAREN_POSITION));
@@ -2237,7 +2252,11 @@ mod tests {
             // `json`: a document, or CEL's word.
             ("json + object", "json {\"a\": 1}", "json"),
             ("json + array", "json [1]", "json"),
-            ("json + scalar", "json 1", "error"),
+            // `{` and `[` are json's ONLY special followers
+            // (D-2026-08-13-1, review round): every other spelling —
+            // a former scalar included — is CEL beginning with the
+            // word `json`, judged by CEL's own rules.
+            ("json + scalar spelling", "json 1", "cel"),
             ("json alone", "json", "cel"),
             ("json + parens", "json(1)", "cel"),
             ("json + alien byte", "json @", "cel"),
@@ -2314,6 +2333,67 @@ mod tests {
                 .any(|d| d.code() == crate::compiler::lexer::E_LEX_UNTERMINATED_COMMENT),
             "the trivia authority speaks: {bag:?}"
         );
+    }
+
+    #[test]
+    fn the_statement_factoring_keeps_the_boundary_token() {
+        // D-2026-08-13-1 (review round): after `IDENT path_tail`
+        // discovers a bare value, the buffered boundary token (`}`,
+        // `;`, or the next line's first token) belongs to the HOST —
+        // dropping it lost handler closers and absorbed siblings.
+        let expressions = ["data", "data.member", "data + 1", "size(data)"];
+        type Shape = fn(&str) -> String;
+        let contexts: [(&str, Shape, usize); 4] = [
+            ("before `}`", |e: &str| format!("on in {{ {e} }}"), 1),
+            (
+                "before `;` + sibling",
+                |e: &str| format!("on in {{ {e}; out = 1 }}"),
+                2,
+            ),
+            (
+                "before newline + sibling",
+                |e: &str| format!("on in {{\n      {e}\n      out = 1\n    }}"),
+                2,
+            ),
+            (
+                "before newline + `}`",
+                |e: &str| format!("on in {{\n      {e}\n    }}"),
+                1,
+            ),
+        ];
+        for expression in expressions {
+            for (label, shape, statements_wanted) in &contexts {
+                let source = format!(
+                    "graph g : App {{\n  operator o {{\n    {}\n  }}\n  . -> o -> .\n}}\n",
+                    shape(expression)
+                );
+                let mut bag = Bag::new();
+                let tree = parse(SourceId::new(0), &source, &mut bag);
+                assert!(
+                    bag.diagnostics().is_empty(),
+                    "{expression} {label}: {bag:?}"
+                );
+                let TopDecl::Graph(graph) = &tree.decls[0] else {
+                    panic!("a graph");
+                };
+                let GraphItem::Operator(operator) = &graph.body[0] else {
+                    panic!("{expression} {label}: an operator: {:?}", graph.body[0]);
+                };
+                let OperatorItem::Handler(handler) = &operator.body[0] else {
+                    panic!("{expression} {label}: a handler");
+                };
+                let statements = handler.body.as_ref().expect("a body");
+                assert_eq!(
+                    statements.len(),
+                    *statements_wanted,
+                    "{expression} {label}: {statements:?}"
+                );
+                let Statement::Yield(Value::Cel(expr)) = &statements[0] else {
+                    panic!("{expression} {label}: a yield: {:?}", statements[0]);
+                };
+                assert_eq!(expr.text, expression, "{label}: the exact expression");
+            }
+        }
     }
 
     fn parse_clean(source: &str) -> SyntaxTree {

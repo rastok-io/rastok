@@ -167,10 +167,38 @@ pub fn parse_declared_number(text: &str) -> Result<DeclaredNumber, String> {
     Ok(DeclaredNumber::Decimal { unscaled, scale })
 }
 
-/// The D-2026-08-10-7 invariants of a DYNAMIC decimal, shared by
-/// the package decoder and the plan validator (`encode ⇒ decode`
-/// demands one rule): budget bounds, minimal scale, and the
-/// integer-domain disjointness.
+/// The invariants of a DECLARED-scale decimal (D-2026-08-13-1,
+/// review round), shared by the package decoder and the plan
+/// validator (`encode ⇒ decode` demands one rule): the decimal128
+/// budgets, and the written-scale integer fold — a value the fold
+/// would have collapsed to an integer is not a decimal constant.
+/// Trailing zeros are SIGNIFICANT here (`decimal("1.50")` is
+/// {150, 2}); the minimal-scale rule below governs DOCUMENT-origin
+/// values only, at their construction.
+#[must_use]
+pub fn declared_decimal_well_formed(unscaled: i128, scale: i32) -> bool {
+    if !(MIN_SCALE..=MAX_SCALE).contains(&scale) {
+        return false;
+    }
+    if unscaled.unsigned_abs() >= 10_u128.pow(MAX_DIGITS) {
+        return false;
+    }
+    if scale <= 0 {
+        let mut expanded = Some(unscaled);
+        for _ in 0..scale.unsigned_abs() {
+            expanded = expanded.and_then(|value| value.checked_mul(10));
+        }
+        if expanded.is_some_and(|value| i64::try_from(value).is_ok()) {
+            // The written-scale fold would have made this an Int.
+            return false;
+        }
+    }
+    true
+}
+
+/// The D-2026-08-10-7 invariants of a DYNAMIC decimal, enforced at
+/// the JSON reader's construction: budget bounds, minimal scale,
+/// and the integer-domain disjointness.
 #[must_use]
 pub fn dynamic_decimal_well_formed(unscaled: i128, scale: i32) -> bool {
     if !(MIN_SCALE..=MAX_SCALE).contains(&scale) {

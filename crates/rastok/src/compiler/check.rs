@@ -3562,10 +3562,11 @@ impl Checker<'_, '_> {
             // lists; a value position never sees one.
             SynValue::StrLit { .. } => unreachable!("StrLit lives in tag arguments"),
             SynValue::Json { value, .. } => {
-                // Always `variant` — the literal is a VALUE, exact
-                // numbers included; its Dyn type is what
-                // distinguishes `json 1` from `1` in the hash
-                // (D-2026-08-10-7: the tree seals type and root).
+                // Always `variant` — the literal is a DOCUMENT
+                // (D-2026-08-13-1), exact numbers included; its Dyn
+                // type is what distinguishes `json [1]` from `[1]`
+                // in the hash (D-2026-08-10-7: the tree seals type
+                // and root).
                 Some(EmitValue::Data(literal_tree(value.clone(), cel::Type::Dyn)))
             }
             SynValue::Cel(expr) => {

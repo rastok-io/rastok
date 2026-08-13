@@ -353,9 +353,11 @@ impl core::fmt::Display for PlanValidationError {
             Self::UnknownVariable { node, name } => {
                 write!(f, "invalid plan: `{node}` writes undeclared var `{name}`")
             }
-            Self::UnrepresentableConstant => {
-                f.write_str("invalid plan: a struct constant is not expressible in source")
-            }
+            Self::UnrepresentableConstant => f.write_str(
+                "invalid plan: a constant outside the source-expressible forms \
+                 (a non-empty struct, a laziness witness, or a decimal the \
+                 written-scale rules refuse)",
+            ),
             Self::UnsupportedConnectorPort { node, port } => write!(
                 f,
                 "invalid plan: `{node}.{port}` is a contract port this machine cannot execute yet"
@@ -1098,10 +1100,14 @@ fn value_expressible(value: &cel::Value) -> Result<(), PlanValidationError> {
         // compiler emits is the EMPTY record literal (`parent = {}`,
         // D-2026-08-09-1). Anything with fields still refuses.
         cel::Value::Struct(fields) if fields.is_empty() => Ok(()),
-        // The decoder's exact rule (D-2026-08-10-7): a decimal the
-        // reader would refuse cannot obtain validation either.
+        // The decoder's exact rule (D-2026-08-13-1, review round):
+        // a plan constant is a DECLARED-scale decimal — `decimal()`
+        // preserves written scale, and a document-origin (minimal)
+        // form satisfies the same gate. A name must not change a
+        // program's validity: `val p = decimal("1.50")` folds to
+        // this constant.
         cel::Value::Decimal { unscaled, scale } => {
-            if crate::json::dynamic_decimal_well_formed(*unscaled, *scale) {
+            if crate::json::declared_decimal_well_formed(*unscaled, *scale) {
                 Ok(())
             } else {
                 Err(PlanValidationError::UnrepresentableConstant)

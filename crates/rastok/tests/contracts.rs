@@ -927,8 +927,9 @@ fn a_json_recovery_follows_the_position_terminators() {
             "quoted CEL follower",
             "graph g : App {\n  operator o {\n    on in { out = json 'x'; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
-        // A scalar spelling refuses with the `decimal(...)` hint and
-        // recovers at the same terminators (D-2026-08-13-1).
+        // A former scalar spelling is CEL too (`{`/`[` are the ONLY
+        // special followers, D-2026-08-13-1 review round): CEL's
+        // voice, CEL's recovery, sibling preserved.
         (
             "scalar number",
             "graph g : App {\n  operator o {\n    on in { out = json 19.99; out = data }\n  }\n  . -> o -> .\n}\n",
@@ -943,7 +944,11 @@ fn a_json_recovery_follows_the_position_terminators() {
         ),
     ] {
         let expected = match label {
-            "host-alien first byte" | "quoted CEL follower" => "E-CEL-EXPR",
+            "host-alien first byte"
+            | "quoted CEL follower"
+            | "scalar number"
+            | "scalar string"
+            | "scalar word" => "E-CEL-EXPR",
             _ => "E-JSON-VALUE",
         };
         let bag = compile_one(source).expect_err(label);

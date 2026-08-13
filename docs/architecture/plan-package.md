@@ -226,9 +226,12 @@ expr       := [1, tagged_value]                   — literal
 ```
 
 The `tagged_value` alphabet gained the exact decimal (registry tag
-10, D-2026-08-10-7): typed decimals at their declared scale, dynamic
-ones at minimal scale, 38 significant digits and the decimal128
-exponent domain as hard budgets.
+10, D-2026-08-10-7): typed decimals at their declared scale,
+document-origin dynamics at minimal scale, `decimal("…")` dynamics
+at their DECLARED scale (D-2026-08-13-1), 38 significant digits and
+the decimal128 exponent domain as hard budgets — plan constants and
+the wire admit any form the written-scale fold would not have
+collapsed to an integer.
 
 All discriminants and keys are extend-only: append, never renumber.
 Anything a future plan carries that these tables cannot express is a

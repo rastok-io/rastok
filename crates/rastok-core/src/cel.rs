@@ -97,9 +97,12 @@ pub enum Value {
     Struct(Vec<(String, Value)>),
     /// An exact decimal — `unscaled × 10^(−scale)` — the dynamic
     /// numeric beyond the integer domain (D-2026-08-10-7): at most
-    /// 38 significant digits (Arrow decimal128), MINIMAL scale for
-    /// dynamic values (trailing zeros stripped, so an
-    /// int-representable value never hides here). No arithmetic —
+    /// 38 significant digits (Arrow decimal128). DOCUMENT-origin
+    /// values carry MINIMAL scale (the reader strips trailing
+    /// zeros); `decimal("…")` values carry their DECLARED scale
+    /// (D-2026-08-13-1) — both fold an integer-representable
+    /// written-scale-≤-0 value to the integer domain, which stays
+    /// disjoint. No arithmetic —
     /// `variant` is narrowed before use.
     Decimal {
         /// The unscaled coefficient.
@@ -546,6 +549,27 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
         let tok = match byte {
             b' ' | b'\t' | b'\r' | b'\n' => {
                 pos += 1;
+                continue;
+            }
+            // Host trivia is trivia HERE too (one authority,
+            // D-2026-08-13-1 review round): `//` per cel-spec, and
+            // the host's `/* … */` so a commented spelling shares
+            // the compiled form (and so the hash) of the plain one.
+            b'/' if bytes.get(pos + 1) == Some(&b'/') => {
+                while pos < bytes.len() && bytes[pos] != b'\n' {
+                    pos += 1;
+                }
+                continue;
+            }
+            b'/' if bytes.get(pos + 1) == Some(&b'*') => {
+                let Some(end) = text[pos + 2..].find("*/") else {
+                    return Err(vec![Diagnostic {
+                        kind: DiagnosticKind::General,
+                        message: String::from("this block comment never closes"),
+                        range: pos..text.len(),
+                    }]);
+                };
+                pos = pos + 2 + end + 2;
                 continue;
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {

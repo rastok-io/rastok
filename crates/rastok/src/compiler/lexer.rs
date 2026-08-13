@@ -213,29 +213,21 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Raw guest text after an already-consumed `{`, scanned to the
-    /// matching `}` under the frozen balanced-brace delimitation; the
-    /// closing brace is consumed, the text excludes it. The host never
-    /// reads the content — quoted strings are skipped opaquely.
     /// The unlexed source from `offset` — a delegation window for
-    /// sub-readers (the JSON literal); the caller re-syncs with
-    /// [`Self::skip_to`].
+    /// sub-readers (the JSON literal); the caller re-syncs FORWARD
+    /// with [`Self::advance_to`].
     #[must_use]
     pub fn source_from(&self, offset: usize) -> &'a str {
         &self.source[offset..]
     }
 
-    /// Re-syncs the cursor after a delegated read.
-    pub fn skip_to(&mut self, offset: usize) {
-        self.pos = offset;
-    }
-
     /// Advances the cursor — MONOTONE by contract: the parser's one
     /// jump primitive, recovery included (D-2026-08-13-1). Going
-    /// backward is a programming error, refused loudly in debug.
+    /// backward is a compiler bug, refused unconditionally: a
+    /// clamped violation would silently misparse.
     pub fn advance_to(&mut self, offset: usize) {
-        debug_assert!(offset >= self.pos, "the cursor never moves backward");
-        self.pos = self.pos.max(offset);
+        assert!(offset >= self.pos, "the cursor never moves backward");
+        self.pos = offset;
     }
 
     /// Scans a CEL continuation from the CURRENT position to the
@@ -293,6 +285,34 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'"' | b'\'' => self.skip_quoted(bag, byte),
+                // Comments are trivia INSIDE the region too: a
+                // terminator inside one never terminates, and at a
+                // newline-ended position the line's value ends
+                // BEFORE a comment that runs to (or across) the
+                // line's end — the comment stays the HOST's
+                // (D-2026-08-13-1, review round).
+                b'/' if self.peek_byte_at(1) == Some(b'/') => {
+                    if terminators.newline {
+                        break;
+                    }
+                    while !matches!(self.peek_byte(), None | Some(b'\n')) {
+                        self.pos += 1;
+                    }
+                }
+                b'/' if self.peek_byte_at(1) == Some(b'*') => {
+                    let Some(end) = self.source[self.pos + 2..]
+                        .find("*/")
+                        .map(|at| self.pos + 2 + at + 2)
+                    else {
+                        // Unterminated: the value ends here, and the
+                        // trivia authority diagnoses the comment.
+                        break;
+                    };
+                    if terminators.newline && self.source[self.pos..end].contains('\n') {
+                        break;
+                    }
+                    self.pos = end;
+                }
                 _ => self.pos += 1,
             }
         }

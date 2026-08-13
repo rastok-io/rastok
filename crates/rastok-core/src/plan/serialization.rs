@@ -1174,11 +1174,12 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
                 wide[16 - unscaled.len()..].copy_from_slice(unscaled);
                 let value = i128::from_be_bytes(wide);
                 let scale_wide = int_from(scale)?;
-                // The reader RE-VERIFIES the D-2026-08-10-7
-                // invariants a compiler enforced: the decimal128
-                // budgets, and — plan constants being DYNAMIC
-                // decimals — the minimal scale that keeps the
-                // decimal and integer domains disjoint.
+                // The reader RE-VERIFIES the invariants a compiler
+                // enforced (D-2026-08-13-1, review round): the
+                // decimal128 budgets, and — plan constants being
+                // DECLARED-scale decimals — the written-scale fold
+                // that keeps the integer domain disjoint. Trailing
+                // zeros are significant (`decimal("1.50")`).
                 let scale_ok = scale_wide >= i64::from(crate::json::MIN_SCALE)
                     && scale_wide <= i64::from(crate::json::MAX_SCALE);
                 if !scale_ok {
@@ -1188,7 +1189,7 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
                 let scale = scale_wide as i32;
                 // ONE shared rule with the validator — encode ⇒
                 // decode has no gap to hide in.
-                if !crate::json::dynamic_decimal_well_formed(value, scale) {
+                if !crate::json::declared_decimal_well_formed(value, scale) {
                     return Err(err("decimal form"));
                 }
                 Ok(cel::Value::Decimal {

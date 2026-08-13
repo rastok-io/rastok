@@ -293,7 +293,7 @@ fn json_refusals_are_located() {
 }
 
 #[test]
-fn json_one_and_one_are_different_programs() {
+fn a_json_document_and_its_cel_twin_are_different_programs() {
     // The static type is identity (D-2026-08-10-7): `json [1]` is a
     // variant, `[1]` a list — same numeric leaf, two programs.
     assert_ne!(hash_of("json [1]"), hash_of("[1]"));
@@ -791,10 +791,73 @@ fn a_branch_alias_cannot_dodge_the_grid_either() {
 }
 
 #[test]
+fn comments_are_trivia_in_every_expression_form() {
+    // D-2026-08-13-1 (review round): a comment changes neither the
+    // AST nor the hash, whatever the expression's shape — trivia has
+    // ONE authority, and CEL recognizes the host's comments.
+    // (Line comments in the ONE-LINE harness would comment out the
+    // closing brace — correctly; they are proven on the multi-line
+    // shapes below.)
+    for (label, plain, commented) in [
+        ("word + block comment", "data", "data /* note */"),
+        ("number + block comment", "1", "1 /* numeric */"),
+        ("string + block comment", "\"x\"", "\"x\" /* c */"),
+        ("binary + inner block", "1 + 2", "1 /* c */ + 2"),
+        ("call + block comment", "size(data)", "size(data) /* c */"),
+    ] {
+        assert_eq!(
+            hash_of(plain),
+            hash_of(commented),
+            "{label}: trivia is not identity"
+        );
+    }
+    // Before `}` on the same line, and before the line's end.
+    let plain =
+        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let brace = "graph g : App {\n  operator o {\n    on in { out = data /* same */ }\n  }\n  . -> o -> .\n}\n";
+    let eol = "graph g : App {\n  operator o {\n    on in {\n      out = data // end\n    }\n  }\n  . -> o -> .\n}\n";
+    let hash = |source: &str| {
+        compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("valid")
+        .hash
+        .to_string()
+    };
+    assert_eq!(hash(plain), hash(brace), "before `}}`");
+    assert_eq!(hash(plain), hash(eol), "before the newline");
+    // A terminator INSIDE a comment never terminates.
+    let guarded = "graph g : App {\n  operator o {\n    on in { out = 1 /* ; } */ + 2 }\n  }\n  . -> o -> .\n}\n";
+    let bare =
+        "graph g : App {\n  operator o {\n    on in { out = 1 + 2 }\n  }\n  . -> o -> .\n}\n";
+    assert_eq!(hash(guarded), hash(bare), "`;`/`}}` inside a comment");
+}
+
+#[test]
+fn a_named_decimal_is_the_same_program_family() {
+    // D-2026-08-13-1 (review round): naming a constant expression
+    // must not change validity — the folded declared-scale constant
+    // travels the package like the direct call.
+    let source = "graph g : App {\n  operator o {\n    val p = decimal(\"1.50\")\n    on in { out = p }\n  }\n  . -> o -> .\n}\n";
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a named decimal compiles");
+    let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, declared) = rastok::plan::decode(&bytes).expect("the package opens");
+    assert_eq!(decoded, compilation.plan, "round trip");
+    assert_eq!(declared, compilation.hash, "identity travels");
+}
+
+#[test]
 fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     use rastok::plan::{AssetBlob, PlanValidationError, ValidatedExecutionPlan};
-    // A NON-minimal decimal (unscaled divisible by 10) cannot obtain
-    // validation — exactly what the decoder would refuse.
+    // A FOLDABLE decimal (the written-scale fold would have made an
+    // Int) cannot obtain validation — exactly what the decoder
+    // refuses. A declared trailing-zero form ({100, 2} =
+    // decimal("1.00")) is legitimate (D-2026-08-13-1, review round).
     let source = "graph g : App {\n  operator o {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> o -> .\n}\n";
     let mut plan = compile(
         &[source],
@@ -809,13 +872,23 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
         .expect("the operator")
         .vars[0]
         .init = Some(rastok::cel::Value::Decimal {
+        unscaled: 20,
+        scale: 0,
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan.clone()).unwrap_err(),
+        PlanValidationError::UnrepresentableConstant
+    );
+    plan.nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "o")
+        .expect("the operator")
+        .vars[0]
+        .init = Some(rastok::cel::Value::Decimal {
         unscaled: 100,
         scale: 2,
     });
-    assert_eq!(
-        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::UnrepresentableConstant
-    );
+    ValidatedExecutionPlan::try_new(plan).expect("a declared trailing-zero decimal validates");
     // A blob lying about its digest cannot obtain validation.
     let source =
         "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";

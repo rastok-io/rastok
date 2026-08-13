@@ -71,6 +71,59 @@ not the package (v4 precedent) — goldens re-bless for the
 version byte alone, and the embedded spike re-proves the same
 hash on target.
 
+Amended (review round, 2026-08-13) — the adversarial review found
+the invariant incompletely held; the following are normative:
+
+- **`{` and `[` are `json`'s ONLY special followers.** The scalar
+  "refusal with a hint" is DEAD: any non-document follower is a
+  CEL continuation beginning with the word `json`, judged by CEL
+  (`val json = 2 … json - 1` is a subtraction; `json 2` fails as
+  two adjacent CEL terms). No `scalar_start` classification
+  exists.
+- **A boundary token survives the peek.** When the buffered token
+  is one the region scan would terminate on immediately (the
+  mirror of the terminator test: a closer, a set byte, a
+  line-crossing token at a newline-ended position, the position's
+  keyword, EOF), the consumed prefix IS the whole expression and
+  the token stays the HOST's — dropping it lost `}`, absorbed
+  `;`-siblings, and swallowed next-line statements.
+- **Trivia has one authority in CEL regions too.** The region
+  scan treats comments as trivia (a terminator inside one never
+  terminates; at a newline-ended position the value ends BEFORE a
+  comment running to or across the line's end), and the CEL lexer
+  recognizes `//` (per cel-spec) and the host's `/* … */` — a
+  commented spelling compiles to the same tree, plan, and hash as
+  the plain one, whatever the expression's shape.
+- **No backward primitive exists.** `Lexer::skip_to` is deleted
+  with `rewind`; `advance_to` REFUSES (asserts) a backward offset
+  instead of clamping it silently. A tag argument that starts
+  with a string and continues (`f("x" + y)`) stitches the CEL
+  continuation from the immutable prefix slice — never a cursor
+  jump back.
+- **A name never changes validity: the plan-constant decimal rule
+  is DECLARED-scale.** `val p = decimal("1.50")` folds to the
+  constant `{150, 2}`; the validator and the decoder share
+  `declared_decimal_well_formed` (decimal128 budgets + the
+  written-scale integer fold). Document-origin values keep the
+  minimal-scale rule at their READER. The wire seals a decimal at
+  the scale it CARRIES — three origins (typed = declared,
+  document = minimal, constructor = declared), one seal rule
+  (identity.md tags 6/10 updated).
+- **The same-line-opener rule is global**: every tag's `(`/`{`
+  sits on the tag's line — the probe is line-scoped by design; a
+  tag word without its same-line opener is an ordinary CEL word.
+- Statically `decimal("…")` stays `Dyn` in this build; inferring
+  a true `decimal(p, s)` static type is the long-term path and
+  awaits the type-system slice.
+
+Supersedes, by name: the `json <value>` clause of D-2026-08-12-1
+(family 4 — now documents only); the `json <json-value>` scalar
+enumeration of D-2026-08-10-6 (its braced-map/array clauses
+stand); the "`json null` runs" example of D-2026-08-12-1's null-executes
+amendment (the null VALUE still executes — spelled `json [null]`
+in a document, or by a decoded `null` line; the bare emission
+stays deferred with its static type).
+
 ## D-2026-08-12-1 — Node attributes: one syntax, one contract metamodel
 
 A configurable property of a Node is an **Attribute**, and every

@@ -91,7 +91,9 @@ pub enum Scalar {
     Bytes(Vec<u8>),
     /// An exact decimal — `unscaled × 10^(−scale)`, at most 38
     /// significant digits (D-2026-08-10-7). Typed decimals keep
-    /// their declared scale; dynamic ones the minimal scale.
+    /// their declared scale; document-origin dynamics carry the
+    /// minimal scale, `decimal("…")` dynamics their DECLARED scale
+    /// (D-2026-08-13-1).
     Decimal {
         /// The unscaled coefficient.
         unscaled: i128,

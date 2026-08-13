@@ -1433,18 +1433,42 @@ attr_entry        ::= lvalue "=" value                               // dotted k
 // CEL is the core's expression grammar. There are no `ref`, `interp`, or
 // leading-dot path forms.
 
-value             ::= tagged_value                                    // jq { … }, sql { … } — foreign literals
-                    | tagged_block_value                              // text { … }, base64 { … } — tagged raw blocks
-                    | braced_value                                    // { … } — the braced record ; classified in envelope positions
+value             ::= braced_value                                    // { … } — the braced record ; classified in envelope positions
                     | "."                                             // identity — exact re-emission (envelope positions only)
-                    | "nothing"                                       // emission positions : emit nothing
-                    | cel_expr                                        // everything else — one grain, one grammar
-                    // LL(1) on the leading token : "text"/"base64"/"json"/"asset" →
-                    // tagged_block_value ; other TAG_KW → tagged_value ; "{" →
-                    // braced_value (then ONE token inside decides struct/map/empty :
-                    // "}" → {} struct ; ":" → {:} map ; STRING → map_entries ;
-                    // IDENT → struct_entries) ; "." → identity ; "nothing" → nothing ;
-                    // anything else → hand the span to the CEL sub-parser.
+                    | IDENT value_after_ident                         // left-factored : ONE consumed word, the tail decides
+                    | cel_non_ident_start                             // any other first token — CEL from that token on
+
+value_after_ident ::= ε                                               // nothing significant on the line, line ends the value :
+                                                                      //   the word ALONE is the CEL expression (span exact)
+                    | json_after_ident                                // the word was "json"
+                    | "(" tag_args ")" tag_body?                      // TAG_KW with its opener ON THE SAME LINE → tagged_value
+                    | "{" raw_or_struct_body "}"                      //   (a tag without its opener is an ordinary CEL word)
+                    | cel_continuation                                // anything else : CEL beginning with the word
+
+json_after_ident  ::= JSON_OBJECT                                     // { … } same line — the document reader owns the braces
+                    | JSON_ARRAY                                      // [ … ] same line
+                    | cel_continuation                                // ANY other follower : CEL beginning with the word `json`
+                                                                      //   (scalar spellings died with D-2026-08-13-1)
+
+statement         ::= IDENT path_tail statement_after_path            // left-factored like values
+                    | non_ident_yield                                 // any other first token : a bare CEL value statement
+
+statement_after_path
+                  ::= "=" value                                       // the consumed path is the lvalue
+                    | ":" type_ref "=" value
+                    | cel_continuation                                // the consumed path is the CEL prefix of a bare value ;
+                                                                      //   the boundary token (`}` / `;` / next line) stays the HOST's
+
+                    // The dispatch consumes ONE token (the IDENT), then decides on a RAW
+                    // same-line byte probe sharing the host trivia rules — never a second
+                    // consumer, never a cursor move backward. A tag's opener sits on the
+                    // TAG's line : the probe is line-scoped by design (a tag word without
+                    // its same-line opener reads as an ordinary CEL word). Inside braced_value,
+                    // ONE token decides struct/map/empty : "}" → {} struct ; ":" → {:} map ;
+                    // STRING → map_entries ; IDENT → struct_entries. The host grammar is
+                    // predictive (LL(1)) up to the explicit point where it delegates a region
+                    // to CEL, JSON, or a guest reader — each byte has one lexical authority,
+                    // and host comments are trivia in CEL regions too (D-2026-08-13-1).
 
 cel_expr          ::= /* a CEL expression (homegrown parser+checker+eval).
                        Pure-CEL subset : literals, member/index access, operators, ternary,
