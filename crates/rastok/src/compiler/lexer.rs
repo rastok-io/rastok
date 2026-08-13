@@ -160,18 +160,29 @@ pub enum AssignmentHead {
     Typed,
 }
 
-/// How the next significant input opens a position: with a
-/// STRUCTURAL form the host may tokenize, or as a CEL region that
-/// must never meet the host vocabulary (D-2026-08-13-1, review
-/// round 6).
+/// How the next significant input opens a VALUE position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RegionHead {
-    /// The host tokenizes: a builder form or a statement opener.
+pub enum ValueHead {
+    /// The host tokenizes a builder form.
     Structural,
-    /// CEL-shaped: in VALUE positions, delegate before any
-    /// tokenization; in STATEMENT position, a bare-expression
-    /// ERROR (no implicit yield, review rounds 7–8).
+    /// Delegate one expression region to CEL.
     Cel,
+}
+
+/// How the next significant input opens a STATEMENT position.
+///
+/// This is deliberately distinct from [`ValueHead`]: a CEL-shaped
+/// value is valid in a value position, while the same spelling is an
+/// error in a statement position (there is no implicit yield).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatementHead {
+    /// A host statement opener (`IDENT`, `(`, `;`, `}`, or EOF).
+    Structural,
+    /// A recognizable non-identifier value whose real value parser
+    /// must consume it before the statement-position refusal.
+    BareValue,
+    /// Other invalid input, recovered one host-lexeme line at a time.
+    Recovery,
 }
 
 /// The `json` continuation, classified totally by ONE probe
@@ -215,6 +226,31 @@ pub struct JsonRefusal {
     pub message: String,
     /// One past the recovery's last consumed byte.
     pub recovered_to: usize,
+}
+
+/// Result of the single read-only CEL framer. A complete region ends
+/// at the host position's FOLLOW. An incomplete region carries the
+/// earlier boundary normal value parsing may commit without consuming
+/// a following construct; statement recovery commits nothing.
+enum CelExtent {
+    Complete { end: usize },
+    Incomplete { recovery_end: usize },
+}
+
+impl CelExtent {
+    fn commit_end(&self) -> usize {
+        match self {
+            Self::Complete { end } => *end,
+            Self::Incomplete { recovery_end } => *recovery_end,
+        }
+    }
+
+    fn complete_end(&self) -> Option<usize> {
+        match self {
+            Self::Complete { end } => Some(*end),
+            Self::Incomplete { .. } => None,
+        }
+    }
 }
 
 /// Hand-written scanner over one UTF-8 source — and the ONE owner
@@ -300,8 +336,8 @@ impl<'a> Lexer<'a> {
             }
             // The COMPARISON lexemes, maximal munch — the HOST's
             // own vocabulary (the simulation expect grammar), not a
-            // CEL copy: CEL bytes never meet this lexer since the
-            // implicit yield's removal (D-2026-08-13-1, rounds 6–7).
+            // copied CEL operator set. Error recovery may observe
+            // them, but no valid CEL production depends on them.
             b'=' if self.peek_byte_at(1) == Some(b'=') => {
                 self.pos += 2;
                 self.token(TokenKind::EqEq, start)
@@ -317,28 +353,45 @@ impl<'a> Lexer<'a> {
             // A single-quoted string is CEL's spelling, never the
             // host's — lexed as ONE opaque Error token (its content
             // never re-speaks, and recoveries stay quote-immune).
+            // An unescaped line ending bounds an unterminated token:
+            // otherwise one bad quote would consume every following
+            // statement before line-bounded recovery can see it.
             b'\'' => {
                 self.pos += 1;
+                let mut closed = false;
                 loop {
                     match self.peek_byte() {
-                        None => break,
-                        Some(b'\\') => self.pos = (self.pos + 2).min(self.source.len()),
+                        None | Some(b'\r' | b'\n') => break,
+                        Some(b'\\') => match self.peek_byte_at(1) {
+                            Some(b'\r' | b'\n') => {
+                                self.pos += 1;
+                                break;
+                            }
+                            _ => self.pos = (self.pos + 2).min(self.source.len()),
+                        },
                         Some(b'\'') => {
                             self.pos += 1;
+                            closed = true;
                             break;
                         }
                         Some(_) => self.pos += 1,
                     }
                 }
-                bag.push(
+                let diagnostic = if closed {
                     Diagnostic::new(
                         E_LEX_CHAR,
                         Phase::Parse,
                         "a single-quoted string is CEL's spelling; host strings are \
                          double-quoted",
                     )
-                    .with_span(Span::new(self.source_id, start..self.pos)),
-                );
+                } else {
+                    Diagnostic::new(
+                        E_LEX_UNTERMINATED_STRING,
+                        Phase::Parse,
+                        "this string never closes before the end of the line",
+                    )
+                };
+                bag.push(diagnostic.with_span(Span::new(self.source_id, start..self.pos)));
                 self.token(TokenKind::Error, start)
             }
             b'.' => {
@@ -364,14 +417,15 @@ impl<'a> Lexer<'a> {
 
     /// An opaque CEL expression span, scanned at bracket depth 0 until
     /// `terminators` — the delimitation rules of `grammar.md`. Quoted
-    /// strings (both CEL quote styles) are skipped opaquely; any
+    /// strings (both CEL quote styles) are opaque and line-bounded; any
     /// closing bracket below depth 0 also terminates.
-    fn cel_expr(&mut self, terminators: &TerminatorSet, bag: &mut Bag) -> Token<'a> {
+    fn cel_expr(&mut self, terminators: &TerminatorSet) -> Token<'a> {
         while matches!(self.peek_byte(), Some(b' ' | b'\t' | b'\r')) {
             self.pos += 1;
         }
         let start = self.pos;
-        self.cel_scan(0, terminators, bag);
+        let extent = self.cel_extent(self.pos, Vec::new(), terminators);
+        self.commit_cel_extent(&extent);
         let end = self
             .source
             .as_bytes()
@@ -401,30 +455,31 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// How a STATEMENT opens: with a structural token the host may
-    /// tokenize (`}`/`;`/`(`/a word/EOF), or as a bare expression —
-    /// a statement ERROR whose bytes still never meet the host
-    /// vocabulary outside a scratch bag. With
+    /// How a STATEMENT opens: as a host construct, a recognizable
+    /// bare value, or input for line-bounded recovery. With
     /// [`Self::tag_opener_on_line`] and the line questions, this is
     /// one of THE named finite-byte-lookahead points of the grammar:
     /// CEL regions may open with bytes the host refuses, so the
     /// choice reads one byte — inside the lexer.
-    pub fn statement_head(&mut self) -> RegionHead {
+    pub fn statement_head(&mut self) -> StatementHead {
         match self.shape() {
             None | Some(b'}' | b';' | b'(' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => {
-                RegionHead::Structural
+                StatementHead::Structural
             }
-            _ => RegionHead::Cel,
+            Some(b'{' | b'[' | b'.' | b'"' | b'\'' | b'!' | b'-' | b'0'..=b'9') => {
+                StatementHead::BareValue
+            }
+            _ => StatementHead::Recovery,
         }
     }
 
     /// How a VALUE opens: with a builder form (`{`, `.`, a word), or
     /// as a CEL expression — same contract as
     /// [`Self::statement_head`].
-    pub fn value_head(&mut self) -> RegionHead {
+    pub fn value_head(&mut self) -> ValueHead {
         match self.shape() {
-            Some(b'{' | b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => RegionHead::Structural,
-            _ => RegionHead::Cel,
+            Some(b'{' | b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => ValueHead::Structural,
+            _ => ValueHead::Cel,
         }
     }
 
@@ -507,8 +562,9 @@ impl<'a> Lexer<'a> {
     /// Whether an ASSIGNMENT follows the consumed path: `=` (alone —
     /// `==` is CEL's), or `:` (a typed assignment). Answered without
     /// tokenizing, so a bare-expression statement can refuse with
-    /// ONE voice and its bytes never meet the host vocabulary
-    /// (review round 7 — the implicit yield is REMOVED).
+    /// ONE positional voice without first manufacturing a host token
+    /// for a CEL-only follower (review round 7 — the implicit yield is
+    /// REMOVED).
     pub fn assignment_follows(&mut self) -> Option<AssignmentHead> {
         if let Some(token) = &self.lookahead {
             return match token.kind {
@@ -613,9 +669,9 @@ impl<'a> Lexer<'a> {
         token.kind == TokenKind::Ident && terminators.keywords.contains(&token.text)
     }
 
-    /// A COMPLETE CEL region lexeme to the position's FOLLOW
-    /// (D-2026-08-13-1, review round 5) — the one producer the
-    /// parser consumes as a grammatical unit. `prefix_start` names
+    /// One CEL region lexeme (D-2026-08-13-1) — complete to the
+    /// position's FOLLOW, or bounded at the safe recovery point of an
+    /// incomplete extent. `prefix_start` names
     /// the already-consumed lexeme(s) beginning the expression; the
     /// stitching re-read of that immutable slice happens HERE, under
     /// the same owner as the buffer and the cursor. A buffered
@@ -625,7 +681,6 @@ impl<'a> Lexer<'a> {
         &mut self,
         prefix_start: Option<usize>,
         terminators: &TerminatorSet,
-        bag: &mut Bag,
     ) -> Token<'a> {
         if let Some(token) = &self.lookahead {
             let start = prefix_start.unwrap_or_else(|| token.span.range().start);
@@ -633,16 +688,20 @@ impl<'a> Lexer<'a> {
                 let end = token.span.range().start.max(start);
                 return self.stitched(start, end);
             }
-            let depth = match self.lookahead.take().map(|token| token.kind) {
-                Some(TokenKind::LParen | TokenKind::LBrack | TokenKind::LBrace) => 1,
-                _ => 0,
+            let expected = match self.lookahead.take().map(|token| token.kind) {
+                Some(TokenKind::LParen) => vec![b')'],
+                Some(TokenKind::LBrack) => vec![b']'],
+                Some(TokenKind::LBrace) => vec![b'}'],
+                _ => Vec::new(),
             };
-            self.cel_scan(depth, terminators, bag);
+            let extent = self.cel_extent(self.pos, expected, terminators);
+            self.commit_cel_extent(&extent);
             return self.stitched(start, self.pos);
         }
         match prefix_start {
             Some(start) => {
-                self.cel_scan(0, terminators, bag);
+                let extent = self.cel_extent(self.pos, Vec::new(), terminators);
+                self.commit_cel_extent(&extent);
                 self.stitched(start, self.pos)
             }
             None => {
@@ -650,9 +709,55 @@ impl<'a> Lexer<'a> {
                 // bare newline is not — it still reads as an empty
                 // expression.
                 self.advance_within_line();
-                self.cel_expr(terminators, bag)
+                self.cel_expr(terminators)
             }
         }
+    }
+
+    /// Commits and returns one CEL region only when the single CEL
+    /// framer reaches this position's boundary with every delimiter
+    /// and quote closed. `None` leaves both cursor and lookahead
+    /// untouched, so line-bounded host recovery can preserve the next
+    /// statement. This chooses only ERROR-RECOVERY extent after the
+    /// parser has already rejected the statement production; it never
+    /// chooses between valid grammar productions.
+    pub fn try_complete_cel_region(
+        &mut self,
+        prefix_start: Option<usize>,
+        terminators: &TerminatorSet,
+    ) -> Option<Token<'a>> {
+        if let Some(token) = &self.lookahead {
+            let start = prefix_start.unwrap_or_else(|| token.span.range().start);
+            // When this buffered token STARTS the misplaced region,
+            // its `newline_before` describes trivia before the value,
+            // not a boundary after it. Continuation tokens retain the
+            // ordinary terminator rule.
+            let mut first = *token;
+            if prefix_start.is_none() {
+                first.newline_before = false;
+            }
+            if Self::token_terminates(&first, terminators) {
+                let end = token.span.range().start.max(start);
+                return Some(self.stitched(start, end));
+            }
+            let expected = match token.kind {
+                TokenKind::LParen => vec![b')'],
+                TokenKind::LBrack => vec![b']'],
+                TokenKind::LBrace => vec![b'}'],
+                _ => Vec::new(),
+            };
+            let extent = self.cel_extent(self.pos, expected, terminators);
+            let end = extent.complete_end()?;
+            let _ = self.lookahead.take();
+            self.pos = end;
+            return Some(self.stitched(start, end));
+        }
+
+        let start = prefix_start.unwrap_or(self.pos);
+        let extent = self.cel_extent(self.pos, Vec::new(), terminators);
+        let end = extent.complete_end()?;
+        self.pos = end;
+        Some(self.stitched(start, end))
     }
 
     /// The stitched region token: `source[start..end]`, its OWN end
@@ -724,54 +829,117 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The CEL region scan both entries share: consumes to the
-    /// position's terminator at depth zero, tracking balanced
-    /// delimiters and skipping quoted content opaquely.
-    fn cel_scan(&mut self, mut depth: u32, terminators: &TerminatorSet, bag: &mut Bag) {
-        while let Some(byte) = self.peek_byte() {
-            if depth == 0 && self.at_terminator(byte, terminators) {
-                break;
+    /// The ONE CEL framer. It is read-only so the normal value path
+    /// and the misplaced-value recovery consult exactly the same
+    /// delimiter, quote, comment, and terminator rules. A mismatched
+    /// closer never pays down an unrelated opener. It may scan past a
+    /// newline to prove a valid balanced expression, but an incomplete
+    /// newline-ended value commits only its first safe recovery line;
+    /// the CEL compiler, not this host framer, diagnoses its syntax.
+    fn cel_extent(
+        &self,
+        start: usize,
+        mut expected: Vec<u8>,
+        terminators: &TerminatorSet,
+    ) -> CelExtent {
+        let bytes = self.source.as_bytes();
+        let mut pos = start;
+        let mut recovery_end = None;
+        while let Some(&byte) = bytes.get(pos) {
+            if expected.is_empty() && self.terminates_at(pos, byte, terminators) {
+                return CelExtent::Complete { end: pos };
+            }
+            if byte == b'/'
+                && let Some(comment) = rastok_core::trivia::comment_at(self.source, pos)
+            {
+                if !comment.terminated {
+                    // Stop BEFORE the comment. The host trivia reader is
+                    // the one authority that diagnoses an unterminated
+                    // comment, and it runs during parsing — unlike the CEL
+                    // checker, which cannot run after missing-closer parse
+                    // cascades have already rejected the source.
+                    return CelExtent::Incomplete { recovery_end: pos };
+                }
+                let reaches_line_end = comment.multiline
+                    || bytes.get(comment.end) == Some(&b'\n')
+                    || comment.end == bytes.len();
+                if expected.is_empty() && terminators.newline && reaches_line_end {
+                    return CelExtent::Complete { end: pos };
+                }
+                if !expected.is_empty() && terminators.newline && reaches_line_end {
+                    recovery_end.get_or_insert(comment.end);
+                }
+                pos = comment.end;
+                continue;
             }
             match byte {
-                b'(' | b'[' | b'{' => {
-                    depth += 1;
-                    self.pos += 1;
-                }
-                b')' | b']' | b'}' => {
-                    if depth == 0 {
-                        break;
+                b'(' => expected.push(b')'),
+                b'[' => expected.push(b']'),
+                b'{' => expected.push(b'}'),
+                quote @ (b'"' | b'\'') => {
+                    pos += 1;
+                    let mut closed = false;
+                    while let Some(&quoted) = bytes.get(pos) {
+                        match quoted {
+                            b'\r' | b'\n' => {
+                                // Ordinary CEL strings are line-bounded.
+                                // Include the malformed prefix, keep the
+                                // following line for the host, and let the
+                                // CEL compiler own the syntax diagnostic.
+                                return CelExtent::Incomplete { recovery_end: pos };
+                            }
+                            b'\\' => {
+                                if matches!(bytes.get(pos + 1), Some(b'\r' | b'\n')) {
+                                    return CelExtent::Incomplete {
+                                        recovery_end: pos + 1,
+                                    };
+                                }
+                                pos = (pos + 2).min(bytes.len());
+                            }
+                            _ if quoted == quote => {
+                                pos += 1;
+                                closed = true;
+                                break;
+                            }
+                            _ => pos += 1,
+                        }
                     }
-                    depth -= 1;
-                    self.pos += 1;
-                }
-                b'"' | b'\'' => self.skip_quoted(bag, byte),
-                // Comments are trivia INSIDE the region too: a
-                // terminator inside one never terminates. The depth
-                // rule mirrors the newline's exactly — a line's end
-                // can only end the value at depth ZERO, so a comment
-                // reaching (or crossing) the line's end breaks the
-                // scan only there; at positive depth it is consumed
-                // and the expression continues (D-2026-08-13-1,
-                // review round 2).
-                b'/' if let Some(comment) =
-                    rastok_core::trivia::comment_at(self.source, self.pos) =>
-                {
-                    if !comment.terminated {
-                        // The value ends here; the trivia authority
-                        // diagnoses the unterminated comment.
-                        break;
+                    if !closed {
+                        return CelExtent::Incomplete { recovery_end: pos };
                     }
-                    let reaches_line_end = comment.multiline
-                        || self.source.as_bytes().get(comment.end) == Some(&b'\n')
-                        || comment.end == self.source.len();
-                    if depth == 0 && terminators.newline && reaches_line_end {
-                        break;
-                    }
-                    self.pos = comment.end;
+                    continue;
                 }
-                _ => self.pos += 1,
+                b')' | b']' | b'}' => match expected.last() {
+                    Some(wanted) if *wanted == byte => {
+                        expected.pop();
+                    }
+                    None => {
+                        return CelExtent::Complete { end: pos };
+                    }
+                    Some(_) => {
+                        return CelExtent::Incomplete {
+                            recovery_end: recovery_end.unwrap_or(pos),
+                        };
+                    }
+                },
+                b'\r' | b'\n' if !expected.is_empty() && terminators.newline => {
+                    recovery_end.get_or_insert(pos);
+                }
+                _ => {}
+            }
+            pos += 1;
+        }
+        if expected.is_empty() {
+            CelExtent::Complete { end: pos }
+        } else {
+            CelExtent::Incomplete {
+                recovery_end: recovery_end.unwrap_or(pos),
             }
         }
+    }
+
+    fn commit_cel_extent(&mut self, extent: &CelExtent) {
+        self.pos = extent.commit_end();
     }
 
     /// A VERBATIM region (`text { … }`, `base64 { … }`): the OPENER
@@ -1113,10 +1281,6 @@ impl<'a> Lexer<'a> {
         self.pos
     }
 
-    fn at_terminator(&self, byte: u8, terminators: &TerminatorSet) -> bool {
-        self.terminates_at(self.pos, byte, terminators)
-    }
-
     fn terminates_at(&self, pos: usize, byte: u8, terminators: &TerminatorSet) -> bool {
         if terminators.bytes.contains(&byte) {
             return true;
@@ -1150,27 +1314,6 @@ impl<'a> Lexer<'a> {
                 .is_some_and(is_ident_continue)
     }
 
-    fn skip_quoted(&mut self, bag: &mut Bag, quote: u8) {
-        let start = self.pos;
-        self.pos += 1;
-        while let Some(byte) = self.peek_byte() {
-            self.pos += 1;
-            match byte {
-                b'\\' => self.pos = (self.pos + 1).min(self.source.len()),
-                _ if byte == quote => return,
-                _ => {}
-            }
-        }
-        bag.push(
-            Diagnostic::new(
-                E_LEX_UNTERMINATED_STRING,
-                Phase::Parse,
-                "this string never closes",
-            )
-            .with_span(Span::new(self.source_id, start..self.pos)),
-        );
-    }
-
     fn number(&mut self, start: usize) -> Token<'a> {
         self.eat_while(|byte| byte.is_ascii_digit());
         if self.peek_byte() == Some(b'.')
@@ -1189,18 +1332,27 @@ impl<'a> Lexer<'a> {
     fn string(&mut self, bag: &mut Bag, start: usize) -> Token<'a> {
         self.pos += 1;
         while let Some(byte) = self.peek_byte() {
-            self.pos += 1;
             match byte {
-                b'\\' => self.pos = (self.pos + 1).min(self.source.len()),
-                b'"' => return self.token(TokenKind::Str, start),
-                _ => {}
+                b'\r' | b'\n' => break,
+                b'\\' => match self.peek_byte_at(1) {
+                    Some(b'\r' | b'\n') => {
+                        self.pos += 1;
+                        break;
+                    }
+                    _ => self.pos = (self.pos + 2).min(self.source.len()),
+                },
+                b'"' => {
+                    self.pos += 1;
+                    return self.token(TokenKind::Str, start);
+                }
+                _ => self.pos += 1,
             }
         }
         bag.push(
             Diagnostic::new(
                 E_LEX_UNTERMINATED_STRING,
                 Phase::Parse,
-                "this string never closes",
+                "this string never closes before the end of the line",
             )
             .with_span(Span::new(self.source_id, start..self.pos)),
         );
@@ -1472,6 +1624,26 @@ mod tests {
         let (tokens, bag) = lex("val x = \"oops");
         assert_eq!(tokens.last(), Some(&(TokenKind::Error, "\"oops")));
         assert_eq!(bag.diagnostics()[0].code(), E_LEX_UNTERMINATED_STRING);
+
+        for (label, source, first) in [
+            ("double quote", "\"oops\nnext", "\"oops"),
+            ("single quote", "'oops\nnext", "'oops"),
+            ("escaped double quote newline", "\"oops\\\nnext", "\"oops\\"),
+            ("escaped single quote newline", "'oops\\\nnext", "'oops\\"),
+        ] {
+            let (tokens, bag) = lex(source);
+            assert_eq!(
+                tokens,
+                [(TokenKind::Error, first), (TokenKind::Ident, "next"),],
+                "{label}: the next line remains tokenizable"
+            );
+            assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
+            assert_eq!(
+                bag.diagnostics()[0].code(),
+                E_LEX_UNTERMINATED_STRING,
+                "{label}"
+            );
+        }
     }
 
     #[test]
@@ -1490,7 +1662,7 @@ mod tests {
     fn cel(source: &str, terminators: &TerminatorSet) -> (String, String) {
         let mut bag = Bag::new();
         let mut lexer = Lexer::new(SourceId::new(0), source);
-        let token = lexer.cel_expr(terminators, &mut bag);
+        let token = lexer.cel_expr(terminators);
         assert_eq!(token.kind, TokenKind::CelExpr);
         let mut rest = String::new();
         loop {
@@ -1549,5 +1721,12 @@ mod tests {
     fn an_unbalanced_closer_terminates_defensively() {
         let (expr, _) = cel("a + b) leftovers", &ATTRIBUTE_POSITION);
         assert_eq!(expr, "a + b");
+
+        let (expr, rest) = cel("[a + b)\nnext", &ATTRIBUTE_POSITION);
+        assert_eq!(expr, "[a + b", "a `)` never closes a `[` opener");
+        assert!(
+            rest.starts_with(')'),
+            "the mismatched closer survives for host recovery: {rest:?}"
+        );
     }
 }

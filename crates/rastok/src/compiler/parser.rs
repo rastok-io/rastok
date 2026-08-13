@@ -10,7 +10,10 @@
 //! wiring. `lab` bodies are recognized and skipped whole until the
 //! scenario stage.
 
-use crate::compiler::lexer::{Lexer, TerminatorSet, Token, TokenKind};
+use crate::compiler::lexer::{
+    E_LEX_UNTERMINATED_COMMENT, E_LEX_UNTERMINATED_STRING, Lexer, StatementHead, TerminatorSet,
+    Token, TokenKind, ValueHead,
+};
 use crate::compiler::syntax::{
     Annotation, AspectEvent, Attribute, BaseType, CelExpr, CmpOp, ConnectorDecl, EdgeDecl,
     EdgeEndpoint, ErrorNode, ExpectStep, FieldDecl, GraphDecl, GraphItem, Guard, HandlerDecl,
@@ -160,6 +163,15 @@ struct Parser<'src, 'bag> {
     bag: &'bag mut Bag,
 }
 
+/// What line-bounded statement recovery consumed. Its primary
+/// structural lexical fault is retained: suppressing ordinary garbage
+/// diagnostics is useful, suppressing the reason recovery stopped is
+/// not.
+struct BareRecovery {
+    range: core::ops::Range<usize>,
+    lexical_fault: Option<Diagnostic>,
+}
+
 impl<'src> Parser<'src, '_> {
     // ----- token plumbing (the lexer owns the lookahead) -----
 
@@ -224,14 +236,14 @@ impl<'src> Parser<'src, '_> {
     }
 
     /// Consumes a refused bare statement to its STRONG boundary —
-    /// host lexemes into a scratch bag (the one refusal voice
-    /// already spoke; the garbage's own lexical complaints stay
-    /// silent). Strong boundaries: `;`, a depth-zero `}`, the next
-    /// line's first lexeme, EOF. PROGRESSION IS STRUCTURAL: the
+    /// host lexemes into a scratch bag. Ordinary garbage diagnostics
+    /// stay silent; an unterminated string/comment is retained as the
+    /// one truthful voice. Strong boundaries: `;`, a depth-zero `}`,
+    /// the next line's first lexeme, EOF. PROGRESSION IS STRUCTURAL: the
     /// first lexeme is consumed unconditionally unless it is `;`,
     /// `}` or EOF — which the statement loop itself consumes or
     /// breaks on (review round 8: a lone `)` looped forever).
-    fn skip_bare_statement(&mut self, tail_of_consumed: bool) -> core::ops::Range<usize> {
+    fn skip_bare_statement(&mut self, tail_of_consumed: bool) -> BareRecovery {
         let mut scratch = Bag::new();
         let mut depth: u32 = 0;
         let mut consumed_any = tail_of_consumed;
@@ -256,8 +268,24 @@ impl<'src> Parser<'src, '_> {
                 _ => {}
             }
         }
+        let lexical_fault = scratch.into_diagnostics().into_iter().find(|diagnostic| {
+            matches!(
+                diagnostic.code(),
+                E_LEX_UNTERMINATED_STRING | E_LEX_UNTERMINATED_COMMENT
+            )
+        });
+        if let Some(fault_end) = lexical_fault
+            .as_ref()
+            .and_then(|diagnostic| diagnostic.spans().first())
+            .map(|span| span.range().end)
+        {
+            end = end.max(fault_end);
+        }
         self.last_end = self.last_end.max(end);
-        start..end
+        BareRecovery {
+            range: start..end,
+            lexical_fault,
+        }
     }
 
     fn bare_statement_refusal(&mut self, range: core::ops::Range<usize>) -> Statement {
@@ -274,6 +302,67 @@ impl<'src> Parser<'src, '_> {
             .with_field("found", "a bare expression"),
         );
         Statement::Error(ErrorNode { span })
+    }
+
+    fn recovered_bare_statement(&mut self, start: usize, recovery: BareRecovery) -> Statement {
+        let end = recovery.range.end.max(start);
+        let span = Span::new(self.source_id, start..end);
+        if let Some(diagnostic) = recovery.lexical_fault {
+            self.bag.push(diagnostic);
+            Statement::Error(ErrorNode { span })
+        } else {
+            self.bare_statement_refusal(start..end)
+        }
+    }
+
+    /// Finishes recovery after a host statement production has
+    /// already emitted its own diagnostic. Unlike the generic
+    /// declaration recovery, this stops at the statement boundary so
+    /// a malformed multi-emit cannot consume the next healthy line.
+    fn recover_statement_tail(&mut self, start: usize) -> ErrorNode {
+        let recovery = self.skip_bare_statement(true);
+        let end = self.last_end.max(recovery.range.end).max(start);
+        if let Some(diagnostic) = recovery.lexical_fault {
+            self.bag.push(diagnostic);
+        }
+        ErrorNode {
+            span: Span::new(self.source_id, start..end),
+        }
+    }
+
+    /// Parses a recognizable value with its real owner, then rejects
+    /// only its placement. This is an error production, never an
+    /// implicit yield: the parsed value is deliberately discarded and
+    /// the syntax tree receives one [`Statement::Error`] hole.
+    fn bare_value_statement(&mut self) -> Statement {
+        let diagnostics_before = self.bag.diagnostics().len();
+        let (start, value) = match self.lexer.value_head() {
+            ValueHead::Structural => {
+                let start = self.peek().span.range().start;
+                (start, self.present_value(&ATTR_POSITION))
+            }
+            ValueHead::Cel => {
+                // This value starts a NEW statement line. Cross the
+                // preceding statement trivia before probing/framing;
+                // otherwise that leading newline would be the
+                // ATTR_POSITION terminator and yield an empty lexeme.
+                self.lexer.advance_to_significant(self.bag);
+                let Some(expr) = self.try_complete_cel_lexeme(None, &ATTR_POSITION) else {
+                    let recovery = self.skip_bare_statement(false);
+                    let start = recovery.range.start;
+                    return self.recovered_bare_statement(start, recovery);
+                };
+                (expr.span.range().start, Value::Cel(expr))
+            }
+        };
+        let end = self.last_end.max(start);
+        if self.bag.diagnostics().len() != diagnostics_before || matches!(value, Value::Error(_)) {
+            Statement::Error(ErrorNode {
+                span: Span::new(self.source_id, start..end),
+            })
+        } else {
+            self.bare_statement_refusal(start..end)
+        }
     }
 
     /// Skips tokens until a top-of-declaration keyword or the closing
@@ -1208,23 +1297,26 @@ impl<'src> Parser<'src, '_> {
         }
     }
 
-    /// `"{" ( statement )* "}"` — heads classified by the lexer:
-    /// CEL never passes through the host vocabulary; anything that
-    /// does not open like a Rastok construct is handed to the CEL
-    /// chain untouched.
+    /// `"{" ( statement )* "}"` — one-token host dispatch. A
+    /// recognizable value in this position is parsed only so its own
+    /// delimiters remain authoritative, then replaced by an error
+    /// hole; other invalid input takes line-bounded token recovery.
     fn statements(&mut self) -> Option<Vec<Statement>> {
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut statements = Vec::new();
         loop {
-            // Classified by the lexer: a non-structural opener means
-            // a BARE EXPRESSION — a statement ERROR since the
-            // implicit yield's removal (D-2026-08-13-1, rounds 7–8).
-            // One refusal voice; classic host-lexeme recovery with
-            // structural progression.
-            if self.lexer.statement_head() == crate::compiler::lexer::RegionHead::Cel {
-                let range = self.skip_bare_statement(false);
-                statements.push(self.bare_statement_refusal(range));
-                continue;
+            match self.lexer.statement_head() {
+                StatementHead::Structural => {}
+                StatementHead::BareValue => {
+                    statements.push(self.bare_value_statement());
+                    continue;
+                }
+                StatementHead::Recovery => {
+                    let recovery = self.skip_bare_statement(false);
+                    let start = recovery.range.start;
+                    statements.push(self.recovered_bare_statement(start, recovery));
+                    continue;
+                }
             }
             let token = self.peek();
             let start = token.span.range().start;
@@ -1245,9 +1337,13 @@ impl<'src> Parser<'src, '_> {
                     };
                     statements.push(Statement::Stop(target));
                 }
-                TokenKind::LParen => match self.multi_emit(start) {
+                // In statement position `(` selects multi-emit. A
+                // parenthesized CEL value is valid only after `=`;
+                // malformed multi-emits recover forward from the point
+                // of failure, never by probing or rewinding.
+                TokenKind::LParen => match self.multi_emit() {
                     Some(statement) => statements.push(statement),
-                    None => statements.push(Statement::Error(self.recover(start))),
+                    None => statements.push(Statement::Error(self.recover_statement_tail(start))),
                 },
                 TokenKind::Ident => statements.push(self.assign_statement(start)),
                 _ => {
@@ -1270,7 +1366,7 @@ impl<'src> Parser<'src, '_> {
     /// consumed by its REAL dispatch when refused as a statement,
     /// so a bare `text { … }` is framed by the verbatim reader,
     /// never by a recovery scanner (review round 8).
-    fn is_form_word(word: &str) -> bool {
+    fn is_self_framing_value_word(word: &str) -> bool {
         word == "nothing"
             || word == "json"
             || TAG_WORDS.contains(&word)
@@ -1343,7 +1439,7 @@ impl<'src> Parser<'src, '_> {
                 // json reader, a guest framer, the dead refusals) —
                 // then the statement-position voice; anything else
                 // takes the classic recovery.
-                if segments.len() == 1 && Self::is_form_word(first.text) {
+                if segments.len() == 1 && Self::is_self_framing_value_word(first.text) {
                     let value = self.ident_tail(first, &ATTR_POSITION);
                     let end = self.last_end.max(start);
                     if matches!(value, Value::Error(_)) {
@@ -1355,14 +1451,24 @@ impl<'src> Parser<'src, '_> {
                     }
                     return self.bare_statement_refusal(start..end);
                 }
-                let range = self.skip_bare_statement(true);
-                self.bare_statement_refusal(start..range.end.max(start))
+                // The grammar has already rejected this position. If
+                // the CEL continuation is structurally complete, let
+                // its real region framer consume the whole misplaced
+                // value (including balanced multiline calls/lists) so
+                // its interior cannot become phantom host statements.
+                // If it is incomplete, line recovery preserves the
+                // next healthy statement instead.
+                if let Some(expr) = self.try_complete_cel_lexeme(Some(start), &ATTR_POSITION) {
+                    return self.bare_statement_refusal(start..expr.span.range().end.max(start));
+                }
+                let recovery = self.skip_bare_statement(true);
+                self.recovered_bare_statement(start, recovery)
             }
         }
     }
 
     /// `( a, b ) = tuple_or_broadcast` — atomic multi-emit.
-    fn multi_emit(&mut self, _start: usize) -> Option<Statement> {
+    fn multi_emit(&mut self) -> Option<Statement> {
         self.bump();
         let mut targets = vec![self.lvalue()?];
         while self.eat(TokenKind::Comma).is_some() {
@@ -1616,10 +1722,20 @@ impl<'src> Parser<'src, '_> {
                 return Value::Error(at);
             }
         }
+        self.present_value(position)
+    }
+
+    /// A value whose first significant token is already known to be
+    /// present. Error productions use this entry after classifying a
+    /// bare value at the start of its own line; the ordinary
+    /// [`Self::value`]
+    /// entry remains responsible for detecting `out =` followed by a
+    /// newline.
+    fn present_value(&mut self, position: &TerminatorSet) -> Value {
         // Classified by the lexer before touching the token stream:
         // CEL text may open with bytes outside the host vocabulary,
         // so only builder-shaped input is tokenized here.
-        if self.lexer.value_head() == crate::compiler::lexer::RegionHead::Cel {
+        if self.lexer.value_head() == ValueHead::Cel {
             return Value::Cel(self.cel(position));
         }
         let token = self.peek();
@@ -1756,16 +1872,30 @@ impl<'src> Parser<'src, '_> {
         self.cel_lexeme(Some(prefix_start), position)
     }
 
-    /// One COMPLETE CEL region lexeme from the lexer — the parser
-    /// consumes it as a grammatical unit and never touches bytes
-    /// (D-2026-08-13-1, review round 5).
+    /// One CEL region lexeme from the lexer — complete, or bounded at
+    /// an incomplete extent's safe recovery point. The parser consumes
+    /// it as a grammatical unit and never touches bytes; CEL remains
+    /// the sole syntax-diagnostic authority for value regions.
     fn cel_lexeme(&mut self, prefix_start: Option<usize>, position: &TerminatorSet) -> CelExpr {
-        let token = self.lexer.cel_region(prefix_start, position, self.bag);
+        let token = self.lexer.cel_region(prefix_start, position);
         self.last_end = self.last_end.max(token.span.range().end);
         CelExpr {
             text: String::from(token.text),
             span: token.span,
         }
+    }
+
+    fn try_complete_cel_lexeme(
+        &mut self,
+        prefix_start: Option<usize>,
+        position: &TerminatorSet,
+    ) -> Option<CelExpr> {
+        let token = self.lexer.try_complete_cel_region(prefix_start, position)?;
+        self.last_end = self.last_end.max(token.span.range().end);
+        Some(CelExpr {
+            text: String::from(token.text),
+            span: token.span,
+        })
     }
 
     /// The dead-initializer refusal (D-2026-08-12-1): one migration
@@ -2396,12 +2526,50 @@ mod tests {
     }
 
     #[test]
+    fn an_unterminated_comment_in_a_cel_value_returns_to_trivia() {
+        // The CEL extent stops BEFORE an unterminated comment. Parsing
+        // therefore reaches the one trivia authority and reports the
+        // cause before the inevitable missing-closer cascades; CHECK is
+        // not required to make the primary fault visible.
+        let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
+        for (label, source) in [
+            (
+                "following source is commented out",
+                "graph g : App {\n  operator o {\n    on in {\n      out = 1 /* never\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+            ),
+            (
+                "physical end of file",
+                "graph g : App {\n  operator o {\n    on in {\n      out = 1 /* never",
+            ),
+        ] {
+            let rejected = crate::compiler::compile(&[source], &registry)
+                .expect_err("an unterminated comment refuses the compilation");
+            assert_eq!(
+                rejected.diagnostics()[0].code(),
+                crate::compiler::lexer::E_LEX_UNTERMINATED_COMMENT,
+                "{label}: the primary cause speaks first — {rejected:?}"
+            );
+            assert!(
+                rejected
+                    .diagnostics()
+                    .iter()
+                    .all(|diagnostic| diagnostic.code() != crate::compiler::check::E_CEL_EXPR),
+                "{label}: CEL never duplicates the trivia authority — {rejected:?}"
+            );
+        }
+
+        let closed = "graph g : App {\n  operator o {\n    on in {\n      out = 1 /* closed */\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+        crate::compiler::compile(&[closed], &registry)
+            .expect("a closed trailing comment remains ordinary trivia");
+    }
+
+    #[test]
     fn a_refused_bare_expression_keeps_the_boundary_token() {
         // Review round 7: the implicit yield is REMOVED — a bare
         // expression refuses with ONE voice carrying the migration
-        // hint, its bytes never meet the host vocabulary, and the
-        // boundary (`}`, `;`, the next line) still belongs to the
-        // HOST: closers and siblings survive.
+        // hint. Its complete CEL continuation is framed as one region,
+        // and the boundary (`}`, `;`, the next line) still belongs to
+        // the HOST: closers and siblings survive.
         let expressions = ["data", "data.member", "data + 1", "size(data)"];
         type Shape = fn(&str) -> String;
         let contexts: [(&str, Shape, usize); 4] = [
@@ -2648,12 +2816,12 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_expression_refuses_without_meeting_the_host() {
-        // Rounds 6–7: the implicit yield is REMOVED, and a refused
-        // bare expression must STILL never meet the host vocabulary —
-        // with and without spaces, every operator row is ONE refusal
-        // voice with the migration hint; no lexical fault, no phantom
-        // assignment.
+    fn a_complete_bare_expression_is_one_refused_value_region() {
+        // The implicit yield is REMOVED. Once `=`/`:` have failed, a
+        // structurally complete continuation is framed as ONE CEL
+        // value — with and without spaces, every operator row is ONE
+        // refusal voice with the migration hint; no lexical fault, no
+        // phantom assignment.
         for op in ["==", "!=", "<=", ">=", "&&", "||", "*", "/", "%", "-"] {
             for spelled in [format!("data {op} data"), format!("data{op}data")] {
                 let source = format!(
@@ -2791,8 +2959,10 @@ mod tests {
             ("lone close paren", ")"),
             ("lone close bracket", "]"),
             ("unclosed call", "data("),
+            ("unclosed array", "["),
             ("single-quoted brace", "data + 'a}b'"),
             ("braced garbage", "{ a = 1 }"),
+            ("parenthesized non-multi-emit", "(data)"),
             ("alien bytes", "@ # $"),
         ] {
             let source = format!(
@@ -2818,6 +2988,185 @@ mod tests {
     }
 
     #[test]
+    fn a_multiline_bare_value_is_one_hole_not_live_statements() {
+        // A value in statement position is invalid, but its internal
+        // fields are never statements of the enclosing handler. The
+        // real value parser owns every structurally recognizable form
+        // before the position diagnostic is emitted.
+        let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
+        for (label, bare) in [
+            ("struct", "{\n        a = 1\n      }"),
+            ("map", "{\n        \"a\": 1\n      }"),
+            ("CEL array", "[\n        1,\n        2\n      ]"),
+            ("CEL call", "size(\n        data\n      )"),
+            ("CEL unary", "!size(\n        data\n      )"),
+        ] {
+            let source = format!(
+                "graph g : App {{\n  operator o {{\n    on in {{\n      {bare}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            );
+            let (statements, bag) = handler_statements(&source);
+            assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
+            assert_eq!(
+                bag.diagnostics()[0].code(),
+                E_PARSE_EXPECTED,
+                "{label}: one position voice"
+            );
+            assert_eq!(statements.len(), 2, "{label}: {statements:?}");
+            assert!(
+                matches!(&statements[0], Statement::Error(_)),
+                "{label}: the whole bare value is one hole"
+            );
+            let Statement::Assign { target, value, .. } = &statements[1] else {
+                panic!("{label}: the sibling lives: {:?}", statements[1]);
+            };
+            assert_eq!(target.segments[0].text, "out", "{label}");
+            assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+
+            let rejected = crate::compiler::compile(&[&source], &registry)
+                .expect_err("a misplaced value refuses the compilation");
+            assert_eq!(
+                rejected.diagnostics().len(),
+                1,
+                "{label}: no checker warning from phantom syntax — {rejected:?}"
+            );
+            assert_eq!(
+                rejected.diagnostics()[0].code(),
+                E_PARSE_EXPECTED,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_structural_lexical_fault_is_not_hidden_by_bare_recovery() {
+        // Host recovery is line-bounded. An unterminated ordinary
+        // string therefore speaks with its lexical code and leaves
+        // the next statement intact instead of consuming the file.
+        for (label, garbage) in [
+            ("single quote", "data + 'unterminated"),
+            ("double quote", "data + \"unterminated"),
+            ("leading single quote", "'unterminated"),
+            ("leading double quote", "\"unterminated"),
+            ("escaped single quote newline", "'unterminated\\"),
+            ("escaped double quote newline", "\"unterminated\\"),
+        ] {
+            let source = format!(
+                "graph g : App {{\n  operator o {{\n    on in {{\n      {garbage}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            );
+            let (statements, bag) = handler_statements(&source);
+            assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
+            assert_eq!(
+                bag.diagnostics()[0].code(),
+                crate::compiler::lexer::E_LEX_UNTERMINATED_STRING,
+                "{label}: the cause, not a generic position refusal"
+            );
+            assert_eq!(statements.len(), 2, "{label}: {statements:?}");
+            assert!(matches!(&statements[0], Statement::Error(_)), "{label}");
+            let Statement::Assign { value, .. } = &statements[1] else {
+                panic!("{label}: the sibling lives: {:?}", statements[1]);
+            };
+            assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+        }
+
+        // A block comment really extends to EOF, so no sibling can
+        // be recovered. Its structural lexical fault must still be
+        // the first and truthful voice; a scratch bag cannot erase it.
+        let source = "graph g : App {\n  operator o {\n    on in {\n      data + /* unterminated\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+        let mut bag = Bag::new();
+        let _ = parse(SourceId::new(0), source, &mut bag);
+        assert_eq!(
+            bag.diagnostics()[0].code(),
+            crate::compiler::lexer::E_LEX_UNTERMINATED_COMMENT,
+            "the terminal lexical cause survives recovery: {bag:?}"
+        );
+    }
+
+    #[test]
+    fn an_incomplete_cel_value_never_consumes_the_next_statement() {
+        // The CEL framer may look beyond a newline to prove a balanced
+        // multiline expression, but an INCOMPLETE extent must recover
+        // at the value position's first safe line boundary. The CEL
+        // compiler owns the one syntax diagnostic; the host parser
+        // only preserves the surrounding RKG structure.
+        let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
+        for (label, malformed) in [
+            ("double quote", "\"oops"),
+            ("single quote", "'oops"),
+            ("unclosed call", "size(data"),
+            ("unclosed array", "[1,"),
+        ] {
+            let source = format!(
+                "graph g : App {{\n  operator o {{\n    on in {{\n      out = {malformed}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            );
+            let (statements, parse_bag) = handler_statements(&source);
+            assert!(
+                parse_bag.diagnostics().is_empty(),
+                "{label}: CEL, not the host parser, owns the malformed expression — {parse_bag:?}"
+            );
+            assert_eq!(statements.len(), 2, "{label}: {statements:?}");
+            let Statement::Assign {
+                value: Value::Cel(expr),
+                ..
+            } = &statements[0]
+            else {
+                panic!(
+                    "{label}: malformed CEL remains one value: {:?}",
+                    statements[0]
+                );
+            };
+            assert_eq!(
+                expr.text, malformed,
+                "{label}: the region stops on its line"
+            );
+            let Statement::Assign { value, .. } = &statements[1] else {
+                panic!("{label}: the sibling lives: {:?}", statements[1]);
+            };
+            assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+
+            let rejected = crate::compiler::compile(&[source.as_str()], &registry)
+                .expect_err("malformed CEL refuses the compilation");
+            assert_eq!(
+                rejected.diagnostics().len(),
+                1,
+                "{label}: one fault, one CEL voice — {rejected:?}"
+            );
+            assert_eq!(
+                rejected.diagnostics()[0].code(),
+                crate::compiler::check::E_CEL_EXPR,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_cel_has_one_voice_in_attributes_and_guards() {
+        let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
+        for (label, source) in [
+            (
+                "attribute",
+                "graph g : App {\n  connector shell : Process {\n    command = \"oops\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> shell -> .\n}\n",
+            ),
+            (
+                "guard",
+                "graph g : App {\n  operator o {\n    on in where true == \"oops\n    { out = data }\n  }\n  . -> o -> .\n}\n",
+            ),
+        ] {
+            let rejected = crate::compiler::compile(&[source], &registry)
+                .expect_err("malformed CEL refuses the compilation");
+            assert_eq!(
+                rejected.diagnostics().len(),
+                1,
+                "{label}: the following construct survives and the fault speaks once — {rejected:?}"
+            );
+            assert_eq!(
+                rejected.diagnostics()[0].code(),
+                crate::compiler::check::E_CEL_EXPR,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
     fn parenthesized_arguments_share_one_trivia_policy() {
         // Review round 8: a paren position is newline-free, and the
         // string-argument probes must cross lines exactly like the
@@ -2837,7 +3186,7 @@ mod tests {
             "the STRING literal is read across the line: {:?}",
             call.args[0]
         );
-        let commented = "graph g : App {\n  operator o {\n    on in { out = asset( /* path */ \"a.bin\" ) }\n  }\n  . -> o -> .\n}\n";
+        let commented = "graph g : App {\n  operator o {\n    on in { out = asset( /* path\n      continues */ \"a.bin\" ) }\n  }\n  . -> o -> .\n}\n";
         let (statements, bag) = handler_statements(commented);
         assert!(
             bag.diagnostics().is_empty(),

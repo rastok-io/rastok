@@ -644,6 +644,15 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                         pos += 1;
                         break;
                     }
+                    if matches!(current, b'\r' | b'\n') {
+                        return Err(vec![Diagnostic {
+                            kind: DiagnosticKind::General,
+                            message: String::from(
+                                "an ordinary CEL string cannot cross a physical line",
+                            ),
+                            range: start..pos,
+                        }]);
+                    }
                     if current == b'\\' {
                         pos += 1;
                         let escaped = *bytes.get(pos).ok_or_else(|| {
@@ -653,6 +662,15 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                                 range: start..pos,
                             }]
                         })?;
+                        if matches!(escaped, b'\r' | b'\n') {
+                            return Err(vec![Diagnostic {
+                                kind: DiagnosticKind::General,
+                                message: String::from(
+                                    "a backslash cannot continue an ordinary CEL string",
+                                ),
+                                range: start..pos,
+                            }]);
+                        }
                         value.push(match escaped {
                             b'n' => '\n',
                             b't' => '\t',
@@ -1962,6 +1980,25 @@ mod tests {
         assert_eq!(eval_const("\"a\" + 'b'"), Value::Text(String::from("ab")));
         assert_eq!(eval_const("-3"), Value::Int(-3));
         assert_eq!(eval_const("3u + 4u"), Value::Uint(7));
+    }
+
+    #[test]
+    fn ordinary_strings_never_cross_a_physical_line() {
+        for source in ["\"left\nright\"", "'left\nright'", "\"left\\\nright\""] {
+            let diagnostics = compile(source, &Signature::new())
+                .expect_err("a physical line ending cannot live in an ordinary CEL string");
+            assert_eq!(diagnostics.len(), 1, "{source:?}: {diagnostics:?}");
+            assert!(
+                diagnostics[0].message.contains("physical line")
+                    || diagnostics[0].message.contains("cannot continue"),
+                "{source:?}: {diagnostics:?}"
+            );
+        }
+        assert_eq!(
+            eval_const("\"left\\nright\""),
+            Value::Text(String::from("left\nright")),
+            "the escaped newline remains the ordinary spelling"
+        );
     }
 
     #[test]

@@ -1158,7 +1158,8 @@ target is a hand-written recursive-descent parser with one token of lookahead.
 IDENT      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 INT        ::= "-"? [0-9]+
 FLOAT      ::= "-"? [0-9]+ "." [0-9]+
-STRING     ::= '"' ( [^"\\] | "\\" any )* '"'
+STRING     ::= '"' ( [^"\\\r\n] | "\\" [^\r\n] )* '"'            // host STRING is line-bounded;
+                                                                    // multiline text uses `text { … }`
 BOOL       ::= "true" | "false"
 NULL       ::= "null"
 ARROW      ::= "->"
@@ -1181,7 +1182,9 @@ SEMI       ::= ";"
 COMMENT    ::= "//" .* EOL  |  "/*" any* "*/"
 // A single-quoted string ('…') is CEL's spelling : the host lexes it as ONE
 // opaque Error lexeme with one voice — its content never re-speaks, and
-// recoveries walking lexemes stay quote-immune.
+// recoveries walking lexemes stay quote-immune. Any physical line ending
+// terminates either host quote spelling as an unterminated token (backslash
+// does not continue it), preserving the next statement for recovery.
 
 // Durations and timestamps have NO dedicated tokens : they are ordinary CEL
 // values — `duration("2h")`, `duration("2h30m")`,
@@ -1413,13 +1416,25 @@ statement         ::= "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast   //
 assignment_tail   ::= ( ":" type_ref )? "=" value                     // the consumed path is the LVALUE : var write / port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value ). The path `err` routes the value to err_value — the TYPED-ERROR emission (err = PaymentDeclined { transient = false })
                     // There is NO implicit yield (D-2026-08-13-1, review round 7) : a
                     // bare expression — IDENT-led or not — is not a statement. It
-                    // refuses with ONE voice and the migration hint (`out = <value>`,
-                    // `err = Kind { … }`), its bytes NEVER meeting the host vocabulary
-                    // (the `=`-alone/`:` decision is a byte PROBE ; `==` refuses as a
-                    // bare expression, never a phantom assignment). The refused
-                    // garbage is swallowed under the BALANCED rule — delimiters
-                    // count, comments are trivia, quotes are ordinary bytes. A future
-                    // explicit `yield <value>` sugar may reopen the position.
+                    // refuses with ONE statement error hole and the migration hint
+                    // (`out = <value>`, `err = Kind { … }`). A well-framed value is
+                    // consumed by its REAL value/region reader before that refusal, so
+                    // its interior never becomes enclosing statements. After an IDENT
+                    // fails the assignment production, the CEL framer chooses only
+                    // recovery extent: it commits a complete continuation as one region,
+                    // or leaves the stream untouched for line-bounded host-lexeme
+                    // recovery. Normal values and recovery share one Complete | Incomplete
+                    // extent computation. Behind `=`, a complete value commits to FOLLOW;
+                    // an incomplete value commits only its safe line boundary and the CEL
+                    // compiler emits the one syntax diagnostic — the next statement never
+                    // becomes CEL text.
+                    // A precise structural lexical
+                    // fault replaces the generic position voice. A future explicit
+                    // `yield <value>` sugar may reopen the position.
+                    // In STATEMENT position `(` always selects multi-emit; a
+                    // parenthesized CEL value is legal only in a VALUE position.
+                    // A malformed multi-emit recovers forward at the statement
+                    // boundary — no tentative parse, syntactic predicate, or rewind.
 path_tail         ::= ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )*       // the dotted walk shared by lvalues and CEL prefixes ; reserved segments after a dot permit qualified names such as Loop.variant and stdlib ports such as store.read
 lvalue            ::= IDENT path_tail                                 // assignment target: port, var, or dotted writable meta/data path — meta.sys is read-only, never an lvalue
 tuple_or_broadcast ::= "(" value ( "," value )* ")"                    // explicit tuple — one value per lvalue, counts must match
@@ -1519,25 +1534,38 @@ tag_body          ::= "{" RAW_TEXT "}"                                // RAW_TAG
                     // THE LEXER/PARSER FRONTIER (D-2026-08-13-1, review round 5) : the
                     // lexer owns the byte cursor AND the token lookahead ; the parser
                     // reads complete lexemes (peek/next) and consumes sub-language
-                    // regions as COMPLETE specialized lexemes — a CEL region, a json
-                    // document (or its complete refusal), a raw guest body, an opaque
-                    // dead/reserved region. It never touches bytes, and no path can
-                    // combine a buffered lexeme with a second read of the same bytes.
+                    // regions as specialized lexemes — a complete or safely bounded CEL
+                    // region, a json document (or its complete refusal), a
+                    // guest/verbatim body, an opaque dead/reserved region. It never
+                    // touches bytes, and no path
+                    // can combine a buffered lexeme with a second read of the same bytes.
                     // The named finite-byte-lookahead points — lexer-owned QUESTIONS,
-                    // the only byte-driven production choices : `shape` (a CEL region
-                    // may open with bytes outside the host vocabulary), the tag-opener
-                    // question (a tag's `(`/`{` sits on the TAG's line), and the line
-                    // questions (value-missing, line-exhausted). Inside braced_value,
+                    // the only byte-driven production choices : the distinct statement
+                    // and value head classifications (a CEL region may open with bytes
+                    // outside the host vocabulary), the path/assignment questions,
+                    // the tag-opener question (a tag's `(`/`{` sits on the TAG's line),
+                    // the tag-argument STRING question, and the line questions
+                    // (value-missing, line-exhausted). Inside braced_value,
                     // ONE lexeme decides struct/map/empty : "}" → {} struct ; ":" →
                     // {:} map ; STRING → map_entries ; IDENT → struct_entries. The
                     // host grammar is predictive (LL(1)) up to those named points and
                     // its delegations — each byte has one lexical authority, comments
                     // are trivia in CEL regions AND in recoveries (a boundary byte
                     // inside a comment never bounds), and a line's end can only end a
-                    // value at depth zero of a newline-ended position. Parser error
-                    // recovery skips LEXEMES to a sync set ; a dead struct body is
-                    // recovered with host lexemes (a `}` in a comment never closes
-                    // it) ; dead-initializer and reserved-format bodies are OPAQUE
+                    // value at depth zero of a newline-ended position. The shared CEL
+                    // extent is explicit Complete | Incomplete: it may look past newlines
+                    // to prove balanced valid input, while normal value parsing commits an
+                    // incomplete extent only to its first safe line boundary and leaves the
+                    // CEL compiler as the one syntax-diagnostic authority, except that an
+                    // unterminated block comment stops before `/*` and belongs to the host's
+                    // one trivia authority during parsing. Parser error
+                    // recovery skips LEXEMES to a sync set ; misplaced complete values
+                    // are consumed by their real reader into one error hole ; incomplete
+                    // input recovers by host lexeme to its statement boundary,
+                    // retaining an unterminated string/comment as the precise lexical
+                    // cause ; a dead struct body is recovered with host lexemes (a `}`
+                    // in a comment never closes it) ; dead-initializer and
+                    // reserved-format bodies are OPAQUE
                     // regions (their bytes may be host-alien, documented).
 
 cel_expr          ::= /* a CEL expression (homegrown parser+checker+eval).
@@ -1572,6 +1600,15 @@ cel_path          ::= /* a CEL access path (subset of cel_expr) : IDENT ( "." ID
 // MULTI-LINE spans : NEWLINE terminates at depth 0 — a predicate spanning lines is
 // wrapped in parentheses OPENED ON THE SAME LINE as the keyword
 // (`where (a == 1 &&` … `)`) : inside parens, depth > 0, newlines are free.
+// The read-only extent calculation may inspect beyond a newline to prove those balanced
+// delimiters. Its result is explicit : Complete ends at FOLLOW ; Incomplete in a
+// newline-ended value commits only through the first safe line boundary. This preserves
+// the next RKG construct while the CEL compiler reports the single expression fault.
+// Ordinary CEL strings cannot contain a physical CR/LF (nor use backslash as physical-line
+// continuation) ; write `\n`, or use `text { … }` for multiline text.
+// An unterminated `/*` remains a HOST-TRIVIA fault : the CEL extent stops before the
+// comment and the trivia reader emits E-LEX-UNTERMINATED-COMMENT during parsing. It is
+// never deferred to CHECK, which missing-closer parse errors can prevent from running.
 
 err_value         ::= IDENT ( "{" struct_body "}" )?                  // the error kind ∈ the node's declared error set,
                                                                       //   with optional typed fields — compile-checked
@@ -1615,19 +1652,17 @@ json_document     ::= JSON_OBJECT | JSON_ARRAY                        // a docum
 // node). `json` is not a tag: it is a reserved word with its own
 // `json_after_ident` continuation.
 //
-// THE REGION TAXONOMY (D-2026-08-13-1, review rounds 5–6). Four
-// region kinds by SEMANTICS, each selected AT its opener (the
-// region method consumes the opener itself — no content byte can
-// meet the host vocabulary): the CEL region (the intrinsic
-// expression language); the json document (a data reader); the
-// VERBATIM regions (`text`/`base64` — braces balance, every other
-// byte ordinary data, quotes and apostrophes included, no
-// escapes); the GUEST regions (jq/bash/sql/python/rust — one
-// ATOMIC handoff to the registered sub-compiler: exact bytes,
-// exact span, no normalization, the host resuming exactly past
-// the closing `}`, guest errors returned as typed results
-// remapped by span). Never one universal framer, never one
-// abstraction over the four.
+// THE REGION TAXONOMY (D-2026-08-13-1). Four region kinds by
+// SEMANTICS, selected before their content: value-position dispatch
+// selects CEL (the intrinsic expression language); the reserved
+// `json` continuation selects the document reader; `text`/`base64`
+// select VERBATIM regions (braces balance, every other byte ordinary
+// data, quotes and apostrophes included, no escapes); registered
+// jq/bash/sql/python/rust tags select GUEST regions. The brace-bodied
+// methods consume their own `{`, then hand off exact bytes and span;
+// the host resumes exactly past the closing `}`, and guest errors
+// return as typed results remapped by span. Never one universal
+// framer, never one abstraction over the four.
 //
 // THE FRAMING QUESTION — EXPOSED, NOT DECIDED. The frozen
 // delimitation contract (brace balance, both quote styles opaque
@@ -1809,7 +1844,7 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | `stop` — alone or followed by IDENT | `stop` action |
 | `handler_body` (statement) | `(` | tuple multi-emit `(a, b) = (e1, e2)` |
 | `handler_body` (statement) | `lvalue` (IDENT, dotted ok — e.g. `meta.app.label`) — next is `=` or `:` | assignment / port emit (`= nothing` = no emit ; `meta.sys` is read-only, never an lvalue) |
-| `handler_body` (statement) | anything else — a bare expression, IDENT-led or not | REFUSAL (one voice, `out = <value>` hint) — the implicit yield is REMOVED (D-2026-08-13-1 round 7) |
+| `handler_body` (statement) | anything else — a bare expression, IDENT-led or not | REFUSAL (`out = <value>` hint): a complete value is consumed by its real reader into one error hole; incomplete input recovers at the line; the implicit yield is REMOVED (D-2026-08-13-1) |
 | `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
 | `value` | `json` — a same-line `{` or `[` follows | `json_after_ident` : the document ; ANY other follower = invalid json form (E-JSON-VALUE) ; word alone = bare word, judged by the contract |

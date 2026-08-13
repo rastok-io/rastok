@@ -7,9 +7,9 @@
 
 ## D-2026-08-13-1 — A lexeme-stream parser, json documents, and `decimal(…)`
 
-Consolidated after five adversarial review rounds (the round-by-round
-history lives in Git; the drafts each round superseded are named at
-the end). The CURRENT rule:
+Consolidated after the parser review (the round-by-round history lives
+in Git; the drafts each round superseded are named at the end). The
+CURRENT rule:
 
 **One owner for the bytes.** The lexer owns the byte cursor AND the
 token lookahead; the parser reads complete lexemes through
@@ -25,9 +25,9 @@ slice, boundary lexemes surviving (the mirror of the terminator
 test, asked of the buffered token). The named finite-byte-lookahead
 points — the ONLY places a production choice reads a byte, all
 lexer-owned questions returning CLOSED types, never a raw byte:
-the head classifications (`statement_head`/`value_head` →
-Structural | Cel — CEL regions may open with bytes the host
-vocabulary refuses), the path and assignment probes
+the distinct head classifications (`statement_head` → Structural |
+BareValue | Recovery; `value_head` → Structural | Cel), the path and
+assignment probes
 (`dot_follows`, `assignment_follows` — `=` alone vs `==` is
 decided WITHOUT tokenizing), `tag_opener_on_line` (→ TagOpener),
 `string_argument` (a tag argument's StrLit-vs-CEL head, only a
@@ -36,52 +36,90 @@ the line questions (`value_missing_on_line`, `line_exhausted`).
 
 **The implicit yield is REMOVED** (review round 7 arbitration —
 recommended by the review, aligned with the LL(1) consigne): a
-bare expression is NOT a statement; it refuses with ONE voice
-carrying the migration hint (`out = <value>`, or `err = Kind`),
-its bytes never meeting the host vocabulary, swallowed under the
-BALANCED rule (delimiters count, comments are trivia, quotes are
-ordinary — the mirror of the verbatim contract). Every value form
-refuses identically as a bare statement, and behind `=` every
-form takes the ONE value dispatch. An explicit `yield <value>`
-sugar may return later; the host lexer keeps only ITS comparison
-lexemes (`==` `!=` `<=` `>=` — the simulation expect grammar),
+bare expression is NOT a statement. When its head is not already a
+live host-statement opener, a well-framed value is consumed by its
+real owner (braced/value parser, CEL region, JSON reader, verbatim
+reader, or guest framer), discarded, and represented by ONE statement
+error hole carrying the migration hint (`out = <value>`, or
+`err = Kind`). Its
+interior can therefore never become statements or attributes of the
+enclosing construct. After an IDENT has failed the assignment
+production, the CEL framer may choose only the recovery EXTENT: it
+atomically commits a complete continuation as one CEL region or leaves
+cursor and lookahead untouched for line-bounded host-lexeme recovery,
+preserving the next healthy statement. This does not choose between
+valid productions and does not weaken LL(1); normal values and recovery
+share the SAME pure `Complete | Incomplete` extent computation, not
+parallel scanners. A normal value commits the full complete extent; an
+incomplete value in a newline-ended position commits only its first safe
+line boundary, so a following statement is never part of the CEL text.
+The host merely frames that malformed value: the CEL compiler emits its
+ONE syntax diagnostic. An unterminated block comment is the deliberate
+lexical exception: the extent ends BEFORE `/*`, and the next host-trivia
+read emits `E-LEX-UNTERMINATED-COMMENT` during parsing. The checker may
+never run after the resulting missing-closer errors, so deferring that
+cause to CEL would make it unreachable. The computation carries expected
+closer kinds, so `)` can never close `[`. Ordinary garbage diagnostics
+are suppressed by statement recovery, but a structural lexical cause
+(unterminated string/comment) found while tokenizing that rejected host
+statement is retained instead of being hidden by the generic position
+error. Behind `=`, every form takes the ONE value dispatch. An explicit
+`yield <value>` sugar may return later; the host lexer keeps only ITS
+comparison lexemes (`==` `!=` `<=` `>=` — the simulation expect grammar),
 never a copy of CEL's operator vocabulary.
 
-**Specialized lexemes, selected AT their opener.** Sub-languages
+In statement position, `(` selects the multi-emit production
+unconditionally; parenthesized CEL is a value only after `=`. A
+malformed multi-emit recovers forward from the failing lexeme to the
+statement boundary. It is never distinguished from parenthesized CEL
+by tentative parsing, an unbounded syntactic predicate, or rewind.
+
+Ordinary strings are line-bounded in both lexical domains. For a host
+`STRING`, any physical CR/LF before its closing double quote is
+`E-LEX-UNTERMINATED-STRING` (a preceding backslash does not buy
+continuation), and the next line remains available to recovery. The host
+Error token used when a single-quoted CEL spelling reaches statement
+recovery has the same boundary. In a CEL value region the framer stops
+the incomplete extent before that physical newline and the CEL compiler
+emits the single expression diagnostic; its own lexer independently
+rejects raw line endings too. An escaped `\n` remains ordinary text;
+multiline text uses `text { … }`.
+
+**Specialized lexemes, selected before their content.** Sub-languages
 are lexical delegations returning complete lexemes or complete
-refusals, and each region method CONSUMES its own opener — the
-region is selected before any content byte can meet the host
+refusals. CEL is selected by the value-position classification; JSON
+by the reserved `json` continuation; brace-bodied verbatim/guest
+methods consume their own `{` before any body byte can meet the host
 vocabulary. Four region kinds, by SEMANTICS, never one universal
 framer: the CEL region (`cel_region` — the intrinsic expression
-language); the json continuation (`json_tail` — a data reader);
-the VERBATIM regions (`verbatim_region` — `text`/`base64`: braces
-balance, every other byte is ordinary data, quotes and apostrophes
-included, no escapes); and the GUEST regions (`guest_region` —
+language); the json continuation (`json_tail` — a data reader); the
+VERBATIM regions (`verbatim_region` — `text`/`base64`: braces balance,
+every other byte is ordinary data, quotes and apostrophes included, no
+escapes); and the GUEST regions (`guest_region` —
 jq/bash/sql/python/rust: the frozen contract, dual-quote opacity,
 awaiting the guest slice's framer arbitration). The host munches
 ITS OWN comparison lexemes (`==` `!=` `<=` `>=` — the simulation
 expect grammar; never a copy of CEL's vocabulary), and a
 single-quoted string is ONE opaque Error lexeme (CEL's spelling,
-named as such once). The parser receives head CLASSIFICATIONS
-(`statement_head`/`value_head` → Structural | Cel), never a raw
-byte. EVERY recovery walks HOST LEXEMES into a scratch bag with
-STRUCTURAL progression (review round 8 — a recovery that consumes
-nothing is a hang): dead/reserved bodies to their balanced closer
-(a closer inside a comment is trivia and never closes), a refused
-bare statement to its strong boundary (`;`, a depth-zero `}`, the
-next line — a bare FORM word is first consumed by its REAL
-dispatch, so a bare `text { … }` is framed by the verbatim
-reader); the garbage's own diagnostics stay silent — the one
-refusal voice already spoke.
+named as such once). The parser receives distinct CLOSED head
+classifications, never a raw byte. Recovery is selected by semantics:
+self-framing misplaced values use their real reader; incomplete or
+otherwise unframed statements walk HOST LEXEMES into a scratch bag to
+a strong boundary (`;`, a depth-zero `}`, or the next line), always
+making structural progress; dead/reserved bodies walk host lexemes to
+their balanced closer (a closer inside a comment is trivia and never
+closes). Scratch diagnostics stay silent except for the structural
+lexical cause that determined the loss of a boundary.
 
 **The guest frontier is atomic.** A guest body reaches its
 sub-compiler as ONE region lexeme — exact bytes, exact span, no
-normalization; each region method CONSUMES its own opener
+normalization; each brace-bodied guest method CONSUMES its own opener
 (returning a TOTAL Option, no panic), so no content byte can meet
 the host vocabulary — the pre-lexed-content state does not exist.
-Guest errors come back as typed results remapped by span. CEL (intrinsic expressions), the
-`json` reader (data), and registered guests are three concepts,
-never one abstraction. The DELIMITATION of a region by `{ … }`
+Guest errors come back as typed results remapped by span. CEL
+(intrinsic expressions), the `json` reader (data), and registered
+guests are three concepts, never one abstraction. The DELIMITATION of
+a region by `{ … }`
 under the frozen contract (brace balance, dual-quote opacity)
 cannot know a guest's comment or string lexicon — the failure
 modes are named and EXPOSED in grammar.md with the arbitration
