@@ -1601,6 +1601,33 @@ json_document     ::= JSON_OBJECT | JSON_ARRAY                        // a docum
 // refuses with its migration (D-2026-08-12-1 — the AST has no such
 // node). `json` is not a tag: it is a reserved word with its own
 // `json_after_ident` continuation.
+//
+// THE GUEST FRONTIER (D-2026-08-13-1, review round 5 supplement).
+// A guest body reaches its sub-compiler as ONE ATOMIC REGION —
+// exact bytes, exact span, no normalization — framed by the host
+// (`raw_region`), which NEVER tokenizes the content; the host
+// resumes exactly past the closing `}`; a guest error must come
+// back as a typed result whose diagnostics remap into the RKG
+// source by span. CEL stays the intrinsic expression language,
+// `json` a data reader, guests registered delegations — three
+// concepts, never one abstraction.
+//
+// THE FRAMING QUESTION — EXPOSED, NOT DECIDED. The frozen
+// delimitation contract (brace balance, both quote styles opaque
+// with backslash escapes) is the HOST's rule, and it cannot know a
+// guest's lexicon. Named failure modes, demonstrated: a `}` inside
+// a guest comment closes the frame early (`bash { echo hi # } }`,
+// `sql { -- } }`); a bare apostrophe (`bash { echo don't }`)
+// starts an opaque quote skip and the HOST diagnoses an
+// unterminated string over guest bytes; guest string lexicons
+// without backslash escapes (SQL doubled quotes) are read by the
+// host's escape rule. The host will NOT grow per-guest lexicons.
+// Arbitration options, for the guest slice: (a) keep the contract
+// and DOCUMENT the authoring rule (braces balanced even in guest
+// comments; quotes paired); (b) fenced raw delimiters for hostile
+// bodies (a heredoc-style spelling); (c) the registered guest
+// brings its OWN framer with its compiler — the frame becomes part
+// of the guest's registration, never the host's lexicon.
 
 defaults_block    ::= "defaults" "{" struct_body "}"
 

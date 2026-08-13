@@ -5,7 +5,7 @@
 //! [`Lexer::next`] (keywords are not distinguished: every word is an
 //! [`TokenKind::Ident`], the parser deciding by position), consumes
 //! sub-language regions as COMPLETE specialized lexemes
-//! ([`Lexer::cel_region`], [`Lexer::json_tail`], [`Lexer::raw_block`],
+//! ([`Lexer::cel_region`], [`Lexer::json_tail`], [`Lexer::raw_region`],
 //! [`Lexer::swallow_opaque_on_line`]), and asks the named
 //! finite-byte-lookahead questions ([`Lexer::shape`],
 //! [`Lexer::tag_opener_on_line`], the line questions). It never
@@ -77,7 +77,7 @@ pub enum TokenKind {
     BiArrow,
     /// Opaque CEL expression span, produced only by [`Lexer::cel_region`].
     CelExpr,
-    /// Opaque raw guest text, produced only by [`Lexer::raw_block`].
+    /// Opaque raw guest text, produced only by [`Lexer::raw_region`].
     RawText,
     /// Lexically invalid input; a diagnostic was pushed.
     Error,
@@ -567,13 +567,40 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Captures a raw brace-balanced block (guest text, verbatim
-    /// text, inline bytes) — braces excluded, no host lexing.
-    pub fn raw_block(&mut self, bag: &mut Bag) -> Token<'a> {
-        let start = self.pos;
+    /// The GUEST/RAW region framer — one ATOMIC lexeme handoff
+    /// (D-2026-08-13-1, review round 5 supplement): after the
+    /// consumed `{`, the ENTIRE region belongs to its reader (a
+    /// guest sub-compiler, the verbatim/text reader, the base64
+    /// decoder) — exact bytes, exact span, no normalization, and
+    /// the host resumes exactly past the closing `}`. The host
+    /// NEVER tokenizes the content. Composes with the buffer: a
+    /// lexeme mistakenly pre-lexed from region bytes is dropped and
+    /// its bytes are re-framed from its own start — the incoherent
+    /// state is unrepresentable, not merely forbidden.
+    ///
+    /// DELIMITATION CONTRACT (frozen, and NAMED as an open
+    /// question): the region ends at the brace-balanced `}`, with
+    /// both quote styles skipped opaquely (backslash escapes). The
+    /// host cannot know a guest's comment or string lexicon — a
+    /// `}` inside a guest comment (`# }`, `-- }`) closes the frame,
+    /// and a bare apostrophe starts an opaque quote skip; grammar.md
+    /// exposes the failure modes and the arbitration options rather
+    /// than growing per-guest lexicons here.
+    pub fn raw_region(&mut self, bag: &mut Bag) -> Token<'a> {
+        // A pre-lexed lexeme from region bytes: re-frame from its
+        // start — the walk below runs on a LOCAL cursor over the
+        // immutable source, and the one commit at the end is
+        // forward (the region contains the dropped lexeme's bytes,
+        // so its end is at or past the current position).
+        let start = match self.lookahead.take() {
+            Some(token) => token.span.range().start,
+            None => self.pos,
+        };
+        let bytes = self.source.as_bytes();
+        let mut pos = start;
         let mut depth: u32 = 0;
         loop {
-            match self.peek_byte() {
+            match bytes.get(pos).copied() {
                 None => {
                     bag.push(
                         Diagnostic::new(
@@ -581,34 +608,61 @@ impl<'a> Lexer<'a> {
                             Phase::Parse,
                             "this raw block never closes",
                         )
-                        .with_span(Span::new(self.source_id, start..self.pos)),
+                        .with_span(Span::new(self.source_id, start..pos)),
                     );
                     break;
                 }
                 Some(b'{') => {
                     depth += 1;
-                    self.pos += 1;
+                    pos += 1;
                 }
                 Some(b'}') => {
                     if depth == 0 {
                         break;
                     }
                     depth -= 1;
-                    self.pos += 1;
+                    pos += 1;
                 }
-                Some(quote @ (b'"' | b'\'')) => self.skip_quoted(bag, quote),
-                Some(_) => self.pos += 1,
+                Some(quote @ (b'"' | b'\'')) => {
+                    let quote_start = pos;
+                    pos += 1;
+                    loop {
+                        match bytes.get(pos).copied() {
+                            None => {
+                                bag.push(
+                                    Diagnostic::new(
+                                        E_LEX_UNTERMINATED_STRING,
+                                        Phase::Parse,
+                                        "this string never closes",
+                                    )
+                                    .with_span(Span::new(self.source_id, quote_start..pos)),
+                                );
+                                break;
+                            }
+                            Some(b'\\') => pos = (pos + 2).min(bytes.len()),
+                            Some(byte) => {
+                                pos += 1;
+                                if byte == quote {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(_) => pos += 1,
             }
         }
         let token = Token {
             kind: TokenKind::RawText,
-            text: &self.source[start..self.pos],
-            span: Span::new(self.source_id, start..self.pos),
+            text: &self.source[start..pos],
+            span: Span::new(self.source_id, start..pos),
             newline_before: false,
         };
-        if self.peek_byte() == Some(b'}') {
-            self.pos += 1;
+        if bytes.get(pos) == Some(&b'}') {
+            pos += 1;
         }
+        assert!(pos >= self.pos, "the region end never precedes the cursor");
+        self.pos = pos;
         token
     }
 
@@ -1074,6 +1128,23 @@ fn punctuation(byte: u8) -> Option<TokenKind> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_raw_region_reframes_a_prelexed_lexeme() {
+        // The atomic-frontier guarantee (review round 5 supplement):
+        // even when a lexeme was mistakenly pre-lexed from region
+        // bytes, the framer drops it and re-frames from its start —
+        // exact bytes, host resumed exactly past the `}`.
+        let mut bag = Bag::new();
+        let mut lexer = Lexer::new(SourceId::new(0), "guest body } tail");
+        let _ = lexer.peek(&mut bag); // pre-lexes `guest` from region bytes
+        let region = lexer.raw_region(&mut bag);
+        assert_eq!(region.text, "guest body ");
+        assert_eq!(region.span.range(), 0..11);
+        let next = lexer.next(&mut bag);
+        assert_eq!(next.text, "tail", "the host resumes past the closer");
+        assert!(bag.diagnostics().is_empty(), "{bag:?}");
+    }
     use super::*;
 
     #[test]

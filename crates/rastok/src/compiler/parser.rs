@@ -1758,7 +1758,7 @@ impl<'src> Parser<'src, '_> {
         let body = if self.peek().kind == TokenKind::LBrace {
             if RAW_TAGS.contains(&tag.text.as_str()) {
                 self.bump();
-                let raw = self.lexer.raw_block(self.bag);
+                let raw = self.lexer.raw_region(self.bag);
                 self.last_end = raw.span.range().end;
                 Some(TaggedBody::Raw {
                     text: String::from(raw.text),

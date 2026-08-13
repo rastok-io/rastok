@@ -39,6 +39,21 @@ inside a comment is trivia to the token stream and can never close
 the region); the parser's error recovery skips lexemes to a sync
 set, never bytes.
 
+**The guest frontier is atomic.** A guest body reaches its
+sub-compiler as ONE region lexeme — exact bytes, exact span, no
+normalization (`raw_region`); the host never tokenizes guest
+content, resumes exactly past the region, and a pre-lexed lexeme
+from region bytes is re-framed under the same owner (the
+incoherent state is unrepresentable). Guest errors come back as
+typed results remapped by span. CEL (intrinsic expressions), the
+`json` reader (data), and registered guests are three concepts,
+never one abstraction. The DELIMITATION of a region by `{ … }`
+under the frozen contract (brace balance, dual-quote opacity)
+cannot know a guest's comment or string lexicon — the failure
+modes are named and EXPOSED in grammar.md with the arbitration
+options (authoring contract / fenced delimiters / guest-registered
+framers); the host grows no per-guest lexicon.
+
 **Trivia has one authority.** `rastok_core::trivia::comment_at` is
 the single recognizer of the comment FACT (span, terminated,
 multiline); the host trivia, the probes, the region scans and the
