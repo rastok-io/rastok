@@ -84,18 +84,7 @@ pub enum TokenKind {
     LtEq,
     /// `>=`
     GtEq,
-    /// `&&`
-    AmpAmp,
-    /// `||`
-    PipePipe,
-    /// `*`
-    Star,
-    /// `/`
-    Slash,
-    /// `%`
-    Percent,
-    /// `-` (when neither an arrow nor a negative-number sign)
-    Minus,
+
     /// Opaque CEL expression span, produced only by [`Lexer::cel_region`].
     CelExpr,
     /// Opaque raw region text, produced only by the region framers
@@ -136,6 +125,39 @@ pub struct TerminatorSet {
     /// Whole-word terminators (`having`, `by`, `within`, …), matched at
     /// word boundaries only.
     pub keywords: &'static [&'static str],
+}
+
+/// A tag argument's head (review round 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringArgument<'a> {
+    /// The next significant input is not a double-quoted string —
+    /// nothing was consumed.
+    NotAString,
+    /// A bare STRING at the argument boundary: the grammar's
+    /// StrLit, consumed.
+    Alone(Token<'a>),
+    /// A STRING continuing into a larger expression: the CEL
+    /// prefix, consumed — stitch from its start.
+    Prefix(Token<'a>),
+}
+
+/// A tag's same-line opener — a CLOSED type, never a raw byte at
+/// the parser's surface (review round 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagOpener {
+    /// `(` — a call's arguments.
+    Paren,
+    /// `{` — a raw or (dead) struct body.
+    Brace,
+}
+
+/// How an assignment continues after its consumed path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignmentHead {
+    /// `= value`.
+    Plain,
+    /// `: type = value`.
+    Typed,
 }
 
 /// How the next significant input opens a position: with a
@@ -260,10 +282,7 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                     self.number(start)
                 }
-                _ => {
-                    self.pos += 1;
-                    self.token(TokenKind::Minus, start)
-                }
+                _ => self.unknown_character(bag, start),
             },
             b'<' => {
                 if self.source.as_bytes()[self.pos..].starts_with(b"<->") {
@@ -277,10 +296,10 @@ impl<'a> Lexer<'a> {
                     self.token(TokenKind::Lt, start)
                 }
             }
-            // The CEL operator SUPERSET, maximal munch — a peek
-            // after a consumed path must never fault on a legal
-            // continuation, and `=` vs `==` is a KIND question
-            // (D-2026-08-13-1, review round 6).
+            // The COMPARISON lexemes, maximal munch — the HOST's
+            // own vocabulary (the simulation expect grammar), not a
+            // CEL copy: CEL bytes never meet this lexer since the
+            // implicit yield's removal (D-2026-08-13-1, rounds 6–7).
             b'=' if self.peek_byte_at(1) == Some(b'=') => {
                 self.pos += 2;
                 self.token(TokenKind::EqEq, start)
@@ -292,26 +311,6 @@ impl<'a> Lexer<'a> {
             b'>' if self.peek_byte_at(1) == Some(b'=') => {
                 self.pos += 2;
                 self.token(TokenKind::GtEq, start)
-            }
-            b'&' if self.peek_byte_at(1) == Some(b'&') => {
-                self.pos += 2;
-                self.token(TokenKind::AmpAmp, start)
-            }
-            b'|' if self.peek_byte_at(1) == Some(b'|') => {
-                self.pos += 2;
-                self.token(TokenKind::PipePipe, start)
-            }
-            b'*' => {
-                self.pos += 1;
-                self.token(TokenKind::Star, start)
-            }
-            b'/' => {
-                self.pos += 1;
-                self.token(TokenKind::Slash, start)
-            }
-            b'%' => {
-                self.pos += 1;
-                self.token(TokenKind::Percent, start)
             }
             // A single-quoted string is CEL's spelling, never the
             // host's — lexed as ONE opaque Error token (its content
@@ -449,23 +448,144 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Whether the argument list CLOSES here (`)` or the end of
+    /// input) — asked without tokenizing, across lines (a paren
+    /// position is newline-free).
+    pub fn arguments_close(&mut self) -> bool {
+        match &self.lookahead {
+            Some(token) => matches!(token.kind, TokenKind::RParen | TokenKind::Eof),
+            None => matches!(self.first_significant_byte(), None | Some(b')')),
+        }
+    }
+
+    /// A tag argument's head, decided WITHOUT tokenizing anything
+    /// but a proven double-quoted string (D-2026-08-13-1, review
+    /// round 7): a bare STRING followed by the argument boundary is
+    /// the grammar's StrLit; a string continuing into an expression
+    /// is the CEL prefix; anything else — a single-quoted CEL
+    /// string included — is untouched for the value dispatch.
+    pub fn string_argument(&mut self, bag: &mut Bag) -> StringArgument<'a> {
+        let opens_string = match &self.lookahead {
+            Some(token) => token.kind == TokenKind::Str,
+            None => matches!(self.significant_on_line(), Some((_, b'"'))),
+        };
+        if !opens_string {
+            return StringArgument::NotAString;
+        }
+        let token = self.next(bag);
+        let alone = match &self.lookahead {
+            Some(follower) => {
+                matches!(follower.kind, TokenKind::Comma | TokenKind::RParen)
+            }
+            None => matches!(self.significant_on_line(), None | Some((_, b',' | b')'))),
+        };
+        if alone {
+            StringArgument::Alone(token)
+        } else {
+            StringArgument::Prefix(token)
+        }
+    }
+
+    /// Whether a SAME-LINE `.` follows — the path walk's question,
+    /// asked WITHOUT tokenizing the follower (a path may be chased
+    /// by CEL bytes outside the host vocabulary, review round 7).
+    pub fn dot_follows(&mut self) -> bool {
+        if let Some(token) = &self.lookahead {
+            return token.kind == TokenKind::Dot && !token.newline_before;
+        }
+        matches!(self.significant_on_line(), Some((_, b'.')))
+    }
+
+    /// Whether an ASSIGNMENT follows the consumed path: `=` (alone —
+    /// `==` is CEL's), or `:` (a typed assignment). Answered without
+    /// tokenizing, so a bare-expression statement can refuse with
+    /// ONE voice and its bytes never meet the host vocabulary
+    /// (review round 7 — the implicit yield is REMOVED).
+    pub fn assignment_follows(&mut self) -> Option<AssignmentHead> {
+        if let Some(token) = &self.lookahead {
+            return match token.kind {
+                TokenKind::Eq => Some(AssignmentHead::Plain),
+                TokenKind::Colon => Some(AssignmentHead::Typed),
+                _ => None,
+            };
+        }
+        let (offset, byte) = self.significant_on_line()?;
+        match byte {
+            b'=' if self.source.as_bytes().get(offset + 1) != Some(&b'=') => {
+                Some(AssignmentHead::Plain)
+            }
+            b':' => Some(AssignmentHead::Typed),
+            _ => None,
+        }
+    }
+
+    /// Swallows a refused BARE-EXPRESSION statement to its boundary,
+    /// silently (the one refusal voice already spoke) and WITHOUT
+    /// tokenizing — the garbage is CEL-shaped, outside the host
+    /// vocabulary. The walk is the BALANCED rule, the mirror of the
+    /// verbatim contract: delimiters balance, comments are trivia,
+    /// and every other byte — quotes included — is ordinary, so an
+    /// unclosed garbage string can never drag the swallow past the
+    /// statement's own closers. Returns the swallowed range.
+    pub fn swallow_bare_statement(
+        &mut self,
+        terminators: &TerminatorSet,
+    ) -> core::ops::Range<usize> {
+        let start = match self.lookahead.take() {
+            Some(token) => token.span.range().start,
+            None => self.pos,
+        };
+        let bytes = self.source.as_bytes();
+        let mut depth: u32 = 0;
+        while let Some(&byte) = bytes.get(self.pos) {
+            if byte == b'/'
+                && let Some(comment) = rastok_core::trivia::comment_at(self.source, self.pos)
+            {
+                if !comment.terminated || (terminators.newline && comment.multiline && depth == 0) {
+                    break;
+                }
+                self.pos = comment.end;
+                continue;
+            }
+            if depth == 0 && self.at_terminator(byte, terminators) {
+                break;
+            }
+            match byte {
+                b'(' | b'[' | b'{' => {
+                    depth += 1;
+                    self.pos += 1;
+                }
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                    self.pos += 1;
+                }
+                _ => self.pos += 1,
+            }
+        }
+        start..self.pos
+    }
+
     /// The tag-opener question: does a `(` or `{` follow ON THE
     /// SAME LINE? Answered from the buffered lexeme when one exists
     /// (its `newline_before` decides), from a read-only byte probe
     /// otherwise — a tag is a tag only WITH its same-line opener.
-    pub fn tag_opener_on_line(&mut self) -> Option<u8> {
+    pub fn tag_opener_on_line(&mut self) -> Option<TagOpener> {
         if let Some(token) = &self.lookahead {
             if token.newline_before {
                 return None;
             }
             return match token.kind {
-                TokenKind::LParen => Some(b'('),
-                TokenKind::LBrace => Some(b'{'),
+                TokenKind::LParen => Some(TagOpener::Paren),
+                TokenKind::LBrace => Some(TagOpener::Brace),
                 _ => None,
             };
         }
         match self.significant_on_line() {
-            Some((_, byte @ (b'(' | b'{'))) => Some(byte),
+            Some((_, b'(')) => Some(TagOpener::Paren),
+            Some((_, b'{')) => Some(TagOpener::Brace),
             _ => None,
         }
     }
@@ -478,11 +598,10 @@ impl<'a> Lexer<'a> {
     /// diagnostic the garbage would raise stays silent (the one
     /// migration voice already spoke — D-2026-08-13-1, review
     /// round 6). Returns whether a region was swallowed.
-    pub fn swallow_opaque_on_line(&mut self, open: u8) -> bool {
+    pub fn swallow_opaque_on_line(&mut self, open: TagOpener) -> bool {
         let (open_kind, close_kind) = match open {
-            b'(' => (TokenKind::LParen, TokenKind::RParen),
-            b'{' => (TokenKind::LBrace, TokenKind::RBrace),
-            _ => return false,
+            TagOpener::Paren => (TokenKind::LParen, TokenKind::RParen),
+            TagOpener::Brace => (TokenKind::LBrace, TokenKind::RBrace),
         };
         let mut scratch = Bag::new();
         let opener = self.peek(&mut scratch);
@@ -704,7 +823,7 @@ impl<'a> Lexer<'a> {
     /// quotes and apostrophes included (`text { don't }` is text),
     /// no escapes, no interpolation. Exact bytes, exact span, one
     /// forward commit.
-    pub fn verbatim_region(&mut self, bag: &mut Bag) -> Token<'a> {
+    pub fn verbatim_region(&mut self, bag: &mut Bag) -> Option<Token<'a>> {
         self.region_after_opener(bag, false)
     }
 
@@ -722,16 +841,18 @@ impl<'a> Lexer<'a> {
     /// modes and the arbitration options (authoring contract /
     /// fenced delimiters / guest-registered framers) rather than
     /// growing per-guest lexicons here.
-    pub fn guest_region(&mut self, bag: &mut Bag) -> Token<'a> {
+    pub fn guest_region(&mut self, bag: &mut Bag) -> Option<Token<'a>> {
         self.region_after_opener(bag, true)
     }
 
-    fn region_after_opener(&mut self, bag: &mut Bag, quotes_opaque: bool) -> Token<'a> {
-        let opener = self.next(bag);
-        assert!(
-            opener.kind == TokenKind::LBrace,
-            "a region method is called at its opener"
-        );
+    fn region_after_opener(&mut self, bag: &mut Bag, quotes_opaque: bool) -> Option<Token<'a>> {
+        // TOTAL, no panic: `None` when the next lexeme is not the
+        // opener (nothing consumed beyond the buffered peek) — the
+        // caller speaks its own expected-diagnostic.
+        if self.peek(bag).kind != TokenKind::LBrace {
+            return None;
+        }
+        let _ = self.next(bag);
         let start = self.pos;
         let bytes = self.source.as_bytes();
         let mut pos = start;
@@ -798,9 +919,10 @@ impl<'a> Lexer<'a> {
         if bytes.get(pos) == Some(&b'}') {
             pos += 1;
         }
-        assert!(pos >= self.pos, "the region end never precedes the cursor");
+        // Forward by arithmetic, no assert: the local cursor started
+        // AT self.pos and only ever incremented.
         self.pos = pos;
-        token
+        Some(token)
     }
 
     /// Consumes trivia so an opaque scan starts at significant input.
@@ -1238,7 +1360,7 @@ mod tests {
         let mut lexer = Lexer::new(SourceId::new(0), "{  don't \"quote\" {ok} } tail");
         let opener = lexer.peek(&mut bag);
         assert_eq!(opener.kind, TokenKind::LBrace, "the opener buffers safely");
-        let region = lexer.verbatim_region(&mut bag);
+        let region = lexer.verbatim_region(&mut bag).expect("the opener is next");
         assert_eq!(
             region.text, "  don't \"quote\" {ok} ",
             "verbatim: quotes and apostrophes are ORDINARY bytes, braces balance"

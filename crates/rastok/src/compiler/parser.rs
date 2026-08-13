@@ -1163,25 +1163,28 @@ impl<'src> Parser<'src, '_> {
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut statements = Vec::new();
         loop {
-            // Classified by the lexer: a bare CEL yield (`!done`,
-            // `-x`, `'txt'`) must not be tokenized — or rejected —
-            // here.
+            // Classified by the lexer: a CEL-shaped opener means a
+            // BARE EXPRESSION — not a statement since the implicit
+            // yield's removal (D-2026-08-13-1, review round 7). One
+            // refusal voice, the line swallowed WITHOUT meeting the
+            // host vocabulary.
             if self.lexer.statement_head() == crate::compiler::lexer::RegionHead::Cel {
-                // The separating newline is trivia; the yield's own
-                // scan must start past it (a no-op when a lexeme is
-                // already buffered — the peek consumed the trivia).
                 self.lexer.advance_to_significant(self.bag);
-                let value = self.value(&ATTR_POSITION);
-                if matches!(&value, Value::Cel(cel) if cel.text.is_empty()) {
-                    // Guaranteed progress: an empty scan consumed
-                    // nothing, so report and step over the byte.
-                    let start = self.peek().span.range().start;
-                    self.error_expected("a statement");
-                    self.bump();
-                    statements.push(Statement::Error(self.recover(start)));
-                } else {
-                    statements.push(Statement::Yield(value));
-                }
+                let range = self.lexer.swallow_bare_statement(&ATTR_POSITION);
+                let span = Span::new(self.source_id, range.start..range.end);
+                self.bag.push(
+                    Diagnostic::new(
+                        E_PARSE_EXPECTED,
+                        Phase::Parse,
+                        "a bare expression is not a statement; write `out = <value>` \
+                         (or `err = Kind { … }`)",
+                    )
+                    .with_span(span)
+                    .with_field("expected", "a statement")
+                    .with_field("found", "a bare expression"),
+                );
+                self.last_end = range.end;
+                statements.push(Statement::Error(ErrorNode { span }));
                 continue;
             }
             let token = self.peek();
@@ -1207,8 +1210,14 @@ impl<'src> Parser<'src, '_> {
                     Some(statement) => statements.push(statement),
                     None => statements.push(Statement::Error(self.recover(start))),
                 },
-                TokenKind::Ident => statements.push(self.assign_or_yield(start)),
-                _ => statements.push(Statement::Yield(self.value(&ATTR_POSITION))),
+                TokenKind::Ident => statements.push(self.assign_statement(start)),
+                _ => {
+                    // Unreachable by the head classification —
+                    // defensive refusal, never a silent value.
+                    self.error_expected("a statement");
+                    self.bump();
+                    statements.push(Statement::Error(self.recover(start)));
+                }
             }
         }
         self.expect(TokenKind::RBrace, "`}`")?;
@@ -1217,10 +1226,32 @@ impl<'src> Parser<'src, '_> {
 
     /// An IDENT-led statement: assignment, typed-error emission, or an
     /// implicit yield whose expression starts with a path.
-    fn assign_or_yield(&mut self, start: usize) -> Statement {
+    fn assign_statement(&mut self, start: usize) -> Statement {
         let Some(target) = self.lvalue() else {
             return Statement::Error(self.recover(start));
         };
+        // The follower is PROBED, never tokenized before the
+        // decision — bare-expression bytes after a path stay outside
+        // the host vocabulary (review round 7; the implicit yield is
+        // REMOVED, so a non-assignment refuses here).
+        let Some(head) = self.lexer.assignment_follows() else {
+            let range = self.lexer.swallow_bare_statement(&ATTR_POSITION);
+            let span = Span::new(self.source_id, start..range.end);
+            self.bag.push(
+                Diagnostic::new(
+                    E_PARSE_EXPECTED,
+                    Phase::Parse,
+                    "a bare expression is not a statement; write `out = <value>` \
+                     (or `err = Kind { … }`)",
+                )
+                .with_span(span)
+                .with_field("expected", "`=` or `:` after the assignment target")
+                .with_field("found", "a bare expression"),
+            );
+            self.last_end = range.end;
+            return Statement::Error(ErrorNode { span });
+        };
+        let _ = head;
         match self.peek().kind {
             TokenKind::Eq if target.segments.len() == 1 && target.segments[0].text == "err" => {
                 self.bump();
@@ -1259,10 +1290,10 @@ impl<'src> Parser<'src, '_> {
                 }
             }
             _ => {
-                // Not an assignment: the consumed path is the start
-                // of a bare value — the CEL continuation re-reads the
-                // immutable prefix slice (D-2026-08-13-1).
-                Statement::Yield(Value::Cel(self.cel_from(start, &ATTR_POSITION)))
+                // The probe proved `=` or `:` — this arm is
+                // unreachable; refuse defensively, never silently.
+                self.error_expected("`=`");
+                Statement::Error(self.recover(start))
             }
         }
     }
@@ -1481,12 +1512,11 @@ impl<'src> Parser<'src, '_> {
         let mut segments = vec![first];
         // A continuation dot belongs to its path only on the same
         // line: the newline flag separates `a -> b` from a `. -> c`
-        // that follows, while spaces and comments stay trivia.
-        loop {
-            let dot = self.peek();
-            if dot.kind != TokenKind::Dot || dot.newline_before {
-                break;
-            }
+        // that follows, while spaces and comments stay trivia. The
+        // walk PROBES (review round 7): the follower after a path
+        // may be CEL bytes outside the host vocabulary, and only a
+        // proven dot is tokenized.
+        while self.lexer.dot_follows() {
             self.bump();
             segments.push(self.name("a path segment")?);
         }
@@ -1583,8 +1613,10 @@ impl<'src> Parser<'src, '_> {
             // consume it, one named deferral, never a struct
             // misreading.
             self.deferred("a reserved data-format body", ident.span);
-            self.lexer.swallow_opaque_on_line(b'(');
-            self.lexer.swallow_opaque_on_line(b'{');
+            self.lexer
+                .swallow_opaque_on_line(crate::compiler::lexer::TagOpener::Paren);
+            self.lexer
+                .swallow_opaque_on_line(crate::compiler::lexer::TagOpener::Brace);
             return Value::Error(ident.span);
         }
         if TAG_WORDS.contains(&word) && opens {
@@ -1697,8 +1729,10 @@ impl<'src> Parser<'src, '_> {
         // through the OPAQUE region API: a dead form may carry bytes
         // the host lexer refuses, and the migration must stay the
         // only voice (D-2026-08-12-1, review round).
-        self.lexer.swallow_opaque_on_line(b'(');
-        self.lexer.swallow_opaque_on_line(b'{');
+        self.lexer
+            .swallow_opaque_on_line(crate::compiler::lexer::TagOpener::Paren);
+        self.lexer
+            .swallow_opaque_on_line(crate::compiler::lexer::TagOpener::Brace);
         Value::Error(token.span)
     }
 
@@ -1713,30 +1747,33 @@ impl<'src> Parser<'src, '_> {
         if self.eat(TokenKind::LParen).is_some() {
             parens = true;
             loop {
-                let next = self.peek();
-                if matches!(next.kind, TokenKind::RParen | TokenKind::Eof) {
+                // Probed, never tokenized: the argument may open
+                // with CEL bytes outside the host vocabulary
+                // (review round 7 — `bounded('x')`).
+                if self.lexer.arguments_close() {
                     break;
                 }
                 trailing_comma = false;
                 // A BARE string token followed by `,` or `)` is the
                 // grammar's STRING — kept apart from CEL so wrapped
                 // or concatenated spellings cannot impersonate it.
-                if next.kind == TokenKind::Str {
-                    let raw = String::from(next.text);
-                    let span = next.span;
-                    let start = span.range().start;
-                    self.bump();
-                    if matches!(self.peek().kind, TokenKind::Comma | TokenKind::RParen) {
-                        args.push(Value::StrLit { raw, span });
-                    } else {
-                        // Part of a larger expression: the string is
-                        // the CEL prefix, and the continuation
-                        // re-reads the immutable slice — forward
-                        // only, never a cursor jump back.
-                        args.push(Value::Cel(self.cel_from(start, &PAREN_POSITION)));
+                match self.lexer.string_argument(self.bag) {
+                    crate::compiler::lexer::StringArgument::Alone(token) => {
+                        self.last_end = token.span.range().end;
+                        args.push(Value::StrLit {
+                            raw: String::from(token.text),
+                            span: token.span,
+                        });
                     }
-                } else {
-                    args.push(self.value(&PAREN_POSITION));
+                    crate::compiler::lexer::StringArgument::Prefix(token) => {
+                        self.last_end = token.span.range().end;
+                        args.push(Value::Cel(
+                            self.cel_from(token.span.range().start, &PAREN_POSITION),
+                        ));
+                    }
+                    crate::compiler::lexer::StringArgument::NotAString => {
+                        args.push(self.value(&PAREN_POSITION));
+                    }
                 }
                 if self.eat(TokenKind::Comma).is_none() {
                     break;
@@ -1754,6 +1791,13 @@ impl<'src> Parser<'src, '_> {
                     self.lexer.verbatim_region(self.bag)
                 } else {
                     self.lexer.guest_region(self.bag)
+                };
+                let Some(raw) = raw else {
+                    // Unreachable while the branch condition peeks
+                    // the opener — the TOTAL API refuses instead of
+                    // panicking.
+                    self.error_expected("`{`");
+                    return Value::Error(tag.span);
                 };
                 self.last_end = raw.span.range().end;
                 Some(TaggedBody::Raw {
@@ -2233,7 +2277,13 @@ mod tests {
         let source = "graph g : App {\n  operator o {\n    on in { out = json /* c\n*/ 1 }\n  }\n  . -> o -> .\n}\n";
         let mut bag = Bag::new();
         let tree = parse(SourceId::new(0), source, &mut bag);
-        assert!(bag.diagnostics().is_empty(), "{bag:?}");
+        // ONE voice: the next line's bare `1` refuses (the implicit
+        // yield is removed, review round 7) — never a json voice.
+        assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+        assert!(
+            bag.diagnostics()[0].message().contains("bare expression"),
+            "{bag:?}"
+        );
         let TopDecl::Graph(graph) = &tree.decls[0] else {
             panic!("a graph");
         };
@@ -2258,10 +2308,11 @@ mod tests {
             source.find("json").unwrap()..source.find("json").unwrap() + 4,
             "span exact"
         );
-        let Statement::Yield(Value::Cel(next)) = &statements[1] else {
-            panic!("second statement: {:?}", statements[1]);
-        };
-        assert_eq!(next.text, "1");
+        assert!(
+            matches!(&statements[1], Statement::Error(_)),
+            "the bare `1` refuses: {:?}",
+            statements[1]
+        );
     }
 
     #[test]
@@ -2282,11 +2333,12 @@ mod tests {
     }
 
     #[test]
-    fn the_statement_factoring_keeps_the_boundary_token() {
-        // D-2026-08-13-1 (review round): after `IDENT path_tail`
-        // discovers a bare value, the buffered boundary token (`}`,
-        // `;`, or the next line's first token) belongs to the HOST —
-        // dropping it lost handler closers and absorbed siblings.
+    fn a_refused_bare_expression_keeps_the_boundary_token() {
+        // Review round 7: the implicit yield is REMOVED — a bare
+        // expression refuses with ONE voice carrying the migration
+        // hint, its bytes never meet the host vocabulary, and the
+        // boundary (`}`, `;`, the next line) still belongs to the
+        // HOST: closers and siblings survive.
         let expressions = ["data", "data.member", "data + 1", "size(data)"];
         type Shape = fn(&str) -> String;
         let contexts: [(&str, Shape, usize); 4] = [
@@ -2315,9 +2367,14 @@ mod tests {
                 );
                 let mut bag = Bag::new();
                 let tree = parse(SourceId::new(0), &source, &mut bag);
+                assert_eq!(
+                    bag.diagnostics().len(),
+                    1,
+                    "{expression} {label}: one voice — {bag:?}"
+                );
                 assert!(
-                    bag.diagnostics().is_empty(),
-                    "{expression} {label}: {bag:?}"
+                    bag.diagnostics()[0].message().contains("out = <value>"),
+                    "{expression} {label}: the migration hint — {bag:?}"
                 );
                 let TopDecl::Graph(graph) = &tree.decls[0] else {
                     panic!("a graph");
@@ -2334,10 +2391,17 @@ mod tests {
                     *statements_wanted,
                     "{expression} {label}: {statements:?}"
                 );
-                let Statement::Yield(Value::Cel(expr)) = &statements[0] else {
-                    panic!("{expression} {label}: a yield: {:?}", statements[0]);
-                };
-                assert_eq!(expr.text, expression, "{label}: the exact expression");
+                assert!(
+                    matches!(&statements[0], Statement::Error(_)),
+                    "{expression} {label}: the refusal form: {:?}",
+                    statements[0]
+                );
+                if *statements_wanted == 2 {
+                    let Statement::Assign { value, .. } = &statements[1] else {
+                        panic!("{expression} {label}: the sibling: {:?}", statements[1]);
+                    };
+                    assert!(matches!(value, Value::Cel(expr) if expr.text == "1"));
+                }
             }
         }
     }
@@ -2521,13 +2585,12 @@ mod tests {
     }
 
     #[test]
-    fn an_implicit_yield_never_meets_the_host_vocabulary() {
-        // Review round 6's blocker: `data == data` became a phantom
-        // assignment and `data * 2` a lexical fault. The operator
-        // superset is maximal-munch and the yield decision is by
-        // KIND — with and without spaces, every row is ONE yield
-        // statement carrying the exact expression, zero parse
-        // diagnostics.
+    fn a_bare_expression_refuses_without_meeting_the_host() {
+        // Rounds 6–7: the implicit yield is REMOVED, and a refused
+        // bare expression must STILL never meet the host vocabulary —
+        // with and without spaces, every operator row is ONE refusal
+        // voice with the migration hint; no lexical fault, no phantom
+        // assignment.
         for op in ["==", "!=", "<=", ">=", "&&", "||", "*", "/", "%", "-"] {
             for spelled in [format!("data {op} data"), format!("data{op}data")] {
                 let source = format!(
@@ -2535,7 +2598,11 @@ mod tests {
                 );
                 let mut bag = Bag::new();
                 let tree = parse(SourceId::new(0), &source, &mut bag);
-                assert!(bag.diagnostics().is_empty(), "{spelled}: {bag:?}");
+                assert_eq!(bag.diagnostics().len(), 1, "{spelled}: {bag:?}");
+                assert!(
+                    bag.diagnostics()[0].message().contains("out = <value>"),
+                    "{spelled}: the migration hint — {bag:?}"
+                );
                 let TopDecl::Graph(graph) = &tree.decls[0] else {
                     panic!("a graph");
                 };
@@ -2547,10 +2614,11 @@ mod tests {
                 };
                 let statements = handler.body.as_ref().expect("a body");
                 assert_eq!(statements.len(), 1, "{spelled}: {statements:?}");
-                let Statement::Yield(Value::Cel(expr)) = &statements[0] else {
-                    panic!("{spelled}: a yield: {:?}", statements[0]);
-                };
-                assert_eq!(expr.text, spelled, "the exact expression");
+                assert!(
+                    matches!(&statements[0], Statement::Error(_)),
+                    "{spelled}: the refusal form: {:?}",
+                    statements[0]
+                );
             }
         }
     }
@@ -2573,6 +2641,66 @@ mod tests {
             panic!("second statement: {:?}", statements[1]);
         };
         assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+    }
+
+    #[test]
+    fn every_bare_form_refuses_with_the_one_hint() {
+        // Review round 7: with the implicit yield removed, EVERY
+        // value form refuses identically as a bare statement — one
+        // voice, the migration hint, the sibling alive. The same
+        // forms behind `out =` stay whole programs (their own
+        // tests).
+        for (label, bare) in [
+            ("cel", "data + 1"),
+            ("json document", "json [1]"),
+            ("verbatim text", "text { don't panic }"),
+            ("base64", "base64 { AAEC }"),
+            ("guest", "jq { .x }"),
+            ("nothing", "nothing"),
+        ] {
+            let source = format!(
+                "graph g : App {{\n  operator o {{\n    on in {{\n      {bare}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            );
+            let (statements, bag) = handler_statements(&source);
+            assert_eq!(bag.diagnostics().len(), 1, "{label}: one voice — {bag:?}");
+            assert!(
+                bag.diagnostics()[0].message().contains("out = <value>"),
+                "{label}: the hint — {bag:?}"
+            );
+            assert_eq!(statements.len(), 2, "{label}: {statements:?}");
+            assert!(
+                matches!(&statements[0], Statement::Error(_)),
+                "{label}: the refusal form"
+            );
+            let Statement::Assign { value, .. } = &statements[1] else {
+                panic!("{label}: the sibling: {:?}", statements[1]);
+            };
+            assert!(
+                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_balanced_text_block_counts_every_brace() {
+        // The text contract, stated normatively (review round 7):
+        // the block is BALANCED TEXT — braces count wherever they
+        // sit, quotes included, because verbatim text has no string
+        // lexicon. Balanced twins compile; a quoted lone closer ends
+        // the block early (the named limitation: hostile text
+        // belongs to a CEL string).
+        let balanced = "graph g : App {\n  operator o {\n    on in { out = text { a \"{x}\" b } }\n  }\n  . -> o -> .\n}\n";
+        let mut bag = Bag::new();
+        let _ = parse(SourceId::new(0), balanced, &mut bag);
+        assert!(bag.diagnostics().is_empty(), "balanced: {bag:?}");
+        let lone_closer = "graph g : App {\n  operator o {\n    on in { out = text { a \"}\" b } }\n  }\n  . -> o -> .\n}\n";
+        let mut bag = Bag::new();
+        let _ = parse(SourceId::new(0), lone_closer, &mut bag);
+        assert!(
+            !bag.diagnostics().is_empty(),
+            "a quoted lone closer ends the block early — the documented limitation"
+        );
     }
 
     fn parse_clean(source: &str) -> SyntaxTree {
@@ -2925,7 +3053,7 @@ graph m0_probe : App {
 
     #[test]
     fn statements_cover_the_grammar_forms() {
-        let source = "graph g : App {\n  operator o {\n    on in {\n      val doubled = data.n * 2\n      (out, audit) = (envelope, envelope)\n      err = PaymentDeclined { transient = false }\n      count + doubled\n      stop\n    }\n  }\n}\n";
+        let source = "graph g : App {\n  operator o {\n    on in {\n      val doubled = data.n * 2\n      (out, audit) = (envelope, envelope)\n      err = PaymentDeclined { transient = false }\n      out = count + doubled\n      stop\n    }\n  }\n}\n";
         let tree = parse_clean(source);
         let TopDecl::Graph(graph) = &tree.decls[0] else {
             panic!("expected a graph");
@@ -2948,10 +3076,10 @@ graph m0_probe : App {
         };
         assert_eq!(kind.text, "PaymentDeclined");
         assert!(body.is_some());
-        let Statement::Yield(Value::Cel(cel)) = &statements[3] else {
-            panic!("expected the implicit yield");
+        let Statement::Assign { value, .. } = &statements[3] else {
+            panic!("expected the assignment: {:?}", statements[3]);
         };
-        assert_eq!(cel.text, "count + doubled");
+        assert!(matches!(value, Value::Cel(cel) if cel.text == "count + doubled"));
         assert!(matches!(&statements[4], Statement::Stop(None)));
     }
 
@@ -2959,7 +3087,7 @@ graph m0_probe : App {
     fn cel_openings_never_meet_the_host_lexer() {
         // `!`, a single quote, and `-(` are not Rastok tokens, but they
         // open valid CEL: they must reach the CEL chain untouched.
-        let source = "graph g : App {\n  operator o {\n    val a = !false\n    val b = 'hello'\n    val c = -(1)\n    on in {\n      !done\n    }\n  }\n}\n";
+        let source = "graph g : App {\n  operator o {\n    val a = !false\n    val b = 'hello'\n    val c = -(1)\n    on in {\n      out = !done\n    }\n  }\n}\n";
         let tree = parse_clean(source);
         let TopDecl::Graph(graph) = &tree.decls[0] else {
             panic!("expected a graph");
@@ -2985,7 +3113,7 @@ graph m0_probe : App {
         };
         assert!(matches!(
             &handler.body.as_ref().unwrap()[0],
-            Statement::Yield(Value::Cel(cel)) if cel.text == "!done"
+            Statement::Assign { value: Value::Cel(cel), .. } if cel.text == "!done"
         ));
     }
 

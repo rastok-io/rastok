@@ -24,9 +24,28 @@ prefix is never handed back — a CEL continuation is ONE complete
 slice, boundary lexemes surviving (the mirror of the terminator
 test, asked of the buffered token). The named finite-byte-lookahead
 points — the ONLY places a production choice reads a byte, all
-lexer-owned questions: `shape` (CEL regions may open with bytes the
-host vocabulary refuses), `tag_opener_on_line`, and the line
-questions (`value_missing_on_line`, `line_exhausted`).
+lexer-owned questions returning CLOSED types, never a raw byte:
+the head classifications (`statement_head`/`value_head` →
+Structural | Cel — CEL regions may open with bytes the host
+vocabulary refuses), the path and assignment probes
+(`dot_follows`, `assignment_follows` — `=` alone vs `==` is
+decided WITHOUT tokenizing), `tag_opener_on_line` (→ TagOpener),
+`string_argument` (a tag argument's StrLit-vs-CEL head, only a
+proven double-quoted string is tokenized), `arguments_close`, and
+the line questions (`value_missing_on_line`, `line_exhausted`).
+
+**The implicit yield is REMOVED** (review round 7 arbitration —
+recommended by the review, aligned with the LL(1) consigne): a
+bare expression is NOT a statement; it refuses with ONE voice
+carrying the migration hint (`out = <value>`, or `err = Kind`),
+its bytes never meeting the host vocabulary, swallowed under the
+BALANCED rule (delimiters count, comments are trivia, quotes are
+ordinary — the mirror of the verbatim contract). Every value form
+refuses identically as a bare statement, and behind `=` every
+form takes the ONE value dispatch. An explicit `yield <value>`
+sugar may return later; the host lexer keeps only ITS comparison
+lexemes (`==` `!=` `<=` `>=` — the simulation expect grammar),
+never a copy of CEL's operator vocabulary.
 
 **Specialized lexemes, selected AT their opener.** Sub-languages
 are lexical delegations returning complete lexemes or complete
@@ -55,11 +74,10 @@ sync set, never bytes.
 
 **The guest frontier is atomic.** A guest body reaches its
 sub-compiler as ONE region lexeme — exact bytes, exact span, no
-normalization (`raw_region`); the host never tokenizes guest
-content, resumes exactly past the region, and a pre-lexed lexeme
-from region bytes is re-framed under the same owner (the
-incoherent state is unrepresentable). Guest errors come back as
-typed results remapped by span. CEL (intrinsic expressions), the
+normalization; each region method CONSUMES its own opener
+(returning a TOTAL Option, no panic), so no content byte can meet
+the host vocabulary — the pre-lexed-content state does not exist.
+Guest errors come back as typed results remapped by span. CEL (intrinsic expressions), the
 `json` reader (data), and registered guests are three concepts,
 never one abstraction. The DELIMITATION of a region by `{ … }`
 under the frozen contract (brace balance, dual-quote opacity)

@@ -2618,7 +2618,6 @@ impl Checker<'_, '_> {
                     let span = targets.first().map_or(decl.span, |target| target.span);
                     self.deferred("an atomic multi-emit", span);
                 }
-                SynStatement::Yield(_) => self.deferred("an implicit yield", decl.span),
                 SynStatement::Stop(_) => self.deferred("a stop action", decl.span),
                 SynStatement::Error(_) => {}
             }

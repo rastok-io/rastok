@@ -1170,11 +1170,18 @@ RBRACK     ::= "]"
 LPAREN     ::= "("
 RPAREN     ::= ")"
 EQ         ::= "="
+EQEQ       ::= "=="                                                   // the HOST's comparison lexemes — the simulation
+BANGEQ     ::= "!="                                                   //   expect grammar, never a copy of CEL's vocabulary
+LTEQ       ::= "<="
+GTEQ       ::= ">="
 COLON      ::= ":"
 DOT        ::= "."
 COMMA      ::= ","
 SEMI       ::= ";"
 COMMENT    ::= "//" .* EOL  |  "/*" any* "*/"
+// A single-quoted string ('…') is CEL's spelling : the host lexes it as ONE
+// opaque Error lexeme with one voice — its content never re-speaks, and
+// recoveries walking lexemes stay quote-immune.
 
 // Durations and timestamps have NO dedicated tokens : they are ordinary CEL
 // values — `duration("2h")`, `duration("2h30m")`,
@@ -1187,7 +1194,8 @@ COMMENT    ::= "//" .* EOL  |  "/*" any* "*/"
 // runtime references are plain CEL paths (`session.key`, `meta.app.x`).
 // CEL expression spans are handed to the CEL SUB-LEXER : the DSL lexer only
 // finds the span's END (delimitation rules below).
-// Maximal-munch : "->" and "<->" tokenize as single atoms
+// Maximal-munch : "->", "<->", "==", "!=", "<=" and ">=" tokenize as single
+// atoms — `=` vs `==` is a KIND question, never a premature diagnostic
 // (Note : "<-" is not a Rastok token ; wiring is always graph-level.)
 // Comments and whitespace are skipped by the lexer.
 ```
@@ -1401,12 +1409,17 @@ guard_clause      ::= "where" cel_expr                               // content 
 handler_body      ::= "{" ( val_decl | statement )* "}"
 statement         ::= "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast   // atomic multi-emit — `(` decides ; tuple = explicit per-port ; broadcast = same value everywhere (`Fanout` is not a surface alias)
                     | "stop" IDENT?                                   // stop action (lifecycle) — word-decided
-                    | IDENT path_tail statement_after_path            // left-factored : ONE consumed word, the tail decides
-                    | non_ident_yield                                 // any other first token : a bare CEL yield
-statement_after_path
-                  ::= ( ":" type_ref )? "=" value                     // the consumed path is the LVALUE : var write / port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value ). The path `err` routes the value to err_value — the TYPED-ERROR emission (err = PaymentDeclined { transient = false })
-                    | cel_continuation                                // a bare value : the consumed path is the CEL PREFIX ; the boundary token (`}` / `;` / the next line's first token) stays the HOST's (D-2026-08-13-1)
-non_ident_yield   ::= value                                           // implicit yield — valid only when a single output exists
+                    | IDENT path_tail assignment_tail                 // left-factored : ONE consumed word ; the ASSIGNMENT PROBE decides
+assignment_tail   ::= ( ":" type_ref )? "=" value                     // the consumed path is the LVALUE : var write / port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value ). The path `err` routes the value to err_value — the TYPED-ERROR emission (err = PaymentDeclined { transient = false })
+                    // There is NO implicit yield (D-2026-08-13-1, review round 7) : a
+                    // bare expression — IDENT-led or not — is not a statement. It
+                    // refuses with ONE voice and the migration hint (`out = <value>`,
+                    // `err = Kind { … }`), its bytes NEVER meeting the host vocabulary
+                    // (the `=`-alone/`:` decision is a byte PROBE ; `==` refuses as a
+                    // bare expression, never a phantom assignment). The refused
+                    // garbage is swallowed under the BALANCED rule — delimiters
+                    // count, comments are trivia, quotes are ordinary bytes. A future
+                    // explicit `yield <value>` sugar may reopen the position.
 path_tail         ::= ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )*       // the dotted walk shared by lvalues and CEL prefixes ; reserved segments after a dot permit qualified names such as Loop.variant and stdlib ports such as store.read
 lvalue            ::= IDENT path_tail                                 // assignment target: port, var, or dotted writable meta/data path — meta.sys is read-only, never an lvalue
 tuple_or_broadcast ::= "(" value ( "," value )* ")"                    // explicit tuple — one value per lvalue, counts must match
@@ -1796,7 +1809,7 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | `stop` — alone or followed by IDENT | `stop` action |
 | `handler_body` (statement) | `(` | tuple multi-emit `(a, b) = (e1, e2)` |
 | `handler_body` (statement) | `lvalue` (IDENT, dotted ok — e.g. `meta.app.label`) — next is `=` or `:` | assignment / port emit (`= nothing` = no emit ; `meta.sys` is read-only, never an lvalue) |
-| `handler_body` (statement) | TAG_KW / `{` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
+| `handler_body` (statement) | anything else — a bare expression, IDENT-led or not | REFUSAL (one voice, `out = <value>` hint) — the implicit yield is REMOVED (D-2026-08-13-1 round 7) |
 | `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
 | `value` | `json` — a same-line `{` or `[` follows | `json_after_ident` : the document ; ANY other follower = invalid json form (E-JSON-VALUE) ; word alone = bare word, judged by the contract |

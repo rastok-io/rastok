@@ -477,8 +477,6 @@ pub enum Statement {
         /// One value per target, or one broadcast value.
         values: Vec<Value>,
     },
-    /// Implicit yield: a bare value where a single output exists.
-    Yield(Value),
     /// `stop IDENT?` — lifecycle action.
     Stop(Option<Name>),
     /// Parse-recovery hole.
