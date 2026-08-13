@@ -14,7 +14,7 @@
 | All three record types in one run (INBOUND / TRANSACTION / OUTBOUND) | delivery §6 |
 | Canonical order = the deterministic execution order of the sweep | execution-model §8, sim-semantics §6.1 |
 | Virtual `committed_at` (no wall-clock anywhere) | sim-semantics §6.1 (5) |
-| Maps serialize sorted by key | sim-semantics §6.1 (6) |
+| Keyed forms use their declared canonical order: record tables, struct fields, metadata triples, and value-map pairs are distinct | sim-semantics §6.1 (6), identity §3 |
 | Same-shape contract : the mocked call's OUTBOUND records | sim-semantics §2 |
 | The fingerprint : blake3 over the canonical bytes | sim-semantics §6 |
 | Cursor advances visible in transaction records | delivery §2 |
@@ -80,12 +80,12 @@ encoded as null. `committed_at` and arming time `t` are shown as annotations
 for readability and are excluded from the causal-core fingerprint.
 
 ```
-#  record      content (canonical field order ; maps sorted by key)
+#  record      content (canonical field order; each keyed sub-form uses its declared order)
 ── ─────────── ────────────────────────────────────────────────────────────────
 1  INBOUND     { connector: "ping", inbound_seq: 0, committed_at: 0,
                  envelope: { id: A0 = H("ping"‖0), parent: ∅, origin: A0,
                              role: default, graph_version: 1,
-                             meta.app: { user_id: "alice" },      ← sorted keys
+                             meta.app: { user_id: "alice" },      ← UTF-8 field order
                              data: struct {} } }
 2  TRANSACTION { node: "count", key: "alice", trigger: "p:in",
                  consumed: [ (edge ping→count, pos 1) ],          ← the cursor
@@ -135,9 +135,14 @@ second injection) : one delivery matches (C2) → **pass**.
 2. **Time is annotation** — every displayed `committed_at` above is `0`
    because both injections occur at virtual t=0. Time annotations may exist
    in storage but are excluded from the canonical causal core.
-3. **Sorted maps** — `meta.app` serializes `{ seen, user_id }` (u > s ? no :
-   's' < 'u' → `seen` first) ; unordered in memory, ordered on the wire,
-   always.
+3. **Canonical keyed forms are explicit, not generic** — `meta.app`
+   serializes `{ seen, user_id }` because spine key 9 is a list sorted
+   UTF-8 by `(zone, field)`. Record tables use fixed unsigned keys in
+   ascending table order; tag-17 structs use UTF-8 field order. A
+   payload `Value::Map` is another form: tag 18 carries pairs sorted by
+   the key's canonical tagged bytes, under which `"b"` precedes `"aa"`.
+   Memory representation is irrelevant; each wire order is fixed by its
+   own table.
 4. **Canonical form is distinct from storage** — the golden projects each
    record through identity.md's envelope spine and tagged-value rules.
    Absent fields are omitted ; durable journal bytes may use another

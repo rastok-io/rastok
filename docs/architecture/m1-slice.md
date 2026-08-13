@@ -6,6 +6,12 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
+**Current checkpoint (2026-08-13): items 1 and 2 are landed, as are
+the contract and parser/compiler interludes recorded under item 2.
+The current transport is plan-package v6; valid-program identity for
+the spike remains `c75b840d…`. The next feature slice is item 3, the
+author-written typed-error half.**
+
 ## The shape of M1
 
 M0 proved the loop; M0.5 consolidated the engine
@@ -190,6 +196,27 @@ step touches `vm.rs` once.
    `codec` stays Required (reaffirmed), `AttrDomain::Forbidden`
    died (a field of another profile is ABSENT, the diagnostic names
    the owner), v5 unchanged structurally.
+   **Post-M1.2 parser/compiler interlude, LANDED 2026-08-13**
+   (D-2026-08-13-1, before item 3): the host front end was returned to
+   a conventional forward lexeme stream. `Lexer` owns the only byte
+   cursor and token lookahead; `Parser` consumes complete lexemes and
+   closed semantic-region results, with no rewind or parser-side byte
+   walk. The grammar is left-factored at identifier-led values;
+   `json` and `nothing` are unmaskable value words, `json` accepts
+   object/array documents only, and implicit yield is gone (`out =`
+   states the emission). CEL extent is one shared
+   `Complete | Incomplete` computation with typed closer tracking:
+   complete values commit atomically, malformed values stop at a safe
+   line boundary, and the following statement survives. Host strings
+   and CEL strings are line-bounded; `trivia::comment_at` is the one
+   comment recognizer. JSON, verbatim `text`/`base64`, and guest bodies
+   retain distinct readers; a guest body reaches its future frontend
+   as one exact region, while the guest-specific framing decision
+   remains explicitly deferred. The exact `decimal("…")` constructor
+   extended the plan call alphabet and moved the transport envelope
+   from v5 to **v6** without moving semantic identity. Parser recovery
+   changes affected invalid programs only; the full valid corpus and
+   the embedded spike kept `c75b840d…`.
 3. **The error half of the language** — typed-error emissions from
    operators (`err = Kind {…}`) and mock `err` replies in the Lab.
    Referees can then provoke connector failures without adapters;
@@ -197,8 +224,17 @@ step touches `vm.rs` once.
 4. **`per` — the partition surface** — keyed nodes and graphs on the
    flat two-concept model; scheduler keys over the proven multiport
    routing.
-5. **Joins — `on (a, b) within … / last`** — correlation windows;
-   the last language lift of the milestone. Identity note, decided
+5. **Joins — `on (a, b)` bounded by `within …` / `last N`** —
+   correlation windows and the static metadata merge of
+   D-2026-08-10-2; the last language lift of the milestone. Here
+   `last N` is the existing count bound. There is deliberately no
+   journal-querying `last(…)` operator:
+   values that must survive are copied explicitly into `meta.app`.
+   Conflicting parent values are selected by an explicit write from
+   `a.meta…` / `b.meta…`; otherwise CommonOrAbsent drops them, and a
+   later required read forces the author to choose. Reads alone never
+   propagate metadata.
+   Identity note, decided
    with the handler canonicalization: the join's activation KEY must
    preserve its declared port order — `on (a, b)` and `on (b, a)`
    are different identities (identity.md makes port order inside a
@@ -250,15 +286,16 @@ step touches `vm.rs` once.
 - the gallery running green under `rastok simulate`, the demo flow
   among it;
 - the benchmark re-run cheap by construction: tasks and referees
-  extended alongside each language lift, prompt card v2 issued at
-  the end of the milestone (v1 stays frozen for the stability
-  measurement).
+  extended alongside each language lift, prompt card v3 issued at
+  the end of the milestone (v1 and the already-frozen v2 stay
+  unchanged for the stability measurement).
 
 ## Explicit non-goals
 
 No durable journal on disk (the format is designed, not built), no
 Saga manager, no `compensable`/`irreversible` execution, no
-`Process` service mode, no distribution, no cluster, no registry, no
-TLS commitment before its decision entry. The parallelism decisions
-of [`parallelism-notes.md`](parallelism-notes.md) stay a decision
-list — M1 remains one worker.
+`Process` service mode, no distribution, no cluster, no runtime or
+distributed registry (the compiler's contract `Registry` is already
+landed), no TLS commitment before its decision entry. The parallelism
+decisions of [`parallelism-notes.md`](parallelism-notes.md) stay a
+decision list — M1 remains one worker.

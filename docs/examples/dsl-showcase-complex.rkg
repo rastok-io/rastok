@@ -1,5 +1,6 @@
-// Illustrative full-surface example. Postgres, File, and the SQL guest are
-// deferred and therefore outside the first executable slice.
+// Illustrative target-surface example. HttpServer, Postgres, File, partitions,
+// joins, and the jq/SQL guests remain guarded as of 2026-08-13; Process(job)
+// is executable. The host syntax is current even where semantics are deferred.
 graph agent_gateway : App {
 
   partition user {
@@ -52,8 +53,8 @@ graph agent_gateway : App {
 
       agent = jq {
         select($intent != "deep_work")
-        | .meta.user_id = $user_id
-        | .meta.needs_history = false
+        | .meta.app.user_id = $user_id
+        | .meta.app.needs_history = false
       }
     }
   }
@@ -92,7 +93,7 @@ graph agent_gateway : App {
 
       audit = jq(req) {
         .data = {
-          user:   .meta.user_id,
+          user:   .meta.app.user_id,
           action: "gateway_evaluation",
           risk:   $risk_score,
           state:  { count: $requests_count }        // emit the NEW count

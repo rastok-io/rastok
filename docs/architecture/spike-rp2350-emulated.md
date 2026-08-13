@@ -39,7 +39,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). It embeds the blessed **v4 plan package** of
+  spike-only). It embeds the blessed **v6 plan package** of
   `examples/echo.rkg` as a `static`, opens it with
   `rastok_core::plan::decode` — which now validates
   structurally and re-encodes for canonicity — boots the `Vm` over a
@@ -66,15 +66,15 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (430-byte v5 package, full invariant validation + canonicity re-encode; re-measured 2026-08-12 — the injected defaults AND the CaptureFailed error kind ride the package) | 4 763 | 238 k | 1.59 ms |
+| `plan::decode` (430-byte v6 package, full invariant validation + canonicity re-encode; re-measured 2026-08-13 — effective defaults, the `CaptureFailed` kind, and the v6 decimal-call alphabet ride the package) | 4 761 | 238 k | 1.59 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and CEL bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32; re-measured 2026-08-12 — run-to-run jitter of a few ticks on avg/max is expected under QEMU icount) | ~1 883–1 885 (min 1 842 / max ~2 106–2 110) | **94 k** | **0.63 ms** |
+| relay transaction (avg of 32; re-measured 2026-08-13 — run-to-run jitter of a few ticks on avg/max is expected under QEMU icount) | 1 883 (min 1 842 / max 2 110) | **94 k** | **0.63 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-12 with the effective attributes and the grown error set aboard) | 63 304 B (61.8 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 204 + 32 = 236 KiB (re-measured 2026-08-11) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-13 with the effective attributes and the grown error set aboard) | 63 304 B (61.8 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 211 036 + 33 716 = 244 752 B (239.0 KiB; re-measured 2026-08-13) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
@@ -82,7 +82,7 @@ Notes the numbers carry:
 - The relay transaction meets its criterion with a **1.6× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 4 206 across the
+- Package decode grew from v1's 1 468 ticks to 4 761 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
   nesting budget, the domain-order audits) and the canonicity
@@ -90,14 +90,14 @@ Notes the numbers carry:
   integrity work done once at boot, and the price is stated rather
   than hidden. No criterion bounds boot cost; the transaction path
   is unchanged.
-- Flash grew from 193 KiB to 236 KiB (`.text` 208 588 B +
-  `.rodata` 33 200 B, re-measured 2026-08-11): the consolidated
+- Flash grew from 193 KiB to 239.0 KiB (`.text` 211 036 B +
+  `.rodata` 33 716 B, re-measured 2026-08-13): the consolidated
   reform's decoders and the jsonl codec's canonical writer link
   into the kernel even for a `lines` plan — the core is one crate,
   and dead-code elimination keeps what the plan decoder can reach.
   The 1 MiB criterion holds with a 4.3× margin; trimming by feature
   gate is noted, not needed.
-- The true high-water mark (61.7 KiB) sits above the old sampled
+- The true high-water mark (61.8 KiB) sits above the old sampled
   figure (57.2 KiB), as a real peak must; the first M1 lift added
   the ingress port to every inbound record (+688 B over 32 rounds),
   and the consolidated reform's five-field spine and ext zone
@@ -140,10 +140,10 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation.** All four criteria of record hold: no patched
-dependencies, 92 k instructions per relay transaction against the
-150 k bound (1.6×), a 61.6 KiB true high-water mark against 128 KiB,
-236 KiB of flash against 1 MiB (re-measured 2026-08-11). The
+instrumentation and re-measured 2026-08-13 on package v6.** All four
+criteria of record hold: no patched dependencies, 94 k instructions
+per relay transaction against the 150 k bound (1.6×), a 61.8 KiB true
+high-water mark against 128 KiB, 239.0 KiB of flash against 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as
 planned — no embedded chantier opens. Silicon confirmation (volet B)

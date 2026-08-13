@@ -152,7 +152,7 @@ graph drain : Loop {
     kind = measure
     source = data.remaining
     until = value <= 0
-    limit = 10_000
+    limit = 10000
   }
 
   . -> pop_head -> .

@@ -942,7 +942,7 @@ text {
 base64 { 3q2+7wEC/w== }
 asset("fixtures/sample.pdf")
 
-// Dynamic / semi-structured → variant : any JSON value, directly
+// Dynamic / semi-structured → variant : a JSON object or array document
 json { "anything": [1, 2, 3] }
 ```
 
@@ -1304,12 +1304,14 @@ claimed `DECL_KW` unmaskable):
   words and the `nothing` sentinel keep their literal meaning and
   cannot serve as contract choices.
 
-Three sub-categories exist within `TAG_KW`: the special value tags
-(`text`, `base64`, `asset` — each with its own reader; `json` left
-this set when it became a RESERVED word with its own total
-continuation, D-2026-08-13-1), the foreign/guest tags (`jq`, `bash`,
-`sql`, `python`, `rust`, and the data formats), and the
-expression-space constructors (`bounded`, `unbounded`, `regex`). Concrete NodeType names such as `HttpServer`,
+Four sub-categories exist within the tag vocabulary: verbatim values
+(`text`, `base64`), registered guests (`jq`, `bash`, `sql`, `python`,
+`rust`), call-shaped values (`asset`, `bounded`, `unbounded`, `regex`),
+and reserved data-format words (`avro`, `protobuf`, `parquet`,
+`msgpack`, `csv`) whose attempted bodies defer opaquely. Each live
+category has its own reader; `json` left the tag set when it became a
+RESERVED word with its own total continuation (D-2026-08-13-1).
+Concrete NodeType names such as `HttpServer`,
 `Process` and `Postgres` are ordinary PascalCase identifiers resolved
 later by the stdlib registry, not lexer keywords.
 
@@ -1494,6 +1496,15 @@ attr_entry        ::= lvalue "=" value                               // dotted k
 // CEL is the core's expression grammar. There are no `ref`, `interp`, or
 // leading-dot path forms.
 
+VERBATIM_TAG      ::= "text" | "base64"                              // balanced-brace verbatim framing
+GUEST_TAG         ::= "jq" | "bash" | "sql" | "python" | "rust"   // guest-region framing
+RAW_TAG           ::= VERBATIM_TAG | GUEST_TAG                        // classification only; there is no universal body framer
+RESERVED_FORMAT   ::= "avro" | "protobuf" | "parquet" | "msgpack" | "csv"
+DEAD_TAG          ::= "oauth2_client_credentials" | "measure" | "exponential"
+                    | "linear" | "constant" | "fibonacci" | "on_crash"
+TAG_KW            ::= RAW_TAG | RESERVED_FORMAT | "asset" | "bounded"
+                    | "unbounded" | "regex"
+
 value             ::= braced_value                                    // { … } — the braced record ; classified in envelope positions
                     | "."                                             // identity — exact re-emission (envelope positions only)
                     | "nothing"                                       // emission positions : emit nothing (reserved word, unmaskable)
@@ -1504,9 +1515,10 @@ value             ::= braced_value                                    // { … }
 value_after_ident ::= ε                                               // nothing significant on the line and the line ends the
                                                                       //   value : the word ALONE is the CEL expression (span exact)
                     | ⟨IDENT ∈ TAG_KW⟩  "(" tag_args ")" tag_body?    // a tag WITH its `(` on the SAME LINE → a tagged call
-                    | ⟨IDENT ∈ RAW_TAG⟩ "{" RAW_TEXT "}"              // jq/bash/sql/python/rust/text/base64 body → raw block
+                    | ⟨IDENT ∈ VERBATIM_TAG⟩ verbatim_body             // text/base64 contract
+                    | ⟨IDENT ∈ GUEST_TAG⟩ guest_body                   // frozen guest contract
                     | ⟨IDENT ∈ DEAD_TAG | RESERVED_FORMAT⟩ …          // dead initializers refuse with the migration ; reserved
-                                                                      //   data formats defer — either way the body is swallowed RAW
+                                                                      //   data formats defer — either way the attempted form is opaque
                     | cel_continuation                                // anything else : CEL beginning with the word — a non-tag
                                                                       //   word before `(`/`{` is CEL too (`size(data)`, `x {`)
 
@@ -1528,8 +1540,15 @@ cel_continuation  ::= cel_expr                                        // the reg
 tag_args          ::= ( value ( "," value )* ","? )?                  // PAREN position ; a BARE STRING token followed by `,`/`)` is
                                                                       //   the grammar's STRING — `("x")` and `"a" + "b"` cannot
                                                                       //   impersonate it (D-2026-08-10-6)
-tag_body          ::= "{" RAW_TEXT "}"                                // RAW_TAGS only — a struct body on a tag is a DEAD form
-                                                                      //   the parser refuses with its migration (D-2026-08-12-1)
+tag_body          ::= verbatim_body                                   // only when the tag ∈ VERBATIM_TAG
+                    | guest_body                                      // only when the tag ∈ GUEST_TAG
+                                                                      // a struct body on another tag is a DEAD form; the parser
+                                                                      // refuses with its migration (D-2026-08-12-1)
+verbatim_body     ::= "{" VERBATIM_TEXT "}"                           // braces balance; every other byte is data, no quote/escape syntax
+guest_body        ::= "{" GUEST_TEXT "}"                              // exact bytes; braces balance with dual-quote opacity under the
+                                                                      // frozen host/guest contract pending guest-registered framers
+VERBATIM_TEXT     ::= /* exact UTF-8 bytes framed by verbatim_region */
+GUEST_TEXT        ::= /* exact bytes framed by guest_region */
 
                     // THE LEXER/PARSER FRONTIER (D-2026-08-13-1, review round 5) : the
                     // lexer owns the byte cursor AND the token lookahead ; the parser

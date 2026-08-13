@@ -108,14 +108,19 @@ Comparisons — including the golden seal — run over the canonical
 projection of the causal core, never over storage bytes.
 
 **Encoding : deterministic CBOR — RFC 8949 §4.2, cited in full** :
-shortest-form integers, map keys sorted bytewise, definite lengths only.
+shortest-form integers, definite lengths only, and the fixed unsigned
+keys of record maps emitted in ascending table order (which is their
+canonical encoded-key order). Pair-list sub-forms name their own
+order: tag-17 struct fields and state-delta paths use UTF-8 name order;
+tag-18 Rastok maps use each key's canonical `tagged_value` bytes;
+metadata key 9 uses UTF-8 `(zone, field)` order.
 **Floats are the exception to shortest-form : a value's
 width is FIXED by its `type_tag` — `float` is always IEEE-754 binary32,
 `double` always binary64 — so `1.5` is never silently narrowed to
 binary16 by one implementation and not another.** `NaN` is the one
 canonical quiet NaN (all-payload-zero : `0x7fc00000` / `0x7ff8…0`) ;
-`-0.0` is preserved distinct from `+0.0`. Map keys are **unsigned
-integers** from the tables below ; since keys are fixed, emission in table order satisfies the
+`-0.0` is preserved distinct from `+0.0`. Record-map keys are **unsigned
+integers** from the tables below; since keys are fixed, emission in table order satisfies the
 sorting rule at zero runtime cost. An absent field is an **omitted key**,
 never a null. The fast seal of a trace is `blake3` over the concatenated
 canonical records ; record-by-record comparison exists to *explain* a

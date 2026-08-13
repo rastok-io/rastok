@@ -142,7 +142,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v5)
+## Body tables (v5 layout retained by current format v6)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -165,7 +165,7 @@ plan       := {1: [node*], 2: [boundary*], 3: [edge*], 4: [handler*],
                                                   //   (D-2026-08-10-1) ; absent = empty ; the ext
                                                   //   standard leaf `content_type: text` is IMPLICIT,
                                                   //   never serialized (D-2026-08-10-4)
-                                                  // 7 : the asset table — RAW blob bytes in
+                                                  // 7 : the asset table — raw asset bytes in
                                                   //   digest order ; digests are DERIVED at decode
                                                   //   (and thereby verified) ; absent = none
 

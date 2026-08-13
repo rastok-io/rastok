@@ -7,23 +7,32 @@ language or runtime behavior.
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
 - [`m0-slice.md`](m0-slice.md) for the first end-to-end proof;
+- [`m0.5-slice.md`](m0.5-slice.md) for the kernel/package consolidation;
+- [`m1-slice.md`](m1-slice.md) for the current public-opening milestone
+  and its landed/pending inventory;
 - [`build-order.md`](build-order.md) for the dependency-driven stage
   sequence used to build the M0 modules;
 - [`components.md`](components.md) for the component blueprint: owned
-  data forms, interfaces, dependency direction, and M0 status;
+  data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
+- [`plan-package.md`](plan-package.md) for the current `.rkp` transport
+  format and validation boundary;
+- [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
+  concurrency model and the decisions left for physical parallelism;
+- [`spike-rp2350-emulated.md`](spike-rp2350-emulated.md) for the measured
+  `no_std` kernel proof;
 - `01-system-context` for the system and its users;
 - `02-rastok-container` for executable and deployment boundaries;
 - `03-rastok-components` for logical responsibilities inside the M0
   executable;
 - `04-app-lab-effect-cycle` for the main runtime interaction;
-- `05-rastok-packages` for the Rust module and type blueprint —
-  modules, key structs/enums/traits, and build artifacts (indicative,
-  not a public API);
-- `06-rastok-modules-overview` for the bird's-eye companion — every
-  module and type with a one-line description, module-level
-  dependencies only.
+- `05-rastok-packages` for the **archived pre-build M0** Rust module and
+  type sketch. It deliberately preserves superseded names and must not
+  be read as the current API;
+- `06-rastok-modules-overview` for the maintained bird's-eye module
+  companion, including the landed M1 compiler interludes and
+  module-level dependencies.
 
 ## Diagram conventions
 

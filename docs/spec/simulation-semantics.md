@@ -290,11 +290,15 @@ Byte-identical **iff** :
    annotations, journaled but outside the blake3 ; in simulation they are
    virtual (deterministic — the display may show them), in production they
    are wall-clock ; the fingerprint is identical either way ;
-6. **canonical serialization AND evaluation** — field order = spec schemas ;
-   **maps serialize sorted by key** ; and the homegrown CEL evaluator
-   guarantees **sorted-key iteration inside macros** (`map`/`filter`/`exists`
-   over a map) — iteration order is a promise *because we own the
-   evaluator*, so a macro-produced list is byte-stable too.
+6. **canonical serialization AND evaluation** — field order = spec schemas;
+   fixed unsigned CBOR table keys use table order; struct fields and
+   state-delta paths use UTF-8 name order; `app_meta` triples use
+   UTF-8 `(zone, field)` order; and Rastok `Value::Map` pairs use the
+   key's canonical tagged bytes (so `"b"` precedes `"aa"`);
+   the homegrown CEL evaluator guarantees **sorted-key iteration inside
+   macros** (`map`/`filter`/`exists` over a map) — iteration order is a
+   promise *because we own the evaluator*, so a macro-produced list is
+   byte-stable too.
 
 Not in the trace : observability spans, real durations, **SNAPSHOT records**
 (derived, non-causal — delivery-semantics §3) — the parallel plane and the
@@ -337,7 +341,7 @@ space of an app is **statically enumerable** :
 So the compiler can print the checklist, and the simulator can score it :
 
 ```
-   rastok sim --coverage
+   rastok simulate --coverage
    23 enumerated cases · 14 covered by a scenario · 9 silent :
      hold       : OutcomeUnknown        — no scenario   (compensable, no key)
      settle     : JoinExpired           — no scenario
@@ -374,7 +378,7 @@ directly, the compiler checks it against the model, the simulator verifies at
 the byte. Gherkin remains a *front-end convention* — documented, optional,
 with `Background` ↔ a simulation-level fixture prelude, `Scenario Outline +
 Examples` ↔ parameterized scenarios, `Tags` ↔
-`rastok sim --tag` — all three are deferred sugar candidates. The
+`rastok simulate --tag` — all three are deferred sugar candidates. The
 `.rkg` scenario is the only executable truth.
 
 

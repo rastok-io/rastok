@@ -29,7 +29,7 @@ optional — a Connector whose contract leaves a case blank is not spec'd:
 | 5 | **`behavior`** | deterministic / probabilistic — §2; pre-declared or per-instance |
 | 6 | **Attributes** | the config surface (boot phase: `env()`/`secret()` legal); `timeout`/`on_timeout`/`restart` inherited where calls/instances exist |
 | 7 | **Correlator** | what "a call" is in its protocol (execution-model §6.1: the Connector matches) |
-| 8 | **Error set** | its typed errors — the finite list `rastok sim --coverage` enumerates |
+| 8 | **Error set** | its typed errors — the finite list the future `rastok simulate --coverage` enumerates |
 | 9 | **Instances** | singleton / `per`-keyed (each with `run_id`) / per-call; the terminal envelope |
 | 10 | **Journal & sim** | which records it writes (INBOUND w/ `inbound_seq`; OUTBOUND open-closed); how it is mocked/injected |
 
@@ -172,7 +172,7 @@ one there refuses by NAME (« `restart` belongs to
 **`mode = job` (default — the Unix one-shot; systemd `Type=oneshot`, k8s Job
 lineage)**: one envelope = one spawn. stdin = the request (codec-framed);
 stdout, complete at exit, = **one reply envelope**: `codec =
-lines` → `data = text` (the whole stdout, one blob); `codec = jsonl` →
+lines` → `data = text` (the whole stdout as one text value); `codec = jsonl` →
 `data = array<variant>` (the decoded lines — possibly length 1). The CAPTURE is
 bounded: **`max_output = 8MiB` (default)** is the AGGREGATE budget
 across stdout and stderr (D-2026-08-12-1, review round) — the total

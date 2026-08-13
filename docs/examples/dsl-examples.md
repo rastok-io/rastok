@@ -1,8 +1,8 @@
 # Rastok DSL — Examples
 
 Polished `.rkg` snippets that exercise the syntax conventions
-(`docs/spec/grammar.md` § *Syntax conventions*) and the formal
-grammar (`docs/spec/grammar.md` § *Formal grammar*).
+([`docs/spec/grammar.md`](../spec/grammar.md) § *Syntax conventions*)
+and its formal grammar.
 
 The model behind the syntax is laid out in [WHITEPAPER.md](../../WHITEPAPER.md) :
 the two Node families (Operator vs Connector), the flat declarative
@@ -11,13 +11,19 @@ shape (`input`, `output`, `var`, `on`, with the default `in` / `out` /
 `map` / `array`), the three dynamic dispatch primitives, and the
 partition model (flat, keyed, with lifetime). Examples below exercise
 these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
-`File`, …) name native Connector types registered with the runtime ;
+`File`, …) name Connector types in the target catalogue;
 the primitive `operator` / `connector` keywords stand on their own
 when no alias fits.
 
-The parser does not exist yet ; these examples are the syntactic contract it
-will honor. They are deliberately short,
-single-purpose, and incremental.
+The parser now implements the current host syntax as a forward lexeme
+stream, but this page deliberately ranges beyond the executable subset.
+As of 2026-08-13, `Process(mode = job)` with `lines`/`jsonl`, multiport,
+the three metadata zones, current literals, and structural type aliases
+execute; HTTP/File adapters, `per`, joins, Loop, Process service mode,
+and guest engines still refuse by their named checker diagnostics. Thus
+these are parser- and design-reference snippets, not a claim that every
+section runs today. The small executable fixtures under
+[`examples/`](../../examples/) are the run/simulate proofs.
 
 ## 1. Minimal — HTTP echo + log
 
@@ -309,8 +315,8 @@ lab teams_inbound {    // binds to `graph teams_inbound : App` (declared in team
       }
 
       expect "turn start"     sessions.codex.in where data.method == "turn/start" && data.params.prompt == "Bonjour"
-      expect "Teams activity" teams_out.in where
-        data.type == "message" && data.text.contains("Bonjour")
+      expect "Teams activity" teams_out.in where (
+        data.type == "message" && data.text.contains("Bonjour"))
     }
   }
 }
@@ -371,7 +377,7 @@ graph city_weather {
   // Pure Operator : extract the user-facing fields.
   operator format {
     on in {
-      jq {
+      out = jq {
         .data = {
           city:        .meta.app.request_city,
           temperature: .data.temp_c,
@@ -409,12 +415,12 @@ lab weather_demo {
       ask.out = { city = "Paris", country = "FR" }            // injection = emission (+ sugar)
 
       // The intermediate contract (observation is legal on any port) :
-      expect "request well-formed" city_weather.build_request.out where
-        data.url == "https://api.weather.example/v1/current" && data.method == "GET" && data.query.city == "Paris"
+      expect "request well-formed" city_weather.build_request.out where (
+        data.url == "https://api.weather.example/v1/current" && data.method == "GET" && data.query.city == "Paris")
 
       // The public outcome :
-      expect "simplified response" replies.in where
-        data.city == "Paris" && data.temperature == 17.5 && data.condition == "partly_cloudy"
+      expect "simplified response" replies.in where (
+        data.city == "Paris" && data.temperature == 17.5 && data.condition == "partly_cloudy")
     }
   }
 }

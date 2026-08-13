@@ -1,7 +1,9 @@
 // =============================================================================
 // teams-codex-gateway.rkg
 //
-// Teams <-> Codex bridge — larger end-to-end example, current syntax.
+// Teams <-> Codex bridge — larger target-surface example, current host syntax.
+// It is intentionally ahead of the executable subset: Http/File/Memory,
+// partitions, Loop, Process(service), and jq remain guarded as of 2026-08-13.
 //
 // Demonstrates :
 //   - graph composability : `sessions` = a per-key sub-graph, declared in place
@@ -9,7 +11,8 @@
 //     define them) ; nodes lean on the default in/out/err ; extra ports are
 //     declared by NAME only (types inferred ; annotate `: T` only to pin)
 //   - Composite configuration attributes (env = { … }, jwt = { … }, auth = { … })
-//   - handler guards, the `data` payload, meta.sys / meta.app, partitions,
+//   - handler guards, the `data` payload, meta.sys / meta.app / meta.ext,
+//     partitions,
 //     deterministic simulations
 //
 // Syntax reference : docs/spec/grammar.md, docs/examples/dsl-examples.md, WHITEPAPER.md
@@ -100,7 +103,7 @@ graph teams_inbound : App {
 
   // The fixed allow-list is graph config. A Memory snapshot is readable, but
   // using an asynchronous store for immutable boot configuration adds no value.
-  val user_map : map<text, text> = map { "abc-123" = "user@example.test" }
+  val user_map : map<text, text> = { "abc-123": "user@example.test" }
 
   operator auth {
     // outputs : `out` (authorized) and `rejected`
@@ -122,8 +125,8 @@ graph teams_inbound : App {
     on in {
       out = jq {
         if .data.type == "invoke" then
-          .meta.kind = "jsonrpc.peer_response"
-          | .meta.rpc_id = (.data.value.approval_id | tostring)
+          .meta.app.kind = "jsonrpc.peer_response"
+          | .meta.app.rpc_id = (.data.value.approval_id | tostring)
           | .data = {
               decision: .data.value.verb,
               approval_id: .data.value.approval_id
@@ -143,11 +146,11 @@ graph teams_inbound : App {
   operator route_codex_out {
 
     on in {
-      peer_request = jq { select(.meta.kind == "jsonrpc.peer_request") }
-      delta = jq { select(.meta.method == "item/agentMessage/delta") }
-      flush = jq { select(.meta.method == "turn/completed") }
+      peer_request = jq { select(.meta.app.kind == "jsonrpc.peer_request") }
+      delta = jq { select(.meta.app.method == "item/agentMessage/delta") }
+      flush = jq { select(.meta.app.method == "turn/completed") }
       message = jq {
-        select(.meta.kind == "jsonrpc.notification" and .meta.method == "item/agentMessage")
+        select(.meta.app.kind == "jsonrpc.notification" and .meta.app.method == "item/agentMessage")
       }
     }
   }
@@ -168,8 +171,8 @@ graph teams_inbound : App {
 
     on flush {
       out = jq {
-        .meta.kind = "jsonrpc.notification"
-        | .meta.method = "item/agentMessage"
+        .meta.app.kind = "jsonrpc.notification"
+        | .meta.app.method = "item/agentMessage"
         | .data = {
             method: "item/agentMessage",
             params: { message: $buffer }
@@ -183,7 +186,7 @@ graph teams_inbound : App {
     on in {
       out = jq {
         .meta.app.delivery_id = .meta.sys.id
-        | if .meta.kind == "jsonrpc.peer_request" then
+        | if .meta.app.kind == "jsonrpc.peer_request" then
           .data = {
             type: "message",
             attachments: [
@@ -205,20 +208,20 @@ graph teams_inbound : App {
                       type: "Action.Execute",
                       verb: "approve",
                       title: "Approve",
-                      data: { approval_id: (.meta.rpc_id // .data.id) }
+                      data: { approval_id: (.meta.app.rpc_id // .data.id) }
                     },
                     {
                       type: "Action.Execute",
                       verb: "reject",
                       title: "Reject",
-                      data: { approval_id: (.meta.rpc_id // .data.id) }
+                      data: { approval_id: (.meta.app.rpc_id // .data.id) }
                     }
                   ]
                 }
               }
             ]
           }
-        elif .meta.kind == "jsonrpc.notification" and .meta.method == "item/agentMessage" then
+        elif .meta.app.kind == "jsonrpc.notification" and .meta.app.method == "item/agentMessage" then
           .data = {
             type: "message",
             text: .data.params.message
@@ -270,7 +273,7 @@ graph teams_inbound : App {
   }
 
   connector dlq : Memory {
-    cap      = 10_000
+    cap      = 10000
     overflow = reject              // a strict DLQ : overflow is loud (CapacityExceeded)
   }
   // Memory is readable through its `read`/`out` snapshot contract. A replay
@@ -336,8 +339,8 @@ lab teams_inbound {
       }
 
       expect "turn/start"     sessions.codex.in where (data.method == "turn/start" && data.params.prompt == "Bonjour")
-      expect "Teams activity" teams_out.in where
-        (data.type == "message" && data.text.contains("Bonjour"))
+      expect "Teams activity" teams_out.in where (
+        data.type == "message" && data.text.contains("Bonjour"))
     }
 
     scenario approval_cycle "user approves a Codex tool request" {

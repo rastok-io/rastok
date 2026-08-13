@@ -561,7 +561,7 @@ refuse at build; raw content, no normalization; the semantic hash
 seals the CONTENT DIGEST, never the path (spelling); the bytes live
 in a content-addressed package section outside the decoded body.
 **Amended 2026-08-10, at implementation:** the v1 physical form is
-body key 7 — raw blob bytes in strict DIGEST order (the checker
+body key 7 — raw asset bytes in strict DIGEST order (the checker
 sorts and remaps indices at seal, so reordering source declarations
 moves nothing), digests DERIVED at decode (and thereby verified),
 with order, uniqueness, digest truth, and both budgets re-checked by

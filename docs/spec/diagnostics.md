@@ -16,9 +16,9 @@ causal core. They live in their home specs, not here.
    A published code is **never renamed and never reused**.
 2. **Stability contract** : stable forever = the code + its structured
    payload fields (what tests and tools key on). Never stable = the
-   message text (pedagogy improves freely). Machine output
-   (`rastok build --json`) is `{code, severity, spans, fields}` ;
-   text is rendering.
+   message text (pedagogy improves freely). The current CLI renders
+   text only; when a machine-output mode lands, its stable shape is
+   `{code, severity, spans, fields}` rather than the rendering text.
 3. **Registration** : any change that introduces a code MUST add its row
    here in the same commit. This file is the collision authority.
 4. **Lazy assignment** : many specification rules still describe
