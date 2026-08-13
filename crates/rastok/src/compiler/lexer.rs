@@ -5,11 +5,12 @@
 //! [`Lexer::next`] (keywords are not distinguished: every word is an
 //! [`TokenKind::Ident`], the parser deciding by position), consumes
 //! sub-language regions as COMPLETE specialized lexemes
-//! ([`Lexer::cel_region`], [`Lexer::json_tail`], [`Lexer::raw_region`],
+//! ([`Lexer::cel_region`], [`Lexer::json_tail`], [`Lexer::verbatim_region`],
+//! [`Lexer::guest_region`],
 //! [`Lexer::swallow_opaque_on_line`]), and asks the named
-//! finite-byte-lookahead questions ([`Lexer::shape`],
-//! [`Lexer::tag_opener_on_line`], the line questions). It never
-//! touches bytes.
+//! finite-byte-lookahead questions ([`Lexer::statement_head`],
+//! [`Lexer::value_head`], [`Lexer::tag_opener_on_line`], the line
+//! questions). It never touches bytes.
 //!
 //! Tokens borrow their text from the source; the lexer copies nothing.
 
@@ -75,9 +76,30 @@ pub enum TokenKind {
     Arrow,
     /// `<->`
     BiArrow,
+    /// `==`
+    EqEq,
+    /// `!=`
+    BangEq,
+    /// `<=`
+    LtEq,
+    /// `>=`
+    GtEq,
+    /// `&&`
+    AmpAmp,
+    /// `||`
+    PipePipe,
+    /// `*`
+    Star,
+    /// `/`
+    Slash,
+    /// `%`
+    Percent,
+    /// `-` (when neither an arrow nor a negative-number sign)
+    Minus,
     /// Opaque CEL expression span, produced only by [`Lexer::cel_region`].
     CelExpr,
-    /// Opaque raw guest text, produced only by [`Lexer::raw_region`].
+    /// Opaque raw region text, produced only by the region framers
+    /// ([`Lexer::verbatim_region`], [`Lexer::guest_region`]).
     RawText,
     /// Lexically invalid input; a diagnostic was pushed.
     Error,
@@ -114,6 +136,18 @@ pub struct TerminatorSet {
     /// Whole-word terminators (`having`, `by`, `within`, …), matched at
     /// word boundaries only.
     pub keywords: &'static [&'static str],
+}
+
+/// How the next significant input opens a position: with a
+/// STRUCTURAL form the host may tokenize, or as a CEL region that
+/// must never meet the host vocabulary (D-2026-08-13-1, review
+/// round 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionHead {
+    /// The host tokenizes: a builder form or a statement opener.
+    Structural,
+    /// A CEL region: delegate before any tokenization.
+    Cel,
 }
 
 /// The `json` continuation, classified totally by ONE probe
@@ -226,16 +260,85 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                     self.number(start)
                 }
-                _ => self.unknown_character(bag, start),
+                _ => {
+                    self.pos += 1;
+                    self.token(TokenKind::Minus, start)
+                }
             },
             b'<' => {
                 if self.source.as_bytes()[self.pos..].starts_with(b"<->") {
                     self.pos += 3;
                     self.token(TokenKind::BiArrow, start)
+                } else if self.peek_byte_at(1) == Some(b'=') {
+                    self.pos += 2;
+                    self.token(TokenKind::LtEq, start)
                 } else {
                     self.pos += 1;
                     self.token(TokenKind::Lt, start)
                 }
+            }
+            // The CEL operator SUPERSET, maximal munch — a peek
+            // after a consumed path must never fault on a legal
+            // continuation, and `=` vs `==` is a KIND question
+            // (D-2026-08-13-1, review round 6).
+            b'=' if self.peek_byte_at(1) == Some(b'=') => {
+                self.pos += 2;
+                self.token(TokenKind::EqEq, start)
+            }
+            b'!' if self.peek_byte_at(1) == Some(b'=') => {
+                self.pos += 2;
+                self.token(TokenKind::BangEq, start)
+            }
+            b'>' if self.peek_byte_at(1) == Some(b'=') => {
+                self.pos += 2;
+                self.token(TokenKind::GtEq, start)
+            }
+            b'&' if self.peek_byte_at(1) == Some(b'&') => {
+                self.pos += 2;
+                self.token(TokenKind::AmpAmp, start)
+            }
+            b'|' if self.peek_byte_at(1) == Some(b'|') => {
+                self.pos += 2;
+                self.token(TokenKind::PipePipe, start)
+            }
+            b'*' => {
+                self.pos += 1;
+                self.token(TokenKind::Star, start)
+            }
+            b'/' => {
+                self.pos += 1;
+                self.token(TokenKind::Slash, start)
+            }
+            b'%' => {
+                self.pos += 1;
+                self.token(TokenKind::Percent, start)
+            }
+            // A single-quoted string is CEL's spelling, never the
+            // host's — lexed as ONE opaque Error token (its content
+            // never re-speaks, and recoveries stay quote-immune).
+            b'\'' => {
+                self.pos += 1;
+                loop {
+                    match self.peek_byte() {
+                        None => break,
+                        Some(b'\\') => self.pos = (self.pos + 2).min(self.source.len()),
+                        Some(b'\'') => {
+                            self.pos += 1;
+                            break;
+                        }
+                        Some(_) => self.pos += 1,
+                    }
+                }
+                bag.push(
+                    Diagnostic::new(
+                        E_LEX_CHAR,
+                        Phase::Parse,
+                        "a single-quoted string is CEL's spelling; host strings are \
+                         double-quoted",
+                    )
+                    .with_span(Span::new(self.source_id, start..self.pos)),
+                );
+                self.token(TokenKind::Error, start)
             }
             b'.' => {
                 if self.peek_byte_at(1) == Some(b'.') {
@@ -285,19 +388,41 @@ impl<'a> Lexer<'a> {
     /// diagnostics and prefix slices; cursor re-syncs happen only
     /// inside the lexer's own delegation methods.
     #[must_use]
-    /// The dispatch shape: the first byte of the next significant
-    /// input — from the buffered lexeme when one exists, from a
-    /// read-only byte probe otherwise. With
-    /// [`Self::tag_opener_on_line`] and the line questions, this is
-    /// THE named finite-byte-lookahead point of the grammar
-    /// (D-2026-08-13-1, review round 5): CEL regions may open with
-    /// bytes the host vocabulary refuses, so production choice needs
-    /// one byte, never a tokenization.
-    pub fn shape(&mut self) -> Option<u8> {
+    /// The dispatch shape — INTERNAL: the first byte of the next
+    /// significant input, from the buffered lexeme when one exists.
+    /// The parser receives the CLASSIFICATIONS below, never a byte
+    /// (D-2026-08-13-1, review round 6).
+    fn shape(&mut self) -> Option<u8> {
         match &self.lookahead {
             Some(token) if token.kind == TokenKind::Eof => None,
             Some(token) => token.text.bytes().next(),
             None => self.first_significant_byte(),
+        }
+    }
+
+    /// How a STATEMENT opens: with a structural token the host may
+    /// tokenize (`}`/`;`/`(`/a word/EOF), or as a bare CEL yield
+    /// whose region must never meet the host vocabulary. With
+    /// [`Self::tag_opener_on_line`] and the line questions, this is
+    /// one of THE named finite-byte-lookahead points of the grammar:
+    /// CEL regions may open with bytes the host refuses, so the
+    /// choice reads one byte — inside the lexer.
+    pub fn statement_head(&mut self) -> RegionHead {
+        match self.shape() {
+            None | Some(b'}' | b';' | b'(' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => {
+                RegionHead::Structural
+            }
+            _ => RegionHead::Cel,
+        }
+    }
+
+    /// How a VALUE opens: with a builder form (`{`, `.`, a word), or
+    /// as a CEL expression — same contract as
+    /// [`Self::statement_head`].
+    pub fn value_head(&mut self) -> RegionHead {
+        match self.shape() {
+            Some(b'{' | b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => RegionHead::Structural,
+            _ => RegionHead::Cel,
         }
     }
 
@@ -345,38 +470,42 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Swallows one opaque balanced region opening with `open` on
-    /// the current line — the dead-initializer and reserved-format
-    /// recovery, ABSOLUTELY SILENT (their bodies may carry bytes the
-    /// host refuses; the one migration diagnostic already spoke).
-    /// Composes with the buffer: a buffered opener is consumed into
-    /// the region. Returns whether a region was swallowed.
+    /// Swallows one balanced region opening with `open` on the
+    /// current line — the dead-initializer and reserved-format
+    /// recovery, walked on HOST LEXEMES into a scratch bag: a
+    /// closer inside a comment is trivia and never closes, a
+    /// single-quoted string is ONE opaque lexeme, and every
+    /// diagnostic the garbage would raise stays silent (the one
+    /// migration voice already spoke — D-2026-08-13-1, review
+    /// round 6). Returns whether a region was swallowed.
     pub fn swallow_opaque_on_line(&mut self, open: u8) -> bool {
-        let close = match open {
-            b'(' => b')',
-            b'{' => b'}',
+        let (open_kind, close_kind) = match open {
+            b'(' => (TokenKind::LParen, TokenKind::RParen),
+            b'{' => (TokenKind::LBrace, TokenKind::RBrace),
             _ => return false,
         };
-        if let Some(token) = &self.lookahead {
-            let matches_open = !token.newline_before
-                && ((open == b'(' && token.kind == TokenKind::LParen)
-                    || (open == b'{' && token.kind == TokenKind::LBrace));
-            if !matches_open {
-                return false;
-            }
-            // The cursor already sits past the buffered opener.
-            self.lookahead = None;
-            self.skip_balanced_raw_at(open, close, 1);
-            return true;
+        let mut scratch = Bag::new();
+        let opener = self.peek(&mut scratch);
+        if opener.newline_before || opener.kind != open_kind {
+            return false;
         }
-        match self.significant_on_line() {
-            Some((offset, byte)) if byte == open => {
-                self.pos = offset;
-                self.skip_balanced_raw_at(open, close, 0);
-                true
+        let _ = self.next(&mut scratch);
+        let mut depth: u32 = 1;
+        loop {
+            let token = self.next(&mut scratch);
+            match token.kind {
+                TokenKind::Eof => break,
+                kind if kind == open_kind => depth += 1,
+                kind if kind == close_kind => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
             }
-            _ => false,
         }
+        true
     }
 
     /// The mirror of the terminator test, asked of a buffered
@@ -567,35 +696,43 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The GUEST/RAW region framer — one ATOMIC lexeme handoff
-    /// (D-2026-08-13-1, review round 5 supplement): after the
-    /// consumed `{`, the ENTIRE region belongs to its reader (a
-    /// guest sub-compiler, the verbatim/text reader, the base64
-    /// decoder) — exact bytes, exact span, no normalization, and
-    /// the host resumes exactly past the closing `}`. The host
-    /// NEVER tokenizes the content. Composes with the buffer: a
-    /// lexeme mistakenly pre-lexed from region bytes is dropped and
-    /// its bytes are re-framed from its own start — the incoherent
-    /// state is unrepresentable, not merely forbidden.
+    /// A VERBATIM region (`text { … }`, `base64 { … }`): the OPENER
+    /// is consumed HERE, so the region is selected before any
+    /// content byte can meet the host vocabulary (D-2026-08-13-1,
+    /// review round 6). Content is verbatim under the text
+    /// contract: braces balance, EVERY other byte is ordinary data —
+    /// quotes and apostrophes included (`text { don't }` is text),
+    /// no escapes, no interpolation. Exact bytes, exact span, one
+    /// forward commit.
+    pub fn verbatim_region(&mut self, bag: &mut Bag) -> Token<'a> {
+        self.region_after_opener(bag, false)
+    }
+
+    /// A GUEST region (`jq { … }`, `bash { … }`, `sql { … }`, …):
+    /// the opener consumed HERE, the ENTIRE region belonging to the
+    /// registered guest compiler — exact bytes, exact span, no
+    /// normalization; the host never tokenizes the content and
+    /// resumes exactly past the closer; guest errors come back as
+    /// typed results remapped by span.
     ///
     /// DELIMITATION CONTRACT (frozen, and NAMED as an open
-    /// question): the region ends at the brace-balanced `}`, with
-    /// both quote styles skipped opaquely (backslash escapes). The
-    /// host cannot know a guest's comment or string lexicon — a
-    /// `}` inside a guest comment (`# }`, `-- }`) closes the frame,
-    /// and a bare apostrophe starts an opaque quote skip; grammar.md
-    /// exposes the failure modes and the arbitration options rather
-    /// than growing per-guest lexicons here.
-    pub fn raw_region(&mut self, bag: &mut Bag) -> Token<'a> {
-        // A pre-lexed lexeme from region bytes: re-frame from its
-        // start — the walk below runs on a LOCAL cursor over the
-        // immutable source, and the one commit at the end is
-        // forward (the region contains the dropped lexeme's bytes,
-        // so its end is at or past the current position).
-        let start = match self.lookahead.take() {
-            Some(token) => token.span.range().start,
-            None => self.pos,
-        };
+    /// question): brace balance with both quote styles skipped
+    /// opaquely (backslash escapes). The host cannot know a guest's
+    /// comment or string lexicon — grammar.md exposes the failure
+    /// modes and the arbitration options (authoring contract /
+    /// fenced delimiters / guest-registered framers) rather than
+    /// growing per-guest lexicons here.
+    pub fn guest_region(&mut self, bag: &mut Bag) -> Token<'a> {
+        self.region_after_opener(bag, true)
+    }
+
+    fn region_after_opener(&mut self, bag: &mut Bag, quotes_opaque: bool) -> Token<'a> {
+        let opener = self.next(bag);
+        assert!(
+            opener.kind == TokenKind::LBrace,
+            "a region method is called at its opener"
+        );
+        let start = self.pos;
         let bytes = self.source.as_bytes();
         let mut pos = start;
         let mut depth: u32 = 0;
@@ -623,7 +760,7 @@ impl<'a> Lexer<'a> {
                     depth -= 1;
                     pos += 1;
                 }
-                Some(quote @ (b'"' | b'\'')) => {
+                Some(quote @ (b'"' | b'\'')) if quotes_opaque => {
                     let quote_start = pos;
                     pos += 1;
                     loop {
@@ -760,44 +897,6 @@ impl<'a> Lexer<'a> {
                     pos = comment.end;
                 }
                 byte => return Some((pos, byte)),
-            }
-        }
-    }
-
-    fn skip_balanced_raw_at(&mut self, open: u8, close: u8, initial: u32) {
-        let bytes = self.source.as_bytes();
-        let mut depth: u32 = initial;
-        let mut quote: Option<u8> = None;
-        while let Some(&byte) = bytes.get(self.pos) {
-            if let Some(active) = quote {
-                match byte {
-                    b'\\' => {
-                        self.pos = (self.pos + 2).min(bytes.len());
-                        continue;
-                    }
-                    _ if byte == active => quote = None,
-                    _ => {}
-                }
-                self.pos += 1;
-                continue;
-            }
-            match byte {
-                b'"' | b'\'' => {
-                    quote = Some(byte);
-                    self.pos += 1;
-                }
-                _ if byte == open => {
-                    depth += 1;
-                    self.pos += 1;
-                }
-                _ if byte == close => {
-                    depth = depth.saturating_sub(1);
-                    self.pos += 1;
-                    if depth == 0 {
-                        return;
-                    }
-                }
-                _ => self.pos += 1,
             }
         }
     }
@@ -1130,17 +1229,20 @@ fn punctuation(byte: u8) -> Option<TokenKind> {
 mod tests {
 
     #[test]
-    fn the_raw_region_reframes_a_prelexed_lexeme() {
-        // The atomic-frontier guarantee (review round 5 supplement):
-        // even when a lexeme was mistakenly pre-lexed from region
-        // bytes, the framer drops it and re-frames from its start —
-        // exact bytes, host resumed exactly past the `}`.
+    fn a_region_is_selected_at_its_opener_before_any_content_lexing() {
+        // The atomic-frontier guarantee (review round 6): the region
+        // method CONSUMES the opener itself, so no content byte can
+        // meet the host vocabulary — a buffered opener composes, and
+        // the leading trivia of the region stays region bytes.
         let mut bag = Bag::new();
-        let mut lexer = Lexer::new(SourceId::new(0), "guest body } tail");
-        let _ = lexer.peek(&mut bag); // pre-lexes `guest` from region bytes
-        let region = lexer.raw_region(&mut bag);
-        assert_eq!(region.text, "guest body ");
-        assert_eq!(region.span.range(), 0..11);
+        let mut lexer = Lexer::new(SourceId::new(0), "{  don't \"quote\" {ok} } tail");
+        let opener = lexer.peek(&mut bag);
+        assert_eq!(opener.kind, TokenKind::LBrace, "the opener buffers safely");
+        let region = lexer.verbatim_region(&mut bag);
+        assert_eq!(
+            region.text, "  don't \"quote\" {ok} ",
+            "verbatim: quotes and apostrophes are ORDINARY bytes, braces balance"
+        );
         let next = lexer.next(&mut bag);
         assert_eq!(next.text, "tail", "the host resumes past the closer");
         assert!(bag.diagnostics().is_empty(), "{bag:?}");

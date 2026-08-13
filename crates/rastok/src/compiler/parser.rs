@@ -89,8 +89,13 @@ const SYNC_WORDS: &[&str] = &[
     "theorem",
 ];
 
-/// Tags whose block body is raw guest text, never read by the host.
+/// Tags whose block body is raw region text, never read by the
+/// host. VERBATIM_TAGS frame under the text contract (quotes are
+/// ordinary bytes); GUEST_TAGS frame under the frozen guest
+/// contract until the guest slice arbitrates its framer
+/// (D-2026-08-13-1, review round 6).
 const RAW_TAGS: &[&str] = &["jq", "bash", "sql", "python", "rust", "text", "base64"];
+const VERBATIM_TAGS: &[&str] = &["text", "base64"];
 
 /// Tag words that open tagged-value expressions: foreign literals
 /// (guests, raw literals, data formats) and the expression-space
@@ -633,36 +638,33 @@ impl<'src> Parser<'src, '_> {
         })
     }
 
-    /// One comparison operator, tokenized as its parts.
+    /// One comparison operator — single maximal-munch lexemes
+    /// (D-2026-08-13-1, review round 6).
     fn cmp_op(&mut self) -> Option<CmpOp> {
         match self.peek().kind {
-            TokenKind::Eq => {
+            TokenKind::EqEq => {
                 self.bump();
-                self.expect(TokenKind::Eq, "`==`")?;
                 Some(CmpOp::Eq)
             }
-            TokenKind::Bang => {
+            TokenKind::BangEq => {
                 self.bump();
-                self.expect(TokenKind::Eq, "`!=`")?;
                 Some(CmpOp::Ne)
+            }
+            TokenKind::LtEq => {
+                self.bump();
+                Some(CmpOp::Le)
             }
             TokenKind::Lt => {
                 self.bump();
-                if self.peek().kind == TokenKind::Eq {
-                    self.bump();
-                    Some(CmpOp::Le)
-                } else {
-                    Some(CmpOp::Lt)
-                }
+                Some(CmpOp::Lt)
+            }
+            TokenKind::GtEq => {
+                self.bump();
+                Some(CmpOp::Ge)
             }
             TokenKind::Gt => {
                 self.bump();
-                if self.peek().kind == TokenKind::Eq {
-                    self.bump();
-                    Some(CmpOp::Ge)
-                } else {
-                    Some(CmpOp::Gt)
-                }
+                Some(CmpOp::Gt)
             }
             _ => {
                 self.error_expected("a comparison operator");
@@ -1153,26 +1155,18 @@ impl<'src> Parser<'src, '_> {
         }
     }
 
-    /// `"{" ( statement )* "}"`
-    /// The first significant byte ahead — the dispatch probe for
-    /// positions that may hold CEL text. CEL never passes through this
-    /// parser's lexer: anything that does not shape like a Rastok
-    /// construct is handed to the CEL chain untouched.
-    fn shape(&mut self) -> Option<u8> {
-        self.lexer.shape()
-    }
-
+    /// `"{" ( statement )* "}"` — heads classified by the lexer:
+    /// CEL never passes through the host vocabulary; anything that
+    /// does not open like a Rastok construct is handed to the CEL
+    /// chain untouched.
     fn statements(&mut self) -> Option<Vec<Statement>> {
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut statements = Vec::new();
         loop {
-            // Probe by shape first: a bare CEL yield (`!done`, `-x`,
-            // `'txt'`) must not be tokenized — or rejected — here.
-            let statement_shaped = matches!(
-                self.shape(),
-                None | Some(b'}' | b';' | b'(' | b'a'..=b'z' | b'A'..=b'Z' | b'_')
-            );
-            if !statement_shaped {
+            // Classified by the lexer: a bare CEL yield (`!done`,
+            // `-x`, `'txt'`) must not be tokenized — or rejected —
+            // here.
+            if self.lexer.statement_head() == crate::compiler::lexer::RegionHead::Cel {
                 // The separating newline is trivia; the yield's own
                 // scan must start past it (a no-op when a lexeme is
                 // already buffered — the peek consumed the trivia).
@@ -1529,14 +1523,10 @@ impl<'src> Parser<'src, '_> {
                 return Value::Error(at);
             }
         }
-        // Probe by shape before touching the token stream: CEL text
-        // may open with bytes this lexer rejects (`!`, `'`, `-(`), so
-        // only builder-shaped input is tokenized here.
-        let builder_shaped = matches!(
-            self.shape(),
-            Some(b'{' | b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_')
-        );
-        if !builder_shaped {
+        // Classified by the lexer before touching the token stream:
+        // CEL text may open with bytes outside the host vocabulary,
+        // so only builder-shaped input is tokenized here.
+        if self.lexer.value_head() == crate::compiler::lexer::RegionHead::Cel {
             return Value::Cel(self.cel(position));
         }
         let token = self.peek();
@@ -1757,8 +1747,14 @@ impl<'src> Parser<'src, '_> {
         }
         let body = if self.peek().kind == TokenKind::LBrace {
             if RAW_TAGS.contains(&tag.text.as_str()) {
-                self.bump();
-                let raw = self.lexer.raw_region(self.bag);
+                // The region method consumes the opener ITSELF: the
+                // region is selected before any content byte can be
+                // tokenized (review round 6).
+                let raw = if VERBATIM_TAGS.contains(&tag.text.as_str()) {
+                    self.lexer.verbatim_region(self.bag)
+                } else {
+                    self.lexer.guest_region(self.bag)
+                };
                 self.last_end = raw.span.range().end;
                 Some(TaggedBody::Raw {
                     text: String::from(raw.text),
@@ -2438,11 +2434,32 @@ mod tests {
             );
         }
         // A parenthesized position: the BadForm stops at the `,`, the
-        // sibling ARGUMENT lives.
+        // sibling ARGUMENT lives — asserted STRUCTURALLY (review
+        // round 6): the call keeps BOTH arguments, recovery form
+        // first, the string intact.
         let source = "graph g : App {\n  operator o {\n    on in { out = asset(json @, \"text/plain\"); out = data }\n  }\n  . -> o -> .\n}\n";
         let (statements, bag) = handler_statements(source);
         assert_eq!(bag.diagnostics().len(), 1, "paren position: {bag:?}");
         assert_eq!(statements.len(), 2, "the statement sibling lives");
+        let Statement::Assign {
+            value: Value::Tagged(call),
+            ..
+        } = &statements[0]
+        else {
+            panic!("the asset call survives: {:?}", statements[0]);
+        };
+        assert_eq!(call.tag.text, "asset");
+        assert_eq!(call.args.len(), 2, "both arguments live: {:?}", call.args);
+        assert!(
+            matches!(call.args[0], Value::Error(_)),
+            "the recovery form first: {:?}",
+            call.args[0]
+        );
+        assert!(
+            matches!(&call.args[1], Value::StrLit { raw, .. } if raw == "\"text/plain\""),
+            "the string argument intact: {:?}",
+            call.args[1]
+        );
     }
 
     #[test]
@@ -2501,6 +2518,61 @@ mod tests {
                 "{label}"
             );
         }
+    }
+
+    #[test]
+    fn an_implicit_yield_never_meets_the_host_vocabulary() {
+        // Review round 6's blocker: `data == data` became a phantom
+        // assignment and `data * 2` a lexical fault. The operator
+        // superset is maximal-munch and the yield decision is by
+        // KIND — with and without spaces, every row is ONE yield
+        // statement carrying the exact expression, zero parse
+        // diagnostics.
+        for op in ["==", "!=", "<=", ">=", "&&", "||", "*", "/", "%", "-"] {
+            for spelled in [format!("data {op} data"), format!("data{op}data")] {
+                let source = format!(
+                    "graph g : App {{\n  operator o {{\n    on in {{\n      {spelled}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+                );
+                let mut bag = Bag::new();
+                let tree = parse(SourceId::new(0), &source, &mut bag);
+                assert!(bag.diagnostics().is_empty(), "{spelled}: {bag:?}");
+                let TopDecl::Graph(graph) = &tree.decls[0] else {
+                    panic!("a graph");
+                };
+                let GraphItem::Operator(operator) = &graph.body[0] else {
+                    panic!("{spelled}: an operator: {:?}", graph.body[0]);
+                };
+                let OperatorItem::Handler(handler) = &operator.body[0] else {
+                    panic!("{spelled}: a handler");
+                };
+                let statements = handler.body.as_ref().expect("a body");
+                assert_eq!(statements.len(), 1, "{spelled}: {statements:?}");
+                let Statement::Yield(Value::Cel(expr)) = &statements[0] else {
+                    panic!("{spelled}: a yield: {:?}", statements[0]);
+                };
+                assert_eq!(expr.text, spelled, "the exact expression");
+            }
+        }
+    }
+
+    #[test]
+    fn a_verbatim_body_owns_its_quotes_and_a_dead_form_its_comments() {
+        // Round 6's remaining frontier proofs, committed: `text`
+        // content is verbatim (apostrophes are data), and a closer
+        // inside a comment never ends an opaque dead region.
+        let text = "graph g : App {\n  operator o {\n    on in { out = text {\n  don't panic\n} }\n  }\n  . -> o -> .\n}\n";
+        let mut bag = Bag::new();
+        let tree = parse(SourceId::new(0), text, &mut bag);
+        assert!(bag.diagnostics().is_empty(), "verbatim: {bag:?}");
+        let _ = tree;
+        let dead = "graph g : App {\n  operator o {\n    on in {\n      out = on_crash(foo /* ) */ bar)\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+        let (statements, bag) = handler_statements(dead);
+        assert_eq!(bag.diagnostics().len(), 1, "one migration voice: {bag:?}");
+        assert_eq!(statements.len(), 2, "the sibling lives: {statements:?}");
+        let Statement::Assign { value, .. } = &statements[1] else {
+            panic!("second statement: {:?}", statements[1]);
+        };
+        assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
     }
 
     fn parse_clean(source: &str) -> SyntaxTree {

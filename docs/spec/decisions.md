@@ -28,16 +28,30 @@ lexer-owned questions: `shape` (CEL regions may open with bytes the
 host vocabulary refuses), `tag_opener_on_line`, and the line
 questions (`value_missing_on_line`, `line_exhausted`).
 
-**Specialized lexemes.** Sub-languages are lexical delegations
-returning complete lexemes or complete refusals: the CEL region
-(`cel_region`), the json continuation (`json_tail` — see below),
-raw guest bodies (`raw_block`), and the opaque dead/reserved
-regions (`swallow_opaque_on_line` — their bodies may carry bytes
-the host refuses, and the one migration diagnostic already spoke).
-A DEAD STRUCT BODY on a tag is recovered with HOST lexemes (a `}`
-inside a comment is trivia to the token stream and can never close
-the region); the parser's error recovery skips lexemes to a sync
-set, never bytes.
+**Specialized lexemes, selected AT their opener.** Sub-languages
+are lexical delegations returning complete lexemes or complete
+refusals, and each region method CONSUMES its own opener — the
+region is selected before any content byte can meet the host
+vocabulary. Four region kinds, by SEMANTICS, never one universal
+framer: the CEL region (`cel_region` — the intrinsic expression
+language); the json continuation (`json_tail` — a data reader);
+the VERBATIM regions (`verbatim_region` — `text`/`base64`: braces
+balance, every other byte is ordinary data, quotes and apostrophes
+included, no escapes); and the GUEST regions (`guest_region` —
+jq/bash/sql/python/rust: the frozen contract, dual-quote opacity,
+awaiting the guest slice's framer arbitration). The host lexes the
+CEL OPERATOR SUPERSET maximal-munch (`==` `!=` `<=` `>=` `&&`
+`||` `*` `/` `%` `-`), so a peek after a consumed path never
+faults on a legal continuation and `=` vs `==` is a KIND question
+— `data == data` is a yield, never a phantom assignment; a
+single-quoted string is ONE opaque Error lexeme (CEL's spelling,
+named as such once). The parser receives head CLASSIFICATIONS
+(`statement_head`/`value_head` → Structural | Cel), never a raw
+byte. Dead/reserved recoveries walk HOST LEXEMES into a scratch
+bag (a closer inside a comment is trivia and never closes; the
+garbage's own diagnostics stay silent — the one migration voice
+already spoke); the parser's error recovery skips lexemes to a
+sync set, never bytes.
 
 **The guest frontier is atomic.** A guest body reaches its
 sub-compiler as ONE region lexeme — exact bytes, exact span, no

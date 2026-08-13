@@ -1602,15 +1602,19 @@ json_document     ::= JSON_OBJECT | JSON_ARRAY                        // a docum
 // node). `json` is not a tag: it is a reserved word with its own
 // `json_after_ident` continuation.
 //
-// THE GUEST FRONTIER (D-2026-08-13-1, review round 5 supplement).
-// A guest body reaches its sub-compiler as ONE ATOMIC REGION —
-// exact bytes, exact span, no normalization — framed by the host
-// (`raw_region`), which NEVER tokenizes the content; the host
-// resumes exactly past the closing `}`; a guest error must come
-// back as a typed result whose diagnostics remap into the RKG
-// source by span. CEL stays the intrinsic expression language,
-// `json` a data reader, guests registered delegations — three
-// concepts, never one abstraction.
+// THE REGION TAXONOMY (D-2026-08-13-1, review rounds 5–6). Four
+// region kinds by SEMANTICS, each selected AT its opener (the
+// region method consumes the opener itself — no content byte can
+// meet the host vocabulary): the CEL region (the intrinsic
+// expression language); the json document (a data reader); the
+// VERBATIM regions (`text`/`base64` — braces balance, every other
+// byte ordinary data, quotes and apostrophes included, no
+// escapes); the GUEST regions (jq/bash/sql/python/rust — one
+// ATOMIC handoff to the registered sub-compiler: exact bytes,
+// exact span, no normalization, the host resuming exactly past
+// the closing `}`, guest errors returned as typed results
+// remapped by span). Never one universal framer, never one
+// abstraction over the four.
 //
 // THE FRAMING QUESTION — EXPOSED, NOT DECIDED. The frozen
 // delimitation contract (brace balance, both quote styles opaque
