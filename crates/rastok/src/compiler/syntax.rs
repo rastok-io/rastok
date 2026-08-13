@@ -585,8 +585,6 @@ pub enum TaggedBody {
         /// Where it was written.
         span: Span,
     },
-    /// Structured body for configuration tags.
-    Struct(StructBody),
 }
 
 /// `{ attr_or_block ( ","? attr_or_block )* }`

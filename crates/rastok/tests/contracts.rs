@@ -957,12 +957,25 @@ fn json_and_nothing_are_unmaskable() {
         "graph g : App {\n  operator o {\n    on in { out = nothing }\n  }\n  . -> o -> .\n}\n",
     )
     .expect("nothing lives");
-    // With no maskable binding, `json[0]` IS the document `[0]`.
-    let compilation = compile_one(
-        "graph g : App {\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n",
-    )
-    .expect("an unspaced document array");
-    let _ = compilation;
+    // With no maskable binding, `json[0]` IS the document `[0]` —
+    // the same program as its spaced twin, and never the CEL list.
+    let hash = |source: &str| compile_one(source).expect("valid").hash.to_string();
+    assert_eq!(
+        hash(
+            "graph g : App {\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n"
+        ),
+        hash(
+            "graph g : App {\n  operator o {\n    on in { out = json [0] }\n  }\n  . -> o -> .\n}\n"
+        ),
+        "spacing is not identity"
+    );
+    assert_ne!(
+        hash(
+            "graph g : App {\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n"
+        ),
+        hash("graph g : App {\n  operator o {\n    on in { out = [0] }\n  }\n  . -> o -> .\n}\n"),
+        "a variant document is not the CEL list"
+    );
 }
 
 #[test]
@@ -991,9 +1004,9 @@ fn a_json_recovery_follows_the_position_terminators() {
             "paren position (close-paren boundary)",
             "graph g : App {\n  operator o {\n    on in { out = asset(json {\"a\": ???}); out = data }\n  }\n  . -> o -> .\n}\n",
         ),
-        // A follower that opens no document and spells no scalar is
-        // a CEL continuation beginning with the word `json`
-        // (D-2026-08-13-1) — CEL's voice, CEL's recovery.
+        // `json` is reserved (review round 3): any non-document
+        // follower is an invalid json form — one voice, forward
+        // recovery, sibling preserved.
         (
             "host-alien first byte",
             "graph g : App {\n  operator o {\n    on in { out = json @; out = data }\n  }\n  . -> o -> .\n}\n",
@@ -1002,9 +1015,8 @@ fn a_json_recovery_follows_the_position_terminators() {
             "quoted CEL follower",
             "graph g : App {\n  operator o {\n    on in { out = json 'x'; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
-        // A former scalar spelling is CEL too (`{`/`[` are the ONLY
-        // special followers, D-2026-08-13-1 review round): CEL's
-        // voice, CEL's recovery, sibling preserved.
+        // A former scalar spelling refuses the same way, with the
+        // `decimal(...)` migration in the message.
         (
             "scalar number",
             "graph g : App {\n  operator o {\n    on in { out = json 19.99; out = data }\n  }\n  . -> o -> .\n}\n",
@@ -1018,17 +1030,13 @@ fn a_json_recovery_follows_the_position_terminators() {
             "graph g : App {\n  operator o {\n    on in { out = json true; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
     ] {
-        let expected = match label {
-            "host-alien first byte"
-            | "quoted CEL follower"
-            | "scalar number"
-            | "scalar string"
-            | "scalar word" => "E-CEL-EXPR",
-            _ => "E-JSON-VALUE",
-        };
         let bag = compile_one(source).expect_err(label);
         assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
-        assert_eq!(bag.diagnostics()[0].code().as_str(), expected, "{label}");
+        assert_eq!(
+            bag.diagnostics()[0].code().as_str(),
+            "E-JSON-VALUE",
+            "{label}"
+        );
     }
     // The positive twin proves the SIBLING really lives there: with
     // the fault healed, the handler carries BOTH emissions.
@@ -1080,14 +1088,14 @@ fn json_trivia_belongs_to_the_host() {
         b.hash.to_string(),
         "host trivia is not identity"
     );
-    // An NBSP is NOT host trivia: it opens no document and spells
-    // no scalar, so the value is a CEL continuation beginning with
-    // the word `json` — the boundary never depends on Unicode
-    // trim_start (D-2026-08-13-1).
+    // An NBSP is NOT host trivia: it opens no document and is not
+    // the position's boundary, so the json form is invalid — the
+    // boundary never depends on Unicode trim_start
+    // (D-2026-08-13-1, review round 3).
     let nbsp = "graph g : App {\n  operator o {\n    on in { out = json \u{a0}1 }\n  }\n  . -> o -> .\n}\n";
     let bag = compile_one(nbsp).expect_err("must refuse");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
-    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-CEL-EXPR");
+    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-JSON-VALUE");
     // A comment crossing the line means NO body on the line: bare
     // word — never a truncated JSON literal.
     let crossing = "graph g : App {\n  operator o {\n    on in { out = json /* c\n*/ 1 }\n  }\n  . -> o -> .\n}\n";

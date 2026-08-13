@@ -556,9 +556,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
             // the host's `/* … */` so a commented spelling shares
             // the compiled form (and so the hash) of the plain one.
             // The FACT of the comment comes from the one primitive.
-            b'/' if crate::trivia::comment_at(text, pos).is_some() => {
-                let comment = crate::trivia::comment_at(text, pos)
-                    .unwrap_or_else(|| unreachable!("guard just matched"));
+            b'/' if let Some(comment) = crate::trivia::comment_at(text, pos) => {
                 if !comment.terminated {
                     return Err(vec![Diagnostic {
                         kind: DiagnosticKind::General,

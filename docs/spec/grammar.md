@@ -1264,28 +1264,41 @@ restatement never enters the serialized table; a second explicit
 declaration, or a contradictory direction, is `E-PORT-CONFLICT`
 (D-2026-08-08-1).
 Reservation is BY POSITION, never a global ban on a spelling
-(D-2026-08-12-1):
+(D-2026-08-12-1; enforcement stated exactly by D-2026-08-13-1
+review round 3 — this section supersedes the earlier draft that
+claimed `DECL_KW` unmaskable):
 
-- **Declaration positions** (node, port, val/var, partition names):
-  `DECL_KW` may not be shadowed; everything else — `TYPE_KW` and
-  `TAG_KW` included — is judged by the position's own grammar.
+- **Binding positions** (graph, lab, node, port — boundary and node
+  alike — val/var/let at every level, type names): the value forms
+  `json` and `nothing`, and the expression literals `true`, `false`
+  and `null`, are RESERVED — one naming policy, refusing at the
+  declaration with `E-NAME-RESERVED`. The envelope surfaces
+  (`meta`/`data`/`sys`/`app`/`ext`) additionally refuse as node
+  names, and `data`/`meta` as binding names. `DECL_KW` words
+  (`graph`, `operator`, `val`, …) are NOT reserved: declaration
+  positions are structural, so a binding named `graph` shadows
+  nothing — the position's own grammar decides.
 - **Type positions**: `TYPE_KW` words mean their type (`text` names
-  the text type there); a user type name may not collide with them.
+  the text type there); a user `type` declaration may not SPELL a
+  builtin type — the builtin resolves first and the declaration
+  would be silently dead (`E-NAME-RESERVED`, review round 3).
 - **Attribute names**: any expressible identifier; dots are owner
   qualification only.
 - **Bare-word VALUE positions**: any expressible word the contract's
   choice domain admits — `codec = json`, `framing = text` and
-  `capacity = unbounded` are all legal choice words, because a
-  `TAG_KW` word is a tag only WHEN ITS FORM follows: `(` or `{`
-  after it, or (for `json`) a same-line JSON value. `LITERAL_KW`
+  `capacity = unbounded` are all legal choice words (a choice
+  introduces NO binding), because a `TAG_KW` word is a tag only
+  WHEN ITS FORM follows (`(` or `{` on its line), and a bare `json`
+  stands alone only at the position's boundary. `LITERAL_KW`
   words and the `nothing` sentinel keep their literal meaning and
   cannot serve as contract choices.
 
 Three sub-categories exist within `TAG_KW`: the special value tags
-(`text`, `base64`, `json`, `asset` — each with its own reader), the
-foreign/guest tags (`jq`, `bash`, `sql`, `python`, `rust`, and the
-data formats), and the expression-space constructors (`bounded`,
-`unbounded`, `regex`). Concrete NodeType names such as `HttpServer`,
+(`text`, `base64`, `asset` — each with its own reader; `json` left
+this set when it became a RESERVED word with its own total
+continuation, D-2026-08-13-1), the foreign/guest tags (`jq`, `bash`,
+`sql`, `python`, `rust`, and the data formats), and the
+expression-space constructors (`bounded`, `unbounded`, `regex`). Concrete NodeType names such as `HttpServer`,
 `Process` and `Postgres` are ordinary PascalCase identifiers resolved
 later by the stdlib registry, not lexer keywords.
 
@@ -1440,9 +1453,11 @@ attr_entry        ::= lvalue "=" value                               // dotted k
 //   envelope surfaces (meta/data/sys/app/ext) refuse as node names, and
 //   data/meta as binding names.
 // - a TAG_KW is one of the closed tag vocabulary (jq bash sql python rust
-//   json avro protobuf parquet msgpack base64 csv text asset bounded
-//   unbounded regex). A tag is a tag only WITH its same-line opener ;
-//   alone, or followed by anything else, it reads as an ordinary CEL word.
+//   avro protobuf parquet msgpack base64 csv text asset bounded
+//   unbounded regex — `json` is NOT a tag: it is a reserved word with
+//   its own total continuation). A tag is a tag only WITH its same-line
+//   opener ; alone, or followed by anything else, it reads as an
+//   ordinary CEL word.
 // - a CONTRACT WORD is a bare word judged by a contract's closed choice
 //   (mode = job, codec = jsonl). It introduces NO binding — reservation
 //   does not apply ; the contract judges the word.
@@ -1460,7 +1475,7 @@ value             ::= braced_value                                    // { … }
 
 value_after_ident ::= ε                                               // nothing significant on the line and the line ends the
                                                                       //   value : the word ALONE is the CEL expression (span exact)
-                    | ⟨IDENT ∈ TAG_KW⟩  "(" tag_args ")" tag_body?    // a tag WITH its `(` on the SAME LINE → tagged_value
+                    | ⟨IDENT ∈ TAG_KW⟩  "(" tag_args ")" tag_body?    // a tag WITH its `(` on the SAME LINE → a tagged call
                     | ⟨IDENT ∈ RAW_TAG⟩ "{" RAW_TEXT "}"              // jq/bash/sql/python/rust/text/base64 body → raw block
                     | ⟨IDENT ∈ DEAD_TAG | RESERVED_FORMAT⟩ …          // dead initializers refuse with the migration ; reserved
                                                                       //   data formats defer — either way the body is swallowed RAW
@@ -1482,7 +1497,8 @@ cel_continuation  ::= cel_expr                                        // the reg
 tag_args          ::= ( value ( "," value )* ","? )?                  // PAREN position ; a BARE STRING token followed by `,`/`)` is
                                                                       //   the grammar's STRING — `("x")` and `"a" + "b"` cannot
                                                                       //   impersonate it (D-2026-08-10-6)
-tag_body          ::= "{" ( RAW_TEXT | struct_body ) "}"              // raw for RAW_TAGS ; a struct body otherwise
+tag_body          ::= "{" RAW_TEXT "}"                                // RAW_TAGS only — a struct body on a tag is a DEAD form
+                                                                      //   the parser refuses with its migration (D-2026-08-12-1)
 
                     // The dispatch consumes ONE token, then decides on a RAW same-line
                     // byte probe sharing the host trivia rules — never a second consumer,
@@ -1543,11 +1559,11 @@ map_entry         ::= STRING ":" value                                // text ke
                                                                       //   (deferred by name — D-2026-08-10-6 as amended) ;
                                                                       //   `json { … }` covers dynamic nesting but is
                                                                       //   always `variant`, never a typed struct
-json_document     ::= JSON_OBJECT | JSON_ARRAY                        // a document only ({…}/[…]), delegated to the house reader
-                                                                      //   (scalars are CEL's; exactness is decimal("…") — D-2026-08-13-1) :
-                                                                      // object/array by brace/bracket balance, scalars by the JSON
-                                                                      // grammar itself ; duplicate keys refuse ; numbers exact
-                                                                      // (identity.md tag-6 rule, D-2026-08-10-7)
+json_document     ::= JSON_OBJECT | JSON_ARRAY                        // a document only ({…}/[…]), delegated to the house reader,
+                                                                      // read whole by brace/bracket balance ; duplicate keys refuse ;
+                                                                      // numbers exact (identity.md tag-6 rule, D-2026-08-10-7) ; any
+                                                                      // other follower of `json` is an INVALID json form — the word
+                                                                      // is reserved and never begins a CEL expression (D-2026-08-13-1)
                     // In ENVELOPE positions (handler emissions, fixture injections,
                     // mock replies) the checker classifies the body ONCE by its
                     // top-level roots : no reserved root → a fresh data record
@@ -1558,24 +1574,18 @@ json_document     ::= JSON_OBJECT | JSON_ARRAY                        // a docum
                     // empty record, never an identity. Elsewhere the body is
                     // simply a record. (simulation-semantics.md §4)
 
-tagged_value      ::= TAG_KW ( "(" arg_list ")" )? ( "{" raw_body "}" )?   // at least one of (args) / {block}
-                                                    // jq { ... }       raw body
-                                                    // jq(req) { ... }  raw body scoped to envelope `req` (join meta-attribution)
-                                                    // bounded(64)      paren args, no body — expression space
-                                                    // a TAG with a struct body is a DEAD form (D-2026-08-12-1)
-tagged_block_value ::= "text" RAW_BLOCK                              // verbatim text — margin set by the closing brace (D-2026-08-10-6)
-                    | "base64" ( "(" STRING ")" )? RAW_BLOCK          // inline bytes, optional content_type (whole-data only with it)
-                    | "json" json_document                            // a JSON document, delegated to the JSON reader — always variant
-                    | "asset" "(" STRING ( "," STRING )? ")"          // build-time repo bytes (path, content_type?) — D-2026-08-10-5
-                                                                      // array literal : a CEL list expression `[v, v, …]`
-raw_body          ::= /* raw text, lexically opaque. The LIVE raw-bodied
-                       tags are exactly the guests (jq, bash, sql, python,
-                       rust) and the raw literals (text, base64). The data
-                       formats (avro, protobuf, parquet, msgpack, csv) are
-                       RESERVED words with no living form yet — their
-                       bodies defer by name. The struct-bodied initializer
-                       tags are DEAD (D-2026-08-12-1) */
-arg_list          ::= ( value ( "," value )* )?
+// The tag family reads through `value_after_ident` above — ONE
+// production family (review round 3; `tagged_value`,
+// `tagged_block_value` and `arg_list` were its pre-factoring
+// spellings). The LIVE raw-bodied tags are exactly the guests
+// (jq, bash, sql, python, rust — `jq(req) { … }` scopes the body to
+// envelope `req`) and the raw literals (`text`, `base64(ct?)`);
+// `asset(path, ct?)` takes arguments only; the data formats (avro,
+// protobuf, parquet, msgpack, csv) are RESERVED words whose bodies
+// defer by name; a STRUCT body on any tag is a DEAD form the parser
+// refuses with its migration (D-2026-08-12-1 — the AST has no such
+// node). `json` is not a tag: it is a reserved word with its own
+// `json_after_ident` continuation.
 
 defaults_block    ::= "defaults" "{" struct_body "}"
 
@@ -1743,9 +1753,9 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | TAG_KW / `{` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
 | `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
-| `value` | special value tag (`text`/`base64`/`json`/`asset`) — its form follows (`{`/`(`; for `json`: a same-line `{` or `[`) | `tagged_block_value` (verbatim / bytes / json_document / build-time bytes) |
-| `value` | other TAG_KW — next is `(` or `{` | `tagged_value` (a dead-initializer tag refuses with its migration) |
-| `value` | any TAG_KW — word alone | CEL expression / bare word, judged by the contract |
+| `value` | `json` — a same-line `{` or `[` follows | `json_after_ident` : the document ; ANY other follower = invalid json form (E-JSON-VALUE) ; word alone = bare word, judged by the contract |
+| `value` | TAG_KW — its same-line `(` (and for raw tags `{`) follows | `value_after_ident` : tagged call / raw block (a dead-initializer tag, a reserved data format, or a struct body refuse with their own voices) |
+| `value` | TAG_KW — word alone or any other follower | CEL expression / bare word, judged by the contract |
 | `value` | `{` — then `}` / `:` / STRING / IDENT | `braced_value` : empty struct / empty map / map_entries / struct_entries |
 | `value` | `.` (envelope position) | identity — exact re-emission |
 | `value` | `nothing` (emission position) | no-emit |
@@ -1784,7 +1794,7 @@ Hand-written recursive descent makes error recovery natural :
 
 - At a missing `{` after `operator X` or `connector X : T`, skip to the next declaration keyword and report.
 - At a stray token inside `operator_body`, skip to the next IDENT-at-column-zero or `}` and report.
-- At a `}` mismatch, walk back to the last `{` opening token, report nesting state.
+- At a `}` mismatch, report against the OPEN delimiter stack the descent carries — the cursor only ever moves forward (D-2026-08-13-1: no rewind primitive exists).
 
 Because every form starts with a reserved keyword or a clearly typed IDENT, the
 parser can re-synchronize on the next `operator`, `connector`,

@@ -230,7 +230,7 @@ pub fn check(
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
             if let TopDecl::Type(type_decl) = decl {
-                if !checker.guard_binding_name(&type_decl.name, "a type name") {
+                if !checker.guard_type_name(&type_decl.name) {
                     continue;
                 }
                 if checker.type_decls.contains_key(&type_decl.name.text) {
@@ -470,6 +470,9 @@ impl Checker<'_, '_> {
         decl: &crate::compiler::syntax::LabDecl,
         app: &Graph,
     ) -> Option<crate::compiler::hir::Lab> {
+        if !self.guard_binding_name(&decl.name, "a lab") {
+            return None;
+        }
         if decl.name.text != app.name {
             self.bag.push(
                 Diagnostic::new(
@@ -1029,6 +1032,7 @@ impl Checker<'_, '_> {
     }
 
     fn graph(&mut self, decl: &GraphDecl) -> Graph {
+        self.guard_binding_name(&decl.name, "a graph");
         if let Some(annotation) = &decl.annotation {
             for symbol in &annotation.symbols {
                 if symbol.text != "App" {
@@ -1053,6 +1057,9 @@ impl Checker<'_, '_> {
         for item in &decl.body {
             match item {
                 GraphItem::Port(port) => {
+                    if !self.guard_binding_name(&port.name, "a boundary port") {
+                        continue;
+                    }
                     // The annotation resolves through the same type
                     // subset as state cells — its deferrals (long,
                     // float, unions) refuse identically.
@@ -1326,19 +1333,14 @@ impl Checker<'_, '_> {
                 .with_span(span)
                 .with_field("name", name),
             );
-        } else if matches!(name.as_str(), "json" | "nothing") {
-            self.bag.push(
-                Diagnostic::new(
-                    E_NAME_RESERVED,
-                    Phase::Resolve,
-                    format!(
-                        "`{name}` is a reserved word — it names a value form of the \
-                         language, never a node"
-                    ),
-                )
-                .with_span(span)
-                .with_field("name", name),
-            );
+        } else if !self.guard_binding_name(
+            &crate::compiler::syntax::Name {
+                text: name.clone(),
+                span,
+            },
+            "a node",
+        ) {
+            // The one naming policy spoke.
         } else if graph
             .nodes
             .iter()
@@ -2218,13 +2220,49 @@ impl Checker<'_, '_> {
     /// Whether `name` may introduce a binding here: reserved handler
     /// names and shadowing are refused — which is also what keeps
     /// compile-time constant substitution sound.
-    /// The value-form words the language reserves in EVERY
-    /// binding-introducing position (D-2026-08-13-1, review round 2):
-    /// a masked `json` or `nothing` would make their value forms
-    /// ambiguous (`json[0]`: document or indexing?), so the name
-    /// refuses AT THE DECLARATION, before any use can blur.
+    /// THE naming policy, one door for every live declaration
+    /// (D-2026-08-13-1, review rounds 2–3): the value forms
+    /// (`json`, `nothing`) and the expression literals
+    /// (`true`/`false`/`null`) refuse in EVERY binding-introducing
+    /// position — a masked `json` would make `json[0]` ambiguous,
+    /// and a masked literal is a silent shadow CEL can never read.
+    /// The refusal lands AT THE DECLARATION, one voice, the name's
+    /// span.
     fn guard_binding_name(&mut self, name: &crate::compiler::syntax::Name, what: &str) -> bool {
-        if !matches!(name.text.as_str(), "json" | "nothing") {
+        let reason = match name.text.as_str() {
+            "json" | "nothing" => "a value form of the language",
+            "true" | "false" | "null" => "a literal of the expression language",
+            _ => return true,
+        };
+        self.bag.push(
+            Diagnostic::new(
+                E_NAME_RESERVED,
+                Phase::Resolve,
+                format!(
+                    "`{}` is a reserved word — it names {reason}, never {what}",
+                    name.text
+                ),
+            )
+            .with_span(name.span)
+            .with_field("name", name.text.clone()),
+        );
+        false
+    }
+
+    /// A user type name additionally may not spell a BUILTIN type:
+    /// the builtin resolves first, so the declaration would be dead
+    /// code shadowed in silence (review round 3 — `type text = int`
+    /// compiled to the same program as its absence).
+    fn guard_type_name(&mut self, name: &crate::compiler::syntax::Name) -> bool {
+        if !self.guard_binding_name(name, "a type name") {
+            return false;
+        }
+        let builtin = crate::compiler::parser::simple_scalar_word(&name.text)
+            || matches!(
+                name.text.as_str(),
+                "variant" | "struct" | "map" | "array" | "table" | "enum" | "union" | "decimal"
+            );
+        if !builtin {
             return true;
         }
         self.bag.push(
@@ -2232,7 +2270,7 @@ impl Checker<'_, '_> {
                 E_NAME_RESERVED,
                 Phase::Resolve,
                 format!(
-                    "`{}` is a reserved word — it names a value form of the language, never {what}",
+                    "`{}` is a builtin type — a user type may not shadow it",
                     name.text
                 ),
             )

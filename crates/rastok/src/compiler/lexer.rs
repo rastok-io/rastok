@@ -115,6 +115,32 @@ pub struct TerminatorSet {
     pub keywords: &'static [&'static str],
 }
 
+/// The `json` continuation, classified totally by ONE probe
+/// (D-2026-08-13-1, review round 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsonTail {
+    /// Nothing on the line, or the position's own boundary: the
+    /// bare word stands alone (a contract may judge it as a Word).
+    Bare,
+    /// A document read whole; the cursor sits past it.
+    Document {
+        /// The parsed document.
+        value: rastok_core::cel::Value,
+        /// Where its bytes sit in the source.
+        range: core::ops::Range<usize>,
+    },
+    /// A follower that is neither a document nor the boundary — the
+    /// reserved word admits no CEL continuation.
+    BadForm {
+        /// The follower's offset (diagnostic anchor).
+        at: usize,
+        /// One past the recovery's last consumed byte.
+        recovered_to: usize,
+    },
+    /// A document that opened but does not read.
+    Unreadable(JsonRefusal),
+}
+
 /// A refused json-document delegation: where the document opened,
 /// where the reader stopped, its message, and how far the FORWARD
 /// recovery consumed.
@@ -236,50 +262,53 @@ impl<'a> Lexer<'a> {
         &self.source[offset..]
     }
 
-    /// Advances the cursor — MONOTONE by contract, PRIVATE by
-    /// design (D-2026-08-13-1, review round 2): no public API can
-    /// reposition the scanner. Going backward is a compiler bug,
-    /// refused unconditionally: a clamped violation would silently
-    /// misparse.
-    fn advance_to(&mut self, offset: usize) {
-        assert!(offset >= self.pos, "the cursor never moves backward");
-        self.pos = offset;
-    }
-
-    /// The WHOLE json-document delegation, one atomic forward walk:
-    /// probes the current line for a `{`/`[` opener (host trivia
-    /// stays the host's), hands the window to the document reader,
-    /// and re-syncs the cursor FORWARD — past the document on
-    /// success, to the position's recovery point on refusal. The
-    /// cursor never leaves this method's hands, so no caller can
-    /// express a backward move (D-2026-08-13-1, review round 2).
-    ///
-    /// `None` = no document opens on the line (cursor untouched).
-    pub fn json_document_on_line(
-        &mut self,
-        terminators: &TerminatorSet,
-    ) -> Option<Result<(rastok_core::cel::Value, core::ops::Range<usize>), JsonRefusal>> {
-        let (offset, byte) = self.significant_on_line()?;
-        if !matches!(byte, b'{' | b'[') {
-            return None;
+    /// The WHOLE `json` continuation, one probe and one atomic
+    /// forward walk (D-2026-08-13-1, review rounds 2–3): the word is
+    /// RESERVED, so its follower decides totally — nothing (or the
+    /// position's own boundary) leaves the bare word; `{`/`[` on the
+    /// line hands the window to the document reader; anything else
+    /// is an invalid json form, consumed forward to the position's
+    /// recovery point. Every cursor write is a locally-derived
+    /// forward offset — no repositioning primitive exists.
+    pub fn json_tail(&mut self, terminators: &TerminatorSet) -> JsonTail {
+        let Some((offset, byte)) = self.significant_on_line() else {
+            return JsonTail::Bare;
+        };
+        if matches!(byte, b'{' | b'[') {
+            return match rastok_core::json::parse_value(&self.source[offset..]) {
+                Ok((value, consumed)) => JsonTail::Document {
+                    value,
+                    range: {
+                        let end = offset + consumed;
+                        self.pos = end;
+                        offset..end
+                    },
+                },
+                Err(error) => {
+                    let at = (offset + error.offset).min(self.source.len());
+                    self.pos = offset;
+                    let recovered_to = self.skip_json_recovery(terminators);
+                    JsonTail::Unreadable(JsonRefusal {
+                        opener: offset,
+                        at,
+                        message: error.message,
+                        recovered_to,
+                    })
+                }
+            };
         }
-        match rastok_core::json::parse_value(&self.source[offset..]) {
-            Ok((value, consumed)) => {
-                let end = offset + consumed;
-                self.advance_to(end);
-                Some(Ok((value, offset..end)))
-            }
-            Err(error) => {
-                let at = (offset + error.offset).min(self.source.len());
-                self.advance_to(offset);
-                let recovered_to = self.skip_json_recovery(terminators);
-                Some(Err(JsonRefusal {
-                    opener: offset,
-                    at,
-                    message: error.message,
-                    recovered_to,
-                }))
-            }
+        if matches!(byte, b')' | b']' | b'}') || self.terminates_at(offset, byte, terminators) {
+            // The position's own boundary: the word stands alone.
+            return JsonTail::Bare;
+        }
+        // A follower that is neither a document nor the boundary:
+        // the json form is invalid — `json` cannot begin a CEL
+        // expression, being reserved (review round 3).
+        self.pos = offset;
+        let recovered_to = self.skip_json_recovery(terminators);
+        JsonTail::BadForm {
+            at: offset,
+            recovered_to,
         }
     }
 
@@ -424,8 +453,7 @@ impl<'a> Lexer<'a> {
     /// next newline outside a comment. A value scan starts past its
     /// same-line trivia, while a bare newline still reads as an empty
     /// expression, per the delimitation rules.
-    pub fn advance_within_line(&mut self, bag: &mut Bag) {
-        let _ = &bag;
+    pub fn advance_within_line(&mut self) {
         loop {
             match self.peek_byte() {
                 Some(b' ' | b'\t' | b'\r') => self.pos += 1,
@@ -458,9 +486,7 @@ impl<'a> Lexer<'a> {
         loop {
             match *bytes.get(pos)? {
                 b' ' | b'\t' | b'\r' | b'\n' => pos += 1,
-                b'/' if rastok_core::trivia::comment_at(self.source, pos).is_some() => {
-                    let comment = rastok_core::trivia::comment_at(self.source, pos)
-                        .unwrap_or_else(|| unreachable!("guard just matched"));
+                b'/' if let Some(comment) = rastok_core::trivia::comment_at(self.source, pos) => {
                     if !comment.terminated {
                         return None;
                     }
@@ -497,9 +523,7 @@ impl<'a> Lexer<'a> {
             match *bytes.get(pos)? {
                 b'\n' => return None,
                 b' ' | b'\t' | b'\r' => pos += 1,
-                b'/' if rastok_core::trivia::comment_at(self.source, pos).is_some() => {
-                    let comment = rastok_core::trivia::comment_at(self.source, pos)
-                        .unwrap_or_else(|| unreachable!("guard just matched"));
+                b'/' if let Some(comment) = rastok_core::trivia::comment_at(self.source, pos) => {
                     if !comment.terminated || comment.multiline {
                         // The comment swallows the rest of the line.
                         return None;
@@ -587,7 +611,10 @@ impl<'a> Lexer<'a> {
                 continue;
             }
             // Strong boundaries: impossible in JSON outside strings.
-            if byte == b';' || byte == b')' {
+            // A `)` matching a paren the GARBAGE opened (`json(1)`,
+            // review round 3) pops instead — the CALLER's `)` always
+            // arrives with an empty stack and still stops the walk.
+            if byte == b';' || (byte == b')' && expected.last() != Some(&b')')) {
                 return self.pos;
             }
             if expected.is_empty()
@@ -599,7 +626,8 @@ impl<'a> Lexer<'a> {
                 b'"' => in_string = true,
                 b'{' => expected.push(b'}'),
                 b'[' => expected.push(b']'),
-                b'}' | b']' => {
+                b'(' => expected.push(b')'),
+                b'}' | b']' | b')' => {
                     if expected.last() == Some(&byte) {
                         expected.pop();
                     } else {
@@ -616,17 +644,21 @@ impl<'a> Lexer<'a> {
     }
 
     fn at_terminator(&self, byte: u8, terminators: &TerminatorSet) -> bool {
+        self.terminates_at(self.pos, byte, terminators)
+    }
+
+    fn terminates_at(&self, pos: usize, byte: u8, terminators: &TerminatorSet) -> bool {
         if terminators.bytes.contains(&byte) {
             return true;
         }
         if terminators.newline && byte == b'\n' {
             return true;
         }
-        if terminators.arrow && self.source.as_bytes()[self.pos..].starts_with(b"->") {
+        if terminators.arrow && self.source.as_bytes()[pos..].starts_with(b"->") {
             return true;
         }
-        if !terminators.keywords.is_empty() && self.at_word_boundary() {
-            let rest = &self.source[self.pos..];
+        if !terminators.keywords.is_empty() && self.word_boundary_at(pos) {
+            let rest = &self.source[pos..];
             return terminators.keywords.iter().any(|keyword| {
                 rest.starts_with(keyword)
                     && !rest[keyword.len()..]
@@ -638,12 +670,12 @@ impl<'a> Lexer<'a> {
         false
     }
 
-    fn at_word_boundary(&self) -> bool {
-        self.pos == 0
+    fn word_boundary_at(&self, pos: usize) -> bool {
+        pos == 0
             || !self
                 .source
                 .as_bytes()
-                .get(self.pos - 1)
+                .get(pos - 1)
                 .copied()
                 .is_some_and(is_ident_continue)
     }

@@ -154,6 +154,40 @@ Amended (review round 2, 2026-08-13) — four more commitments:
 Statically `decimal("…")` staying `Dyn`, and the one-seal-rule
 decimal model, are unchanged by this round.
 
+Amended (review round 3, 2026-08-13) — closing the authorities:
+
+- **ONE naming policy** (`guard_binding_name`) at every live
+  declaration door: graph names, lab names, boundary ports, node
+  ports, nodes, val/var/let, type names. The reserved set grows to
+  the expression literals (`true`/`false`/`null` — a masked literal
+  is a shadow CEL can never read), and a user `type` may not spell
+  a BUILTIN type (the builtin resolves first; the declaration was
+  silently dead — `type text = int` compiled to the same program
+  as its absence). `DECL_KW` words are NOT reserved — declaration
+  positions are structural; the earlier grammar draft claiming
+  `DECL_KW` unmaskable is superseded by the enforced section.
+- **`json` is a whole keyword.** Its follower decides TOTALLY:
+  `{`/`[` open the document; the position's boundary leaves the
+  bare word (a contract Word); ANY other follower is an invalid
+  json form (E-JSON-VALUE, forward recovery) — no CEL fallback
+  exists, since the reserved word can never be a name. `json`
+  leaves RAW_TAGS/TAG_WORDS (its entries were dead). The recovery
+  stack tracks garbage-opened parens (`json(1)` swallows whole;
+  a CALLER's `)` still stops the walk on an empty stack).
+- **A struct body on a tag refuses in the parser** — the AST's
+  `TaggedBody::Struct` variant is DELETED; the grammar's dead-form
+  note is now the code's behavior (D-2026-08-12-1 alignment).
+- **No panic on the new paths**: the double probes and their
+  `unreachable!` bridges are gone (if-let guards; the json
+  continuation is ONE lexer call), and the `advance_to` primitive
+  is deleted outright — every cursor write is a locally-derived
+  forward offset inside the owning method.
+- The grammar's normative text loses its pre-factoring twins
+  (`tagged_value`/`tagged_block_value`/`arg_list` fold into
+  `value_after_ident`), the predictive table points at the
+  factored family, and the recovery prose no longer describes a
+  backward walk.
+
 ## D-2026-08-12-1 — Node attributes: one syntax, one contract metamodel
 
 A configurable property of a Node is an **Attribute**, and every

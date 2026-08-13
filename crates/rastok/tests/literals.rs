@@ -832,6 +832,18 @@ fn comments_are_trivia_in_every_expression_form() {
     let bare =
         "graph g : App {\n  operator o {\n    on in { out = 1 + 2 }\n  }\n  . -> o -> .\n}\n";
     assert_eq!(hash(guarded), hash(bare), "`;`/`}}` inside a comment");
+    // A line's end only ends a value at depth ZERO (review round 2's
+    // blocker, its exact reproductions): comments inside a
+    // multiline array and a parenthesized guard are trivia, and the
+    // commented twin is the SAME program.
+    let array_bare = "graph g : App {\n  operator o {\n    on in {\n      out = size([\n        1,\n        2\n      ])\n    }\n  }\n  . -> o -> .\n}\n";
+    let array_line = "graph g : App {\n  operator o {\n    on in {\n      out = size([\n        1, // premier\n        2\n      ])\n    }\n  }\n  . -> o -> .\n}\n";
+    let array_block = "graph g : App {\n  operator o {\n    on in {\n      out = size([\n        1, /* premier */\n        2\n      ])\n    }\n  }\n  . -> o -> .\n}\n";
+    assert_eq!(hash(array_bare), hash(array_line), "array + line comment");
+    assert_eq!(hash(array_bare), hash(array_block), "array + block comment");
+    let guard_bare = "graph g : App {\n  operator o {\n    on in where (\n      true\n      && true\n    ) {\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+    let guard_line = "graph g : App {\n  operator o {\n    on in where (\n      true // condition\n      && true\n    ) {\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+    assert_eq!(hash(guard_bare), hash(guard_line), "guard + line comment");
 }
 
 #[test]

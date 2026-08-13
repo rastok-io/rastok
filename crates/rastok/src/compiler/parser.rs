@@ -90,9 +90,7 @@ const SYNC_WORDS: &[&str] = &[
 ];
 
 /// Tags whose block body is raw guest text, never read by the host.
-const RAW_TAGS: &[&str] = &[
-    "jq", "bash", "sql", "python", "rust", "json", "text", "base64",
-];
+const RAW_TAGS: &[&str] = &["jq", "bash", "sql", "python", "rust", "text", "base64"];
 
 /// Tag words that open tagged-value expressions: foreign literals
 /// (guests, raw literals, data formats, `json`) and the
@@ -106,7 +104,6 @@ const TAG_WORDS: &[&str] = &[
     "sql",
     "python",
     "rust",
-    "json",
     "avro",
     "protobuf",
     "parquet",
@@ -277,7 +274,7 @@ impl<'src> Parser<'src, '_> {
         }
         // Same-line comments before a value are trivia; a bare
         // newline is not — it still reads as an empty expression.
-        self.lexer.advance_within_line(self.bag);
+        self.lexer.advance_within_line();
         let token = self.lexer.cel_expr(terminators, self.bag);
         self.last_end = token.span.range().end;
         CelExpr {
@@ -1651,66 +1648,63 @@ impl<'src> Parser<'src, '_> {
         Value::Cel(self.cel_from(ident.span.range().start, position))
     }
 
-    /// The `json` continuation: a DOCUMENT (`{`/`[` on the line),
-    /// the bare word alone, or a CEL expression beginning with the
-    /// word — `{` and `[` are the ONLY special followers
-    /// (D-2026-08-13-1, review round). Raw inspection only — the
-    /// delegated body never meets the host lexer.
+    /// The `json` continuation — the word is RESERVED, so ONE lexer
+    /// probe classifies it totally (D-2026-08-13-1, review round 3):
+    /// a document, the bare word (a contract may judge the Word), or
+    /// an invalid json form. No CEL fallback exists — `json` can
+    /// never be a name.
     fn json_tail(&mut self, ident: &Token<'_>, position: &TerminatorSet) -> Value {
-        let probe = self.lexer.significant_on_line();
-        match probe {
-            Some((_, b'{' | b'[')) => {
-                // The document reader owns its self-delimiting
-                // braces; host trivia before the opener stayed the
-                // host's, no trim exists on this path, and the
-                // cursor re-sync lives INSIDE the lexer — forward
-                // only, by construction.
-                match self
-                    .lexer
-                    .json_document_on_line(position)
-                    .unwrap_or_else(|| unreachable!("the probe just saw the opener"))
-                {
-                    Ok((value, range)) => {
-                        self.last_end = range.end;
-                        Value::Json {
-                            value,
-                            span: Span::new(self.source_id, range.start..range.end),
-                        }
-                    }
-                    Err(refusal) => {
-                        let source_len = self.lexer.source_from(0).len();
-                        // An EOF point is an EMPTY range (Span's own
-                        // contract); anything else underlines one
-                        // byte.
-                        let end = (refusal.at + 1).min(source_len);
-                        self.bag.push(
-                            crate::diagnostics::Diagnostic::new(
-                                E_JSON_VALUE,
-                                crate::diagnostics::Phase::Parse,
-                                format!("the JSON value does not read: {}", refusal.message),
-                            )
-                            .with_span(Span::new(self.source_id, refusal.at..end))
-                            .with_field("detail", refusal.message.clone()),
-                        );
-                        self.last_end = refusal.recovered_to;
-                        Value::Error(Span::new(self.source_id, refusal.opener..refusal.opener))
-                    }
+        match self.lexer.json_tail(position) {
+            crate::compiler::lexer::JsonTail::Bare => Value::Cel(CelExpr {
+                text: String::from(ident.text),
+                span: ident.span,
+            }),
+            crate::compiler::lexer::JsonTail::Document { value, range } => {
+                self.last_end = range.end;
+                Value::Json {
+                    value,
+                    span: Span::new(self.source_id, range.start..range.end),
                 }
             }
-            None if position.newline => {
-                // Nothing significant on the line and the line ends
-                // the value: the bare word stands alone, span exact —
-                // a crossing comment stays HOST trivia
-                // (D-2026-08-13-1).
-                Value::Cel(CelExpr {
-                    text: String::from(ident.text),
-                    span: ident.span,
-                })
+            crate::compiler::lexer::JsonTail::BadForm { at, recovered_to } => {
+                self.bag.push(
+                    crate::diagnostics::Diagnostic::new(
+                        E_JSON_VALUE,
+                        crate::diagnostics::Phase::Parse,
+                        "`json` takes a document ({ … } or [ … }) on its line; a scalar \
+                         is CEL's — write it directly, or `decimal(\"…\")` for an exact \
+                         number",
+                    )
+                    .with_span(Span::new(
+                        self.source_id,
+                        at..(at + 1).min(self.source_len()),
+                    ))
+                    .with_field("detail", "not a document after `json`"),
+                );
+                self.last_end = recovered_to;
+                Value::Error(Span::new(self.source_id, at..at))
             }
-            // A terminator on the line, or any CEL continuation:
-            // the word belongs to CEL.
-            _ => Value::Cel(self.cel_from(ident.span.range().start, position)),
+            crate::compiler::lexer::JsonTail::Unreadable(refusal) => {
+                // An EOF point is an EMPTY range (Span's own
+                // contract); anything else underlines one byte.
+                let end = (refusal.at + 1).min(self.source_len());
+                self.bag.push(
+                    crate::diagnostics::Diagnostic::new(
+                        E_JSON_VALUE,
+                        crate::diagnostics::Phase::Parse,
+                        format!("the JSON value does not read: {}", refusal.message),
+                    )
+                    .with_span(Span::new(self.source_id, refusal.at..end))
+                    .with_field("detail", refusal.message.clone()),
+                );
+                self.last_end = refusal.recovered_to;
+                Value::Error(Span::new(self.source_id, refusal.opener..refusal.opener))
+            }
         }
+    }
+
+    fn source_len(&self) -> usize {
+        self.lexer.source_from(0).len()
     }
 
     /// The CEL continuation of an already-consumed prefix: the END
@@ -1869,7 +1863,27 @@ impl<'src> Parser<'src, '_> {
                     span: raw.span,
                 })
             } else {
-                self.struct_body().map(TaggedBody::Struct)
+                // A struct body on a tag is a DEAD form
+                // (D-2026-08-12-1) — the grammar said so, the parser
+                // now agrees (review round 3): one migration voice,
+                // the braces swallowed RAW, the recovery form back.
+                self.bag.push(
+                    Diagnostic::new(
+                        E_PARSE_EXPECTED,
+                        Phase::Parse,
+                        format!(
+                            "`{} {{ … }}` is a dead struct-bodied tag; a tag takes \
+                             parenthesized arguments, and only the raw-bodied tags \
+                             take a block (D-2026-08-12-1)",
+                            tag.text
+                        ),
+                    )
+                    .with_span(tag.span)
+                    .with_field("expected", "parenthesized arguments")
+                    .with_field("found", "a struct body"),
+                );
+                self.lexer.skip_balanced_raw(b'{', b'}');
+                return Value::Error(tag.span);
             }
         } else {
             None
@@ -2144,6 +2158,13 @@ impl<'src> Parser<'src, '_> {
     }
 }
 
+/// Whether `word` spells a builtin scalar type — the type-name
+/// guard's question (review round 3).
+#[must_use]
+pub fn simple_scalar_word(word: &str) -> bool {
+    simple_scalar(word).is_some()
+}
+
 fn simple_scalar(word: &str) -> Option<ScalarType> {
     Some(match word {
         "bool" => ScalarType::Bool,
@@ -2251,14 +2272,14 @@ mod tests {
             // `json`: a document, or CEL's word.
             ("json + object", "json {\"a\": 1}", "json"),
             ("json + array", "json [1]", "json"),
-            // `{` and `[` are json's ONLY special followers
-            // (D-2026-08-13-1, review round): every other spelling —
-            // a former scalar included — is CEL beginning with the
-            // word `json`, judged by CEL's own rules.
-            ("json + scalar spelling", "json 1", "cel"),
+            // `json` is a RESERVED word (D-2026-08-13-1, review
+            // round 3): `{`/`[` open its document, the bare word
+            // stands alone for the contract to judge, and any other
+            // follower is an invalid json form — never CEL.
+            ("json + scalar spelling", "json 1", "error"),
             ("json alone", "json", "cel"),
-            ("json + parens", "json(1)", "cel"),
-            ("json + alien byte", "json @", "cel"),
+            ("json + parens", "json(1)", "error"),
+            ("json + alien byte", "json @", "error"),
         ] {
             let (value, bag) = first_value(value);
             let got = match &value {
