@@ -5,6 +5,72 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-13-1 — A monotone parser, json documents, and `decimal(…)`
+
+The value parser is stabilized around three commitments.
+
+**The cursor never moves backward.** Classification OBSERVES form
+(a raw byte probe sharing the lexer's exact trivia rules, or one
+peeked token); once a branch is chosen, ONE consumer owns the
+bytes and every advance is forward — recovery included. The
+identifier prefix is left-factored: `value ::= … | IDENT
+ident_tail`, and a consumed prefix is never handed back — a CEL
+continuation re-reads the immutable `source[prefix_start..end]`
+slice, which is a bounded re-read, not a parser rewind. The same
+factoring serves statements (`IDENT path_tail statement_tail`:
+`= value` makes the consumed path the lvalue; anything else makes
+it a CEL prefix — no try-and-rewind). `Lexer::rewind` is deleted:
+the invariant is the absence of the method. The host grammar is
+LL(1) after this factoring; sub-languages are selected by an
+explicit syntactic form and then read by their dedicated reader,
+each byte having exactly one lexical authority (host trivia before
+an opener belongs to the host — commented and uncommented
+spellings share one AST, one plan, one hash; the JSON reader owns
+its self-delimiting braces; raw bodies sit between host-owned
+delimiters).
+
+**`json` takes a DOCUMENT.** `json { … }` and `json [ … ]` are the
+only literal forms; the scalar spellings (`json 2`, `json true`,
+`json null`, `json "x"`) are REMOVED — scalars are CEL's
+(`2`, `true`, `null`, `"x"`), and the removal costs nothing
+because exactness moved to `decimal(…)` (below). A scalar after
+`json` refuses with the migration hint; a bare `json` at the end
+of a value is an ordinary word for the contract to judge; any
+other continuation is a CEL expression beginning with the word
+`json`. The runtime jsonl codec is UNTOUCHED: scalar lines remain
+valid wire documents. `json [1] ≠ [1]` keeps the prefix's meaning
+(the sealed `[type, root]` identity of D-2026-08-10-6 is
+unchanged for documents).
+
+**`decimal("…")` is CEL's exact-number constructor** — exactness
+is a capability of the expression language, not a side effect of
+a JSON prefix. The argument is a standard JSON number; the scale
+is DECLARED — as written: `decimal("1.50")` is `{unscaled 150,
+scale 2}`, trailing zeros significant, exponents reaching
+negative scales — with the full decimal128 domain of the Rust
+type (38 significant digits, scale ∈ [−6143, +6144]), matching
+SQL NUMERIC semantics. The D-2026-08-10-7 integer fold applies to
+the WRITTEN scale: `decimal("2")` is `Int(2)` (scale ≤ 0 fitting
+i64 folds), while `decimal("2.0")` is `{20, 1}` — a declared
+decimal. Structural equality distinguishes scales
+(`{150,2} ≠ {15,1}`): the constructor preserves what you wrote;
+dynamic decimals inside json documents keep their MINIMAL-scale
+rule unchanged. Statically the result is `variant`, like every
+dynamic decimal. **Rejected:** keeping `json <number>` alive as
+the exactness door (a data-format prefix is the wrong owner);
+minimal-scale normalization in the constructor (it would erase
+declared NUMERIC scale); adding a second number grammar (the
+house JSON number rules are THE rules).
+
+Consequence — **package format v6**: `decimal` enters the plan's
+call alphabet (fn id 4), and a new id extends the format's
+vocabulary, so the categorical rule bumps the version (v5 joins
+the refused drafts, future versions refuse by number). No
+identity moves: the semantic hash covers the HIR canonical form,
+not the package (v4 precedent) — goldens re-bless for the
+version byte alone, and the embedded spike re-proves the same
+hash on target.
+
 ## D-2026-08-12-1 — Node attributes: one syntax, one contract metamodel
 
 A configurable property of a Node is an **Attribute**, and every

@@ -324,15 +324,16 @@ fn a_null_line_is_the_null_value() {
 
 #[test]
 fn json_null_is_an_executable_value() {
-    // The decision says `json` covers the JSON model exactly —
-    // including `null`, which must EXECUTE, not merely compile.
+    // `json` takes documents only (D-2026-08-13-1), and a BARE
+    // `null` emission stays deferred with the null static type —
+    // but null inside a document must EXECUTE, not merely compile.
     let source =
-        "graph g : App {\n  operator o {\n    on in { out = json null }\n  }\n  . -> o -> .\n}\n";
+        "graph g : App {\n  operator o {\n    on in { out = json [null] }\n  }\n  . -> o -> .\n}\n";
     let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(
         outputs[0].envelope.data(),
-        &Data::materialized(Value::Null),
+        &Data::materialized(Value::Array(vec![Value::Null])),
         "the null value crosses"
     );
 }

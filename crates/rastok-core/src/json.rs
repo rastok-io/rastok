@@ -31,6 +31,142 @@ pub fn decimal_in_domain(unscaled: i128, scale: i32) -> bool {
     (MIN_SCALE..=MAX_SCALE).contains(&scale) && unscaled.unsigned_abs() < 10_u128.pow(MAX_DIGITS)
 }
 
+/// A declared exact number, as `decimal("…")` reads it
+/// (D-2026-08-13-1): the WRITTEN scale is preserved — trailing
+/// zeros significant, exponents reaching negative scales — and the
+/// D-2026-08-10-7 integer fold applies to the written scale alone
+/// (scale ≤ 0 whose value fits i64 is an int).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclaredNumber {
+    /// The written scale was ≤ 0 and the value fits i64.
+    Int(i64),
+    /// A declared decimal at its WRITTEN scale.
+    Decimal {
+        /// The coefficient, sign included.
+        unscaled: i128,
+        /// The written scale (fraction digits minus exponent).
+        scale: i32,
+    },
+}
+
+/// Reads a standard JSON number AS WRITTEN (D-2026-08-13-1) — the
+/// `decimal("…")` constructor's parser. One number grammar in the
+/// system: JSON's exactly (optional `-`, `0 | [1-9]digits`,
+/// optional fraction, optional exponent). The coefficient keeps
+/// every written digit (at most [`MAX_DIGITS`] significant); the
+/// scale is declared, bounded by [`MIN_SCALE`]..=[`MAX_SCALE`].
+///
+/// # Errors
+///
+/// A human-readable reason: not a JSON number, trailing content,
+/// or outside the decimal128 domain.
+pub fn parse_declared_number(text: &str) -> Result<DeclaredNumber, String> {
+    let bytes = text.as_bytes();
+    let mut pos = 0usize;
+    let negative = bytes.first() == Some(&b'-');
+    if negative {
+        pos += 1;
+    }
+    let int_start = pos;
+    while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+        pos += 1;
+    }
+    let int_digits = &text[int_start..pos];
+    if int_digits.is_empty() {
+        return Err(String::from("a JSON number starts with a digit"));
+    }
+    if int_digits.len() > 1 && int_digits.starts_with('0') {
+        return Err(String::from("a JSON number has no leading zero"));
+    }
+    let mut frac_digits = "";
+    if bytes.get(pos) == Some(&b'.') {
+        pos += 1;
+        let frac_start = pos;
+        while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+            pos += 1;
+        }
+        frac_digits = &text[frac_start..pos];
+        if frac_digits.is_empty() {
+            return Err(String::from("a fraction needs at least one digit"));
+        }
+    }
+    let mut exponent: i64 = 0;
+    if matches!(bytes.get(pos), Some(b'e' | b'E')) {
+        pos += 1;
+        let exp_negative = match bytes.get(pos) {
+            Some(b'-') => {
+                pos += 1;
+                true
+            }
+            Some(b'+') => {
+                pos += 1;
+                false
+            }
+            _ => false,
+        };
+        let exp_start = pos;
+        while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+            pos += 1;
+        }
+        let digits = &text[exp_start..pos];
+        if digits.is_empty() {
+            return Err(String::from("an exponent needs at least one digit"));
+        }
+        exponent = digits
+            .parse::<i64>()
+            .map_err(|_| String::from("the exponent is out of range"))?;
+        if exp_negative {
+            exponent = -exponent;
+        }
+    }
+    if pos != bytes.len() {
+        return Err(alloc::format!(
+            "trailing content after the number: `{}`",
+            &text[pos..]
+        ));
+    }
+    // The coefficient keeps every WRITTEN digit.
+    let mut unscaled: i128 = 0;
+    let mut significant = 0u32;
+    for byte in int_digits.bytes().chain(frac_digits.bytes()) {
+        let digit = i128::from(byte - b'0');
+        if unscaled != 0 || digit != 0 {
+            significant += 1;
+        }
+        if significant > MAX_DIGITS {
+            return Err(alloc::format!("more than {MAX_DIGITS} significant digits"));
+        }
+        unscaled = unscaled
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(digit))
+            .ok_or_else(|| String::from("the coefficient overflows"))?;
+    }
+    if negative {
+        unscaled = -unscaled;
+    }
+    let scale = i64::try_from(frac_digits.len())
+        .ok()
+        .and_then(|frac| frac.checked_sub(exponent))
+        .and_then(|scale| i32::try_from(scale).ok())
+        .ok_or_else(|| String::from("the scale is out of range"))?;
+    if !(MIN_SCALE..=MAX_SCALE).contains(&scale) {
+        return Err(alloc::format!(
+            "the scale {scale} is outside [{MIN_SCALE}, {MAX_SCALE}]"
+        ));
+    }
+    // The integer fold, on the WRITTEN scale (D-2026-08-10-7).
+    if scale <= 0 {
+        let folded = 10_i128
+            .checked_pow(scale.unsigned_abs())
+            .and_then(|factor| unscaled.checked_mul(factor))
+            .and_then(|value| i64::try_from(value).ok());
+        if let Some(value) = folded {
+            return Ok(DeclaredNumber::Int(value));
+        }
+    }
+    Ok(DeclaredNumber::Decimal { unscaled, scale })
+}
+
 /// The D-2026-08-10-7 invariants of a DYNAMIC decimal, shared by
 /// the package decoder and the plan validator (`encode ⇒ decode`
 /// demands one rule): budget bounds, minimal scale, and the

@@ -38,7 +38,7 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 /// targets, the travelling `app`/`ext` schemas, and the rest of the
 /// reform's tables. A new format is a new version, and an old
 /// decoder refuses it by name, exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -483,6 +483,10 @@ fn expr_tree(expr: &cel::Expr) -> Cbor {
                 cel::Function::Duration => 1,
                 cel::Function::Timestamp => 2,
                 cel::Function::Size => 3,
+                // v6 (D-2026-08-13-1): the exact-number constructor
+                // extends the call alphabet — the categorical rule
+                // of plan-package.md bumps the format.
+                cel::Function::Decimal => 4,
             }),
             Cbor::Array(args.iter().map(expr_tree).collect()),
         ]),
@@ -1101,6 +1105,7 @@ fn expr_from(tree: &Cbor) -> Result<cel::Expr, DecodeError> {
                 1 => cel::Function::Duration,
                 2 => cel::Function::Timestamp,
                 3 => cel::Function::Size,
+                4 => cel::Function::Decimal,
                 _ => return Err(err("function")),
             },
             args: args.iter().map(expr_from).collect::<Result<Vec<_>, _>>()?,

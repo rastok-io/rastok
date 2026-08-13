@@ -411,6 +411,10 @@ pub enum Function {
     Timestamp,
     /// `size(text | bytes | list | map)`
     Size,
+    /// `decimal("1.50")` — CEL's exact-number constructor: a
+    /// standard JSON number at its WRITTEN scale (D-2026-08-13-1);
+    /// the integer fold applies to the written scale.
+    Decimal,
 }
 
 /// Compiles expression text against a signature into a typed tree.
@@ -1060,6 +1064,7 @@ impl<'a> ExprParser<'_, 'a> {
                         "duration" => Function::Duration,
                         "timestamp" => Function::Timestamp,
                         "size" => Function::Size,
+                        "decimal" => Function::Decimal,
                         "now" => {
                             return Err(Diagnostic {
                                 kind: DiagnosticKind::General,
@@ -1279,7 +1284,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
             }
         }
         Expr::Call { function, args } => match function {
-            Function::Duration | Function::Timestamp => {
+            Function::Duration | Function::Timestamp | Function::Decimal => {
                 if args.len() != 1 {
                     return Err(fail(String::from("this function takes one argument")));
                 }
@@ -1289,6 +1294,10 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
                 }
                 Ok(match function {
                     Function::Duration => Type::Duration,
+                    // A dynamic decimal conforms to no precise M0
+                    // type — `variant`, narrowed before use
+                    // (D-2026-08-10-7).
+                    Function::Decimal => Type::Dyn,
                     _ => Type::Timestamp,
                 })
             }
@@ -1546,6 +1555,17 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
                 }
                 (Function::Timestamp, [Value::Text(text)]) => {
                     parse_timestamp(text).map(Value::Timestamp)
+                }
+                (Function::Decimal, [Value::Text(text)]) => {
+                    match crate::json::parse_declared_number(text) {
+                        Ok(crate::json::DeclaredNumber::Int(value)) => Ok(Value::Int(value)),
+                        Ok(crate::json::DeclaredNumber::Decimal { unscaled, scale }) => {
+                            Ok(Value::Decimal { unscaled, scale })
+                        }
+                        Err(reason) => Err(fault(alloc::format!(
+                            "`{text}` is not an exact decimal: {reason}"
+                        ))),
+                    }
                 }
                 (Function::Size, [Value::Text(text)]) => {
                     Ok(Value::Int(text.chars().count() as i64))

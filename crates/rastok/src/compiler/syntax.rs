@@ -524,8 +524,10 @@ pub enum Value {
         /// Where it was written.
         span: Span,
     },
-    /// `json <json-value>` — one complete JSON value, read by the
-    /// house reader, always `variant` (D-2026-08-10-6/-7).
+    /// `json <document>` — one complete JSON DOCUMENT (`{ … }` or
+    /// `[ … ]`, D-2026-08-13-1), read by the house reader, always
+    /// `variant` (D-2026-08-10-6/-7). A scalar spelling refuses
+    /// with the `decimal(...)`/CEL migration.
     Json {
         /// The parsed value — exact numbers, duplicate keys refused.
         value: rastok_core::cel::Value,

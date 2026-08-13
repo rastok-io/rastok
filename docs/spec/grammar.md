@@ -34,9 +34,19 @@ Rules :
 
 - **Attributes always use `=`.** `command = "codex"`, `args = ["app-server"]`, `timeout = duration("5s")`, `env = { "HOME": "/tmp" }`. No exceptions — there are NO configuration sub-blocks (`env { … }`, `init { … }`, `tls { … }`, `auth oauth2_client_credentials { … }` are dead forms; they refuse with a migration hint, D-2026-08-12-1).
 - **Type annotations always use `:`.** `input msg: struct`, `var count: int`, `connector X : HttpClient`. Never `=`.
-- **An attribute value belongs to one of FOUR families** (D-2026-08-12-1): a BARE WORD from the contract's closed choice (`mode = job`); a CEL EXPRESSION, where a tag with positional arguments and no body is an ordinary call (`duration("5s")`, `asset("logo.png")`); a BRACED LITERAL — `=` entries build a struct, `:` entries a map (D-2026-08-10-6), replaced atomically, never patched; or a FOREIGN LITERAL `tag [(binding)] body` whose body belongs to the tag's reader (`sql { … }`, `text { … }`, `base64(ct) { … }`, `jq(request) { … }`, `json <value>` — self-delimiting). Tagged INITIALIZERS (`on_crash { … }`, `measure { … }`, `exponential { … }`) are dead: a plain struct plus the attribute's name suffices, a former discriminant is a closed-choice FIELD (`Loop.backoff = { curve = exponential, … }`).
+- **An attribute value belongs to one of FOUR families** (D-2026-08-12-1): a BARE WORD from the contract's closed choice (`mode = job`); a CEL EXPRESSION, where a tag with positional arguments and no body is an ordinary call (`duration("5s")`, `asset("logo.png")`); a BRACED LITERAL — `=` entries build a struct, `:` entries a map (D-2026-08-10-6), replaced atomically, never patched; or a FOREIGN LITERAL `tag [(binding)] body` whose body belongs to the tag's reader (`sql { … }`, `text { … }`, `base64(ct) { … }`, `jq(request) { … }`, `json { … }` / `json [ … ]` — a DOCUMENT,
+self-delimiting; scalar spellings are dead, scalars are CEL's and
+exactness is `decimal("…")`, D-2026-08-13-1). Tagged INITIALIZERS (`on_crash { … }`, `measure { … }`, `exponential { … }`) are dead: a plain struct plus the attribute's name suffices, a former discriminant is a closed-choice FIELD (`Loop.backoff = { curve = exponential, … }`).
 - **Dotted attribute names are owner qualification ONLY** (`Loop.backoff`, `Saga.timeout`, `HttpClient.timeout`) — never a patch path into a composite value.
-- **The form is decided at the second token** — see `Formal grammar` at the bottom for the LL(1) decision table.
+- **The host grammar is LL(1) after left-factoring the identifier
+  prefixes** (D-2026-08-13-1): classification observes the form (one
+  raw significant byte, or one peeked token) without irreversible
+  effect; once chosen, ONE branch consumes and the cursor never moves
+  backward. Sub-languages are selected by an explicit syntactic form,
+  then read by their dedicated reader — each byte has one lexical
+  authority, and host trivia (comments included) never changes an
+  AST, a plan, or a hash. See `Formal grammar` for the decision
+  table.
 
 Example mixing all forms :
 
@@ -894,7 +904,7 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 | `array`   | `[ v, v, … ]`                                  | ordered sequence ; `array<struct>` is the relational `table` view |
 | `text`    | `"…"` ; `text { … }`                          | CEL string, or the VERBATIM block — first newline excluded, margin set by the closing brace, no interpolation, braces balanced |
 | `bytes`   | `base64 { … }` ; `asset("path")`              | RFC 4648 standard, mandatory padding, ASCII whitespace ignored ; or build-time repo bytes (D-2026-08-10-5). `hex` and `bytes …` forms are DEAD |
-| `variant` | `json <json-value>`                           | any JSON value directly (`json { "k": 1 }`, `json [1]`, `json 42`) ; always `variant` ; duplicate keys refuse ; numbers exact per D-2026-08-10-7 |
+| `variant` | `json <json-document>`                        | a JSON DOCUMENT (`json { "k": 1 }`, `json [1]`) ; always `variant` ; duplicate keys refuse ; numbers exact per D-2026-08-10-7 ; a scalar spelling refuses — scalars are CEL's, exact numbers `decimal("…")` (D-2026-08-13-1) |
 | whole payload | `asset("path", "content_type")` ; `base64("ct") { … }` | fresh bytes + `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
 
 The `<type> file { … }` forms are DEAD — `asset` replaces them for
@@ -1209,7 +1219,7 @@ TYPE_KW    = { "variant",                                             // the val
                "decimal", "date", "timestamp", "timestamp_ntz",      // scalar logical
                "time", "uuid", "duration" }
 TAG_KW     = { "jq", "bash", "sql", "python", "rust",                // guests — raw bodies
-               "json", "avro", "protobuf", "parquet", "msgpack",     // data formats — `json` is the self-delimiting json_value literal (D-2026-08-10-6)
+               "json", "avro", "protobuf", "parquet", "msgpack",     // data formats — `json` takes a self-delimiting DOCUMENT ({…}/[…]; scalars are dead, D-2026-08-13-1)
                "base64", "csv",                                       // `hex` and `file` are DEAD (D-2026-08-10-5/-6)
                "text",                                                // the verbatim block tag (also a TYPE_KW — position disambiguates)
                "asset",                                               // build-time repo bytes (D-2026-08-10-5) — parens, no body
@@ -1235,7 +1245,7 @@ LITERAL_KW = { "true", "false", "null", "nothing",
 `DECL_KW` introduces declarations, labeled blocks, handler clauses
 (`where`/`having`/`within`/`last`) and the narrowing operator `as`.
 `TAG_KW` introduces foreign-literal expressions (`jq { ... }`,
-`jq(req) { ... }`, `base64(ct) { ... }`, `json <value>`) and the
+`jq(req) { ... }`, `base64(ct) { ... }`, `json { ... }`/`json [ ... ]`) and the
 expression-space constructors (`bounded(64)` — parens, no body).
 `TYPE_KW` names the value-type tree — `variant` (top), the
 composites, and the scalar physical / logical types. `LITERAL_KW` are enum-like
@@ -1483,7 +1493,8 @@ map_entry         ::= STRING ":" value                                // text ke
                                                                       //   (deferred by name — D-2026-08-10-6 as amended) ;
                                                                       //   `json { … }` covers dynamic nesting but is
                                                                       //   always `variant`, never a typed struct
-json_value        ::= JSON_VALUE                                      // one complete JSON value, delegated to the house reader :
+json_document     ::= JSON_OBJECT | JSON_ARRAY                        // a document only ({…}/[…]), delegated to the house reader
+                                                                      //   (scalars are CEL's; exactness is decimal("…") — D-2026-08-13-1) :
                                                                       // object/array by brace/bracket balance, scalars by the JSON
                                                                       // grammar itself ; duplicate keys refuse ; numbers exact
                                                                       // (identity.md tag-6 rule, D-2026-08-10-7)
@@ -1504,7 +1515,7 @@ tagged_value      ::= TAG_KW ( "(" arg_list ")" )? ( "{" raw_body "}" )?   // at
                                                     // a TAG with a struct body is a DEAD form (D-2026-08-12-1)
 tagged_block_value ::= "text" RAW_BLOCK                              // verbatim text — margin set by the closing brace (D-2026-08-10-6)
                     | "base64" ( "(" STRING ")" )? RAW_BLOCK          // inline bytes, optional content_type (whole-data only with it)
-                    | "json" json_value                               // any JSON value, delegated to the JSON reader — always variant
+                    | "json" json_document                            // a JSON document, delegated to the JSON reader — always variant
                     | "asset" "(" STRING ( "," STRING )? ")"          // build-time repo bytes (path, content_type?) — D-2026-08-10-5
                                                                       // array literal : a CEL list expression `[v, v, …]`
 raw_body          ::= /* raw text, lexically opaque. The LIVE raw-bodied
@@ -1682,7 +1693,7 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | TAG_KW / `{` / `[` / `.` / IDENT (dotted ok) not followed by `=`/`:` | implicit yield expression |
 | `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
-| `value` | special value tag (`text`/`base64`/`json`/`asset`) — its form follows (`{`, `(`, or a same-line JSON value for `json`) | `tagged_block_value` (verbatim / bytes / json_value / build-time bytes) |
+| `value` | special value tag (`text`/`base64`/`json`/`asset`) — its form follows (`{`/`(`; for `json`: a same-line `{` or `[`) | `tagged_block_value` (verbatim / bytes / json_document / build-time bytes) |
 | `value` | other TAG_KW — next is `(` or `{` | `tagged_value` (a dead-initializer tag refuses with its migration) |
 | `value` | any TAG_KW — word alone | CEL expression / bare word, judged by the contract |
 | `value` | `{` — then `}` / `:` / STRING / IDENT | `braced_value` : empty struct / empty map / map_entries / struct_entries |

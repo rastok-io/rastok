@@ -82,18 +82,18 @@ fn every_refusal_is_typed() {
 
     // A future format version — refused by name.
     let bumped = reframe(&bytes, |pairs| {
-        pairs.insert(1, Cbor::Uint(6));
+        pairs.insert(1, Cbor::Uint(7));
     });
     assert_eq!(
         plan::decode(&bumped).unwrap_err(),
-        DecodeError::UnsupportedVersion(6)
+        DecodeError::UnsupportedVersion(7)
     );
 
     // The RETIRED draft versions — v2 lacked the typed port_decl,
     // v3 the empty-struct literal, v4 the three-zone reform
-    // (D-2026-08-10-9); each is refused by number, never migrated
-    // silently.
-    for draft in [2u64, 3, 4] {
+    // (D-2026-08-10-9), v5 the `decimal(…)` call (D-2026-08-13-1);
+    // each is refused by number, never migrated silently.
+    for draft in [2u64, 3, 4, 5] {
         let retired = reframe(&bytes, |pairs| {
             pairs.insert(1, Cbor::Uint(draft));
         });
@@ -258,11 +258,11 @@ fn a_non_canonical_envelope_refuses() {
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,
     // because the canonical encoder itself refuses to write an
-    // unsorted map: entry (1, uint 5) is bytes 5..7, entry
+    // unsorted map: entry (1, uint 6) is bytes 5..7, entry
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x05],
+        &[0xa4, 0x01, 0x06],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -277,16 +277,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 5 written on two
-    // bytes (0x18 0x05) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 6 written on two
+    // bytes (0x18 0x06) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x05],
+        &[0xa4, 0x01, 0x06],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x05]);
+    widened.splice(6..7, [0x18, 0x06]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))

@@ -687,6 +687,7 @@ impl Writer<'_> {
                     cel::Function::Duration => 1,
                     cel::Function::Timestamp => 2,
                     cel::Function::Size => 3,
+                    cel::Function::Decimal => 4,
                 });
                 self.count(args.len());
                 for arg in args {

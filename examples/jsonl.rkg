@@ -22,7 +22,7 @@ lab relay {
     }
 
     scenario roundtrip "a struct request opens one canonical line; the mock answers the wire's shape" {
-      app.in = { price = json 19.99, n = 42 }
+      app.in = { price = decimal("19.99"), n = 42 }
       expect "sifted" app.out count == 1 where data == 7
     }
   }

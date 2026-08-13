@@ -18,7 +18,14 @@
 > The package is a TRANSPORT format: versioned and free to evolve by
 > version bump; none of v1, v2, or v3 was ever published and no
 > decoder reads them — each refuses by its number.
-> **Format v5 is CURRENT** (D-2026-08-10-9, landed 2026-08-10): the
+> **Format v6 is CURRENT** (D-2026-08-13-1, landed 2026-08-13): the
+> call alphabet gained `decimal` (fn 4) — a new id extends the
+> format's vocabulary, so the categorical rule bumps the version;
+> v5 joined the refused drafts. No hash moved: identity lives in
+> the HIR canonical form, and the goldens re-blessed for the
+> version byte alone (the spike re-proved the same semantic hash
+> on target). The v5 entry below stays as history.
+> Format v5 (D-2026-08-10-9, landed 2026-08-10): the
 > three-zone metadata write targets, the travelling `app`/`ext`
 > schemas, the content-addressed asset table, expanded named types
 > (they never reach the format — expansion is the checker's), and
@@ -57,7 +64,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (this document: 5)   │
+        │ 1 : format_version   uint      (this document: 6)   │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -210,7 +217,7 @@ expr       := [1, tagged_value]                   — literal
             | [4, binop (uint), expr, expr]       — binary  (1 mul … 13 or, declaration order)
             | [5, expr, expr, expr]               — ternary
             | [6, expr, expr]                     — index
-            | [7, fn (uint), [expr*]]             — call    (1 duration · 2 timestamp · 3 size)
+            | [7, fn (uint), [expr*]]             — call    (1 duration · 2 timestamp · 3 size · 4 decimal)
             | [8, [expr*]]                        — list literal
             | [9, [[key (text), expr]*]]          — map literal (already construction-sorted)
             | [10, index (uint)]                  — asset reference into body key 7

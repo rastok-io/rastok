@@ -898,11 +898,11 @@ fn a_json_recovery_follows_the_position_terminators() {
     for (label, source) in [
         (
             "semicolon statement",
-            "graph g : App {\n  operator o {\n    on in { out = json ???; out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = json {\"a\": ???}; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "struct field",
-            "graph g : App {\n  operator o {\n    on in { out = { bad = json ???, ok = 1 } }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = { bad = json {\"a\": ???}, ok = 1 } }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "multiline json",
@@ -910,32 +910,49 @@ fn a_json_recovery_follows_the_position_terminators() {
         ),
         (
             "paren position (comma boundary)",
-            "graph g : App {\n  operator o {\n    on in { out = asset(json ???, \"text/plain\"); out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = asset(json {\"a\": ???}, \"text/plain\"); out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "paren position (close-paren boundary)",
-            "graph g : App {\n  operator o {\n    on in { out = asset(json ???); out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = asset(json {\"a\": ???}); out = data }\n  }\n  . -> o -> .\n}\n",
         ),
+        // A follower that opens no document and spells no scalar is
+        // a CEL continuation beginning with the word `json`
+        // (D-2026-08-13-1) — CEL's voice, CEL's recovery.
         (
             "host-alien first byte",
             "graph g : App {\n  operator o {\n    on in { out = json @; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
-            "host-alien slash",
+            "quoted CEL follower",
             "graph g : App {\n  operator o {\n    on in { out = json 'x'; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
+        // A scalar spelling refuses with the `decimal(...)` hint and
+        // recovers at the same terminators (D-2026-08-13-1).
+        (
+            "scalar number",
+            "graph g : App {\n  operator o {\n    on in { out = json 19.99; out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "scalar string",
+            "graph g : App {\n  operator o {\n    on in { out = json \"s\"; out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "scalar word",
+            "graph g : App {\n  operator o {\n    on in { out = json true; out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
     ] {
+        let expected = match label {
+            "host-alien first byte" | "quoted CEL follower" => "E-CEL-EXPR",
+            _ => "E-JSON-VALUE",
+        };
         let bag = compile_one(source).expect_err(label);
         assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
-        assert_eq!(
-            bag.diagnostics()[0].code().as_str(),
-            "E-JSON-VALUE",
-            "{label}"
-        );
+        assert_eq!(bag.diagnostics()[0].code().as_str(), expected, "{label}");
     }
     // The positive twin proves the SIBLING really lives there: with
     // the fault healed, the handler carries BOTH emissions.
-    let healed = "graph g : App {\n  operator o {\n    on in { out = json 1; out = data }\n  }\n  . -> o -> .\n}\n";
+    let healed = "graph g : App {\n  operator o {\n    on in { out = json {\"a\": 1}; out = data }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile_one(healed).expect("valid");
     let handler = &compilation.plan.plan().handlers[0];
     let emissions = handler
@@ -974,9 +991,8 @@ fn json_trivia_belongs_to_the_host() {
     // A same-line comment between the tag and the body is HOST
     // trivia — the reader never sees it, and the identity is the
     // same as the uncommented spelling.
-    let commented = "graph g : App {\n  operator o {\n    on in { out = json /* c */ 1 }\n  }\n  . -> o -> .\n}\n";
-    let plain =
-        "graph g : App {\n  operator o {\n    on in { out = json 1 }\n  }\n  . -> o -> .\n}\n";
+    let commented = "graph g : App {\n  operator o {\n    on in { out = json /* c */ {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
+    let plain = "graph g : App {\n  operator o {\n    on in { out = json {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
     let a = compile_one(commented).expect("valid");
     let b = compile_one(plain).expect("valid");
     assert_eq!(
@@ -984,13 +1000,14 @@ fn json_trivia_belongs_to_the_host() {
         b.hash.to_string(),
         "host trivia is not identity"
     );
-    // An NBSP is NOT host trivia — it is the JSON body's first byte
-    // and refuses as JSON: the boundary never depends on Unicode
-    // trim_start.
+    // An NBSP is NOT host trivia: it opens no document and spells
+    // no scalar, so the value is a CEL continuation beginning with
+    // the word `json` — the boundary never depends on Unicode
+    // trim_start (D-2026-08-13-1).
     let nbsp = "graph g : App {\n  operator o {\n    on in { out = json \u{a0}1 }\n  }\n  . -> o -> .\n}\n";
     let bag = compile_one(nbsp).expect_err("must refuse");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
-    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-JSON-VALUE");
+    assert_eq!(bag.diagnostics()[0].code().as_str(), "E-CEL-EXPR");
     // A comment crossing the line means NO body on the line: bare
     // word — never a truncated JSON literal.
     let crossing = "graph g : App {\n  operator o {\n    on in { out = json /* c\n*/ 1 }\n  }\n  . -> o -> .\n}\n";
@@ -1095,7 +1112,7 @@ fn an_omitted_value_never_absorbs_the_next_line() {
 fn a_json_error_resynchronizes_at_the_line_boundary() {
     // The faulty value is consumed to its line's end — one voice,
     // and the next emission survives in the tree.
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = json ???\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = json {\"a\": ???}\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
     let bag = compile_one(source).expect_err("must refuse");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     assert!(

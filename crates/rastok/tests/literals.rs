@@ -193,17 +193,18 @@ fn mixing_struct_and_map_punctuation_refuses() {
 #[test]
 fn json_reads_every_form_directly() {
     use rastok::envelope::{Data, Scalar, Value};
-    // Scalars.
+    // Scalars are CEL's spellings — `json` takes documents only
+    // (D-2026-08-13-1).
     assert_eq!(
-        emitted("json 42"),
+        emitted("42"),
         Data::materialized(Value::Scalar(Scalar::Int(42)))
     );
     assert_eq!(
-        emitted("json \"text\""),
+        emitted("\"text\""),
         Data::materialized(Value::Scalar(Scalar::Text(String::from("text"))))
     );
     assert_eq!(
-        emitted("json true"),
+        emitted("true"),
         Data::materialized(Value::Scalar(Scalar::Bool(true)))
     );
     // Object — a MAP (the variant JSON model), single braces.
@@ -223,13 +224,44 @@ fn json_reads_every_form_directly() {
             Value::Scalar(Scalar::Int(3)),
         ]))
     );
-    // An exact fraction survives as a decimal.
+    // An exact fraction is the `decimal(...)` constructor's — and
+    // the scale is DECLARED: trailing zeros are significant
+    // (D-2026-08-13-1).
     assert_eq!(
-        emitted("json 19.99"),
+        emitted("decimal(\"19.99\")"),
         Data::materialized(Value::Scalar(Scalar::Decimal {
             unscaled: 1999,
             scale: 2
         }))
+    );
+    assert_eq!(
+        emitted("decimal(\"1.50\")"),
+        Data::materialized(Value::Scalar(Scalar::Decimal {
+            unscaled: 150,
+            scale: 2
+        }))
+    );
+    assert_eq!(
+        emitted("decimal(\"1.5\")"),
+        Data::materialized(Value::Scalar(Scalar::Decimal {
+            unscaled: 15,
+            scale: 1
+        }))
+    );
+    // The integer fold: a WRITTEN scale of zero or less collapses
+    // to the int the program would otherwise spell (D-2026-08-10-7).
+    assert_eq!(
+        emitted("decimal(\"2\")"),
+        Data::materialized(Value::Scalar(Scalar::Int(2)))
+    );
+    // A fraction inside a DOCUMENT stays exact too — value-canonical
+    // (the document's numbers are standard JSON).
+    assert_eq!(
+        emitted("json [19.99]"),
+        Data::materialized(Value::Array(vec![Value::Scalar(Scalar::Decimal {
+            unscaled: 1999,
+            scale: 2
+        })]))
     );
 }
 
@@ -237,7 +269,10 @@ fn json_reads_every_form_directly() {
 fn json_refusals_are_located() {
     for (body, wrong) in [
         ("json { \"a\": 1, \"a\": 2 }", "duplicate key"),
-        ("json 123456789012345678901234567890123456789", "39 digits"),
+        (
+            "json [123456789012345678901234567890123456789]",
+            "39 digits",
+        ),
         ("json { \"a\": }", "syntax"),
     ] {
         let source = format!(
@@ -259,16 +294,18 @@ fn json_refusals_are_located() {
 
 #[test]
 fn json_one_and_one_are_different_programs() {
-    // The static type is identity (D-2026-08-10-7): `json 1` is a
-    // variant, `1` an int — same numeric leaf, two programs.
-    assert_ne!(hash_of("json 1"), hash_of("1"));
+    // The static type is identity (D-2026-08-10-7): `json [1]` is a
+    // variant, `[1]` a list — same numeric leaf, two programs.
+    assert_ne!(hash_of("json [1]"), hash_of("[1]"));
     // Minimally different pairs stay distinct too.
-    assert_ne!(hash_of("json 1"), hash_of("json \"1\""));
-    assert_ne!(hash_of("json 19.99"), hash_of("json 19.98"));
-    // And the canonical collapses ARE one program.
-    assert_eq!(hash_of("json 1"), hash_of("json 1.0"));
-    assert_eq!(hash_of("json 1"), hash_of("json 1e0"));
-    assert_eq!(hash_of("json -0"), hash_of("json 0"));
+    assert_ne!(hash_of("json [1]"), hash_of("json [\"1\"]"));
+    assert_ne!(hash_of("json [19.99]"), hash_of("json [19.98]"));
+    // And the canonical collapses ARE one program: a document's
+    // numbers are standard JSON, VALUE-canonical — unlike
+    // `decimal(...)`, whose scale is declared (D-2026-08-13-1).
+    assert_eq!(hash_of("json [1]"), hash_of("json [1.0]"));
+    assert_eq!(hash_of("json [1]"), hash_of("json [1e0]"));
+    assert_eq!(hash_of("json [-0]"), hash_of("json [0]"));
 }
 
 #[test]

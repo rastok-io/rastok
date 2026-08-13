@@ -199,27 +199,7 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
         }
         let start = self.pos;
-        let mut depth: u32 = 0;
-        while let Some(byte) = self.peek_byte() {
-            if depth == 0 && self.at_terminator(byte, terminators) {
-                break;
-            }
-            match byte {
-                b'(' | b'[' | b'{' => {
-                    depth += 1;
-                    self.pos += 1;
-                }
-                b')' | b']' | b'}' => {
-                    if depth == 0 {
-                        break;
-                    }
-                    depth -= 1;
-                    self.pos += 1;
-                }
-                b'"' | b'\'' => self.skip_quoted(bag, byte),
-                _ => self.pos += 1,
-            }
-        }
+        self.cel_scan(0, terminators, bag);
         let end = self
             .source
             .as_bytes()
@@ -248,6 +228,74 @@ impl<'a> Lexer<'a> {
     /// Re-syncs the cursor after a delegated read.
     pub fn skip_to(&mut self, offset: usize) {
         self.pos = offset;
+    }
+
+    /// Advances the cursor — MONOTONE by contract: the parser's one
+    /// jump primitive, recovery included (D-2026-08-13-1). Going
+    /// backward is a programming error, refused loudly in debug.
+    pub fn advance_to(&mut self, offset: usize) {
+        debug_assert!(offset >= self.pos, "the cursor never moves backward");
+        self.pos = self.pos.max(offset);
+    }
+
+    /// Scans a CEL continuation from the CURRENT position to the
+    /// position's terminator, but reports the token from
+    /// `text_start` — the left-factored prefix the parser already
+    /// consumed (D-2026-08-13-1): re-reading the immutable
+    /// `source[text_start..end]` slice is a bounded re-read, never
+    /// a parser rewind.
+    pub fn cel_expr_from(
+        &mut self,
+        text_start: usize,
+        depth: u32,
+        terminators: &TerminatorSet,
+        bag: &mut Bag,
+    ) -> Token<'a> {
+        // `depth` counts the openers the caller already consumed:
+        // a dropped `(`/`[` peek left the cursor INSIDE its region,
+        // and the scan must not break on the matching closer.
+        self.cel_scan(depth, terminators, bag);
+        // The stitched slice trims its OWN end: an empty continuation
+        // leaves the whitespace skipped before the terminator inside
+        // `text_start..end`, and the inner trim never saw it.
+        let end = self.pos.max(text_start);
+        let end = self
+            .source
+            .as_bytes()
+            .get(text_start..end)
+            .map_or(end, |stitched| text_start + stitched.trim_ascii_end().len());
+        Token {
+            kind: TokenKind::CelExpr,
+            text: &self.source[text_start..end],
+            span: Span::new(self.source_id, text_start..end),
+            newline_before: false,
+        }
+    }
+
+    /// The CEL region scan both entries share: consumes to the
+    /// position's terminator at depth zero, tracking balanced
+    /// delimiters and skipping quoted content opaquely.
+    fn cel_scan(&mut self, mut depth: u32, terminators: &TerminatorSet, bag: &mut Bag) {
+        while let Some(byte) = self.peek_byte() {
+            if depth == 0 && self.at_terminator(byte, terminators) {
+                break;
+            }
+            match byte {
+                b'(' | b'[' | b'{' => {
+                    depth += 1;
+                    self.pos += 1;
+                }
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                    self.pos += 1;
+                }
+                b'"' | b'\'' => self.skip_quoted(bag, byte),
+                _ => self.pos += 1,
+            }
+        }
     }
 
     /// Captures a raw brace-balanced block (guest text, verbatim
@@ -293,13 +341,6 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
         }
         token
-    }
-
-    /// Repositions the scanner at an absolute byte offset. Used by the
-    /// parser to hand a peeked token back before an opaque-span scan.
-    pub fn rewind(&mut self, pos: usize) {
-        debug_assert!(pos <= self.source.len());
-        self.pos = pos;
     }
 
     /// Consumes trivia so an opaque scan starts at significant input.
