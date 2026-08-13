@@ -891,6 +891,81 @@ fn the_recovery_form_is_silent_in_every_position() {
 }
 
 #[test]
+fn json_and_nothing_are_unmaskable() {
+    // D-2026-08-13-1 (review round 2): the value-form words are
+    // RESERVED in every binding-introducing position — a masked
+    // `json` would make `json[0]` ambiguous between a document and
+    // an indexing. The refusal lands AT THE DECLARATION.
+    for (label, source) in [
+        (
+            "operator val json",
+            "graph g : App {\n  operator o {\n    val json = [42]\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "operator val nothing",
+            "graph g : App {\n  operator o {\n    val nothing = 42\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "handler-local val json",
+            "graph g : App {\n  operator o {\n    on in { val json = 1\n      out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "operator var json",
+            "graph g : App {\n  operator o {\n    var json : int = 0\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "operator var nothing",
+            "graph g : App {\n  operator o {\n    var nothing : int = 0\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "graph val json",
+            "graph g : App {\n  val json = 1\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "node named json",
+            "graph g : App {\n  operator json {\n    on in { out = data }\n  }\n  . -> json -> .\n}\n",
+        ),
+        (
+            "node named nothing",
+            "graph g : App {\n  operator nothing {\n    on in { out = data }\n  }\n  . -> nothing -> .\n}\n",
+        ),
+        (
+            "type named json",
+            "type json = int\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+        (
+            "declared port json",
+            "graph g : App {\n  operator o {\n    output json\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
+        ),
+    ] {
+        let bag = compile_one(source).expect_err(label);
+        assert!(
+            bag.diagnostics().iter().any(|d| {
+                d.code().as_str() == "E-NAME-RESERVED" && d.message().contains("reserved word")
+            }),
+            "{label}: {bag:?}"
+        );
+    }
+    // The value forms themselves stay whole.
+    compile_one("graph g : App {\n  operator o {\n    on in { out = json {\"a\": 1} }\n  }\n  . -> o -> .\n}\n")
+        .expect("json object lives");
+    compile_one(
+        "graph g : App {\n  operator o {\n    on in { out = json [1, 2] }\n  }\n  . -> o -> .\n}\n",
+    )
+    .expect("json array lives");
+    compile_one(
+        "graph g : App {\n  operator o {\n    on in { out = nothing }\n  }\n  . -> o -> .\n}\n",
+    )
+    .expect("nothing lives");
+    // With no maskable binding, `json[0]` IS the document `[0]`.
+    let compilation = compile_one(
+        "graph g : App {\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n",
+    )
+    .expect("an unspaced document array");
+    let _ = compilation;
+}
+
+#[test]
 fn a_json_recovery_follows_the_position_terminators() {
     // The review's blocker: `;`-separated statements, struct
     // fields, paren tuples, and MULTILINE faulty json all recover

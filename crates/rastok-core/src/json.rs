@@ -878,7 +878,8 @@ fn write_string(text: &str, out: &mut String) {
 
 /// Plain decimal notation at the sealed scale: `1999 / scale 2` is
 /// `19.99`; a negative scale appends zeros (`5 / scale -2` is
-/// `500` — unreachable for dynamic decimals, total anyway). The
+/// `500` — reachable only for magnitudes past i64, the
+/// written-scale fold collapsing the rest, D-2026-08-13-1). The
 /// domain check is defensive: the doors hold every travelling
 /// decimal to [`decimal_in_domain`], so an out-of-domain scale here
 /// is a refusal, never a runaway allocation.

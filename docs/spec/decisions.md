@@ -124,6 +124,36 @@ amendment (the null VALUE still executes — spelled `json [null]`
 in a document, or by a decoded `null` line; the bare emission
 stays deferred with its static type).
 
+Amended (review round 2, 2026-08-13) — four more commitments:
+
+- **A line's end can only end a value at depth ZERO.** The comment
+  rule mirrors the newline's exactly: inside brackets, `//`
+  consumes to its line's end and the expression continues, and a
+  `/* … */` is trivia even across lines; only at depth zero of a
+  newline-ended position does a comment reaching the line's end
+  close the value. (`size([1, // first\n 2])` compiles, same hash
+  as its uncommented twin.)
+- **`json` and `nothing` are RESERVED, unmaskable words.** They
+  refuse in every binding-introducing position the build supports
+  (val/var/let at every level, node names, declared ports, type
+  names) with E-NAME-RESERVED, at the declaration — so `json[0]`
+  can only ever be the document `[0]`, never an indexing. A
+  contract's closed-choice WORD is not a binding and stays free.
+  (Partitions and join aliases defer as whole constructs today;
+  the guard extends with them.)
+- **The comment is ONE lexical fact.** `rastok_core::trivia::comment_at`
+  is the single recognizer (span, terminated, multiline); the host
+  trivia, the line probes, the CEL region scan, and the CEL lexer
+  each apply their own POLICY to that one fact — no hand-rolled
+  copies remain.
+- **No public repositioning primitive exists.** The json-document
+  delegation is one atomic lexer method (probe, read, forward
+  re-sync — success or recovery); `advance_to` is private to the
+  lexer. Backward movement is not expressible from the parser.
+
+Statically `decimal("…")` staying `Dyn`, and the one-seal-rule
+decimal model, are unchanged by this round.
+
 ## D-2026-08-12-1 — Node attributes: one syntax, one contract metamodel
 
 A configurable property of a Node is an **Attribute**, and every

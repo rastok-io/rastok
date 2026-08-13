@@ -27,3 +27,4 @@ pub mod json;
 pub mod node;
 pub mod plan;
 pub mod runtime;
+pub mod trivia;

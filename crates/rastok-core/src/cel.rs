@@ -555,21 +555,18 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
             // D-2026-08-13-1 review round): `//` per cel-spec, and
             // the host's `/* … */` so a commented spelling shares
             // the compiled form (and so the hash) of the plain one.
-            b'/' if bytes.get(pos + 1) == Some(&b'/') => {
-                while pos < bytes.len() && bytes[pos] != b'\n' {
-                    pos += 1;
-                }
-                continue;
-            }
-            b'/' if bytes.get(pos + 1) == Some(&b'*') => {
-                let Some(end) = text[pos + 2..].find("*/") else {
+            // The FACT of the comment comes from the one primitive.
+            b'/' if crate::trivia::comment_at(text, pos).is_some() => {
+                let comment = crate::trivia::comment_at(text, pos)
+                    .unwrap_or_else(|| unreachable!("guard just matched"));
+                if !comment.terminated {
                     return Err(vec![Diagnostic {
                         kind: DiagnosticKind::General,
                         message: String::from("this block comment never closes"),
                         range: pos..text.len(),
                     }]);
-                };
-                pos = pos + 2 + end + 2;
+                }
+                pos = comment.end;
                 continue;
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
@@ -1662,9 +1659,11 @@ fn eval_binary(
 fn values_equal(lhs: &Value, rhs: &Value) -> bool {
     match (lhs, rhs) {
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        // Structural on the canonical pair — a dynamic decimal is
-        // minimal-scale by construction, so it never numerically
-        // equals an int it could have been (D-2026-08-10-7).
+        // Structural on the carried pair — scales are DECLARED and
+        // equality distinguishes them ({150,2} ≠ {15,1},
+        // D-2026-08-13-1); an integer never structurally equals a
+        // decimal, and the written-scale fold keeps every foldable
+        // value in the integer domain.
         (
             Value::Decimal { unscaled, scale },
             Value::Decimal {

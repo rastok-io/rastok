@@ -115,6 +115,21 @@ pub struct TerminatorSet {
     pub keywords: &'static [&'static str],
 }
 
+/// A refused json-document delegation: where the document opened,
+/// where the reader stopped, its message, and how far the FORWARD
+/// recovery consumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonRefusal {
+    /// The opener's offset (the span the recovery form carries).
+    pub opener: usize,
+    /// The faulty byte's offset (diagnostic anchor).
+    pub at: usize,
+    /// The reader's message.
+    pub message: String,
+    /// One past the recovery's last consumed byte.
+    pub recovered_to: usize,
+}
+
 /// Hand-written scanner over one UTF-8 source.
 #[derive(Debug)]
 pub struct Lexer<'a> {
@@ -213,21 +228,59 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The unlexed source from `offset` — a delegation window for
-    /// sub-readers (the JSON literal); the caller re-syncs FORWARD
-    /// with [`Self::advance_to`].
+    /// The unlexed source from `offset` — a read-only window for
+    /// diagnostics and prefix slices; cursor re-syncs happen only
+    /// inside the lexer's own delegation methods.
     #[must_use]
     pub fn source_from(&self, offset: usize) -> &'a str {
         &self.source[offset..]
     }
 
-    /// Advances the cursor — MONOTONE by contract: the parser's one
-    /// jump primitive, recovery included (D-2026-08-13-1). Going
-    /// backward is a compiler bug, refused unconditionally: a
-    /// clamped violation would silently misparse.
-    pub fn advance_to(&mut self, offset: usize) {
+    /// Advances the cursor — MONOTONE by contract, PRIVATE by
+    /// design (D-2026-08-13-1, review round 2): no public API can
+    /// reposition the scanner. Going backward is a compiler bug,
+    /// refused unconditionally: a clamped violation would silently
+    /// misparse.
+    fn advance_to(&mut self, offset: usize) {
         assert!(offset >= self.pos, "the cursor never moves backward");
         self.pos = offset;
+    }
+
+    /// The WHOLE json-document delegation, one atomic forward walk:
+    /// probes the current line for a `{`/`[` opener (host trivia
+    /// stays the host's), hands the window to the document reader,
+    /// and re-syncs the cursor FORWARD — past the document on
+    /// success, to the position's recovery point on refusal. The
+    /// cursor never leaves this method's hands, so no caller can
+    /// express a backward move (D-2026-08-13-1, review round 2).
+    ///
+    /// `None` = no document opens on the line (cursor untouched).
+    pub fn json_document_on_line(
+        &mut self,
+        terminators: &TerminatorSet,
+    ) -> Option<Result<(rastok_core::cel::Value, core::ops::Range<usize>), JsonRefusal>> {
+        let (offset, byte) = self.significant_on_line()?;
+        if !matches!(byte, b'{' | b'[') {
+            return None;
+        }
+        match rastok_core::json::parse_value(&self.source[offset..]) {
+            Ok((value, consumed)) => {
+                let end = offset + consumed;
+                self.advance_to(end);
+                Some(Ok((value, offset..end)))
+            }
+            Err(error) => {
+                let at = (offset + error.offset).min(self.source.len());
+                self.advance_to(offset);
+                let recovered_to = self.skip_json_recovery(terminators);
+                Some(Err(JsonRefusal {
+                    opener: offset,
+                    at,
+                    message: error.message,
+                    recovered_to,
+                }))
+            }
+        }
     }
 
     /// Scans a CEL continuation from the CURRENT position to the
@@ -286,32 +339,28 @@ impl<'a> Lexer<'a> {
                 }
                 b'"' | b'\'' => self.skip_quoted(bag, byte),
                 // Comments are trivia INSIDE the region too: a
-                // terminator inside one never terminates, and at a
-                // newline-ended position the line's value ends
-                // BEFORE a comment that runs to (or across) the
-                // line's end — the comment stays the HOST's
-                // (D-2026-08-13-1, review round).
-                b'/' if self.peek_byte_at(1) == Some(b'/') => {
-                    if terminators.newline {
+                // terminator inside one never terminates. The depth
+                // rule mirrors the newline's exactly — a line's end
+                // can only end the value at depth ZERO, so a comment
+                // reaching (or crossing) the line's end breaks the
+                // scan only there; at positive depth it is consumed
+                // and the expression continues (D-2026-08-13-1,
+                // review round 2).
+                b'/' if let Some(comment) =
+                    rastok_core::trivia::comment_at(self.source, self.pos) =>
+                {
+                    if !comment.terminated {
+                        // The value ends here; the trivia authority
+                        // diagnoses the unterminated comment.
                         break;
                     }
-                    while !matches!(self.peek_byte(), None | Some(b'\n')) {
-                        self.pos += 1;
-                    }
-                }
-                b'/' if self.peek_byte_at(1) == Some(b'*') => {
-                    let Some(end) = self.source[self.pos + 2..]
-                        .find("*/")
-                        .map(|at| self.pos + 2 + at + 2)
-                    else {
-                        // Unterminated: the value ends here, and the
-                        // trivia authority diagnoses the comment.
-                        break;
-                    };
-                    if terminators.newline && self.source[self.pos..end].contains('\n') {
+                    let reaches_line_end = comment.multiline
+                        || self.source.as_bytes().get(comment.end) == Some(&b'\n')
+                        || comment.end == self.source.len();
+                    if depth == 0 && terminators.newline && reaches_line_end {
                         break;
                     }
-                    self.pos = end;
+                    self.pos = comment.end;
                 }
                 _ => self.pos += 1,
             }
@@ -376,13 +425,23 @@ impl<'a> Lexer<'a> {
     /// same-line trivia, while a bare newline still reads as an empty
     /// expression, per the delimitation rules.
     pub fn advance_within_line(&mut self, bag: &mut Bag) {
+        let _ = &bag;
         loop {
             match self.peek_byte() {
                 Some(b' ' | b'\t' | b'\r') => self.pos += 1,
-                Some(b'/') if self.peek_byte_at(1) == Some(b'/') => {
-                    self.eat_while(|byte| byte != b'\n');
+                Some(b'/')
+                    if let Some(comment) =
+                        rastok_core::trivia::comment_at(self.source, self.pos) =>
+                {
+                    // Line-scoped policy: a comment crossing the
+                    // line (or never closing) is NOT consumed — the
+                    // line ends here, and the trivia authority will
+                    // meet the comment itself.
+                    if !comment.terminated || comment.multiline {
+                        return;
+                    }
+                    self.pos = comment.end;
                 }
-                Some(b'/') if self.peek_byte_at(1) == Some(b'*') => self.skip_block_comment(bag),
                 _ => return,
             }
         }
@@ -399,15 +458,13 @@ impl<'a> Lexer<'a> {
         loop {
             match *bytes.get(pos)? {
                 b' ' | b'\t' | b'\r' | b'\n' => pos += 1,
-                b'/' if bytes.get(pos + 1) == Some(&b'/') => {
-                    while pos < bytes.len() && bytes[pos] != b'\n' {
-                        pos += 1;
+                b'/' if rastok_core::trivia::comment_at(self.source, pos).is_some() => {
+                    let comment = rastok_core::trivia::comment_at(self.source, pos)
+                        .unwrap_or_else(|| unreachable!("guard just matched"));
+                    if !comment.terminated {
+                        return None;
                     }
-                }
-                b'/' if bytes.get(pos + 1) == Some(&b'*') => {
-                    pos = self.source[pos + 2..]
-                        .find("*/")
-                        .map(|end| pos + 2 + end + 2)?;
+                    pos = comment.end;
                 }
                 byte => return Some(byte),
             }
@@ -440,20 +497,14 @@ impl<'a> Lexer<'a> {
             match *bytes.get(pos)? {
                 b'\n' => return None,
                 b' ' | b'\t' | b'\r' => pos += 1,
-                b'/' if bytes.get(pos + 1) == Some(&b'/') => {
-                    while pos < bytes.len() && bytes[pos] != b'\n' {
-                        pos += 1;
-                    }
-                }
-                b'/' if bytes.get(pos + 1) == Some(&b'*') => {
-                    let end = self.source[pos + 2..]
-                        .find("*/")
-                        .map(|end| pos + 2 + end + 2)?;
-                    if self.source[pos..end].contains('\n') {
+                b'/' if rastok_core::trivia::comment_at(self.source, pos).is_some() => {
+                    let comment = rastok_core::trivia::comment_at(self.source, pos)
+                        .unwrap_or_else(|| unreachable!("guard just matched"));
+                    if !comment.terminated || comment.multiline {
                         // The comment swallows the rest of the line.
                         return None;
                     }
-                    pos = end;
+                    pos = comment.end;
                 }
                 byte => return Some((pos, byte)),
             }
@@ -659,33 +710,28 @@ impl<'a> Lexer<'a> {
         loop {
             match self.peek_byte() {
                 Some(b' ' | b'\t' | b'\r' | b'\n') => self.pos += 1,
-                Some(b'/') if self.peek_byte_at(1) == Some(b'/') => {
-                    self.eat_while(|byte| byte != b'\n');
+                Some(b'/')
+                    if let Some(comment) =
+                        rastok_core::trivia::comment_at(self.source, self.pos) =>
+                {
+                    // Host policy: CONSUME, diagnosing the
+                    // unterminated block — the one voice for it.
+                    if !comment.terminated {
+                        bag.push(
+                            Diagnostic::new(
+                                E_LEX_UNTERMINATED_COMMENT,
+                                Phase::Parse,
+                                "this block comment never closes",
+                            )
+                            .with_span(Span::new(self.source_id, self.pos..comment.end)),
+                        );
+                    }
+                    self.pos = comment.end;
                 }
-                Some(b'/') if self.peek_byte_at(1) == Some(b'*') => self.skip_block_comment(bag),
                 _ => {
                     self.newline_before = self.source[run_start..self.pos].contains('\n');
                     return;
                 }
-            }
-        }
-    }
-
-    fn skip_block_comment(&mut self, bag: &mut Bag) {
-        let start = self.pos;
-        self.pos += 2;
-        match self.source[self.pos..].find("*/") {
-            Some(offset) => self.pos += offset + 2,
-            None => {
-                self.pos = self.source.len();
-                bag.push(
-                    Diagnostic::new(
-                        E_LEX_UNTERMINATED_COMMENT,
-                        Phase::Parse,
-                        "this block comment never closes",
-                    )
-                    .with_span(Span::new(self.source_id, start..self.pos)),
-                );
             }
         }
     }

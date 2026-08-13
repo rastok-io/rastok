@@ -1651,50 +1651,49 @@ impl<'src> Parser<'src, '_> {
         Value::Cel(self.cel_from(ident.span.range().start, position))
     }
 
-    /// The `json` continuation: a DOCUMENT (`{`/`[` on the line), a
-    /// bare word, a refused scalar spelling, or a CEL expression
-    /// beginning with the word (D-2026-08-13-1). Raw inspection
-    /// only — the delegated body never meets the host lexer.
+    /// The `json` continuation: a DOCUMENT (`{`/`[` on the line),
+    /// the bare word alone, or a CEL expression beginning with the
+    /// word — `{` and `[` are the ONLY special followers
+    /// (D-2026-08-13-1, review round). Raw inspection only — the
+    /// delegated body never meets the host lexer.
     fn json_tail(&mut self, ident: &Token<'_>, position: &TerminatorSet) -> Value {
         let probe = self.lexer.significant_on_line();
         match probe {
-            Some((offset, byte @ (b'{' | b'['))) => {
-                let _ = byte;
+            Some((_, b'{' | b'[')) => {
                 // The document reader owns its self-delimiting
                 // braces; host trivia before the opener stayed the
-                // host's, and no trim exists on this path.
-                match rastok_core::json::parse_value(self.lexer.source_from(offset)) {
-                    Ok((value, consumed)) => {
-                        let end = offset + consumed;
-                        self.lexer.advance_to(end);
-                        self.last_end = end;
+                // host's, no trim exists on this path, and the
+                // cursor re-sync lives INSIDE the lexer — forward
+                // only, by construction.
+                match self
+                    .lexer
+                    .json_document_on_line(position)
+                    .unwrap_or_else(|| unreachable!("the probe just saw the opener"))
+                {
+                    Ok((value, range)) => {
+                        self.last_end = range.end;
                         Value::Json {
                             value,
-                            span: Span::new(self.source_id, offset..end),
+                            span: Span::new(self.source_id, range.start..range.end),
                         }
                     }
-                    Err(error) => {
+                    Err(refusal) => {
                         let source_len = self.lexer.source_from(0).len();
-                        let at = (offset + error.offset).min(source_len);
                         // An EOF point is an EMPTY range (Span's own
                         // contract); anything else underlines one
                         // byte.
-                        let end = (at + 1).min(source_len);
+                        let end = (refusal.at + 1).min(source_len);
                         self.bag.push(
                             crate::diagnostics::Diagnostic::new(
                                 E_JSON_VALUE,
                                 crate::diagnostics::Phase::Parse,
-                                format!("the JSON value does not read: {}", error.message),
+                                format!("the JSON value does not read: {}", refusal.message),
                             )
-                            .with_span(Span::new(self.source_id, at..end))
-                            .with_field("detail", error.message),
+                            .with_span(Span::new(self.source_id, refusal.at..end))
+                            .with_field("detail", refusal.message.clone()),
                         );
-                        // Recovery follows the POSITION, opaquely
-                        // and forward only.
-                        self.lexer.advance_to(offset);
-                        let end = self.lexer.skip_json_recovery(position);
-                        self.last_end = end;
-                        Value::Error(Span::new(self.source_id, offset..offset))
+                        self.last_end = refusal.recovered_to;
+                        Value::Error(Span::new(self.source_id, refusal.opener..refusal.opener))
                     }
                 }
             }

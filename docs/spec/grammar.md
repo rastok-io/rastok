@@ -904,7 +904,7 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 | `array`   | `[ v, v, … ]`                                  | ordered sequence ; `array<struct>` is the relational `table` view |
 | `text`    | `"…"` ; `text { … }`                          | CEL string, or the VERBATIM block — first newline excluded, margin set by the closing brace, no interpolation, braces balanced |
 | `bytes`   | `base64 { … }` ; `asset("path")`              | RFC 4648 standard, mandatory padding, ASCII whitespace ignored ; or build-time repo bytes (D-2026-08-10-5). `hex` and `bytes …` forms are DEAD |
-| `variant` | `json <json-document>`                        | a JSON DOCUMENT (`json { "k": 1 }`, `json [1]`) ; always `variant` ; duplicate keys refuse ; numbers exact per D-2026-08-10-7 ; a scalar spelling refuses — scalars are CEL's, exact numbers `decimal("…")` (D-2026-08-13-1) |
+| `variant` | `json <json-document>`                        | a JSON DOCUMENT (`json { "k": 1 }`, `json [1]`) ; always `variant` ; duplicate keys refuse ; numbers exact per D-2026-08-10-7 ; `{`/`[` are the ONLY special followers — any other spelling is CEL beginning with the word `json` (scalars are CEL's, exact numbers `decimal("…")`, D-2026-08-13-1) |
 | whole payload | `asset("path", "content_type")` ; `base64("ct") { … }` | fresh bytes + `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
 
 The `<type> file { … }` forms are DEAD — `asset` replaces them for
@@ -1386,13 +1386,16 @@ guard_clause      ::= "where" cel_expr                               // content 
                     | "last" INT                                     // join count bound — a Tier-2 θ-join requires AT LEAST ONE bound (within or last) ; presence joins may use either or none
                     // The `where` clause on `on err` doubles as the Loop base-case predicate when the enclosing node carries `: Loop` — see loop.md §3.
 handler_body      ::= "{" ( val_decl | statement )* "}"
-statement         ::= lvalue ( ":" type_ref )? "=" value             // var write / port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value )
-                    | "err" "=" err_value                            // TYPED-ERROR emission : err = PaymentDeclined { transient = false }
-                    | "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast              // atomic multi-emit ; tuple = explicit per-port ; broadcast = same value to every port (`Fanout` is not a surface alias)
-                    | implicit_yield                                  // valid only when a single output exists
-                    | "stop" IDENT?                                   // stop action (lifecycle)
-implicit_yield    ::= value
-lvalue            ::= IDENT ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )* // assignment target: port, var, or dotted writable meta/data path; reserved segments after a dot permit qualified names such as Loop.variant and stdlib ports such as store.read — meta.sys is read-only, never an lvalue
+statement         ::= "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast   // atomic multi-emit — `(` decides ; tuple = explicit per-port ; broadcast = same value everywhere (`Fanout` is not a surface alias)
+                    | "stop" IDENT?                                   // stop action (lifecycle) — word-decided
+                    | IDENT path_tail statement_after_path            // left-factored : ONE consumed word, the tail decides
+                    | non_ident_yield                                 // any other first token : a bare CEL yield
+statement_after_path
+                  ::= ( ":" type_ref )? "=" value                     // the consumed path is the LVALUE : var write / port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value ). The path `err` routes the value to err_value — the TYPED-ERROR emission (err = PaymentDeclined { transient = false })
+                    | cel_continuation                                // a bare value : the consumed path is the CEL PREFIX ; the boundary token (`}` / `;` / the next line's first token) stays the HOST's (D-2026-08-13-1)
+non_ident_yield   ::= value                                           // implicit yield — valid only when a single output exists
+path_tail         ::= ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )*       // the dotted walk shared by lvalues and CEL prefixes ; reserved segments after a dot permit qualified names such as Loop.variant and stdlib ports such as store.read
+lvalue            ::= IDENT path_tail                                 // assignment target: port, var, or dotted writable meta/data path — meta.sys is read-only, never an lvalue
 tuple_or_broadcast ::= "(" value ( "," value )* ")"                    // explicit tuple — one value per lvalue, counts must match
                     | value                                            // broadcast — same value to every lvalue
 
@@ -1429,46 +1432,69 @@ attr_entry        ::= lvalue "=" value                               // dotted k
 // the parser still recognizes it to refuse with the migration hint
 // « `env { … }` is no longer a configuration form; write `env = { … }` ».
 
+// ============ WORD CLASSES (D-2026-08-13-1, review round 2) ============
+// Three disjoint roles a word can play — the factoring below names them:
+// - a USER IDENTIFIER introduces a binding (val/var/let, node, port, type,
+//   partition, alias). `json` and `nothing` are RESERVED here — they name
+//   value forms and refuse AT THE DECLARATION (E-NAME-RESERVED) ; the
+//   envelope surfaces (meta/data/sys/app/ext) refuse as node names, and
+//   data/meta as binding names.
+// - a TAG_KW is one of the closed tag vocabulary (jq bash sql python rust
+//   json avro protobuf parquet msgpack base64 csv text asset bounded
+//   unbounded regex). A tag is a tag only WITH its same-line opener ;
+//   alone, or followed by anything else, it reads as an ordinary CEL word.
+// - a CONTRACT WORD is a bare word judged by a contract's closed choice
+//   (mode = job, codec = jsonl). It introduces NO binding — reservation
+//   does not apply ; the contract judges the word.
+
 // ============ VALUES : builders by prefix, CEL for everything scalar ============
 // CEL is the core's expression grammar. There are no `ref`, `interp`, or
 // leading-dot path forms.
 
 value             ::= braced_value                                    // { … } — the braced record ; classified in envelope positions
                     | "."                                             // identity — exact re-emission (envelope positions only)
+                    | "nothing"                                       // emission positions : emit nothing (reserved word, unmaskable)
+                    | "json" json_after_ident                         // the json document literal (reserved word, unmaskable)
                     | IDENT value_after_ident                         // left-factored : ONE consumed word, the tail decides
                     | cel_non_ident_start                             // any other first token — CEL from that token on
 
-value_after_ident ::= ε                                               // nothing significant on the line, line ends the value :
-                                                                      //   the word ALONE is the CEL expression (span exact)
-                    | json_after_ident                                // the word was "json"
-                    | "(" tag_args ")" tag_body?                      // TAG_KW with its opener ON THE SAME LINE → tagged_value
-                    | "{" raw_or_struct_body "}"                      //   (a tag without its opener is an ordinary CEL word)
-                    | cel_continuation                                // anything else : CEL beginning with the word
+value_after_ident ::= ε                                               // nothing significant on the line and the line ends the
+                                                                      //   value : the word ALONE is the CEL expression (span exact)
+                    | ⟨IDENT ∈ TAG_KW⟩  "(" tag_args ")" tag_body?    // a tag WITH its `(` on the SAME LINE → tagged_value
+                    | ⟨IDENT ∈ RAW_TAG⟩ "{" RAW_TEXT "}"              // jq/bash/sql/python/rust/text/base64 body → raw block
+                    | ⟨IDENT ∈ DEAD_TAG | RESERVED_FORMAT⟩ …          // dead initializers refuse with the migration ; reserved
+                                                                      //   data formats defer — either way the body is swallowed RAW
+                    | cel_continuation                                // anything else : CEL beginning with the word — a non-tag
+                                                                      //   word before `(`/`{` is CEL too (`size(data)`, `x {`)
 
-json_after_ident  ::= JSON_OBJECT                                     // { … } same line — the document reader owns the braces
-                    | JSON_ARRAY                                      // [ … ] same line
+json_after_ident  ::= JSON_OBJECT                                     // { … } on the SAME line — the document reader owns the braces
+                    | JSON_ARRAY                                      // [ … ] on the SAME line
                     | cel_continuation                                // ANY other follower : CEL beginning with the word `json`
-                                                                      //   (scalar spellings died with D-2026-08-13-1)
+                                                                      //   (`{`/`[` are json's ONLY special followers, D-2026-08-13-1)
 
-statement         ::= IDENT path_tail statement_after_path            // left-factored like values
-                    | non_ident_yield                                 // any other first token : a bare CEL value statement
+cel_non_ident_start ::= cel_expr                                      // the region scan starts AT the current token (a literal,
+                                                                      //   `-`, `(`, `[`, a string, …)
+cel_continuation  ::= cel_expr                                        // the region scan CONTINUES a consumed prefix : the token is
+                                                                      //   re-read through the immutable source slice, forward only ;
+                                                                      //   a peeked BOUNDARY token (closer, position byte, line-crossing
+                                                                      //   token at a newline-ended position, keyword, EOF) ends the
+                                                                      //   expression at the prefix and stays the HOST's
+tag_args          ::= ( value ( "," value )* ","? )?                  // PAREN position ; a BARE STRING token followed by `,`/`)` is
+                                                                      //   the grammar's STRING — `("x")` and `"a" + "b"` cannot
+                                                                      //   impersonate it (D-2026-08-10-6)
+tag_body          ::= "{" ( RAW_TEXT | struct_body ) "}"              // raw for RAW_TAGS ; a struct body otherwise
 
-statement_after_path
-                  ::= "=" value                                       // the consumed path is the lvalue
-                    | ":" type_ref "=" value
-                    | cel_continuation                                // the consumed path is the CEL prefix of a bare value ;
-                                                                      //   the boundary token (`}` / `;` / next line) stays the HOST's
-
-                    // The dispatch consumes ONE token (the IDENT), then decides on a RAW
-                    // same-line byte probe sharing the host trivia rules — never a second
-                    // consumer, never a cursor move backward. A tag's opener sits on the
-                    // TAG's line : the probe is line-scoped by design (a tag word without
-                    // its same-line opener reads as an ordinary CEL word). Inside braced_value,
-                    // ONE token decides struct/map/empty : "}" → {} struct ; ":" → {:} map ;
-                    // STRING → map_entries ; IDENT → struct_entries. The host grammar is
-                    // predictive (LL(1)) up to the explicit point where it delegates a region
-                    // to CEL, JSON, or a guest reader — each byte has one lexical authority,
-                    // and host comments are trivia in CEL regions too (D-2026-08-13-1).
+                    // The dispatch consumes ONE token, then decides on a RAW same-line
+                    // byte probe sharing the host trivia rules — never a second consumer,
+                    // never a cursor move backward (the lexer exposes no repositioning
+                    // primitive). A tag's opener sits on the TAG's line : the probe is
+                    // line-scoped by design. Inside braced_value, ONE token decides
+                    // struct/map/empty : "}" → {} struct ; ":" → {:} map ; STRING →
+                    // map_entries ; IDENT → struct_entries. The host grammar is predictive
+                    // (LL(1)) up to the explicit point where it delegates a region to CEL,
+                    // JSON, or a guest reader — each byte has one lexical authority, and
+                    // comments are trivia in CEL regions too, terminating a value only at
+                    // depth zero of a newline-ended position (D-2026-08-13-1).
 
 cel_expr          ::= /* a CEL expression (homegrown parser+checker+eval).
                        Pure-CEL subset : literals, member/index access, operators, ternary,

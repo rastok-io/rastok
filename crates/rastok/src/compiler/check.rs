@@ -230,6 +230,9 @@ pub fn check(
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
             if let TopDecl::Type(type_decl) = decl {
+                if !checker.guard_binding_name(&type_decl.name, "a type name") {
+                    continue;
+                }
                 if checker.type_decls.contains_key(&type_decl.name.text) {
                     checker.bag.push(
                         Diagnostic::new(
@@ -1323,6 +1326,19 @@ impl Checker<'_, '_> {
                 .with_span(span)
                 .with_field("name", name),
             );
+        } else if matches!(name.as_str(), "json" | "nothing") {
+            self.bag.push(
+                Diagnostic::new(
+                    E_NAME_RESERVED,
+                    Phase::Resolve,
+                    format!(
+                        "`{name}` is a reserved word — it names a value form of the \
+                         language, never a node"
+                    ),
+                )
+                .with_span(span)
+                .with_field("name", name),
+            );
         } else if graph
             .nodes
             .iter()
@@ -1906,6 +1922,9 @@ impl Checker<'_, '_> {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
                     };
+                    if !self.guard_binding_name(&port.name, "a port") {
+                        continue;
+                    }
                     // An explicit redeclaration is a conflict even
                     // when the direction agrees; an inferred repeat
                     // is not.
@@ -2141,6 +2160,9 @@ impl Checker<'_, '_> {
         signature: &cel::Signature,
         consts: &BTreeMap<String, cel::Value>,
     ) -> Option<Var> {
+        if !self.guard_binding_name(&decl.name, "a var") {
+            return None;
+        }
         let (ty, int_bounded) = self.state_type(&decl.ty)?;
         let init = match &decl.value {
             None => None,
@@ -2196,11 +2218,38 @@ impl Checker<'_, '_> {
     /// Whether `name` may introduce a binding here: reserved handler
     /// names and shadowing are refused — which is also what keeps
     /// compile-time constant substitution sound.
+    /// The value-form words the language reserves in EVERY
+    /// binding-introducing position (D-2026-08-13-1, review round 2):
+    /// a masked `json` or `nothing` would make their value forms
+    /// ambiguous (`json[0]`: document or indexing?), so the name
+    /// refuses AT THE DECLARATION, before any use can blur.
+    fn guard_binding_name(&mut self, name: &crate::compiler::syntax::Name, what: &str) -> bool {
+        if !matches!(name.text.as_str(), "json" | "nothing") {
+            return true;
+        }
+        self.bag.push(
+            Diagnostic::new(
+                E_NAME_RESERVED,
+                Phase::Resolve,
+                format!(
+                    "`{}` is a reserved word — it names a value form of the language, never {what}",
+                    name.text
+                ),
+            )
+            .with_span(name.span)
+            .with_field("name", name.text.clone()),
+        );
+        false
+    }
+
     fn bindable(
         &mut self,
         name: &crate::compiler::syntax::Name,
         signature: &cel::Signature,
     ) -> bool {
+        if !self.guard_binding_name(name, "a binding") {
+            return false;
+        }
         let collision = if matches!(name.text.as_str(), "data" | "meta") {
             Some("a reserved handler name")
         } else if signature.get(&name.text).is_some() {
