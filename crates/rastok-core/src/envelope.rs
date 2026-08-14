@@ -5,11 +5,11 @@
 //! envelope is immutable: a transaction never mutates one, it emits new
 //! ones.
 //!
-//! This module owns the value types and the identity framing primitive.
-//! The full derivation recipes (`root_id`, `emission_id`) belong to the
-//! journal's `ids` module. The `Union` and `Variant` arms of the
-//! materialized value domain join with the checker work that gives them
-//! meaning.
+//! This module owns the envelope and its representation state. Materialized
+//! logical values are owned by [`crate::value`]; [`Value`] is re-exported
+//! here so the envelope API keeps one obvious entry point without defining a
+//! second value domain. The full derivation recipes (`root_id`,
+//! `emission_id`) belong to the journal's `ids` module.
 //!
 //! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
 
@@ -18,6 +18,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::OnceCell;
 use core::fmt;
+
+pub use crate::value::Value;
 
 /// Deterministically derived 128-bit identity (`envelope.md` §2). The
 /// physical type is a fixed 128-bit value; no random bits ever enter an
@@ -75,8 +77,11 @@ impl fmt::Display for Id {
     }
 }
 
-/// Scalar leaf of the materialized data domain, shared by `data` values
-/// and `meta` namespace leaves.
+/// Scalar leaf admitted by a metadata namespace.
+///
+/// Payload values use [`Value`] directly. Metadata deliberately remains a
+/// smaller domain (`scalar | array<scalar>`), so this type records that
+/// boundary rather than duplicating the payload value algebra.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scalar {
     /// Boolean.
@@ -100,57 +105,6 @@ pub enum Scalar {
         /// Digits after the point (negative = trailing zeros).
         scale: i32,
     },
-}
-
-/// Materialized Rastok data domain — the in-memory view of `data`.
-///
-/// Struct equality compares fields BY NAME: declaration order is
-/// presentation, not semantics (identity.md — the canonical seal
-/// sorts), so two structs with one canonical identity are one
-/// value. Well-formedness (unique field names) is enforced at the
-/// machine's doors, never resolved by "first found".
-#[derive(Debug, Clone)]
-pub enum Value {
-    /// The JSON model's absent value — `json null` and jsonl lines
-    /// carry it; identity tag 9, shared with the CEL twin.
-    Null,
-    /// Scalar leaf.
-    Scalar(Scalar),
-    /// Named fields in declaration order.
-    Struct(Vec<(String, Value)>),
-    /// Ordered homogeneous elements.
-    Array(Vec<Value>),
-    /// Keyed values; M0 admits text keys.
-    Map(BTreeMap<String, Value>),
-}
-
-impl PartialEq for Value {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Null, Self::Null) => true,
-            (Self::Scalar(a), Self::Scalar(b)) => a == b,
-            // Sorted-field comparison — by name like the canonical
-            // seal, total on malformed duplicates (the cel twin
-            // documents the contract).
-            (Self::Struct(a), Self::Struct(b)) => {
-                if a.len() != b.len() {
-                    return false;
-                }
-                fn sorted(fields: &[(String, Value)]) -> Vec<&(String, Value)> {
-                    let mut refs: Vec<&(String, Value)> = fields.iter().collect();
-                    refs.sort_by(|x, y| x.0.cmp(&y.0));
-                    refs
-                }
-                sorted(a)
-                    .into_iter()
-                    .zip(sorted(b))
-                    .all(|(x, y)| x.0 == y.0 && x.1 == y.1)
-            }
-            (Self::Array(a), Self::Array(b)) => a == b,
-            (Self::Map(a), Self::Map(b)) => a == b,
-            _ => false,
-        }
-    }
 }
 
 /// Per-envelope representation tag of encoded `data` bytes
@@ -556,7 +510,7 @@ mod tests {
         let plain = Data::encoded(Encoding::Raw, *b"{\"n\":1}");
         let cached = Data::encoded(Encoding::Raw, *b"{\"n\":1}");
         cached
-            .materialize_with(|_, _| Ok::<_, DecodeFault>(Value::Scalar(Scalar::Int(1))))
+            .materialize_with(|_, _| Ok::<_, DecodeFault>(Value::Int(1)))
             .unwrap();
         assert_eq!(plain, cached);
         assert_ne!(plain, Data::encoded(Encoding::Avro, *b"{\"n\":1}"));
@@ -573,16 +527,13 @@ mod tests {
                     decode_runs += 1;
                     assert_eq!(encoding, Encoding::Raw);
                     assert_eq!(bytes, b"7");
-                    Ok::<_, DecodeFault>(Value::Scalar(Scalar::Int(7)))
+                    Ok::<_, DecodeFault>(Value::Int(7))
                 })
                 .unwrap();
-            assert_eq!(value, &Value::Scalar(Scalar::Int(7)));
+            assert_eq!(value, &Value::Int(7));
         }
         assert_eq!(decode_runs, 1);
-        assert_eq!(
-            data.materialized_value(),
-            Some(&Value::Scalar(Scalar::Int(7)))
-        );
+        assert_eq!(data.materialized_value(), Some(&Value::Int(7)));
     }
 
     #[test]
@@ -596,18 +547,18 @@ mod tests {
         // may succeed.
         assert_eq!(data.materialized_value(), None);
         let value = data
-            .materialize_with(|_, _| Ok::<_, DecodeFault>(Value::Scalar(Scalar::Int(1))))
+            .materialize_with(|_, _| Ok::<_, DecodeFault>(Value::Int(1)))
             .unwrap();
-        assert_eq!(value, &Value::Scalar(Scalar::Int(1)));
+        assert_eq!(value, &Value::Int(1));
     }
 
     #[test]
     fn a_born_in_memory_value_never_decodes() {
-        let data = Data::materialized(Value::Scalar(Scalar::Text(String::from("hi"))));
+        let data = Data::materialized(Value::Text(String::from("hi")));
         let value = data
             .materialize_with(|_, _| unreachable!("no bytes to decode"))
             .unwrap_or_else(|_: DecodeFault| unreachable!());
-        assert_eq!(value, &Value::Scalar(Scalar::Text(String::from("hi"))));
+        assert_eq!(value, &Value::Text(String::from("hi")));
     }
 
     #[test]

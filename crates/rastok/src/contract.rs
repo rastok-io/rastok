@@ -205,19 +205,19 @@ impl ValueDomain {
     /// Judges a CONSTANT value against the domain — the ONE
     /// predicate shared by author-written values and sheet defaults.
     #[must_use]
-    pub fn admits(&self, value: &cel::Value) -> bool {
+    pub fn admits(&self, value: &crate::value::Value) -> bool {
         match self {
             Self::Choice(_) | Self::CelPath | Self::Struct | Self::Map => false,
-            Self::Text => matches!(value, cel::Value::Text(_)),
+            Self::Text => matches!(value, crate::value::Value::Text(_)),
             Self::TextList => match value {
-                cel::Value::List(items) => {
-                    items.iter().all(|item| matches!(item, cel::Value::Text(_)))
-                }
+                crate::value::Value::Array(items) => items
+                    .iter()
+                    .all(|item| matches!(item, crate::value::Value::Text(_))),
                 _ => false,
             },
-            Self::Duration => matches!(value, cel::Value::Duration(_)),
+            Self::Duration => matches!(value, crate::value::Value::Duration(_)),
             Self::ByteSize => {
-                matches!(value, cel::Value::Text(text) if byte_size(text).is_some())
+                matches!(value, crate::value::Value::Text(text) if byte_size(text).is_some())
             }
         }
     }

@@ -600,9 +600,18 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
     );
 
     let plan = with_setvar_root(cel::Expr::MapLit(vec![
-        (String::from("z"), cel::Expr::Literal(cel::Value::Int(1))),
-        (String::from("a"), cel::Expr::Literal(cel::Value::Int(2))),
-        (String::from("z"), cel::Expr::Literal(cel::Value::Int(3))),
+        (
+            String::from("z"),
+            cel::Expr::Literal(rastok::value::Value::Int(1)),
+        ),
+        (
+            String::from("a"),
+            cel::Expr::Literal(rastok::value::Value::Int(2)),
+        ),
+        (
+            String::from("z"),
+            cel::Expr::Literal(rastok::value::Value::Int(3)),
+        ),
     ]));
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -735,8 +744,14 @@ fn an_unsorted_map_literal_is_not_canonical() {
     // one the re-encoding check reproduces faithfully, so the
     // validator must refuse it by walking the trees.
     let plan = with_setvar_root(cel::Expr::MapLit(vec![
-        (String::from("b"), cel::Expr::Literal(cel::Value::Int(1))),
-        (String::from("a"), cel::Expr::Literal(cel::Value::Int(2))),
+        (
+            String::from("b"),
+            cel::Expr::Literal(rastok::value::Value::Int(1)),
+        ),
+        (
+            String::from("a"),
+            cel::Expr::Literal(rastok::value::Value::Int(2)),
+        ),
     ]));
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -749,8 +764,14 @@ fn an_unsorted_map_literal_is_not_canonical() {
 #[test]
 fn a_duplicated_map_literal_key_refuses() {
     let plan = with_setvar_root(cel::Expr::MapLit(vec![
-        (String::from("a"), cel::Expr::Literal(cel::Value::Int(1))),
-        (String::from("a"), cel::Expr::Literal(cel::Value::Int(2))),
+        (
+            String::from("a"),
+            cel::Expr::Literal(rastok::value::Value::Int(1)),
+        ),
+        (
+            String::from("a"),
+            cel::Expr::Literal(rastok::value::Value::Int(2)),
+        ),
     ]));
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -780,12 +801,14 @@ fn what_the_type_accepts_the_format_reads_back() {
         let relay_steps = &mut plan.handlers[0].body;
         for step in relay_steps {
             if let Step::SetVar { expr, .. } = step {
-                let previous =
-                    core::mem::replace(&mut expr.root, cel::Expr::Literal(cel::Value::Int(0)));
+                let previous = core::mem::replace(
+                    &mut expr.root,
+                    cel::Expr::Literal(rastok::value::Value::Int(0)),
+                );
                 expr.root = cel::Expr::Binary {
                     op: cel::BinaryOp::Add,
                     left: Box::new(previous),
-                    right: Box::new(cel::Expr::Literal(cel::Value::Int(0))),
+                    right: Box::new(cel::Expr::Literal(rastok::value::Value::Int(0))),
                 };
             }
         }

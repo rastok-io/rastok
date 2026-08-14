@@ -291,7 +291,7 @@ fn content_type_follows_the_payload_not_the_merge() {
                 authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
-                    data: Data::materialized(Value::Scalar(Scalar::Text(String::from("a,b")))),
+                    data: Data::materialized(Value::Text(String::from("a,b"))),
                     ext,
                 },
                 sequence: SubmissionSequence::Next,

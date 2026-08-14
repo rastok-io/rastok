@@ -101,15 +101,12 @@ fn the_lab_trace_matches_its_golden_and_seals_the_request_digest() {
     let request = rastok::envelope::Data::materialized(rastok::envelope::Value::Struct(vec![
         (
             String::from("price"),
-            rastok::envelope::Value::Scalar(rastok::envelope::Scalar::Decimal {
+            rastok::envelope::Value::Decimal {
                 unscaled: 1999,
                 scale: 2,
-            }),
+            },
         ),
-        (
-            String::from("n"),
-            rastok::envelope::Value::Scalar(rastok::envelope::Scalar::Int(42)),
-        ),
+        (String::from("n"), rastok::envelope::Value::Int(42)),
     ]));
     let prepared = rastok::boundary::prepare_jsonl(&request).expect("the request frames");
     assert_eq!(

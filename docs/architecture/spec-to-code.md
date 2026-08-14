@@ -45,12 +45,14 @@ they are not promised crate names.
 |---|---|---|---|
 | M1.3 logical payload types and uniform ports | One canonical `DataType`/`Value`; complete effective port types; JSON/Avro/Arrow projections including unions; Rastok expressions as a consumer; `IDENT!` frontends; ordinary multi-output completion with Process `err` diagnostics and one typed `exit` per invocation | core `datatype` (type authority landed), then `value`/`expr`/envelope/plan vocabulary plus std compiler, contract, schema-projection and boundary adapters | the ordered gates in [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md), one categorical v7 move, external-schema mapping matrices, differential CEL-compatible tests, package sabotage, Lab/real Process parity, no_std and spike |
 
-The remaining `cel::Value`, `error_set`, `TypedError` and
-success/failure-only boundary reply remain implementation scaffolding until
-this row lands. `datatype::DataType` has replaced `cel::Type` without moving
-the v6 wire ids or semantic hashes; its full logical family and resolved
-types arrive through the following gates. Scaffolding is not the target
-model and must not acquire new normative responsibilities.
+Core `datatype::DataType` and `value::Value` now own the executable type and
+materialized-value subsets without moving the v6 wire ids or semantic hashes.
+The expression-only `cel::EvalValue` may additionally carry the lazy payload
+witness, but cannot cross into plans, envelopes, or journals. The remaining
+`error_set`, `TypedError` and success/failure-only boundary reply are
+implementation scaffolding until this row lands; the complete logical family
+and resolved port types arrive through the following gates. Scaffolding is not
+the target model and must not acquire new normative responsibilities.
 
 ## Keeping the map honest
 

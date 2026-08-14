@@ -379,17 +379,13 @@ impl<'plan> Vm<'plan> {
                 .iter()
                 .find(|decl| decl.port == submission.port)
                 .and_then(|decl| decl.ty.as_ref());
-            crate::runtime::crossing_pins_hold(
-                self.plan.plan(),
-                &from,
-                own_pin,
-                &crate::runtime::from_envelope_value(value),
-            )
-            .map_err(|refused| VmError::IngressPinViolation {
-                ingress: submission.port.clone(),
-                rejected_at: refused.at,
-                violation: refused.violation,
-            })?;
+            crate::runtime::crossing_pins_hold(self.plan.plan(), &from, own_pin, value).map_err(
+                |refused| VmError::IngressPinViolation {
+                    ingress: submission.port.clone(),
+                    rejected_at: refused.at,
+                    violation: refused.violation,
+                },
+            )?;
         }
         self.reserve_targets(&from)?;
         let committed = journal
@@ -771,7 +767,7 @@ impl<'plan> Vm<'plan> {
                 self.plan.plan(),
                 &from,
                 contract_pin.as_ref(),
-                &crate::runtime::from_envelope_value(value),
+                value,
             )
             .map_err(crate::runtime::PinViolation::into_fault)
             {
@@ -978,13 +974,8 @@ impl<'plan> Vm<'plan> {
                             })
                     });
                 if any_pin {
-                    crate::runtime::crossing_pins_hold(
-                        self.plan.plan(),
-                        &from,
-                        own_pin,
-                        &crate::runtime::from_envelope_value(value),
-                    )
-                    .map_err(|violation| VmError::Fault(violation.into_fault()))?;
+                    crate::runtime::crossing_pins_hold(self.plan.plan(), &from, own_pin, value)
+                        .map_err(|violation| VmError::Fault(violation.into_fault()))?;
                 }
             }
         }
@@ -1105,9 +1096,9 @@ impl<'plan> Vm<'plan> {
                         // time counts (execution-model §8). What is
                         // armed here is exactly what the committed
                         // record sealed as its timers.
-                        if let Some(crate::plan::AttrSetting::Value(crate::cel::Value::Duration(
-                            budget,
-                        ))) = self.plan.nodes[target.index()]
+                        if let Some(crate::plan::AttrSetting::Value(
+                            crate::value::Value::Duration(budget),
+                        )) = self.plan.nodes[target.index()]
                             .connector()
                             .and_then(|spec| spec.attribute("timeout"))
                         {

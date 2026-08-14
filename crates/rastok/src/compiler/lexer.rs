@@ -195,7 +195,7 @@ pub enum JsonTail {
     /// A document read whole; the cursor sits past it.
     Document {
         /// The parsed document.
-        value: rastok_core::cel::Value,
+        value: rastok_core::value::Value,
         /// Where its bytes sit in the source.
         range: core::ops::Range<usize>,
     },

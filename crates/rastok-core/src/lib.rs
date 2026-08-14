@@ -1,7 +1,7 @@
 //! The Rastok kernel — everything deterministic, nothing of the OS.
 //!
-//! This crate holds the vocabulary (`node`), the envelope and its
-//! values, the CEL chain, the executable plan, the journal's records
+//! This crate holds the vocabulary (`node`), logical types and values,
+//! envelopes, the expression chain, the executable plan, the journal's records
 //! and trait, the boundary vocabulary and its five traits, and the
 //! machine (`runtime`, `runtime::vm`). The world enters exclusively
 //! through the boundary traits; adapters, the compiler, the lab, and
@@ -29,3 +29,4 @@ pub mod node;
 pub mod plan;
 pub mod runtime;
 pub mod trivia;
+pub mod value;

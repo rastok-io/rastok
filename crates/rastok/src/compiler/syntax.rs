@@ -529,7 +529,7 @@ pub enum Value {
     /// expression (D-2026-08-13-1, review round 3).
     Json {
         /// The parsed value — exact numbers, duplicate keys refused.
-        value: rastok_core::cel::Value,
+        value: rastok_core::value::Value,
         /// Where it was written.
         span: Span,
     },

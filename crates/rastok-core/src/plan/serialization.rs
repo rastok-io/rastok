@@ -22,13 +22,14 @@ use crate::canonical_cbor::{self, Value as Cbor};
 use crate::cel;
 use crate::datatype::DataType;
 use crate::envelope::WriteTarget;
-use crate::identity::encoding::cel_tagged;
+use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
     Node, NodeKind, PlanValidationError, PortDecl, SemanticHash, Slot, Step,
     ValidatedExecutionPlan, VarCell,
 };
+use crate::value::Value;
 
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
@@ -311,7 +312,7 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
 fn attr_tree(setting: &AttrSetting) -> Cbor {
     match setting {
         AttrSetting::Word(word) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(word.clone())]),
-        AttrSetting::Value(value) => Cbor::Array(vec![Cbor::Uint(2), cel_tagged(value)]),
+        AttrSetting::Value(value) => Cbor::Array(vec![Cbor::Uint(2), value_tagged(value)]),
     }
 }
 
@@ -335,7 +336,7 @@ fn port_decl_tree(decl: &PortDecl) -> Cbor {
 fn var_tree(var: &VarCell) -> Cbor {
     let mut pairs = BTreeMap::from([(1, Cbor::Text(var.name.clone())), (2, type_tree(&var.ty))]);
     if let Some(init) = &var.init {
-        pairs.insert(3, cel_tagged(init));
+        pairs.insert(3, value_tagged(init));
     }
     Cbor::Map(pairs)
 }
@@ -445,7 +446,7 @@ fn type_tree(ty: &DataType) -> Cbor {
 
 fn expr_tree(expr: &cel::Expr) -> Cbor {
     match expr {
-        cel::Expr::Literal(value) => Cbor::Array(vec![Cbor::Uint(1), cel_tagged(value)]),
+        cel::Expr::Literal(value) => Cbor::Array(vec![Cbor::Uint(1), value_tagged(value)]),
         cel::Expr::Asset(index) => Cbor::Array(vec![Cbor::Uint(10), Cbor::Uint(u64::from(*index))]),
         cel::Expr::Path(segments) => Cbor::Array(vec![
             Cbor::Uint(2),
@@ -524,7 +525,7 @@ fn expr_tree(expr: &cel::Expr) -> Cbor {
 pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     enum Item<'a> {
         Expr(&'a cel::Expr, usize),
-        Val(&'a cel::Value, usize),
+        Val(&'a Value, usize),
         Ty(&'a DataType, usize),
     }
     /// A `tree_tree`: its type and expression roots sit at `level`.
@@ -670,16 +671,16 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 }
             }
             Item::Val(value, level) => {
-                // `cel_tagged`: an array whose tag and scalar
+                // `value_tagged`: an array whose tag and scalar
                 // payloads sit one down.
                 max = max.max(level + 1);
                 match value {
-                    cel::Value::List(items) => {
+                    Value::Array(items) => {
                         for item in items {
                             stack.push(Item::Val(item, level + 2));
                         }
                     }
-                    cel::Value::Map(entries) => {
+                    Value::Map(entries) => {
                         for entry in entries.values() {
                             // pair array at +2, the tagged key's own
                             // tag and text at +4.
@@ -687,7 +688,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                             stack.push(Item::Val(entry, level + 3));
                         }
                     }
-                    cel::Value::Struct(fields) => {
+                    Value::Struct(fields) => {
                         for (_, value) in fields {
                             // pair array at +2, its BARE field text
                             // at +3 (tag 17 keys carry no tag).
@@ -695,7 +696,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                             stack.push(Item::Val(value, level + 3));
                         }
                     }
-                    cel::Value::Decimal { .. } => {
+                    Value::Decimal { .. } => {
                         // `[10, [bytes, scale]]` — the payload pair
                         // sits one deeper than the tag.
                         max = max.max(level + 2);
@@ -882,7 +883,7 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
 fn attr_from(tree: &Cbor) -> Result<AttrSetting, DecodeError> {
     match array_of(tree, "attr setting")? {
         [Cbor::Uint(1), Cbor::Text(word)] => Ok(AttrSetting::Word(word.clone())),
-        [Cbor::Uint(2), value] => Ok(AttrSetting::Value(cel_value_from(value)?)),
+        [Cbor::Uint(2), value] => Ok(AttrSetting::Value(value_from(value)?)),
         _ => Err(err("attr setting")),
     }
 }
@@ -909,7 +910,7 @@ fn var_from(tree: &Cbor) -> Result<VarCell, DecodeError> {
     let name = text_of(get(pairs, 1, "var name")?, "var name")?.to_string();
     let ty = type_from(get(pairs, 2, "var type")?)?;
     let init = match find(pairs, 3) {
-        Some(value) => Some(cel_value_from(value)?),
+        Some(value) => Some(value_from(value)?),
         None => None,
     };
     Ok(VarCell { name, ty, init })
@@ -1067,7 +1068,7 @@ fn type_from(tree: &Cbor) -> Result<DataType, DecodeError> {
 fn expr_from(tree: &Cbor) -> Result<cel::Expr, DecodeError> {
     let parts = array_of(tree, "cel expr")?;
     match parts {
-        [Cbor::Uint(1), value] => Ok(cel::Expr::Literal(cel_value_from(value)?)),
+        [Cbor::Uint(1), value] => Ok(cel::Expr::Literal(value_from(value)?)),
         [Cbor::Uint(10), Cbor::Uint(index)] => Ok(cel::Expr::Asset(
             u32::try_from(*index).map_err(|_| err("asset index"))?,
         )),
@@ -1144,22 +1145,22 @@ fn binop_from(code: u64) -> Result<cel::BinaryOp, DecodeError> {
     })
 }
 
-/// Reads a `tagged_value` back into a CEL value — the inverse of the
-/// canon's `cel_tagged`, over the tags the plan can carry.
-fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
+/// Reads a `tagged_value` back into the core value domain — the inverse of the
+/// canon's `value_tagged`, over the tags the plan can carry.
+fn value_from(tree: &Cbor) -> Result<Value, DecodeError> {
     match array_of(tree, "tagged value")? {
-        [Cbor::Uint(1), Cbor::Bool(v)] => Ok(cel::Value::Bool(*v)),
+        [Cbor::Uint(1), Cbor::Bool(v)] => Ok(Value::Bool(*v)),
         [Cbor::Uint(2), value] | [Cbor::Uint(3), value] => {
             // Tags 2 (int) and 3 (long) are both the signed domain —
             // the registry keeps them distinct so the seal shows the
             // honest width; the decoded value is one i64 either way.
-            Ok(cel::Value::Int(int_from(value)?))
+            Ok(Value::Int(int_from(value)?))
         }
-        [Cbor::Uint(5), Cbor::Double(v)] => Ok(cel::Value::Double(v.value())),
-        [Cbor::Uint(7), Cbor::Bytes(v)] => Ok(cel::Value::Bytes(v.clone())),
-        [Cbor::Uint(8), Cbor::Text(v)] => Ok(cel::Value::Text(v.clone())),
-        [Cbor::Uint(9), Cbor::Null] => Ok(cel::Value::Null),
-        [Cbor::Uint(23), Cbor::Uint(v)] => Ok(cel::Value::Uint(*v)),
+        [Cbor::Uint(5), Cbor::Double(v)] => Ok(Value::Double(v.value())),
+        [Cbor::Uint(7), Cbor::Bytes(v)] => Ok(Value::Bytes(v.clone())),
+        [Cbor::Uint(8), Cbor::Text(v)] => Ok(Value::Text(v.clone())),
+        [Cbor::Uint(9), Cbor::Null] => Ok(Value::Null),
+        [Cbor::Uint(23), Cbor::Uint(v)] => Ok(Value::Uint(*v)),
         [Cbor::Uint(10), payload] => match array_of(payload, "decimal")? {
             [Cbor::Bytes(unscaled), scale] => {
                 if unscaled.is_empty() || unscaled.len() > 16 {
@@ -1191,15 +1192,15 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
                 if !crate::json::declared_decimal_well_formed(value, scale) {
                     return Err(err("decimal form"));
                 }
-                Ok(cel::Value::Decimal {
+                Ok(Value::Decimal {
                     unscaled: value,
                     scale,
                 })
             }
             _ => Err(err("decimal")),
         },
-        [Cbor::Uint(12), value] => Ok(cel::Value::Timestamp(int_from(value)?)),
-        [Cbor::Uint(16), value] => Ok(cel::Value::Duration(int_from(value)?)),
+        [Cbor::Uint(12), value] => Ok(Value::Timestamp(int_from(value)?)),
+        [Cbor::Uint(16), value] => Ok(Value::Duration(int_from(value)?)),
         [Cbor::Uint(17), Cbor::Array(pairs)] => {
             // The struct literal — bare text keys, declaration
             // order AS SEALED (sorted); the validator holds shipped
@@ -1208,12 +1209,12 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
             for pair in pairs {
                 match array_of(pair, "struct field")? {
                     [Cbor::Text(name), value] => {
-                        fields.push((name.clone(), cel_value_from(value)?));
+                        fields.push((name.clone(), value_from(value)?));
                     }
                     _ => return Err(err("struct field")),
                 }
             }
-            Ok(cel::Value::Struct(fields))
+            Ok(Value::Struct(fields))
         }
         [Cbor::Uint(18), Cbor::Array(pairs)] => {
             let mut map = alloc::collections::BTreeMap::new();
@@ -1224,17 +1225,17 @@ fn cel_value_from(tree: &Cbor) -> Result<cel::Value, DecodeError> {
                             [Cbor::Uint(8), Cbor::Text(text)] => text.clone(),
                             _ => return Err(err("map key")),
                         };
-                        map.insert(key, cel_value_from(value)?);
+                        map.insert(key, value_from(value)?);
                     }
                     _ => return Err(err("map entry")),
                 }
             }
-            Ok(cel::Value::Map(map))
+            Ok(Value::Map(map))
         }
-        [Cbor::Uint(19), Cbor::Array(items)] => Ok(cel::Value::List(
+        [Cbor::Uint(19), Cbor::Array(items)] => Ok(Value::Array(
             items
                 .iter()
-                .map(cel_value_from)
+                .map(value_from)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         _ => Err(err("tagged value")),
@@ -1337,20 +1338,20 @@ mod tests {
             let mut entries = BTreeMap::new();
             entries.insert(
                 text("k"),
-                cel::Value::List(vec![
-                    cel::Value::Int(-3),
-                    cel::Value::Bytes(vec![1]),
-                    cel::Value::Double(1.5),
-                    cel::Value::Timestamp(7),
+                Value::Array(vec![
+                    Value::Int(-3),
+                    Value::Bytes(vec![1]),
+                    Value::Double(1.5),
+                    Value::Timestamp(7),
                 ]),
             );
-            cel::Value::Map(entries)
+            Value::Map(entries)
         };
         let expr = cel::Expr::Ternary {
             cond: Box::new(cel::Expr::Binary {
                 op: cel::BinaryOp::Lt,
                 left: Box::new(cel::Expr::Path(vec![text("seen")])),
-                right: Box::new(cel::Expr::Literal(cel::Value::Int(3))),
+                right: Box::new(cel::Expr::Literal(Value::Int(3))),
             }),
             then: Box::new(cel::Expr::Call {
                 function: cel::Function::Size,
@@ -1358,13 +1359,13 @@ mod tests {
                     text("k"),
                     cel::Expr::Unary {
                         op: cel::UnaryOp::Neg,
-                        expr: Box::new(cel::Expr::Literal(cel::Value::Int(1))),
+                        expr: Box::new(cel::Expr::Literal(Value::Int(1))),
                     },
                 )])])],
             }),
             otherwise: Box::new(cel::Expr::Index {
                 base: Box::new(cel::Expr::Path(vec![text("data"), text("f")])),
-                index: Box::new(cel::Expr::Literal(cel::Value::Uint(0))),
+                index: Box::new(cel::Expr::Literal(Value::Uint(0))),
             }),
         };
         ExecutionPlan {
@@ -1465,11 +1466,11 @@ mod tests {
                             },
                             FieldWrite {
                                 target: WriteTarget::App(text("m.dotted")),
-                                expr: tree(cel::Expr::Literal(cel::Value::Null)),
+                                expr: tree(cel::Expr::Literal(Value::Null)),
                             },
                             FieldWrite {
                                 target: WriteTarget::Ext(text("content_type")),
-                                expr: tree(cel::Expr::Literal(cel::Value::Text(text("t")))),
+                                expr: tree(cel::Expr::Literal(Value::Text(text("t")))),
                             },
                         ]),
                     },
@@ -1477,7 +1478,7 @@ mod tests {
                         port: port("out"),
                         value: Emission::Replace(vec![FieldWrite {
                             target: WriteTarget::Data(vec![]),
-                            expr: tree(cel::Expr::Literal(cel::Value::Duration(5))),
+                            expr: tree(cel::Expr::Literal(Value::Duration(5))),
                         }]),
                     },
                 ],
@@ -1545,28 +1546,28 @@ mod tests {
 
     #[test]
     fn the_level_walker_matches_the_builders() {
-        let mut nested_binary = cel::Expr::Literal(cel::Value::Int(1));
-        let mut nested_maplit = cel::Expr::Literal(cel::Value::Int(1));
+        let mut nested_binary = cel::Expr::Literal(Value::Int(1));
+        let mut nested_maplit = cel::Expr::Literal(Value::Int(1));
         for _ in 0..60 {
             nested_binary = cel::Expr::Binary {
                 op: cel::BinaryOp::Add,
                 left: Box::new(nested_binary),
-                right: Box::new(cel::Expr::Literal(cel::Value::Int(0))),
+                right: Box::new(cel::Expr::Literal(Value::Int(0))),
             };
             nested_maplit = cel::Expr::MapLit(vec![(text("k"), nested_maplit)]);
         }
-        let mut nested_value = cel::Value::Int(1);
+        let mut nested_value = Value::Int(1);
         let mut nested_type = DataType::Int;
         for _ in 0..60 {
-            nested_value = cel::Value::List(vec![nested_value]);
+            nested_value = Value::Array(vec![nested_value]);
             nested_type = DataType::Map(Box::new(nested_type));
         }
-        let mut deep_type_plan = one_step_plan(cel::Expr::Literal(cel::Value::Null));
+        let mut deep_type_plan = one_step_plan(cel::Expr::Literal(Value::Null));
         deep_type_plan.handlers[0].body = vec![Step::Let {
             name: text("x"),
             expr: cel::Tree {
                 ty: nested_type,
-                root: cel::Expr::Literal(cel::Value::Null),
+                root: cel::Expr::Literal(Value::Null),
             },
         }];
         let plans = [

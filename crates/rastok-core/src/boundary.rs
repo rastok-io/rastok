@@ -241,14 +241,14 @@ pub fn prepare_jsonl(data: &envelope::Data) -> Result<PreparedRequest, String> {
 /// Prepares the plain-text request wire: raw bytes or the textual
 /// scalar's UTF-8 form, exactly as before the codec split.
 pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
-    use envelope::{Data, Encoding, Scalar, Value};
+    use envelope::{Data, Encoding, Value};
     let bytes = match data {
         Data::Encoded {
             encoding: Encoding::Raw,
             bytes,
             ..
         } => bytes.clone(),
-        Data::Materialized(Value::Scalar(Scalar::Text(text))) => {
+        Data::Materialized(Value::Text(text)) => {
             let mut bytes = text.clone().into_bytes();
             if bytes.last() != Some(&b'\n') {
                 bytes.push(b'\n');
@@ -664,16 +664,12 @@ impl Dispatcher {
 mod tests {
     #[test]
     fn prepare_lines_frames_exactly_one_trailing_newline() {
-        use crate::envelope::{Data, Encoding, Scalar, Value};
-        let framed = prepare_lines(&Data::materialized(Value::Scalar(Scalar::Text(
-            String::from("ligne"),
-        ))))
-        .unwrap();
+        use crate::envelope::{Data, Encoding, Value};
+        let framed =
+            prepare_lines(&Data::materialized(Value::Text(String::from("ligne")))).unwrap();
         assert_eq!(framed.bytes(), b"ligne\n");
-        let already = prepare_lines(&Data::materialized(Value::Scalar(Scalar::Text(
-            String::from("ligne\n"),
-        ))))
-        .unwrap();
+        let already =
+            prepare_lines(&Data::materialized(Value::Text(String::from("ligne\n")))).unwrap();
         assert_eq!(already.bytes(), b"ligne\n");
         let raw = prepare_lines(&Data::encoded(Encoding::Raw, *b"verbatim")).unwrap();
         assert_eq!(raw.bytes(), b"verbatim");

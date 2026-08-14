@@ -183,7 +183,7 @@ fn the_machine_verifies_the_ingress_port() {
     // that is not a graph input refuses typed, before any journal
     // append.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::{Vm, VmError};
@@ -199,7 +199,7 @@ fn the_machine_verifies_the_ingress_port() {
         authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
-            data: Data::materialized(Value::Scalar(Scalar::Text(String::from("go")))),
+            data: Data::materialized(Value::Text(String::from("go"))),
             ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
@@ -721,7 +721,7 @@ fn the_braced_record_is_physically_a_struct() {
     // on the envelope itself for all three interpreters' shared
     // path, and on the canonical seal below.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -740,7 +740,7 @@ fn the_braced_record_is_physically_a_struct() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                data: Data::materialized(Value::Int(1)),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -754,7 +754,7 @@ fn the_braced_record_is_physically_a_struct() {
     };
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].0, "v");
-    assert_eq!(fields[0].1, Value::Scalar(Scalar::Int(7)));
+    assert_eq!(fields[0].1, Value::Int(7));
     // And the canonical seal carries tag 17 (struct), not 18 (map):
     // find the emission record and walk envelope(20).data(8).
     let trace = rastok::golden::project(journal.records());
@@ -830,7 +830,7 @@ fn an_empty_brace_is_an_empty_record() {
     // `{}` builds an EMPTY struct — never an identity (identity is
     // `.`). The injected payload must not leak through.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -849,7 +849,7 @@ fn an_empty_brace_is_an_empty_record() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                data: Data::materialized(Value::Int(1)),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -869,7 +869,7 @@ fn a_whole_data_write_is_the_payload_itself() {
     // `{data = 1}` is the ENVELOPE form: the payload becomes the
     // integer 1 — never a struct with a field named `data`.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -889,7 +889,7 @@ fn a_whole_data_write_is_the_payload_itself() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Text(String::from("gone")))),
+                data: Data::materialized(Value::Text(String::from("gone"))),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -899,7 +899,7 @@ fn a_whole_data_write_is_the_payload_itself() {
     vm.drain(&mut journal).expect("the drain completes");
     assert_eq!(
         vm.outputs()[0].envelope.data(),
-        &Data::materialized(Value::Scalar(Scalar::Int(1))),
+        &Data::materialized(Value::Int(1)),
         "the payload itself"
     );
 }
@@ -1000,10 +1000,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Struct(vec![(
-                    String::from("v"),
-                    Value::Scalar(Scalar::Int(1)),
-                )])),
+                data: Data::materialized(Value::Struct(vec![(String::from("v"), Value::Int(1))])),
                 ext: app,
             },
             sequence: SubmissionSequence::Next,
@@ -1014,10 +1011,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     let output = &vm.outputs()[0];
     assert_eq!(
         output.envelope.data(),
-        &Data::materialized(Value::Struct(vec![(
-            String::from("v"),
-            Value::Scalar(Scalar::Int(1)),
-        )])),
+        &Data::materialized(Value::Struct(vec![(String::from("v"), Value::Int(1),)])),
         "the payload crosses untouched"
     );
     assert_eq!(
@@ -1035,7 +1029,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
     // leaf-splice alone would write nothing and the field would
     // vanish. Every nesting and both braced forms hold it.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -1057,7 +1051,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
                 authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
-                    data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                    data: Data::materialized(Value::Int(1)),
                     ext: Namespace::new(),
                 },
                 sequence: SubmissionSequence::Next,
@@ -1232,7 +1226,7 @@ fn boundary_outputs_carry_their_port() {
     // answers (port, envelope) pairs, not an anonymous stream the
     // caller would have to re-derive from the plan.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -1251,7 +1245,7 @@ fn boundary_outputs_carry_their_port() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                data: Data::materialized(Value::Int(1)),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -1285,7 +1279,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     // draft and JOURNALED it. The pins are judged before any append
     // — replay never meets a record a pin refuses.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -1302,7 +1296,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
         authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new("alpha").unwrap(),
         draft: Draft {
-            data: Data::materialized(Value::Scalar(Scalar::Text(String::from("wrong")))),
+            data: Data::materialized(Value::Text(String::from("wrong"))),
             ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
@@ -1662,7 +1656,7 @@ lab g {
 #[test]
 fn the_bare_data_relay_preserves_the_logical_type() {
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -1695,14 +1689,14 @@ fn the_bare_data_relay_preserves_the_logical_type() {
         vm.outputs()[0].envelope.data().clone()
     };
     // Struct in, Struct out — tag 17 stays tag 17.
-    let sent = Value::Struct(vec![(String::from("field"), Value::Scalar(Scalar::Int(7)))]);
+    let sent = Value::Struct(vec![(String::from("field"), Value::Int(7))]);
     assert!(
         matches!(relay(sent), Data::Materialized(Value::Struct(_))),
         "a bare relay must not retype a struct"
     );
     // Map in, Map out — tag 18 stays tag 18.
     let mut entries = BTreeMap::new();
-    entries.insert(String::from("k"), Value::Scalar(Scalar::Int(1)));
+    entries.insert(String::from("k"), Value::Int(1));
     assert!(
         matches!(
             relay(Value::Map(entries)),
@@ -1715,7 +1709,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
 #[test]
 fn an_ingress_pin_violation_is_a_named_error() {
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::{Vm, VmError};
@@ -1735,7 +1729,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
                 authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
                 port: rastok::node::Port::new("alpha").unwrap(),
                 draft: Draft {
-                    data: Data::materialized(Value::Scalar(Scalar::Text(String::from("wrong")))),
+                    data: Data::materialized(Value::Text(String::from("wrong"))),
                     ext: Namespace::new(),
                 },
                 sequence: SubmissionSequence::Next,
@@ -1946,7 +1940,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
     // an AST special case: a local binding and a ternary preserve it
     // exactly like the bare relay.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -1979,10 +1973,10 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
         vm.drain(&mut journal).expect("the drain completes");
         vm.outputs()[0].envelope.data().clone()
     };
-    let a_struct = || Value::Struct(vec![(String::from("field"), Value::Scalar(Scalar::Int(7)))]);
+    let a_struct = || Value::Struct(vec![(String::from("field"), Value::Int(7))]);
     let a_map = || {
         let mut entries = BTreeMap::new();
-        entries.insert(String::from("k"), Value::Scalar(Scalar::Int(1)));
+        entries.insert(String::from("k"), Value::Int(1));
         Value::Map(entries)
     };
     for body in [
@@ -2108,7 +2102,7 @@ fn a_spawn_failure_cannot_cross_a_pin() {
     // wired here into an int pin, so the final gate refuses and
     // nothing commits past the inbound.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::{MemJournal, Record};
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -2129,7 +2123,7 @@ fn a_spawn_failure_cannot_cross_a_pin() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Text(String::from("go")))),
+                data: Data::materialized(Value::Text(String::from("go"))),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -2255,9 +2249,9 @@ fn a_struct_constant_cannot_enter_a_plan() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    relay.vars[0].init = Some(rastok::cel::Value::Struct(vec![(
+    relay.vars[0].init = Some(rastok::value::Value::Struct(vec![(
         String::from("field"),
-        rastok::cel::Value::Int(7),
+        rastok::value::Value::Int(7),
     )]));
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -2346,7 +2340,7 @@ fn short_circuits_never_demand_the_data() {
     // tree: a branch the evaluation never takes must never force an
     // opaque payload to decode, even though `data` appears in it.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Encoding, Scalar, Value};
+    use rastok::envelope::{Data, Encoding, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -2397,7 +2391,7 @@ fn short_circuits_never_demand_the_data() {
     assert_eq!(errors, 0, "the untaken arm never ran");
     assert_eq!(
         outputs[0].envelope.data(),
-        &Data::materialized(Value::Scalar(Scalar::Int(1)))
+        &Data::materialized(Value::Int(1))
     );
     // The control: a taken read still faults, typed.
     let (outputs, errors) = run(
@@ -2548,14 +2542,14 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
 
 #[test]
 fn struct_equality_is_by_name_like_the_seal() {
-    use rastok::envelope::{Scalar, Value};
+    use rastok::envelope::Value;
     let left = Value::Struct(vec![
-        (String::from("a"), Value::Scalar(Scalar::Int(1))),
-        (String::from("b"), Value::Scalar(Scalar::Int(2))),
+        (String::from("a"), Value::Int(1)),
+        (String::from("b"), Value::Int(2)),
     ]);
     let right = Value::Struct(vec![
-        (String::from("b"), Value::Scalar(Scalar::Int(2))),
-        (String::from("a"), Value::Scalar(Scalar::Int(1))),
+        (String::from("b"), Value::Int(2)),
+        (String::from("a"), Value::Int(1)),
     ]);
     // One canonical identity, one value — equality agrees with the
     // sorted seal in every judge.
@@ -2573,21 +2567,23 @@ fn struct_equality_is_by_name_like_the_seal() {
     let mut env = std::collections::BTreeMap::new();
     env.insert(
         String::from("a"),
-        rastok::cel::Value::Struct(vec![
-            (String::from("x"), rastok::cel::Value::Int(1)),
-            (String::from("y"), rastok::cel::Value::Int(2)),
-        ]),
+        rastok::value::Value::Struct(vec![
+            (String::from("x"), rastok::value::Value::Int(1)),
+            (String::from("y"), rastok::value::Value::Int(2)),
+        ])
+        .into(),
     );
     env.insert(
         String::from("b"),
-        rastok::cel::Value::Struct(vec![
-            (String::from("y"), rastok::cel::Value::Int(2)),
-            (String::from("x"), rastok::cel::Value::Int(1)),
-        ]),
+        rastok::value::Value::Struct(vec![
+            (String::from("y"), rastok::value::Value::Int(2)),
+            (String::from("x"), rastok::value::Value::Int(1)),
+        ])
+        .into(),
     );
     assert_eq!(
         rastok::cel::eval(&tree, &env).expect("the comparison evaluates"),
-        rastok::cel::Value::Bool(true),
+        rastok::cel::EvalValue::Bool(true),
         "CEL == follows the canonical identity"
     );
 }
@@ -2595,7 +2591,7 @@ fn struct_equality_is_by_name_like_the_seal() {
 #[test]
 fn a_duplicated_struct_field_refuses_at_the_door() {
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -2616,8 +2612,8 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Struct(vec![
-                        (String::from("twin"), Value::Scalar(Scalar::Int(1))),
-                        (String::from("twin"), Value::Scalar(Scalar::Int(2))),
+                        (String::from("twin"), Value::Int(1)),
+                        (String::from("twin"), Value::Int(2)),
                     ])),
                     ext: Namespace::new(),
                 },
@@ -2635,7 +2631,7 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
 #[test]
 fn the_conformance_judgement_is_matchable() {
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::{Vm, VmError};
@@ -2660,10 +2656,7 @@ fn the_conformance_judgement_is_matchable() {
     };
     // A tool MATCHES the judgement — no message parsing.
     let error = vm
-        .inject(
-            &mut journal,
-            submission(Value::Scalar(Scalar::Text(String::from("wrong")))),
-        )
+        .inject(&mut journal, submission(Value::Text(String::from("wrong"))))
         .unwrap_err();
     assert!(matches!(
         error,
@@ -2673,10 +2666,7 @@ fn the_conformance_judgement_is_matchable() {
                 && violation.reason == ConformanceReason::TypeMismatch
     ));
     let error = vm
-        .inject(
-            &mut journal,
-            submission(Value::Scalar(Scalar::Int(1 << 40))),
-        )
+        .inject(&mut journal, submission(Value::Int(1 << 40)))
         .unwrap_err();
     assert!(matches!(
         error,

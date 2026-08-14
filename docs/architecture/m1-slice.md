@@ -66,7 +66,7 @@ step touches `vm.rs` once.
    runtime, synthesized error emissions take the same pre-commit
    gate as everything else, and a bare `data` relay preserves the
    logical Struct/Map type; `76b220a` sixth pass — the struct
-   witness rides cel::Value itself, so every equivalent spelling
+   witness rode the then-named `cel::Value`, so every equivalent spelling
    preserves it; the validator gates unexecutable connector ports by
    capability; the encoded bare relay passes the representation
    through; all four error production paths pinned at the final
@@ -91,7 +91,7 @@ step touches `vm.rs` once.
    bench card v1 is restored byte-for-byte with the M1 surface on a
    new v2, and the fresh-data variant is named `FreshData`; ninth
    pass — laziness is SEMANTIC, not syntactic: the whole payload
-   rides evaluation as `cel::Value::Payload`, a witness that
+   rides evaluation as `cel::EvalValue::Payload`, a witness that
    carries through `val` bindings and ternaries and materializes
    only where an operation demands structure, so `val copy = data;
    out = copy` ships the representation exactly like `out = data`
@@ -230,7 +230,9 @@ step touches `vm.rs` once.
    typed-error deliverable into `ProcessExit`; partition `stop` remains a
    distinct lifecycle implemented by the following `per` slice. Core
    `datatype::DataType` already owns the executable type subset without an
-   identity move; the remaining `cel::Value`, `error_set`, `TypedError` and
+   identity move. Core `value::Value` now also owns the executable
+   materialized-value subset; `cel::EvalValue` is only the transient carrier
+   of the lazy payload witness. The remaining `error_set`, `TypedError` and
    success/failure-only reply split are removed by the ordered M1.3 gates,
    not promoted as an intermediate model. Ordered gates and evidence are in
    the dedicated

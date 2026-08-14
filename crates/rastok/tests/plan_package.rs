@@ -206,7 +206,7 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
 /// compares.
 fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<String>, usize) {
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -216,7 +216,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
         authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
-            data: Data::materialized(Value::Scalar(Scalar::Text(String::from("go")))),
+            data: Data::materialized(Value::Text(String::from("go"))),
             ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,

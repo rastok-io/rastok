@@ -16,13 +16,14 @@ pub mod vm;
 use crate::boundary::{BoundaryEvent, CallOutcome};
 use crate::cel;
 use crate::datatype::DataType;
-use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue};
+use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue, Scalar};
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
 use crate::plan::{
     Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, Slot, Step,
     ValidatedExecutionPlan,
 };
+use crate::value::Value;
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::{String, ToString};
@@ -38,7 +39,7 @@ pub trait GuestExecutor {
     /// # Errors
     ///
     /// A typed guest fault; never an observation of the host.
-    fn run(&self, program: &[u8], input: cel::Value, budget: u64) -> Result<cel::Value, Fault>;
+    fn run(&self, program: &[u8], input: Value, budget: u64) -> Result<Value, Fault>;
 }
 
 /// A runtime fault of one transaction. Atomicity holds: a faulted
@@ -93,7 +94,7 @@ pub type Key = String;
 /// another key's writes.
 #[derive(Debug, Default)]
 pub struct PartitionState {
-    cells: BTreeMap<(Slot, Key), BTreeMap<String, cel::Value>>,
+    cells: BTreeMap<(Slot, Key), BTreeMap<String, Value>>,
 }
 
 impl PartitionState {
@@ -117,7 +118,7 @@ impl PartitionState {
         plan: &ValidatedExecutionPlan,
         slot: Slot,
         key: &str,
-    ) -> Result<BTreeMap<String, cel::Value>, Fault> {
+    ) -> Result<BTreeMap<String, Value>, Fault> {
         if plan.nodes.get(slot.index()).is_none() {
             return Err(Fault::UnknownSlot(slot));
         }
@@ -131,7 +132,7 @@ impl PartitionState {
         plan: &ExecutionPlan,
         slot: Slot,
         key: &str,
-    ) -> BTreeMap<String, cel::Value> {
+    ) -> BTreeMap<String, Value> {
         if let Some(cell) = self.cells.get(&(slot, Key::from(key))) {
             return cell.clone();
         }
@@ -153,7 +154,7 @@ impl PartitionState {
         plan: &ValidatedExecutionPlan,
         slot: Slot,
         key: &str,
-        delta: &[(String, cel::Value)],
+        delta: &[(String, Value)],
     ) -> Result<(), Fault> {
         if plan.nodes.get(slot.index()).is_none() {
             return Err(Fault::UnknownSlot(slot));
@@ -168,7 +169,7 @@ impl PartitionState {
         plan: &ExecutionPlan,
         slot: Slot,
         key: &str,
-        delta: &[(String, cel::Value)],
+        delta: &[(String, Value)],
     ) {
         let mut cell = self.cell_unchecked(plan, slot, key);
         for (name, value) in delta {
@@ -415,7 +416,7 @@ impl<'plan> TransactionExecutor<'plan> {
         &self,
         slot: Slot,
         delivery: &Delivery,
-        state: &BTreeMap<String, cel::Value>,
+        state: &BTreeMap<String, Value>,
     ) -> Result<TransactionOutcome, Fault> {
         // The validated plan proves its own references, not the
         // caller's slot — verified, refused typed.
@@ -441,17 +442,23 @@ impl<'plan> TransactionExecutor<'plan> {
         // Scratch isolation: the handler runs against copies; nothing
         // below touches the caller's state.
         let mut scratch = state.clone();
-        let mut lets: BTreeMap<String, cel::Value> = BTreeMap::new();
+        let mut lets: BTreeMap<String, cel::EvalValue> = BTreeMap::new();
         let mut buffer = EmissionBuffer::new();
         let input = &delivery.envelope;
-        let base = |scratch: &BTreeMap<String, cel::Value>,
-                    lets: &BTreeMap<String, cel::Value>|
-         -> BTreeMap<String, cel::Value> {
-            let mut map = scratch.clone();
+        let base = |scratch: &BTreeMap<String, Value>,
+                    lets: &BTreeMap<String, cel::EvalValue>|
+         -> BTreeMap<String, cel::EvalValue> {
+            let mut map: BTreeMap<String, cel::EvalValue> = scratch
+                .iter()
+                .map(|(name, value)| (name.clone(), cel::EvalValue::from(value.clone())))
+                .collect();
             for (name, value) in lets {
                 map.insert(name.clone(), value.clone());
             }
-            map.insert(String::from("meta"), meta_value(input.meta()));
+            map.insert(
+                String::from("meta"),
+                cel::EvalValue::from(meta_value(input.meta())),
+            );
             map
         };
         // `data` materializes on the EVALUATOR'S demand, cached for
@@ -466,8 +473,8 @@ impl<'plan> TransactionExecutor<'plan> {
                 &data_slot,
             )?;
             match verdict {
-                cel::Value::Bool(true) => {}
-                cel::Value::Bool(false) => {
+                Value::Bool(true) => {}
+                Value::Bool(false) => {
                     // Filtered: consumed with no effect.
                     return Ok(TransactionOutcome {
                         record: TransactionRecord {
@@ -557,29 +564,14 @@ impl<'plan> TransactionExecutor<'plan> {
                         let data = match built.data {
                             BuiltData::Unchanged => {
                                 if let Data::Materialized(current) = input.data() {
-                                    crossing_pins_hold(
-                                        self.plan,
-                                        &from,
-                                        own_pin,
-                                        &from_envelope_value(current),
-                                    )
-                                    .map_err(PinViolation::into_fault)?;
+                                    crossing_pins_hold(self.plan, &from, own_pin, current)
+                                        .map_err(PinViolation::into_fault)?;
                                 }
                                 input.data().clone()
                             }
                             BuiltData::Value(value) => {
                                 crossing_pins_hold(self.plan, &from, own_pin, &value)
                                     .map_err(PinViolation::into_fault)?;
-                                Data::materialized(to_envelope_value(&value)?)
-                            }
-                            BuiltData::Envelope(value) => {
-                                crossing_pins_hold(
-                                    self.plan,
-                                    &from,
-                                    own_pin,
-                                    &from_envelope_value(&value),
-                                )
-                                .map_err(PinViolation::into_fault)?;
                                 Data::materialized(value)
                             }
                         };
@@ -596,7 +588,7 @@ impl<'plan> TransactionExecutor<'plan> {
             }
         }
         // The delta is what actually changed.
-        let state_delta: Vec<(String, cel::Value)> = scratch
+        let state_delta: Vec<(String, Value)> = scratch
             .iter()
             .filter(|(name, value)| state.get(*name) != Some(value))
             .map(|(name, value)| (name.clone(), value.clone()))
@@ -692,11 +684,11 @@ impl<'plan> TransactionExecutor<'plan> {
         let mut payload = BTreeMap::new();
         payload.insert(
             String::from("kind"),
-            envelope::Value::Scalar(envelope::Scalar::Text(String::from(kind))),
+            envelope::Value::Text(String::from(kind)),
         );
         payload.insert(
             String::from("message"),
-            envelope::Value::Scalar(envelope::Scalar::Text(String::from(message))),
+            envelope::Value::Text(String::from(message)),
         );
         TransactionOutcome {
             record: TransactionRecord {
@@ -758,7 +750,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 let mut payload = BTreeMap::new();
                 payload.insert(
                     String::from("kind"),
-                    envelope::Value::Scalar(envelope::Scalar::Text(error.kind.clone())),
+                    envelope::Value::Text(error.kind.clone()),
                 );
                 if let Data::Encoded {
                     encoding: envelope::Encoding::Raw,
@@ -768,7 +760,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 {
                     payload.insert(
                         String::from("detail"),
-                        envelope::Value::Scalar(envelope::Scalar::Bytes(bytes.clone())),
+                        envelope::Value::Bytes(bytes.clone()),
                     );
                 } else if let Data::Materialized(value) = &error.data {
                     payload.insert(String::from("detail"), value.clone());
@@ -834,13 +826,8 @@ pub(crate) struct Built {
 pub(crate) enum BuiltData {
     /// No payload write ran: the input's representation ships as-is.
     Unchanged,
-    /// The payload was (re)built as an evaluated CEL value.
-    Value(cel::Value),
-    /// The payload was built directly in the ENVELOPE domain by a
-    /// builder's write fold. (CEL VALUES carry the struct witness
-    /// too, since the bridge preserves it — this variant simply
-    /// skips a domain round trip the fold never needed.)
-    Envelope(envelope::Value),
+    /// The payload was (re)built as one materialized core value.
+    Value(Value),
 }
 
 /// Folds the input envelope's zones onto a fresh emission meta —
@@ -858,7 +845,7 @@ fn inherit_zones(meta: Meta, input: &Meta) -> Meta {
 fn emitted_content(
     emission: &PlanEmission,
     input: &Envelope,
-    base: &BTreeMap<String, cel::Value>,
+    base: &BTreeMap<String, cel::EvalValue>,
     slot: &DataSlot<'_>,
     plan: &crate::plan::ExecutionPlan,
 ) -> Result<Option<Built>, Fault> {
@@ -883,14 +870,14 @@ fn emitted_content(
         PlanEmission::Identity => Ok(Some(inherited(BuiltData::Unchanged, false))),
         PlanEmission::Data(expr) => {
             // No spelling-dependent special case, in EITHER
-            // direction: the struct witness rides `cel::Value` and
-            // the laziness witness rides it too. A whole payload
+            // direction: the evaluator preserves the struct and
+            // laziness witnesses. A whole payload
             // arriving uninspected — `out = data`, `out = copy`, the
             // taken arm of a ternary — ships the REPRESENTATION,
             // content type included; anything else is FRESH data and
             // strikes it (D-2026-08-10-4).
             let value = eval_lazy(expr, base, slot, assets)?;
-            if matches!(value, cel::Value::Payload) {
+            if matches!(value, cel::EvalValue::Payload) {
                 return Ok(Some(inherited(BuiltData::Unchanged, false)));
             }
             let value = resolve_payload(value, slot)?;
@@ -919,7 +906,7 @@ fn emitted_content(
                 matches!(&write.target, envelope::WriteTarget::Data(path) if path.is_empty())
                     && matches!(
                         eval_lazy(&write.expr, base, slot, assets)?,
-                        cel::Value::Payload
+                        cel::EvalValue::Payload
                     )
             } else {
                 false
@@ -951,10 +938,10 @@ fn emitted_content(
                             Some(current) => current,
                             None => data.insert(match input.data() {
                                 Data::Materialized(value) => value.clone(),
-                                _ => to_envelope_value(&slot.materialize()?)?,
+                                _ => slot.materialize()?,
                             }),
                         };
-                        apply_struct_write(current, path, to_envelope_value(&value)?);
+                        apply_struct_write(current, path, value);
                     }
                     envelope::WriteTarget::App(field) => {
                         // The travelling schema judges the VALUE — a
@@ -999,7 +986,7 @@ fn emitted_content(
                 }
             }
             if let Some(value) = data {
-                built.data = BuiltData::Envelope(value);
+                built.data = BuiltData::Value(value);
             }
             Ok(Some(built))
         }
@@ -1039,7 +1026,7 @@ pub(crate) fn value_well_formed(value: &envelope::Value) -> Result<(), Fault> {
         // (D-2026-08-10-7) BEFORE it travels: an unbounded scale
         // reaching a writer would be a runaway allocation, so the
         // door refuses it typed instead.
-        envelope::Value::Scalar(envelope::Scalar::Decimal { unscaled, scale }) => {
+        envelope::Value::Decimal { unscaled, scale } => {
             if crate::json::decimal_in_domain(*unscaled, *scale) {
                 Ok(())
             } else {
@@ -1048,7 +1035,15 @@ pub(crate) fn value_well_formed(value: &envelope::Value) -> Result<(), Fault> {
                 )))
             }
         }
-        envelope::Value::Null | envelope::Value::Scalar(_) => Ok(()),
+        envelope::Value::Null
+        | envelope::Value::Bool(_)
+        | envelope::Value::Int(_)
+        | envelope::Value::Uint(_)
+        | envelope::Value::Double(_)
+        | envelope::Value::Text(_)
+        | envelope::Value::Bytes(_)
+        | envelope::Value::Duration(_)
+        | envelope::Value::Timestamp(_) => Ok(()),
         envelope::Value::Struct(fields) => {
             let mut seen = alloc::collections::BTreeSet::new();
             for (name, value) in fields {
@@ -1073,7 +1068,7 @@ pub(crate) fn crossing_pins_hold(
     plan: &crate::plan::ExecutionPlan,
     from: &crate::plan::EndpointRef,
     own_pin: Option<&DataType>,
-    value: &cel::Value,
+    value: &Value,
 ) -> Result<(), PinViolation> {
     if let Some(pinned) = own_pin
         && let Some(violation) = conformance_fault(from.port.name(), pinned, value)
@@ -1129,35 +1124,31 @@ pub enum ValueKind {
     Timestamp,
     /// The null value.
     Null,
-    /// A list.
-    List,
+    /// An array.
+    Array,
     /// A map.
     Map,
     /// A struct.
     Struct,
-    /// An unmaterialized payload witness — judged values are
-    /// resolved first, so a judge never meets one; total anyway.
-    Opaque,
     /// An exact dynamic decimal (D-2026-08-10-7).
     Decimal,
 }
 
 impl ValueKind {
-    fn of(value: &cel::Value) -> Self {
+    fn of(value: &Value) -> Self {
         match value {
-            cel::Value::Bool(_) => Self::Bool,
-            cel::Value::Int(_) | cel::Value::Uint(_) => Self::Number,
-            cel::Value::Decimal { .. } => Self::Decimal,
-            cel::Value::Double(_) => Self::Double,
-            cel::Value::Text(_) => Self::Text,
-            cel::Value::Bytes(_) => Self::Bytes,
-            cel::Value::Duration(_) => Self::Duration,
-            cel::Value::Timestamp(_) => Self::Timestamp,
-            cel::Value::Null => Self::Null,
-            cel::Value::List(_) => Self::List,
-            cel::Value::Map(_) => Self::Map,
-            cel::Value::Struct(_) => Self::Struct,
-            cel::Value::Payload => Self::Opaque,
+            Value::Bool(_) => Self::Bool,
+            Value::Int(_) | Value::Uint(_) => Self::Number,
+            Value::Decimal { .. } => Self::Decimal,
+            Value::Double(_) => Self::Double,
+            Value::Text(_) => Self::Text,
+            Value::Bytes(_) => Self::Bytes,
+            Value::Duration(_) => Self::Duration,
+            Value::Timestamp(_) => Self::Timestamp,
+            Value::Null => Self::Null,
+            Value::Array(_) => Self::Array,
+            Value::Map(_) => Self::Map,
+            Value::Struct(_) => Self::Struct,
         }
     }
 }
@@ -1173,10 +1164,9 @@ impl fmt::Display for ValueKind {
             Self::Duration => "duration",
             Self::Timestamp => "timestamp",
             Self::Null => "null",
-            Self::List => "list",
+            Self::Array => "array",
             Self::Map => "map",
             Self::Struct => "struct",
-            Self::Opaque => "opaque",
             Self::Decimal => "decimal",
         })
     }
@@ -1232,7 +1222,7 @@ impl fmt::Display for ConformanceViolation {
 pub(crate) fn conformance_fault(
     name: &str,
     declared: &DataType,
-    value: &cel::Value,
+    value: &Value,
 ) -> Option<ConformanceViolation> {
     let mismatch = || {
         Some(ConformanceViolation {
@@ -1246,11 +1236,8 @@ pub(crate) fn conformance_fault(
         (DataType::Variant, _) => None,
         // A dynamic decimal conforms to no precise M0 type — it is
         // narrowed before use (D-2026-08-10-7).
-        (_, cel::Value::Decimal { .. }) => mismatch(),
-        // Judged values are resolved first; an unmaterialized
-        // witness meeting a precise judge is a mismatch, total.
-        (_, cel::Value::Payload) => mismatch(),
-        (DataType::Int, cel::Value::Int(candidate)) => {
+        (_, Value::Decimal { .. }) => mismatch(),
+        (DataType::Int, Value::Int(candidate)) => {
             if i32::try_from(*candidate).is_err() {
                 Some(ConformanceViolation {
                     name: String::from(name),
@@ -1262,25 +1249,26 @@ pub(crate) fn conformance_fault(
                 None
             }
         }
-        (DataType::Bool, cel::Value::Bool(_))
-        | (DataType::Text, cel::Value::Text(_))
-        | (DataType::Bytes, cel::Value::Bytes(_))
-        | (DataType::Double, cel::Value::Double(_))
-        | (DataType::Duration, cel::Value::Duration(_))
-        | (DataType::Timestamp, cel::Value::Timestamp(_)) => None,
+        (DataType::Bool, Value::Bool(_))
+        | (DataType::Uint, Value::Uint(_))
+        | (DataType::Text, Value::Text(_))
+        | (DataType::Bytes, Value::Bytes(_))
+        | (DataType::Double, Value::Double(_))
+        | (DataType::Duration, Value::Duration(_))
+        | (DataType::Timestamp, Value::Timestamp(_)) => None,
         // Composite judges are structural: every element must hold
         // its element type. `array<variant>` — the jsonl reply pin —
         // admits any element, `null` included.
-        (DataType::Array(inner), cel::Value::List(items)) => items
+        (DataType::Array(inner), Value::Array(items)) => items
             .iter()
             .find_map(|item| conformance_fault(name, inner, item))
             .map(|violation| ConformanceViolation {
                 name: String::from(name),
                 expected: declared.clone(),
-                found: ValueKind::List,
+                found: ValueKind::Array,
                 reason: violation.reason,
             }),
-        (DataType::Map(inner), cel::Value::Map(entries)) => entries
+        (DataType::Map(inner), Value::Map(entries)) => entries
             .values()
             .find_map(|item| conformance_fault(name, inner, item))
             .map(|violation| ConformanceViolation {
@@ -1289,18 +1277,29 @@ pub(crate) fn conformance_fault(
                 found: ValueKind::Map,
                 reason: violation.reason,
             }),
-        (DataType::Null, cel::Value::Null) => None,
-        (_, cel::Value::Bool(_)) => mismatch(),
-        (_, cel::Value::Int(_) | cel::Value::Uint(_)) => mismatch(),
-        (_, cel::Value::Double(_)) => mismatch(),
-        (_, cel::Value::Text(_)) => mismatch(),
-        (_, cel::Value::Bytes(_)) => mismatch(),
-        (_, cel::Value::Struct(_)) => mismatch(),
-        (_, cel::Value::Duration(_)) => mismatch(),
-        (_, cel::Value::Timestamp(_)) => mismatch(),
-        (_, cel::Value::Null) => mismatch(),
-        (_, cel::Value::List(_)) => mismatch(),
-        (_, cel::Value::Map(_)) => mismatch(),
+        (DataType::Null, Value::Null) => None,
+        (_, Value::Bool(_)) => mismatch(),
+        (_, Value::Int(_) | Value::Uint(_)) => mismatch(),
+        (_, Value::Double(_)) => mismatch(),
+        (_, Value::Text(_)) => mismatch(),
+        (_, Value::Bytes(_)) => mismatch(),
+        (_, Value::Struct(_)) => mismatch(),
+        (_, Value::Duration(_)) => mismatch(),
+        (_, Value::Timestamp(_)) => mismatch(),
+        (_, Value::Null) => mismatch(),
+        (_, Value::Array(_)) => mismatch(),
+        (_, Value::Map(_)) => mismatch(),
+    }
+}
+
+#[cfg(test)]
+mod conformance_tests {
+    use super::*;
+
+    #[test]
+    fn uint_has_one_type_and_value_conformance_rule() {
+        assert!(conformance_fault("port", &DataType::Uint, &Value::Uint(u64::MAX)).is_none());
+        assert!(conformance_fault("port", &DataType::Uint, &Value::Int(1)).is_some());
     }
 }
 
@@ -1348,7 +1347,7 @@ pub fn apply_struct_write(data: &mut envelope::Value, path: &[String], leaf: env
 #[derive(Debug)]
 pub struct DataSlot<'a> {
     data: &'a Data,
-    cache: core::cell::RefCell<Option<cel::Value>>,
+    cache: core::cell::RefCell<Option<Value>>,
     fault: core::cell::RefCell<Option<Fault>>,
 }
 
@@ -1369,7 +1368,7 @@ impl<'a> DataSlot<'a> {
     ///
     /// # Errors
     /// The materialization fault, if the payload cannot decode.
-    pub fn materialize(&self) -> Result<cel::Value, Fault> {
+    pub fn materialize(&self) -> Result<Value, Fault> {
         if let Some(value) = self.cache.borrow().as_ref() {
             return Ok(value.clone());
         }
@@ -1380,9 +1379,9 @@ impl<'a> DataSlot<'a> {
 
     /// The evaluator's demand: a failed materialization parks its
     /// fault for [`eval_lazy`] to surface and answers "unbound".
-    fn demand(&self) -> Option<cel::Value> {
+    fn demand(&self) -> Option<cel::EvalValue> {
         match self.materialize() {
-            Ok(value) => Some(value),
+            Ok(value) => Some(cel::EvalValue::from(value)),
             Err(fault) => {
                 *self.fault.borrow_mut() = Some(fault);
                 None
@@ -1402,7 +1401,7 @@ impl<'a> DataSlot<'a> {
 #[derive(Debug)]
 pub struct LazyBindings<'a> {
     /// Everything already materialized: state scratch, locals, meta.
-    pub base: &'a BTreeMap<String, cel::Value>,
+    pub base: &'a BTreeMap<String, cel::EvalValue>,
     /// The on-demand payload.
     pub data: &'a DataSlot<'a>,
     /// The plan's build-time asset table (D-2026-08-10-5).
@@ -1410,25 +1409,25 @@ pub struct LazyBindings<'a> {
 }
 
 impl cel::Bindings for LazyBindings<'_> {
-    fn get(&self, name: &str) -> Option<cel::Value> {
+    fn get(&self, name: &str) -> Option<cel::EvalValue> {
         if let Some(value) = self.base.get(name) {
             return Some(value.clone());
         }
         // Resolving the NAME is not yet inspecting the structure:
         // the witness carries; `Bindings::payload` materializes.
-        (name == "data").then_some(cel::Value::Payload)
+        (name == "data").then_some(cel::EvalValue::Payload)
     }
 
-    fn payload(&self) -> Result<cel::Value, cel::Error> {
+    fn payload(&self) -> Result<cel::EvalValue, cel::Error> {
         self.data.demand().ok_or_else(|| cel::Error {
             message: String::from("the payload could not materialize"),
         })
     }
 
-    fn asset(&self, index: u32) -> Result<cel::Value, cel::Error> {
+    fn asset(&self, index: u32) -> Result<cel::EvalValue, cel::Error> {
         self.assets
             .get(index as usize)
-            .map(|blob| cel::Value::Bytes(blob.bytes.clone()))
+            .map(|blob| cel::EvalValue::Bytes(blob.bytes.clone()))
             .ok_or_else(|| cel::Error {
                 message: format!("asset {index} is outside the validated table"),
             })
@@ -1442,29 +1441,29 @@ impl cel::Bindings for LazyBindings<'_> {
 ///
 /// # Errors
 /// The materialization fault, if the payload cannot decode.
-pub fn resolve_payload(value: cel::Value, slot: &DataSlot<'_>) -> Result<cel::Value, Fault> {
+pub fn resolve_payload(value: cel::EvalValue, slot: &DataSlot<'_>) -> Result<Value, Fault> {
     Ok(match value {
-        cel::Value::Payload => slot.materialize()?,
-        cel::Value::List(items) => cel::Value::List(
+        cel::EvalValue::Payload => slot.materialize()?,
+        cel::EvalValue::List(items) => Value::Array(
             items
                 .into_iter()
                 .map(|item| resolve_payload(item, slot))
                 .collect::<Result<_, _>>()?,
         ),
-        cel::Value::Map(map) => {
+        cel::EvalValue::Map(map) => {
             let mut deep = BTreeMap::new();
             for (key, value) in map {
                 deep.insert(key, resolve_payload(value, slot)?);
             }
-            cel::Value::Map(deep)
+            Value::Map(deep)
         }
-        cel::Value::Struct(fields) => cel::Value::Struct(
+        cel::EvalValue::Struct(fields) => Value::Struct(
             fields
                 .into_iter()
                 .map(|(name, value)| Ok((name, resolve_payload(value, slot)?)))
                 .collect::<Result<_, _>>()?,
         ),
-        other => other,
+        other => other.into_value().map_err(Fault::Eval)?,
     })
 }
 
@@ -1478,10 +1477,10 @@ pub fn resolve_payload(value: cel::Value, slot: &DataSlot<'_>) -> Result<cel::Va
 /// The materialization fault, or the evaluation's own.
 pub fn eval_lazy(
     tree: &cel::Tree,
-    base: &BTreeMap<String, cel::Value>,
+    base: &BTreeMap<String, cel::EvalValue>,
     slot: &DataSlot<'_>,
     assets: &[crate::plan::AssetBlob],
-) -> Result<cel::Value, Fault> {
+) -> Result<cel::EvalValue, Fault> {
     let env = LazyBindings {
         base,
         data: slot,
@@ -1494,35 +1493,35 @@ pub fn eval_lazy(
     result
 }
 
-/// The handler-facing CEL view of an envelope's data — the bridge a
+/// The handler-facing materialized view of an envelope's data — the bridge a
 /// host layer (lab, adapters, tooling) uses to read what a handler
 /// reads.
-pub fn data_value(data: &Data) -> Result<cel::Value, Fault> {
+pub fn data_value(data: &Data) -> Result<Value, Fault> {
     // `Data::materialize_with` is the CACHE AUTHORITY: the decode
     // lands in the envelope's own cell, so an identity re-emission
     // ships the filled cell and the next node never decodes again —
     // once per ENVELOPE, not once per transaction (envelope.md §5.1).
-    Ok(from_envelope_value(data.materialize_with(decode_encoded)?))
+    Ok(data.materialize_with(decode_encoded)?.clone())
 }
 
 /// Decodes encoded bytes into the envelope domain — the closure
 /// `Data::materialize_with` runs on first structural access.
 fn decode_encoded(encoding: envelope::Encoding, bytes: &[u8]) -> Result<envelope::Value, Fault> {
     match encoding {
-        envelope::Encoding::Raw => Ok(envelope::Value::Scalar(match core::str::from_utf8(bytes) {
-            Ok(text) => envelope::Scalar::Text(String::from(text)),
-            Err(_) => envelope::Scalar::Bytes(bytes.to_vec()),
-        })),
+        envelope::Encoding::Raw => Ok(match core::str::from_utf8(bytes) {
+            Ok(text) => envelope::Value::Text(String::from(text)),
+            Err(_) => envelope::Value::Bytes(bytes.to_vec()),
+        }),
         other => Err(Fault::Opaque(format!(
             "{other} decoding is not in this build"
         ))),
     }
 }
 
-/// The handler-facing CEL view of an envelope's metadata: the full
+/// The handler-facing logical view of an envelope's metadata: the full
 /// `meta.sys` spine and the two writable zones, flat dotted keys
 /// nested for reading.
-pub fn meta_value(meta: &Meta) -> cel::Value {
+pub fn meta_value(meta: &Meta) -> Value {
     let mut app = BTreeMap::new();
     for (field, value) in meta.app() {
         app.insert(field.clone(), from_meta_value(value));
@@ -1530,28 +1529,25 @@ pub fn meta_value(meta: &Meta) -> cel::Value {
     // The whole five-field spine — a handler reading any `meta.sys`
     // field the spec names must find it, not a hole.
     let mut sys = BTreeMap::new();
-    sys.insert(
-        String::from("id"),
-        cel::Value::Text(meta.sys().id().to_string()),
-    );
+    sys.insert(String::from("id"), Value::Text(meta.sys().id().to_string()));
     sys.insert(
         String::from("parent_id"),
         match meta.sys().parent_id() {
-            Some(parent) => cel::Value::Text(parent.to_string()),
-            None => cel::Value::Null,
+            Some(parent) => Value::Text(parent.to_string()),
+            None => Value::Null,
         },
     );
     sys.insert(
         String::from("origin_id"),
-        cel::Value::Text(meta.sys().origin_id().to_string()),
+        Value::Text(meta.sys().origin_id().to_string()),
     );
     sys.insert(
         String::from("role"),
-        cel::Value::Text(meta.sys().role().to_string()),
+        Value::Text(meta.sys().role().to_string()),
     );
     sys.insert(
         String::from("graph_version"),
-        cel::Value::Int(i64::try_from(meta.sys().graph_version()).unwrap_or(i64::MAX)),
+        Value::Int(i64::try_from(meta.sys().graph_version()).unwrap_or(i64::MAX)),
     );
     let mut root = BTreeMap::new();
     // Exactly three zones, no alias, no root fields
@@ -1560,29 +1556,29 @@ pub fn meta_value(meta: &Meta) -> cel::Value {
     // naturally.
     root.insert(String::from("app"), nested_zone(&app));
     root.insert(String::from("ext"), nested_zone_meta(meta.ext()));
-    root.insert(String::from("sys"), cel::Value::Map(sys));
-    cel::Value::Map(root)
+    root.insert(String::from("sys"), Value::Map(sys));
+    Value::Map(root)
 }
 
 /// Nests a zone's flat dotted keys into the CEL map tree the
 /// projection exposes — one storage form, nested views derived.
-fn nested_from_pairs(pairs: impl Iterator<Item = (String, cel::Value)>) -> cel::Value {
-    let mut root: BTreeMap<String, cel::Value> = BTreeMap::new();
+fn nested_from_pairs(pairs: impl Iterator<Item = (String, Value)>) -> Value {
+    let mut root: BTreeMap<String, Value> = BTreeMap::new();
     for (key, value) in pairs {
         let segments: alloc::vec::Vec<&str> = key.split('.').collect();
         let mut cursor = &mut root;
         for segment in &segments[..segments.len() - 1] {
             let entry = cursor
                 .entry(String::from(*segment))
-                .or_insert_with(|| cel::Value::Map(BTreeMap::new()));
+                .or_insert_with(|| Value::Map(BTreeMap::new()));
             match entry {
-                cel::Value::Map(inner) => cursor = inner,
+                Value::Map(inner) => cursor = inner,
                 // Prefix-freedom is a checker invariant; a leaf met
                 // on the way is unreachable from validated plans —
                 // keep the projection total by shadowing.
                 other => {
-                    *other = cel::Value::Map(BTreeMap::new());
-                    let cel::Value::Map(inner) = other else {
+                    *other = Value::Map(BTreeMap::new());
+                    let Value::Map(inner) = other else {
                         unreachable!("just inserted a map")
                     };
                     cursor = inner;
@@ -1591,111 +1587,38 @@ fn nested_from_pairs(pairs: impl Iterator<Item = (String, cel::Value)>) -> cel::
         }
         cursor.insert(String::from(segments[segments.len() - 1]), value);
     }
-    cel::Value::Map(root)
+    Value::Map(root)
 }
 
-fn nested_zone(zone: &BTreeMap<String, cel::Value>) -> cel::Value {
+fn nested_zone(zone: &BTreeMap<String, Value>) -> Value {
     nested_from_pairs(zone.iter().map(|(k, v)| (k.clone(), v.clone())))
 }
 
-fn nested_zone_meta(zone: &envelope::Namespace) -> cel::Value {
+fn nested_zone_meta(zone: &envelope::Namespace) -> Value {
     nested_from_pairs(zone.iter().map(|(k, v)| (k.clone(), from_meta_value(v))))
 }
 
-pub(crate) fn from_envelope_value(value: &envelope::Value) -> cel::Value {
-    match value {
-        envelope::Value::Null => cel::Value::Null,
-        envelope::Value::Scalar(scalar) => from_scalar(scalar),
-        // The logical type CROSSES the bridge: a struct stays a
-        // struct through bindings, locals, and ternaries — tag 17
-        // never silently becomes tag 18 on the way through CEL.
-        envelope::Value::Struct(fields) => cel::Value::Struct(
-            fields
-                .iter()
-                .map(|(name, value)| (name.clone(), from_envelope_value(value)))
-                .collect(),
-        ),
-        envelope::Value::Array(items) => {
-            cel::Value::List(items.iter().map(from_envelope_value).collect())
-        }
-        envelope::Value::Map(map) => cel::Value::Map(
-            map.iter()
-                .map(|(key, value)| (key.clone(), from_envelope_value(value)))
-                .collect(),
-        ),
-    }
-}
-
-fn from_scalar(scalar: &envelope::Scalar) -> cel::Value {
+fn from_scalar(scalar: &envelope::Scalar) -> Value {
     match scalar {
-        envelope::Scalar::Bool(value) => cel::Value::Bool(*value),
-        envelope::Scalar::Int(value) => cel::Value::Int(*value),
-        envelope::Scalar::Double(value) => cel::Value::Double(*value),
-        envelope::Scalar::Text(value) => cel::Value::Text(value.clone()),
-        envelope::Scalar::Bytes(value) => cel::Value::Bytes(value.clone()),
-        envelope::Scalar::Decimal { unscaled, scale } => cel::Value::Decimal {
+        envelope::Scalar::Bool(value) => Value::Bool(*value),
+        envelope::Scalar::Int(value) => Value::Int(*value),
+        envelope::Scalar::Double(value) => Value::Double(*value),
+        envelope::Scalar::Text(value) => Value::Text(value.clone()),
+        envelope::Scalar::Bytes(value) => Value::Bytes(value.clone()),
+        envelope::Scalar::Decimal { unscaled, scale } => Value::Decimal {
             unscaled: *unscaled,
             scale: *scale,
         },
     }
 }
 
-fn from_meta_value(value: &MetaValue) -> cel::Value {
+fn from_meta_value(value: &MetaValue) -> Value {
     match value {
         MetaValue::Scalar(scalar) => from_scalar(scalar),
-        MetaValue::Array(items) => cel::Value::List(items.iter().map(from_scalar).collect()),
+        MetaValue::Array(items) => Value::Array(items.iter().map(from_scalar).collect()),
     }
 }
 
-/// Converts a CEL value into the envelope data domain.
-pub fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, Fault> {
-    Ok(match value {
-        cel::Value::Decimal { unscaled, scale } => {
-            envelope::Value::Scalar(envelope::Scalar::Decimal {
-                unscaled: *unscaled,
-                scale: *scale,
-            })
-        }
-        // Emission builders resolve the witness before converting;
-        // an unresolved one is a caller defect, refused typed.
-        cel::Value::Payload => {
-            return Err(Fault::Unrepresentable(String::from(
-                "an unmaterialized payload cannot enter the envelope domain",
-            )));
-        }
-        cel::Value::Bool(v) => envelope::Value::Scalar(envelope::Scalar::Bool(*v)),
-        cel::Value::Int(v) => envelope::Value::Scalar(envelope::Scalar::Int(*v)),
-        cel::Value::Uint(v) => envelope::Value::Scalar(envelope::Scalar::Int(
-            i64::try_from(*v).map_err(|_| Fault::Unrepresentable(String::from("uint > i64")))?,
-        )),
-        cel::Value::Double(v) => envelope::Value::Scalar(envelope::Scalar::Double(*v)),
-        cel::Value::Text(v) => envelope::Value::Scalar(envelope::Scalar::Text(v.clone())),
-        cel::Value::Bytes(v) => envelope::Value::Scalar(envelope::Scalar::Bytes(v.clone())),
-        cel::Value::List(items) => envelope::Value::Array(
-            items
-                .iter()
-                .map(to_envelope_value)
-                .collect::<Result<_, _>>()?,
-        ),
-        cel::Value::Map(map) => envelope::Value::Map(
-            map.iter()
-                .map(|(key, item)| Ok((key.clone(), to_envelope_value(item)?)))
-                .collect::<Result<_, Fault>>()?,
-        ),
-        cel::Value::Struct(fields) => envelope::Value::Struct(
-            fields
-                .iter()
-                .map(|(name, item)| Ok((name.clone(), to_envelope_value(item)?)))
-                .collect::<Result<_, Fault>>()?,
-        ),
-        cel::Value::Null => envelope::Value::Null,
-        other @ (cel::Value::Duration(_) | cel::Value::Timestamp(_)) => {
-            return Err(Fault::Unrepresentable(format!("{other:?}")));
-        }
-    })
-}
-
-/// Converts a CEL value into a writable-metadata leaf.
 /// The ONE conformance rule between a metadata value and a schema
 /// type (D-2026-08-10-1) — used at runtime zone writes, at the VM
 /// ingress, and mirrored by the checker's static list. `variant` admits
@@ -1705,19 +1628,19 @@ pub fn meta_conforms(value: &MetaValue, ty: &DataType) -> bool {
     match ty {
         DataType::Variant => true,
         DataType::Bool => {
-            matches!(value, MetaValue::Scalar(envelope::Scalar::Bool(_)))
+            matches!(value, MetaValue::Scalar(Scalar::Bool(_)))
         }
         DataType::Int => {
-            matches!(value, MetaValue::Scalar(envelope::Scalar::Int(_)))
+            matches!(value, MetaValue::Scalar(Scalar::Int(_)))
         }
         DataType::Double => {
-            matches!(value, MetaValue::Scalar(envelope::Scalar::Double(_)))
+            matches!(value, MetaValue::Scalar(Scalar::Double(_)))
         }
         DataType::Text => {
-            matches!(value, MetaValue::Scalar(envelope::Scalar::Text(_)))
+            matches!(value, MetaValue::Scalar(Scalar::Text(_)))
         }
         DataType::Bytes => {
-            matches!(value, MetaValue::Scalar(envelope::Scalar::Bytes(_)))
+            matches!(value, MetaValue::Scalar(Scalar::Bytes(_)))
         }
         DataType::Array(inner) => match value {
             MetaValue::Array(items) => items
@@ -1729,24 +1652,24 @@ pub fn meta_conforms(value: &MetaValue, ty: &DataType) -> bool {
     }
 }
 
-/// Converts a CEL value into a metadata leaf — the physical half of
+/// Converts a core value into a metadata leaf — the physical half of
 /// [`meta_conforms`]'s rule.
 ///
 /// # Errors
 /// A typed refusal when the value has no flat-leaf representation.
-pub fn to_meta_value(value: &cel::Value) -> Result<MetaValue, Fault> {
+pub fn to_meta_value(value: &Value) -> Result<MetaValue, Fault> {
     Ok(match value {
-        cel::Value::Bool(v) => MetaValue::Scalar(envelope::Scalar::Bool(*v)),
-        cel::Value::Int(v) => MetaValue::Scalar(envelope::Scalar::Int(*v)),
-        cel::Value::Double(v) => MetaValue::Scalar(envelope::Scalar::Double(*v)),
-        cel::Value::Text(v) => MetaValue::Scalar(envelope::Scalar::Text(v.clone())),
-        cel::Value::Bytes(v) => MetaValue::Scalar(envelope::Scalar::Bytes(v.clone())),
-        cel::Value::Decimal { unscaled, scale } => MetaValue::Scalar(envelope::Scalar::Decimal {
+        Value::Bool(v) => MetaValue::Scalar(Scalar::Bool(*v)),
+        Value::Int(v) => MetaValue::Scalar(Scalar::Int(*v)),
+        Value::Double(v) => MetaValue::Scalar(Scalar::Double(*v)),
+        Value::Text(v) => MetaValue::Scalar(Scalar::Text(v.clone())),
+        Value::Bytes(v) => MetaValue::Scalar(Scalar::Bytes(v.clone())),
+        Value::Decimal { unscaled, scale } => MetaValue::Scalar(Scalar::Decimal {
             unscaled: *unscaled,
             scale: *scale,
         }),
         // `array<scalar>` is spec-admitted meta (envelope.md §0).
-        cel::Value::List(items) => {
+        Value::Array(items) => {
             let scalars = items
                 .iter()
                 .map(|item| match to_meta_value(item)? {

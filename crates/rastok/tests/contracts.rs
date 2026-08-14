@@ -287,15 +287,15 @@ fn every_default_travels_in_the_plan() {
     );
     assert_eq!(
         get("max_output"),
-        Some(rastok::plan::AttrSetting::Value(rastok::cel::Value::Text(
-            String::from("8MiB")
-        )))
+        Some(rastok::plan::AttrSetting::Value(
+            rastok::value::Value::Text(String::from("8MiB"))
+        ))
     );
     assert_eq!(
         get("args"),
-        Some(rastok::plan::AttrSetting::Value(rastok::cel::Value::List(
-            Vec::new()
-        )))
+        Some(rastok::plan::AttrSetting::Value(
+            rastok::value::Value::Array(Vec::new())
+        ))
     );
 }
 
@@ -446,9 +446,9 @@ fn the_binding_drops_no_argument_silently() {
     let message = bind_error(|spec| {
         for (name, setting) in &mut spec.attributes {
             if name == "args" {
-                *setting = rastok::plan::AttrSetting::Value(rastok::cel::Value::List(vec![
-                    rastok::cel::Value::Text(String::from("ok")),
-                    rastok::cel::Value::Int(7),
+                *setting = rastok::plan::AttrSetting::Value(rastok::value::Value::Array(vec![
+                    rastok::value::Value::Text(String::from("ok")),
+                    rastok::value::Value::Int(7),
                 ]));
             }
         }

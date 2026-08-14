@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (through M1.2 interludes, 2026-08-13)
+title Rastok — bird's-eye module overview (M1.3 foundation, 2026-08-14)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -51,10 +51,8 @@ package "envelope — data and metadata carried through the graph" as P_ENV {
   Data : encoded or materialized envelope data
   enum Encoding <<enum>>
   Encoding : raw, Avro, or Arrow IPC encoding
-  enum "Value" as ENV_Value <<enum>>
-  ENV_Value : null, scalar, struct, array, or map
   enum Scalar <<enum>>
-  Scalar : bool, int, double, text, bytes, or exact decimal
+  Scalar : restricted metadata leaf
   enum Role <<enum>>
   Role : default or compensate flow
   enum WriteTarget <<enum>>
@@ -76,15 +74,20 @@ package "diagnostics — structured diagnostics shared across phases" as P_DIAG 
   Bag : accumulating diagnostic destination
 }
 
-package "cel — isolated CEL compilation and evaluation domain" as P_CEL {
+package "datatype / value — core logical data authority" as P_DATA {
+  enum DataType <<enum>>
+  DataType : logical type tree used by plans and expressions
+  enum "Value" as CORE_Value <<enum>>
+  CORE_Value : the one materialized value domain
+}
+
+package "cel — current Rastok expression engine" as P_CEL {
   class Signature <<struct>>
   Signature : names and types visible to an expression
   class Tree <<struct>>
-  Tree : canonical typed CEL tree
-  enum "Type" as CEL_Type <<enum>>
-  CEL_Type : CEL type domain
-  enum "Value" as CEL_Value <<enum>>
-  CEL_Value : CEL runtime value domain
+  Tree : canonical typed expression tree
+  enum EvalValue <<enum>>
+  EvalValue : transient core value or lazy payload witness
   class "Diagnostic" as CEL_Diagnostic <<struct>>
   CEL_Diagnostic : native CEL compiler diagnostic
   class "Error" as CEL_Error <<struct>>
@@ -92,8 +95,8 @@ package "cel — isolated CEL compilation and evaluation domain" as P_CEL {
 }
 
 note bottom of P_CEL
-  bindings are a plain sorted map of
-  names to values — no trait needed
+  owns neither DataType nor materialized Value;
+  compatible operations retain the CEL oracle
 end note
 
 package "canonical_cbor — bounded canonical byte discipline" as P_CBOR {
@@ -106,7 +109,7 @@ package "canonical_cbor — bounded canonical byte discipline" as P_CBOR {
 }
 
 package "identity::encoding — shared tagged-value registry" as P_IDENT {
-  class "value_tagged / cel_tagged / meta_tagged" as IDENT_API <<mod>>
+  class "value_tagged / meta_tagged" as IDENT_API <<mod>>
   IDENT_API : one extend-only value alphabet for plans and traces
 }
 
@@ -359,14 +362,18 @@ P_COMP ..> P_CONTRACT : validates sheets
 P_COMP ..> P_JSON : delegates documents
 P_COMP ..> P_TRIVIA : shares comment facts
 P_STD ..> P_CONTRACT : instantiates
+P_ENV ..> P_DATA : carries core values
+P_CEL ..> P_DATA : consumes types / values
 P_CEL ..> P_CBOR : canonical doubles / nesting budget
 P_CEL ..> P_JSON : exact number reader
 P_CEL ..> P_TRIVIA : shares comment facts
-P_JSON ..> P_CEL : produces CEL values
+P_JSON ..> P_DATA : produces core values
 P_IDENT ..> P_CBOR : emits tagged trees
 P_IDENT ..> P_ENV : tags envelope scalars
+P_IDENT ..> P_DATA : tags core values
 P_PLAN ..> P_CBOR : encodes / decodes
 P_PLAN ..> P_IDENT : tagged values
+P_PLAN ..> P_DATA : carries types / values
 P_RT ..> P_PLAN : uses
 P_RT ..> P_BND : uses
 P_RT ..> P_J : uses

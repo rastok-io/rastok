@@ -12,8 +12,10 @@ canonical [`DataType`](types.md) tree. It types envelope data, ports,
 state and the admitted metadata subset. The intrinsic expression
 language consumes `DataType` and the one materialized `Value` domain; it
 does not define either. The former `cel::Type` authority has moved to
-core `datatype::DataType`; the still-parallel `cel::Value` domain is
-implementation scaffolding to remove in M1.3.
+core `datatype::DataType`, and materialized values now live only in core
+`value::Value`. The expression evaluator's `cel::EvalValue` is transient
+evaluation state: it may carry the lazy whole-payload witness, but it is
+never serialized, journaled, or accepted as an envelope value.
 The language is named **Rastok expressions**. Its compatible operator
 core remains differentially checked against cel-spec, with every
 Rastok-owned divergence named, but “CEL” is no longer the specification
@@ -242,18 +244,18 @@ comparison lexemes (`==` `!=` `<=` `>=` — the simulation expect grammar),
 never a copy of CEL's operator vocabulary.
 
 In statement position, `(` selects the multi-emit production
-unconditionally; parenthesized CEL is a value only after `=`. A
+unconditionally; a parenthesized Rastok expression is a value only after `=`. A
 malformed multi-emit recovers forward from the failing lexeme to the
-statement boundary. It is never distinguished from parenthesized CEL
+statement boundary. It is never distinguished from a parenthesized expression
 by tentative parsing, an unbounded syntactic predicate, or rewind.
 
 Ordinary strings are line-bounded in both lexical domains. For a host
 `STRING`, any physical CR/LF before its closing double quote is
 `E-LEX-UNTERMINATED-STRING` (a preceding backslash does not buy
 continuation), and the next line remains available to recovery. The host
-Error token used when a single-quoted CEL spelling reaches statement
-recovery has the same boundary. In a CEL value region the framer stops
-the incomplete extent before that physical newline and the CEL compiler
+Error token used when a single-quoted expression spelling reaches statement
+recovery has the same boundary. In an expression value region the framer stops
+the incomplete extent before that physical newline and the expression compiler
 emits the single expression diagnostic; its own lexer independently
 rejects raw line endings too. An escaped `\n` remains ordinary text;
 multiline text uses `text { … }`.
@@ -1028,9 +1030,9 @@ per-rule canonicity checks in the CBOR reader (an open-ended list
 where re-encoding is total); trusting the decoder's shape checks as
 validation (a well-shaped plan can still name Slot 999).
 
-## D-2026-08-07-2 — The CEL uint domain gets registry tag 23
+## D-2026-08-07-2 — The expression uint domain gets registry tag 23
 
-`uint` is a first-class CEL value domain and needs its own identity;
+`uint` is a first-class expression value domain and needs its own identity;
 reusing tag 3 (`long`) made distinct values byte-identical
 (E-2026-08-07-1). The registry being extend-only, `uint` is appended
 as tag 23; tag 3 is long only, and the package decoder maps 2 and 3

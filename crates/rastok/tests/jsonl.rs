@@ -9,7 +9,7 @@
 use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
 use rastok::compiler::compile;
 use rastok::contract::Registry;
-use rastok::envelope::{Data, Namespace, Scalar, Value};
+use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
 use rastok::runtime::vm::Vm;
@@ -54,9 +54,7 @@ fn drive(source: &str, data: Value) -> (Vec<rastok::runtime::vm::BoundaryOutput>
         .iter()
         .map(|error| match error.data() {
             Data::Materialized(value) => value.clone(),
-            Data::Encoded { bytes, .. } => {
-                Value::Scalar(Scalar::Text(String::from_utf8_lossy(bytes).into_owned()))
-            }
+            Data::Encoded { bytes, .. } => Value::Text(String::from_utf8_lossy(bytes).into_owned()),
         })
         .collect();
     (vm.outputs().to_vec(), errors)
@@ -71,12 +69,12 @@ fn a_structured_value_round_trips_through_a_real_process() {
     let request = Value::Struct(vec![
         (
             String::from("price"),
-            Value::Scalar(Scalar::Decimal {
+            Value::Decimal {
                 unscaled: 1999,
                 scale: 2,
-            }),
+            },
         ),
-        (String::from("n"), Value::Scalar(Scalar::Int(42))),
+        (String::from("n"), Value::Int(42)),
     ]);
     let (outputs, errors) = drive(CAT_JSONL, request);
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
@@ -91,13 +89,13 @@ fn a_structured_value_round_trips_through_a_real_process() {
     let Value::Map(fields) = &items[0] else {
         panic!("the JSON model reads objects as maps");
     };
-    assert_eq!(fields.get("n"), Some(&Value::Scalar(Scalar::Int(42))));
+    assert_eq!(fields.get("n"), Some(&Value::Int(42)));
     assert_eq!(
         fields.get("price"),
-        Some(&Value::Scalar(Scalar::Decimal {
+        Some(&Value::Decimal {
             unscaled: 1999,
             scale: 2
-        })),
+        }),
         "the exact decimal survives the wire"
     );
 }
@@ -107,17 +105,15 @@ fn multiple_lines_decode_to_multiple_variants() {
     // A process emitting several JSON lines: each is one variant of
     // the reply array, in order.
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"1\\n{\\\"a\\\":2}\\n[3]\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
+    let (outputs, errors) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     let Data::Materialized(Value::Array(items)) = outputs[0].envelope.data() else {
         panic!("array<variant>");
     };
     assert_eq!(items.len(), 3);
-    assert_eq!(items[0], Value::Scalar(Scalar::Int(1)));
-    assert!(
-        matches!(&items[1], Value::Map(fields) if fields.get("a") == Some(&Value::Scalar(Scalar::Int(2))))
-    );
-    assert_eq!(items[2], Value::Array(vec![Value::Scalar(Scalar::Int(3))]));
+    assert_eq!(items[0], Value::Int(1));
+    assert!(matches!(&items[1], Value::Map(fields) if fields.get("a") == Some(&Value::Int(2))));
+    assert_eq!(items[2], Value::Array(vec![Value::Int(3)]));
 }
 
 #[test]
@@ -125,7 +121,7 @@ fn an_unparseable_line_is_a_typed_decode_error() {
     // `echo not-json` answers garbage: the reply is a DecodeError
     // carrying the offending line — never a silent skip.
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"echo\"\n    args = [\"not json\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
+    let (outputs, errors) = drive(source, Value::Int(1));
     assert_eq!(outputs.len(), 0, "nothing crosses on out");
     assert_eq!(errors.len(), 1, "the typed error leaves on err");
     let Value::Map(fields) = &errors[0] else {
@@ -133,12 +129,12 @@ fn an_unparseable_line_is_a_typed_decode_error() {
     };
     assert_eq!(
         fields.get("kind"),
-        Some(&Value::Scalar(Scalar::Text(String::from("DecodeError"))))
+        Some(&Value::Text(String::from("DecodeError")))
     );
     let Some(Value::Map(detail)) = fields.get("detail") else {
         panic!("the offending line rides the payload: {fields:?}");
     };
-    let Some(Value::Scalar(Scalar::Text(message))) = detail.get("message") else {
+    let Some(Value::Text(message)) = detail.get("message") else {
         panic!("a message field: {detail:?}");
     };
     assert!(message.contains("not json"), "the line is named: {message}");
@@ -148,7 +144,7 @@ fn an_unparseable_line_is_a_typed_decode_error() {
 fn an_unserializable_request_refuses_before_any_spawn() {
     // Bytes have no JSON form: the request refuses TYPED before any
     // open fact — no child ever spawns.
-    let (outputs, errors) = drive(CAT_JSONL, Value::Scalar(Scalar::Bytes(vec![1, 2])));
+    let (outputs, errors) = drive(CAT_JSONL, Value::Bytes(vec![1, 2]));
     assert_eq!(outputs.len(), 0);
     assert_eq!(errors.len(), 1, "DecodeError on err");
     let Value::Map(fields) = &errors[0] else {
@@ -156,14 +152,14 @@ fn an_unserializable_request_refuses_before_any_spawn() {
     };
     assert_eq!(
         fields.get("kind"),
-        Some(&Value::Scalar(Scalar::Text(String::from("DecodeError"))))
+        Some(&Value::Text(String::from("DecodeError")))
     );
 }
 
 #[test]
 fn empty_stdout_is_the_empty_array() {
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"true\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
+    let (outputs, errors) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new());
     assert_eq!(
         outputs[0].envelope.data(),
@@ -179,12 +175,12 @@ fn the_request_digest_is_canonical_across_spellings() {
     // digest cannot split what the seal unifies.
     use rastok::boundary::prepare_jsonl;
     let ab = Data::materialized(Value::Struct(vec![
-        (String::from("a"), Value::Scalar(Scalar::Int(1))),
-        (String::from("b"), Value::Scalar(Scalar::Int(2))),
+        (String::from("a"), Value::Int(1)),
+        (String::from("b"), Value::Int(2)),
     ]));
     let ba = Data::materialized(Value::Struct(vec![
-        (String::from("b"), Value::Scalar(Scalar::Int(2))),
-        (String::from("a"), Value::Scalar(Scalar::Int(1))),
+        (String::from("b"), Value::Int(2)),
+        (String::from("a"), Value::Int(1)),
     ]));
     assert_eq!(
         prepare_jsonl(&ab).unwrap().digest(),
@@ -258,17 +254,14 @@ fn the_same_sift_graph_runs_against_a_real_child() {
     // `[{"status": "ok", "value": 7}]` and the SAME graph the mock
     // satisfied sifts the real reply — mock and world, one shape.
     let mut fields = std::collections::BTreeMap::new();
-    fields.insert(
-        String::from("status"),
-        Value::Scalar(Scalar::Text(String::from("ok"))),
-    );
-    fields.insert(String::from("value"), Value::Scalar(Scalar::Int(7)));
+    fields.insert(String::from("status"), Value::Text(String::from("ok")));
+    fields.insert(String::from("value"), Value::Int(7));
     let (outputs, errors) = drive(SIFT_GRAPH, Value::Map(fields));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(outputs.len(), 1);
     assert_eq!(
         outputs[0].envelope.data(),
-        &Data::materialized(Value::Scalar(Scalar::Int(7))),
+        &Data::materialized(Value::Int(7)),
         "the sifted value crossed both worlds identically"
     );
 }
@@ -313,7 +306,7 @@ fn a_null_line_is_the_null_value() {
     // line carrying it decodes to the null element, never a
     // DecodeError.
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"null\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
+    let (outputs, errors) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(
         outputs[0].envelope.data(),
@@ -329,7 +322,7 @@ fn json_null_is_an_executable_value() {
     // but null inside a document must EXECUTE, not merely compile.
     let source =
         "graph g : App {\n  operator o {\n    on in { out = json [null] }\n  }\n  . -> o -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
+    let (outputs, errors) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(
         outputs[0].envelope.data(),
@@ -366,12 +359,12 @@ graph g : App {
   probe -> .
 }
 "#;
-    let (outputs, errors) = drive(source, Value::Scalar(Scalar::Int(1)));
+    let (outputs, errors) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(outputs.len(), 1, "the token survived the call");
     assert_eq!(
         outputs[0].envelope.data(),
-        &Data::materialized(Value::Scalar(Scalar::Text(String::from("tok"))))
+        &Data::materialized(Value::Text(String::from("tok")))
     );
 }
 
@@ -448,10 +441,10 @@ fn an_out_of_domain_decimal_refuses_at_the_door() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Decimal {
+                data: Data::materialized(Value::Decimal {
                     unscaled: 5,
                     scale: i32::MIN,
-                })),
+                }),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,

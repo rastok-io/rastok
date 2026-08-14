@@ -297,9 +297,7 @@ impl Partner for Swapper {
         let echoed = String::from_utf8_lossy(intent.prepared.bytes()).into_owned();
         self.pending.push(Response {
             call_ref: intent.call_ref,
-            outcome: CallOutcome::Success(Data::materialized(Value::Scalar(
-                rastok::envelope::Scalar::Text(echoed),
-            ))),
+            outcome: CallOutcome::Success(Data::materialized(Value::Text(echoed))),
         });
     }
 

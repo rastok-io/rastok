@@ -31,7 +31,7 @@
 use crate::boundary::{Draft, InboundSubmission, IngressAuthority, Partner, SubmissionSequence};
 use crate::compiler::compile;
 use crate::contract::{ConnectorContract, Registry};
-use crate::envelope::{Data, Namespace, Scalar, Value};
+use crate::envelope::{Data, Namespace, Value};
 use crate::journal::{Closure, MemJournal, OutboundStatus, Record};
 use crate::node;
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
@@ -299,10 +299,7 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
 
 fn submission(text: &str) -> InboundSubmission {
     let mut data = BTreeMap::new();
-    data.insert(
-        String::from("text"),
-        Value::Scalar(Scalar::Text(String::from(text))),
-    );
+    data.insert(String::from("text"), Value::Text(String::from(text)));
     InboundSubmission {
         authority: IngressAuthority::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
@@ -430,7 +427,7 @@ fn run_provocation(
         ));
     };
     match payload.get("kind") {
-        Some(Value::Scalar(Scalar::Text(kind))) if kind == provocation.kind => Ok(()),
+        Some(Value::Text(kind)) if kind == provocation.kind => Ok(()),
         other => Err(format!(
             "the `{}` provocation produced kind {other:?}",
             provocation.kind
@@ -509,14 +506,8 @@ fn interleave_battery(
         return Err("the interleave payloads must differ, or a swap is invisible".into());
     }
     let mut data = BTreeMap::new();
-    data.insert(
-        String::from("a"),
-        Value::Scalar(Scalar::Text(String::from(probe.a))),
-    );
-    data.insert(
-        String::from("b"),
-        Value::Scalar(Scalar::Text(String::from(probe.b))),
-    );
+    data.insert(String::from("a"), Value::Text(String::from(probe.a)));
+    data.insert(String::from("b"), Value::Text(String::from(probe.b)));
     let paired = InboundSubmission {
         authority: IngressAuthority::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
@@ -579,7 +570,7 @@ fn interleave_battery(
         };
         let request = String::from_utf8_lossy(outbound.intent.prepared.bytes()).into_owned();
         let response = match data {
-            Data::Materialized(Value::Scalar(Scalar::Text(text))) => text.clone(),
+            Data::Materialized(Value::Text(text)) => text.clone(),
             other => format!("{other:?}"),
         };
         if response != request {

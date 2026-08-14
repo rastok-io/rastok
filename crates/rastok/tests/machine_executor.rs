@@ -15,7 +15,7 @@ use rastok::plan::{GraphVersion, Slot, ValidatedExecutionPlan};
 use rastok::runtime::{
     Delivery, Fault, Mailboxes, PartitionState, TransactionExecutor, meta_value,
 };
-use rastok::{cel, envelope, node};
+use rastok::{envelope, node};
 use std::collections::BTreeMap;
 
 use rastok::boundary::TypedError;
@@ -67,7 +67,7 @@ fn input(text: &str) -> Delivery {
     let mut data = BTreeMap::new();
     data.insert(
         String::from("text"),
-        envelope::Value::Scalar(envelope::Scalar::Text(String::from(text))),
+        envelope::Value::Text(String::from(text)),
     );
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
     Delivery {
@@ -153,30 +153,40 @@ fn the_meta_projection_carries_the_whole_spine() {
         envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("text/plain"))),
     );
     let meta = Meta::new(MetaSys::root(id, 3)).with_ext(ext);
-    let cel::Value::Map(root) = meta_value(&meta) else {
+    let rastok::value::Value::Map(root) = meta_value(&meta) else {
         panic!("expected a map projection");
     };
-    let cel::Value::Map(sys) = &root["sys"] else {
+    let rastok::value::Value::Map(sys) = &root["sys"] else {
         panic!("expected a sys map");
     };
-    assert_eq!(sys["id"], cel::Value::Text(id.to_string()));
-    assert_eq!(sys["parent_id"], cel::Value::Null, "a root has no parent");
-    assert_eq!(sys["role"], cel::Value::Text(String::from("default")));
-    assert_eq!(sys["graph_version"], cel::Value::Int(3));
+    assert_eq!(sys["id"], rastok::value::Value::Text(id.to_string()));
+    assert_eq!(
+        sys["parent_id"],
+        rastok::value::Value::Null,
+        "a root has no parent"
+    );
+    assert_eq!(
+        sys["role"],
+        rastok::value::Value::Text(String::from("default"))
+    );
+    assert_eq!(sys["graph_version"], rastok::value::Value::Int(3));
     // The five-field spine carries no content type; the ext zone
     // does — and its flat dotted keys NEST in the projection.
     assert!(!sys.contains_key("mime_type"));
-    let cel::Value::Map(ext) = &root["ext"] else {
+    let rastok::value::Value::Map(ext) = &root["ext"] else {
         panic!("the ext zone projects");
     };
     assert_eq!(
         ext["content_type"],
-        cel::Value::Text(String::from("text/plain"))
+        rastok::value::Value::Text(String::from("text/plain"))
     );
-    let cel::Value::Map(tenant) = &ext["tenant"] else {
+    let rastok::value::Value::Map(tenant) = &ext["tenant"] else {
         panic!("flat dotted keys nest in the projection");
     };
-    assert_eq!(tenant["org"], cel::Value::Text(String::from("acme")));
+    assert_eq!(
+        tenant["org"],
+        rastok::value::Value::Text(String::from("acme"))
+    );
 }
 
 #[test]
@@ -214,7 +224,7 @@ fn the_projection_has_exactly_three_roots() {
         envelope::MetaValue::Scalar(envelope::Scalar::Text(String::from("app-value"))),
     );
     let meta = Meta::new(MetaSys::root(id, 1)).with_app(app);
-    let cel::Value::Map(root) = meta_value(&meta) else {
+    let rastok::value::Value::Map(root) = meta_value(&meta) else {
         panic!("a map projection");
     };
     assert_eq!(
@@ -223,15 +233,15 @@ fn the_projection_has_exactly_three_roots() {
         "three zones, no other root"
     );
     // The flat dotted key nests under its zone.
-    let Some(cel::Value::Map(app)) = root.get("app") else {
+    let Some(rastok::value::Value::Map(app)) = root.get("app") else {
         panic!("the app zone projects");
     };
-    let Some(cel::Value::Map(audit)) = app.get("audit") else {
+    let Some(rastok::value::Value::Map(audit)) = app.get("audit") else {
         panic!("dotted keys nest");
     };
     assert_eq!(
         audit.get("origin"),
-        Some(&cel::Value::Text(String::from("app-value")))
+        Some(&rastok::value::Value::Text(String::from("app-value")))
     );
 }
 
@@ -298,7 +308,7 @@ fn a_transaction_commits_everything_together() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
     let state = PartitionState::new().cell(&plan, slot, "").unwrap();
-    assert_eq!(state.get("count"), Some(&cel::Value::Int(0)));
+    assert_eq!(state.get("count"), Some(&rastok::value::Value::Int(0)));
     let delivery = input("salut");
     let outcome = executor.fire(slot, &delivery, &state).unwrap();
     // The commit packet: consumed cursor, state delta, emission.
@@ -306,7 +316,7 @@ fn a_transaction_commits_everything_together() {
     assert_eq!(outcome.record.consumed[0].seq, 1);
     assert_eq!(
         outcome.record.state_delta,
-        vec![(String::from("count"), cel::Value::Int(1))]
+        vec![(String::from("count"), rastok::value::Value::Int(1))]
     );
     assert_eq!(outcome.record.emissions.len(), 1);
     let emission = &outcome.record.emissions[0];
@@ -372,7 +382,11 @@ fn a_faulted_transaction_changes_nothing() {
     };
     let fault = executor.fire(slot, &delivery, &state).unwrap_err();
     assert!(matches!(fault, Fault::Opaque(_)));
-    assert_eq!(state.get("count"), Some(&cel::Value::Int(0)), "untouched");
+    assert_eq!(
+        state.get("count"),
+        Some(&rastok::value::Value::Int(0)),
+        "untouched"
+    );
 }
 
 #[test]
@@ -384,16 +398,16 @@ fn state_is_isolated_between_keys() {
             &plan,
             slot,
             "alice",
-            &[(String::from("count"), cel::Value::Int(7))],
+            &[(String::from("count"), rastok::value::Value::Int(7))],
         )
         .unwrap();
     assert_eq!(
         partitions.cell(&plan, slot, "alice").unwrap().get("count"),
-        Some(&cel::Value::Int(7))
+        Some(&rastok::value::Value::Int(7))
     );
     assert_eq!(
         partitions.cell(&plan, slot, "bob").unwrap().get("count"),
-        Some(&cel::Value::Int(0)),
+        Some(&rastok::value::Value::Int(0)),
         "bob's cell starts from the plan defaults"
     );
 }

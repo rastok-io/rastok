@@ -1092,38 +1092,38 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 /// The expressible-constant gate. CEL cannot construct a struct, so
 /// the one struct constant a compiled plan holds is the EMPTY record
 /// literal (`parent = {}`, D-2026-08-09-2) — the v4 tables read it
-/// back, and anything with fields (or a runtime laziness witness)
-/// still refuses: admitting more than the compiler emits would make
-/// hand-forged plans indistinguishable from compiled ones.
-fn value_expressible(value: &cel::Value) -> Result<(), PlanValidationError> {
+/// back, and anything with fields still refuses: admitting more than the
+/// compiler emits would make hand-forged plans indistinguishable from
+/// compiled ones. A runtime laziness witness is not a core
+/// [`Value`](crate::value::Value) and is therefore unrepresentable here by
+/// construction.
+fn value_expressible(value: &crate::value::Value) -> Result<(), PlanValidationError> {
     match value {
-        // CEL cannot CONSTRUCT a struct; the one struct constant a
-        // compiler emits is the EMPTY record literal (`parent = {}`,
+        // The current expression subset cannot CONSTRUCT a struct; the one
+        // struct constant a compiler emits is the EMPTY record literal (`parent = {}`,
         // D-2026-08-09-1). Anything with fields still refuses.
-        cel::Value::Struct(fields) if fields.is_empty() => Ok(()),
+        crate::value::Value::Struct(fields) if fields.is_empty() => Ok(()),
         // The decoder's exact rule (D-2026-08-13-1, review round):
         // a plan constant is a DECLARED-scale decimal — `decimal()`
         // preserves written scale, and a document-origin (minimal)
         // form satisfies the same gate. A name must not change a
         // program's validity: `val p = decimal("1.50")` folds to
         // this constant.
-        cel::Value::Decimal { unscaled, scale } => {
+        crate::value::Value::Decimal { unscaled, scale } => {
             if crate::json::declared_decimal_well_formed(*unscaled, *scale) {
                 Ok(())
             } else {
                 Err(PlanValidationError::UnrepresentableConstant)
             }
         }
-        cel::Value::Struct(_) | cel::Value::Payload => {
-            Err(PlanValidationError::UnrepresentableConstant)
-        }
-        cel::Value::List(items) => items.iter().try_for_each(value_expressible),
-        cel::Value::Map(entries) => entries.values().try_for_each(value_expressible),
+        crate::value::Value::Struct(_) => Err(PlanValidationError::UnrepresentableConstant),
+        crate::value::Value::Array(items) => items.iter().try_for_each(value_expressible),
+        crate::value::Value::Map(entries) => entries.values().try_for_each(value_expressible),
         _ => Ok(()),
     }
 }
 
-/// Every map literal in a shipped CEL tree is construction-sorted —
+/// Every map literal in a shipped expression tree is construction-sorted —
 /// the parser sorts them, so an unsorted or duplicated literal is a
 /// second byte form of the same expression, which the re-encoding
 /// check cannot catch (it faithfully reproduces whatever order the

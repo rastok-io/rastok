@@ -11,7 +11,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::cel::Value;
+use crate::value::Value;
 
 /// The significant-digit budget — Arrow `decimal128`.
 pub const MAX_DIGITS: u32 = 38;
@@ -342,7 +342,7 @@ impl Reader<'_> {
         self.skip_whitespace();
         if self.bytes.get(self.pos) == Some(&b']') {
             self.pos += 1;
-            return Ok(Value::List(items));
+            return Ok(Value::Array(items));
         }
         loop {
             self.skip_whitespace();
@@ -352,7 +352,7 @@ impl Reader<'_> {
                 Some(b',') => self.pos += 1,
                 Some(b']') => {
                     self.pos += 1;
-                    return Ok(Value::List(items));
+                    return Ok(Value::Array(items));
                 }
                 _ => return Err(self.err("`,` or `]` was expected")),
             }
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(parsed("null"), Value::Null);
         assert_eq!(
             parsed("[1, 2]"),
-            Value::List(vec![Value::Int(1), Value::Int(2)])
+            Value::Array(vec![Value::Int(1), Value::Int(2)])
         );
         let Value::Map(map) = parsed("{\"a\": 1}") else {
             panic!("an object is a map");
@@ -665,7 +665,7 @@ mod tests {
     #[test]
     fn the_reader_reports_consumed_length() {
         let (value, consumed) = parse_value("[1] trailing").expect("parses");
-        assert_eq!(value, Value::List(vec![Value::Int(1)]));
+        assert_eq!(value, Value::Array(vec![Value::Int(1)]));
         assert_eq!(consumed, 3, "trailing input is the caller's");
     }
 }
@@ -692,7 +692,7 @@ mod oracle {
                 // tests own this half.
                 true
             }
-            (Value::List(a), serde_json::Value::Array(b)) => {
+            (Value::Array(a), serde_json::Value::Array(b)) => {
                 a.len() == b.len() && a.iter().zip(b).all(|(x, y)| agrees(x, y))
             }
             (Value::Map(a), serde_json::Value::Object(b)) => {
@@ -780,14 +780,15 @@ fn write_into(
             message: String::from("nesting beyond the writer budget"),
         });
     }
-    use crate::envelope::{Scalar, Value};
+    use crate::envelope::Value;
     match value {
         Value::Null => out.push_str("null"),
-        Value::Scalar(Scalar::Bool(v)) => out.push_str(if *v { "true" } else { "false" }),
-        Value::Scalar(Scalar::Int(v)) => {
+        Value::Bool(v) => out.push_str(if *v { "true" } else { "false" }),
+        Value::Int(v) => {
             out.push_str(&alloc::format!("{v}"));
         }
-        Value::Scalar(Scalar::Double(v)) => {
+        Value::Uint(v) => out.push_str(&alloc::format!("{v}")),
+        Value::Double(v) => {
             if !v.is_finite() {
                 return Err(JsonError {
                     offset: 0,
@@ -802,8 +803,8 @@ fn write_into(
             // (D-2026-08-11-1, amended).
             out.push_str(&alloc::format!("{v}"));
         }
-        Value::Scalar(Scalar::Text(v)) => write_string(v, out),
-        Value::Scalar(Scalar::Bytes(_)) => {
+        Value::Text(v) => write_string(v, out),
+        Value::Bytes(_) => {
             return Err(JsonError {
                 offset: 0,
                 message: String::from(
@@ -811,8 +812,14 @@ fn write_into(
                 ),
             });
         }
-        Value::Scalar(Scalar::Decimal { unscaled, scale }) => {
+        Value::Decimal { unscaled, scale } => {
             write_decimal(*unscaled, *scale, out)?;
+        }
+        Value::Duration(_) | Value::Timestamp(_) => {
+            return Err(JsonError {
+                offset: 0,
+                message: String::from("duration and timestamp require an explicit JSON projection"),
+            });
         }
         Value::Array(items) => {
             out.push('[');
@@ -920,7 +927,7 @@ fn write_decimal(unscaled: i128, scale: i32, out: &mut String) -> Result<(), Jso
 #[cfg(test)]
 mod writer_tests {
     use super::*;
-    use crate::envelope::{Scalar, Value};
+    use crate::envelope::Value;
     use alloc::vec;
 
     #[test]
@@ -928,71 +935,63 @@ mod writer_tests {
         // Struct keys sort — two by-name-equal values, one byte
         // sequence (the digest rule).
         let ab = Value::Struct(vec![
-            (String::from("b"), Value::Scalar(Scalar::Int(2))),
-            (String::from("a"), Value::Scalar(Scalar::Int(1))),
+            (String::from("b"), Value::Int(2)),
+            (String::from("a"), Value::Int(1)),
         ]);
         assert_eq!(write_value(&ab).unwrap(), "{\"a\":1,\"b\":2}");
         // Decimal at its sealed scale, exact.
         assert_eq!(
-            write_value(&Value::Scalar(Scalar::Decimal {
+            write_value(&Value::Decimal {
                 unscaled: 1999,
                 scale: 2
-            }))
+            })
             .unwrap(),
             "19.99"
         );
         assert_eq!(
-            write_value(&Value::Scalar(Scalar::Decimal {
+            write_value(&Value::Decimal {
                 unscaled: 5,
                 scale: 4
-            }))
+            })
             .unwrap(),
             "0.0005"
         );
         // An integral double writes SHORTEST — and its line reads
         // back as int (the inbound domain is dynamic; the static
         // tag does not survive the wire).
-        assert_eq!(
-            write_value(&Value::Scalar(Scalar::Double(2.0))).unwrap(),
-            "2"
-        );
-        assert_eq!(
-            write_value(&Value::Scalar(Scalar::Double(2.5))).unwrap(),
-            "2.5"
-        );
+        assert_eq!(write_value(&Value::Double(2.0)).unwrap(), "2");
+        assert_eq!(write_value(&Value::Double(2.5)).unwrap(), "2.5");
         let (round, _) = parse_value("2").unwrap();
-        assert_eq!(round, crate::cel::Value::Int(2));
+        assert_eq!(round, crate::value::Value::Int(2));
         // Escapes.
         assert_eq!(
-            write_value(&Value::Scalar(Scalar::Text(String::from("a\"\n")))).unwrap(),
+            write_value(&Value::Text(String::from("a\"\n"))).unwrap(),
             "\"a\\\"\\n\""
         );
     }
 
     #[test]
     fn the_writer_round_trips_through_the_reader() {
-        use crate::runtime::to_envelope_value;
         let value = Value::Struct(vec![
             (
                 String::from("price"),
-                Value::Scalar(Scalar::Decimal {
+                Value::Decimal {
                     unscaled: 1999,
                     scale: 2,
-                }),
+                },
             ),
-            (String::from("n"), Value::Scalar(Scalar::Int(42))),
+            (String::from("n"), Value::Int(42)),
             (
                 String::from("tags"),
-                Value::Array(vec![Value::Scalar(Scalar::Text(String::from("x")))]),
+                Value::Array(vec![Value::Text(String::from("x"))]),
             ),
         ]);
         let written = write_value(&value).unwrap();
         let (read, _) = parse_value(&written).expect("the writer's output parses");
-        let back = to_envelope_value(&read).expect("representable");
         // A struct reads back as a MAP (the JSON model) — compare
         // through a second write: one canonical byte sequence.
         assert_eq!(
-            write_value(&back).unwrap(),
+            write_value(&read).unwrap(),
             written,
             "byte-stable round trip"
         );
@@ -1000,9 +999,9 @@ mod writer_tests {
 
     #[test]
     fn the_valueless_forms_refuse() {
-        assert!(write_value(&Value::Scalar(Scalar::Bytes(vec![1]))).is_err());
-        assert!(write_value(&Value::Scalar(Scalar::Double(f64::NAN))).is_err());
-        assert!(write_value(&Value::Scalar(Scalar::Double(f64::INFINITY))).is_err());
+        assert!(write_value(&Value::Bytes(vec![1])).is_err());
+        assert!(write_value(&Value::Double(f64::NAN)).is_err());
+        assert!(write_value(&Value::Double(f64::INFINITY)).is_err());
     }
 
     #[test]
@@ -1012,8 +1011,8 @@ mod writer_tests {
         // first (plain UTF-8 key order). Both deterministic, each
         // authority owns its own bytes — this pins the wire's.
         let mut entries = alloc::collections::BTreeMap::new();
-        entries.insert(String::from("b"), Value::Scalar(Scalar::Int(1)));
-        entries.insert(String::from("aa"), Value::Scalar(Scalar::Int(2)));
+        entries.insert(String::from("b"), Value::Int(1));
+        entries.insert(String::from("aa"), Value::Int(2));
         assert_eq!(
             write_value(&Value::Map(entries)).unwrap(),
             r#"{"aa":2,"b":1}"#
@@ -1026,7 +1025,7 @@ mod writer_tests {
         let round = parse_value(&write_value(&Value::Array(vec![Value::Null])).unwrap()).unwrap();
         assert_eq!(
             round.0,
-            crate::cel::Value::List(vec![crate::cel::Value::Null])
+            crate::value::Value::Array(vec![crate::value::Value::Null])
         );
     }
 
@@ -1036,22 +1035,22 @@ mod writer_tests {
         // never as a runaway allocation.
         for scale in [MIN_SCALE, MAX_SCALE] {
             assert!(
-                write_value(&Value::Scalar(Scalar::Decimal { unscaled: 7, scale })).is_ok(),
+                write_value(&Value::Decimal { unscaled: 7, scale }).is_ok(),
                 "scale {scale} is inside the domain"
             );
         }
         for scale in [MIN_SCALE - 1, MAX_SCALE + 1, i32::MIN, i32::MAX] {
             assert!(
-                write_value(&Value::Scalar(Scalar::Decimal { unscaled: 7, scale })).is_err(),
+                write_value(&Value::Decimal { unscaled: 7, scale }).is_err(),
                 "scale {scale} refuses"
             );
         }
         let too_wide = 10_i128.pow(MAX_DIGITS);
         assert!(
-            write_value(&Value::Scalar(Scalar::Decimal {
+            write_value(&Value::Decimal {
                 unscaled: too_wide,
                 scale: 2
-            }))
+            })
             .is_err(),
             "39 digits refuse"
         );
@@ -1060,7 +1059,7 @@ mod writer_tests {
     #[test]
     fn the_writer_mirrors_the_reader_nesting_budget() {
         let nest = |depth: usize| {
-            let mut value = Value::Scalar(Scalar::Int(1));
+            let mut value = Value::Int(1);
             for _ in 0..depth {
                 value = Value::Array(vec![value]);
             }
@@ -1081,12 +1080,9 @@ mod writer_tests {
             [
                 (
                     String::from("k\n"),
-                    Value::Array(vec![
-                        Value::Scalar(Scalar::Bool(true)),
-                        Value::Scalar(Scalar::Int(-3)),
-                    ]),
+                    Value::Array(vec![Value::Bool(true), Value::Int(-3)]),
                 ),
-                (String::from("z"), Value::Scalar(Scalar::Double(1.5))),
+                (String::from("z"), Value::Double(1.5)),
             ]
             .into_iter()
             .collect(),

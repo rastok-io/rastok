@@ -59,7 +59,7 @@ pub struct Const {
     /// The expression as compiled; enters the semantic hash.
     pub tree: cel::Tree,
     /// The boot-time reduction; never identity material.
-    pub value: cel::Value,
+    pub value: crate::value::Value,
 }
 
 /// One constant binding.

@@ -55,10 +55,11 @@ rendering.
 Exit: one rendered diagnostic asserted byte-for-byte, per
 [`../spec/diagnostics.md`](../spec/diagnostics.md).
 
-### Stage 3 — `envelope`
+### Stage 3 — `datatype`, `value`, and `envelope`
 
-`Value`, `Encoding`, `Data`, `Id`, `MetaSys`, `Meta`, `Envelope`, and
-the canonical identity derivation.
+The core `DataType` and materialized `Value` authorities; then `Encoding`,
+`Data`, `Id`, `MetaSys`, `Meta`, `Envelope`, and the canonical identity
+derivation. `envelope::Value` is only a re-export of core `value::Value`.
 
 Exit: round-trip and invalid-shape tests, plus repeatability of `Id`
 across equivalent construction orders, per
@@ -73,14 +74,16 @@ Lexer and parser for the selected M0 grammar subset, producing
 Exit: accepted and rejected `.rkg` fixtures with spans, per
 [`../spec/grammar.md`](../spec/grammar.md).
 
-### Stage 5 — `cel`
+### Stage 5 — Rastok expressions (module `cel` during M1.3)
 
-The isolated CEL domain: compilation (`Signature`, `Tree`, `Type`,
-native diagnostics) and evaluation (`Value`, `Bindings`, `Error`).
-Independent of Stage 4 and may proceed in parallel with it.
+The isolated expression consumer: compilation (`Signature`, `Tree`, native
+diagnostics) and evaluation (`EvalValue`, `Bindings`, `Error`) over the core
+`DataType` and `Value`. `EvalValue` may carry the lazy payload witness during
+one evaluation but never enters a plan, envelope, or journal. Independent of
+Stage 4 and may proceed in parallel with it.
 
-Exit: conformance fixtures for the admitted CEL subset, including
-error cases.
+Exit: conformance fixtures for the admitted CEL-compatible subset and named
+Rastok divergences, including error cases.
 
 ### Stage 6 — `compiler` middle
 

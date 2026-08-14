@@ -21,10 +21,10 @@
 use crate::boundary::{
     CallOutcome, CallRef, InboundSubmission, IngressAuthority, Intent, SubmissionSequence,
 };
-use crate::cel;
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::node;
 use crate::plan::GraphVersion;
+use crate::value::Value;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -176,7 +176,7 @@ pub struct TransactionRecord {
     /// The consumed input positions; canonically sorted at commit.
     pub consumed: Vec<ConsumedPosition>,
     /// The state changes; canonically sorted by field at commit.
-    pub state_delta: Vec<(String, cel::Value)>,
+    pub state_delta: Vec<(String, Value)>,
     /// The emissions, in text/emission-index order.
     pub emissions: Vec<Emission>,
     /// The dated obligations this firing arms — `(timer_kind, ref)`
@@ -833,8 +833,8 @@ mod tests {
                     },
                 ],
                 state_delta: vec![
-                    (String::from("z"), cel::Value::Int(1)),
-                    (String::from("a"), cel::Value::Int(2)),
+                    (String::from("z"), Value::Int(1)),
+                    (String::from("a"), Value::Int(2)),
                 ],
                 emissions: vec![],
                 timers: vec![],
@@ -861,7 +861,7 @@ mod tests {
                     edge: String::from(".in>shout.in"),
                     seq: 0,
                 }],
-                state_delta: vec![(String::from("count"), cel::Value::Int(1))],
+                state_delta: vec![(String::from("count"), Value::Int(1))],
                 emissions: vec![Emission {
                     port: node::Port::new("out").unwrap(),
                     index: 0,

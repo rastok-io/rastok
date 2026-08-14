@@ -11,8 +11,7 @@
 //! exactly the machinery a run does, minus this file.
 
 use crate::boundary::{CallOutcome, Intent, Partner, Response, TypedError};
-use crate::cel;
-use crate::envelope::{Data, Envelope, Scalar, Value};
+use crate::envelope::{Data, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -219,30 +218,24 @@ impl ProcessFailure {
             Self::CaptureFailed {} => BTreeMap::new(),
             Self::SpawnFailed { message } | Self::DecodeError { message } => {
                 let mut payload = BTreeMap::new();
-                payload.insert(
-                    String::from("message"),
-                    Value::Scalar(Scalar::Text(message)),
-                );
+                payload.insert(String::from("message"), Value::Text(message));
                 payload
             }
             Self::ExecFailed { exit_code, stderr } => {
                 let mut payload = BTreeMap::new();
-                payload.insert(
-                    String::from("exit_code"),
-                    Value::Scalar(Scalar::Int(exit_code)),
-                );
-                payload.insert(String::from("stderr"), Value::Scalar(Scalar::Text(stderr)));
+                payload.insert(String::from("exit_code"), Value::Int(exit_code));
+                payload.insert(String::from("stderr"), Value::Text(stderr));
                 payload
             }
             Self::OutputOverflow { limit, reason } => {
                 let mut payload = BTreeMap::new();
                 payload.insert(
                     String::from("limit"),
-                    Value::Scalar(Scalar::Int(i64::try_from(limit).unwrap_or(i64::MAX))),
+                    Value::Int(i64::try_from(limit).unwrap_or(i64::MAX)),
                 );
                 payload.insert(
                     String::from("reason"),
-                    Value::Scalar(Scalar::Text(String::from(reason.as_str()))),
+                    Value::Text(String::from(reason.as_str())),
                 );
                 payload
             }
@@ -275,15 +268,17 @@ impl ProcessSettings {
             Some(_) => return Err(E::OnTimeoutNotKill),
             None => return Err(E::Unresolved("on_timeout")),
         }
-        let Some(AttrSetting::Value(cel::Value::Text(command))) = spec.attribute("command") else {
+        let Some(AttrSetting::Value(crate::value::Value::Text(command))) =
+            spec.attribute("command")
+        else {
             return Err(E::CommandNotText);
         };
         let args = match spec.attribute("args") {
-            Some(AttrSetting::Value(cel::Value::List(items))) => {
+            Some(AttrSetting::Value(crate::value::Value::Array(items))) => {
                 let mut args = Vec::with_capacity(items.len());
                 for item in items {
                     match item {
-                        cel::Value::Text(text) => args.push(text.clone()),
+                        crate::value::Value::Text(text) => args.push(text.clone()),
                         other => return Err(E::ArgNotText(format!("{other:?}"))),
                     }
                 }
@@ -305,7 +300,7 @@ impl ProcessSettings {
             _ => return Err(E::Unresolved("codec")),
         };
         let max_output = match spec.attribute("max_output") {
-            Some(AttrSetting::Value(cel::Value::Text(text))) => {
+            Some(AttrSetting::Value(crate::value::Value::Text(text))) => {
                 match crate::contract::byte_size(text) {
                     Some(size) => {
                         // The SYNTAX bound is target-independent
@@ -327,7 +322,10 @@ impl ProcessSettings {
             _ => return Err(E::Unresolved("max_output")),
         };
         if let Some(setting) = spec.attribute("timeout")
-            && !matches!(setting, AttrSetting::Value(cel::Value::Duration(_)))
+            && !matches!(
+                setting,
+                AttrSetting::Value(crate::value::Value::Duration(_))
+            )
         {
             return Err(E::TimeoutNotDuration);
         }
@@ -820,7 +818,7 @@ impl Run {
                     // `codec = lines`, job mode: the whole stdout,
                     // one text blob.
                     crate::boundary::RequestCodec::Lines => {
-                        CallOutcome::Success(Data::materialized(Value::Scalar(Scalar::Text(text))))
+                        CallOutcome::Success(Data::materialized(Value::Text(text)))
                     }
                     // `codec = jsonl`, job mode: the decoded lines,
                     // `data = array<variant>` (D-2026-08-11-1). The
@@ -869,8 +867,6 @@ fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, String> {
             .bytes()
             .all(|byte| matches!(byte, b' ' | b'\t' | b'\r'))
         {
-            let value = rastok_core::runtime::to_envelope_value(&value)
-                .map_err(|fault| format!("line `{line}` is not representable: {fault}"))?;
             items.push(value);
         } else {
             return Err(format!(
@@ -998,10 +994,7 @@ graph real : App {
 
     fn submission(text: &str) -> InboundSubmission {
         let mut data = std::collections::BTreeMap::new();
-        data.insert(
-            String::from("text"),
-            Value::Scalar(Scalar::Text(String::from(text))),
-        );
+        data.insert(String::from("text"), Value::Text(String::from(text)));
         InboundSubmission {
             authority: IngressAuthority::single(crate::node::Path::new(["cli"]).unwrap()),
             port: crate::node::Port::new("in").unwrap(),
@@ -1064,7 +1057,7 @@ graph real : App {
         // stdout, one text blob.
         assert_eq!(
             outputs[0].data(),
-            &Data::materialized(Value::Scalar(Scalar::Text(String::from("salut\n"))))
+            &Data::materialized(Value::Text(String::from("salut\n")))
         );
         // The same normative sequence as the scripted world — the
         // adapter changed, the machine did not.
@@ -1111,18 +1104,15 @@ graph failing : App {
         };
         assert_eq!(
             payload.get("kind"),
-            Some(&Value::Scalar(Scalar::Text(String::from("ExecFailed"))))
+            Some(&Value::Text(String::from("ExecFailed")))
         );
         let Some(Value::Map(detail)) = payload.get("detail") else {
             panic!("expected the ExecFailed detail");
         };
-        assert_eq!(
-            detail.get("exit_code"),
-            Some(&Value::Scalar(Scalar::Int(3)))
-        );
+        assert_eq!(detail.get("exit_code"), Some(&Value::Int(3)));
         assert_eq!(
             detail.get("stderr"),
-            Some(&Value::Scalar(Scalar::Text(String::from("broken\n"))))
+            Some(&Value::Text(String::from("broken\n")))
         );
     }
 
@@ -1151,7 +1141,7 @@ graph missing : App {
         };
         assert_eq!(
             payload.get("kind"),
-            Some(&Value::Scalar(Scalar::Text(String::from("SpawnFailed"))))
+            Some(&Value::Text(String::from("SpawnFailed")))
         );
     }
 
@@ -1186,7 +1176,7 @@ graph mute : App {
         };
         assert_eq!(
             payload.get("kind"),
-            Some(&Value::Scalar(Scalar::Text(String::from("TimeoutExpired"))))
+            Some(&Value::Text(String::from("TimeoutExpired")))
         );
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
@@ -1229,7 +1219,7 @@ graph orphaning : App {
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(
             outputs[0].data(),
-            &Data::materialized(Value::Scalar(Scalar::Text(String::from("done\n"))))
+            &Data::materialized(Value::Text(String::from("done\n")))
         );
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
@@ -1268,7 +1258,7 @@ graph wedge : App {
         };
         assert_eq!(
             payload.get("kind"),
-            Some(&Value::Scalar(Scalar::Text(String::from("OutputOverflow"))))
+            Some(&Value::Text(String::from("OutputOverflow")))
         );
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
@@ -1301,7 +1291,7 @@ graph flood : App {
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(
             outputs[0].data(),
-            &Data::materialized(Value::Scalar(Scalar::Text(String::from("done\n"))))
+            &Data::materialized(Value::Text(String::from("done\n")))
         );
     }
 
@@ -1331,7 +1321,7 @@ graph capped : App {
         };
         assert_eq!(
             payload.get("kind"),
-            Some(&Value::Scalar(Scalar::Text(String::from("OutputOverflow"))))
+            Some(&Value::Text(String::from("OutputOverflow")))
         );
     }
 
@@ -1366,7 +1356,7 @@ graph hoarse : App {
         };
         assert_eq!(
             payload.get("kind"),
-            Some(&Value::Scalar(Scalar::Text(String::from("OutputOverflow"))))
+            Some(&Value::Text(String::from("OutputOverflow")))
         );
         let Some(Value::Map(detail)) = payload.get("detail") else {
             panic!("the payload rides detail: {payload:?}");
@@ -1375,10 +1365,10 @@ graph hoarse : App {
         // order, and the journal must not record a thread race —
         // the payload carries the declared limit and the reason.
         assert_eq!(detail.get("stream"), None, "{detail:?}");
-        assert_eq!(detail.get("limit"), Some(&Value::Scalar(Scalar::Int(50))));
+        assert_eq!(detail.get("limit"), Some(&Value::Int(50)));
         assert_eq!(
             detail.get("reason"),
-            Some(&Value::Scalar(Scalar::Text(String::from("budget"))))
+            Some(&Value::Text(String::from("budget")))
         );
     }
 
@@ -1410,7 +1400,7 @@ graph unframeable : App {
         };
         assert_eq!(
             payload.get("kind"),
-            Some(&Value::Scalar(Scalar::Text(String::from("DecodeError"))))
+            Some(&Value::Text(String::from("DecodeError")))
         );
         assert!(
             !journal
@@ -1574,23 +1564,20 @@ graph unframeable : App {
     /// nothing else does.
     #[test]
     fn the_jsonl_framing_table_holds() {
-        use rastok_core::envelope::{Scalar, Value};
+        use rastok_core::envelope::Value;
         assert_eq!(super::decode_jsonl(""), Ok(vec![]), "empty stdout");
         assert!(
             super::decode_jsonl("\n").is_err(),
             "a lone newline is one EMPTY line, refused — never silently lost"
         );
-        assert_eq!(
-            super::decode_jsonl("1\n"),
-            Ok(vec![Value::Scalar(Scalar::Int(1))])
-        );
+        assert_eq!(super::decode_jsonl("1\n"), Ok(vec![Value::Int(1)]));
         assert!(
             super::decode_jsonl("1\n\n").is_err(),
             "an interior empty line refuses"
         );
         assert_eq!(
             super::decode_jsonl("1 \t\r\n"),
-            Ok(vec![Value::Scalar(Scalar::Int(1))]),
+            Ok(vec![Value::Int(1)]),
             "JSON's whitespace pads a line"
         );
         assert!(

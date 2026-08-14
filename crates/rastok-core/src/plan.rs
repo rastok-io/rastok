@@ -1,7 +1,7 @@
 //! Serializable compiled execution model.
 //!
 //! The `ExecutionPlan` is what ships to runtime hosts: tables plus
-//! canonical CEL trees — no closures, no host references. Attribute
+//! canonical expression trees — no closures, no host references. Attribute
 //! constants are the boot-time reductions; the semantic identity was
 //! taken earlier, over the canonical HIR (`identity.md` §1), and rides
 //! beside the plan as [`SemanticHash`].
@@ -15,6 +15,7 @@ pub use validation::{PlanValidationError, ValidatedExecutionPlan};
 use crate::cel;
 use crate::datatype::DataType;
 use crate::node;
+use crate::value::Value;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -206,7 +207,7 @@ pub enum AttrSetting {
     /// A bare enum-like keyword.
     Word(String),
     /// A reduced constant.
-    Value(cel::Value),
+    Value(Value),
 }
 
 /// One planned state cell.
@@ -217,7 +218,7 @@ pub struct VarCell {
     /// The cell's logical data type.
     pub ty: DataType,
     /// The boot-time default, when declared.
-    pub init: Option<cel::Value>,
+    pub init: Option<Value>,
 }
 
 /// One planned handler: a triggered, ordered statement body.

@@ -24,20 +24,18 @@ use core::fmt;
 use core::ops::Range;
 
 use crate::datatype::DataType;
+use crate::value::Value;
 
 /// Names refused explicitly: admitted by full CEL, outside this build.
 const UNSUPPORTED_FUNCTIONS: &[&str] = &["has", "exists", "exists_one", "all", "map", "filter"];
 
-/// An expression runtime value, mirroring the executable [`DataType`] subset.
+/// An evaluator-only value.
 ///
-/// Equality is STRUCTURAL and agrees with the canonical bytes: the
-/// `Double` arm compares canonicalized bits (all NaNs are one value,
-/// `-0.0` and `+0.0` are two), so a plan equals itself across the
-/// encode/decode trip and two plans with different canonical bytes
-/// never compare equal. CEL's own `==` operator does NOT use this —
-/// it lives in `values_equal` and keeps IEEE numeric semantics.
+/// This mirrors [`Value`] only so a lazy [`Self::Payload`] witness can occur
+/// recursively while evaluating an expression. It is never serialized or
+/// stored; every value crossing an evaluator boundary is a core [`Value`].
 #[derive(Debug, Clone)]
-pub enum Value {
+pub enum EvalValue {
     /// Boolean.
     Bool(bool),
     /// 64-bit signed integer.
@@ -57,16 +55,16 @@ pub enum Value {
     /// The null value.
     Null,
     /// Homogeneous list.
-    List(Vec<Value>),
+    List(Vec<EvalValue>),
     /// Text-keyed map; `BTreeMap` keeps iteration sorted by key.
-    Map(BTreeMap<String, Value>),
+    Map(BTreeMap<String, EvalValue>),
     /// Named fields in declaration order — the LOGICAL twin of
-    /// `envelope::Value::Struct` (canonical tag 17, where a map is
+    /// [`Value::Struct`] (canonical tag 17, where a map is
     /// 18): the witness that lets a struct cross the CEL bridge —
     /// bindings, locals, ternaries — without silently becoming a
     /// map. CEL cannot construct one; it can only carry, access,
     /// and re-emit what the envelope domain handed it.
-    Struct(Vec<(String, Value)>),
+    Struct(Vec<(String, EvalValue)>),
     /// An exact decimal — `unscaled × 10^(−scale)` — the dynamic
     /// numeric beyond the integer domain (D-2026-08-10-7): at most
     /// 38 significant digits (Arrow decimal128). DOCUMENT-origin
@@ -93,7 +91,7 @@ pub enum Value {
     Payload,
 }
 
-impl PartialEq for Value {
+impl PartialEq for EvalValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Bool(a), Self::Bool(b)) => a == b,
@@ -119,7 +117,7 @@ impl PartialEq for Value {
             // (stable) instead of name-lookup keeps `Eq`'s contract
             // total: a malformed duplicate-name struct — refused at
             // every door, but representable — still equals itself.
-            (Self::Struct(a), Self::Struct(b)) => struct_fields_eq(a, b, Value::eq),
+            (Self::Struct(a), Self::Struct(b)) => struct_fields_eq(a, b, EvalValue::eq),
             (
                 Self::Decimal { unscaled, scale },
                 Self::Decimal {
@@ -135,7 +133,82 @@ impl PartialEq for Value {
     }
 }
 
-impl Eq for Value {}
+impl Eq for EvalValue {}
+
+impl From<Value> for EvalValue {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Bool(value) => Self::Bool(value),
+            Value::Int(value) => Self::Int(value),
+            Value::Uint(value) => Self::Uint(value),
+            Value::Double(value) => Self::Double(value),
+            Value::Text(value) => Self::Text(value),
+            Value::Bytes(value) => Self::Bytes(value),
+            Value::Duration(value) => Self::Duration(value),
+            Value::Timestamp(value) => Self::Timestamp(value),
+            Value::Null => Self::Null,
+            Value::Array(items) => Self::List(items.into_iter().map(Self::from).collect()),
+            Value::Map(entries) => Self::Map(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, Self::from(value)))
+                    .collect(),
+            ),
+            Value::Struct(fields) => Self::Struct(
+                fields
+                    .into_iter()
+                    .map(|(name, value)| (name, Self::from(value)))
+                    .collect(),
+            ),
+            Value::Decimal { unscaled, scale } => Self::Decimal { unscaled, scale },
+        }
+    }
+}
+
+impl EvalValue {
+    /// Converts an evaluator result into the materialized value algebra.
+    ///
+    /// # Errors
+    /// An unresolved payload witness is evaluator state and cannot cross the
+    /// materialization boundary.
+    pub fn into_value(self) -> Result<Value, Error> {
+        Ok(match self {
+            Self::Bool(value) => Value::Bool(value),
+            Self::Int(value) => Value::Int(value),
+            Self::Uint(value) => Value::Uint(value),
+            Self::Double(value) => Value::Double(value),
+            Self::Text(value) => Value::Text(value),
+            Self::Bytes(value) => Value::Bytes(value),
+            Self::Duration(value) => Value::Duration(value),
+            Self::Timestamp(value) => Value::Timestamp(value),
+            Self::Null => Value::Null,
+            Self::List(items) => Value::Array(
+                items
+                    .into_iter()
+                    .map(Self::into_value)
+                    .collect::<Result<_, _>>()?,
+            ),
+            Self::Map(entries) => Value::Map(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| Ok((key, value.into_value()?)))
+                    .collect::<Result<_, Error>>()?,
+            ),
+            Self::Struct(fields) => Value::Struct(
+                fields
+                    .into_iter()
+                    .map(|(name, value)| Ok((name, value.into_value()?)))
+                    .collect::<Result<_, Error>>()?,
+            ),
+            Self::Decimal { unscaled, scale } => Value::Decimal { unscaled, scale },
+            Self::Payload => {
+                return Err(fault(String::from(
+                    "an unresolved payload cannot leave expression evaluation",
+                )));
+            }
+        })
+    }
+}
 
 /// Sorted-field struct comparison, shared by structural equality and
 /// the CEL `==` operator: stable-sort both sides by name, compare
@@ -144,15 +217,15 @@ impl Eq for Value {}
 /// bytes; for malformed values it stays reflexive, symmetric, and
 /// transitive, which `Eq` promises unconditionally.
 fn struct_fields_eq(
-    a: &[(String, Value)],
-    b: &[(String, Value)],
-    values: impl Fn(&Value, &Value) -> bool,
+    a: &[(String, EvalValue)],
+    b: &[(String, EvalValue)],
+    values: impl Fn(&EvalValue, &EvalValue) -> bool,
 ) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    fn sorted(fields: &[(String, Value)]) -> alloc::vec::Vec<&(String, Value)> {
-        let mut refs: alloc::vec::Vec<&(String, Value)> = fields.iter().collect();
+    fn sorted(fields: &[(String, EvalValue)]) -> alloc::vec::Vec<&(String, EvalValue)> {
+        let mut refs: alloc::vec::Vec<&(String, EvalValue)> = fields.iter().collect();
         refs.sort_by(|x, y| x.0.cmp(&y.0));
         refs
     }
@@ -195,16 +268,16 @@ impl Signature {
 /// the full dotted path is offered first, then the bare root.
 pub trait Bindings {
     /// The value bound to `name`, if any.
-    fn get(&self, name: &str) -> Option<Value>;
+    fn get(&self, name: &str) -> Option<EvalValue>;
 
-    /// The whole payload behind a [`Value::Payload`] witness,
+    /// The whole payload behind a [`EvalValue::Payload`] witness,
     /// materialized. The default has no payload authority: a witness
     /// reaching an environment that cannot honor it is a fault, not
     /// a silent value.
     ///
     /// # Errors
     /// When this environment carries no payload.
-    fn payload(&self) -> Result<Value, Error> {
+    fn payload(&self) -> Result<EvalValue, Error> {
         Err(fault(String::from(
             "`data` carries no payload in this environment",
         )))
@@ -215,13 +288,13 @@ pub trait Bindings {
     ///
     /// # Errors
     /// When this environment carries no assets.
-    fn asset(&self, index: u32) -> Result<Value, Error> {
+    fn asset(&self, index: u32) -> Result<EvalValue, Error> {
         Err(fault(format!("asset {index} is not available here")))
     }
 }
 
-impl Bindings for BTreeMap<String, Value> {
-    fn get(&self, name: &str) -> Option<Value> {
+impl Bindings for BTreeMap<String, EvalValue> {
+    fn get(&self, name: &str) -> Option<EvalValue> {
         BTreeMap::get(self, name).cloned()
     }
 }
@@ -271,7 +344,7 @@ impl fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
-/// Canonical typed CEL tree — one form for hashing, planning, and
+/// Canonical typed expression tree — one form for hashing, planning, and
 /// evaluation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tree {
@@ -312,9 +385,9 @@ pub enum Expr {
     Ternary {
         /// The condition.
         cond: Box<Expr>,
-        /// Value when true.
+        /// Expression selected when true.
         then: Box<Expr>,
-        /// Value when false.
+        /// Expression selected when false.
         otherwise: Box<Expr>,
     },
     /// Index access `base[index]`.
@@ -453,7 +526,7 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
 ///
 /// Value errors only: unknown bindings, arithmetic faults, dynamic
 /// type mismatches, malformed time strings.
-pub fn eval(tree: &Tree, bindings: &dyn Bindings) -> Result<Value, Error> {
+pub fn eval(tree: &Tree, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
     eval_expr(&tree.root, bindings)
 }
 
@@ -464,7 +537,11 @@ pub fn eval(tree: &Tree, bindings: &dyn Bindings) -> Result<Value, Error> {
 ///
 /// Same as [`eval`]; a reference to a non-constant name is an error.
 pub fn const_eval(tree: &Tree, consts: &BTreeMap<String, Value>) -> Result<Value, Error> {
-    eval_expr(&tree.root, consts)
+    let bindings: BTreeMap<String, EvalValue> = consts
+        .iter()
+        .map(|(name, value)| (name.clone(), EvalValue::from(value.clone())))
+        .collect();
+    eval_expr(&tree.root, &bindings)?.into_value()
 }
 
 // ===== lexing =====
@@ -1363,15 +1440,13 @@ fn literal_type(value: &Value) -> DataType {
         Value::Duration(_) => DataType::Duration,
         Value::Timestamp(_) => DataType::Timestamp,
         Value::Null => DataType::Null,
-        Value::List(_) => DataType::Array(Box::new(DataType::Variant)),
+        Value::Array(_) => DataType::Array(Box::new(DataType::Variant)),
         Value::Map(_) => DataType::Map(Box::new(DataType::Variant)),
         // No struct type exists in the annotation subset; the value
         // carries its own witness and types as dynamic.
         Value::Struct(_) => DataType::Variant,
         // The dynamic decimal types as `variant` until narrowing exists.
         Value::Decimal { .. } => DataType::Variant,
-        // A literal is never a witness; total anyway.
-        Value::Payload => DataType::Variant,
     }
 }
 
@@ -1434,9 +1509,9 @@ fn numeric(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
 /// every other value passes through. Carrying positions (a `val`
 /// binding, a ternary result, a list element) never call this — that
 /// is what keeps `val copy = data` as lazy as `data` itself.
-fn concrete(value: Value, bindings: &dyn Bindings) -> Result<Value, Error> {
+fn concrete(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
     match value {
-        Value::Payload => bindings.payload(),
+        EvalValue::Payload => bindings.payload(),
         other => Ok(other),
     }
 }
@@ -1444,23 +1519,23 @@ fn concrete(value: Value, bindings: &dyn Bindings) -> Result<Value, Error> {
 /// The deep variant for comparisons: a witness inside a composite
 /// materializes too, so `[data] == [x]` compares values, never
 /// markers.
-fn concrete_deep(value: Value, bindings: &dyn Bindings) -> Result<Value, Error> {
+fn concrete_deep(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
     Ok(match value {
-        Value::Payload => bindings.payload()?,
-        Value::List(items) => Value::List(
+        EvalValue::Payload => bindings.payload()?,
+        EvalValue::List(items) => EvalValue::List(
             items
                 .into_iter()
                 .map(|item| concrete_deep(item, bindings))
                 .collect::<Result<_, _>>()?,
         ),
-        Value::Map(map) => {
+        EvalValue::Map(map) => {
             let mut deep = BTreeMap::new();
             for (key, value) in map {
                 deep.insert(key, concrete_deep(value, bindings)?);
             }
-            Value::Map(deep)
+            EvalValue::Map(deep)
         }
-        Value::Struct(fields) => Value::Struct(
+        EvalValue::Struct(fields) => EvalValue::Struct(
             fields
                 .into_iter()
                 .map(|(name, value)| Ok((name, concrete_deep(value, bindings)?)))
@@ -1470,9 +1545,9 @@ fn concrete_deep(value: Value, bindings: &dyn Bindings) -> Result<Value, Error> 
     })
 }
 
-fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
+fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
     match expr {
-        Expr::Literal(value) => Ok(value.clone()),
+        Expr::Literal(value) => Ok(EvalValue::from(value.clone())),
         Expr::Asset(index) => bindings.asset(*index),
         Expr::Path(segments) => {
             let dotted = segments.join(".");
@@ -1486,12 +1561,12 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
                 // A member access IS the structural demand.
                 value = concrete(value, bindings)?;
                 match value {
-                    Value::Map(mut map) => {
+                    EvalValue::Map(mut map) => {
                         value = map.remove(segment.as_str()).ok_or_else(|| {
                             fault(format!("`{dotted}` has no member `{segment}`"))
                         })?;
                     }
-                    Value::Struct(fields) => {
+                    EvalValue::Struct(fields) => {
                         value = fields
                             .into_iter()
                             .find(|(name, _)| name == segment)
@@ -1508,15 +1583,15 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
         Expr::Unary { op, expr } => {
             let value = concrete(eval_expr(expr, bindings)?, bindings)?;
             match (op, value) {
-                (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
-                (UnaryOp::Neg, Value::Int(i)) => i
+                (UnaryOp::Not, EvalValue::Bool(b)) => Ok(EvalValue::Bool(!b)),
+                (UnaryOp::Neg, EvalValue::Int(i)) => i
                     .checked_neg()
-                    .map(Value::Int)
+                    .map(EvalValue::Int)
                     .ok_or_else(|| fault(String::from("integer overflow"))),
-                (UnaryOp::Neg, Value::Double(d)) => Ok(Value::Double(-d)),
-                (UnaryOp::Neg, Value::Duration(d)) => d
+                (UnaryOp::Neg, EvalValue::Double(d)) => Ok(EvalValue::Double(-d)),
+                (UnaryOp::Neg, EvalValue::Duration(d)) => d
                     .checked_neg()
-                    .map(Value::Duration)
+                    .map(EvalValue::Duration)
                     .ok_or_else(|| fault(String::from("duration overflow"))),
                 (_, other) => Err(fault(format!("operator does not accept {other:?}"))),
             }
@@ -1527,28 +1602,28 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
             then,
             otherwise,
         } => match concrete(eval_expr(cond, bindings)?, bindings)? {
-            Value::Bool(true) => eval_expr(then, bindings),
-            Value::Bool(false) => eval_expr(otherwise, bindings),
+            EvalValue::Bool(true) => eval_expr(then, bindings),
+            EvalValue::Bool(false) => eval_expr(otherwise, bindings),
             other => Err(fault(format!("the condition evaluated to {other:?}"))),
         },
         Expr::Index { base, index } => {
             let base = concrete(eval_expr(base, bindings)?, bindings)?;
             let index = concrete(eval_expr(index, bindings)?, bindings)?;
             match (base, index) {
-                (Value::List(items), Value::Int(i)) => usize::try_from(i)
+                (EvalValue::List(items), EvalValue::Int(i)) => usize::try_from(i)
                     .ok()
                     .and_then(|i| items.into_iter().nth(i))
                     .ok_or_else(|| fault(String::from("list index out of range"))),
-                (Value::List(items), Value::Uint(i)) => usize::try_from(i)
+                (EvalValue::List(items), EvalValue::Uint(i)) => usize::try_from(i)
                     .ok()
                     .and_then(|i| items.into_iter().nth(i))
                     .ok_or_else(|| fault(String::from("list index out of range"))),
-                (Value::Struct(fields), Value::Text(key)) => fields
+                (EvalValue::Struct(fields), EvalValue::Text(key)) => fields
                     .into_iter()
                     .find(|(name, _)| name == &key)
                     .map(|(_, value)| value)
                     .ok_or_else(|| fault(format!("no member `{key}`"))),
-                (Value::Map(mut map), Value::Text(key)) => map
+                (EvalValue::Map(mut map), EvalValue::Text(key)) => map
                     .remove(&key)
                     .ok_or_else(|| fault(format!("no such key `{key}`"))),
                 (base, index) => Err(fault(format!("cannot index {base:?} with {index:?}"))),
@@ -1561,30 +1636,36 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
                 values.push(concrete(eval_expr(arg, bindings)?, bindings)?);
             }
             match (function, values.as_slice()) {
-                (Function::Duration, [Value::Text(text)]) => {
-                    parse_duration(text).map(Value::Duration)
+                (Function::Duration, [EvalValue::Text(text)]) => {
+                    parse_duration(text).map(EvalValue::Duration)
                 }
-                (Function::Timestamp, [Value::Text(text)]) => {
-                    parse_timestamp(text).map(Value::Timestamp)
+                (Function::Timestamp, [EvalValue::Text(text)]) => {
+                    parse_timestamp(text).map(EvalValue::Timestamp)
                 }
-                (Function::Decimal, [Value::Text(text)]) => {
+                (Function::Decimal, [EvalValue::Text(text)]) => {
                     match crate::json::parse_declared_number(text) {
-                        Ok(crate::json::DeclaredNumber::Int(value)) => Ok(Value::Int(value)),
+                        Ok(crate::json::DeclaredNumber::Int(value)) => Ok(EvalValue::Int(value)),
                         Ok(crate::json::DeclaredNumber::Decimal { unscaled, scale }) => {
-                            Ok(Value::Decimal { unscaled, scale })
+                            Ok(EvalValue::Decimal { unscaled, scale })
                         }
                         Err(reason) => Err(fault(alloc::format!(
                             "`{text}` is not an exact decimal: {reason}"
                         ))),
                     }
                 }
-                (Function::Size, [Value::Text(text)]) => {
-                    Ok(Value::Int(text.chars().count() as i64))
+                (Function::Size, [EvalValue::Text(text)]) => {
+                    Ok(EvalValue::Int(text.chars().count() as i64))
                 }
-                (Function::Size, [Value::Bytes(bytes)]) => Ok(Value::Int(bytes.len() as i64)),
-                (Function::Size, [Value::List(items)]) => Ok(Value::Int(items.len() as i64)),
-                (Function::Size, [Value::Map(map)]) => Ok(Value::Int(map.len() as i64)),
-                (Function::Size, [Value::Struct(fields)]) => Ok(Value::Int(fields.len() as i64)),
+                (Function::Size, [EvalValue::Bytes(bytes)]) => {
+                    Ok(EvalValue::Int(bytes.len() as i64))
+                }
+                (Function::Size, [EvalValue::List(items)]) => {
+                    Ok(EvalValue::Int(items.len() as i64))
+                }
+                (Function::Size, [EvalValue::Map(map)]) => Ok(EvalValue::Int(map.len() as i64)),
+                (Function::Size, [EvalValue::Struct(fields)]) => {
+                    Ok(EvalValue::Int(fields.len() as i64))
+                }
                 (function, values) => {
                     Err(fault(format!("{function:?} does not accept {values:?}")))
                 }
@@ -1595,14 +1676,14 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<Value, Error> {
             for item in items {
                 values.push(eval_expr(item, bindings)?);
             }
-            Ok(Value::List(values))
+            Ok(EvalValue::List(values))
         }
         Expr::MapLit(entries) => {
             let mut map = BTreeMap::new();
             for (key, value) in entries {
                 map.insert(key.clone(), eval_expr(value, bindings)?);
             }
-            Ok(Value::Map(map))
+            Ok(EvalValue::Map(map))
         }
     }
 }
@@ -1612,17 +1693,17 @@ fn eval_binary(
     left: &Expr,
     right: &Expr,
     bindings: &dyn Bindings,
-) -> Result<Value, Error> {
+) -> Result<EvalValue, Error> {
     use BinaryOp::{Add, And, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Or, Rem, Sub};
     if matches!(op, And | Or) {
-        let Value::Bool(lhs) = concrete(eval_expr(left, bindings)?, bindings)? else {
+        let EvalValue::Bool(lhs) = concrete(eval_expr(left, bindings)?, bindings)? else {
             return Err(fault(String::from("logic needs booleans")));
         };
         return match (op, lhs) {
-            (And, false) => Ok(Value::Bool(false)),
-            (Or, true) => Ok(Value::Bool(true)),
+            (And, false) => Ok(EvalValue::Bool(false)),
+            (Or, true) => Ok(EvalValue::Bool(true)),
             _ => match concrete(eval_expr(right, bindings)?, bindings)? {
-                Value::Bool(rhs) => Ok(Value::Bool(rhs)),
+                EvalValue::Bool(rhs) => Ok(EvalValue::Bool(rhs)),
                 _ => Err(fault(String::from("logic needs booleans"))),
             },
         };
@@ -1630,11 +1711,11 @@ fn eval_binary(
     let lhs = concrete_deep(eval_expr(left, bindings)?, bindings)?;
     let rhs = concrete_deep(eval_expr(right, bindings)?, bindings)?;
     match op {
-        Eq => Ok(Value::Bool(values_equal(&lhs, &rhs))),
-        Ne => Ok(Value::Bool(!values_equal(&lhs, &rhs))),
+        Eq => Ok(EvalValue::Bool(values_equal(&lhs, &rhs))),
+        Ne => Ok(EvalValue::Bool(!values_equal(&lhs, &rhs))),
         Lt | Le | Gt | Ge => {
             let ordering = compare(&lhs, &rhs)?;
-            Ok(Value::Bool(match op {
+            Ok(EvalValue::Bool(match op {
                 Lt => ordering.is_lt(),
                 Le => ordering.is_le(),
                 Gt => ordering.is_gt(),
@@ -1646,39 +1727,39 @@ fn eval_binary(
     }
 }
 
-fn values_equal(lhs: &Value, rhs: &Value) -> bool {
+fn values_equal(lhs: &EvalValue, rhs: &EvalValue) -> bool {
     match (lhs, rhs) {
-        (Value::Bool(a), Value::Bool(b)) => a == b,
+        (EvalValue::Bool(a), EvalValue::Bool(b)) => a == b,
         // Structural on the carried pair — scales are DECLARED and
         // equality distinguishes them ({150,2} ≠ {15,1},
         // D-2026-08-13-1); an integer never structurally equals a
         // decimal, and the written-scale fold keeps every foldable
         // value in the integer domain.
         (
-            Value::Decimal { unscaled, scale },
-            Value::Decimal {
+            EvalValue::Decimal { unscaled, scale },
+            EvalValue::Decimal {
                 unscaled: other_unscaled,
                 scale: other_scale,
             },
         ) => unscaled == other_unscaled && scale == other_scale,
-        (Value::Int(a), Value::Int(b)) => a == b,
-        (Value::Uint(a), Value::Uint(b)) => a == b,
-        (Value::Double(a), Value::Double(b)) => a == b,
-        (Value::Text(a), Value::Text(b)) => a == b,
-        (Value::Bytes(a), Value::Bytes(b)) => a == b,
-        (Value::Duration(a), Value::Duration(b)) => a == b,
-        (Value::Timestamp(a), Value::Timestamp(b)) => a == b,
-        (Value::Null, Value::Null) => true,
-        (Value::List(a), Value::List(b)) => {
+        (EvalValue::Int(a), EvalValue::Int(b)) => a == b,
+        (EvalValue::Uint(a), EvalValue::Uint(b)) => a == b,
+        (EvalValue::Double(a), EvalValue::Double(b)) => a == b,
+        (EvalValue::Text(a), EvalValue::Text(b)) => a == b,
+        (EvalValue::Bytes(a), EvalValue::Bytes(b)) => a == b,
+        (EvalValue::Duration(a), EvalValue::Duration(b)) => a == b,
+        (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a == b,
+        (EvalValue::Null, EvalValue::Null) => true,
+        (EvalValue::List(a), EvalValue::List(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(x, y))
         }
-        (Value::Struct(a), Value::Struct(b)) => {
+        (EvalValue::Struct(a), EvalValue::Struct(b)) => {
             // Sorted like the canonical seal — CEL `==` must not
             // split two values one identity owns, and stays total on
             // malformed duplicates (see `struct_fields_eq`).
             struct_fields_eq(a, b, values_equal)
         }
-        (Value::Map(a), Value::Map(b)) => {
+        (EvalValue::Map(a), EvalValue::Map(b)) => {
             a.len() == b.len()
                 && a.iter()
                     .zip(b)
@@ -1688,79 +1769,84 @@ fn values_equal(lhs: &Value, rhs: &Value) -> bool {
     }
 }
 
-fn compare(lhs: &Value, rhs: &Value) -> Result<core::cmp::Ordering, Error> {
+fn compare(lhs: &EvalValue, rhs: &EvalValue) -> Result<core::cmp::Ordering, Error> {
     match (lhs, rhs) {
-        (Value::Int(a), Value::Int(b)) => Ok(a.cmp(b)),
-        (Value::Uint(a), Value::Uint(b)) => Ok(a.cmp(b)),
-        (Value::Double(a), Value::Double(b)) => a
+        (EvalValue::Int(a), EvalValue::Int(b)) => Ok(a.cmp(b)),
+        (EvalValue::Uint(a), EvalValue::Uint(b)) => Ok(a.cmp(b)),
+        (EvalValue::Double(a), EvalValue::Double(b)) => a
             .partial_cmp(b)
             .ok_or_else(|| fault(String::from("NaN is not ordered"))),
-        (Value::Text(a), Value::Text(b)) => Ok(a.cmp(b)),
-        (Value::Duration(a), Value::Duration(b)) => Ok(a.cmp(b)),
-        (Value::Timestamp(a), Value::Timestamp(b)) => Ok(a.cmp(b)),
+        (EvalValue::Text(a), EvalValue::Text(b)) => Ok(a.cmp(b)),
+        (EvalValue::Duration(a), EvalValue::Duration(b)) => Ok(a.cmp(b)),
+        (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => Ok(a.cmp(b)),
         (lhs, rhs) => Err(fault(format!("cannot order {lhs:?} against {rhs:?}"))),
     }
 }
 
-fn arithmetic(op: BinaryOp, lhs: Value, rhs: Value) -> Result<Value, Error> {
+fn arithmetic(op: BinaryOp, lhs: EvalValue, rhs: EvalValue) -> Result<EvalValue, Error> {
     use BinaryOp::{Add, Div, Mul, Rem, Sub};
     let overflow = || fault(String::from("integer overflow"));
     match (op, lhs, rhs) {
-        (Add, Value::Int(a), Value::Int(b)) => {
-            a.checked_add(b).map(Value::Int).ok_or_else(overflow)
+        (Add, EvalValue::Int(a), EvalValue::Int(b)) => {
+            a.checked_add(b).map(EvalValue::Int).ok_or_else(overflow)
         }
-        (Sub, Value::Int(a), Value::Int(b)) => {
-            a.checked_sub(b).map(Value::Int).ok_or_else(overflow)
+        (Sub, EvalValue::Int(a), EvalValue::Int(b)) => {
+            a.checked_sub(b).map(EvalValue::Int).ok_or_else(overflow)
         }
-        (Mul, Value::Int(a), Value::Int(b)) => {
-            a.checked_mul(b).map(Value::Int).ok_or_else(overflow)
+        (Mul, EvalValue::Int(a), EvalValue::Int(b)) => {
+            a.checked_mul(b).map(EvalValue::Int).ok_or_else(overflow)
         }
-        (Div, Value::Int(a), Value::Int(b)) => a
+        (Div, EvalValue::Int(a), EvalValue::Int(b)) => a
             .checked_div(b)
-            .map(Value::Int)
+            .map(EvalValue::Int)
             .ok_or_else(|| fault(String::from("division by zero"))),
-        (Rem, Value::Int(a), Value::Int(b)) => a
+        (Rem, EvalValue::Int(a), EvalValue::Int(b)) => a
             .checked_rem(b)
-            .map(Value::Int)
+            .map(EvalValue::Int)
             .ok_or_else(|| fault(String::from("division by zero"))),
-        (Add, Value::Uint(a), Value::Uint(b)) => {
-            a.checked_add(b).map(Value::Uint).ok_or_else(overflow)
+        (Add, EvalValue::Uint(a), EvalValue::Uint(b)) => {
+            a.checked_add(b).map(EvalValue::Uint).ok_or_else(overflow)
         }
-        (Sub, Value::Uint(a), Value::Uint(b)) => {
-            a.checked_sub(b).map(Value::Uint).ok_or_else(overflow)
+        (Sub, EvalValue::Uint(a), EvalValue::Uint(b)) => {
+            a.checked_sub(b).map(EvalValue::Uint).ok_or_else(overflow)
         }
-        (Mul, Value::Uint(a), Value::Uint(b)) => {
-            a.checked_mul(b).map(Value::Uint).ok_or_else(overflow)
+        (Mul, EvalValue::Uint(a), EvalValue::Uint(b)) => {
+            a.checked_mul(b).map(EvalValue::Uint).ok_or_else(overflow)
         }
-        (Div, Value::Uint(a), Value::Uint(b)) => a
+        (Div, EvalValue::Uint(a), EvalValue::Uint(b)) => a
             .checked_div(b)
-            .map(Value::Uint)
+            .map(EvalValue::Uint)
             .ok_or_else(|| fault(String::from("division by zero"))),
-        (Rem, Value::Uint(a), Value::Uint(b)) => a
+        (Rem, EvalValue::Uint(a), EvalValue::Uint(b)) => a
             .checked_rem(b)
-            .map(Value::Uint)
+            .map(EvalValue::Uint)
             .ok_or_else(|| fault(String::from("division by zero"))),
-        (Add, Value::Double(a), Value::Double(b)) => Ok(Value::Double(a + b)),
-        (Sub, Value::Double(a), Value::Double(b)) => Ok(Value::Double(a - b)),
-        (Mul, Value::Double(a), Value::Double(b)) => Ok(Value::Double(a * b)),
-        (Div, Value::Double(a), Value::Double(b)) => Ok(Value::Double(a / b)),
-        (Add, Value::Text(a), Value::Text(b)) => Ok(Value::Text(a + &b)),
-        (Add, Value::Duration(a), Value::Duration(b)) => {
-            a.checked_add(b).map(Value::Duration).ok_or_else(overflow)
-        }
-        (Sub, Value::Duration(a), Value::Duration(b)) => {
-            a.checked_sub(b).map(Value::Duration).ok_or_else(overflow)
-        }
-        (Add, Value::Timestamp(a), Value::Duration(b))
-        | (Add, Value::Duration(b), Value::Timestamp(a)) => {
-            a.checked_add(b).map(Value::Timestamp).ok_or_else(overflow)
-        }
-        (Sub, Value::Timestamp(a), Value::Duration(b)) => {
-            a.checked_sub(b).map(Value::Timestamp).ok_or_else(overflow)
-        }
-        (Sub, Value::Timestamp(a), Value::Timestamp(b)) => {
-            a.checked_sub(b).map(Value::Duration).ok_or_else(overflow)
-        }
+        (Add, EvalValue::Double(a), EvalValue::Double(b)) => Ok(EvalValue::Double(a + b)),
+        (Sub, EvalValue::Double(a), EvalValue::Double(b)) => Ok(EvalValue::Double(a - b)),
+        (Mul, EvalValue::Double(a), EvalValue::Double(b)) => Ok(EvalValue::Double(a * b)),
+        (Div, EvalValue::Double(a), EvalValue::Double(b)) => Ok(EvalValue::Double(a / b)),
+        (Add, EvalValue::Text(a), EvalValue::Text(b)) => Ok(EvalValue::Text(a + &b)),
+        (Add, EvalValue::Duration(a), EvalValue::Duration(b)) => a
+            .checked_add(b)
+            .map(EvalValue::Duration)
+            .ok_or_else(overflow),
+        (Sub, EvalValue::Duration(a), EvalValue::Duration(b)) => a
+            .checked_sub(b)
+            .map(EvalValue::Duration)
+            .ok_or_else(overflow),
+        (Add, EvalValue::Timestamp(a), EvalValue::Duration(b))
+        | (Add, EvalValue::Duration(b), EvalValue::Timestamp(a)) => a
+            .checked_add(b)
+            .map(EvalValue::Timestamp)
+            .ok_or_else(overflow),
+        (Sub, EvalValue::Timestamp(a), EvalValue::Duration(b)) => a
+            .checked_sub(b)
+            .map(EvalValue::Timestamp)
+            .ok_or_else(overflow),
+        (Sub, EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a
+            .checked_sub(b)
+            .map(EvalValue::Duration)
+            .ok_or_else(overflow),
         (op, lhs, rhs) => Err(fault(format!("{op:?} does not accept {lhs:?} and {rhs:?}"))),
     }
 }
@@ -1901,14 +1987,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_payload_witness_never_becomes_a_materialized_value() {
+        let nested = EvalValue::List(alloc::vec![EvalValue::Payload]);
+        assert!(
+            nested.into_value().is_err(),
+            "evaluator state must not enter plans, envelopes, or journals"
+        );
+
+        let materialized = Value::Array(alloc::vec![Value::Int(1)]);
+        assert_eq!(
+            EvalValue::from(materialized.clone())
+                .into_value()
+                .expect("a core value has no lazy witness"),
+            materialized
+        );
+    }
+
+    #[test]
     fn struct_equality_is_reflexive_even_on_malformed_values() {
         // `Eq`'s contract is unconditional: a duplicate-name struct
         // is refused at every door, but it is REPRESENTABLE — and a
         // representable value must equal itself. Sorted comparison
         // keeps the door refusals AND the contract.
-        let duplicated = Value::Struct(alloc::vec![
-            (String::from("x"), Value::Int(1)),
-            (String::from("x"), Value::Int(2)),
+        let duplicated = EvalValue::Struct(alloc::vec![
+            (String::from("x"), EvalValue::Int(1)),
+            (String::from("x"), EvalValue::Int(2)),
         ]);
         assert_eq!(duplicated, duplicated.clone(), "reflexive");
         assert!(
@@ -1916,19 +2019,19 @@ mod tests {
             "the CEL `==` agrees"
         );
         // Symmetry, on two DIFFERENT malformed spellings.
-        let reversed = Value::Struct(alloc::vec![
-            (String::from("x"), Value::Int(2)),
-            (String::from("x"), Value::Int(1)),
+        let reversed = EvalValue::Struct(alloc::vec![
+            (String::from("x"), EvalValue::Int(2)),
+            (String::from("x"), EvalValue::Int(1)),
         ]);
         assert_eq!(duplicated == reversed, reversed == duplicated, "symmetric");
         // And the well-formed case still compares by name.
-        let ab = Value::Struct(alloc::vec![
-            (String::from("a"), Value::Int(1)),
-            (String::from("b"), Value::Int(2)),
+        let ab = EvalValue::Struct(alloc::vec![
+            (String::from("a"), EvalValue::Int(1)),
+            (String::from("b"), EvalValue::Int(2)),
         ]);
-        let ba = Value::Struct(alloc::vec![
-            (String::from("b"), Value::Int(2)),
-            (String::from("a"), Value::Int(1)),
+        let ba = EvalValue::Struct(alloc::vec![
+            (String::from("b"), EvalValue::Int(2)),
+            (String::from("a"), EvalValue::Int(1)),
         ]);
         assert_eq!(ab, ba, "order is presentation");
         assert!(values_equal(&ab, &ba));
@@ -1940,20 +2043,23 @@ mod tests {
         })
     }
 
-    fn eval_const(text: &str) -> Value {
+    fn eval_const(text: &str) -> EvalValue {
         let tree = compile_ok(text, &Signature::new());
         eval(&tree, &BTreeMap::new()).unwrap()
     }
 
     #[test]
     fn literals_and_arithmetic_evaluate() {
-        assert_eq!(eval_const("1 + 2 * 3"), Value::Int(7));
-        assert_eq!(eval_const("(1 + 2) * 3"), Value::Int(9));
-        assert_eq!(eval_const("7 % 3"), Value::Int(1));
-        assert_eq!(eval_const("1.5 + 0.25"), Value::Double(1.75));
-        assert_eq!(eval_const("\"a\" + 'b'"), Value::Text(String::from("ab")));
-        assert_eq!(eval_const("-3"), Value::Int(-3));
-        assert_eq!(eval_const("3u + 4u"), Value::Uint(7));
+        assert_eq!(eval_const("1 + 2 * 3"), EvalValue::Int(7));
+        assert_eq!(eval_const("(1 + 2) * 3"), EvalValue::Int(9));
+        assert_eq!(eval_const("7 % 3"), EvalValue::Int(1));
+        assert_eq!(eval_const("1.5 + 0.25"), EvalValue::Double(1.75));
+        assert_eq!(
+            eval_const("\"a\" + 'b'"),
+            EvalValue::Text(String::from("ab"))
+        );
+        assert_eq!(eval_const("-3"), EvalValue::Int(-3));
+        assert_eq!(eval_const("3u + 4u"), EvalValue::Uint(7));
     }
 
     #[test]
@@ -1970,19 +2076,19 @@ mod tests {
         }
         assert_eq!(
             eval_const("\"left\\nright\""),
-            Value::Text(String::from("left\nright")),
+            EvalValue::Text(String::from("left\nright")),
             "the escaped newline remains the ordinary spelling"
         );
     }
 
     #[test]
     fn comparisons_ternary_and_logic_evaluate() {
-        assert_eq!(eval_const("1 < 2 && 2 <= 2"), Value::Bool(true));
-        assert_eq!(eval_const("\"a\" != \"b\""), Value::Bool(true));
-        assert_eq!(eval_const("true ? 1 : 2"), Value::Int(1));
-        assert_eq!(eval_const("null == null"), Value::Bool(true));
-        assert_eq!(eval_const("1 == \"1\""), Value::Bool(false));
-        assert_eq!(eval_const("!false || false"), Value::Bool(true));
+        assert_eq!(eval_const("1 < 2 && 2 <= 2"), EvalValue::Bool(true));
+        assert_eq!(eval_const("\"a\" != \"b\""), EvalValue::Bool(true));
+        assert_eq!(eval_const("true ? 1 : 2"), EvalValue::Int(1));
+        assert_eq!(eval_const("null == null"), EvalValue::Bool(true));
+        assert_eq!(eval_const("1 == \"1\""), EvalValue::Bool(false));
+        assert_eq!(eval_const("!false || false"), EvalValue::Bool(true));
     }
 
     /// The CEL `==` OPERATOR keeps IEEE semantics — `values_equal`,
@@ -1994,8 +2100,8 @@ mod tests {
     fn the_cel_operator_keeps_ieee_while_structure_keeps_bits() {
         // IEEE, through the operator: NaN never equals itself, and
         // the two zeros are numerically one.
-        assert_eq!(eval_const("0.0 / 0.0 == 0.0 / 0.0"), Value::Bool(false));
-        assert_eq!(eval_const("-0.0 == 0.0"), Value::Bool(true));
+        assert_eq!(eval_const("0.0 / 0.0 == 0.0 / 0.0"), EvalValue::Bool(false));
+        assert_eq!(eval_const("-0.0 == 0.0"), EvalValue::Bool(true));
         // Bits, through the structure: NaN is ONE value, the zeros
         // are TWO.
         assert_eq!(eval_const("0.0 / 0.0"), eval_const("0.0 / 0.0"));
@@ -2005,8 +2111,8 @@ mod tests {
     #[test]
     fn logic_short_circuits() {
         // The right side would divide by zero; short-circuit skips it.
-        assert_eq!(eval_const("false && 1 / 0 == 0"), Value::Bool(false));
-        assert_eq!(eval_const("true || 1 / 0 == 0"), Value::Bool(true));
+        assert_eq!(eval_const("false && 1 / 0 == 0"), EvalValue::Bool(false));
+        assert_eq!(eval_const("true || 1 / 0 == 0"), EvalValue::Bool(true));
     }
 
     #[test]
@@ -2031,14 +2137,14 @@ mod tests {
         let tree = compile_ok("data.text != \"\" && session.key == \"s-1\"", &signature);
         assert_eq!(tree.ty, DataType::Bool);
         let mut data = BTreeMap::new();
-        data.insert(String::from("text"), Value::Text(String::from("hello")));
+        data.insert(String::from("text"), EvalValue::Text(String::from("hello")));
         let mut bindings = BTreeMap::new();
-        bindings.insert(String::from("data"), Value::Map(data));
+        bindings.insert(String::from("data"), EvalValue::Map(data));
         bindings.insert(
             String::from("session.key"),
-            Value::Text(String::from("s-1")),
+            EvalValue::Text(String::from("s-1")),
         );
-        assert_eq!(eval(&tree, &bindings).unwrap(), Value::Bool(true));
+        assert_eq!(eval(&tree, &bindings).unwrap(), EvalValue::Bool(true));
     }
 
     #[test]
@@ -2054,34 +2160,34 @@ mod tests {
 
     #[test]
     fn collections_index_and_size() {
-        assert_eq!(eval_const("[1, 2, 3][1]"), Value::Int(2));
-        assert_eq!(eval_const("{'a': 1, 'b': 2}['b']"), Value::Int(2));
-        assert_eq!(eval_const("size([1, 2, 3])"), Value::Int(3));
-        assert_eq!(eval_const("size(\"héllo\")"), Value::Int(5));
-        assert_eq!(eval_const("size({'a': 1})"), Value::Int(1));
+        assert_eq!(eval_const("[1, 2, 3][1]"), EvalValue::Int(2));
+        assert_eq!(eval_const("{'a': 1, 'b': 2}['b']"), EvalValue::Int(2));
+        assert_eq!(eval_const("size([1, 2, 3])"), EvalValue::Int(3));
+        assert_eq!(eval_const("size(\"héllo\")"), EvalValue::Int(5));
+        assert_eq!(eval_const("size({'a': 1})"), EvalValue::Int(1));
     }
 
     #[test]
     fn durations_follow_the_go_format() {
         assert_eq!(
             eval_const("duration(\"2h\")"),
-            Value::Duration(7_200_000_000_000)
+            EvalValue::Duration(7_200_000_000_000)
         );
         assert_eq!(
             eval_const("duration(\"2h30m\")"),
-            Value::Duration(9_000_000_000_000)
+            EvalValue::Duration(9_000_000_000_000)
         );
         assert_eq!(
             eval_const("duration(\"1.5s\")"),
-            Value::Duration(1_500_000_000)
+            EvalValue::Duration(1_500_000_000)
         );
         assert_eq!(
             eval_const("duration(\"-10ms\")"),
-            Value::Duration(-10_000_000)
+            EvalValue::Duration(-10_000_000)
         );
         assert_eq!(
             eval_const("duration(\"1h\") + duration(\"30m\")"),
-            Value::Duration(5_400_000_000_000)
+            EvalValue::Duration(5_400_000_000_000)
         );
         let tree = compile_ok("duration(\"2d\")", &Signature::new());
         assert!(eval(&tree, &BTreeMap::new()).is_err(), "`d` is not a unit");
@@ -2096,15 +2202,15 @@ mod tests {
     fn timestamps_are_utc_rfc3339() {
         assert_eq!(
             eval_const("timestamp(\"1970-01-01T00:00:00Z\")"),
-            Value::Timestamp(0)
+            EvalValue::Timestamp(0)
         );
         assert_eq!(
             eval_const("timestamp(\"2026-01-05T00:00:00Z\")"),
-            Value::Timestamp(1_767_571_200_000_000_000)
+            EvalValue::Timestamp(1_767_571_200_000_000_000)
         );
         assert_eq!(
             eval_const("timestamp(\"2026-01-05T01:00:00Z\") - timestamp(\"2026-01-05T00:00:00Z\")"),
-            Value::Duration(3_600_000_000_000)
+            EvalValue::Duration(3_600_000_000_000)
         );
         let offset = compile_ok(
             "timestamp(\"2026-01-05T00:00:00+01:00\")",

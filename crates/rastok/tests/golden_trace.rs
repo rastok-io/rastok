@@ -13,7 +13,7 @@ use rastok::boundary::{
 };
 use rastok::compiler::compile;
 use rastok::contract::Registry;
-use rastok::envelope::{Data, Encoding, Envelope, Namespace, Scalar, Value};
+use rastok::envelope::{Data, Encoding, Envelope, Namespace, Value};
 use rastok::golden::{Trace, diff, project};
 use rastok::journal::{MemJournal, Record};
 use rastok::node;
@@ -74,10 +74,7 @@ fn run(source: &str) -> Vec<Record> {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     let mut data = std::collections::BTreeMap::new();
-    data.insert(
-        String::from("text"),
-        Value::Scalar(Scalar::Text(String::from("salut"))),
-    );
+    data.insert(String::from("text"), Value::Text(String::from("salut")));
     vm.inject(
         &mut journal,
         InboundSubmission {

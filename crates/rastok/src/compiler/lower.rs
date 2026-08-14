@@ -186,7 +186,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         // The plan must carry its whole semantics: every constant a
         // handler references is substituted into the shipped trees, so
         // no binding is left behind in the compiler.
-        let mut consts: std::collections::BTreeMap<String, cel::Value> = hir
+        let mut consts: std::collections::BTreeMap<String, crate::value::Value> = hir
             .app
             .vals
             .iter()
@@ -278,7 +278,7 @@ fn canonical_target(target: &crate::envelope::WriteTarget) -> String {
 /// shadowing is refused at check time.
 fn substitute_tree(
     tree: &cel::Tree,
-    consts: &std::collections::BTreeMap<String, cel::Value>,
+    consts: &std::collections::BTreeMap<String, crate::value::Value>,
 ) -> cel::Tree {
     cel::Tree {
         root: substitute(&tree.root, consts),
@@ -288,7 +288,7 @@ fn substitute_tree(
 
 fn substitute(
     expr: &cel::Expr,
-    consts: &std::collections::BTreeMap<String, cel::Value>,
+    consts: &std::collections::BTreeMap<String, crate::value::Value>,
 ) -> cel::Expr {
     let recurse = |inner: &cel::Expr| Box::new(substitute(inner, consts));
     match expr {
@@ -300,7 +300,9 @@ fn substitute(
                 for segment in &segments[1..] {
                     result = cel::Expr::Index {
                         base: Box::new(result),
-                        index: Box::new(cel::Expr::Literal(cel::Value::Text(segment.clone()))),
+                        index: Box::new(cel::Expr::Literal(crate::value::Value::Text(
+                            segment.clone(),
+                        ))),
                     };
                 }
                 result
@@ -717,61 +719,57 @@ impl Writer<'_> {
         }
     }
 
-    fn value(&mut self, value: &cel::Value) {
+    fn value(&mut self, value: &crate::value::Value) {
         match value {
-            // Compiler values are constants; the runtime laziness
-            // witness cannot appear in one (`value_expressible`
-            // refuses it) — hashing a marker would seal a lie.
-            cel::Value::Payload => unreachable!("a payload witness never reaches the hash"),
-            cel::Value::Decimal { unscaled, scale } => {
+            crate::value::Value::Decimal { unscaled, scale } => {
                 // Tag 13 in the HASH register: the canonical pair —
                 // reached by `json` literals (D-2026-08-10-7).
                 self.tag(13);
                 self.hasher.update(&unscaled.to_be_bytes());
                 self.hasher.update(&scale.to_be_bytes());
             }
-            cel::Value::Bool(b) => {
+            crate::value::Value::Bool(b) => {
                 self.tag(1);
                 self.tag(u8::from(*b));
             }
-            cel::Value::Int(i) => {
+            crate::value::Value::Int(i) => {
                 self.tag(2);
                 self.hasher.update(&i.to_le_bytes());
             }
-            cel::Value::Uint(u) => {
+            crate::value::Value::Uint(u) => {
                 self.tag(3);
                 self.hasher.update(&u.to_le_bytes());
             }
-            cel::Value::Double(d) => {
+            crate::value::Value::Double(d) => {
                 self.tag(4);
                 self.hasher.update(&d.to_bits().to_le_bytes());
             }
-            cel::Value::Text(text) => {
+            crate::value::Value::Text(text) => {
                 self.tag(5);
                 self.str(text);
             }
-            cel::Value::Bytes(bytes) => {
+            crate::value::Value::Bytes(bytes) => {
                 self.tag(6);
                 self.count(bytes.len());
                 self.hasher.update(bytes);
             }
-            cel::Value::Duration(nanos) => {
+            crate::value::Value::Duration(nanos) => {
                 self.tag(7);
                 self.hasher.update(&nanos.to_le_bytes());
             }
-            cel::Value::Timestamp(nanos) => {
+            crate::value::Value::Timestamp(nanos) => {
                 self.tag(8);
                 self.hasher.update(&nanos.to_le_bytes());
             }
-            cel::Value::Null => self.tag(9),
-            cel::Value::List(items) => {
+            crate::value::Value::Null => self.tag(9),
+            crate::value::Value::Array(items) => {
                 self.tag(10);
                 self.count(items.len());
                 for item in items {
                     self.value(item);
                 }
             }
-            cel::Value::Map(map) => {
+            crate::value::Value::Map(map) => {
                 self.tag(11);
                 self.count(map.len());
                 for (key, item) in map {
@@ -779,7 +777,7 @@ impl Writer<'_> {
                     self.value(item);
                 }
             }
-            cel::Value::Struct(fields) => {
+            crate::value::Value::Struct(fields) => {
                 // Reached by exactly one literal — the EMPTY record
                 // (`parent = {}`; CEL itself cannot construct a
                 // struct). Hashed totally anyway: a distinct tag,
@@ -802,8 +800,8 @@ impl Writer<'_> {
 mod tests {
     use crate::compiler::compile;
     use crate::contract::Registry;
+    use crate::node;
     use crate::plan::{AttrSetting, Emission, GraphVersion, Manifest, Step};
-    use crate::{cel, node};
 
     const M0_PROBE: &str = r#"
 graph m0_probe : App {
@@ -840,7 +838,9 @@ graph m0_probe : App {
         assert_eq!(spec.contract, "Process");
         assert_eq!(
             spec.attribute("command"),
-            Some(&AttrSetting::Value(cel::Value::Text(String::from("cat"))))
+            Some(&AttrSetting::Value(crate::value::Value::Text(
+                String::from("cat")
+            )))
         );
         assert_eq!(plan.handlers.len(), 1);
         let handler = &plan.handlers[0];

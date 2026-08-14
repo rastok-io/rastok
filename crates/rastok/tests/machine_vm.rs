@@ -19,7 +19,7 @@ use rastok::boundary::{
 };
 use rastok::compiler::compile;
 use rastok::contract::Registry;
-use rastok::envelope::{Encoding, Namespace, Scalar, Value};
+use rastok::envelope::{Encoding, Namespace, Value};
 use rastok::journal::{MemJournal, OutboundStatus, Record};
 
 const M0_PROBE: &str = r#"
@@ -75,10 +75,7 @@ impl Partner for EchoWorld {
 
 fn submission(text: &str) -> InboundSubmission {
     let mut data = std::collections::BTreeMap::new();
-    data.insert(
-        String::from("text"),
-        Value::Scalar(Scalar::Text(String::from(text))),
-    );
+    data.insert(String::from("text"), Value::Text(String::from(text)));
     InboundSubmission {
         authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
@@ -195,7 +192,7 @@ fn a_typed_failure_leaves_by_the_err_edge_or_stops() {
     };
     assert_eq!(
         payload.get("kind"),
-        Some(&Value::Scalar(Scalar::Text(String::from("ExecFailed")))),
+        Some(&Value::Text(String::from("ExecFailed"))),
         "the error kind survives into the graph"
     );
 }
@@ -280,7 +277,7 @@ on in {
     };
     assert_eq!(
         payload.get("kind"),
-        Some(&Value::Scalar(Scalar::Text(String::from("RuntimeFault"))))
+        Some(&Value::Text(String::from("RuntimeFault")))
     );
 }
 
@@ -430,7 +427,7 @@ fn a_silent_partner_expires_into_a_typed_timeout() {
     };
     assert_eq!(
         payload.get("kind"),
-        Some(&Value::Scalar(Scalar::Text(String::from("TimeoutExpired"))))
+        Some(&Value::Text(String::from("TimeoutExpired")))
     );
     // The claim lifted: a second submission opens a second call.
     vm.inject(&mut journal, submission("encore")).unwrap();
@@ -726,9 +723,7 @@ fn a_refused_commit_on_an_unframeable_expiry_loses_nothing() {
     };
     assert_eq!(
         payload.get("kind"),
-        Some(&rastok::envelope::Value::Scalar(
-            rastok::envelope::Scalar::Text(String::from("DecodeError"))
-        )),
+        Some(&rastok::envelope::Value::Text(String::from("DecodeError"))),
         "the kind survived the replay"
     );
     let decode_transactions: Vec<_> = journal

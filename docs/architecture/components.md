@@ -201,24 +201,25 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`cel`** | the current expression compiler/evaluator over core `DataType`; its parallel value domain remains to migrate | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → value; (`Tree`, boot constants) → constant | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 migration in progress |
+| **`cel`** | the current expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 migration in progress |
 
 `cel` never sees an envelope, node, or partition, and owns its own
 `cel::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
 The *signature* — the typed names visible at one expression position —
 is the entire interface, which keeps the chain independently
 conformance-testable against the compatible upstream CEL subset. Its
-signatures and trees consume core `datatype::DataType`; it no longer owns
-a type enum. Its remaining `cel::Value` and `envelope::Value` domains are
-temporary parallel representations, bridged by the runtime while the B1
-value migration lands. Inside the kernel the chain also shares foundational
-utilities: canonical nesting/double rules, the exact number reader, and the
-single comment recognizer.
+signatures and trees consume core `datatype::DataType` and `value::Value`; it
+owns neither semantic domain. `envelope::Value` is a re-export of that one
+core value type. `cel::EvalValue` exists only inside evaluation because the
+lazy whole-payload witness may flow through locals and expressions; conversion
+to a core value rejects any unresolved witness. Inside the kernel the chain
+also shares foundational utilities: canonical nesting/double rules, the exact
+number reader, and the single comment recognizer.
 
 This is current implementation state, not the completed M1.3 authority.
-M1.3 removes the remaining parallel value domain, renames this consumer
-boundary to `expr`, and retains differential cel-spec evidence only for the
-explicitly compatible operator subset.
+M1.3 expands the core value algebra, renames this consumer boundary to `expr`,
+and retains differential cel-spec evidence only for the explicitly compatible
+operator subset.
 
 ### 3.3 The executable plan (`plan`)
 

@@ -12,7 +12,7 @@
 use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
 use rastok::compiler::Compilation;
 use rastok::contract::Registry;
-use rastok::envelope::{Data, Namespace, Scalar, Value};
+use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
 use rastok::render::{Sources, render_all};
@@ -166,7 +166,7 @@ fn run(paths: &[String]) -> ExitCode {
             // named ingress is the Lab's and the future servers'.
             port: node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Text(line))),
+                data: Data::materialized(Value::Text(line)),
                 ext: {
                     let mut ext = Namespace::new();
                     ext.insert(
@@ -358,9 +358,7 @@ fn parse_stored(rendered: &str) -> Option<rastok::golden::Trace> {
 /// print lossily, anything else prints in its debug shape.
 fn render_data(data: &Data) -> String {
     match data {
-        Data::Materialized(Value::Scalar(Scalar::Text(text))) => {
-            text.trim_end_matches('\n').to_string()
-        }
+        Data::Materialized(Value::Text(text)) => text.trim_end_matches('\n').to_string(),
         Data::Encoded {
             encoding: rastok::envelope::Encoding::Raw,
             bytes,

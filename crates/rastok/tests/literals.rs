@@ -10,7 +10,7 @@ use rastok::contract::Registry;
 
 fn emitted(body: &str) -> rastok::envelope::Data {
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -31,7 +31,7 @@ fn emitted(body: &str) -> rastok::envelope::Data {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                data: Data::materialized(Value::Int(1)),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -57,28 +57,25 @@ fn hash_of(body: &str) -> String {
 
 #[test]
 fn verbatim_text_strips_the_closing_margin() {
-    use rastok::envelope::{Data, Scalar, Value};
+    use rastok::envelope::{Data, Value};
     // The closing brace sits at column 4; the margin stripped from
     // every line is ITS indentation — lines keep their own extra.
     let data = emitted("text {\n      first line\n        indented\n      last line\n    }");
     assert_eq!(
         data,
-        Data::materialized(Value::Scalar(Scalar::Text(String::from(
+        Data::materialized(Value::Text(String::from(
             "  first line\n    indented\n  last line"
-        )))),
+        ))),
         "first newline out, closing-brace margin stripped, no escapes"
     );
 }
 
 #[test]
 fn base64_decodes_strictly() {
-    use rastok::envelope::{Data, Scalar, Value};
+    use rastok::envelope::{Data, Value};
     // Whitespace ignored, padding mandatory, standard alphabet.
     let data = emitted("base64 {\n      SGVs\n      bG8=\n    }");
-    assert_eq!(
-        data,
-        Data::materialized(Value::Scalar(Scalar::Bytes(b"Hello".to_vec())))
-    );
+    assert_eq!(data, Data::materialized(Value::Bytes(b"Hello".to_vec())));
 }
 
 #[test]
@@ -127,7 +124,7 @@ fn base64_with_a_content_type_is_whole_payload() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                data: Data::materialized(Value::Int(1)),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -138,7 +135,7 @@ fn base64_with_a_content_type_is_whole_payload() {
     let output = &vm.outputs()[0];
     assert_eq!(
         output.envelope.data(),
-        &Data::materialized(Value::Scalar(Scalar::Bytes(vec![0, 1, 2])))
+        &Data::materialized(Value::Bytes(vec![0, 1, 2]))
     );
     assert_eq!(
         output.envelope.meta().ext().get("content_type"),
@@ -149,15 +146,15 @@ fn base64_with_a_content_type_is_whole_payload() {
 
 #[test]
 fn maps_are_colon_punctuated_and_run() {
-    use rastok::envelope::{Data, Scalar, Value};
+    use rastok::envelope::{Data, Value};
     use std::collections::BTreeMap;
     // `{ "k": v }` is an executable emission: a MAP, tag 18 — never
     // silently a struct.
     let Data::Materialized(Value::Map(map)) = emitted("{ \"a\": 1, \"b\": 2 }") else {
         panic!("a map value");
     };
-    assert_eq!(map.get("a"), Some(&Value::Scalar(Scalar::Int(1))));
-    assert_eq!(map.get("b"), Some(&Value::Scalar(Scalar::Int(2))));
+    assert_eq!(map.get("a"), Some(&Value::Int(1)));
+    assert_eq!(map.get("b"), Some(&Value::Int(2)));
     // `{:}` is the EMPTY map — distinct from `{}` the empty struct.
     assert_eq!(
         emitted("{:}"),
@@ -192,36 +189,27 @@ fn mixing_struct_and_map_punctuation_refuses() {
 
 #[test]
 fn json_reads_every_form_directly() {
-    use rastok::envelope::{Data, Scalar, Value};
+    use rastok::envelope::{Data, Value};
     // Scalars are CEL's spellings — `json` takes documents only
     // (D-2026-08-13-1).
-    assert_eq!(
-        emitted("42"),
-        Data::materialized(Value::Scalar(Scalar::Int(42)))
-    );
+    assert_eq!(emitted("42"), Data::materialized(Value::Int(42)));
     assert_eq!(
         emitted("\"text\""),
-        Data::materialized(Value::Scalar(Scalar::Text(String::from("text"))))
+        Data::materialized(Value::Text(String::from("text")))
     );
-    assert_eq!(
-        emitted("true"),
-        Data::materialized(Value::Scalar(Scalar::Bool(true)))
-    );
+    assert_eq!(emitted("true"), Data::materialized(Value::Bool(true)));
     // Object — a MAP (the variant JSON model), single braces.
     let Data::Materialized(Value::Map(map)) = emitted("json { \"name\": \"Ada\" }") else {
         panic!("an object is a map");
     };
-    assert_eq!(
-        map.get("name"),
-        Some(&Value::Scalar(Scalar::Text(String::from("Ada"))))
-    );
+    assert_eq!(map.get("name"), Some(&Value::Text(String::from("Ada"))));
     // Array.
     assert_eq!(
         emitted("json [1, 2, 3]"),
         Data::materialized(Value::Array(vec![
-            Value::Scalar(Scalar::Int(1)),
-            Value::Scalar(Scalar::Int(2)),
-            Value::Scalar(Scalar::Int(3)),
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
         ]))
     );
     // An exact fraction is the `decimal(...)` constructor's — and
@@ -229,39 +217,36 @@ fn json_reads_every_form_directly() {
     // (D-2026-08-13-1).
     assert_eq!(
         emitted("decimal(\"19.99\")"),
-        Data::materialized(Value::Scalar(Scalar::Decimal {
+        Data::materialized(Value::Decimal {
             unscaled: 1999,
             scale: 2
-        }))
+        })
     );
     assert_eq!(
         emitted("decimal(\"1.50\")"),
-        Data::materialized(Value::Scalar(Scalar::Decimal {
+        Data::materialized(Value::Decimal {
             unscaled: 150,
             scale: 2
-        }))
+        })
     );
     assert_eq!(
         emitted("decimal(\"1.5\")"),
-        Data::materialized(Value::Scalar(Scalar::Decimal {
+        Data::materialized(Value::Decimal {
             unscaled: 15,
             scale: 1
-        }))
+        })
     );
     // The integer fold: a WRITTEN scale of zero or less collapses
     // to the int the program would otherwise spell (D-2026-08-10-7).
-    assert_eq!(
-        emitted("decimal(\"2\")"),
-        Data::materialized(Value::Scalar(Scalar::Int(2)))
-    );
+    assert_eq!(emitted("decimal(\"2\")"), Data::materialized(Value::Int(2)));
     // A fraction inside a DOCUMENT stays exact too — value-canonical
     // (the document's numbers are standard JSON).
     assert_eq!(
         emitted("json [19.99]"),
-        Data::materialized(Value::Array(vec![Value::Scalar(Scalar::Decimal {
+        Data::materialized(Value::Array(vec![Value::Decimal {
             unscaled: 1999,
             scale: 2
-        })]))
+        }]))
     );
 }
 
@@ -411,7 +396,7 @@ fn an_asset_emission_runs_and_carries_its_type() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                data: Data::materialized(Value::Int(1)),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -422,7 +407,7 @@ fn an_asset_emission_runs_and_carries_its_type() {
     let output = &vm.outputs()[0];
     assert_eq!(
         output.envelope.data(),
-        &Data::materialized(Value::Scalar(Scalar::Bytes(b"PDFISH".to_vec())))
+        &Data::materialized(Value::Bytes(b"PDFISH".to_vec()))
     );
     assert_eq!(
         output.envelope.meta().ext().get("content_type"),
@@ -505,7 +490,7 @@ fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
 
 #[test]
 fn bare_forms_embed_in_records_and_typed_forms_refuse_there() {
-    use rastok::envelope::{Data, Scalar, Value};
+    use rastok::envelope::{Data, Value};
     // The bare forms are ordinary field values (D-2026-08-10-5/-6).
     let Data::Materialized(Value::Struct(fields)) =
         emitted("{ signature = base64 { AAEC }, note = text {\n      hi\n    }, blob = json [1] }")
@@ -517,21 +502,21 @@ fn bare_forms_embed_in_records_and_typed_forms_refuse_there() {
             .iter()
             .find(|(name, _)| name == "signature")
             .map(|(_, v)| v),
-        Some(&Value::Scalar(Scalar::Bytes(vec![0, 1, 2])))
+        Some(&Value::Bytes(vec![0, 1, 2]))
     );
     assert_eq!(
         fields
             .iter()
             .find(|(name, _)| name == "note")
             .map(|(_, v)| v),
-        Some(&Value::Scalar(Scalar::Text(String::from("  hi"))))
+        Some(&Value::Text(String::from("  hi")))
     );
     assert_eq!(
         fields
             .iter()
             .find(|(name, _)| name == "blob")
             .map(|(_, v)| v),
-        Some(&Value::Array(vec![Value::Scalar(Scalar::Int(1))]))
+        Some(&Value::Array(vec![Value::Int(1)]))
     );
     // A content-typed form nested in a record refuses with the rule.
     let source = "graph g : App {\n  operator o {\n    on in { out = { document = base64(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
@@ -631,7 +616,7 @@ fn inject_holds_the_ext_zone_to_the_schema() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                data: Data::materialized(Value::Int(1)),
                 ext,
             },
             sequence: SubmissionSequence::Next,
@@ -671,7 +656,7 @@ fn a_non_meta_typed_app_write_refuses_or_converts() {
     // …and a variant-typed content_type that turns out non-text faults
     // TYPED at the runtime write, never a silent int.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Scalar, Value};
+    use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
@@ -689,7 +674,7 @@ fn a_non_meta_typed_app_write_refuses_or_converts() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Int(7))),
+                data: Data::materialized(Value::Int(7)),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -750,7 +735,7 @@ fn the_meta_type_grid_is_closed_end_to_end() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Int(1))),
+                data: Data::materialized(Value::Int(1)),
                 ext,
             },
             sequence: SubmissionSequence::Next,
@@ -883,7 +868,7 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
         .find(|node| node.path.to_string() == "o")
         .expect("the operator")
         .vars[0]
-        .init = Some(rastok::cel::Value::Decimal {
+        .init = Some(rastok::value::Value::Decimal {
         unscaled: 20,
         scale: 0,
     });
@@ -896,7 +881,7 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
         .find(|node| node.path.to_string() == "o")
         .expect("the operator")
         .vars[0]
-        .init = Some(rastok::cel::Value::Decimal {
+        .init = Some(rastok::value::Value::Decimal {
         unscaled: 100,
         scale: 2,
     });
@@ -923,14 +908,14 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
 
 #[test]
 fn whole_data_bare_forms_run_in_the_builder() {
-    use rastok::envelope::{Data, Scalar, Value};
+    use rastok::envelope::{Data, Value};
     // `out = { data = base64 { … }, meta.app.tag = "x" }` — the
     // D-5 form the review named.
     let Data::Materialized(value) = emitted("{ data = base64 { AAEC }, meta.app.tag = \"x\" }")
     else {
         panic!("materialized");
     };
-    assert_eq!(value, Value::Scalar(Scalar::Bytes(vec![0, 1, 2])));
+    assert_eq!(value, Value::Bytes(vec![0, 1, 2]));
 }
 
 #[test]
@@ -972,7 +957,7 @@ fn asset_order_is_digest_canonical() {
 
 #[test]
 fn the_review_round_three_matrix_holds() {
-    use rastok::envelope::{Data, Scalar, Value};
+    use rastok::envelope::{Data, Value};
     // uint refuses statically — the runtime cannot represent it.
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.n = 3u\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
@@ -1007,7 +992,7 @@ fn the_review_round_three_matrix_holds() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Text(String::from("hello")))),
+                data: Data::materialized(Value::Text(String::from("hello"))),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -1031,14 +1016,14 @@ fn the_review_round_three_matrix_holds() {
     else {
         panic!("materialized");
     };
-    assert_eq!(value, Value::Scalar(Scalar::Bytes(vec![0, 1, 2])));
+    assert_eq!(value, Value::Bytes(vec![0, 1, 2]));
     // And a map as the whole payload beside metadata.
     let Data::Materialized(Value::Map(map)) =
         emitted("{ data = { \"a\": 1 }, meta.app.tag = \"x\" }")
     else {
         panic!("a map payload");
     };
-    assert_eq!(map.get("a"), Some(&Value::Scalar(Scalar::Int(1))));
+    assert_eq!(map.get("a"), Some(&Value::Int(1)));
 }
 
 #[test]
@@ -1183,10 +1168,10 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
             authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Scalar(Scalar::Decimal {
+                data: Data::materialized(Value::Decimal {
                     unscaled: 1999,
                     scale: 2,
-                })),
+                }),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -1205,7 +1190,7 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
 
 #[test]
 fn values_nest_recursively_across_struct_and_map() {
-    use rastok::envelope::{Data, Scalar, Value};
+    use rastok::envelope::{Data, Value};
     // A map inside a struct field.
     let Data::Materialized(Value::Struct(fields)) = emitted("{ nested = { \"a\": 1 } }") else {
         panic!("a struct");
@@ -1213,7 +1198,7 @@ fn values_nest_recursively_across_struct_and_map() {
     let Some((_, Value::Map(inner))) = fields.iter().find(|(name, _)| name == "nested") else {
         panic!("a nested map");
     };
-    assert_eq!(inner.get("a"), Some(&Value::Scalar(Scalar::Int(1))));
+    assert_eq!(inner.get("a"), Some(&Value::Int(1)));
     // A map inside a map.
     let Data::Materialized(Value::Map(outer)) = emitted("{ \"row\": { \"x\": 1 } }") else {
         panic!("a map");
@@ -1221,7 +1206,7 @@ fn values_nest_recursively_across_struct_and_map() {
     let Some(Value::Map(inner)) = outer.get("row") else {
         panic!("a nested map");
     };
-    assert_eq!(inner.get("x"), Some(&Value::Scalar(Scalar::Int(1))));
+    assert_eq!(inner.get("x"), Some(&Value::Int(1)));
     // A non-empty STRUCT inside a map: inexpressible in v1, deferred
     // BY NAME (the D-6 amendment) — dynamic nesting spells `json`.
     let source = "graph g : App {\n  operator o {\n    on in { out = { \"row\": { x = 1 } } }\n  }\n  . -> o -> .\n}\n";

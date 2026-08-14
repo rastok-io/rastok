@@ -121,7 +121,7 @@ of the contract, in order:
    omitted contract default before lowering, and nothing of the
    metamodel itself (presence, defaults, profiles) is serialized —
    the error set sorted (it
-   is a SET — the hash reads it sorted), and every CEL map literal
+   is a SET — the hash reads it sorted), and every expression map literal
    construction-sorted, walked recursively through guards, steps,
    and writes. These orders live in domain arrays the serializer
    reproduces faithfully, so the re-encoding check below cannot see
@@ -144,7 +144,7 @@ the compiler surfaces that refusal as the user diagnostic
 `E-PLAN-DEPTH` — so what `encode` accepts, `decode` reads back, with
 no gap at the boundary.
 
-Deep semantic checking (CEL typing, contract coherence) remains the
+Deep semantic checking (expression typing, contract coherence) remains the
 compiler's job — the package's validation holds the *structural*
 invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
@@ -157,7 +157,7 @@ Compound values use fixed-shape arrays with a leading numeric
 discriminant; maps use fixed unsigned keys; absent optional = omitted
 key. `tagged_value` is the registry of
 [identity.md §3](../spec/identity.md) — the same sub-form the golden
-traces seal, shared code and shared bytes; since 2026-08-07 the CEL
+traces seal, shared code and shared bytes; since 2026-08-07 the Rastok
 `uint` domain has its own registry tag 23, and tag 3 is `long` only
 (E-2026-08-07-1 — v1 reused tag 3 for both, and a decode could turn
 an `int` into a `uint` while keeping the plan's hash). Since v4 an

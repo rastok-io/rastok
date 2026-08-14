@@ -20,12 +20,12 @@ use embedded_alloc::LlffHeap as Heap;
 use panic_semihosting as _;
 
 use rastok_core::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-use rastok_core::envelope::{Data, Id, Namespace, Scalar, Value};
+use rastok_core::envelope::{Data, Id, Namespace, Value};
+use rastok_core::journal;
 use rastok_core::journal::MemJournal;
 use rastok_core::node::Path;
 use rastok_core::plan::GraphVersion;
 use rastok_core::runtime::vm::Vm;
-use rastok_core::journal;
 
 /// The allocator, wrapped to record a true high-water mark: the
 /// peak is updated inside every successful allocation, so no
@@ -124,7 +124,7 @@ fn submission(text: &str, marker: u8) -> InboundSubmission {
         authority: IngressAuthority::single(Path::new(["pico"]).unwrap()),
         port: rastok_core::node::Port::new("in").unwrap(),
         draft: Draft {
-            data: Data::materialized(Value::Scalar(Scalar::Text(String::from(text)))),
+            data: Data::materialized(Value::Text(String::from(text))),
             ext,
         },
         sequence: SubmissionSequence::Next,
@@ -144,7 +144,10 @@ fn main() -> ! {
 
     // Calibration: 1M iterations of the asm-exact 2-instruction loop.
     let (calib_ticks, ()) = ticks.measure(|| spin(1_000_000));
-    hprintln!("calib: {} ticks for 2000000 instructions (asm-exact)", calib_ticks);
+    hprintln!(
+        "calib: {} ticks for 2000000 instructions (asm-exact)",
+        calib_ticks
+    );
 
     // 1. Open the sealed package.
     let (open_ticks, opened) = ticks.measure(|| rastok_core::plan::decode(ECHO_PACKAGE));
@@ -188,11 +191,7 @@ fn main() -> ! {
         }
         last
     });
-    hprintln!(
-        "blake3_id x1000: {} ticks total (last: {})",
-        id_ticks,
-        last
-    );
+    hprintln!("blake3_id x1000: {} ticks total (last: {})", id_ticks, last);
     let _ = journal::ids::delivery_ref("bench.out>echo.in", last);
 
     hprintln!(

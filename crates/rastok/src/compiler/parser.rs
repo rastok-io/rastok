@@ -1338,7 +1338,7 @@ impl<'src> Parser<'src, '_> {
                     statements.push(Statement::Stop(target));
                 }
                 // In statement position `(` selects multi-emit. A
-                // parenthesized CEL value is valid only after `=`;
+                // parenthesized expression value is valid only after `=`;
                 // malformed multi-emits recover forward from the point
                 // of failure, never by probing or rewinding.
                 TokenKind::LParen => match self.multi_emit() {
@@ -3293,7 +3293,7 @@ graph m0_probe : App {
             panic!("expected an attribute");
         };
         let Value::Cel(cel) = &command.value else {
-            panic!("expected a CEL value");
+            panic!("expected an expression value");
         };
         assert_eq!(cel.text, "\"cat\"");
     }

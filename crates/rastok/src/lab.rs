@@ -226,7 +226,7 @@ fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<S
                 let mut env = BTreeMap::new();
                 match runtime::data_value(observed.envelope.data()) {
                     Ok(data) => {
-                        env.insert(String::from("data"), data);
+                        env.insert(String::from("data"), cel::EvalValue::from(data));
                     }
                     Err(fault) => {
                         return Some(format!(
@@ -236,14 +236,14 @@ fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<S
                 }
                 env.insert(
                     String::from("meta"),
-                    runtime::meta_value(observed.envelope.meta()),
+                    cel::EvalValue::from(runtime::meta_value(observed.envelope.meta())),
                 );
                 // A faulting or non-boolean predicate fails the
                 // expectation itself — "did not match" would be a
                 // false green with the void quantifier.
                 match cel::eval(tree, &env) {
-                    Ok(cel::Value::Bool(true)) => matches += 1,
-                    Ok(cel::Value::Bool(false)) => {}
+                    Ok(cel::EvalValue::Bool(true)) => matches += 1,
+                    Ok(cel::EvalValue::Bool(false)) => {}
                     Ok(other) => {
                         return Some(format!(
                             "expect {name}: the predicate is not a bool (got {other:?})"
@@ -296,7 +296,8 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
                 cel::eval(tree, &empty).map_err(|error| format!("the injection: {error}"))?;
             Ok(Draft {
                 data: Data::materialized(
-                    runtime::to_envelope_value(&value)
+                    value
+                        .into_value()
                         .map_err(|fault| format!("the injection: {fault}"))?,
                 ),
                 ext: Namespace::new(),
@@ -309,12 +310,12 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
             let mut ext = Namespace::new();
             for write in writes {
                 let value = cel::eval(&write.value, &empty)
+                    .map_err(|error| format!("the injection: {error}"))?
+                    .into_value()
                     .map_err(|error| format!("the injection: {error}"))?;
                 match &write.target {
                     WriteTarget::Data(path) => {
-                        let leaf = runtime::to_envelope_value(&value)
-                            .map_err(|fault| format!("the injection: {fault}"))?;
-                        runtime::apply_struct_write(&mut data, path, leaf);
+                        runtime::apply_struct_write(&mut data, path, value);
                     }
                     WriteTarget::Ext(field) => {
                         // The fixture is the world's half: it seeds
@@ -369,8 +370,11 @@ impl MockPartner<'_> {
         // guard, a losing later branch, or a statement past the
         // reply must never force an opaque request to decode. The
         // slot caches across branches — one decode at most.
-        let mut env: BTreeMap<String, cel::Value> = BTreeMap::new();
-        env.insert(String::from("meta"), runtime::meta_value(request.meta()));
+        let mut env: BTreeMap<String, cel::EvalValue> = BTreeMap::new();
+        env.insert(
+            String::from("meta"),
+            cel::EvalValue::from(runtime::meta_value(request.meta())),
+        );
         let slot = runtime::DataSlot::new(request.data());
         for handler in &mock.handlers {
             let passes = match &handler.guard {
@@ -388,7 +392,7 @@ impl MockPartner<'_> {
                         return None;
                     }
                     match result {
-                        Ok(cel::Value::Bool(passes)) => passes,
+                        Ok(cel::EvalValue::Bool(passes)) => passes,
                         // A faulting or non-boolean guard is a fault
                         // of the scenario, never a silent
                         // fall-through to the next branch.
@@ -428,7 +432,7 @@ impl MockPartner<'_> {
         &mut self,
         handler: &crate::compiler::hir::Handler,
         request: &Envelope,
-        mut env: BTreeMap<String, cel::Value>,
+        mut env: BTreeMap<String, cel::EvalValue>,
         slot: &runtime::DataSlot<'_>,
     ) -> Option<CallOutcome> {
         use crate::compiler::hir::Statement;
@@ -467,9 +471,9 @@ impl MockPartner<'_> {
     fn lazy_eval(
         &self,
         tree: &cel::Tree,
-        env: &BTreeMap<String, cel::Value>,
+        env: &BTreeMap<String, cel::EvalValue>,
         slot: &runtime::DataSlot<'_>,
-    ) -> Result<cel::Value, String> {
+    ) -> Result<cel::EvalValue, String> {
         let lazy = runtime::LazyBindings {
             base: env,
             data: slot,
@@ -486,7 +490,7 @@ impl MockPartner<'_> {
         &self,
         value: &EmitValue,
         request: &Envelope,
-        env: &BTreeMap<String, cel::Value>,
+        env: &BTreeMap<String, cel::EvalValue>,
         slot: &runtime::DataSlot<'_>,
     ) -> Result<Option<Data>, String> {
         match value {
@@ -497,40 +501,33 @@ impl MockPartner<'_> {
                 // arriving uninspected — `out = data`, a local carry
                 // — ships the REPRESENTATION, whatever the spelling.
                 let value = self.lazy_eval(tree, env, slot)?;
-                if matches!(value, cel::Value::Payload) {
+                if matches!(value, cel::EvalValue::Payload) {
                     return Ok(Some(request.data().clone()));
                 }
                 let value = runtime::resolve_payload(value, slot)
                     .map_err(|fault| format!("the mock request is unreadable: {fault}"))?;
-                Ok(Some(Data::materialized(
-                    runtime::to_envelope_value(&value)
-                        .map_err(|fault| format!("the mock faulted: {fault}"))?,
-                )))
+                Ok(Some(Data::materialized(value)))
             }
             EmitValue::FreshData(writes) | EmitValue::Patch(writes) => {
-                let mut data =
-                    if matches!(value, EmitValue::Patch(_)) {
-                        match request.data() {
-                            Data::Materialized(value) => value.clone(),
-                            // A patch base is a DIRECT demand, through
-                            // the same cached slot.
-                            _ => runtime::to_envelope_value(&slot.materialize().map_err(
-                                |fault| format!("the mock request is unreadable: {fault}"),
-                            )?)
-                            .map_err(|fault| format!("the mock faulted: {fault}"))?,
-                        }
-                    } else {
-                        crate::envelope::Value::Struct(Vec::new())
-                    };
+                let mut data = if matches!(value, EmitValue::Patch(_)) {
+                    match request.data() {
+                        Data::Materialized(value) => value.clone(),
+                        // A patch base is a DIRECT demand, through
+                        // the same cached slot.
+                        _ => slot
+                            .materialize()
+                            .map_err(|fault| format!("the mock request is unreadable: {fault}"))?,
+                    }
+                } else {
+                    crate::envelope::Value::Struct(Vec::new())
+                };
                 for write in writes {
                     let evaluated =
                         runtime::resolve_payload(self.lazy_eval(&write.value, env, slot)?, slot)
                             .map_err(|fault| format!("the mock request is unreadable: {fault}"))?;
                     match &write.target {
                         WriteTarget::Data(path) => {
-                            let leaf = runtime::to_envelope_value(&evaluated)
-                                .map_err(|fault| format!("the mock faulted: {fault}"))?;
-                            runtime::apply_struct_write(&mut data, path, leaf);
+                            runtime::apply_struct_write(&mut data, path, evaluated);
                         }
                         // A reply carries data only: its envelope is
                         // minted by the connector's own transaction.

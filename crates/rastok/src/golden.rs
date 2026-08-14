@@ -44,7 +44,7 @@
 use crate::envelope::{Data, Encoding, Envelope, Role};
 use crate::journal::{Closure, OutboundStatus, Record};
 use rastok_core::canonical_cbor::{Value as Cbor, decode, encode};
-use rastok_core::identity::encoding::{cel_tagged, meta_tagged, value_tagged};
+use rastok_core::identity::encoding::{meta_tagged, value_tagged};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -365,7 +365,7 @@ fn record_tree(record: &Record) -> Cbor {
                         delta
                             .iter()
                             .map(|(field, value)| {
-                                Cbor::Array(vec![Cbor::Text(field.clone()), cel_tagged(value)])
+                                Cbor::Array(vec![Cbor::Text(field.clone()), value_tagged(value)])
                             })
                             .collect(),
                     ),

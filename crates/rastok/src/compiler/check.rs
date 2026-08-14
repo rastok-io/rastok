@@ -444,7 +444,7 @@ impl Checker<'_, '_> {
         &mut self,
         expr: &CelExpr,
         signature: &cel::Signature,
-        consts: &BTreeMap<String, cel::Value>,
+        consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Const> {
         let tree = self.cel(expr, signature)?;
         match cel::const_eval(&tree, consts) {
@@ -829,7 +829,7 @@ impl Checker<'_, '_> {
                     let Some(constant) = self.constant(expr, &signature, &BTreeMap::new()) else {
                         continue;
                     };
-                    let cel::Value::Duration(nanos) = constant.value else {
+                    let crate::value::Value::Duration(nanos) = constant.value else {
                         self.bag.push(
                             Diagnostic::new(
                                 E_CEL_EXPR,
@@ -1365,7 +1365,7 @@ impl Checker<'_, '_> {
         &mut self,
         val: &ValDecl,
         signature: &cel::Signature,
-        consts: &BTreeMap<String, cel::Value>,
+        consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Const> {
         if val.ty.is_some() {
             self.deferred("a typed val", val.span);
@@ -1385,7 +1385,7 @@ impl Checker<'_, '_> {
         &mut self,
         decl: &OperatorDecl,
         graph_signature: &cel::Signature,
-        graph_consts: &BTreeMap<String, cel::Value>,
+        graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
         if let Some(annotation) = &decl.annotation {
             for symbol in &annotation.symbols {
@@ -1412,7 +1412,7 @@ impl Checker<'_, '_> {
         &mut self,
         decl: &ConnectorDecl,
         graph_signature: &cel::Signature,
-        graph_consts: &BTreeMap<String, cel::Value>,
+        graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
         let mut symbols = decl.annotation.symbols.iter();
         let trait_name = symbols
@@ -1754,10 +1754,12 @@ impl Checker<'_, '_> {
                 }
                 (contract::ValueDomain::Choice(words), AttrValue::Const(constant)) => {
                     match &constant.value {
-                        cel::Value::Text(text) if words.contains(&text.as_str()) => Some(format!(
-                            "expected one of {words:?} as a bare word; `\"{text}\"` is CEL \
+                        crate::value::Value::Text(text) if words.contains(&text.as_str()) => {
+                            Some(format!(
+                                "expected one of {words:?} as a bare word; `\"{text}\"` is CEL \
                              text — write `{text}`"
-                        )),
+                            ))
+                        }
                         _ => Some(format!("expected one of {words:?} as a bare word")),
                     }
                 }
@@ -1881,7 +1883,7 @@ impl Checker<'_, '_> {
         body: &[OperatorItem],
         node: &mut Node,
         graph_signature: &cel::Signature,
-        graph_consts: &BTreeMap<String, cel::Value>,
+        graph_consts: &BTreeMap<String, crate::value::Value>,
         is_connector: bool,
     ) {
         let mut signature = graph_signature.clone();
@@ -2161,7 +2163,7 @@ impl Checker<'_, '_> {
         &mut self,
         decl: &VarDecl,
         signature: &cel::Signature,
-        consts: &BTreeMap<String, cel::Value>,
+        consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Var> {
         if !self.guard_binding_name(&decl.name, "a var") {
             return None;
@@ -2172,7 +2174,7 @@ impl Checker<'_, '_> {
             Some(SynValue::Cel(expr)) => {
                 let constant = self.constant(expr, signature, consts)?;
                 if int_bounded
-                    && let cel::Value::Int(value) = constant.value
+                    && let crate::value::Value::Int(value) = constant.value
                     && i32::try_from(value).is_err()
                 {
                     self.bag.push(
@@ -2308,10 +2310,10 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Maps a declared state type onto the CEL domain. Returns the
-    /// type and whether it carries the 32-bit `int` bound. `long` and
-    /// `float` defer explicitly: the CEL domain does not represent
-    /// them distinctly yet, and a silent merge would corrupt identity.
+    /// Maps a declared state type onto the current executable [`DataType`]
+    /// subset. Returns the type and whether it carries the 32-bit `int` bound.
+    /// `long` and `float` defer explicitly because this subset does not yet
+    /// represent them distinctly; a silent merge would corrupt identity.
     fn state_type(&mut self, ty: &TypeRef) -> Option<(DataType, bool)> {
         if ty.optional || ty.alternatives.len() != 1 {
             self.deferred("an optional or union state type", ty.span);
@@ -2377,7 +2379,7 @@ impl Checker<'_, '_> {
         &mut self,
         value: &SynValue,
         signature: &cel::Signature,
-        consts: &BTreeMap<String, cel::Value>,
+        consts: &BTreeMap<String, crate::value::Value>,
         span: Span,
     ) -> Option<AttrValue> {
         match value {
@@ -2399,7 +2401,7 @@ impl Checker<'_, '_> {
         decl: &crate::compiler::syntax::HandlerDecl,
         node_signature: &cel::Signature,
         node: &Node,
-        consts: &BTreeMap<String, cel::Value>,
+        consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Handler> {
         let activation = match &decl.trigger {
             SynTrigger::Port(name) => {
@@ -2863,7 +2865,7 @@ impl Checker<'_, '_> {
     fn verbatim_body(
         &mut self,
         tagged: &crate::compiler::syntax::TaggedValue,
-    ) -> Option<cel::Value> {
+    ) -> Option<crate::value::Value> {
         use crate::compiler::syntax::TaggedBody;
         let Some(TaggedBody::Raw { text, .. }) = &tagged.body else {
             self.bag.push(
@@ -2877,7 +2879,7 @@ impl Checker<'_, '_> {
             );
             return None;
         };
-        Some(cel::Value::Text(strip_verbatim_margin(text)))
+        Some(crate::value::Value::Text(strip_verbatim_margin(text)))
     }
 
     /// The decoded body of a shape-validated `base64` call —
@@ -3276,7 +3278,7 @@ impl Checker<'_, '_> {
             SynValue::Json { value, .. } => Some(literal_tree(value.clone(), DataType::Variant)),
             SynValue::BracedMap(entries) => self.map_value_tree(entries, signature, at),
             SynValue::Braced(body) if body.entries.is_empty() => Some(literal_tree(
-                cel::Value::Struct(Vec::new()),
+                crate::value::Value::Struct(Vec::new()),
                 DataType::Variant,
             )),
             SynValue::Braced(_) => {
@@ -3297,7 +3299,10 @@ impl Checker<'_, '_> {
                             .map(|value| literal_tree(value, DataType::Text)),
                         TagCall::Base64 { content_type: None } => {
                             let bytes = self.base64_body(tagged)?;
-                            Some(literal_tree(cel::Value::Bytes(bytes), DataType::Bytes))
+                            Some(literal_tree(
+                                crate::value::Value::Bytes(bytes),
+                                DataType::Bytes,
+                            ))
                         }
                         TagCall::Asset {
                             path,
@@ -3397,7 +3402,7 @@ impl Checker<'_, '_> {
     fn string_literal(&mut self, expr: &CelExpr) -> Option<String> {
         let tree = self.cel(expr, &cel::Signature::new())?;
         match tree.root {
-            cel::Expr::Literal(cel::Value::Text(text)) => Some(text),
+            cel::Expr::Literal(crate::value::Value::Text(text)) => Some(text),
             _ => {
                 self.bag.push(
                     Diagnostic::new(
@@ -3686,7 +3691,8 @@ impl Checker<'_, '_> {
                             .map(|value| EmitValue::Data(literal_tree(value, DataType::Text))),
                         TagCall::Base64 { content_type } => {
                             let bytes = self.base64_body(tagged)?;
-                            let data = literal_tree(cel::Value::Bytes(bytes), DataType::Bytes);
+                            let data =
+                                literal_tree(crate::value::Value::Bytes(bytes), DataType::Bytes);
                             Some(match content_type {
                                 Some(content_type) => EmitValue::FreshData(vec![
                                     FieldWrite {
@@ -3698,7 +3704,7 @@ impl Checker<'_, '_> {
                                             "content_type",
                                         )),
                                         value: literal_tree(
-                                            cel::Value::Text(content_type),
+                                            crate::value::Value::Text(content_type),
                                             DataType::Text,
                                         ),
                                     },
@@ -3723,7 +3729,7 @@ impl Checker<'_, '_> {
                                             "content_type",
                                         )),
                                         value: literal_tree(
-                                            cel::Value::Text(content_type),
+                                            crate::value::Value::Text(content_type),
                                             DataType::Text,
                                         ),
                                     },
@@ -3986,7 +3992,7 @@ impl Checker<'_, '_> {
                                                 path.clone(),
                                             ),
                                             value: literal_tree(
-                                                cel::Value::Bytes(bytes),
+                                                crate::value::Value::Bytes(bytes),
                                                 DataType::Bytes,
                                             ),
                                         });
@@ -3996,7 +4002,7 @@ impl Checker<'_, '_> {
                                                     String::from("content_type"),
                                                 ),
                                                 value: literal_tree(
-                                                    cel::Value::Text(ct),
+                                                    crate::value::Value::Text(ct),
                                                     DataType::Text,
                                                 ),
                                             });
@@ -4036,7 +4042,7 @@ impl Checker<'_, '_> {
                                                     String::from("content_type"),
                                                 ),
                                                 value: literal_tree(
-                                                    cel::Value::Text(ct),
+                                                    crate::value::Value::Text(ct),
                                                     DataType::Text,
                                                 ),
                                             });
@@ -4139,7 +4145,9 @@ impl Checker<'_, '_> {
                                 writes.push(FieldWrite {
                                     target: crate::envelope::WriteTarget::Data(path),
                                     value: cel::Tree {
-                                        root: cel::Expr::Literal(cel::Value::Struct(Vec::new())),
+                                        root: cel::Expr::Literal(crate::value::Value::Struct(
+                                            Vec::new(),
+                                        )),
                                         ty: DataType::Variant,
                                     },
                                 });
@@ -4323,7 +4331,7 @@ impl Checker<'_, '_> {
         pinned: &DataType,
         value: &EmitValue,
         origin: BuildOrigin<'_>,
-        consts: &BTreeMap<String, cel::Value>,
+        consts: &BTreeMap<String, crate::value::Value>,
         port_name: &str,
         span: Span,
     ) -> bool {
@@ -4411,10 +4419,10 @@ impl Checker<'_, '_> {
     fn constant_breach(
         pinned: &DataType,
         tree: &cel::Tree,
-        consts: &BTreeMap<String, cel::Value>,
+        consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<String> {
         if *pinned == DataType::Int
-            && let Ok(cel::Value::Int(value)) = cel::const_eval(tree, consts)
+            && let Ok(crate::value::Value::Int(value)) = cel::const_eval(tree, consts)
             && i32::try_from(value).is_err()
         {
             return Some(format!("the constant {value}, outside the 32-bit int"));
@@ -4807,7 +4815,7 @@ fn key_path(key: &crate::compiler::syntax::LValue) -> String {
 }
 
 /// A literal expression tree — the compiler's own constants.
-fn literal_tree(value: cel::Value, ty: DataType) -> cel::Tree {
+fn literal_tree(value: crate::value::Value, ty: DataType) -> cel::Tree {
     cel::Tree {
         root: cel::Expr::Literal(value),
         ty,
@@ -4893,24 +4901,21 @@ fn decode_base64(raw: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn value_type(value: &cel::Value) -> DataType {
+fn value_type(value: &crate::value::Value) -> DataType {
     match value {
-        cel::Value::Struct(_) => DataType::Variant,
-        cel::Value::Decimal { .. } => DataType::Variant,
-        // A checker value is a constant; the runtime witness never
-        // appears here — total anyway.
-        cel::Value::Payload => DataType::Variant,
-        cel::Value::Bool(_) => DataType::Bool,
-        cel::Value::Int(_) => DataType::Int,
-        cel::Value::Uint(_) => DataType::Uint,
-        cel::Value::Double(_) => DataType::Double,
-        cel::Value::Text(_) => DataType::Text,
-        cel::Value::Bytes(_) => DataType::Bytes,
-        cel::Value::Duration(_) => DataType::Duration,
-        cel::Value::Timestamp(_) => DataType::Timestamp,
-        cel::Value::Null => DataType::Null,
-        cel::Value::List(_) => DataType::Array(Box::new(DataType::Variant)),
-        cel::Value::Map(_) => DataType::Map(Box::new(DataType::Variant)),
+        crate::value::Value::Struct(_) => DataType::Variant,
+        crate::value::Value::Decimal { .. } => DataType::Variant,
+        crate::value::Value::Bool(_) => DataType::Bool,
+        crate::value::Value::Int(_) => DataType::Int,
+        crate::value::Value::Uint(_) => DataType::Uint,
+        crate::value::Value::Double(_) => DataType::Double,
+        crate::value::Value::Text(_) => DataType::Text,
+        crate::value::Value::Bytes(_) => DataType::Bytes,
+        crate::value::Value::Duration(_) => DataType::Duration,
+        crate::value::Value::Timestamp(_) => DataType::Timestamp,
+        crate::value::Value::Null => DataType::Null,
+        crate::value::Value::Array(_) => DataType::Array(Box::new(DataType::Variant)),
+        crate::value::Value::Map(_) => DataType::Map(Box::new(DataType::Variant)),
     }
 }
 
@@ -4994,7 +4999,10 @@ graph m0_probe : App {
         let AttrValue::Const(command) = &echo.attributes()[1].value else {
             panic!("expected a constant attribute");
         };
-        assert_eq!(command.value, cel::Value::Text(String::from("cat")));
+        assert_eq!(
+            command.value,
+            crate::value::Value::Text(String::from("cat"))
+        );
         let shout = &hir.app.nodes[1];
         assert_eq!(shout.category(), node::Kind::Operator);
         assert_eq!(shout.vars[0].ty, DataType::Int);
