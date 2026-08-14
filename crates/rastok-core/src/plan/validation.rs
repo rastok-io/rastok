@@ -1098,6 +1098,13 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 /// [`Value`](crate::value::Value) and is therefore unrepresentable here by
 /// construction.
 fn value_expressible(value: &crate::value::Value) -> Result<(), PlanValidationError> {
+    value
+        .validate()
+        .map_err(|_| PlanValidationError::UnrepresentableConstant)?;
+    value_shape_expressible(value)
+}
+
+fn value_shape_expressible(value: &crate::value::Value) -> Result<(), PlanValidationError> {
     match value {
         // The current expression subset cannot CONSTRUCT a struct; the one
         // struct constant a compiler emits is the EMPTY record literal (`parent = {}`,
@@ -1117,8 +1124,8 @@ fn value_expressible(value: &crate::value::Value) -> Result<(), PlanValidationEr
             }
         }
         crate::value::Value::Struct(_) => Err(PlanValidationError::UnrepresentableConstant),
-        crate::value::Value::Array(items) => items.iter().try_for_each(value_expressible),
-        crate::value::Value::Map(entries) => entries.values().try_for_each(value_expressible),
+        crate::value::Value::Array(items) => items.iter().try_for_each(value_shape_expressible),
+        crate::value::Value::Map(entries) => entries.values().try_for_each(value_shape_expressible),
         _ => Ok(()),
     }
 }

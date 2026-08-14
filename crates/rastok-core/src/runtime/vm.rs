@@ -27,6 +27,7 @@ use crate::journal::{ConsumedPosition, Journal, ids};
 use crate::node;
 use crate::plan::{Edge, EndpointRef, GraphVersion, NodeKind, Slot, ValidatedExecutionPlan};
 use crate::runtime::{Delivery, Fault, Key, Mailboxes, PartitionState, TransactionExecutor};
+use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
 use alloc::string::String;
@@ -85,7 +86,7 @@ pub enum VmError {
         rejected_at: EndpointRef,
         /// The SEMANTIC judgement: expected type, found kind, and
         /// the reason — a tool matches, `Display` renders.
-        violation: crate::runtime::ConformanceViolation,
+        violation: Box<crate::runtime::ConformanceViolation>,
     },
 }
 
@@ -372,7 +373,9 @@ impl<'plan> Vm<'plan> {
         // destination pin it will fan out to — replay never meets a
         // record a pin refuses. Encoded bytes stay the codecs' door.
         if let Data::Materialized(value) = &submission.draft.data {
-            crate::runtime::value_well_formed(value).map_err(VmError::Fault)?;
+            value
+                .validate()
+                .map_err(|error| VmError::Fault(crate::runtime::Fault::InvalidValue(error)))?;
             let own_pin = self
                 .plan
                 .boundary
@@ -383,7 +386,7 @@ impl<'plan> Vm<'plan> {
                 |refused| VmError::IngressPinViolation {
                     ingress: submission.port.clone(),
                     rejected_at: refused.at,
-                    violation: refused.violation,
+                    violation: Box::new(refused.violation),
                 },
             )?;
         }
@@ -946,7 +949,9 @@ impl<'plan> Vm<'plan> {
     ) -> Result<(), VmError> {
         for emission in &record.emissions {
             if let Data::Materialized(value) = emission.envelope.data() {
-                crate::runtime::value_well_formed(value).map_err(VmError::Fault)?;
+                value
+                    .validate()
+                    .map_err(|error| VmError::Fault(crate::runtime::Fault::InvalidValue(error)))?;
                 let own_pin = self.plan.nodes[slot.index()]
                     .ports
                     .iter()

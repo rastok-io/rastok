@@ -76,9 +76,9 @@ package "diagnostics — structured diagnostics shared across phases" as P_DIAG 
 
 package "datatype / value — core logical data authority" as P_DATA {
   enum DataType <<enum>>
-  DataType : logical type tree used by plans and expressions
+  DataType : logical type tree and recursive conformance judge
   enum "Value" as CORE_Value <<enum>>
-  CORE_Value : the one materialized value domain
+  CORE_Value : one materialized domain and structural validator
 }
 
 package "cel — current Rastok expression engine" as P_CEL {

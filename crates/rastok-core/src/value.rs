@@ -5,8 +5,10 @@
 //! evaluation markers do not belong here and can never be serialized.
 
 use alloc::collections::BTreeMap;
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt;
 
 /// A materialized Rastok logical value.
 #[derive(Debug, Clone)]
@@ -78,6 +80,196 @@ impl PartialEq for Value {
 
 impl Eq for Value {}
 
+impl Value {
+    /// Verifies the invariants every materialized value must satisfy before it
+    /// can enter an envelope, state cell, plan, or journal.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first structural defect with its path from the value root.
+    pub fn validate(&self) -> Result<(), ValueError> {
+        self.validate_at(&mut Vec::new())
+    }
+
+    fn validate_at(&self, path: &mut Vec<ValuePathSegment>) -> Result<(), ValueError> {
+        match self {
+            Self::Decimal { unscaled, scale }
+                if !crate::datatype::decimal_in_domain(*unscaled, *scale) =>
+            {
+                Err(ValueError {
+                    path: path.clone(),
+                    defect: ValueDefect::DecimalOutOfDomain {
+                        unscaled: *unscaled,
+                        scale: *scale,
+                    },
+                })
+            }
+            Self::Struct(fields) => {
+                let mut names = BTreeSet::new();
+                for (name, value) in fields {
+                    if !names.insert(name) {
+                        return Err(ValueError {
+                            path: path.clone(),
+                            defect: ValueDefect::DuplicateStructField(name.clone()),
+                        });
+                    }
+                    path.push(ValuePathSegment::Field(name.clone()));
+                    let result = value.validate_at(path);
+                    path.pop();
+                    result?;
+                }
+                Ok(())
+            }
+            Self::Array(items) => {
+                for (index, value) in items.iter().enumerate() {
+                    path.push(ValuePathSegment::Index(index));
+                    let result = value.validate_at(path);
+                    path.pop();
+                    result?;
+                }
+                Ok(())
+            }
+            Self::Map(entries) => {
+                for (key, value) in entries {
+                    path.push(ValuePathSegment::MapValue(key.clone()));
+                    let result = value.validate_at(path);
+                    path.pop();
+                    result?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// One step from a materialized value root to a nested value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValuePathSegment {
+    /// A struct field.
+    Field(String),
+    /// An array index.
+    Index(usize),
+    /// A value under a text map key.
+    MapValue(String),
+}
+
+/// A structural defect independent of the boundary that observed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueDefect {
+    /// An exact decimal outside the canonical decimal128 budget.
+    DecimalOutOfDomain {
+        /// The exact coefficient.
+        unscaled: i128,
+        /// The carried scale.
+        scale: i32,
+    },
+    /// Two fields of one struct carry the same semantic name.
+    DuplicateStructField(String),
+}
+
+/// A malformed materialized value and the path to its first defect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueError {
+    /// Path from the value root to the malformed value.
+    pub path: Vec<ValuePathSegment>,
+    /// The violated value invariant.
+    pub defect: ValueDefect,
+}
+
+impl fmt::Display for ValueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("value")?;
+        for segment in &self.path {
+            match segment {
+                ValuePathSegment::Field(name) => write!(f, ".{name}")?,
+                ValuePathSegment::Index(index) => write!(f, "[{index}]")?,
+                ValuePathSegment::MapValue(key) => write!(f, "[{key:?}]")?,
+            }
+        }
+        match &self.defect {
+            ValueDefect::DecimalOutOfDomain { unscaled, scale } => write!(
+                f,
+                " contains decimal({unscaled}, scale {scale}) outside the decimal128 domain"
+            ),
+            ValueDefect::DuplicateStructField(name) => {
+                write!(f, " contains a struct whose field `{name}` appears twice")
+            }
+        }
+    }
+}
+
+impl core::error::Error for ValueError {}
+
+/// The materialized value category reported by a conformance refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind {
+    /// A boolean.
+    Bool,
+    /// A signed or unsigned integer.
+    Number,
+    /// A binary64.
+    Double,
+    /// Text.
+    Text,
+    /// Bytes.
+    Bytes,
+    /// A duration.
+    Duration,
+    /// A timestamp.
+    Timestamp,
+    /// The null value.
+    Null,
+    /// An array.
+    Array,
+    /// A map.
+    Map,
+    /// A struct.
+    Struct,
+    /// An exact decimal.
+    Decimal,
+}
+
+impl ValueKind {
+    /// Returns the stable category of `value`.
+    #[must_use]
+    pub fn of(value: &Value) -> Self {
+        match value {
+            Value::Bool(_) => Self::Bool,
+            Value::Int(_) | Value::Uint(_) => Self::Number,
+            Value::Double(_) => Self::Double,
+            Value::Text(_) => Self::Text,
+            Value::Bytes(_) => Self::Bytes,
+            Value::Duration(_) => Self::Duration,
+            Value::Timestamp(_) => Self::Timestamp,
+            Value::Null => Self::Null,
+            Value::Array(_) => Self::Array,
+            Value::Map(_) => Self::Map,
+            Value::Struct(_) => Self::Struct,
+            Value::Decimal { .. } => Self::Decimal,
+        }
+    }
+}
+
+impl fmt::Display for ValueKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Bool => "bool",
+            Self::Number => "number",
+            Self::Double => "double",
+            Self::Text => "text",
+            Self::Bytes => "bytes",
+            Self::Duration => "duration",
+            Self::Timestamp => "timestamp",
+            Self::Null => "null",
+            Self::Array => "array",
+            Self::Map => "map",
+            Self::Struct => "struct",
+            Self::Decimal => "decimal",
+        })
+    }
+}
+
 /// Stable-sort struct fields by name before comparing. Well-formed structs
 /// have unique names; keeping the operation total also preserves `Eq` for a
 /// malformed value while a boundary prepares its typed refusal.
@@ -103,6 +295,7 @@ fn struct_fields_eq(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn structural_equality_agrees_with_canonical_identity() {
@@ -118,5 +311,23 @@ mod tests {
             (String::from("a"), Value::Int(1)),
         ]);
         assert_eq!(ab, ba);
+    }
+
+    #[test]
+    fn validation_names_the_nested_value_defect() {
+        let malformed = Value::Array(alloc::vec![Value::Struct(alloc::vec![
+            (String::from("amount"), Value::Int(1)),
+            (String::from("amount"), Value::Int(2)),
+        ])]);
+        let error = malformed.validate().expect_err("the duplicate refuses");
+        assert_eq!(error.path, alloc::vec![ValuePathSegment::Index(0)]);
+        assert_eq!(
+            error.defect,
+            ValueDefect::DuplicateStructField(String::from("amount"))
+        );
+        assert_eq!(
+            error.to_string(),
+            "value[0] contains a struct whose field `amount` appears twice"
+        );
     }
 }

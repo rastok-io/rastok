@@ -13,23 +13,13 @@ use alloc::vec::Vec;
 
 use crate::value::Value;
 
-/// The significant-digit budget — Arrow `decimal128`.
-pub const MAX_DIGITS: u32 = 38;
-/// The scale bounds — the IEEE decimal128 exponent domain, exactly
-/// as identity.md's registry pins it: scale ∈ [−6143, +6144].
-pub const MAX_SCALE: i32 = 6144;
-/// The lower scale bound (see [`MAX_SCALE`]).
-pub const MIN_SCALE: i32 = -6143;
-
-/// The decimal128 DOMAIN (D-2026-08-10-7) any decimal — declared
-/// scale included — must inhabit: at most [`MAX_DIGITS`]
-/// significant digits, scale within [`MIN_SCALE`]..=[`MAX_SCALE`].
-/// The machine's doors hold values to this before they travel;
-/// the writer keeps a defensive mirror.
-#[must_use]
-pub fn decimal_in_domain(unscaled: i128, scale: i32) -> bool {
-    (MIN_SCALE..=MAX_SCALE).contains(&scale) && unscaled.unsigned_abs() < 10_u128.pow(MAX_DIGITS)
-}
+// Compatibility spellings for the reader's callers. The logical decimal
+// budget belongs to `datatype`; JSON owns only its origin-specific parsing and
+// minimal-scale rules.
+pub use crate::datatype::{
+    DECIMAL_MAX_DIGITS as MAX_DIGITS, DECIMAL_MAX_SCALE as MAX_SCALE,
+    DECIMAL_MIN_SCALE as MIN_SCALE, decimal_in_domain,
+};
 
 /// A declared exact number, as `decimal("…")` reads it
 /// (D-2026-08-13-1): the WRITTEN scale is preserved — trailing

@@ -232,7 +232,11 @@ step touches `vm.rs` once.
    `datatype::DataType` already owns the executable type subset without an
    identity move. Core `value::Value` now also owns the executable
    materialized-value subset; `cel::EvalValue` is only the transient carrier
-   of the lazy payload witness. The remaining `error_set`, `TypedError` and
+   of the lazy payload witness. Core `Value::validate` and
+   `DataType::violation` now provide the single structural-validation and
+   recursive-conformance doors used by plans, metadata, state, ingress and
+   emissions; JSON no longer owns the decimal128 domain. The remaining
+   `error_set`, `TypedError` and
    success/failure-only reply split are removed by the ordered M1.3 gates,
    not promoted as an intermediate model. Ordered gates and evidence are in
    the dedicated

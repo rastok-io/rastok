@@ -554,9 +554,10 @@ is the empty array but a LONE `\n` is one empty line and refuses
 (the framing is judged before the terminator is stripped); a line's
 padding is JSON's own whitespace alphabet, nothing wider — a
 non-breaking space is trailing content. (5) **The decimal128 domain
-is held at the doors** — `value_well_formed` refuses an
-out-of-domain coefficient or scale before it travels, and the
-writer keeps a defensive mirror plus the reader's nesting budget:
+is held at the doors** — core `Value::validate` refuses an
+out-of-domain coefficient or scale before it travels, while
+`datatype::decimal_in_domain` is the shared logical-domain authority;
+the writer keeps a defensive mirror plus the reader's nesting budget:
 a hostile scale is a typed refusal, never a runaway allocation.
 
 *Amended 2026-08-11 (second round):* four more edges.

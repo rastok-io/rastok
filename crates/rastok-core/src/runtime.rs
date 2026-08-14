@@ -23,13 +23,16 @@ use crate::plan::{
     Emission as PlanEmission, ExecutionPlan, GraphVersion, Handler, Slot, Step,
     ValidatedExecutionPlan,
 };
-use crate::value::Value;
+use crate::value::{Value, ValueError};
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::fmt;
+
+pub use crate::datatype::{ConformanceReason, ConformanceViolation};
+pub use crate::value::ValueKind;
 
 /// Pure, deterministic, budgeted guest execution — the contract the
 /// jq and SQL engines will implement; no engine ships in M0.
@@ -50,14 +53,12 @@ pub enum Fault {
     Eval(cel::Error),
     /// A value that envelope data cannot represent yet.
     Unrepresentable(String),
+    /// A materialized value violates the core value algebra.
+    InvalidValue(ValueError),
     /// The plan has no handler for this node and trigger.
     MissingHandler,
     /// The payload could not be materialized for the handler.
     Opaque(String),
-    /// A struct carrying one field name twice — ill-formed data the
-    /// canonical seal would silently collapse; refused at the doors,
-    /// never resolved by "first found".
-    DuplicateField(String),
     /// A caller-supplied slot the plan does not know. `Slot` is
     /// freely constructible; the validated plan proves only its OWN
     /// references, so the public doors verify and refuse — never
@@ -72,11 +73,9 @@ impl fmt::Display for Fault {
             Self::Unrepresentable(what) => {
                 write!(f, "`{what}` is not representable in envelope data yet")
             }
+            Self::InvalidValue(error) => error.fmt(f),
             Self::MissingHandler => f.write_str("no handler for this trigger"),
             Self::Opaque(what) => write!(f, "the payload is opaque here: {what}"),
-            Self::DuplicateField(name) => {
-                write!(f, "the struct field `{name}` appears twice")
-            }
             Self::UnknownSlot(slot) => {
                 write!(f, "the plan has no node at slot {}", slot.index())
             }
@@ -509,13 +508,14 @@ impl<'plan> TransactionExecutor<'plan> {
                         eval_lazy(expr, &base(&scratch, &lets), &data_slot, &self.plan.assets)?,
                         &data_slot,
                     )?;
+                    value.validate().map_err(Fault::InvalidValue)?;
                     // A state cell holds its DECLARED type at every
                     // write, not just at the initializer: a dynamic
                     // value of the wrong shape — or an int leaving
                     // the 32-bit range — is a typed error, never a
                     // silent coercion.
                     if let Some(cell) = node.vars.iter().find(|cell| &cell.name == name)
-                        && let Some(violation) = conformance_fault(name, &cell.ty, &value)
+                        && let Some(violation) = cell.ty.violation(name, &value)
                     {
                         return Err(Fault::Eval(cel::Error {
                             message: alloc::string::ToString::to_string(&violation),
@@ -1016,49 +1016,6 @@ impl PinViolation {
     }
 }
 
-/// Holds materialized content to WELL-FORMEDNESS: a struct may not
-/// carry one field name twice — the canonical seal would silently
-/// collapse the pair, so the doors refuse it typed instead of
-/// resolving by "first found".
-pub(crate) fn value_well_formed(value: &envelope::Value) -> Result<(), Fault> {
-    match value {
-        // A decimal must inhabit the decimal128 domain
-        // (D-2026-08-10-7) BEFORE it travels: an unbounded scale
-        // reaching a writer would be a runaway allocation, so the
-        // door refuses it typed instead.
-        envelope::Value::Decimal { unscaled, scale } => {
-            if crate::json::decimal_in_domain(*unscaled, *scale) {
-                Ok(())
-            } else {
-                Err(Fault::Unrepresentable(alloc::format!(
-                    "a decimal outside the decimal128 domain (unscaled {unscaled}, scale {scale})"
-                )))
-            }
-        }
-        envelope::Value::Null
-        | envelope::Value::Bool(_)
-        | envelope::Value::Int(_)
-        | envelope::Value::Uint(_)
-        | envelope::Value::Double(_)
-        | envelope::Value::Text(_)
-        | envelope::Value::Bytes(_)
-        | envelope::Value::Duration(_)
-        | envelope::Value::Timestamp(_) => Ok(()),
-        envelope::Value::Struct(fields) => {
-            let mut seen = alloc::collections::BTreeSet::new();
-            for (name, value) in fields {
-                if !seen.insert(name.as_str()) {
-                    return Err(Fault::DuplicateField(name.clone()));
-                }
-                value_well_formed(value)?;
-            }
-            Ok(())
-        }
-        envelope::Value::Array(items) => items.iter().try_for_each(value_well_formed),
-        envelope::Value::Map(entries) => entries.values().try_for_each(value_well_formed),
-    }
-}
-
 /// Judges materialized content against every pin it must cross —
 /// the emitting end's own pin and each fan-out target's — BEFORE any
 /// commit: routing is post-commit and must never fail. Encoded bytes
@@ -1071,7 +1028,7 @@ pub(crate) fn crossing_pins_hold(
     value: &Value,
 ) -> Result<(), PinViolation> {
     if let Some(pinned) = own_pin
-        && let Some(violation) = conformance_fault(from.port.name(), pinned, value)
+        && let Some(violation) = pinned.violation(from.port.name(), value)
     {
         return Err(PinViolation {
             at: from.clone(),
@@ -1093,7 +1050,7 @@ pub(crate) fn crossing_pins_hold(
                 .and_then(|decl| decl.ty.as_ref()),
         };
         if let Some(pinned) = pinned
-            && let Some(violation) = conformance_fault(to.port.name(), pinned, value)
+            && let Some(violation) = pinned.violation(to.port.name(), value)
         {
             return Err(PinViolation {
                 at: to.clone(),
@@ -1102,205 +1059,6 @@ pub(crate) fn crossing_pins_hold(
         }
     }
     Ok(())
-}
-
-/// What kind of value stood at a refused pin — the machine's
-/// vocabulary for "found", never a rendered sentence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValueKind {
-    /// A boolean.
-    Bool,
-    /// A signed or unsigned integer.
-    Number,
-    /// A binary64.
-    Double,
-    /// Text.
-    Text,
-    /// Bytes.
-    Bytes,
-    /// A duration.
-    Duration,
-    /// A timestamp.
-    Timestamp,
-    /// The null value.
-    Null,
-    /// An array.
-    Array,
-    /// A map.
-    Map,
-    /// A struct.
-    Struct,
-    /// An exact dynamic decimal (D-2026-08-10-7).
-    Decimal,
-}
-
-impl ValueKind {
-    fn of(value: &Value) -> Self {
-        match value {
-            Value::Bool(_) => Self::Bool,
-            Value::Int(_) | Value::Uint(_) => Self::Number,
-            Value::Decimal { .. } => Self::Decimal,
-            Value::Double(_) => Self::Double,
-            Value::Text(_) => Self::Text,
-            Value::Bytes(_) => Self::Bytes,
-            Value::Duration(_) => Self::Duration,
-            Value::Timestamp(_) => Self::Timestamp,
-            Value::Null => Self::Null,
-            Value::Array(_) => Self::Array,
-            Value::Map(_) => Self::Map,
-            Value::Struct(_) => Self::Struct,
-        }
-    }
-}
-
-impl fmt::Display for ValueKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Bool => "bool",
-            Self::Number => "number",
-            Self::Double => "double",
-            Self::Text => "text",
-            Self::Bytes => "bytes",
-            Self::Duration => "duration",
-            Self::Timestamp => "timestamp",
-            Self::Null => "null",
-            Self::Array => "array",
-            Self::Map => "map",
-            Self::Struct => "struct",
-            Self::Decimal => "decimal",
-        })
-    }
-}
-
-/// Why a pin refused — semantic, matchable; `Display` renders the
-/// sentence at the frontier.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConformanceReason {
-    /// The value's kind cannot inhabit the declared type.
-    TypeMismatch,
-    /// The right kind, outside the physical range.
-    IntegerOutOfRange {
-        /// The offending value.
-        value: i64,
-    },
-}
-
-/// One refused conformance: the declared expectation, what stood
-/// there, and why — structure first, text at `Display`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConformanceViolation {
-    /// The declaring name (a cell or a port).
-    pub name: String,
-    /// The declared type.
-    pub expected: DataType,
-    /// The kind of value that stood there.
-    pub found: ValueKind,
-    /// The semantic reason.
-    pub reason: ConformanceReason,
-}
-
-impl fmt::Display for ConformanceViolation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.reason {
-            ConformanceReason::TypeMismatch => write!(
-                f,
-                "`{}` is declared {:?}; a {} cannot enter it",
-                self.name, self.expected, self.found
-            ),
-            ConformanceReason::IntegerOutOfRange { value } => write!(
-                f,
-                "`{}` is an int; {value} leaves the 32-bit range",
-                self.name
-            ),
-        }
-    }
-}
-
-/// Judges a runtime value against a declared cell type; `None` means
-/// it conforms. `variant` admits anything — the dynamic escape is chosen
-/// in the declaration, not discovered at the write.
-pub(crate) fn conformance_fault(
-    name: &str,
-    declared: &DataType,
-    value: &Value,
-) -> Option<ConformanceViolation> {
-    let mismatch = || {
-        Some(ConformanceViolation {
-            name: String::from(name),
-            expected: declared.clone(),
-            found: ValueKind::of(value),
-            reason: ConformanceReason::TypeMismatch,
-        })
-    };
-    match (declared, value) {
-        (DataType::Variant, _) => None,
-        // A dynamic decimal conforms to no precise M0 type — it is
-        // narrowed before use (D-2026-08-10-7).
-        (_, Value::Decimal { .. }) => mismatch(),
-        (DataType::Int, Value::Int(candidate)) => {
-            if i32::try_from(*candidate).is_err() {
-                Some(ConformanceViolation {
-                    name: String::from(name),
-                    expected: DataType::Int,
-                    found: ValueKind::Number,
-                    reason: ConformanceReason::IntegerOutOfRange { value: *candidate },
-                })
-            } else {
-                None
-            }
-        }
-        (DataType::Bool, Value::Bool(_))
-        | (DataType::Uint, Value::Uint(_))
-        | (DataType::Text, Value::Text(_))
-        | (DataType::Bytes, Value::Bytes(_))
-        | (DataType::Double, Value::Double(_))
-        | (DataType::Duration, Value::Duration(_))
-        | (DataType::Timestamp, Value::Timestamp(_)) => None,
-        // Composite judges are structural: every element must hold
-        // its element type. `array<variant>` — the jsonl reply pin —
-        // admits any element, `null` included.
-        (DataType::Array(inner), Value::Array(items)) => items
-            .iter()
-            .find_map(|item| conformance_fault(name, inner, item))
-            .map(|violation| ConformanceViolation {
-                name: String::from(name),
-                expected: declared.clone(),
-                found: ValueKind::Array,
-                reason: violation.reason,
-            }),
-        (DataType::Map(inner), Value::Map(entries)) => entries
-            .values()
-            .find_map(|item| conformance_fault(name, inner, item))
-            .map(|violation| ConformanceViolation {
-                name: String::from(name),
-                expected: declared.clone(),
-                found: ValueKind::Map,
-                reason: violation.reason,
-            }),
-        (DataType::Null, Value::Null) => None,
-        (_, Value::Bool(_)) => mismatch(),
-        (_, Value::Int(_) | Value::Uint(_)) => mismatch(),
-        (_, Value::Double(_)) => mismatch(),
-        (_, Value::Text(_)) => mismatch(),
-        (_, Value::Bytes(_)) => mismatch(),
-        (_, Value::Struct(_)) => mismatch(),
-        (_, Value::Duration(_)) => mismatch(),
-        (_, Value::Timestamp(_)) => mismatch(),
-        (_, Value::Null) => mismatch(),
-        (_, Value::Array(_)) => mismatch(),
-        (_, Value::Map(_)) => mismatch(),
-    }
-}
-
-#[cfg(test)]
-mod conformance_tests {
-    use super::*;
-
-    #[test]
-    fn uint_has_one_type_and_value_conformance_rule() {
-        assert!(conformance_fault("port", &DataType::Uint, &Value::Uint(u64::MAX)).is_none());
-        assert!(conformance_fault("port", &DataType::Uint, &Value::Int(1)).is_some());
-    }
 }
 
 /// Applies one struct-building write along its path — a braced
@@ -1625,31 +1383,8 @@ fn from_meta_value(value: &MetaValue) -> Value {
 /// every representable leaf.
 #[must_use]
 pub fn meta_conforms(value: &MetaValue, ty: &DataType) -> bool {
-    match ty {
-        DataType::Variant => true,
-        DataType::Bool => {
-            matches!(value, MetaValue::Scalar(Scalar::Bool(_)))
-        }
-        DataType::Int => {
-            matches!(value, MetaValue::Scalar(Scalar::Int(_)))
-        }
-        DataType::Double => {
-            matches!(value, MetaValue::Scalar(Scalar::Double(_)))
-        }
-        DataType::Text => {
-            matches!(value, MetaValue::Scalar(Scalar::Text(_)))
-        }
-        DataType::Bytes => {
-            matches!(value, MetaValue::Scalar(Scalar::Bytes(_)))
-        }
-        DataType::Array(inner) => match value {
-            MetaValue::Array(items) => items
-                .iter()
-                .all(|scalar| meta_conforms(&MetaValue::Scalar(scalar.clone()), inner)),
-            MetaValue::Scalar(_) => false,
-        },
-        _ => false,
-    }
+    let materialized = from_meta_value(value);
+    materialized.validate().is_ok() && ty.accepts(&materialized)
 }
 
 /// Converts a core value into a metadata leaf — the physical half of
@@ -1687,4 +1422,26 @@ pub fn to_meta_value(value: &Value) -> Result<MetaValue, Fault> {
             )));
         }
     })
+}
+
+#[cfg(test)]
+mod metadata_conformance_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_uses_the_core_value_and_type_authorities() {
+        let largest_int = MetaValue::Scalar(Scalar::Int(i64::from(i32::MAX)));
+        let oversized_int = MetaValue::Scalar(Scalar::Int(i64::from(i32::MAX) + 1));
+        assert!(meta_conforms(&largest_int, &DataType::Int));
+        assert!(!meta_conforms(&oversized_int, &DataType::Int));
+
+        let malformed_decimal = MetaValue::Scalar(Scalar::Decimal {
+            unscaled: 1,
+            scale: crate::datatype::DECIMAL_MAX_SCALE + 1,
+        });
+        assert!(
+            !meta_conforms(&malformed_decimal, &DataType::Variant),
+            "variant is dynamic, not an escape from value well-formedness"
+        );
+    }
 }

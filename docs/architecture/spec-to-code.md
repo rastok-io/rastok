@@ -38,6 +38,7 @@ they are not promised crate names.
 | Contract interlude | One compiler-layer node contract authority: attribute domains, `Required`/`Optional`/`Defaulted`, profiles, pre-hash default injection; adapter binding before VM/journal | `contract`, `stdlib`, `compiler::check`, `connectors::Process::try_new` | sheet validation, identity equivalence, forged/stripped plan refusals, adapter conformance |
 | Parser interlude | Forward lexeme stream with lexer-owned cursor/lookahead; reserved `json`/`nothing`; no implicit yield; semantic region delegation; bounded structural recovery | `compiler::{lexer,parser,syntax}`, `trivia`, `cel`, `json` | success/rejection/diagnostic-location matrices, sibling-preservation regressions, unchanged valid-program hash |
 | Plan package v6 | The VM accepts only `ValidatedExecutionPlan`; shared bounded canonical CBOR; v5 body plus decimal call id 4 under a v6 envelope | `plan::{serialization,validation}`, `canonical_cbor`, `identity::encoding` | canonical round trip, typed corruptions, `no_std` decode and emulated Cortex-M33 spike |
+| M1.3 core judges | One structural validation authority for materialized values and one recursive conformance authority for the executable logical-type subset; decimal128 bounds are type-domain policy, not JSON policy | `value::{Value::validate,ValueError}`, `datatype::{DataType::violation,ConformanceViolation}`, consumed by plan/runtime/VM doors | nested-path refusals, metadata range parity, workspace gates and unchanged embedded hash |
 
 ## M1.3 target (landing in ordered gates)
 
@@ -47,6 +48,9 @@ they are not promised crate names.
 
 Core `datatype::DataType` and `value::Value` now own the executable type and
 materialized-value subsets without moving the v6 wire ids or semantic hashes.
+Their validation and recursive conformance judges are likewise core-owned and
+shared by plan constants, metadata, state, ingress and emitted values; JSON
+keeps only origin-specific reading/writing rules.
 The expression-only `cel::EvalValue` may additionally carry the lazy payload
 witness, but cannot cross into plans, envelopes, or journals. The remaining
 `error_set`, `TypedError` and success/failure-only boundary reply are

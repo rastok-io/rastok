@@ -80,6 +80,7 @@ canonical record projection ─▶ golden compare
 
 ```text
 crates/rastok-core/src/       # the kernel — #![no_std] + alloc (split at M0.5)
+├── datatype.rs, value.rs       # logical types, values, validation/conformance
 ├── node.rs, envelope.rs, cel.rs, plan.rs
 ├── canonical_cbor.rs         # one bounded canonical byte discipline
 ├── identity/encoding.rs      # tagged-value identity registry
@@ -215,6 +216,13 @@ lazy whole-payload witness may flow through locals and expressions; conversion
 to a core value rejects any unresolved witness. Inside the kernel the chain
 also shares foundational utilities: canonical nesting/double rules, the exact
 number reader, and the single comment recognizer.
+
+Core also owns the executable judges: `Value::validate` rejects malformed
+materialized values independently of where they entered, while
+`DataType::violation` reports recursive conformance failures with their nested
+path. The plan gate, metadata/state doors, VM ingress and emission gate consume
+those same operations; JSON retains only its origin-specific number and
+document rules.
 
 This is current implementation state, not the completed M1.3 authority.
 M1.3 expands the core value algebra, renames this consumer boundary to `expr`,
@@ -521,8 +529,11 @@ The chronological detail and commit evidence remain in
   metamodel; defaults are injected before identity, and the parser is a
   forward lexeme-stream parser. The lexer owns cursor/lookahead and
   delegates CEL, JSON, verbatim, and guest regions without rewind.
-- **Next:** M1.3 lands one logical `DataType`/`Value`, uniform resolved
-  port contracts, JSON/Avro/Arrow union projections, tagged frontends,
-  and multi-output boundary completion. `per`, joins, new adapters,
+- **M1.3 foundation:** one executable `DataType`/`Value` ownership,
+  validation and recursive conformance authority now serves plans, state,
+  metadata, expressions and VM doors without an identity move.
+- **Next:** M1.3 expands that algebra, then lands uniform resolved port
+  contracts, JSON/Avro/Arrow union projections, tagged frontends and
+  multi-output boundary completion. `per`, joins, new adapters,
   Loop, counters, and `--watch` remain guarded in the order recorded by
   the slice.
