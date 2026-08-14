@@ -490,20 +490,55 @@ fn a_callable_foreign_connector_refuses_at_bind() {
     // the Process adapter and strand them open — the binding
     // refuses it by name. A PURE SOURCE (no incoming edge) is
     // merely skipped: nothing will ever call it.
-    let message = bind_error(|spec| {
-        spec.contract = String::from("Custom");
-    });
-    assert!(
-        message.contains("callable `Custom` connector has no adapter"),
-        "{message}"
-    );
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
             spec.contract = String::from("Custom");
+            node.ports.extend([
+                rastok::plan::PortDecl {
+                    port: rastok::node::Port::new("in").expect("a conventional port"),
+                    direction: rastok::node::Direction::Input,
+                    ty: Some(rastok::datatype::DataType::Text),
+                },
+                rastok::plan::PortDecl {
+                    port: rastok::node::Port::new("out").expect("a conventional port"),
+                    direction: rastok::node::Direction::Output,
+                    ty: Some(rastok::datatype::DataType::Text),
+                },
+                rastok::plan::PortDecl {
+                    port: rastok::node::Port::new("err").expect("a conventional port"),
+                    direction: rastok::node::Direction::Output,
+                    ty: Some(rastok::datatype::DataType::Variant),
+                },
+            ]);
+            node.ports
+                .sort_by(|left, right| left.key().cmp(&right.key()));
         }
     }
+    plan.boundary.extend([
+        rastok::plan::PortDecl {
+            port: rastok::node::Port::new("in").expect("a conventional port"),
+            direction: rastok::node::Direction::Input,
+            ty: Some(rastok::datatype::DataType::Text),
+        },
+        rastok::plan::PortDecl {
+            port: rastok::node::Port::new("out").expect("a conventional port"),
+            direction: rastok::node::Direction::Output,
+            ty: Some(rastok::datatype::DataType::Text),
+        },
+    ]);
+    plan.boundary
+        .sort_by(|left, right| left.key().cmp(&right.key()));
+    let callable = rastok::plan::ValidatedExecutionPlan::try_from(plan.clone())
+        .expect("the foreign connector is structurally typed");
+    let message = rastok::connectors::Process::try_new(&callable)
+        .expect_err("the callable foreign connector refuses")
+        .to_string();
+    assert!(
+        message.contains("callable `Custom` connector has no adapter"),
+        "{message}"
+    );
     // Sever every edge DELIVERING to the connector: a pure source.
     // The slot is DERIVED from the node, never hard-coded to the
     // lowering order.
@@ -716,7 +751,7 @@ fn tag_words_serve_as_choice_words_on_another_sheet() {
         .expect("a valid sheet");
     for word in ["text", "json", "unbounded"] {
         let source = format!(
-            "graph g : App {{\n  connector p : Probe {{\n    framing = {word}\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> p -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  output out: variant\n  connector p : Probe {{\n    framing = {word}\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> p -> .\n}}\n"
         );
         let result = compile(&[source.as_str()], &registry);
         assert!(result.is_ok(), "`framing = {word}` compiles: {result:?}");
@@ -993,14 +1028,14 @@ fn json_and_nothing_are_unmaskable() {
         );
     }
     // The value forms themselves stay whole.
-    compile_one("graph g : App {\n  operator o {\n    on in { out = json {\"a\": 1} }\n  }\n  . -> o -> .\n}\n")
+    compile_one("graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json {\"a\": 1} }\n  }\n  . -> o -> .\n}\n")
         .expect("json object lives");
     compile_one(
-        "graph g : App {\n  operator o {\n    on in { out = json [1, 2] }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json [1, 2] }\n  }\n  . -> o -> .\n}\n",
     )
     .expect("json array lives");
     compile_one(
-        "graph g : App {\n  operator o {\n    on in { out = nothing }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = nothing }\n  }\n  . -> o -> .\n}\n",
     )
     .expect("nothing lives");
     // With no maskable binding, `json[0]` IS the document `[0]` —
@@ -1008,18 +1043,20 @@ fn json_and_nothing_are_unmaskable() {
     let hash = |source: &str| compile_one(source).expect("valid").hash.to_string();
     assert_eq!(
         hash(
-            "graph g : App {\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n"
+            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n"
         ),
         hash(
-            "graph g : App {\n  operator o {\n    on in { out = json [0] }\n  }\n  . -> o -> .\n}\n"
+            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json [0] }\n  }\n  . -> o -> .\n}\n"
         ),
         "spacing is not identity"
     );
     assert_ne!(
         hash(
-            "graph g : App {\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n"
+            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n"
         ),
-        hash("graph g : App {\n  operator o {\n    on in { out = [0] }\n  }\n  . -> o -> .\n}\n"),
+        hash(
+            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = [0] }\n  }\n  . -> o -> .\n}\n"
+        ),
         "a variant document is not the CEL list"
     );
 }
@@ -1125,8 +1162,8 @@ fn json_trivia_belongs_to_the_host() {
     // A same-line comment between the tag and the body is HOST
     // trivia — the reader never sees it, and the identity is the
     // same as the uncommented spelling.
-    let commented = "graph g : App {\n  operator o {\n    on in { out = json /* c */ {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
-    let plain = "graph g : App {\n  operator o {\n    on in { out = json {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
+    let commented = "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json /* c */ {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
+    let plain = "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
     let a = compile_one(commented).expect("valid");
     let b = compile_one(plain).expect("valid");
     assert_eq!(

@@ -131,6 +131,31 @@ pub fn compile_with_assets(
             );
             return Err(bag);
         }
+        Err(
+            error @ (PlanValidationError::UnresolvedPortType { .. }
+            | PlanValidationError::ConflictingPortTypes { .. }
+            | PlanValidationError::MismatchedEdgePins { .. }),
+        ) => {
+            bag.push(type_resolution_diagnostic(&error));
+            return Err(bag);
+        }
+        Err(PlanValidationError::DataTypeNotInFormat {
+            location,
+            ty,
+            format,
+        }) => {
+            bag.push(
+                Diagnostic::new(
+                    check::E_CHECK_DEFERRED,
+                    Phase::Check,
+                    format!(
+                        "`{location}` resolves to {ty}, which this build cannot yet transport in plan-package v{format}"
+                    ),
+                )
+                .with_field("construct", "plan-package v7 type transport"),
+            );
+            return Err(bag);
+        }
         Err(error) => {
             bag.push(internal_plan_diagnostic(&error));
             return Err(bag);
@@ -143,6 +168,61 @@ pub fn compile_with_assets(
         warnings: bag.into_diagnostics(),
         labs: hir.labs,
     })
+}
+
+fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
+    match error {
+        PlanValidationError::UnresolvedPortType { node, port } => Diagnostic::new(
+            check::E_PORT_TYPE,
+            Phase::Check,
+            match node {
+                Some(node) => format!(
+                    "`{node}.{port}` has no effective payload type; add a type constraint"
+                ),
+                None => format!(
+                    "the boundary port `{port}` has no effective payload type; add a type constraint"
+                ),
+            },
+        )
+        .with_field("port", port.name())
+        .with_field("expected", "a resolved logical type")
+        .with_field("found", "an unsolved inference variable"),
+        PlanValidationError::ConflictingPortTypes {
+            node,
+            port,
+            expected,
+            found,
+        } => Diagnostic::new(
+            check::E_PORT_TYPE,
+            Phase::Check,
+            match node {
+                Some(node) => format!(
+                    "`{node}.{port}` requires {expected}, but a producer supplies {found}"
+                ),
+                None => format!(
+                    "the boundary port `{port}` requires {expected}, but a producer supplies {found}"
+                ),
+            },
+        )
+        .with_field("port", port.name())
+        .with_field("expected", expected.to_string())
+        .with_field("found", found.to_string()),
+        PlanValidationError::MismatchedEdgePins {
+            port,
+            expected,
+            found,
+        } => Diagnostic::new(
+            check::E_PORT_TYPE,
+            Phase::Check,
+            format!(
+                "`{port}` requires {expected}, but its producer supplies {found}"
+            ),
+        )
+        .with_field("port", port.name())
+        .with_field("expected", expected.to_string())
+        .with_field("found", found.to_string()),
+        _ => internal_plan_diagnostic(error),
+    }
 }
 
 /// The diagnostic for a lowering/validator disagreement. The payload

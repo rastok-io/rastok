@@ -68,8 +68,8 @@ fn a_read_never_written_refuses() {
 fn inference_is_order_independent() {
     // The same writes in either textual order seal the same schema
     // and the same semantic hash.
-    let ab = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
-    let ba = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.second = 2\n        meta.app.first = \"a\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let ab = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let ba = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.second = 2\n        meta.app.first = \"a\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let first = compile(
         &[ab],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -83,7 +83,7 @@ fn inference_is_order_independent() {
     // The write ORDER is identity (the fold executes in order), so
     // the hashes differ — but both compile, and reading either
     // field is legal in both:
-    let reads = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in where meta.app.first == \"a\" { out = data }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let reads = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in where meta.app.first == \"a\" { out = data }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
     compile(
         &[reads],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -147,6 +147,7 @@ fn the_lab_cannot_extend_the_production_schema() {
     // widens it.
     let source = r#"
 graph g : App {
+  input in: variant
   operator o {
     on in { out = data }
   }
@@ -196,6 +197,7 @@ fn an_injection_seeds_ext_and_the_graph_copies_it() {
     // it wants to keep into `app` — explicitly.
     let source = r#"
 graph g : App {
+  input in: variant
   operator o {
     on in {
       out = {
@@ -236,7 +238,7 @@ fn the_lab_never_moves_the_production_hash() {
     // The proof D-2026-08-10-1 demands: adding a Lab — fixtures,
     // mocks, expectations — changes neither the plan nor the
     // semantic hash of the deployed graph.
-    let graph = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.kept = \"x\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let graph = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.kept = \"x\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let with_lab = format!(
         "{graph}\nlab g {{\n  simulation probing on app {{\n    scenario s \"observes\" {{\n      app.in = {{ v = 1 }}\n      expect \"out\" app.out count == 1 where meta.app.kept == \"x\"\n    }}\n  }}\n}}\n"
     );
@@ -271,7 +273,7 @@ fn content_type_follows_the_payload_not_the_merge() {
 
     let run = |body: &str| {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: text\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],

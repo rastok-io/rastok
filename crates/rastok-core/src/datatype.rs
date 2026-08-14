@@ -698,6 +698,72 @@ impl DataType {
         })
     }
 
+    /// Closed record with no fields.
+    #[must_use]
+    pub fn empty_struct() -> Self {
+        Self::Struct(StructType(Vec::new()))
+    }
+
+    /// Whether every value admitted by `self` is also admitted by `target`.
+    ///
+    /// This is the one static compatibility relation used when values cross
+    /// ports, enter state, or satisfy a declared metadata field. It is about
+    /// logical values, not representation: a codec or an Arrow/Avro layout
+    /// cannot make two otherwise distinct logical types assignable.
+    #[must_use]
+    pub fn is_assignable_to(&self, target: &Self) -> bool {
+        if self == target || matches!(target, Self::Variant) {
+            return true;
+        }
+        match (self, target) {
+            // An explicitly dynamic value must be narrowed before entering a
+            // precise type. It is deliberately not the top half of a
+            // symmetric wildcard rule.
+            (Self::Variant, _) => false,
+            (Self::Integer(source), Self::Integer(target)) => integer_assignable(*source, *target),
+            (Self::Integer(_) | Self::Decimal(_), Self::Number) => true,
+            (Self::Float(source), Self::Float(target)) => source.bits() <= target.bits(),
+            (Self::Bytes(BinaryType::Fixed(_)), Self::Bytes(BinaryType::Variable)) => true,
+            (Self::Array(source), Self::Array(target)) => {
+                array_length_assignable(source.length(), target.length())
+                    && source.element().is_assignable_to(target.element())
+            }
+            (Self::Map(source), Self::Map(target)) => {
+                source.key() == target.key() && source.value().is_assignable_to(target.value())
+            }
+            (Self::Struct(source), Self::Struct(target)) => {
+                source.fields().len() == target.fields().len()
+                    && source
+                        .fields()
+                        .iter()
+                        .zip(target.fields())
+                        .all(|(a, b)| a.name() == b.name() && a.ty().is_assignable_to(b.ty()))
+            }
+            (Self::Enum(source), Self::Enum(target)) => source
+                .symbols()
+                .iter()
+                .all(|symbol| target.symbols().contains(symbol)),
+            (Self::StructuralUnion(source), target) => source
+                .branches()
+                .iter()
+                .all(|branch| branch.is_assignable_to(target)),
+            (source, Self::StructuralUnion(target)) => target
+                .branches()
+                .iter()
+                .any(|branch| source.is_assignable_to(branch)),
+            (Self::TaggedUnion(source), Self::TaggedUnion(target)) => {
+                source.cases().iter().all(|source_case| {
+                    target.cases().iter().any(|target_case| {
+                        source_case.name() == target_case.name()
+                            && Self::Struct(source_case.payload().clone())
+                                .is_assignable_to(&Self::Struct(target_case.payload().clone()))
+                    })
+                })
+            }
+            _ => false,
+        }
+    }
+
     /// Builds a structural union, flattening nested structural unions and
     /// sorting branches by the canonical type order.
     ///
@@ -1109,6 +1175,29 @@ fn arrays_overlap(left: &ArrayType, right: &ArrayType) -> bool {
         (None, None) => true,
         (None, Some(length)) | (Some(length), None) if length.get() == 0 => true,
         _ => left.element().overlaps(right.element()),
+    }
+}
+
+fn integer_assignable(source: IntegerType, target: IntegerType) -> bool {
+    match (source, target) {
+        (IntegerType::Signed(source), IntegerType::Signed(target))
+        | (IntegerType::Unsigned(source), IntegerType::Unsigned(target)) => {
+            source.bits() <= target.bits()
+        }
+        // A u8 fits in i16, a u16 in i32, and a u32 in i64. No
+        // supported signed width can contain all u64 values.
+        (IntegerType::Unsigned(source), IntegerType::Signed(target)) => {
+            source.bits() < target.bits()
+        }
+        (IntegerType::Signed(_), IntegerType::Unsigned(_)) => false,
+    }
+}
+
+fn array_length_assignable(source: Option<ArrayLength>, target: Option<ArrayLength>) -> bool {
+    match (source, target) {
+        (_, None) => true,
+        (Some(source), Some(target)) => source == target,
+        (None, Some(_)) => false,
     }
 }
 
@@ -1572,6 +1661,31 @@ mod tests {
             panic!("optional is a structural union");
         };
         assert_eq!(union.branches(), &[DataType::Null, DataType::Text]);
+    }
+
+    #[test]
+    fn assignability_is_directional_and_structural() {
+        assert!(DataType::INT.is_assignable_to(&DataType::LONG));
+        assert!(!DataType::LONG.is_assignable_to(&DataType::INT));
+        assert!(DataType::INT.is_assignable_to(&DataType::Number));
+        assert!(DataType::INT.is_assignable_to(&DataType::Variant));
+        assert!(!DataType::Variant.is_assignable_to(&DataType::INT));
+
+        let optional_text = DataType::Text
+            .optional()
+            .expect("text and null are disjoint");
+        assert!(DataType::Text.is_assignable_to(&optional_text));
+        assert!(DataType::Null.is_assignable_to(&optional_text));
+        assert!(!optional_text.is_assignable_to(&DataType::Text));
+
+        let narrow = DataType::Struct(
+            StructType::new(alloc::vec![TypeField::new("n", DataType::INT)]).expect("one field"),
+        );
+        let wide = DataType::Struct(
+            StructType::new(alloc::vec![TypeField::new("n", DataType::LONG)]).expect("one field"),
+        );
+        assert!(narrow.is_assignable_to(&wide));
+        assert!(!wide.is_assignable_to(&narrow));
     }
 
     #[test]

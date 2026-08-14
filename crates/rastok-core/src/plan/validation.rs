@@ -96,9 +96,9 @@ pub enum PlanValidationError {
         /// The repeated key.
         key: String,
     },
-    /// A port table declares one of the implicit defaults — `in`,
-    /// `out`, and `err` are always present and never declared, on
-    /// nodes and at the boundary alike.
+    /// A port table redundantly declares an untyped conventional port.
+    /// `in`, `out`, and `err` already exist; only an explicit type adds
+    /// semantic information worth transporting in the raw v6 table.
     ImplicitPortDeclared {
         /// The declaring node; `None` is the boundary.
         node: Option<node::Path>,
@@ -220,6 +220,25 @@ pub enum PlanValidationError {
         /// The target's pin.
         expected: DataType,
         /// The source's pin.
+        found: DataType,
+    },
+    /// A port survived every inference constraint without one effective
+    /// logical type. `variant` is never substituted for this state.
+    UnresolvedPortType {
+        /// The owning node; `None` is the graph boundary.
+        node: Option<node::Path>,
+        /// The unresolved port.
+        port: node::Port,
+    },
+    /// Two constraints on one port cannot both hold.
+    ConflictingPortTypes {
+        /// The owning node; `None` is the graph boundary.
+        node: Option<node::Path>,
+        /// The constrained port.
+        port: node::Port,
+        /// The type already required there.
+        expected: DataType,
+        /// The incompatible producing type.
         found: DataType,
     },
     /// A logical type violates the canonical algebra's global budgets. Local
@@ -391,6 +410,31 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: `{port}` is pinned to {expected:?}, its source to {found:?}"
             ),
+            Self::UnresolvedPortType { node, port } => match node {
+                Some(node) => write!(
+                    f,
+                    "invalid plan: `{node}.{port}` has no effective type after inference"
+                ),
+                None => write!(
+                    f,
+                    "invalid plan: boundary port `{port}` has no effective type after inference"
+                ),
+            },
+            Self::ConflictingPortTypes {
+                node,
+                port,
+                expected,
+                found,
+            } => match node {
+                Some(node) => write!(
+                    f,
+                    "invalid plan: `{node}.{port}` requires {expected}, but also receives {found}"
+                ),
+                None => write!(
+                    f,
+                    "invalid plan: boundary port `{port}` requires {expected}, but also receives {found}"
+                ),
+            },
             Self::InvalidDataType { location, reason } => {
                 write!(f, "invalid plan: type at {location} is invalid: {reason}")
             }
@@ -425,7 +469,10 @@ impl core::error::Error for PlanValidationError {}
 /// holding the type IS holding the property. The machine and the
 /// codec accept only this type.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValidatedExecutionPlan(ExecutionPlan);
+pub struct ValidatedExecutionPlan {
+    plan: ExecutionPlan,
+    resolved_ports: super::type_resolution::ResolvedPortTable,
+}
 
 impl ValidatedExecutionPlan {
     /// Validates a raw plan.
@@ -442,20 +489,34 @@ impl ValidatedExecutionPlan {
     /// The first violated invariant, named.
     pub fn try_new(plan: ExecutionPlan) -> Result<Self, PlanValidationError> {
         validate(&plan)?;
-        Ok(Self(plan))
+        let resolved_ports = super::type_resolution::resolve(&plan)?;
+        Ok(Self {
+            plan,
+            resolved_ports,
+        })
     }
 
     /// Read access to the validated plan.
     #[must_use]
     pub fn plan(&self) -> &ExecutionPlan {
-        &self.0
+        &self.plan
+    }
+
+    /// Effective logical types of every graph-boundary and node port.
+    ///
+    /// Unlike the raw v6 declarations, this table contains no inference
+    /// variable and no recovery hole. It is derived again when a package is
+    /// decoded; B8 will make it part of the published v7 representation.
+    #[must_use]
+    pub const fn resolved_ports(&self) -> &super::type_resolution::ResolvedPortTable {
+        &self.resolved_ports
     }
 
     /// Gives the raw plan back — the validity claim does not travel
     /// with it.
     #[must_use]
     pub fn into_inner(self) -> ExecutionPlan {
-        self.0
+        self.plan
     }
 }
 
@@ -474,7 +535,7 @@ impl core::ops::Deref for ValidatedExecutionPlan {
     type Target = ExecutionPlan;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.plan
     }
 }
 
@@ -810,20 +871,53 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             });
         }
     }
-    // The implicit trio is exactly that — implicit: `in`, `out`, and
-    // `err` are always present and never appear in a declared table,
-    // on nodes or at the boundary. The checker holds the surface to
-    // the same rule, so a table naming them is a byte form the
-    // lowering can never emit.
-    let implicit = |port: &node::Port| matches!(port.name(), "in" | "out" | "err");
-    if let Some(decl) = plan.boundary.iter().find(|decl| implicit(&decl.port)) {
+    // Untyped conventional declarations are redundant byte forms. A
+    // typed declaration is different: it carries a source constraint
+    // that B2 must retain until the complete resolved table ships in v7.
+    let conventional_direction = |port: &node::Port| match port.name() {
+        "in" => Some(node::Direction::Input),
+        "out" | "err" => Some(node::Direction::Output),
+        _ => None,
+    };
+    let implicit = |port: &node::Port| conventional_direction(port).is_some();
+    if let Some((decl, expected)) = plan.boundary.iter().find_map(|decl| {
+        conventional_direction(&decl.port)
+            .filter(|expected| decl.direction != *expected)
+            .map(|expected| (decl, expected))
+    }) {
+        return Err(PlanValidationError::WrongPortDirection {
+            node: None,
+            port: decl.port.clone(),
+            expected,
+        });
+    }
+    if let Some(decl) = plan
+        .boundary
+        .iter()
+        .find(|decl| implicit(&decl.port) && decl.ty.is_none())
+    {
         return Err(PlanValidationError::ImplicitPortDeclared {
             node: None,
             port: decl.port.clone(),
         });
     }
     for (node_index, node) in plan.nodes.iter().enumerate() {
-        if let Some(decl) = node.ports.iter().find(|decl| implicit(&decl.port)) {
+        if let Some((decl, expected)) = node.ports.iter().find_map(|decl| {
+            conventional_direction(&decl.port)
+                .filter(|expected| decl.direction != *expected)
+                .map(|expected| (decl, expected))
+        }) {
+            return Err(PlanValidationError::WrongPortDirection {
+                node: Some(node.path.clone()),
+                port: decl.port.clone(),
+                expected,
+            });
+        }
+        if let Some(decl) = node
+            .ports
+            .iter()
+            .find(|decl| implicit(&decl.port) && decl.ty.is_none())
+        {
             return Err(PlanValidationError::ImplicitPortDeclared {
                 node: Some(node.path.clone()),
                 port: decl.port.clone(),
@@ -962,10 +1056,9 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     }
 
     // References: slots, ports in their roles, handlers, vars. The
-    // implicit trio is always available in its fixed directions, and
-    // a declared table EXTENDS it — the same union the checker
-    // applies to the surface language (`add_port` never adds a
-    // default), so the two can never disagree about a program.
+    // The conventional trio is always available in its fixed directions.
+    // A typed restatement may additionally occur in the table; direction
+    // remains conventional while the row supplies its source constraint.
     let has_port = |node: &Node, port: &node::Port, direction: node::Direction| match port.name() {
         "in" => direction == node::Direction::Input,
         "out" | "err" => direction == node::Direction::Output,
@@ -1017,10 +1110,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         node::Direction::Output => node::Direction::Input,
                         node::Direction::Input => node::Direction::Output,
                     };
-                    // The implicit trio first — `in` is the graph's
-                    // input, `out` and `err` its outputs — then the
-                    // declared table, which extends it and (checked
-                    // above) never contains it.
+                    // Conventional direction first — `in` is the graph's
+                    // input, `out` and `err` its outputs — then extra rows.
                     let actual = match endpoint.port.name() {
                         "in" => Some(node::Direction::Input),
                         "out" | "err" => Some(node::Direction::Output),
@@ -1056,7 +1147,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // holds the surface to; endpoint slots are proven above, so the
     // lookups dereference safely.
     let pin_of = |endpoint: &EndpointRef| -> Option<DataType> {
-        let decl_ty = match endpoint.node {
+        match endpoint.node {
             Some(slot) => {
                 let node = &plan.nodes[slot.index()];
                 node.ports
@@ -1064,15 +1155,14 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     .find(|decl| decl.port == endpoint.port)
                     .and_then(|decl| decl.ty.clone())
                     .or_else(|| {
-                        // The connector contract's EFFECTIVE out pin
+                        // The connector contract's effective conventional pin
                         // — the same authority the checker, the
                         // mock judge, and the machine consult
                         // (D-2026-08-11-1, amended).
-                        if endpoint.port.name() != "out" {
-                            return None;
-                        }
                         match &node.kind {
-                            NodeKind::Connector(spec) => crate::boundary::connector_out_pin(spec),
+                            NodeKind::Connector(spec) => {
+                                crate::boundary::resolved_port_type(spec, &endpoint.port)
+                            }
                             NodeKind::Operator => None,
                         }
                     })
@@ -1082,17 +1172,13 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 .iter()
                 .find(|decl| decl.port == endpoint.port)
                 .and_then(|decl| decl.ty.clone()),
-        };
-        // A `variant` pin admits anything — the same rule the
-        // checker and the runtime judge apply; only two PRECISE
-        // pins can disagree.
-        decl_ty.filter(|ty| !matches!(ty, DataType::Variant))
+        }
     };
     for edge in &plan.edges {
         if let Some(to) = &edge.to
             && let Some(found) = pin_of(&edge.from)
             && let Some(expected) = pin_of(to)
-            && found != expected
+            && !found.is_assignable_to(&expected)
         {
             return Err(PlanValidationError::MismatchedEdgePins {
                 port: to.port.clone(),

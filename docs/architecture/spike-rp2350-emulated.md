@@ -66,41 +66,43 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (430-byte v6 package, full invariant validation + canonicity re-encode; re-measured 2026-08-14 after the complete logical `DataType` algebra landed behind the v6 format gate) | 4 856 | 243 k | 1.62 ms |
+| `plan::decode` (430-byte v6 package, full invariant validation + effective-port resolution + canonicity re-encode; re-measured 2026-08-14 after M1.3 B2) | 6 041 | 302 k | 2.01 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and CEL bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32; re-measured 2026-08-14 — deterministic under this QEMU icount run) | 2 161 (min 2 109 / max 2 421) | **108 k** | **0.72 ms** |
+| relay transaction (avg of 32; re-measured 2026-08-14 — deterministic under this QEMU icount run) | 2 215 (min 2 156 / max 2 460) | **111 k** | **0.74 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-14 with the complete logical type algebra aboard) | 63 368 B (61.9 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 226 132 + 35 220 = 261 352 B (255.2 KiB; re-measured 2026-08-14) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-14 with the B2 resolved table aboard) | 63 832 B (62.3 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 267 836 + 36 344 = 304 180 B (297.1 KiB; re-measured 2026-08-14) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
 
-- The relay transaction meets its criterion with a **1.4× margin**,
+- The relay transaction meets its criterion with a **1.35× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 4 856 across the
+- Package decode grew from v1's 1 468 ticks to 6 041 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
   nesting budget, the domain-order audits) and the canonicity
   re-encode are
   integrity work done once at boot, and the price is stated rather
   than hidden. The 2026-08-14 logical type landing leaves the v6
-  package and semantic hash byte-identical, but this landing costs 95
-  decode ticks and 278 ticks on the measured relay path. No
+  package and semantic hash byte-identical. B2 then adds 1 185 decode
+  ticks to derive and validate the complete effective port table, 54 ticks
+  on the measured relay path, and 464 bytes at the heap peak; the validator
+  does not substitute `variant` merely to save these resources. No
   criterion bounds boot cost; the transaction path remains below its
   recorded bound.
-- Flash grew from 193 KiB to 255.2 KiB (`.text` 226 132 B +
-  `.rodata` 35 220 B, re-measured 2026-08-14): the consolidated
+- Flash grew from 193 KiB to 297.1 KiB (`.text` 267 836 B +
+  `.rodata` 36 344 B, re-measured 2026-08-14): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
-  complete logical-type algebra and validator link into the kernel even
-  for a `lines` plan — the core is one crate, and dead-code elimination keeps
-  what the plan decoder can reach. The 1 MiB criterion holds with a
-  4.0× margin; trimming by feature gate is noted, not needed.
-- The true high-water mark (61.9 KiB) sits above the old sampled
+  complete logical-type algebra, inference solver and validator link into
+  the kernel even for a `lines` plan — the core is one crate, and dead-code
+  elimination keeps what the plan decoder can reach. The 1 MiB criterion holds with a
+  3.4× margin; trimming by feature gate is noted, not needed.
+- The true high-water mark (62.3 KiB) sits above the old sampled
   figure (57.2 KiB), as a real peak must; the first M1 lift added
   the ingress port to every inbound record (+688 B over 32 rounds),
   and the consolidated reform's five-field spine and ext zone
@@ -144,9 +146,9 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
 instrumentation and re-measured 2026-08-14 on package v6.** All four
-criteria of record hold: no patched dependencies, 108 k instructions
-per relay transaction against the 150 k bound (1.4×), a 61.9 KiB true
-high-water mark against 128 KiB, 255.2 KiB of flash against 1 MiB. The
+criteria of record hold: no patched dependencies, 111 k instructions
+per relay transaction against the 150 k bound (1.35×), a 62.3 KiB true
+high-water mark against 128 KiB, 297.1 KiB of flash against 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as
 planned — no embedded chantier opens. Silicon confirmation (volet B)

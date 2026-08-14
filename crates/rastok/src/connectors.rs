@@ -993,13 +993,14 @@ graph real : App {
 "#;
 
     fn submission(text: &str) -> InboundSubmission {
-        let mut data = std::collections::BTreeMap::new();
-        data.insert(String::from("text"), Value::Text(String::from(text)));
         InboundSubmission {
             authority: IngressAuthority::single(crate::node::Path::new(["cli"]).unwrap()),
             port: crate::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Map(data)),
+                data: Data::materialized(Value::Struct(vec![(
+                    String::from("text"),
+                    Value::Text(String::from(text)),
+                )])),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
@@ -1373,11 +1374,11 @@ graph hoarse : App {
     }
 
     #[test]
-    fn an_unframeable_request_never_opens_a_call() {
-        // The prepared request is sealed before the open fact: an
-        // unframeable payload refuses as a typed decode error with
-        // NO outbound record — the journal never promises an effect
-        // that cannot be attempted.
+    fn an_unframeable_request_never_reaches_the_call_boundary() {
+        // B2 resolves the whole route to `text`: a structured ingress
+        // refuses at the final pin before any mailbox or outbound fact.
+        // The adapter-level framing refusal remains a defence for forged
+        // plans, not a state a checked graph can normally reach.
         let source = r#"
 graph unframeable : App {
   connector echo : Process {
@@ -1393,22 +1394,18 @@ graph unframeable : App {
   . -> shout -> echo -> .
 }
 "#;
-        let (journal, outputs, errors) = run(source, "salut");
-        assert!(outputs.is_empty());
-        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
-            panic!("expected the typed error payload");
-        };
-        assert_eq!(
-            payload.get("kind"),
-            Some(&Value::Text(String::from("DecodeError")))
-        );
+        let compilation = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the route resolves to text");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         assert!(
-            !journal
-                .records()
-                .iter()
-                .any(|record| matches!(record, Record::Outbound(_))),
-            "no open fact for an unattemptable effect"
+            vm.inject(&mut journal, submission("salut")).is_err(),
+            "a struct cannot enter a text route"
         );
+        assert!(journal.records().is_empty(), "nothing was journaled");
     }
 
     /// A scripted reader for the pump seam: each step answers one

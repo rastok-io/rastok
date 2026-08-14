@@ -233,7 +233,7 @@ operator subset.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private wrapper around the tables and expression trees of `ExecutionPlan`, constructible only through validation | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | M0.5, extended in M1 |
+| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; construction validates structure, solves every used/declared port, and rejects unresolved or conflicting constraints | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [plan-package.md](plan-package.md) | M1.3 B2; v6 re-derives the table, v7 will transport it |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -530,10 +530,12 @@ The chronological detail and commit evidence remain in
   forward lexeme-stream parser. The lexer owns cursor/lookahead and
   delegates CEL, JSON, verbatim, and guest regions without rewind.
 - **M1.3 foundation:** one executable `DataType`/`Value` ownership,
-  validation and recursive conformance authority now serves plans, state,
-  metadata, expressions and VM doors without an identity move.
-- **Next:** M1.3 expands that algebra, then lands uniform resolved port
-  contracts, JSON/Avro/Arrow union projections, tagged frontends and
+  validation and recursive conformance authority serves plans, state,
+  metadata, expressions and VM doors. B2 adds a total effective port table,
+  with declared/inferred origin, and makes unresolved/conflicting constraints
+  typed refusals without a package-format move.
+- **Next:** M1.3 completes the new value families and lands uniform connector
+  port contracts, JSON/Avro/Arrow union projections, tagged frontends and
   multi-output boundary completion. `per`, joins, new adapters,
   Loop, counters, and `--watch` remain guarded in the order recorded by
   the slice.

@@ -959,6 +959,13 @@ addition would silently reclassify existing records).
 
 ## D-2026-08-08-3 — A pinned port type is a public contract
 
+> **Partly superseded by D-2026-08-14-1 and M1.3 B2.** An omitted annotation
+> is now a compiler-only inference variable that must resolve before execution;
+> `variant` is an explicit dynamic type, not symmetric inference territory.
+> Precise → variant is assignable; variant → precise requires narrowing. The
+> annotation remains identity material in v6, while the derived effective
+> table is recomputed by validation until v7 transports it.
+
 Second multiport lift. A port annotation (`input evt : text`)
 resolves through the same type subset as state cells (its deferrals
 refuse identically) and becomes part of the port's declaration

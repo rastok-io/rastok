@@ -376,19 +376,13 @@ impl<'plan> Vm<'plan> {
             value
                 .validate()
                 .map_err(|error| VmError::Fault(crate::runtime::Fault::InvalidValue(error)))?;
-            let own_pin = self
-                .plan
-                .boundary
-                .iter()
-                .find(|decl| decl.port == submission.port)
-                .and_then(|decl| decl.ty.as_ref());
-            crate::runtime::crossing_pins_hold(self.plan.plan(), &from, own_pin, value).map_err(
-                |refused| VmError::IngressPinViolation {
+            crate::runtime::crossing_pins_hold(self.plan, &from, value).map_err(|refused| {
+                VmError::IngressPinViolation {
                     ingress: submission.port.clone(),
                     rejected_at: refused.at,
                     violation: refused.violation,
-                },
-            )?;
+                }
+            })?;
         }
         self.reserve_targets(&from)?;
         let committed = journal
@@ -757,22 +751,8 @@ impl<'plan> Vm<'plan> {
                 node: Some(slot),
                 port: out,
             };
-            // The connector's own pin is the CONTRACT's reply type —
-            // a mock answering a record over jsonl is judged exactly
-            // like a real child would be shaped: array<variant> or
-            // the typed refusal. `connector_out_pin` is the ONE
-            // effective-pin authority (D-2026-08-11-1, amended).
-            let contract_pin = match &self.plan.plan().nodes[slot.index()].kind {
-                NodeKind::Connector(spec) => crate::boundary::connector_out_pin(spec),
-                NodeKind::Operator => None,
-            };
-            if let Err(fault) = crate::runtime::crossing_pins_hold(
-                self.plan.plan(),
-                &from,
-                contract_pin.as_ref(),
-                value,
-            )
-            .map_err(crate::runtime::PinViolation::into_fault)
+            if let Err(fault) = crate::runtime::crossing_pins_hold(self.plan, &from, value)
+                .map_err(crate::runtime::PinViolation::into_fault)
             {
                 let outcome = executor.typed_error_transaction(
                     slot,
@@ -952,36 +932,12 @@ impl<'plan> Vm<'plan> {
                 value
                     .validate()
                     .map_err(|error| VmError::Fault(crate::runtime::Fault::InvalidValue(error)))?;
-                let own_pin = self.plan.nodes[slot.index()]
-                    .ports
-                    .iter()
-                    .find(|decl| decl.port == emission.port)
-                    .and_then(|decl| decl.ty.as_ref());
                 let from = EndpointRef {
                     node: Some(slot),
                     port: emission.port.clone(),
                 };
-                // Convert only when a pin actually watches this
-                // fan-out — an untyped graph pays nothing here.
-                let any_pin = own_pin.is_some()
-                    || self.plan.edges.iter().any(|edge| {
-                        edge.from == from
-                            && edge.to.as_ref().is_some_and(|to| match to.node {
-                                Some(target) => self.plan.nodes[target.index()]
-                                    .ports
-                                    .iter()
-                                    .any(|decl| decl.port == to.port && decl.ty.is_some()),
-                                None => self
-                                    .plan
-                                    .boundary
-                                    .iter()
-                                    .any(|decl| decl.port == to.port && decl.ty.is_some()),
-                            })
-                    });
-                if any_pin {
-                    crate::runtime::crossing_pins_hold(self.plan.plan(), &from, own_pin, value)
-                        .map_err(|violation| VmError::Fault(violation.into_fault()))?;
-                }
+                crate::runtime::crossing_pins_hold(self.plan, &from, value)
+                    .map_err(|violation| VmError::Fault(violation.into_fault()))?;
             }
         }
         let mut needed: BTreeMap<Slot, usize> = BTreeMap::new();

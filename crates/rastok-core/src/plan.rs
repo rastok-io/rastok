@@ -7,9 +7,11 @@
 //! beside the plan as [`SemanticHash`].
 
 mod serialization;
+mod type_resolution;
 mod validation;
 
 pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
+pub use type_resolution::{ResolvedPort, ResolvedPortTable, TypeOrigin};
 pub use validation::{PlanValidationError, ValidatedExecutionPlan};
 
 use crate::cel;
@@ -46,7 +48,8 @@ impl Slot {
 /// One entry of a port table — a node's or the boundary's: the name,
 /// the direction, and the OPTIONAL pinned type. A present type is a
 /// public contract (identity material, transported in the package);
-/// an absent one is inference territory. The canonical order key is
+/// an absent one is a source-level inference variable, never an implicit
+/// `variant`. The canonical order key is
 /// `(port, direction)` — the type never decides an order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PortDecl {
@@ -82,9 +85,9 @@ impl PortDecl {
 pub struct ExecutionPlan {
     /// The nodes, in canonical order; [`Slot`]s index this table.
     pub nodes: Vec<Node>,
-    /// Boundary ports declared on the graph, in canonical order; the
-    /// defaults `in`, `out`, and `err` exist implicitly and are
-    /// never in this table.
+    /// Boundary ports declared on the graph, in canonical order.
+    /// Conventional `in`, `out`, and `err` rows are omitted when
+    /// unannotated, but an explicit type constraint may restate them.
     pub boundary: Vec<PortDecl>,
     /// The wiring, desugared to explicit pairs, in canonical order —
     /// the same order the semantic hash sees.
@@ -153,8 +156,10 @@ pub struct Node {
     pub path: node::Path,
     /// What the node is.
     pub kind: NodeKind,
-    /// The node's semantic port table — declared and inferred, in
-    /// canonical order; the defaults `in`, `out`, `err` are implicit.
+    /// The node's source port table, in canonical order. Conventional
+    /// `in`, `out`, and `err` rows are omitted when unannotated; an explicit
+    /// annotation may restate them. Effective declared/inferred types live
+    /// in [`ValidatedExecutionPlan::resolved_ports`].
     pub ports: Vec<PortDecl>,
     /// Declared state cells with their boot-time defaults, in
     /// canonical order.

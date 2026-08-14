@@ -973,6 +973,7 @@ impl Writer<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::DataType;
     use crate::compiler::compile;
     use crate::contract::Registry;
     use crate::node;
@@ -988,7 +989,7 @@ graph m0_probe : App {
 
   operator shout {
     on in where data.text != "" {
-      out = { data.text = data.text }
+      out = data.text
     }
   }
 
@@ -1027,12 +1028,30 @@ graph m0_probe : App {
         assert!(matches!(
             &handler.body[0],
             Step::Emit {
-                value: Emission::Patch(_),
+                value: Emission::Data(_),
                 ..
             }
         ));
         assert_eq!(plan.edges.len(), 3);
         assert_eq!(compilation.symbols.nodes, ["shout", "echo"]);
+        let resolved = plan.resolved_ports();
+        let boundary_in = resolved
+            .boundary()
+            .iter()
+            .find(|port| port.port().name() == "in")
+            .expect("the used boundary input resolves");
+        assert!(matches!(boundary_in.ty(), DataType::Struct(_)));
+        assert_eq!(boundary_in.origin(), crate::plan::TypeOrigin::Inferred);
+        assert_eq!(
+            resolved
+                .node(crate::plan::Slot::new(0))
+                .expect("the operator row")
+                .iter()
+                .find(|port| port.port().name() == "out")
+                .expect("the operator output")
+                .ty(),
+            &DataType::Text
+        );
     }
 
     #[test]
@@ -1075,7 +1094,7 @@ graph m0_probe : App {
 graph m0_probe : App {
   operator shout {
     on in where data.text != "" {
-      out = { data.text = data.text }
+      out = data.text
     }
   }
 
@@ -1151,6 +1170,10 @@ graph m0_probe : App {
         // DELIBERATE MOVE 2026-08-12, same day (review round): the
         // Process error_set gained `CaptureFailed` (a pipe READ
         // fault is its own kind), and the set travels in the plan.
+        // DELIBERATE FIXTURE MIGRATION 2026-08-14 (M1.3 B2): the
+        // probe now emits `data.text`, not a one-field record, because
+        // the Process `lines` input is text. The identity recipe did
+        // not move; this previously ill-typed program did.
         let hash = compile(
             &[M0_PROBE],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1159,15 +1182,14 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "20479b25d045023614f7ac3d0da80a362918091994c7f85d60a204de730f6349"
+            "e26af508fc6320fa055f344e53a66cce3206900fd7e19a4e7668f60be6681857"
         );
     }
 
     #[test]
     fn boundary_ports_are_identity_material() {
-        let bare = "graph g : App {\n  operator o { on in { out = . } }\n  . -> o -> .\n}\n";
-        let with_port =
-            "graph g : App {\n  input feed\n  operator o { on in { out = . } }\n  . -> o -> .\n}\n";
+        let bare = "graph g : App {\n  operator o { on in where data.anchor == \"\" { out = . } }\n  . -> o -> .\n}\n";
+        let with_port = "graph g : App {\n  input feed: text\n  operator o { on in where data.anchor == \"\" { out = . } }\n  . -> o -> .\n}\n";
         let bare_hash = compile(
             &[bare],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1189,8 +1211,8 @@ graph m0_probe : App {
 
     #[test]
     fn the_plan_and_the_hash_share_one_edge_order() {
-        let forward = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
-        let reordered = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
+        let forward = "graph g : App {\n  operator a { on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
+        let reordered = "graph g : App {\n  operator a { on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
         let one = compile(
             &[forward],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1230,7 +1252,7 @@ graph m0_probe : App {
         // Map literals: one canonical form for hash, plan, and eval.
         let with_map = |map: &str| {
             format!(
-                "graph g : App {{\n  operator o {{\n    on in where size({map}) > 0 {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    on in where data.anchor == \"\" && size({map}) > 0 {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
             )
         };
         let forward = compile(
@@ -1249,7 +1271,7 @@ graph m0_probe : App {
 
     #[test]
     fn inferred_ports_travel_in_the_plan() {
-        let source = "graph g : App {\n  input feed\n  output sink\n  operator o {\n    on event { result = . }\n  }\n  .feed -> o.event\n  o.result -> .sink\n}\n";
+        let source = "graph g : App {\n  input feed: text\n  output sink\n  operator o {\n    on event { result = . }\n  }\n  .feed -> o.event\n  o.result -> .sink\n}\n";
         let compilation = compile(
             &[source],
             &Registry::try_m0().expect("the standard catalogue holds"),

@@ -18,7 +18,7 @@ graph relay : App {
 lab relay {
   simulation golden on app {
     mock shell {
-      on in { out = json [{"status": "ok", "value": 7}] }
+      on in { out = [{"status": "ok", "value": 7}] }
     }
 
     scenario roundtrip "a struct request opens one canonical line; the mock answers the wire's shape" {

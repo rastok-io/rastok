@@ -614,7 +614,7 @@ mod tests {
         // `data`. The losing branch's text must not force the opaque
         // request to decode.
         let (outcome, faults) = opaque_answer(
-            "      on in where meta.sys.graph_version == 1 { out = {status = \"ok\"} }\n      on in where data == \"x\" { out = . }",
+            "      on in where meta.sys.graph_version == 1 { out = \"ok\" }\n      on in where data == \"x\" { out = . }",
         );
         assert!(faults.is_empty(), "no forced decode: {faults:?}");
         assert!(
@@ -684,14 +684,14 @@ lab m0_probe {
   simulation smoke on app {
     mock echo {
       on in where data == "salut" {
-        out = { text = "salut", echoed = true }
+        out = "salut"
       }
       on in { out = . }
     }
 
     scenario roundtrip "one message through a scripted world" {
       app.in = { text = "salut" }
-      expect "the echo came back" app.out count == 1 where data.echoed == true
+      expect "the echo came back" app.out count == 1 where data == "salut"
       expect nothing app.err
     }
 
@@ -752,7 +752,7 @@ lab m0_probe {
         // `expect relay.out` watches departures — the fifth review
         // showed a real emission invisible to its own port.
         let source = PROBE_WITH_LAB.replace(
-            "expect \"the echo came back\" app.out count == 1 where data.echoed == true",
+            "expect \"the echo came back\" app.out count == 1 where data == \"salut\"",
             "expect \"the departure\" shout.out count == 1 where data == \"salut\"",
         );
         let compilation = compile(
@@ -774,8 +774,8 @@ lab m0_probe {
         // scenario? No — build it directly: a predicate reading a
         // field the delivery does not carry must fail, not shrug.
         let source = PROBE_WITH_LAB.replace(
-            "where data.echoed == true",
-            "where data.missing_field == true",
+            "expect \"the echo came back\" app.out count == 1 where data == \"salut\"",
+            "expect \"the echo came back\" app.out count == 1 where data.missing_field == true",
         );
         let compilation = compile(
             &[source.as_str()],
@@ -793,7 +793,10 @@ lab m0_probe {
 
     #[test]
     fn a_broken_expectation_fails_loudly_not_silently() {
-        let source = PROBE_WITH_LAB.replace("data.echoed == true", "data.echoed == false");
+        let source = PROBE_WITH_LAB.replace(
+            "expect \"the echo came back\" app.out count == 1 where data == \"salut\"",
+            "expect \"the echo came back\" app.out count == 1 where data == \"nope\"",
+        );
         let compilation = compile(
             &[source.as_str()],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -813,7 +816,7 @@ lab m0_probe {
 graph m0_probe : App {
   operator wide {
     var count : int = 2147483647
-    on in {
+    on in where data.text != "" {
       count = count + 1
       out = data.text
     }

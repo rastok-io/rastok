@@ -18,7 +18,10 @@ use crate::compiler::syntax::{
     SyntaxTree, TopDecl, Trigger as SynTrigger, TypeRef, ValDecl, Value as SynValue, VarDecl,
 };
 use crate::contract;
-use crate::datatype::DataType;
+use crate::datatype::{
+    DataType, DateUnit, DecimalType, EnumType, MapType, StructType, TemporalType, TimeUnit,
+    TypeError, TypeField,
+};
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 use crate::node;
 use std::collections::BTreeMap;
@@ -61,6 +64,14 @@ pub const E_TYPE_DUP: Code = Code::new("E-TYPE-DUP");
 /// width; the MEASURED value rides the diagnostic; fields `name` +
 /// `depth`/`nodes`/`count` (D-2026-08-10-8).
 pub const E_TYPE_BUDGET: Code = Code::new("E-TYPE-BUDGET");
+/// A structural union whose branches overlap and therefore have no unique
+/// selected branch.
+pub const E_UNION_OVERLAP: Code = Code::new("E-UNION-OVERLAP");
+/// A source type that violates a canonical constructor invariant.
+pub const E_TYPE_INVALID: Code = Code::new("E-TYPE-INVALID");
+/// An open compiler constraint that reached a position requiring a closed
+/// effective type.
+pub const E_TYPE_UNRESOLVED: Code = Code::new("E-TYPE-UNRESOLVED");
 /// A content-typed byte form outside whole-payload position
 /// (D-2026-08-10-5); field `tag`.
 pub const E_CONTENT_TYPE: Code = Code::new("E-CONTENT-TYPE");
@@ -1075,25 +1086,18 @@ impl Checker<'_, '_> {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
                     };
-                    // The defaults are redefinable, per the grammar —
-                    // the same rule `add_port` applies on nodes: ONE
-                    // same-direction redeclaration is a no-op the
-                    // serialized table never carries; a second is the
-                    // ordinary duplicate-declaration conflict; a
-                    // contradictory direction is a conflict the
-                    // wiring could never satisfy.
+                    // The conventional ports are pre-bound in direction,
+                    // but an explicit annotation is still a real source
+                    // constraint. An untyped restatement remains absent
+                    // from the raw v6 table; a typed one travels so B2 can
+                    // resolve it without treating `variant` as a fallback.
                     let implicit = match port.name.text.as_str() {
                         "in" => Some(Direction::Input),
                         "out" | "err" => Some(Direction::Output),
                         _ => None,
                     };
                     if let Some(known) = implicit {
-                        if pinned.is_some() {
-                            // Typing a default pins the trio's own
-                            // contract — that joins the connector
-                            // sheets, not this lift.
-                            self.deferred("a typed default port", port.span);
-                        } else if known != direction {
+                        if known != direction {
                             self.bag.push(
                                 Diagnostic::new(
                                     E_PORT_CONFLICT,
@@ -1121,6 +1125,22 @@ impl Checker<'_, '_> {
                                 .with_span(port.name.span)
                                 .with_field("port", port.name.text.clone()),
                             );
+                        } else if let Some(ty) = pinned {
+                            match node::Port::new(port.name.text.clone()) {
+                                Ok(declared) => graph.boundary.push(crate::plan::PortDecl {
+                                    port: declared,
+                                    direction,
+                                    ty: Some(ty),
+                                }),
+                                Err(invalid) => self.bag.push(
+                                    Diagnostic::new(
+                                        E_PORT_UNKNOWN,
+                                        Phase::Check,
+                                        invalid.to_string(),
+                                    )
+                                    .with_span(port.name.span),
+                                ),
+                            }
                         }
                         continue;
                     }
@@ -1159,7 +1179,10 @@ impl Checker<'_, '_> {
                     if self.bindable(&val.name, &signature)
                         && let Some(value) = self.graph_val(val, &signature, &consts)
                     {
-                        signature = signature.with(val.name.text.clone(), value_type(&value.value));
+                        let Some(ty) = self.inferred_value_type(&value.value, val.span) else {
+                            continue;
+                        };
+                        signature = signature.with(val.name.text.clone(), ty);
                         consts.insert(val.name.text.clone(), value.value.clone());
                         graph.vals.push(Val {
                             name: val.name.text.clone(),
@@ -1219,9 +1242,9 @@ impl Checker<'_, '_> {
     /// `err` is exempt: unwired errors bubble to the root sink.
     fn warn_unwired_outputs(&mut self, graph: &Graph) {
         for node in &graph.nodes {
-            // The default ports never enter the declared table, but
-            // an emission on them leaks all the same: sweep the
-            // handlers' emitted ports beside the declared outputs.
+            // Untyped conventional ports do not enter the raw table, but an
+            // emission on them leaks all the same. A typed restatement may
+            // already be present, so sweep emitted ports beside the rows.
             let mut outputs: Vec<node::Port> = node
                 .ports
                 .iter()
@@ -1951,7 +1974,10 @@ impl Checker<'_, '_> {
                     if self.bindable(&val.name, &signature)
                         && let Some(value) = self.graph_val(val, &signature, &consts)
                     {
-                        signature = signature.with(val.name.text.clone(), value_type(&value.value));
+                        let Some(ty) = self.inferred_value_type(&value.value, val.span) else {
+                            continue;
+                        };
+                        signature = signature.with(val.name.text.clone(), ty);
                         consts.insert(val.name.text.clone(), value.value.clone());
                         node.vals.push(Val {
                             name: val.name.text.clone(),
@@ -2050,10 +2076,9 @@ impl Checker<'_, '_> {
     }
 
     /// Adds one port to a node's semantic table, refusing conflicting
-    /// roles. Default ports are implicit and never added; a matching
-    /// explicit or inferred use of a default name is checked against
-    /// the default direction instead. A pinned type on a declaration
-    /// completes an inferred entry; typing a default defers.
+    /// roles. Conventional ports remain implicit when merely used, but
+    /// an explicit type annotation enters the table like any other source
+    /// constraint. A matching inferred use never overwrites that pin.
     fn add_port(
         &mut self,
         node: &mut Node,
@@ -2067,16 +2092,26 @@ impl Checker<'_, '_> {
             "out" | "err" => Some(Direction::Output),
             _ => None,
         };
-        if default_direction.is_some() && pinned.is_some() {
-            self.deferred("a typed default port", name.span);
-            return;
-        }
-        let existing = default_direction.or_else(|| {
-            node.ports
-                .iter()
-                .find(|decl| decl.port.name() == name.text)
-                .map(|decl| decl.direction)
-        });
+        let table_entry = node
+            .ports
+            .iter()
+            .position(|decl| decl.port.name() == name.text);
+        let existing = table_entry
+            .map(|index| node.ports[index].direction)
+            .or(default_direction);
+        let is_conventional = default_direction.is_some();
+        let push = |node: &mut Node, ty: Option<DataType>| {
+            if let Ok(port) = node::Port::new(name.text.clone()) {
+                node.ports.push(crate::plan::PortDecl {
+                    port,
+                    direction,
+                    ty,
+                });
+                true
+            } else {
+                false
+            }
+        };
         match existing {
             Some(known) if known != direction => {
                 self.bag.push(
@@ -2097,23 +2132,23 @@ impl Checker<'_, '_> {
             Some(_) => {
                 // A declaration may COMPLETE an inferred entry with
                 // its pinned type; inference never overwrites one.
-                if let Some(ty) = pinned
-                    && let Some(entry) = node
-                        .ports
-                        .iter_mut()
-                        .find(|decl| decl.port.name() == name.text)
-                {
-                    entry.ty = Some(ty);
+                if let Some(ty) = pinned {
+                    if let Some(index) = table_entry {
+                        node.ports[index].ty = Some(ty);
+                    } else if is_conventional && !push(node, Some(ty)) {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_PORT_UNKNOWN,
+                                Phase::Check,
+                                format!("`{}` is not a valid port name", name.text),
+                            )
+                            .with_span(name.span),
+                        );
+                    }
                 }
             }
             None => {
-                if let Ok(port) = node::Port::new(name.text.clone()) {
-                    node.ports.push(crate::plan::PortDecl {
-                        port,
-                        direction,
-                        ty: pinned,
-                    });
-                } else {
+                if !push(node, pinned) {
                     self.bag.push(
                         Diagnostic::new(
                             E_PORT_UNKNOWN,
@@ -2188,19 +2223,24 @@ impl Checker<'_, '_> {
                     );
                     return None;
                 }
-                let init_ty = value_type(&constant.value);
-                if init_ty != ty && init_ty != DataType::Variant && ty != DataType::Variant {
+                if !ty.accepts(&constant.value) {
+                    let init_ty = match value_type(&constant.value) {
+                        Ok(Some(ty)) => ty.to_string(),
+                        Ok(None) | Err(_) => {
+                            format!("{:?}", crate::value::ValueKind::of(&constant.value))
+                        }
+                    };
                     self.bag.push(
                         Diagnostic::new(
                             E_CEL_EXPR,
                             Phase::Check,
                             format!(
-                                "`{}` is declared {ty:?}, its initializer is a {init_ty:?}",
+                                "`{}` is declared {ty}, its initializer is {init_ty}",
                                 decl.name.text
                             ),
                         )
                         .with_span(expr.span)
-                        .with_field("detail", format!("{init_ty:?} does not fit {ty:?}")),
+                        .with_field("detail", format!("{init_ty} does not fit {ty}")),
                     );
                     return None;
                 }
@@ -2310,37 +2350,172 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Maps a declared state type onto the current executable [`DataType`]
-    /// subset. Returns the type and whether it carries the 32-bit `int` bound.
-    /// `long` and `float` defer explicitly because this subset does not yet
-    /// represent them distinctly; a silent merge would corrupt identity.
+    /// Resolves a source type structurally into the canonical core algebra.
+    /// Named declarations are aliases only; no source spelling survives in
+    /// the result. The boolean keeps the existing focused diagnostic for the
+    /// friendly 32-bit `int` alias.
     fn state_type(&mut self, ty: &TypeRef) -> Option<(DataType, bool)> {
-        if ty.optional || ty.alternatives.len() != 1 {
-            self.deferred("an optional or union state type", ty.span);
+        let mapped = self.resolve_type_ref(ty)?;
+        let int_bounded = mapped == DataType::INT;
+        Some((mapped, int_bounded))
+    }
+
+    fn inferred_value_type(&mut self, value: &crate::value::Value, span: Span) -> Option<DataType> {
+        match value_type(value) {
+            Ok(Some(ty)) => Some(ty),
+            Ok(None) => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_TYPE_UNRESOLVED,
+                        Phase::Check,
+                        "this value has no element constraint from which to infer a type",
+                    )
+                    .with_span(span)
+                    .with_field("type", "unsolved collection element"),
+                );
+                None
+            }
+            Err(error) => {
+                self.type_constructor_refusal(span, error);
+                None
+            }
+        }
+    }
+
+    fn resolve_type_ref(&mut self, ty: &TypeRef) -> Option<DataType> {
+        let mut alternatives = Vec::with_capacity(ty.alternatives.len() + usize::from(ty.optional));
+        for alternative in &ty.alternatives {
+            alternatives.push(self.resolve_base_type(alternative, ty.span)?);
+        }
+        if ty.optional {
+            alternatives.push(DataType::Null);
+        }
+        let resolved = match alternatives.as_slice() {
+            [only] => only.clone(),
+            _ => match DataType::structural_union(alternatives) {
+                Ok(union) => union,
+                Err(error) => {
+                    self.type_constructor_refusal(ty.span, error);
+                    return None;
+                }
+            },
+        };
+        if let Err(error) = resolved.validate() {
+            self.type_constructor_refusal(ty.span, error);
             return None;
         }
-        let mapped = match &ty.alternatives[0] {
-            BaseType::Scalar(ScalarType::Bool) => (DataType::Bool, false),
-            BaseType::Scalar(ScalarType::Int) => (DataType::INT, true),
-            BaseType::Scalar(ScalarType::Long) => {
-                self.deferred("the long state type", ty.span);
-                return None;
+        Some(resolved)
+    }
+
+    fn resolve_base_type(&mut self, ty: &BaseType, span: Span) -> Option<DataType> {
+        let resolved = match ty {
+            BaseType::Scalar(ScalarType::Bool) => DataType::Bool,
+            BaseType::Scalar(ScalarType::Int) => DataType::INT,
+            BaseType::Scalar(ScalarType::Long) => DataType::LONG,
+            BaseType::Scalar(ScalarType::Float) => DataType::FLOAT,
+            BaseType::Scalar(ScalarType::Double) => DataType::DOUBLE,
+            BaseType::Scalar(ScalarType::Number) => DataType::Number,
+            BaseType::Scalar(ScalarType::Bytes) => DataType::BYTES,
+            BaseType::Scalar(ScalarType::Text) => DataType::Text,
+            BaseType::Scalar(ScalarType::Null) => DataType::Null,
+            BaseType::Scalar(ScalarType::Decimal { precision, scale }) => {
+                let scale = match i32::try_from(*scale) {
+                    Ok(scale) => scale,
+                    Err(_) => {
+                        self.type_constructor_refusal(
+                            span,
+                            TypeError::DecimalScale { scale: i32::MAX },
+                        );
+                        return None;
+                    }
+                };
+                match DecimalType::new(*precision, scale) {
+                    Ok(decimal) => DataType::Decimal(decimal),
+                    Err(error) => {
+                        self.type_constructor_refusal(span, error);
+                        return None;
+                    }
+                }
             }
-            BaseType::Scalar(ScalarType::Float) => {
-                self.deferred("the float state type", ty.span);
-                return None;
+            BaseType::Scalar(ScalarType::Date) => {
+                DataType::Temporal(TemporalType::Date(DateUnit::Day))
             }
-            BaseType::Scalar(ScalarType::Double) => (DataType::DOUBLE, false),
-            BaseType::Scalar(ScalarType::Text) => (DataType::Text, false),
-            BaseType::Scalar(ScalarType::Bytes) => (DataType::BYTES, false),
-            BaseType::Scalar(ScalarType::Duration) => (DataType::DURATION, false),
-            BaseType::Scalar(ScalarType::Timestamp) => (DataType::TIMESTAMP, false),
-            BaseType::Variant => (DataType::Variant, false),
+            BaseType::Scalar(ScalarType::Timestamp) => DataType::TIMESTAMP,
+            BaseType::Scalar(ScalarType::TimestampNtz) => {
+                DataType::Temporal(TemporalType::TimestampNtz(TimeUnit::Nanosecond))
+            }
+            BaseType::Scalar(ScalarType::Time) => {
+                DataType::Temporal(TemporalType::Time(TimeUnit::Nanosecond))
+            }
+            BaseType::Scalar(ScalarType::Uuid) => DataType::Uuid,
+            BaseType::Scalar(ScalarType::Duration) => DataType::DURATION,
+            BaseType::Variant => DataType::Variant,
+            BaseType::Struct { fields, open } => {
+                if *open {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_TYPE_UNRESOLVED,
+                            Phase::Check,
+                            "an open struct is an inference constraint, not an effective type",
+                        )
+                        .with_span(span)
+                        .with_field("type", "struct { .. }"),
+                    );
+                    return None;
+                }
+                let mut resolved = Vec::with_capacity(fields.len());
+                for field in fields {
+                    resolved.push(TypeField::new(
+                        field.name.text.clone(),
+                        self.resolve_type_ref(&field.ty)?,
+                    ));
+                }
+                match StructType::new(resolved) {
+                    Ok(structure) => DataType::Struct(structure),
+                    Err(error) => {
+                        self.type_constructor_refusal(span, error);
+                        return None;
+                    }
+                }
+            }
+            BaseType::Map(key, value) => {
+                let key = self.resolve_type_ref(key)?;
+                let value = self.resolve_type_ref(value)?;
+                match MapType::new(key, value) {
+                    Ok(map) => DataType::Map(map),
+                    Err(error) => {
+                        self.type_constructor_refusal(span, error);
+                        return None;
+                    }
+                }
+            }
+            BaseType::Array(element) => DataType::array(self.resolve_type_ref(element)?),
+            BaseType::Table(element) => {
+                let element = self.resolve_type_ref(element)?;
+                if !matches!(element, DataType::Struct(_)) {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_TYPE_INVALID,
+                            Phase::Check,
+                            "table is a relational view of array<struct>, so its row must be a struct",
+                        )
+                        .with_span(span)
+                        .with_field("detail", "the table row is not a struct"),
+                    );
+                    return None;
+                }
+                DataType::array(element)
+            }
+            BaseType::Enum(symbols) => {
+                match EnumType::new(symbols.iter().map(|symbol| symbol.text.clone()).collect()) {
+                    Ok(enumeration) => DataType::Enum(enumeration),
+                    Err(error) => {
+                        self.type_constructor_refusal(span, error);
+                        return None;
+                    }
+                }
+            }
             BaseType::Named(name) => {
-                // A named type is SUGAR (D-2026-08-10-8): expand and
-                // resolve structurally — renaming an alias is never
-                // an identity move. Cycles were refused at
-                // collection; an unknown name refuses here.
                 let Some(aliased) = self.type_decls.get(&name.text).cloned() else {
                     self.bag.push(
                         Diagnostic::new(
@@ -2354,25 +2529,43 @@ impl Checker<'_, '_> {
                     return None;
                 };
                 if self.type_stack.contains(&name.text) {
-                    // A true cycle — validation refused it with its
-                    // own diagnostic, so this unit never compiles;
-                    // stopping here only keeps the resolver total.
-                    // (Chains are COLLAPSED before any use, so no
-                    // depth cap is needed: what validation accepted,
-                    // resolution serves.)
                     return None;
                 }
                 self.type_stack.push(name.text.clone());
-                let resolved = self.state_type(&aliased);
+                let resolved = self.resolve_type_ref(&aliased);
                 self.type_stack.pop();
                 return resolved;
             }
-            _ => {
-                self.deferred("this state type", ty.span);
-                return None;
-            }
         };
-        Some(mapped)
+        Some(resolved)
+    }
+
+    fn type_constructor_refusal(&mut self, span: Span, error: TypeError) {
+        let message = error.to_string();
+        let diagnostic = match error {
+            TypeError::OverlappingUnionBranches { .. } => {
+                Diagnostic::new(E_UNION_OVERLAP, Phase::Check, message.clone())
+                    .with_field("detail", message)
+            }
+            TypeError::MemberBudget { count, .. } => {
+                Diagnostic::new(E_TYPE_BUDGET, Phase::Check, message)
+                    .with_field("name", "the source type")
+                    .with_field("count", count.to_string())
+            }
+            TypeError::NodeBudget { nodes, .. } => {
+                Diagnostic::new(E_TYPE_BUDGET, Phase::Check, message)
+                    .with_field("name", "the source type")
+                    .with_field("nodes", nodes.to_string())
+            }
+            TypeError::NestingBudget { depth, .. } => {
+                Diagnostic::new(E_TYPE_BUDGET, Phase::Check, message)
+                    .with_field("name", "the source type")
+                    .with_field("depth", depth.to_string())
+            }
+            _ => Diagnostic::new(E_TYPE_INVALID, Phase::Check, message.clone())
+                .with_field("detail", message),
+        };
+        self.bag.push(diagnostic.with_span(span));
     }
 
     fn attribute_value(
@@ -2452,17 +2645,19 @@ impl Checker<'_, '_> {
                 return None;
             }
         };
-        // A pinned type on the activation port TYPES the handler's
-        // `data` — the annotation's first dividend; unpinned ports
-        // stay `dyn`, inference territory.
-        let data_type = match &activation {
-            node::HandlerActivation::Port(port) => node
-                .ports
-                .iter()
-                .find(|decl| &decl.port == port)
-                .and_then(|decl| decl.ty.clone())
-                .unwrap_or(DataType::Variant),
+        // A source annotation or instantiated Connector contract on the
+        // activation port TYPES the handler's `data`. An unpinned operator
+        // port remains a compiler inference variable; `variant` below is only
+        // the expression checker's temporary signature, never the port's
+        // inferred effective type.
+        let declared_data_type = match &activation {
+            node::HandlerActivation::Port(port) => node_port_pin(node, port),
         };
+        // The expression engine still needs a concrete signature during B2;
+        // its `variant` here is parser/checker scaffolding only. The separate
+        // `declared_data_type` is what prevents that placeholder from being
+        // mistaken for an explicit dynamic port constraint.
+        let data_type = declared_data_type.clone().unwrap_or(DataType::Variant);
         let mut signature = node_signature
             .clone()
             .with("data", data_type.clone())
@@ -2537,10 +2732,10 @@ impl Checker<'_, '_> {
                             SynValue::Error(_) => {}
                             SynValue::Cel(expr) => {
                                 if let Some(tree) = self.cel(expr, &signature) {
-                                    if tree.ty != var.ty
-                                        && tree.ty != DataType::Variant
-                                        && var.ty != DataType::Variant
-                                    {
+                                    let unresolved_input = declared_data_type.is_none()
+                                        && tree.ty == DataType::Variant
+                                        && expression_reads_data(&tree.root);
+                                    if !unresolved_input && !tree.ty.is_assignable_to(&var.ty) {
                                         self.bag.push(
                                             Diagnostic::new(
                                                 E_CEL_EXPR,
@@ -2603,7 +2798,7 @@ impl Checker<'_, '_> {
                             && !self.port_conforms(
                                 &expected,
                                 &emit,
-                                BuildOrigin::Handler(&data_type),
+                                BuildOrigin::Handler(declared_data_type.as_ref()),
                                 consts,
                                 port.name(),
                                 name.span,
@@ -3376,13 +3571,18 @@ impl Checker<'_, '_> {
         // CEL's own MapLit inference (join over the value types) —
         // `{ "k": 1 }` here and inside a CEL span are ONE program,
         // one type, one hash.
-        let mut values = DataType::Variant;
-        for (index, (_, _, ty)) in pairs.iter().enumerate() {
-            if index == 0 {
-                values = ty.clone();
-            } else if values != *ty {
-                values = DataType::Variant;
-            }
+        let mut values = None;
+        for (_, _, ty) in &pairs {
+            values = Some(match values {
+                Some(current) => match inferred_join(&current, ty) {
+                    Ok(joined) => joined,
+                    Err(error) => {
+                        self.type_constructor_refusal(at, error);
+                        return None;
+                    }
+                },
+                None => ty.clone(),
+            });
         }
         Some(cel::Tree {
             root: cel::Expr::MapLit(
@@ -3391,7 +3591,10 @@ impl Checker<'_, '_> {
                     .map(|(key, root, _)| (key, root))
                     .collect(),
             ),
-            ty: DataType::text_map(values),
+            // The empty map keeps a compiler-only element hole. The B2 plan
+            // solver recognizes the empty AST and resolves it from context;
+            // `variant` here never enters the validated table as a fallback.
+            ty: DataType::text_map(values.unwrap_or(DataType::Variant)),
         })
     }
 
@@ -3483,9 +3686,10 @@ impl Checker<'_, '_> {
     }
 
     /// Seals the production `app` schema from the GRAPH's writes:
-    /// types unify (the pre-B2 checker still treats `variant` as inference
-    /// territory here), a conflict refuses naming both sites, and the flat
-    /// keys must be prefix-free
+    /// types unify through the same directional relation as ports and state;
+    /// explicit `variant` remains dynamic rather than impersonating an
+    /// inference hole. A conflict refuses naming both sites, and flat keys
+    /// must be prefix-free
     /// (D-2026-08-10-1).
     fn seal_app_schema(&mut self) {
         let mut sites: BTreeMap<String, (DataType, Span)> = BTreeMap::new();
@@ -3495,11 +3699,15 @@ impl Checker<'_, '_> {
                     sites.insert(field, (ty, span));
                 }
                 Some((known, first)) => {
-                    let unified = match (known, &ty) {
-                        (DataType::Variant, other) => Some(other.clone()),
-                        (other, DataType::Variant) => Some(other.clone()),
-                        (a, b) if a == b => Some(a.clone()),
-                        _ => None,
+                    // Metadata leaves have one stable type. Unlike a data
+                    // expression, unrelated writes do not synthesize a
+                    // structural union behind the user's back.
+                    let unified = if known.is_assignable_to(&ty) {
+                        Some(ty.clone())
+                    } else if ty.is_assignable_to(known) {
+                        Some(known.clone())
+                    } else {
+                        None
                     };
                     match unified {
                         Some(unified) => {
@@ -3888,7 +4096,7 @@ impl Checker<'_, '_> {
                         SynValue::Cel(expr) => {
                             if let Some(tree) = self.cel(expr, signature) {
                                 if matches!(&target, crate::envelope::WriteTarget::Ext(field) if field == "content_type")
-                                    && !matches!(tree.ty, DataType::Text | DataType::Variant)
+                                    && !tree.ty.is_assignable_to(&DataType::Text)
                                 {
                                     self.bag.push(
                                         Diagnostic::new(
@@ -4229,13 +4437,13 @@ impl Checker<'_, '_> {
                 EdgeEndpoint::Nothing(_) => EdgeTarget::Discard,
                 other => EdgeTarget::Port(self.endpoint(other, graph, false)?),
             };
-            // Two PINNED ends must agree — a typed source into a
-            // differently typed target is a contract breach at wiring
-            // time; an unpinned side is inference territory.
+            // Two pinned ends must be directionally compatible at wiring
+            // time. An unpinned side remains open here and is closed by the
+            // validated-plan resolver.
             if let EdgeTarget::Port(target) = &to
                 && let Some(source_ty) = endpoint_pinned_type(&from, graph)
                 && let Some(target_ty) = endpoint_pinned_type(target, graph)
-                && source_ty != target_ty
+                && !source_ty.is_assignable_to(&target_ty)
             {
                 self.bag.push(
                     Diagnostic::new(
@@ -4324,8 +4532,9 @@ impl Checker<'_, '_> {
     ///   fresh structure for `FreshData`.
     /// - `Nothing` produces nothing and always conforms.
     ///
-    /// An UNKNOWN shape (dyn anywhere) is inference territory and
-    /// passes. Pushes `E-PORT-TYPE` and answers false on a breach.
+    /// An UNKNOWN shape is a compiler inference variable and passes this
+    /// early check; it is not an explicit `variant`. Pushes `E-PORT-TYPE`
+    /// and answers false on a known breach.
     fn port_conforms(
         &mut self,
         pinned: &DataType,
@@ -4338,30 +4547,39 @@ impl Checker<'_, '_> {
         let inherited_shape = || match origin {
             // A handler's Patch starts from the envelope it received,
             // whose data carries the activation port's pin.
-            BuildOrigin::Handler(ty) if !matches!(ty, DataType::Variant) => {
-                DataShape::Known(ty.clone(), None)
-            }
-            BuildOrigin::Handler(_) => DataShape::Unknown,
+            BuildOrigin::Handler(Some(ty)) => DataShape::Known(ty.clone(), None),
+            BuildOrigin::Handler(None) => DataShape::Unknown,
             // A draft is born a fresh STRUCT (`lab::draft`) — a
             // Patch injection starts from it, so even a
             // metadata-only patch carries a struct through the
             // input.
-            BuildOrigin::Draft => DataShape::Struct,
+            BuildOrigin::Draft => DataShape::Known(DataType::empty_struct(), None),
         };
         let shape = match value {
             EmitValue::Nothing => return true,
             EmitValue::Data(tree) => DataShape::Known(tree.ty.clone(), Some(tree)),
             EmitValue::Identity => inherited_shape(),
-            EmitValue::Patch(writes) => Self::folded_shape(writes, inherited_shape()),
-            EmitValue::FreshData(writes) => Self::folded_shape(writes, DataShape::Struct),
+            EmitValue::Patch(writes) => match Self::folded_shape(writes, inherited_shape()) {
+                Ok(shape) => shape,
+                Err(error) => {
+                    self.type_constructor_refusal(span, error);
+                    return false;
+                }
+            },
+            EmitValue::FreshData(writes) => {
+                match Self::folded_shape(writes, DataShape::Known(DataType::empty_struct(), None)) {
+                    Ok(shape) => shape,
+                    Err(error) => {
+                        self.type_constructor_refusal(span, error);
+                        return false;
+                    }
+                }
+            }
         };
         let found: Option<String> = match &shape {
             DataShape::Unknown => None,
             DataShape::Known(ty, tree) => {
-                if !matches!(pinned, DataType::Variant)
-                    && !matches!(ty, DataType::Variant)
-                    && ty != pinned
-                {
+                if !ty.is_assignable_to(pinned) {
                     Some(match value {
                         EmitValue::Identity => format!("{ty:?} (the input, unchanged)"),
                         _ => format!("{ty:?}"),
@@ -4369,14 +4587,6 @@ impl Checker<'_, '_> {
                 } else {
                     tree.and_then(|tree| Self::constant_breach(pinned, tree, consts))
                 }
-            }
-            // No pin type spells "struct" (records are inference
-            // territory), so a built struct conforms to `dyn` alone:
-            // a scalar pin cannot hold it, and neither can a
-            // composite one — a record is not an array<variant>
-            // (the jsonl reply pin, D-2026-08-11-1) nor a map.
-            DataShape::Struct => {
-                (!matches!(pinned, DataType::Variant)).then(|| String::from("a built struct"))
             }
         };
         let Some(found) = found else {
@@ -4398,18 +4608,29 @@ impl Checker<'_, '_> {
 
     /// Folds a builder's writes IN ORDER — the runtime's order — over
     /// the running data shape.
-    fn folded_shape<'w>(writes: &'w [FieldWrite], initial: DataShape<'w>) -> DataShape<'w> {
+    fn folded_shape<'w>(
+        writes: &'w [FieldWrite],
+        initial: DataShape<'w>,
+    ) -> Result<DataShape<'w>, TypeError> {
         let mut shape = initial;
         for write in writes {
             match &write.target {
                 crate::envelope::WriteTarget::Data(path) if path.is_empty() => {
                     shape = DataShape::Known(write.value.ty.clone(), Some(&write.value));
                 }
-                crate::envelope::WriteTarget::Data(_) => shape = DataShape::Struct,
+                crate::envelope::WriteTarget::Data(path) => {
+                    shape = match shape {
+                        DataShape::Known(current, _) => DataShape::Known(
+                            write_data_type_path(Some(current), path, write.value.ty.clone())?,
+                            None,
+                        ),
+                        DataShape::Unknown => DataShape::Unknown,
+                    };
+                }
                 crate::envelope::WriteTarget::App(_) | crate::envelope::WriteTarget::Ext(_) => {}
             }
         }
-        shape
+        Ok(shape)
     }
 
     /// The constant half of conformance: the 32-bit `int` bound,
@@ -4587,36 +4808,32 @@ impl Checker<'_, '_> {
 enum BuildOrigin<'a> {
     /// A handler emission: `Identity`/`Patch` start from the received
     /// envelope, whose data carries the activation port's pin.
-    Handler(&'a DataType),
+    Handler(Option<&'a DataType>),
     /// A scenario injection: the draft is born as an empty map.
     Draft,
 }
 
 /// The statically known shape of the data a builder produces —
 /// three DISTINCT states, never one `None` meaning all of them:
-/// unknown (inference territory), a known type (with the producing
-/// tree when there is one, for the constant bound), or a built
-/// STRUCT — a braced record builds a struct (D-2026-08-09-1),
-/// physically distinct from a CEL map (canonical tags 17 vs 18).
+/// unknown (an open compiler constraint), or a known type (with the
+/// producing tree when there is one, for the constant bound). Braced records are
+/// represented by an actual closed `DataType::Struct`, never a sentinel.
 enum DataShape<'a> {
     Unknown,
     Known(DataType, Option<&'a cel::Tree>),
-    Struct,
 }
 
-/// The pin a node's port carries: its table entry when declared, or
-/// the connector contract's EFFECTIVE out pin — the checker-side
-/// face of `rastok_core::boundary::connector_out_pin`, so the edge
-/// audit, the mock-reply judge, the plan validator, and the machine
-/// all speak the ONE derivation (D-2026-08-11-1, amended).
+/// The pin a node's port carries: its table entry when declared, or the
+/// instantiated Connector contract's effective pin. The HIR and raw-plan
+/// adapters call the same pure B2 resolver.
 fn node_port_pin(node: &Node, port: &node::Port) -> Option<DataType> {
     node.ports
         .iter()
         .find(|decl| decl.port == *port)
         .and_then(|decl| decl.ty.clone())
         .or_else(|| {
-            // The HIR adapter of `boundary::effective_pin` — the
-            // derivation itself lives in ONE place.
+            // The derivation itself lives in one boundary helper; B5 moves
+            // it into the contract metamodel without changing callers.
             let NodeRole::Connector {
                 trait_name,
                 attributes,
@@ -4634,34 +4851,26 @@ fn node_port_pin(node: &Node, port: &node::Port) -> Option<DataType> {
                     crate::compiler::hir::AttrValue::Const(_) => None,
                 }
             });
-            rastok_core::boundary::effective_pin(trait_name, port.name(), word)
+            rastok_core::boundary::resolved_contract_port_type(trait_name, port.name(), word)
         })
 }
 
 /// The pinned type of an edge endpoint, when its port declares one:
 /// a node's table entry (the connector's effective out pin
-/// included), or a declared boundary port — the implicit trio and
-/// unannotated ports answer `None` (inference territory).
+/// included), or a declared boundary port. An unannotated conventional or
+/// named port answers `None` here and is closed by validated-plan inference.
 fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<DataType> {
-    let precise = |ty: DataType| match ty {
-        // A `variant` pin is an explicit "anything". The pre-B2 edge
-        // solver also treats it as inference territory, never a conflict.
-        DataType::Variant => None,
-        other => Some(other),
-    };
     match &endpoint.node {
         None => graph
             .boundary
             .iter()
             .find(|decl| decl.port == endpoint.port)
-            .and_then(|decl| decl.ty.clone())
-            .and_then(precise),
+            .and_then(|decl| decl.ty.clone()),
         Some(path) => graph
             .nodes
             .iter()
             .find(|node| &node.path == path)
-            .and_then(|node| node_port_pin(node, &endpoint.port))
-            .and_then(precise),
+            .and_then(|node| node_port_pin(node, &endpoint.port)),
     }
 }
 
@@ -4902,9 +5111,93 @@ fn decode_base64(raw: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn value_type(value: &crate::value::Value) -> DataType {
-    match value {
-        crate::value::Value::Struct(_) => DataType::Variant,
+fn write_data_type_path(
+    current: Option<DataType>,
+    path: &[String],
+    leaf: DataType,
+) -> Result<DataType, TypeError> {
+    let Some((head, rest)) = path.split_first() else {
+        return Ok(leaf);
+    };
+    let mut fields: BTreeMap<String, DataType> = match current {
+        Some(DataType::Struct(structure)) => structure
+            .fields()
+            .iter()
+            .map(|field| (field.name().to_string(), field.ty().clone()))
+            .collect(),
+        _ => BTreeMap::new(),
+    };
+    let nested = write_data_type_path(fields.remove(head), rest, leaf)?;
+    fields.insert(head.clone(), nested);
+    StructType::new(
+        fields
+            .into_iter()
+            .map(|(name, ty)| TypeField::new(name, ty))
+            .collect(),
+    )
+    .map(DataType::Struct)
+}
+
+fn inferred_join(left: &DataType, right: &DataType) -> Result<DataType, TypeError> {
+    if left.is_assignable_to(right) {
+        Ok(right.clone())
+    } else if right.is_assignable_to(left) {
+        Ok(left.clone())
+    } else {
+        DataType::structural_union(vec![left.clone(), right.clone()])
+    }
+}
+
+fn expression_reads_data(expr: &cel::Expr) -> bool {
+    let mut stack = vec![expr];
+    while let Some(expr) = stack.pop() {
+        match expr {
+            cel::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {
+                return true;
+            }
+            cel::Expr::Path(_) | cel::Expr::Literal(_) | cel::Expr::Asset(_) => {}
+            cel::Expr::Unary { expr, .. } => stack.push(expr),
+            cel::Expr::Binary { left, right, .. } => {
+                stack.push(left);
+                stack.push(right);
+            }
+            cel::Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                stack.push(cond);
+                stack.push(then);
+                stack.push(otherwise);
+            }
+            cel::Expr::Index { base, index } => {
+                stack.push(base);
+                stack.push(index);
+            }
+            cel::Expr::Call { args, .. } | cel::Expr::List(args) => stack.extend(args),
+            cel::Expr::MapLit(entries) => {
+                stack.extend(entries.iter().map(|(_, value)| value));
+            }
+        }
+    }
+    false
+}
+
+fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError> {
+    Ok(Some(match value {
+        crate::value::Value::Struct(fields) => {
+            let mut resolved = Vec::with_capacity(fields.len());
+            for (name, value) in fields {
+                let Some(ty) = value_type(value)? else {
+                    return Ok(None);
+                };
+                resolved.push(TypeField::new(name.clone(), ty));
+            }
+            DataType::Struct(StructType::new(resolved)?)
+        }
+        // B3 gives exact decimals their expression-level static type. The
+        // v6 expression tree still carries the explicit dynamic case; this
+        // is a known frontend type, never an unresolved inference variable.
         crate::value::Value::Decimal { .. } => DataType::Variant,
         crate::value::Value::Bool(_) => DataType::Bool,
         crate::value::Value::Int(_) => DataType::INT,
@@ -4915,9 +5208,39 @@ fn value_type(value: &crate::value::Value) -> DataType {
         crate::value::Value::Duration(_) => DataType::DURATION,
         crate::value::Value::Timestamp(_) => DataType::TIMESTAMP,
         crate::value::Value::Null => DataType::Null,
-        crate::value::Value::Array(_) => DataType::array(DataType::Variant),
-        crate::value::Value::Map(_) => DataType::text_map(DataType::Variant),
-    }
+        crate::value::Value::Array(items) => {
+            let mut element = None;
+            for item in items {
+                let Some(item) = value_type(item)? else {
+                    return Ok(None);
+                };
+                element = Some(match element {
+                    Some(current) => inferred_join(&current, &item)?,
+                    None => item,
+                });
+            }
+            let Some(element) = element else {
+                return Ok(None);
+            };
+            DataType::array(element)
+        }
+        crate::value::Value::Map(entries) => {
+            let mut element = None;
+            for item in entries.values() {
+                let Some(item) = value_type(item)? else {
+                    return Ok(None);
+                };
+                element = Some(match element {
+                    Some(current) => inferred_join(&current, &item)?,
+                    None => item,
+                });
+            }
+            let Some(element) = element else {
+                return Ok(None);
+            };
+            DataType::text_map(element)
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -4971,7 +5294,7 @@ graph m0_probe : App {
     var count : int = 0
     on in where data.text != "" {
       count = count + 1
-      out = { data.text = data.text }
+      out = data.text
     }
   }
 
@@ -5018,13 +5341,10 @@ graph m0_probe : App {
             panic!("expected the emission");
         };
         assert_eq!(port.name(), "out");
-        let EmitValue::Patch(writes) = value else {
-            panic!("expected an envelope patch");
+        let EmitValue::Data(tree) = value else {
+            panic!("expected a whole-data expression");
         };
-        assert_eq!(
-            writes[0].target,
-            crate::envelope::WriteTarget::Data(vec![String::from("text")])
-        );
+        assert!(matches!(&tree.root, cel::Expr::Path(path) if path == &["data", "text"]));
     }
 
     #[test]
@@ -5414,7 +5734,7 @@ graph m0_probe : App {
             .iter()
             .find(|diagnostic| diagnostic.code() == E_CEL_EXPR)
             .expect("the type mismatch");
-        assert!(diagnostic.message().contains("declared Int"));
+        assert!(diagnostic.message().contains("declared int32"));
     }
 
     #[test]
@@ -5477,14 +5797,16 @@ graph m0_probe : App {
     #[test]
     fn physical_integer_types_are_not_silently_merged() {
         let long = "graph g : App {\n  operator o {\n    var n : long = 0\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(long);
-        let constructs: Vec<&str> = bag
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.code() == E_CHECK_DEFERRED)
-            .map(|diagnostic| diagnostic.fields()[0].1.as_str())
-            .collect();
-        assert!(constructs.contains(&"the long state type"));
+        let (hir, bag) = check_source(long);
+        assert!(
+            !bag.has_errors(),
+            "long is now canonical: {:#?}",
+            bag.diagnostics()
+        );
+        assert_eq!(
+            hir.expect("one App").app.nodes[0].vars[0].ty,
+            DataType::LONG
+        );
         let overflow = "graph g : App {\n  operator o {\n    var n : int = 2147483648\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(overflow);
         assert!(

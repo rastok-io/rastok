@@ -157,47 +157,50 @@ impl RequestCodec {
             _ => Self::Lines,
         }
     }
-
-    /// The v6 type a job-mode reply crosses the `out` pin with. It preserves
-    /// D-2026-08-11-1's historical `array<variant>` package contract while
-    /// M1.3 is built behind the v6 gate. B5/B7 replace it with the resolved
-    /// per-frame `variant` port and ordinary repeated emissions; no new code
-    /// should treat this aggregate as the target model. `lines` stays
-    /// untyped in the same legacy table. Callers reach this through
-    /// [`connector_out_pin`] — the one effective-pin authority in v6.
-    #[must_use]
-    pub fn reply_type(self) -> Option<DataType> {
-        match self {
-            Self::Jsonl => Some(DataType::array(DataType::Variant)),
-            Self::Lines => None,
-        }
-    }
 }
 
-/// The EFFECTIVE pin of a connector port, as a PURE function of
-/// (contract, port, codec word) — the one semantic authority
-/// (D-2026-08-11-1, amended twice): the checker's edge audit and
-/// mock-reply judge reach it through their HIR adapter, the plan
-/// validator and the machine through [`connector_out_pin`]. Scoped
-/// to the `Process` contract's `out`; any other sheet derives
-/// nothing until it lands with its own rules.
+/// Effective logical type of one currently executable Connector port.
+///
+/// This is the temporary B2 contract resolver shared by the compiler HIR and
+/// raw-plan validation. B5 moves the same attribute-dependent rule into the
+/// general `PortContract` metamodel. The JSONL output remains the historical
+/// v6 aggregate `array<variant>` until B6 changes Process to repeated ordinary
+/// emissions.
 #[must_use]
-pub fn effective_pin(contract: &str, port: &str, codec_word: Option<&str>) -> Option<DataType> {
-    if contract != "Process" || port != "out" {
+pub fn resolved_contract_port_type(
+    contract: &str,
+    port: &str,
+    codec_word: Option<&str>,
+) -> Option<DataType> {
+    if contract != "Process" {
         return None;
     }
-    RequestCodec::from_word(codec_word).reply_type()
+    match (port, codec_word) {
+        ("in" | "out", Some("lines")) => Some(DataType::Text),
+        ("in", Some("jsonl")) | ("err", Some("lines" | "jsonl")) => Some(DataType::Variant),
+        ("out", Some("jsonl")) => Some(DataType::array(DataType::Variant)),
+        _ => None,
+    }
 }
 
-/// [`effective_pin`]'s plan-side adapter: the connector spec's
-/// `out` pin.
+/// The effective logical type of one port in the currently executable
+/// `Process` contract.
+///
+/// B2 resolves every travelling port before execution while B5 will move this
+/// attribute-dependent rule into the general contract metamodel.
 #[must_use]
-pub fn connector_out_pin(spec: &crate::plan::ConnectorSpec) -> Option<DataType> {
-    let word = match spec.attribute("codec") {
+pub fn resolved_port_type(
+    spec: &crate::plan::ConnectorSpec,
+    port: &crate::node::Port,
+) -> Option<DataType> {
+    if spec.contract != "Process" {
+        return None;
+    }
+    let codec = match spec.attribute("codec") {
         Some(crate::plan::AttrSetting::Word(word)) => Some(word.as_str()),
         _ => None,
     };
-    effective_pin(&spec.contract, "out", word)
+    resolved_contract_port_type(&spec.contract, port.name(), codec)
 }
 
 /// Frames one request under the given codec.

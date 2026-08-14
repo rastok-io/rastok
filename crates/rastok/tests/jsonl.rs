@@ -222,7 +222,7 @@ fn a_mocked_jsonl_graph_runs_in_the_lab() {
 lab g {{
   simulation probing on app {{
     mock shell {{
-      on in {{ out = json [{{"status": "ok", "value": 7}}] }}
+      on in {{ out = [{{"status": "ok", "value": 7}}] }}
     }}
 
     scenario s "a structured reply routes by its fields" {{
@@ -320,8 +320,7 @@ fn json_null_is_an_executable_value() {
     // `json` takes documents only (D-2026-08-13-1), and a BARE
     // `null` emission stays deferred with the null static type —
     // but null inside a document must EXECUTE, not merely compile.
-    let source =
-        "graph g : App {\n  operator o {\n    on in { out = json [null] }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = json [null] }\n  }\n  . -> o -> .\n}\n";
     let (outputs, errors) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(
@@ -398,7 +397,7 @@ graph g : App {
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = json [1] }
+      on in { out = [1] }
     }
 
     scenario s "the token survives the mock" {
@@ -528,8 +527,40 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                     *setting = rastok::plan::AttrSetting::Word(String::from("json"));
                 }
             }
+            node.ports.extend([
+                rastok::plan::PortDecl {
+                    port: rastok::node::Port::new("in").expect("a conventional port"),
+                    direction: rastok::node::Direction::Input,
+                    ty: Some(rastok::datatype::DataType::Variant),
+                },
+                rastok::plan::PortDecl {
+                    port: rastok::node::Port::new("out").expect("a conventional port"),
+                    direction: rastok::node::Direction::Output,
+                    ty: Some(rastok::datatype::DataType::array(
+                        rastok::datatype::DataType::Variant,
+                    )),
+                },
+            ]);
+            node.ports
+                .sort_by(|left, right| left.key().cmp(&right.key()));
         }
     }
+    plan.boundary.extend([
+        rastok::plan::PortDecl {
+            port: rastok::node::Port::new("in").expect("a conventional port"),
+            direction: rastok::node::Direction::Input,
+            ty: Some(rastok::datatype::DataType::Variant),
+        },
+        rastok::plan::PortDecl {
+            port: rastok::node::Port::new("out").expect("a conventional port"),
+            direction: rastok::node::Direction::Output,
+            ty: Some(rastok::datatype::DataType::array(
+                rastok::datatype::DataType::Variant,
+            )),
+        },
+    ]);
+    plan.boundary
+        .sort_by(|left, right| left.key().cmp(&right.key()));
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan);
     assert!(
         validated.is_ok(),

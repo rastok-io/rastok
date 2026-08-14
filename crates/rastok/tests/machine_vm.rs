@@ -74,13 +74,24 @@ impl Partner for EchoWorld {
 }
 
 fn submission(text: &str) -> InboundSubmission {
-    let mut data = std::collections::BTreeMap::new();
-    data.insert(String::from("text"), Value::Text(String::from(text)));
+    let data = vec![(String::from("text"), Value::Text(String::from(text)))];
     InboundSubmission {
         authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
-            data: Data::materialized(Value::Map(data)),
+            data: Data::materialized(Value::Struct(data)),
+            ext: Namespace::new(),
+        },
+        sequence: SubmissionSequence::Next,
+    }
+}
+
+fn text_submission(text: &str) -> InboundSubmission {
+    InboundSubmission {
+        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        port: rastok::node::Port::new("in").unwrap(),
+        draft: Draft {
+            data: Data::materialized(Value::Text(String::from(text))),
             ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
@@ -246,6 +257,7 @@ impl Partner for ScriptedWorld {
 fn a_value_fault_becomes_a_typed_error_not_a_lost_envelope() {
     let source = r#"
 graph g : App {
+  input in: variant
   operator pick {
 on in {
   out = data.missing
@@ -686,8 +698,8 @@ fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
 }
 
 #[test]
-fn a_refused_commit_on_an_unframeable_expiry_loses_nothing() {
-    // Case: the queued delivery cannot be framed and the decode
+fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
+    // Case: the queued delivery expires and the timeout
     // transaction's commit is refused — the delivery must stay.
     let compilation = compile(
         &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  . -> wrap -> echo -> nothing\n}\n"],
@@ -697,19 +709,19 @@ fn a_refused_commit_on_an_unframeable_expiry_loses_nothing() {
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
-    vm.inject(&mut journal, submission("salut")).unwrap();
-    // wrap re-emits the MAP; the delivery to echo is unframeable,
-    // so it refuses at the head with a typed DecodeError… unless
-    // it is still QUEUED behind nothing — drive only the wrap
-    // transaction, then expire while queued.
+    vm.inject(&mut journal, text_submission("salut")).unwrap();
+    // Drive only the wrap transaction, then expire the conforming
+    // delivery while it is still queued. B2's ingress gate makes the
+    // former unframeable-payload setup unreachable by construction.
     vm.step(&mut journal).unwrap();
     let facts_before = journal.inner.records().len();
     journal.refuse_commits = true;
     assert!(vm.advance(&mut journal, &mut world, 5_000_000_000).is_err());
-    assert_eq!(
-        journal.inner.records().len(),
-        facts_before,
-        "a refused commit adds no fact"
+    assert!(
+        journal.inner.records()[facts_before..]
+            .iter()
+            .all(|record| !matches!(record, Record::Transaction(_))),
+        "the open and closure facts may commit, but the refused transaction may not"
     );
     // Heal and replay: the delivery was never removed, the timer
     // never acked — exactly one typed error results.
@@ -723,10 +735,12 @@ fn a_refused_commit_on_an_unframeable_expiry_loses_nothing() {
     };
     assert_eq!(
         payload.get("kind"),
-        Some(&rastok::envelope::Value::Text(String::from("DecodeError"))),
+        Some(&rastok::envelope::Value::Text(String::from(
+            "TimeoutExpired"
+        ))),
         "the kind survived the replay"
     );
-    let decode_transactions: Vec<_> = journal
+    let terminal_transactions: Vec<_> = journal
         .inner
         .records()
         .iter()
@@ -736,11 +750,11 @@ fn a_refused_commit_on_an_unframeable_expiry_loses_nothing() {
         })
         .collect();
     assert_eq!(
-        decode_transactions.len(),
+        terminal_transactions.len(),
         1,
         "exactly one transaction consumed the delivery"
     );
-    assert_eq!(decode_transactions[0].consumed.len(), 1);
+    assert_eq!(terminal_transactions[0].consumed.len(), 1);
 }
 
 #[test]

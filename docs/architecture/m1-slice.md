@@ -144,7 +144,7 @@ step touches `vm.rs` once.
    sharpened five edges (amendment on D-2026-08-11-1): `null`
    executes (the envelope domain gained tag 9's value — `json
    null` runs, a `null` line decodes), the reply shape is a real
-   pin (`reply_type` = `array<variant>`, judged at check for mocks
+   pin (`array<variant>`, judged at check for mocks
    and at every settled outcome — the record-mock false green
    refuses; `lines` stays untyped by NAME, its typing lands with
    the connector sheets), the plan validator holds the codec's
@@ -157,9 +157,9 @@ step touches `vm.rs` once.
    request's `app`/`ext` zones (content_type struck — the reply's
    payload is fresh), proven by an app-token round trip through a
    REAL `cat` and through a mock. A second same-day round unified
-   the effective pin into ONE derivation
-   (`boundary::connector_out_pin`, consulted by the checker's edge
-   audit and mock judge, the plan validator, and the machine — a
+   the effective pin into one derivation (the historical M1.2 helper;
+   M1.3 B2 has since replaced it with the total resolved port table
+   consumed by the checker, plan validator, and machine — a
    jsonl-to-`int` edge now refuses at CHECK), scoped the codec rule
    to the Process contract (domain AND presence — the sheet
    requires it), aligned doubles with the decision's own words
@@ -235,7 +235,10 @@ step touches `vm.rs` once.
    of the lazy payload witness. Core `Value::validate` and
    `DataType::violation` now provide the single structural-validation and
    recursive-conformance doors used by plans, metadata, state, ingress and
-   emissions; JSON no longer owns the decimal128 domain. The remaining
+   emissions; JSON no longer owns the decimal128 domain. B2 now resolves every
+   used or declared port into a total `Declared`/`Inferred` table on
+   `ValidatedExecutionPlan`; v6 decoders re-derive it, and no unresolved hole
+   becomes `variant`. The remaining
    `error_set`, `TypedError` and
    success/failure-only reply split are removed by the ordered M1.3 gates,
    not promoted as an intermediate model. Ordered gates and evidence are in

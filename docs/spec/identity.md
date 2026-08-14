@@ -6,10 +6,11 @@
 > journal records.
 >
 > The registry below describes executable plan-package v6. The M1.3
-> target in D-2026-08-14-1 lands a canonical `DataType` registry,
+> target in D-2026-08-14-1 transports a canonical `DataType` registry,
 > complete resolved port types and structural/tagged unions together in
-> v7. Until that validator lands, this table remains the current wire
-> authority; it is not the design constraint for the v7 registry.
+> v7. B2 already requires and derives the complete effective table when a v6
+> plan validates or decodes; this registry remains only the current wire
+> authority and is not the design constraint for v7.
 
 ## 1. The semantic hash
 

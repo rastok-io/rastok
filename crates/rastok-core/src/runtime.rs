@@ -387,7 +387,7 @@ pub struct TransactionOutcome {
 /// handler runs, everything or nothing after.
 #[derive(Debug)]
 pub struct TransactionExecutor<'plan> {
-    plan: &'plan ExecutionPlan,
+    plan: &'plan ValidatedExecutionPlan,
     graph_version: GraphVersion,
 }
 
@@ -399,7 +399,7 @@ impl<'plan> TransactionExecutor<'plan> {
     #[must_use]
     pub fn new(plan: &'plan ValidatedExecutionPlan, graph_version: GraphVersion) -> Self {
         Self {
-            plan: plan.plan(),
+            plan,
             graph_version,
         }
     }
@@ -552,11 +552,6 @@ impl<'plan> TransactionExecutor<'plan> {
                         // out-of-range int (or any wrong shape) into
                         // a pin, pass-through included. Encoded
                         // bytes are the codecs' door.
-                        let own_pin = node
-                            .ports
-                            .iter()
-                            .find(|decl| &decl.port == port)
-                            .and_then(|decl| decl.ty.as_ref());
                         let from = crate::plan::EndpointRef {
                             node: Some(slot),
                             port: port.clone(),
@@ -564,13 +559,13 @@ impl<'plan> TransactionExecutor<'plan> {
                         let data = match built.data {
                             BuiltData::Unchanged => {
                                 if let Data::Materialized(current) = input.data() {
-                                    crossing_pins_hold(self.plan, &from, own_pin, current)
+                                    crossing_pins_hold(self.plan, &from, current)
                                         .map_err(PinViolation::into_fault)?;
                                 }
                                 input.data().clone()
                             }
                             BuiltData::Value(value) => {
-                                crossing_pins_hold(self.plan, &from, own_pin, &value)
+                                crossing_pins_hold(self.plan, &from, &value)
                                     .map_err(PinViolation::into_fault)?;
                                 Data::materialized(value)
                             }
@@ -1019,15 +1014,14 @@ impl PinViolation {
 /// Judges materialized content against every pin it must cross —
 /// the emitting end's own pin and each fan-out target's — BEFORE any
 /// commit: routing is post-commit and must never fail. Encoded bytes
-/// never reach this judge (the codecs' door); `dyn` pins admit
-/// anything.
+/// never reach this judge (the codecs' door); an explicit `variant`
+/// destination admits any valid materialized value.
 pub(crate) fn crossing_pins_hold(
-    plan: &crate::plan::ExecutionPlan,
+    plan: &crate::plan::ValidatedExecutionPlan,
     from: &crate::plan::EndpointRef,
-    own_pin: Option<&DataType>,
     value: &Value,
 ) -> Result<(), PinViolation> {
-    if let Some(pinned) = own_pin
+    if let Some(pinned) = plan.resolved_ports().endpoint_type(from)
         && let Some(violation) = pinned.violation(from.port.name(), value)
     {
         return Err(PinViolation {
@@ -1037,18 +1031,7 @@ pub(crate) fn crossing_pins_hold(
     }
     for edge in plan.edges.iter().filter(|edge| edge.from == *from) {
         let Some(to) = &edge.to else { continue };
-        let pinned = match to.node {
-            Some(slot) => plan
-                .nodes
-                .get(slot.index())
-                .and_then(|node| node.ports.iter().find(|decl| decl.port == to.port))
-                .and_then(|decl| decl.ty.as_ref()),
-            None => plan
-                .boundary
-                .iter()
-                .find(|decl| decl.port == to.port)
-                .and_then(|decl| decl.ty.as_ref()),
-        };
+        let pinned = plan.resolved_ports().endpoint_type(to);
         if let Some(pinned) = pinned
             && let Some(violation) = pinned.violation(to.port.name(), value)
         {

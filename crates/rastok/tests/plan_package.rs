@@ -175,7 +175,7 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
         "0 - 9223372036854775807",
     ] {
         let source = format!(
-            "graph probe : App {{\n  operator o {{\n    on in {{ out = {literal} }}\n  }}\n\n  . -> o -> .\n}}\n"
+            "graph probe : App {{\n  input in: text\n  output out: variant\n  operator o {{\n    on in {{ out = {literal} }}\n  }}\n\n  . -> o -> .\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -339,7 +339,7 @@ fn nesting_beyond_the_budget_refuses_before_the_stack_does() {
 fn nested_additions(count: usize) -> String {
     let additions = "+ 1 ".repeat(count);
     format!(
-        "graph deep : App {{\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
+        "graph deep : App {{\n  input in: text\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
          seen = 1 {additions}\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n"
     )
 }
@@ -377,7 +377,7 @@ fn a_nan_plan_equals_itself_across_the_trip() {
     // is canonical-bits equality, so the round trip preserves the
     // claim the header test makes — "structural equality across the
     // trip" — instead of a plan that stops equalling itself.
-    let source = "graph g : App {\n  operator o {\n    var seen : double = 0.0 / 0.0\n\n    on in {\n      out = data\n    }\n  }\n\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: text\n  operator o {\n    var seen : double = 0.0 / 0.0\n\n    on in {\n      out = data\n    }\n  }\n\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -395,7 +395,7 @@ fn the_zero_signs_are_two_plans() {
     // packages differ, so equality may not say otherwise.
     let with_zero = |zero: &str| {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    var seen : double = {zero}\n\n    on in {{\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : double = {zero}\n\n    on in {{\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n"
         );
         compile(
             &[source.as_str()],
@@ -441,7 +441,7 @@ fn a_hostile_depth_source_refuses_and_the_process_survives() {
         // A parenthesis tower: pure parser recursion, zero AST depth
         // — the parser's own guard must refuse it.
         let tower = format!(
-            "graph g : App {{\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
+            "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
              seen = {}1{}\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n",
             "(".repeat(5_000),
             ")".repeat(5_000),
@@ -501,7 +501,7 @@ fn the_depth_boundaries_are_exact() {
     // at CHECK with the structured `depth` payload.
     let parens = |n: usize| {
         format!(
-            "graph g : App {{\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
+            "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : int = 0\n\n    on in {{\n      \
              seen = {}1{}\n      out = data\n    }}\n  }}\n\n  . -> o -> .\n}}\n",
             "(".repeat(n),
             ")".repeat(n),

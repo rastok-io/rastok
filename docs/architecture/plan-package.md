@@ -25,9 +25,11 @@
 > the HIR canonical form, and the goldens re-blessed for the
 > version byte alone (the spike re-proved the same semantic hash
 > on target). The v5 entry below stays as history.
-> **M1.3 target:** D-2026-08-14-1 replaces the current type/value
-> authority and resolved port tables in one categorical format v7
-> landing. v7 is not current until its full validator and sabotage
+> **M1.3 target:** D-2026-08-14-1 transports the complete canonical
+> `DataType` registry and resolved port tables in one categorical format v7
+> landing. Core type/value ownership and B2's total effective table already
+> govern execution: v6 transports source pins and deterministically re-solves
+> them at validation/decode. v7 is not current until its full wire validator and sabotage
 > matrix land; the ordered work is in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). It will
 > carry canonical union discriminants and complete effective types, not
@@ -114,7 +116,8 @@ of the contract, in order:
 2. **Domain canonicity, audited by the same type** — every collection
    the plan documents as canonically ordered actually is: nodes by
    (kind rank, path), boundary and port tables sorted and unique with
-   the implicit trio never declared, edges by their endpoint text,
+   untyped conventional rows omitted (a typed `in`/`out`/`err` row is a
+   real v6 source constraint), edges by their endpoint text,
    handlers by (slot, activation key) with one handler per
    activation, vars and attributes sorted — attributes are the
    EFFECTIVE sheet (D-2026-08-12-1): the checker injected every
@@ -194,6 +197,10 @@ port_decl  := [name (text), direction (uint: 1 in · 2 out), type?]
               material), and the semantic hash of any graph with a
               port table moved with the annotation's identity slot —
               both pinned by the gauge fixture (D-2026-08-08-3)
+              — since M1.3 B2, validation derives a separate total
+              ResolvedPortTable (effective type + Declared/Inferred origin)
+              from these rows, connector pins and graph constraints; an
+              unresolved variable refuses and never becomes variant
 var        := {1: name (text), 2: type, 3: init (tagged_value)?}
 
 edge       := [endpoint, endpoint | null]         — null = «-> nothing»

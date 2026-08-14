@@ -36,7 +36,7 @@ use crate::journal::{Closure, MemJournal, OutboundStatus, Record};
 use crate::node;
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::Vm;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Builds one fresh adapter per battery run. A trait rather than a
 /// closure because the adapter may borrow the probe's plan — the
@@ -298,15 +298,16 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
 }
 
 fn submission(text: &str) -> InboundSubmission {
-    let mut data = BTreeMap::new();
-    data.insert(String::from("text"), Value::Text(String::from(text)));
     InboundSubmission {
         authority: IngressAuthority::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
         port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
         draft: Draft {
-            data: Data::materialized(Value::Map(data)),
+            data: Data::materialized(Value::Struct(vec![(
+                String::from("text"),
+                Value::Text(String::from(text)),
+            )])),
             ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
@@ -505,16 +506,17 @@ fn interleave_battery(
     if probe.a == probe.b {
         return Err("the interleave payloads must differ, or a swap is invisible".into());
     }
-    let mut data = BTreeMap::new();
-    data.insert(String::from("a"), Value::Text(String::from(probe.a)));
-    data.insert(String::from("b"), Value::Text(String::from(probe.b)));
+    let data = vec![
+        (String::from("a"), Value::Text(String::from(probe.a))),
+        (String::from("b"), Value::Text(String::from(probe.b))),
+    ];
     let paired = InboundSubmission {
         authority: IngressAuthority::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
         port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
         draft: Draft {
-            data: Data::materialized(Value::Map(data)),
+            data: Data::materialized(Value::Struct(data)),
             ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,

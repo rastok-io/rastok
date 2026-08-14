@@ -104,8 +104,9 @@ pub struct Node {
     pub vals: Vec<Val>,
     /// Mutable state cells, in declaration order.
     pub vars: Vec<Var>,
-    /// The semantic port table — declared and inferred, with
-    /// directions; the defaults `in`, `out`, `err` stay implicit.
+    /// Source port rows and inferred port existence, with directions.
+    /// Untyped conventional ports stay implicit; a typed restatement is a
+    /// real source constraint. Effective types belong to the validated plan.
     pub ports: Vec<crate::plan::PortDecl>,
     /// Checked handlers, in declaration order.
     pub handlers: Vec<Handler>,

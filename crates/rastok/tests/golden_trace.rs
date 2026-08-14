@@ -73,15 +73,14 @@ fn run(source: &str) -> Vec<Record> {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
-    let mut data = std::collections::BTreeMap::new();
-    data.insert(String::from("text"), Value::Text(String::from("salut")));
+    let data = vec![(String::from("text"), Value::Text(String::from("salut")))];
     vm.inject(
         &mut journal,
         InboundSubmission {
             authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Map(data)),
+                data: Data::materialized(Value::Struct(data)),
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,

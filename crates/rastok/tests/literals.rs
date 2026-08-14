@@ -16,7 +16,7 @@ fn emitted(body: &str) -> rastok::envelope::Data {
     use rastok::runtime::vm::Vm;
 
     let source = format!(
-        "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+        "graph g : App {{\n  input in: variant\n  operator o {{\n    output out: variant\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
     );
     let compilation = compile(
         &[source.as_str()],
@@ -44,7 +44,7 @@ fn emitted(body: &str) -> rastok::envelope::Data {
 
 fn hash_of(body: &str) -> String {
     let source = format!(
-        "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+        "graph g : App {{\n  input in: variant\n  operator o {{\n    output out: variant\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
     );
     compile(
         &[source.as_str()],
@@ -110,7 +110,7 @@ fn base64_with_a_content_type_is_whole_payload() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  operator o {\n    on in { out = base64(\"image/png\") { AAEC } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = base64(\"image/png\") { AAEC } }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -307,7 +307,7 @@ fn assets_resolve_at_build_and_seal_by_content() {
 
     // Whole-data with a content type, plus a second use of the SAME
     // content under a different path: one deduplicated blob.
-    let source = "graph g : App {\n  operator o {\n    on in { out = asset(\"assets/logo.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/same.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"assets/logo.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/same.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
     let compilation = compile_with_assets(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -321,7 +321,7 @@ fn assets_resolve_at_build_and_seal_by_content() {
     );
     // The hash seals the CONTENT digest, not the path: the same
     // program via the other spelling is the same identity.
-    let swapped = "graph g : App {\n  operator o {\n    on in { out = asset(\"assets/same.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/logo.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let swapped = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"assets/same.bin\", \"application/octet-stream\") }\n  }\n  operator p {\n    on in { out = asset(\"assets/logo.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
     let other = compile_with_assets(
         &[swapped],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -381,7 +381,7 @@ fn an_asset_emission_runs_and_carries_its_type() {
     let mut file = std::fs::File::create(root.join("report.bin")).unwrap();
     file.write_all(b"PDFISH").unwrap();
 
-    let source = "graph g : App {\n  operator o {\n    on in { out = asset(\"report.bin\", \"application/pdf\") }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"report.bin\", \"application/pdf\") }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile_with_assets(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -544,7 +544,7 @@ fn the_carry_survives_a_dead_earlier_write() {
     // `data = "temp"` then `data = data`: last-write-wins — the
     // final value is the input payload, so the representation and
     // its content type CARRY (the reviewer's counter-example).
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        data = \"temp\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        data = \"temp\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -596,8 +596,7 @@ fn inject_holds_the_ext_zone_to_the_schema() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source =
-        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -647,44 +646,27 @@ fn a_zone_alias_cannot_dodge_the_grid() {
 #[test]
 fn a_non_meta_typed_app_write_refuses_or_converts() {
     // An array<scalar> write now CONVERTS (spec-admitted meta)…
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.tags = [\"a\", \"b\"]\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.tags = [\"a\", \"b\"]\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("array<scalar> is legal meta");
-    // …and a variant-typed content_type that turns out non-text faults
-    // TYPED at the runtime write, never a silent int.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Value};
-    use rastok::journal::MemJournal;
-    use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
-    let source = "graph g : App {\n  operator o {\n    on in { out = { data = \"x\", meta.ext.content_type = data } }\n  }\n  . -> o -> .\n}\n";
-    let compilation = compile(
+    // …and an explicitly dynamic value cannot silently enter the precise
+    // `text` field. B2 uses the same assignability relation for metadata
+    // and ports, so the refusal is static rather than a runtime surprise.
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = { data = \"x\", meta.ext.content_type = data } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("variant passes the static gate");
-    let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
-        &mut journal,
-        InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
-            port: rastok::node::Port::new("in").unwrap(),
-            draft: Draft {
-                data: Data::materialized(Value::Int(7)),
-                ext: Namespace::new(),
-            },
-            sequence: SubmissionSequence::Next,
-        },
-    )
-    .expect("the injection lands");
-    vm.drain(&mut journal)
-        .expect("the machine absorbs the fault");
-    assert_eq!(vm.outputs().len(), 0, "nothing crosses");
-    assert_eq!(vm.errors().len(), 1, "the typed fault leaves on err");
+    .expect_err("variant must be narrowed before a text write");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-CEL-EXPR"),
+        "{bag:?}"
+    );
 }
 
 #[test]
@@ -715,8 +697,7 @@ fn the_meta_type_grid_is_closed_end_to_end() {
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
-    let source =
-        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -802,8 +783,9 @@ fn comments_are_trivia_in_every_expression_form() {
     let brace = "graph g : App {\n  operator o {\n    on in { out = data /* same */ }\n  }\n  . -> o -> .\n}\n";
     let eol = "graph g : App {\n  operator o {\n    on in {\n      out = data // end\n    }\n  }\n  . -> o -> .\n}\n";
     let hash = |source: &str| {
+        let typed = source.replacen("graph g : App {", "graph g : App {\n  input in: variant", 1);
         compile(
-            &[source],
+            &[typed.as_str()],
             &Registry::try_m0().expect("the standard catalogue holds"),
         )
         .expect("valid")
@@ -836,7 +818,7 @@ fn a_named_decimal_is_the_same_program_family() {
     // D-2026-08-13-1 (review round): naming a constant expression
     // must not change validity — the folded declared-scale constant
     // travels the package like the direct call.
-    let source = "graph g : App {\n  operator o {\n    val p = decimal(\"1.50\")\n    on in { out = p }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    val p = decimal(\"1.50\")\n    on in { out = p }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -855,7 +837,7 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     // Int) cannot obtain validation — exactly what the decoder
     // refuses. A declared trailing-zero form ({100, 2} =
     // decimal("1.00")) is legitimate (D-2026-08-13-1, review round).
-    let source = "graph g : App {\n  operator o {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> o -> .\n}\n";
     let mut plan = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -887,8 +869,7 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     });
     ValidatedExecutionPlan::try_new(plan).expect("a declared trailing-zero decimal validates");
     // A blob lying about its digest cannot obtain validation.
-    let source =
-        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     let mut plan = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -932,8 +913,8 @@ fn asset_order_is_digest_canonical() {
 
     // The same two assets, used in OPPOSITE source order, produce
     // the same package bytes: the table is digest-sorted at seal.
-    let ab = "graph g : App {\n  operator o {\n    on in { out = asset(\"a.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"b.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    let ba = "graph g : App {\n  operator o {\n    on in { out = asset(\"b.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"a.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let ab = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"a.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"b.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let ba = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = asset(\"b.bin\") }\n  }\n  operator p {\n    on in { out = asset(\"a.bin\") }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
     let first = compile_with_assets(
         &[ab],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -971,40 +952,23 @@ fn the_review_round_three_matrix_holds() {
             .any(|d| d.code().as_str() == "E-META-ZONE"),
         "{bag:?}"
     );
-    // A variant write is judged against the SEALED schema at run: x is
-    // int (the other writer), the text faults typed.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::Namespace;
-    use rastok::journal::MemJournal;
-    use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.x = 1\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.x = data\n        data = data\n      }\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
-    let compilation = compile(
+    // Metadata keeps its deliberately narrower rule: one field has one
+    // type. B2 must not hide an int/text conflict behind `variant` or a
+    // synthesized union.
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.x = 1\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.x = \"not an int\"\n        data = data\n      }\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
+    let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("variant passes the static gate");
-    let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
-        &mut journal,
-        InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
-            port: rastok::node::Port::new("in").unwrap(),
-            draft: Draft {
-                data: Data::materialized(Value::Text(String::from("hello"))),
-                ext: Namespace::new(),
-            },
-            sequence: SubmissionSequence::Next,
-        },
-    )
-    .expect("the injection lands");
-    vm.drain(&mut journal)
-        .expect("the machine absorbs the fault");
-    assert_eq!(vm.outputs().len(), 0, "the text never crosses as int");
-    assert_eq!(vm.errors().len(), 1, "the typed fault leaves on err");
+    .expect_err("one app field cannot change type");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-META-TYPE"),
+        "{bag:?}"
+    );
     // app.content_type is an ORDINARY app field — no special rule.
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.content_type = 7\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.content_type = 7\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1092,7 +1056,7 @@ fn lab_assets_never_reach_the_production_plan() {
 #[test]
 fn the_validator_only_admits_executable_schemas() {
     use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
-    let base = "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let base = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     // A uint schema entry: no value can ever satisfy it — named as
     // the TYPE refusal it is.
     let mut plan = compile(
@@ -1154,7 +1118,7 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.price = data\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.price = data\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1529,7 +1493,7 @@ fn the_alias_boundary_keeps_its_variable() {
     // silently dropped at the boundary. 257 refuses typed.
     let graph_with = |ty: &str| {
         format!(
-            "graph g : App {{\n  operator o {{\n    var seen : {ty} = \"x\"\n    on in {{ seen = data\n      out = data }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: text\n  operator o {{\n    var seen : {ty} = \"x\"\n    on in {{ seen = data\n      out = data }}\n  }}\n  . -> o -> .\n}}\n"
         )
     };
     let chain = |n: usize| {

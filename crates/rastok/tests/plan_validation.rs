@@ -59,9 +59,9 @@ fn a_declared_port_extends_the_implicit_trio() {
     let source = r#"
 graph probe : App {
   operator o {
-    output extra
+    output extra: text
 
-    on in {
+    on in where data.anchor == "" {
       out = data
     }
   }
@@ -86,7 +86,7 @@ graph g : App {
   input in
 
   operator o {
-    on in {
+    on in where data.anchor == "" {
       out = data
     }
   }
@@ -102,6 +102,106 @@ graph g : App {
     assert!(
         compilation.plan.plan().boundary.is_empty(),
         "the defaults never enter the declared table"
+    );
+}
+
+#[test]
+fn typed_conventional_ports_are_real_constraints() {
+    let source = r#"
+graph g : App {
+  input in: variant
+
+  operator o {
+    input in: variant
+    on in { out = "done" }
+  }
+
+  . -> o -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an explicit conventional pin is supported");
+    let raw = compilation.plan.plan();
+    assert!(
+        raw.boundary.iter().any(|decl| {
+            decl.port.name() == "in" && decl.ty.as_ref() == Some(&DataType::Variant)
+        })
+    );
+    assert!(
+        raw.nodes[0].ports.iter().any(|decl| {
+            decl.port.name() == "in" && decl.ty.as_ref() == Some(&DataType::Variant)
+        })
+    );
+    let boundary = compilation
+        .plan
+        .resolved_ports()
+        .boundary()
+        .iter()
+        .find(|decl| decl.port().name() == "in")
+        .expect("the boundary port resolves");
+    assert_eq!(boundary.ty(), &DataType::Variant);
+    assert_eq!(boundary.origin(), plan::TypeOrigin::Declared);
+
+    let package = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, _) = plan::decode(&package).expect("the source pin survives v6");
+    assert_eq!(
+        decoded
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|decl| decl.port().name() == "in")
+            .expect("the decoded pin resolves")
+            .ty(),
+        &DataType::Variant
+    );
+}
+
+#[test]
+fn an_unconstrained_raw_port_never_becomes_variant() {
+    let mut raw = raw_probe();
+    let relay = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the relay operator");
+    relay
+        .ports
+        .push(plan::PortDecl::untyped(port("unused"), Direction::Output));
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::UnresolvedPortType {
+            node: Some(rastok::node::Path::new(["relay"]).unwrap()),
+            port: port("unused"),
+        }
+    );
+}
+
+#[test]
+fn a_raw_port_cannot_contradict_its_instantiated_contract() {
+    let mut raw = raw_probe();
+    let shell = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the Process node");
+    shell.ports.push(plan::PortDecl {
+        port: port("in"),
+        direction: Direction::Input,
+        ty: Some(DataType::INT),
+    });
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::ConflictingPortTypes {
+            node: Some(rastok::node::Path::new(["shell"]).unwrap()),
+            port: port("in"),
+            expected: DataType::INT,
+            found: DataType::Text,
+        }
     );
 }
 
@@ -540,7 +640,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     );
 }
 
-const TWO_TRIGGERS: &str = "graph g : App {\n  operator o {\n    on a { out = data }\n    on b { out = data }\n  }\n  . -> o.a\n  . -> o.b\n  o -> .\n}\n";
+const TWO_TRIGGERS: &str = "graph g : App {\n  operator o {\n    input a: text\n    input b: text\n    on a { out = data }\n    on b { out = data }\n  }\n  . -> o.a\n  . -> o.b\n  o -> .\n}\n";
 
 #[test]
 fn a_non_adjacent_duplicate_wins_over_the_broken_order() {

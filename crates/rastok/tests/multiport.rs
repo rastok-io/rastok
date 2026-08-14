@@ -15,6 +15,9 @@ use rastok::contract::Registry;
 /// One input fanning to two named outputs through named node ports.
 const SORTER: &str = r#"
 graph sorter : App {
+  input in: variant
+  output high: variant
+  output low: variant
   operator route {
     on in {
       hot = data
@@ -25,8 +28,6 @@ graph sorter : App {
   . -> route
   route.hot -> .high
   route.cold -> .low
-  output high
-  output low
 }
 
 lab sorter {
@@ -43,8 +44,9 @@ lab sorter {
 /// Two declared inputs, each reaching its own handler.
 const MERGER: &str = r#"
 graph merge : App {
-  input alpha
-  input beta
+  input alpha: variant
+  input beta: variant
+  output out: variant
 
   operator join {
     var seen : int = 0
@@ -133,7 +135,8 @@ fn refusal_code(graph: &str, injection: &str) -> Vec<&'static str> {
 
 const MERGER_GRAPH: &str = r#"
 graph merge : App {
-  input alpha
+  input alpha: variant
+  output out: variant
 
   operator join {
     on a {
@@ -406,7 +409,7 @@ fn typed_ports_travel_in_the_package() {
 fn the_annotation_is_identity() {
     // Pinning a type is a public contract — two graphs differing only
     // by the annotation are two identities.
-    let annotated = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
+    let annotated = "graph g : App {\n  input in: text\n  output out: text\n  operator o {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> o.evt\n  o -> .\n}\n";
     let bare = annotated.replace(" : text", "");
     let one = compile(
         &[annotated],
@@ -568,14 +571,13 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
 // ===== the resolved contract table travels in the plan =====
 
 #[test]
-fn a_contract_port_table_travels_without_the_registry() {
+fn an_untyped_contract_port_never_enters_a_validated_plan() {
     use rastok::contract::{AttributeSpec, ConnectorContract, Presence, ValueDomain};
-    use rastok::plan;
 
-    // A future-shaped contract: named ports beside the trio — what
-    // File and the HTTP pair will declare. The m1-slice transport
-    // rule: everything the embedded validator checks must travel,
-    // because it has no Registry.
+    // B2 closes the old hole: a contract name and direction are not
+    // enough to make a usable port. B5 will give contract sheets typed
+    // PortContracts; until then, an otherwise unconstrained named port
+    // cannot enter a ValidatedExecutionPlan as an implicit variant.
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
         name: "Probe",
         input_ports: &["in", "request"],
@@ -599,47 +601,18 @@ fn a_contract_port_table_travels_without_the_registry() {
         .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
-    // The table TRAVELS today; EXECUTING a named connector port is
-    // deferred by name until the Partner seam speaks it (the edge
-    // test below) — so the probe is wired through its trio.
     let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay -> probe -> .\n}\n";
-    let compilation = compile(&[source], &registry).expect("the contract compiles");
-    // 2. The RESOLVED table is in the plan — the trio stays implicit.
-    let probe = compilation
-        .plan
-        .plan()
-        .nodes
-        .iter()
-        .find(|node| node.path.to_string() == "probe")
-        .expect("the connector");
+    let bag = compile(&[source], &registry).expect_err("request has no logical type yet");
     assert!(
-        probe.ports.iter().any(|decl| decl.port.name() == "request"
-            && decl.direction == rastok::node::Direction::Input),
-        "{:?}",
-        probe.ports
+        bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code().as_str() == "E-PORT-TYPE"
+                && diagnostic
+                    .fields()
+                    .iter()
+                    .any(|(key, value)| *key == "port" && value == "request")
+        }),
+        "{bag:?}"
     );
-    assert!(
-        probe.ports.iter().any(|decl| decl.port.name() == "response"
-            && decl.direction == rastok::node::Direction::Output),
-        "{:?}",
-        probe.ports
-    );
-    assert!(
-        !probe
-            .ports
-            .iter()
-            .any(|decl| matches!(decl.port.name(), "in" | "out" | "err")),
-        "the trio never enters a table: {:?}",
-        probe.ports
-    );
-    // 3. The package round-trips the table.
-    let bytes = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, _) = plan::decode(&bytes).expect("the package opens");
-    assert_eq!(decoded, compilation.plan);
-    // 4. The validator stands WITHOUT the Registry: the raw plan
-    //    re-earns the type from its own tables alone.
-    let raw = decoded.into_inner();
-    rastok::plan::ValidatedExecutionPlan::try_new(raw).expect("no Registry consulted");
 }
 
 #[test]
@@ -726,7 +699,7 @@ fn the_braced_record_is_physically_a_struct() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        v = 7\n      }\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        v = 7\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -799,6 +772,7 @@ fn the_escape_gives_reserved_names_as_plain_fields() {
     // share this resolver with handler emissions and injections.
     let source = r#"
 graph g : App {
+  input in: variant
   operator o {
     on in {
       out = {
@@ -835,7 +809,7 @@ fn an_empty_brace_is_an_empty_record() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  operator o {\n    on in { out = {} }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {} }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -874,8 +848,7 @@ fn a_whole_data_write_is_the_payload_itself() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source =
-        "graph g : App {\n  operator o {\n    on in { out = {data = 1} }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {data = 1} }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -979,7 +952,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1036,7 +1009,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
 
     let run = |body: &str| {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -1087,7 +1060,7 @@ fn the_empty_record_travels_and_hashes_stably() {
     // The one struct constant a plan may carry: the empty record
     // literal survives the package round trip, revalidates, and the
     // hash is deterministic across compiles.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { parent = {} } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = { parent = {} } }\n  }\n  . -> o -> .\n}\n";
     let first = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1107,35 +1080,25 @@ fn the_empty_record_travels_and_hashes_stably() {
 }
 
 #[test]
-fn a_mock_and_an_injection_hold_the_empty_record_too() {
-    // The three interpreters share the resolver: the mock reply and
-    // the scenario injection carry `parent = {}` like the machine.
+fn an_injection_holds_the_empty_record_too() {
+    // The scenario builder and the machine share the same structural
+    // value. A variant boundary is intentional here: the test is about
+    // preserving an empty nested record, not inferring its schema.
     let source = r#"
 graph g : App {
-  connector shell : Process {
-    mode = job ; command = "cat"
-    codec = lines
-    effect = idempotent ; behavior = deterministic
+  input in: variant
+  output out: variant
+  operator relay {
+    on in { out = data }
   }
-
-  operator wrap {
-    on in { out = data.note }
-  }
-
-  . -> wrap -> shell
-  shell.out -> .
+  . -> relay -> .
 }
 
 lab g {
   simulation probing on app {
-    mock shell {
-      on in { out = { parent = {}, tag = "answered" } }
-    }
-
-    scenario s "empty records cross every interpreter" {
-      app.in = { note = "go", hollow = {} }
-      expect "the reply arrives" app.out count == 1 where data.tag == "answered"
-      expect "the empty record is a field" app.out count == 1 where size(data.parent) == 0
+    scenario s "empty records survive an injection" {
+      app.in = { hollow = {} }
+      expect "the empty record is a field" app.out count == 1 where size(data.hollow) == 0
     }
   }
 }
@@ -1308,9 +1271,9 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
 
 #[test]
 fn an_unchanged_pass_through_holds_the_pin_at_run() {
-    // Statically dyn (the activation is unpinned), dynamically text:
-    // the pass-through is judged at emission construction — a typed
-    // RuntimeFault leaves on err, nothing crosses `score : int`.
+    // The identity makes the boundary input int too. A text supplied
+    // by the world is therefore refused at ingress, before a handler
+    // or journal record can exist.
     let source = r#"
 graph g : App {
   output result : int
@@ -1331,19 +1294,35 @@ lab g {
   simulation probing on app {
     scenario s "a dynamic wrong shape faults" {
       app.in = "wrong"
-      expect "nothing crosses" app.result count == 0
-      expect "the fault is typed" app.err count == 1
     }
   }
 }
 "#;
-    lab_passes(source);
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the graph has one resolved int flow");
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    assert!(
+        runs[0]
+            .report
+            .failures
+            .iter()
+            .any(|failure| failure.contains("injection was refused"))
+    );
+    assert!(runs[0].records.is_empty(), "the journal stays untouched");
 }
 
 #[test]
 fn a_typed_destination_holds_against_an_untyped_source() {
-    // The static rule admits dyn → pinned; the DESTINATION pin is
-    // judged at emission construction, before the commit.
+    // The formerly "untyped" source is inferred from the destination.
+    // The graph has one int flow, so a text supplied by the world is
+    // refused at ingress rather than discovered after execution.
     let source = r#"
 graph g : App {
   output result : int
@@ -1362,21 +1341,38 @@ lab g {
   simulation probing on app {
     scenario s "a text cannot land on an int output" {
       app.in = "wrong"
-      expect "nothing crosses" app.result count == 0
-      expect "the fault is typed" app.err count == 1
     }
   }
 }
 "#;
-    lab_passes(source);
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the destination constrains the complete flow");
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    assert!(
+        runs[0]
+            .report
+            .failures
+            .iter()
+            .any(|failure| failure.contains("injection was refused"))
+    );
+    assert!(runs[0].records.is_empty(), "the journal stays untouched");
 }
 
 #[test]
 fn a_connector_reply_holds_the_destination_pin() {
-    // A materialized partner answer fans out like any content: the
-    // typed input downstream judges it before the outcome commits.
+    // Process(lines).out is text. An int destination is impossible
+    // independently of any partner outcome, so B2 rejects the edge
+    // before a VM or journal exists.
     let source = r#"
 graph g : App {
+  input in: variant
   connector shell : Process {
     mode = job ; command = "cat"
     codec = lines
@@ -1410,7 +1406,16 @@ lab g {
   }
 }
 "#;
-    lab_passes(source);
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("text cannot feed an int port");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE")
+    );
 }
 
 // ===== the validator holds pinned edges =====
@@ -1493,34 +1498,38 @@ fn a_named_constant_answers_like_its_literal() {
 // ===== round five — variant coherence, synthesized errors, the relay =====
 
 #[test]
-fn a_variant_pin_is_inference_territory_everywhere() {
-    // `variant` is explicit "anything". A pinned variant admits every
-    // emission, and only two PRECISE pins can make
-    // an edge disagree: checker, validator, and runtime share the
-    // rule.
-    let flexible = "graph g : App {\n  operator o {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  . -> o\n  o.flexible -> .\n}\n";
+fn an_explicit_variant_is_dynamic_not_an_inference_hole() {
+    // `variant` is a resolved logical type. Precise values can enter
+    // it, but a dynamic value cannot enter a precise port without an
+    // explicit narrowing operation.
+    let flexible = "graph g : App {\n  input in: variant\n  operator o {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  . -> o\n  o.flexible -> .\n}\n";
     compile(
         &[flexible],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("an int through a variant pin");
 
-    let variant_to_int = "graph g : App {\n  operator a {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  operator b {\n    input evt : int\n    on evt { out = data }\n  }\n  . -> a\n  a.flexible -> b.evt\n  b -> .\n}\n";
-    compile(
+    let variant_to_int = "graph g : App {\n  input in: variant\n  operator a {\n    output flexible : variant\n    on in { flexible = data }\n  }\n  operator b {\n    input evt : int\n    on evt { out = data }\n  }\n  . -> a\n  a.flexible -> b.evt\n  b -> .\n}\n";
+    let bag = compile(
         &[variant_to_int],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("variant -> int is inference territory");
+    .expect_err("variant cannot silently narrow to int");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE")
+    );
 
-    let int_to_variant = "graph g : App {\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : variant\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
+    let int_to_variant = "graph g : App {\n  input in: variant\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : variant\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
     let compilation = compile(
         &[int_to_variant],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("int -> variant is inference territory");
+    .expect("int is assignable to variant");
 
     // The same rule holds for a raw plan re-earning the type after
-    // the trip — a variant/Int pinned edge is never a mismatch.
+    // the trip — the directional int-to-variant rule is preserved.
     let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
     let (decoded, _) = rastok::plan::decode(&bytes).expect("the package opens");
     rastok::plan::ValidatedExecutionPlan::try_new(decoded.into_inner())
@@ -1588,10 +1597,9 @@ lab g {
 
 #[test]
 fn a_decode_error_cannot_cross_a_pin() {
-    // The machine's own DecodeError synthesis takes the same choke
-    // point: a map into a `lines` connector refuses framing, the
-    // typed error struct heads for err — and err is wired into an
-    // int pin, so nothing commits past the operator.
+    // Process.err is variant in the B2 bridge. It cannot feed an int
+    // destination without narrowing, regardless of which failure kind
+    // might eventually be emitted.
     let source = r#"
 graph g : App {
   connector shell : Process {
@@ -1624,32 +1632,15 @@ lab g {
   }
 }
 "#;
-    let compilation = compile(
+    let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("a valid unit");
-    let runs = rastok::lab::run(
-        &compilation.plan,
-        rastok::plan::GraphVersion(1),
-        &compilation.labs[0],
-    );
-    let run = &runs[0];
+    .expect_err("variant cannot silently narrow to int");
     assert!(
-        run.report
-            .failures
+        bag.diagnostics()
             .iter()
-            .any(|failure| failure.contains("cannot enter")),
-        "the machine fault surfaces: {:#?}",
-        run.report.failures
-    );
-    // TimeoutExpired and every Partner failure route through the
-    // SAME reserve_emissions choke point — one line guards them all.
-    assert!(
-        run.records
-            .iter()
-            .all(|record| !matches!(record, rastok::journal::Record::Transaction(_))),
-        "nothing committed"
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE")
     );
 }
 
@@ -1662,8 +1653,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
     use rastok::runtime::vm::Vm;
     use std::collections::BTreeMap;
 
-    let source =
-        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1750,12 +1740,12 @@ fn an_ingress_pin_violation_is_a_named_error() {
 }
 
 #[test]
-fn the_lab_and_mock_builders_seal_structs_too() {
-    // The VM path is asserted above; the Lab draft and the mock
-    // reply have their own implementations of the same builder —
-    // each is held to tag 17 in the sealed records it produces.
+fn the_lab_builder_seals_structs_before_a_typed_mock_reply() {
+    // The Lab draft is held to tag 17. The lines mock answers with
+    // text because its reply must conform to Process.out.
     let source = r#"
 graph g : App {
+  input in: variant
   connector shell : Process {
     mode = job ; command = "cat"
     codec = lines
@@ -1772,7 +1762,7 @@ graph g : App {
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = {v = 1} }
+      on in { out = "reply" }
     }
 
     scenario s "sugar everywhere" {
@@ -1804,7 +1794,6 @@ lab g {
         tagged.first() == Some(&rastok::canonical_cbor::Value::Uint(17))
     };
     let mut inbound_struct = false;
-    let mut outcome_struct = false;
     for index in 0..trace.len() {
         let (tree, _) = rastok::canonical_cbor::decode(trace.record_bytes(index).unwrap())
             .expect("canonical bytes");
@@ -1819,25 +1808,8 @@ lab g {
         {
             inbound_struct = true;
         }
-        // The connector outcome: the MOCK reply's data seals as a
-        // struct on the way to `out`.
-        if let Some(rastok::canonical_cbor::Value::Array(emissions)) = pairs.get(&36) {
-            for emission in emissions {
-                let rastok::canonical_cbor::Value::Array(parts) = emission else {
-                    continue;
-                };
-                if let Some(rastok::canonical_cbor::Value::Map(spine)) = parts.last()
-                    && let Some(rastok::canonical_cbor::Value::Array(form)) = spine.get(&8)
-                    && let Some(rastok::canonical_cbor::Value::Bytes(inner)) = form.get(1)
-                    && tagged_struct(inner)
-                {
-                    outcome_struct = true;
-                }
-            }
-        }
     }
     assert!(inbound_struct, "the Lab draft seals tag 17");
-    assert!(outcome_struct, "the mock reply seals tag 17");
 }
 
 #[test]
@@ -1849,50 +1821,35 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     // not know refuses by IGNORANCE (WrongPortDirection). Vm::boot
     // therefore never accepts a plan this machine cannot execute
     // faithfully.
-    use rastok::contract::{AttributeSpec, ConnectorContract, Presence, ValueDomain};
-    use rastok::plan::{Edge, EndpointRef, Slot, ValidatedExecutionPlan};
-    const PROBE_SHEET: ConnectorContract = ConnectorContract {
-        name: "Probe",
-        input_ports: &["in", "request"],
-        output_ports: &["out", "err", "response"],
-        common: &[
-            AttributeSpec {
-                name: "behavior",
-                presence: Presence::Required,
-                domain: ValueDomain::Choice(&["deterministic"]),
-            },
-            AttributeSpec {
-                name: "effect",
-                presence: Presence::Required,
-                domain: ValueDomain::Choice(&["idempotent"]),
-            },
-        ],
-        selector: None,
-        error_set: &["ProbeFailed"],
-    };
-    let registry = Registry::try_m0()
-        .expect("the standard catalogue holds")
-        .try_with(PROBE_SHEET)
-        .expect("a valid sheet enters");
-    let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay -> probe -> .\n}\n";
-    let mut plan = compile(&[source], &registry)
-        .expect("the contract compiles")
-        .plan
-        .into_inner();
+    use rastok::datatype::DataType;
+    use rastok::node::Direction;
+    use rastok::plan::{Edge, EndpointRef, PortDecl, Slot, ValidatedExecutionPlan};
+    let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> probe -> .\n}\n";
+    let mut plan = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the Process contract compiles")
+    .plan
+    .into_inner();
     let probe_slot = plan
         .nodes
         .iter()
         .position(|node| node.path.to_string() == "probe")
         .expect("the connector");
-    let relay_slot = plan
-        .nodes
-        .iter()
-        .position(|node| node.path.to_string() == "relay")
-        .expect("the operator");
+    let probe = &mut plan.nodes[probe_slot];
+    probe.ports.push(PortDecl {
+        port: rastok::node::Port::new("request").unwrap(),
+        direction: Direction::Input,
+        ty: Some(DataType::Text),
+    });
+    probe
+        .ports
+        .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
         from: EndpointRef {
-            node: Some(Slot::new(u32::try_from(relay_slot).unwrap())),
-            port: rastok::node::Port::new("out").unwrap(),
+            node: None,
+            port: rastok::node::Port::new("in").unwrap(),
         },
         to: Some(EndpointRef {
             node: Some(Slot::new(u32::try_from(probe_slot).unwrap())),
@@ -1948,7 +1905,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
 
     let relay = |body: &str, data: Value| {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{\n      {body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  operator o {{\n    on in {{\n      {body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -2000,12 +1957,15 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
 
 #[test]
 fn a_mock_relay_keeps_the_struct_witness() {
-    // The mock's own EmitValue::Data path crosses the same bridge.
+    // A mock is checked against the same connector pin as a real
+    // adapter. JSONL replies are arrays of variants, not arbitrary
+    // values invented by the Lab.
     let source = r#"
 graph g : App {
+  input in: variant
   connector shell : Process {
     mode = job ; command = "cat"
-    codec = lines
+    codec = jsonl
     effect = idempotent ; behavior = deterministic
   }
 
@@ -2019,11 +1979,11 @@ graph g : App {
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = {v = 1} }
+      on in { out = [{"v": 1}] }
     }
 
-    scenario s "the mock reply is a struct" {
-      app.in = {field = 7}
+    scenario s "the mock reply follows the jsonl pin" {
+      app.in = {"field": 7}
       expect "the reply lands" app.out count == 1
     }
   }
@@ -2054,8 +2014,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source =
-        "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -2097,73 +2056,26 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
 
 #[test]
 fn a_spawn_failure_cannot_cross_a_pin() {
-    // The REAL adapter path: a missing binary makes the Process
-    // adapter answer SpawnFailed; its error payload heads for err —
-    // wired here into an int pin, so the final gate refuses and
-    // nothing commits past the inbound.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
-    use rastok::envelope::{Data, Namespace, Value};
-    use rastok::journal::{MemJournal, Record};
-    use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    // The exact failure kind is irrelevant to the graph type: the
+    // variant error port cannot enter an int input without narrowing.
 
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"/definitely/not/a/binary\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator sink {\n    input evt : int\n    on evt { out = data }\n  }\n\n  . -> shell\n  shell.err -> sink.evt\n  shell.out -> .\n  sink -> .\n}\n";
-    let compilation = compile(
+    let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("a valid plan");
-    let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    let mut world =
-        rastok::connectors::Process::try_new(&compilation.plan).expect("the plan binds");
-    vm.inject(
-        &mut journal,
-        InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
-            port: rastok::node::Port::new("in").unwrap(),
-            draft: Draft {
-                data: Data::materialized(Value::Text(String::from("go"))),
-                ext: Namespace::new(),
-            },
-            sequence: SubmissionSequence::Next,
-        },
-    )
-    .expect("the injection lands");
-    vm.drain(&mut journal).expect("the request opens");
-    let error = loop {
-        match vm.pump(&mut journal, &mut world) {
-            Err(error) => break error,
-            Ok(report) if report.settled == 0 && !vm.has_open_obligations() => {
-                panic!("the spawn failure should have surfaced");
-            }
-            Ok(_) => {
-                if let Err(error) = vm.drain(&mut journal) {
-                    break error;
-                }
-            }
-        }
-    };
+    .expect_err("variant cannot silently narrow to int");
     assert!(
-        error.to_string().contains("cannot enter"),
-        "the machine fault names the pin: {error}"
-    );
-    assert!(
-        journal.records().iter().all(|record| {
-            match record {
-                Record::Transaction(transaction) => transaction.emissions.is_empty(),
-                _ => true,
-            }
-        }),
-        "no violating emission was committed"
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE")
     );
 }
 
 #[test]
 fn a_timeout_error_cannot_cross_a_pin() {
-    // The scheduler-minted TimeoutExpired takes its own production
-    // path (the dated queue, not a partner answer) — and the same
-    // final gate: err wired into an int pin refuses before commit.
+    // Scheduler failures have the same resolved variant port as
+    // partner failures, so this impossible edge is rejected statically.
     let source = r#"
 graph g : App {
   connector shell : Process {
@@ -2198,35 +2110,15 @@ lab g {
   }
 }
 "#;
-    let compilation = compile(
+    let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("a valid unit");
-    let runs = rastok::lab::run(
-        &compilation.plan,
-        rastok::plan::GraphVersion(1),
-        &compilation.labs[0],
-    );
-    let run = &runs[0];
+    .expect_err("variant cannot silently narrow to int");
     assert!(
-        run.report
-            .failures
+        bag.diagnostics()
             .iter()
-            .any(|failure| failure.contains("cannot enter")),
-        "the machine fault surfaces: {:#?}",
-        run.report.failures
-    );
-    assert!(
-        run.records.iter().all(|record| {
-            match record {
-                rastok::journal::Record::Transaction(transaction) => {
-                    transaction.emissions.is_empty()
-                }
-                _ => true,
-            }
-        }),
-        "no violating emission was committed"
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE")
     );
 }
 
@@ -2236,7 +2128,7 @@ fn a_struct_constant_cannot_enter_a_plan() {
     // hand-built plan carrying one would break `encode ⇒ decode`
     // (the tables refuse the form). The validator holds the line.
     use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
-    let source = "graph g : App {\n  operator relay {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> relay -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator relay {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> relay -> .\n}\n";
     let mut plan = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -2299,7 +2191,7 @@ fn data_materializes_only_on_demand() {
     // A guard reading nothing + identity: bytes, encoding, and MIME
     // survive whole.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in where true { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0, "no opaque read was asked for");
     assert!(matches!(
@@ -2317,18 +2209,18 @@ fn data_materializes_only_on_demand() {
     );
     // A false guard consumes without decoding and without error.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in where false { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where false { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!((outputs.len(), errors), (0, 0));
     // A meta-only guard touches meta, never data.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in where meta.sys.graph_version == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where meta.sys.graph_version == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0);
     assert_eq!(outputs.len(), 1);
     // A state write independent of data materializes nothing.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    var seen : int = 0\n    on in {\n      seen = seen + 1\n      out = .\n    }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    var seen : int = 0\n    on in {\n      seen = seen + 1\n      out = .\n    }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0);
     assert_eq!(outputs.len(), 1);
@@ -2372,12 +2264,12 @@ fn short_circuits_never_demand_the_data() {
     // `false && data.x == 1`: the right side never evaluates —
     // filtered, no decode, no fault.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in where false && data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where false && data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!((outputs.len(), errors), (0, 0), "filtered without a fault");
     // `true || data.x == 1`: the identity ships the bytes whole.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in where true || data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true || data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0, "the right side never ran");
     assert!(matches!(
@@ -2386,7 +2278,7 @@ fn short_circuits_never_demand_the_data() {
     ));
     // `false ? data.x : 1`: the untaken arm never demands.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in { out = false ? data.x : 1 }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = false ? data.x : 1 }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0, "the untaken arm never ran");
     assert_eq!(
@@ -2395,7 +2287,7 @@ fn short_circuits_never_demand_the_data() {
     );
     // The control: a taken read still faults, typed.
     let (outputs, errors) = run(
-        "graph g : App {\n  operator o {\n    on in where true && data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true && data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!((outputs.len(), errors), (0, 1), "a real read still faults");
 }
@@ -2414,7 +2306,7 @@ fn the_carry_is_as_lazy_as_the_name() {
 
     let run = |body: &str, encoding: Encoding, bytes: &'static [u8]| {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  operator o {{\n    on in {{\n{body}\n    }}\n  }}\n  . -> o -> .\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -2505,7 +2397,7 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  operator o {\n    on in where size(data) > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in where size(data) > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -2596,7 +2488,7 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
