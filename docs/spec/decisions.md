@@ -97,6 +97,14 @@ partial attempt. A future streaming profile keeps the same invocation
 identity and terminal barrier. Aggregation is always bounded; overflow is an
 `exit` case rather than a truncated value presented as complete.
 
+`Process.codec` frames `in` and `out`; the independent
+`Process.err_codec` frames stderr and defaults to `lines`. A `jsonl` data
+codec therefore never tries to decode diagnostics as JSON. Framing produces
+unit values (`lines` → one `text` per line, `jsonl` → one `variant` per
+document, `bytes` → one bounded captured byte value). On-exit publication
+commits those ordered values atomically with `exit`; it does not silently
+fold them into an array or one text blob.
+
 **One marked frontend form.** A value region owned by a dedicated
 reader/compiler is introduced by:
 
@@ -172,7 +180,9 @@ literal spelling and `TAG_KW` partition in D-2026-08-12-1; the
 `json <json-value>`, `text { ... }`, `base64(...) { ... }` and bare guest
 spellings of D-2026-08-10-5/-6; the proposed `@mylang` guest sigil; the
 Process/error-set interpretation recorded in D-2026-08-12-1's capture
-amendments and the current stdlib sheet. Their still-compatible parser,
+amendments; and D-2026-08-11-1's reserved `bytes` codec and single
+`array<variant>` job reply (each decoded JSONL document is now an ordinary
+`variant` emission). Their still-compatible parser,
 exact-number, capture-budget, attribute-contract and framing invariants
 survive.
 

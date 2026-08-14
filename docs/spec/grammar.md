@@ -1297,7 +1297,7 @@ LITERAL_KW = { "true", "false", "null", "nothing",
                "deterministic", "probabilistic", "seeded",        // behavior values (stdlib.md §2 ; seeded reserved)
                "ack", "respond",                                  // HttpServer modes
                "job", "service",                                  // Process modes
-               "jsonl", "lines",                                  // Process codecs (bytes reserved)
+               "jsonl", "lines",                                  // Process codecs; `bytes` is TYPE_KW but legal as a contract word
                "evict_oldest", "reject",                          // Memory overflow
                "bypass", "kill",                                  // on_timeout values (execution-model §6.4)
                "read", "write", "duplex",
@@ -1495,15 +1495,29 @@ base_type         ::= scalar_type
                     | "variant"
                     | "struct" "{" ( field_decl ( "," field_decl )* )? "}" // typed record — EMPTY struct { } is legal
                     | "map" "<" type_ref "," type_ref ">"
-                    | "array" "<" type_ref ">"
+                    | "array" "<" type_ref ( "," INT )? ">"              // optional exact length; zero is legal
                     | "table" "<" type_ref ">"                        // alias for array<struct>
                     | "enum" "{" IDENT ( "," IDENT )* "}"
                     | "union" "{" tagged_case ( ","? tagged_case )* "}" // tagged union; case names are semantic discriminants
                     | IDENT                                           // named type / Schema / declared enum|union
-scalar_type       ::= "bool" | "int" | "long" | "float" | "double" | "number"
-                    | "bytes" | "text" | "null"
-                    | "decimal" "(" INT "," INT ")"
-                    | "date" | "timestamp" | "timestamp_ntz" | "time" | "interval" | "uuid" | "duration"
+scalar_type       ::= "bool" | signed_type | unsigned_type | float_type | "number"
+                    | "bytes" ( "(" INT ")" )? | "text" | "null"
+                    | "decimal" "(" INT "," SIGNED_INT ")"
+                    | "date" ( "(" date_unit ")" )?
+                    | "time" ( "(" time_unit ")" )?
+                    | "timestamp" ( "(" time_unit ( "," timezone )? ")" )?
+                    | "timestamp_ntz" ( "(" time_unit ")" )?
+                    | "duration" ( "(" time_unit ")" )?
+                    | "interval" "(" interval_unit ")"
+                    | "uuid"
+signed_type       ::= "int" | "long" | "int8" | "int16" | "int32" | "int64"
+unsigned_type     ::= "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+float_type        ::= "float" | "double" | "float16" | "float32" | "float64"
+date_unit         ::= "day" | "millisecond"
+time_unit         ::= "second" | "millisecond" | "microsecond" | "nanosecond"
+timezone          ::= "utc" | STRING                                 // UTC aliases normalize during resolution
+interval_unit     ::= "year_month" | "day_time" | "month_day_nano"
+SIGNED_INT        ::= "-"? INT
 field_decl        ::= field_name ":" type_ref
                     | ".."                                            // open record (row polymorphism)
 tagged_case       ::= IDENT ( "{" ( field_decl ( ","? field_decl )* )? "}" )?

@@ -52,11 +52,48 @@ explicit width, floating-point values with an explicit width, exact
 `decimal(p,s)`, exact `number`, `text`, `bytes` and the logical families anchored on
 Arrow semantics (`date`, `time`, `timestamp`, `timestamp_ntz`,
 `duration`, `interval`, `uuid`). Fixed-size binary and fixed-size lists
-carry their size as a type parameter. The exact physical widths,
+carry their size as a type parameter. Integer and floating widths,
 temporal units, timezone semantics and decimal bounds are part of the
 canonical type, never host-dependent defaults. Friendly source aliases
 such as `int`, `long`, `float` and `double` resolve to those explicit
 canonical parameters.
+
+The canonical scalar constructors and source aliases are exact:
+
+| Canonical constructor | Admitted parameters | Source spellings |
+|---|---|---|
+| `signed(bits)` | `bits ∈ {8,16,32,64}` | `int8`/`int16`/`int32`/`int64`; `int = int32`, `long = int64` |
+| `unsigned(bits)` | `bits ∈ {8,16,32,64}` | `uint8`/`uint16`/`uint32`/`uint64`; `uint = uint64` |
+| `float(bits)` | `bits ∈ {16,32,64}` | `float16`/`float32`/`float64`; `float = float32`, `double = float64` |
+| `decimal(precision, scale)` | decimal128 only: `1 ≤ precision ≤ 38`, `-38 ≤ scale ≤ 38` | `decimal(p,s)` |
+| `number` | exact integer-or-decimal, never binary floating point | `number` |
+| `bytes(length?)` | absent = variable; fixed `1 ≤ length ≤ 2³¹-1` | `bytes`, `bytes(n)` |
+| `text`, `bool`, `null`, `uuid` | no parameter | same word |
+| `date(unit)` | `day | millisecond`; `date` defaults to `day` | `date`, `date(unit)` |
+| `time(unit)` | `second | millisecond | microsecond | nanosecond`; `time` defaults to `nanosecond` | `time`, `time(unit)` |
+| `timestamp(unit, zone)` | the four time units; `zone = utc | named(text)` | `timestamp`, `timestamp(unit, "zone")` |
+| `timestamp_ntz(unit)` | the four time units; deliberately no zone | `timestamp_ntz`, `timestamp_ntz(unit)` |
+| `duration(unit)` | the four time units; default nanosecond | `duration`, `duration(unit)` |
+| `interval(unit)` | `year_month | day_time | month_day_nano` | `interval(unit)` |
+
+`timestamp` with no arguments is `timestamp(nanosecond, utc)`. A named
+timezone is identity material; the spellings `UTC`, `Etc/UTC` and
+`+00:00` normalize to the canonical `utc` case. A timezone-naive value is
+not UTC by omission: it is `timestamp_ntz`. Offset widths for variable
+text/binary and Arrow dense/sparse, dictionary or run-end layouts are
+representation facts and do not create logical types.
+
+The materialized value keeps every distinction needed when no surrounding
+schema is available: integer signedness/width, float width and canonical
+bits, decimal carried scale, temporal unit/timezone, enum symbol and union
+discriminant. A decimal value does not repeat precision; conformance checks
+its coefficient against the declared precision and requires its carried
+scale to equal the declared scale. A schema-less exact-number value may use
+the wider decimal128 exponent domain (`-6143..=6144`) already fixed by the
+value registry; narrowing it to `decimal(p,s)` still requires the declared
+`s` in `-38..=38`. `number` and `variant` are types, not wrapper values:
+their values retain the concrete canonical scalar or tree cases they
+contain.
 
 `number` is a closed exact-numeric scalar, not a floating-point escape
 hatch: it preserves whether its value is an integer or a bounded exact
@@ -89,7 +126,42 @@ expansion is the type identity, so renaming an alias does not change a
 plan. Tagged-union case names are not aliases and do affect identity.
 Recursive aliases remain illegal in v1.
 
-### 2.1 JSON, Avro and Arrow are projections, not rival type systems
+### 2.1 Canonical composite invariants
+
+The resolved tree admits no source-order aliases:
+
+- struct fields are closed, unique and sorted by field-name UTF-8 bytes;
+  an open `struct { .. }` exists only as a compiler constraint and must be
+  closed before a validated plan is built;
+- enum symbols and tagged-union cases are unique and sorted by their UTF-8
+  bytes; enum declaration order and an external ordinal stay adapter facts;
+- an array carries an element type and optional fixed length; `array<T>` is
+  variable and `array<T,N>` is fixed (including `N = 0`);
+- a map carries both key and value types. V1 map keys are closed scalar or
+  enum types with a total canonical value encoding: bool, fixed-width
+  integer, text, bytes/fixed bytes, decimal, date/time/timestamp/duration,
+  uuid or enum. Float, `number`, null, interval, variant and every composite
+  key refuse by path;
+- structural-union branches are flattened, unique, pairwise disjoint and
+  sorted by their canonical type bytes. Optional `T?` resolves to that same
+  union with `null`; source branch order is not identity;
+- tagged-union cases are named semantic discriminants. Each case carries a
+  closed struct payload (the empty struct is the unit case). A tagged value
+  stores the case name plus that payload; case order is not identity.
+
+A structural-union value stores the selected canonical branch index as well
+as its value. Although disjointness lets Rastok verify the selection, keeping
+the discriminant preserves an Avro/Arrow choice at opaque and replay
+boundaries. A mismatching discriminant is malformed data, never recomputed
+as first-match-wins.
+
+Every type is checked against its budgets before admission into a resolved
+or validated form: nesting ≤ 128, expanded nodes ≤ 4096,
+fields/symbols/cases ≤ 256 per composite, and fixed sizes fit the declared
+31-bit bound. These are validity rules of `DataType`, not parser
+implementation limits or promises about allocator capacity.
+
+### 2.2 JSON, Avro and Arrow are projections, not rival type systems
 
 `DataType` is deliberately expressive enough to project the supported
 JSON Schema, Avro and Arrow schema profiles without losing a logical
@@ -101,6 +173,10 @@ authorities:
 | JSON / JSON Schema | null, booleans, exact numbers, text, arrays, objects/maps, enums and exclusive unions (`oneOf` or an unambiguous type array) |
 | Avro | primitives and logical types, records, arrays, maps, enums, fixed binary, nullability and unions |
 | Arrow | signedness and widths, text/binary/fixed binary, decimal and temporal parameters, struct, list/fixed-size list, map and unions |
+
+The exact supported profiles and every named refusal are fixed by
+[`schema-projections.md`](schema-projections.md). An adapter may preserve
+representation metadata in its codec, but it may not weaken that matrix.
 
 Avro union branches and Arrow union type codes are explicit
 discriminants. They project to a Rastok tagged union whenever their
@@ -210,8 +286,9 @@ monomorphic. Its port rules may be:
 Examples:
 
 ```text
-Process(codec = lines) : in T where LinesEncodable(T), out text
-Process(codec = jsonl) : in T where JsonEncodable(T), out array<variant>
+Process(codec = lines) : in text, out text (0..n emissions)
+Process(codec = jsonl) : in T where JsonEncodable(T), out variant (0..n emissions)
+Process(codec = bytes) : in bytes, out bytes (0..1 emission)
 Kafka(schema = OrderV2) : out OrderV2
 File(codec = parquet, schema = Row) : out array<Row>
 ```

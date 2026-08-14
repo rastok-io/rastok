@@ -148,7 +148,7 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Role / Direction | child process over stdio; **both** (caller + source) |
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
 | effect / behavior | **per-instance, both mandatory** |
-| Attributes | the normative table below (D-2026-08-12-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
+| Attributes | the normative table below (D-2026-08-12-1, amended by D-2026-08-14-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
 | Correlator | see modes below |
 | Outcome cases | `ProcessExit` below; exactly one terminal exit per admitted job invocation. stderr never carries lifecycle data. |
 | Unwired policy | `out = require_wire`; `err` and `exit` default to the journal sink. Explicit edges consume them; `-> nothing` records intentional discard. |
@@ -166,7 +166,8 @@ values and never reintroduces a default.
 |---|---|---|---|
 | `command` | common | Rastok expression → `text` | **Required** |
 | `args` | common | Rastok expression → `array<text>` | Defaulted(`[]`) — omission ≡ `[]`; `null` refuses (no domain is implicitly nullable) |
-| `codec` | common | choice `lines \| jsonl` (`bytes` **reserved**) | **Required** — the framing is never chosen silently (D-2026-08-11-1) |
+| `codec` | common | choice `lines \| jsonl \| bytes` for `in` and `out` | **Required** — request/reply framing is never chosen silently (D-2026-08-11-1) |
+| `err_codec` | common | choice `lines \| bytes` for stderr only | Defaulted(`lines`) — diagnostics never inherit `jsonl` from `codec`; omission ≡ `lines` |
 | `effect` | common | choice, typed | **Required** |
 | `behavior` | common | choice, typed | **Required** |
 | `timeout` | common | Rastok expression → `duration` | Optional — a true optional: no budget declared, no budget |
@@ -205,21 +206,35 @@ the exit case and decides whether to retry, alert, discard or continue.
 identity/provenance rather than fields invented inside stderr or every exit
 payload.
 
-Framing and publication are orthogonal. The M1.3 job implementation keeps
-its bounded on-exit publication: all ordered frames and the one `exit` are
-committed as one completion, so a retry cannot expose a partial attempt. A
-line-framed stderr may consequently yield many `err` envelopes for one run;
-an explicit bounded collector may instead aggregate them. A future streaming
-profile may publish frames earlier, but must preserve call identity, emit no
-frame after that call's `exit`, and keep aggregation/backpressure bounded.
+Framing and publication are orthogonal. `codec` frames stdin/stdout;
+`err_codec` frames stderr independently. `lines` yields one `text` value per
+line, `jsonl` yields one `variant` per JSON value, and `bytes` yields one
+bounded byte value for the captured channel. The M1.3 job implementation
+keeps bounded on-exit publication: all ordered frame values and the one
+`exit` are committed as one completion, so a retry cannot expose a partial
+attempt. **On-exit does not aggregate frames**: line-framed stderr may yield
+two hundred `err` envelopes in that transaction. An explicit bounded
+collector may instead aggregate them. A future streaming profile may publish
+frames earlier, but must preserve call identity, emit no frame after that
+call's `exit`, and keep aggregation/backpressure bounded.
+
+The frame boundaries are exact. For `lines`, a request is one `text` value;
+the adapter appends one `\n` when absent. On output, `\n` is removed from
+each UTF-8 line, an empty line is the empty text value, a final non-empty
+unterminated line is accepted at EOF, and an empty channel emits nothing.
+For `jsonl`, the same newline boundaries contain JSON values; an empty line
+refuses. For `bytes`, request bytes pass unchanged and a non-empty captured
+channel produces one value. A framing or UTF-8 failure yields `DecodeFailed`;
+no partial frame is emitted.
 
 **`mode = job` (default — the Unix one-shot; systemd `Type=oneshot`, k8s Job
 lineage)**: one envelope = one spawn. stdin = the request (codec-framed);
-when stdout decodes successfully the completion carries `out`: `codec =
-lines` → `data = text` (the whole stdout as one text value); `codec =
-jsonl` → `data = array<variant>` (the decoded lines — possibly length
-1). The same completion independently carries `err` when stderr is
-non-empty and always carries one `exit`. The CAPTURE is
+when stdout decodes successfully the completion carries zero or more `out`
+frames: `codec = lines` → one `text` per line; `codec = jsonl` → one
+`variant` per decoded line; `codec = bytes` → one bounded `bytes` value
+when non-empty. Independently, `err_codec = lines` yields one `text` per
+stderr line and `err_codec = bytes` yields one bounded `bytes` value when
+non-empty. The completion always carries one `exit`. The CAPTURE is
 bounded: **`max_output = 8MiB` (default)** is the AGGREGATE budget
 across stdout and stderr (D-2026-08-12-1, review round) — the total
 is judged before any byte is stored, so neither stream ever loses
@@ -261,15 +276,15 @@ EAGERLY through the house JSON reader (D-2026-08-10-4/-7): exact
 numbers, duplicate keys refused; a line that does not parse — an
 interior empty line included — is `DecodeFailed` with the offending
 line in the payload; the single trailing newline's empty tail is
-framing, not a line; empty stdout is the empty array — but a LONE
-`\n` is one empty line and refuses (the framing is judged before
-the terminator is stripped). A line's padding is JSON's own
-whitespace alphabet (space, tab, CR) and nothing wider; `null` is a
-value like any other and decodes to the null element. The reply's
-shape is a REAL pin: `Process(job, jsonl).out = array<variant>`,
-consulted by the checker (a mock answering anything else refuses at
-check) and by the machine (every settled outcome is judged against
-it) — the Lab and the world see one shape.
+framing, not a line; empty stdout emits no `out`, while a LONE `\n`
+is one empty line and refuses (the framing is judged before the
+terminator is stripped). A line's padding is JSON's own whitespace
+alphabet (space, tab, CR) and nothing wider; `null` is a value like
+any other and decodes to one null-valued envelope. The reply's real
+pin is `Process(job, jsonl).out = variant`; multiplicity belongs to
+the ordered completion, not to an artificial `array<variant>` wrapper.
+The checker and machine judge every emitted frame against that pin, so
+Lab and world see one shape.
 
 **`mode = service` (the declared resident)**: long-running. `codec` frames
 line by line. With `correlate = data.id`, **stdout splits**: lines whose id
