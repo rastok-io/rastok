@@ -66,10 +66,10 @@ The repository opens publicly with this milestone (15 October 2026).
   typed-error item: its codes become `ProcessExit` cases. Partition `stop`
   remains a distinct, later lifecycle boundary.
   B1's complete strict-profile type/value domain, B2's total validated
-  port-type resolution and B3's Rastok-owned expression consumer/narrowing
-  core are landed; the remaining ordered gates add tagged frontends, uniform
-  connector contracts, multi-output completion and the one categorical v7
-  publication.
+  port-type resolution, B3's Rastok-owned expression consumer/narrowing
+  core and B4's one `name!` frontend surface are landed; the remaining
+  ordered gates add uniform connector contracts, multi-output completion
+  and the one categorical v7 publication.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

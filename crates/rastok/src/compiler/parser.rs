@@ -16,11 +16,12 @@ use crate::compiler::lexer::{
 };
 use crate::compiler::syntax::{
     Annotation, AspectEvent, Attribute, BaseType, CmpOp, ConnectorDecl, EdgeDecl, EdgeEndpoint,
-    ErrorNode, ExpectStep, ExprSource, FieldDecl, GraphDecl, GraphItem, Guard, HandlerDecl, IntLit,
-    LValue, LabDecl, LifetimeValue, MockDecl, Name, OperatorDecl, OperatorItem, PartitionDecl,
-    PartitionField, PerClause, PortDecl, PortDirection, PortRef, ScalarType, ScenarioDecl,
-    ScenarioItem, SimulationDecl, Statement, StructBody, StructEntry, SubBlock, SyntaxTree,
-    TaggedBody, TaggedValue, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl, WindowMode,
+    ErrorNode, ExpectStep, ExprSource, FieldDecl, FrontendPayload, FrontendValue, GraphDecl,
+    GraphItem, Guard, HandlerDecl, IntLit, LValue, LabDecl, LifetimeValue, MockDecl, Name,
+    OperatorDecl, OperatorItem, PartitionDecl, PartitionField, PerClause, PortDecl, PortDirection,
+    PortRef, ScalarType, ScenarioDecl, ScenarioItem, SimulationDecl, Statement, StructBody,
+    StructEntry, SubBlock, SyntaxTree, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
+    WindowMode,
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 
@@ -91,46 +92,6 @@ const SYNC_WORDS: &[&str] = &[
     "theorem",
 ];
 
-/// Tags whose block body is raw region text, never read by the
-/// host. VERBATIM_TAGS frame under the text contract (quotes are
-/// ordinary bytes); GUEST_TAGS frame under the frozen guest
-/// contract until the guest slice arbitrates its framer
-/// (D-2026-08-13-1, review round 6).
-const RAW_TAGS: &[&str] = &["jq", "bash", "sql", "python", "rust", "text", "base64"];
-const VERBATIM_TAGS: &[&str] = &["text", "base64"];
-
-/// Tag words that open tagged-value expressions: foreign literals
-/// (guests, raw literals, data formats) and the expression-space
-/// constructors. `json` is NOT here — a RESERVED word with its own
-/// total continuation (D-2026-08-13-1). Tagged INITIALIZERS left
-/// the vocabulary (D-2026-08-12-1) — a plain struct with a
-/// closed-choice discriminant field replaces each one, and the
-/// dead spelling refuses with its migration hint.
-const TAG_WORDS: &[&str] = &[
-    "jq",
-    "bash",
-    "sql",
-    "python",
-    "rust",
-    "avro",
-    "protobuf",
-    "parquet",
-    "msgpack",
-    "base64",
-    "csv",
-    "text",
-    "asset",
-    "bounded",
-    "unbounded",
-    "regex",
-];
-
-/// The RESERVED data-format tags: words the catalogue holds with no
-/// living form yet. A body after one is consumed OPAQUELY — never
-/// read as an RKG struct — and defers with ONE named diagnostic
-/// (D-2026-08-12-1, review round).
-const RESERVED_FORMAT_TAGS: &[&str] = &["avro", "protobuf", "parquet", "msgpack", "csv"];
-
 /// The tagged-initializer spellings D-2026-08-12-1 killed — kept
 /// only to refuse with a useful migration.
 const DEAD_INITIALIZER_TAGS: &[&str] = &[
@@ -145,9 +106,15 @@ const DEAD_INITIALIZER_TAGS: &[&str] = &[
 
 /// Parses one `.rkg` source into a syntax tree, accumulating
 /// diagnostics; the tree is returned even when faulty.
-pub fn parse(source_id: SourceId, source: &str, bag: &mut Bag) -> SyntaxTree {
+pub fn parse(
+    source_id: SourceId,
+    source: &str,
+    registry: &crate::contract::Registry,
+    bag: &mut Bag,
+) -> SyntaxTree {
     Parser {
         lexer: Lexer::new(source_id, source),
+        registry,
         source_id,
         last_end: 0,
         bag,
@@ -157,6 +124,7 @@ pub fn parse(source_id: SourceId, source: &str, bag: &mut Bag) -> SyntaxTree {
 
 struct Parser<'src, 'bag> {
     lexer: Lexer<'src>,
+    registry: &'bag crate::contract::Registry,
     source_id: SourceId,
     last_end: usize,
     bag: &'bag mut Bag,
@@ -1361,18 +1329,6 @@ impl<'src> Parser<'src, '_> {
     /// An IDENT-led statement: an assignment or a typed-error
     /// emission — a bare expression refuses (no implicit yield,
     /// review rounds 7–8).
-    /// The word-set a single bare word can open as a VALUE FORM —
-    /// consumed by its REAL dispatch when refused as a statement,
-    /// so a bare `text { … }` is framed by the verbatim reader,
-    /// never by a recovery scanner (review round 8).
-    fn is_self_framing_value_word(word: &str) -> bool {
-        word == "nothing"
-            || word == "json"
-            || TAG_WORDS.contains(&word)
-            || DEAD_INITIALIZER_TAGS.contains(&word)
-            || RESERVED_FORMAT_TAGS.contains(&word)
-    }
-
     fn assign_statement(&mut self, start: usize) -> Statement {
         let first = self.bump();
         let mut segments = vec![Name {
@@ -1438,7 +1394,12 @@ impl<'src> Parser<'src, '_> {
                 // json reader, a guest framer, the dead refusals) —
                 // then the statement-position voice; anything else
                 // takes the classic recovery.
-                if segments.len() == 1 && Self::is_self_framing_value_word(first.text) {
+                if segments.len() == 1
+                    && (first.text == "nothing"
+                        || self.lexer.frontend_bang_follows(first.span.range().end)
+                        || (DEAD_INITIALIZER_TAGS.contains(&first.text)
+                            && self.lexer.tag_opener_on_line().is_some()))
+                {
                     let value = self.ident_tail(first, &ATTR_POSITION);
                     let end = self.last_end.max(start);
                     if matches!(value, Value::Error(_)) {
@@ -1767,8 +1728,8 @@ impl<'src> Parser<'src, '_> {
         if word == "nothing" {
             return Value::Nothing(ident.span);
         }
-        if word == "json" {
-            return self.json_tail(&ident, position);
+        if self.lexer.frontend_bang_follows(ident.span.range().end) {
+            return self.frontend_value(ident, position);
         }
         if self.lexer.line_exhausted() && position.newline {
             // Nothing significant follows on the line and the line
@@ -1781,80 +1742,12 @@ impl<'src> Parser<'src, '_> {
                 span: ident.span,
             });
         }
-        let opener = self.lexer.tag_opener_on_line();
-        let opens = opener.is_some();
-        if DEAD_INITIALIZER_TAGS.contains(&word) && opens {
+        if DEAD_INITIALIZER_TAGS.contains(&word) && self.lexer.tag_opener_on_line().is_some() {
             return self.dead_initializer(&ident);
         }
-        if RESERVED_FORMAT_TAGS.contains(&word) && opens {
-            // A reserved format's body is OPAQUE — the RAW skippers
-            // consume it, one named deferral, never a struct
-            // misreading.
-            self.deferred("a reserved data-format body", ident.span);
-            self.lexer
-                .swallow_opaque_on_line(crate::compiler::lexer::TagOpener::Paren);
-            self.lexer
-                .swallow_opaque_on_line(crate::compiler::lexer::TagOpener::Brace);
-            return Value::Error(ident.span);
-        }
-        if TAG_WORDS.contains(&word) && opens {
-            return self.tagged_value(ident);
-        }
-        // An ordinary word — or a tag word standing alone: the Rastok expression
-        // continuation re-reads the immutable prefix slice.
+        // An ordinary word: the expression continuation re-reads the
+        // immutable prefix slice. Frontend NAMES have no special status here.
         Value::Expr(self.expr_from(ident.span.range().start, position))
-    }
-
-    /// The `json` continuation — the word is RESERVED, so ONE lexer
-    /// probe classifies it totally (D-2026-08-13-1, review round 3):
-    /// a document, the bare word (a contract may judge the Word), or
-    /// an invalid json form. No Rastok expression fallback exists — `json` can
-    /// never be a name.
-    fn json_tail(&mut self, ident: &Token<'_>, position: &TerminatorSet) -> Value {
-        match self.lexer.json_tail(position) {
-            crate::compiler::lexer::JsonTail::Bare => Value::Expr(ExprSource {
-                text: String::from(ident.text),
-                span: ident.span,
-            }),
-            crate::compiler::lexer::JsonTail::Document { value, range } => {
-                self.last_end = range.end;
-                Value::Json {
-                    value,
-                    span: Span::new(self.source_id, range.start..range.end),
-                }
-            }
-            crate::compiler::lexer::JsonTail::BadForm {
-                anchor,
-                recovered_to,
-            } => {
-                self.bag.push(
-                    crate::diagnostics::Diagnostic::new(
-                        E_JSON_VALUE,
-                        crate::diagnostics::Phase::Parse,
-                        "`json` takes a document ({ … } or [ … ]) on its line; write a scalar \
-                         as an ordinary expression, or use `decimal(\"…\")` for an exact number",
-                    )
-                    .with_span(anchor)
-                    .with_field("detail", "not a document after `json`"),
-                );
-                self.last_end = recovered_to;
-                let at = anchor.range().start;
-                Value::Error(Span::new(self.source_id, at..at))
-            }
-            crate::compiler::lexer::JsonTail::Unreadable(refusal) => {
-                self.bag.push(
-                    crate::diagnostics::Diagnostic::new(
-                        E_JSON_VALUE,
-                        crate::diagnostics::Phase::Parse,
-                        format!("the JSON value does not read: {}", refusal.message),
-                    )
-                    .with_span(refusal.anchor)
-                    .with_field("detail", refusal.message.clone()),
-                );
-                self.last_end = refusal.recovered_to;
-                Value::Error(refusal.opener)
-            }
-        }
     }
 
     /// The Rastok expression continuation of an already-consumed prefix: the END
@@ -1929,134 +1822,124 @@ impl<'src> Parser<'src, '_> {
         Value::Error(token.span)
     }
 
-    fn tagged_value(&mut self, token: Token<'_>) -> Value {
-        let tag = Name {
+    /// A tagged frontend after the grammar has selected `IDENT!`.  The
+    /// selection is name-agnostic; the registry is consulted only now for the
+    /// framing contract and reader.
+    fn frontend_value(&mut self, token: Token<'_>, position: &TerminatorSet) -> Value {
+        let name = Name {
             text: String::from(token.text),
             span: token.span,
         };
+        // The adjacency probe proved this exact token; consuming it is a
+        // normal one-token LL(1) step, never a rewind.
+        if self.expect(TokenKind::Bang, "`!`").is_none() {
+            return Value::Error(name.span);
+        }
         let mut args = Vec::new();
         let mut parens = false;
-        let mut trailing_comma = false;
-        if self.eat(TokenKind::LParen).is_some() {
+        if self.lexer.frontend_args_follow() {
+            let _ = self.expect(TokenKind::LParen, "`(`");
             parens = true;
             loop {
-                // Probed, never tokenized: the argument may open
-                // with Rastok expression bytes outside the host vocabulary
-                // (review round 7 — `bounded('x')`).
                 if self.lexer.arguments_close() {
                     break;
                 }
-                trailing_comma = false;
-                // A BARE string token followed by `,` or `)` is the
-                // grammar's STRING — kept apart from Rastok expression so wrapped
-                // or concatenated spellings cannot impersonate it.
-                match self.lexer.string_argument(self.bag) {
-                    crate::compiler::lexer::StringArgument::Alone(token) => {
-                        self.last_end = token.span.range().end;
-                        args.push(Value::StrLit {
-                            raw: String::from(token.text),
-                            span: token.span,
-                        });
-                    }
-                    crate::compiler::lexer::StringArgument::Prefix(token) => {
-                        self.last_end = token.span.range().end;
-                        args.push(Value::Expr(
-                            self.expr_from(token.span.range().start, &PAREN_POSITION),
-                        ));
-                    }
-                    crate::compiler::lexer::StringArgument::NotAString => {
-                        args.push(self.value(&PAREN_POSITION));
-                    }
-                }
+                args.push(self.value(&PAREN_POSITION));
                 if self.eat(TokenKind::Comma).is_none() {
                     break;
                 }
-                trailing_comma = true;
             }
             self.expect(TokenKind::RParen, "`)`");
         }
-        let body = if self.peek().kind == TokenKind::LBrace {
-            if RAW_TAGS.contains(&tag.text.as_str()) {
-                // The region method consumes the opener ITSELF: the
-                // region is selected before any content byte can be
-                // tokenized (review round 6).
-                let raw = if VERBATIM_TAGS.contains(&tag.text.as_str()) {
-                    self.lexer.verbatim_region(self.bag)
-                } else {
-                    self.lexer.guest_region(self.bag)
-                };
-                let Some(raw) = raw else {
-                    // Unreachable while the branch condition peeks
-                    // the opener — the TOTAL API refuses instead of
-                    // panicking.
-                    self.error_expected("`{`");
-                    return Value::Error(tag.span);
-                };
-                self.last_end = raw.span.range().end;
-                Some(TaggedBody::Raw {
-                    text: String::from(raw.text),
-                    span: raw.span,
-                })
-            } else {
-                // A struct body on a tag is a DEAD form
-                // (D-2026-08-12-1) — the grammar said so, the parser
-                // now agrees (review round 3): one migration voice,
-                // the braces swallowed RAW, the recovery form back.
-                self.bag.push(
-                    Diagnostic::new(
-                        E_PARSE_EXPECTED,
-                        Phase::Parse,
-                        format!(
-                            "`{} {{ … }}` is a dead struct-bodied tag; a tag takes \
-                             parenthesized arguments, and only the raw-bodied tags \
-                             take a block (D-2026-08-12-1)",
-                            tag.text
-                        ),
-                    )
-                    .with_span(tag.span)
-                    .with_field("expected", "parenthesized arguments")
-                    .with_field("found", "a struct body"),
-                );
-                // Swallow the braced garbage with HOST LEXEMES —
-                // review round 5: a `}` inside a comment is trivia
-                // to the token stream, so it can never close the
-                // region early. A scratch bag keeps the swallow
-                // silent (the one migration voice already spoke).
-                self.bump();
-                let mut depth: u32 = 1;
-                let mut scratch = Bag::new();
-                loop {
-                    let token = self.lexer.next(&mut scratch);
-                    match token.kind {
-                        TokenKind::Eof => break,
-                        TokenKind::LBrace => depth += 1,
-                        TokenKind::RBrace => {
-                            depth -= 1;
-                            if depth == 0 {
-                                self.last_end = token.span.range().end;
-                                break;
-                            }
+        let Some(reader) = self
+            .registry
+            .frontend(&name.text)
+            .map(|contract| contract.reader)
+        else {
+            self.bag.push(
+                Diagnostic::new(
+                    crate::compiler::check::E_RESOLVE_UNKNOWN,
+                    Phase::Resolve,
+                    format!("`{}` names no registered tagged frontend", name.text),
+                )
+                .with_span(name.span)
+                .with_field("name", name.text.clone()),
+            );
+            // No contract means no truthful framer. Recovery is bounded by the
+            // host value position and is never used for a valid frontend.
+            let skipped = self.expr(position);
+            self.last_end = self.last_end.max(skipped.span.range().end);
+            return Value::Error(name.span);
+        };
+
+        let payload = match reader.framing() {
+            crate::contract::FrontendFraming::JsonValue => {
+                match self.lexer.json_region(position, self.bag) {
+                    crate::compiler::lexer::JsonRegion::Value { value, range } => {
+                        self.last_end = range.end;
+                        FrontendPayload::Json {
+                            value,
+                            span: Span::new(self.source_id, range),
                         }
-                        _ => {}
+                    }
+                    crate::compiler::lexer::JsonRegion::Refused {
+                        opener,
+                        anchor,
+                        message,
+                        recovered_to,
+                    } => {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_JSON_VALUE,
+                                Phase::Parse,
+                                format!("the JSON value does not read: {message}"),
+                            )
+                            .with_span(anchor)
+                            .with_field("detail", message),
+                        );
+                        self.last_end = recovered_to;
+                        return Value::Error(opener);
+                    }
+                    crate::compiler::lexer::JsonRegion::HostError { at, recovered_to } => {
+                        self.last_end = recovered_to;
+                        return Value::Error(at);
                     }
                 }
-                return Value::Error(tag.span);
             }
-        } else {
-            None
+            crate::contract::FrontendFraming::VerbatimBraced => {
+                let diagnostic_count = self.bag.diagnostics().len();
+                let Some(raw) = self.lexer.verbatim_region(self.bag) else {
+                    if self.bag.diagnostics().len() == diagnostic_count {
+                        self.error_expected("a braced frontend payload");
+                    }
+                    return Value::Error(name.span);
+                };
+                self.last_end = raw.span.range().end;
+                FrontendPayload::Raw {
+                    text: String::from(raw.text),
+                    span: raw.span,
+                }
+            }
+            crate::contract::FrontendFraming::QuotedBraced => {
+                let diagnostic_count = self.bag.diagnostics().len();
+                let Some(raw) = self.lexer.guest_region(self.bag) else {
+                    if self.bag.diagnostics().len() == diagnostic_count {
+                        self.error_expected("a braced frontend payload");
+                    }
+                    return Value::Error(name.span);
+                };
+                self.last_end = raw.span.range().end;
+                FrontendPayload::Raw {
+                    text: String::from(raw.text),
+                    span: raw.span,
+                }
+            }
         };
-        if !parens && args.is_empty() && body.is_none() {
-            // A WRITTEN `()` is a form — the checker owns its
-            // specialized refusal; only a tag with nothing at all
-            // is the parser's fault.
-            self.error_expected("arguments or a block");
-        }
-        Value::Tagged(TaggedValue {
-            tag,
+        Value::Frontend(FrontendValue {
+            name,
             args,
             parens,
-            trailing_comma,
-            body,
+            payload,
         })
     }
 
@@ -2353,6 +2236,12 @@ fn simple_scalar(word: &str) -> Option<ScalarType> {
 mod tests {
     use super::*;
 
+    fn parse(source_id: SourceId, source: &str, bag: &mut Bag) -> SyntaxTree {
+        let registry =
+            crate::contract::Registry::try_m0().expect("the standard frontend catalogue is valid");
+        super::parse(source_id, source, &registry, bag)
+    }
+
     #[test]
     fn json_recovery_keeps_the_sibling_in_the_tree() {
         // The FAULTY source itself: the first emission is the
@@ -2361,7 +2250,7 @@ mod tests {
         let mut bag = Bag::new();
         let tree = parse(
             SourceId::new(0),
-            "graph g : App {\n  operator o {\n    on in { out = json {\"a\": ???}; out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = json! {\"a\": ???}; out = data }\n  }\n  . -> o -> .\n}\n",
             &mut bag,
         );
         assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
@@ -2412,43 +2301,37 @@ mod tests {
 
     #[test]
     fn the_identifier_dispatch_matrix_holds() {
-        // D-2026-08-13-1 §7: value ::= … | IDENT ident_tail, decided
-        // by ONE raw byte probe. Every (prefix × follower) pair lands
-        // in exactly the family the grammar names — no tag greed, no
-        // struct misread, no second consumer.
+        // B4: IDENT followed immediately by `!` is the sole frontend
+        // production. The NAME is irrelevant to the grammar; the registry
+        // judges it only after the shape has selected the production.
         for (label, value, want) in [
-            // Ordinary words: always Rastok expression, whatever follows.
             ("word alone", "data", "expr"),
             ("word + operator", "data + 1", "expr"),
             ("word + call parens", "size(data)", "expr"),
             ("word + brace", "data { }", "expr"),
-            // Tag words: a tag only WITH its opener. (`duration`,
-            // `decimal`, … are Rastok expression functions, not host tags.)
-            ("tag + parens", "bounded(64)", "tagged"),
-            ("tag alone", "bounded", "expr"),
-            ("tag + operator", "bounded + 1", "expr"),
-            ("expr function call", "duration(\"5s\")", "expr"),
-            // Dead and reserved tags: one refusal, forward recovery.
+            ("duration expression", "duration(\"5s\")", "expr"),
+            ("asset expression", "asset(\"README.md\")", "expr"),
+            ("decimal expression", "decimal(\"1.50\")", "expr"),
             ("dead tag + parens", "exponential(1, 2)", "error"),
             ("dead tag + brace", "measure { x = 1 }", "error"),
-            ("reserved format + brace", "avro { x }", "error"),
-            // `json`: a document, the bare word, or an invalid form.
-            ("json + object", "json {\"a\": 1}", "json"),
-            ("json + array", "json [1]", "json"),
-            // `json` is a RESERVED word (D-2026-08-13-1, review
-            // round 3): `{`/`[` open its document, the bare word
-            // stands alone for the contract to judge, and any other
-            // follower is an invalid json form — never Rastok expression.
-            ("json + scalar spelling", "json 1", "error"),
+            ("json object", "json! {\"a\": 1}", "frontend"),
+            ("json array", "json! [1]", "frontend"),
+            ("json scalar", "json! 1", "frontend"),
+            ("text", "text! {hello}", "frontend"),
+            ("base64", "base64! {AAEC}", "frontend"),
+            ("registered guest", "jq! {.x}", "frontend"),
+            ("reserved format", "avro! {x}", "frontend"),
+            // Frontend names remain ordinary expression identifiers without
+            // the adjacent bang. Maximal munch keeps `!=` an operator.
             ("json alone", "json", "expr"),
-            ("json + parens", "json(1)", "error"),
-            ("json + alien byte", "json @", "error"),
+            ("json inequality", "json!=data", "expr"),
+            ("spaced bang", "json ! 1", "expr"),
+            ("unknown frontend", "not_registered! {x}", "error"),
         ] {
             let (value, bag) = first_value(value);
             let got = match &value {
                 Value::Expr(_) => "expr",
-                Value::Tagged(_) => "tagged",
-                Value::Json { .. } => "json",
+                Value::Frontend(_) => "frontend",
                 Value::Error(_) => "error",
                 other => panic!("{label}: unexpected family {other:?}"),
             };
@@ -2462,50 +2345,22 @@ mod tests {
     }
 
     #[test]
-    fn a_crossing_comment_leaves_the_bare_word() {
-        // D-2026-08-13-1 §6: a block comment crossing the line means
-        // NO body on the line — the value is the word `json` itself,
-        // span exact, and the comment stays HOST trivia. What follows
-        // on the next line is a NEW statement.
-        let source = "graph g : App {\n  operator o {\n    on in { out = json /* c\n*/ 1 }\n  }\n  . -> o -> .\n}\n";
-        let mut bag = Bag::new();
-        let tree = parse(SourceId::new(0), source, &mut bag);
-        // ONE voice: the next line's bare `1` refuses (the implicit
-        // yield is removed, review round 7) — never a json voice.
-        assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
-        assert!(
-            bag.diagnostics()[0].message().contains("bare expression"),
-            "{bag:?}"
-        );
-        let TopDecl::Graph(graph) = &tree.decls[0] else {
-            panic!("a graph");
-        };
-        let GraphItem::Operator(operator) = &graph.body[0] else {
-            panic!("an operator: {:?}", graph.body[0]);
-        };
-        let OperatorItem::Handler(handler) = &operator.body[0] else {
-            panic!("a handler");
-        };
-        let statements = handler.body.as_ref().expect("a body");
-        assert_eq!(statements.len(), 2, "the next line is a NEW statement");
-        let Statement::Assign {
-            value: Value::Expr(expr),
-            ..
-        } = &statements[0]
-        else {
-            panic!("first statement: {:?}", statements[0]);
-        };
-        assert_eq!(expr.text, "json", "the bare word alone");
-        assert_eq!(
-            expr.span.range(),
-            source.find("json").unwrap()..source.find("json").unwrap() + 4,
-            "span exact"
-        );
-        assert!(
-            matches!(&statements[1], Statement::Error(_)),
-            "the bare `1` refuses: {:?}",
-            statements[1]
-        );
+    fn the_bang_is_syntax_not_a_reserved_name() {
+        let (ordinary, bag) = first_value("json");
+        assert!(bag.diagnostics().is_empty(), "{bag:?}");
+        assert!(matches!(ordinary, Value::Expr(expr) if expr.text == "json"));
+
+        let (spaced, bag) = first_value("json ! 1");
+        assert!(bag.diagnostics().is_empty(), "{bag:?}");
+        assert!(matches!(spaced, Value::Expr(expr) if expr.text == "json ! 1"));
+
+        let (frontend, bag) = first_value("json! 1");
+        assert!(bag.diagnostics().is_empty(), "{bag:?}");
+        assert!(matches!(frontend, Value::Frontend(_)));
+
+        let (inequality, bag) = first_value("json!=data");
+        assert!(bag.diagnostics().is_empty(), "{bag:?}");
+        assert!(matches!(inequality, Value::Expr(expr) if expr.text == "json!=data"));
     }
 
     #[test]
@@ -2662,11 +2517,11 @@ mod tests {
         for (label, source) in [
             (
                 "no args",
-                "graph g : App {\n  operator o {\n    on in {\n      out = bounded { x = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = measure { x = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
             ),
             (
                 "with args",
-                "graph g : App {\n  operator o {\n    on in {\n      out = regex(\"x\") { y = 2 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = on_crash(\"x\") { y = 2 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
             ),
         ] {
             let (statements, bag) = handler_statements(source);
@@ -2696,30 +2551,26 @@ mod tests {
 
     #[test]
     fn a_bad_json_form_stays_inside_its_position() {
-        // Review round 4's blocker: the garbage-opened paren pulled
-        // the walk across the line. The BadForm walk is HOST-bounded:
-        // a balanced same-line form swallows whole, an unbalanced one
-        // ends at its line, and a parenthesized position stops at its
-        // own boundary — the sibling lives in every case.
-        for (label, source, statements_wanted) in [
+        // The frontend reader owns the malformed document but never the
+        // following host statement or its delimiters.
+        for (label, source) in [
             (
-                "balanced same line + sibling",
-                "graph g : App {\n  operator o {\n    on in {\n      out = json(1)\n      typo = data\n    }\n  }\n  . -> o -> .\n}\n",
-                2,
+                "object",
+                "graph g : App {\n  operator o {\n    on in { out = json! {\"a\": ???}; out = data }\n  }\n  . -> o -> .\n}\n",
             ),
             (
-                "unbalanced + newline + sibling",
-                "graph g : App {\n  operator o {\n    on in {\n      out = json(1\n      typo = data\n    }\n  }\n  . -> o -> .\n}\n",
-                2,
+                "array",
+                "graph g : App {\n  operator o {\n    on in { out = json! [1, ???]; out = data }\n  }\n  . -> o -> .\n}\n",
             ),
         ] {
             let (statements, bag) = handler_statements(source);
             assert_eq!(bag.diagnostics().len(), 1, "{label}: one voice — {bag:?}");
-            assert_eq!(
-                statements.len(),
-                statements_wanted,
-                "{label}: {statements:?}"
-            );
+            assert_eq!(bag.diagnostics()[0].code(), E_JSON_VALUE, "{label}");
+            assert_eq!(statements.len(), 2, "{label}: {statements:?}");
+            let Statement::Assign { value, .. } = &statements[0] else {
+                panic!("{label}: first statement: {:?}", statements[0]);
+            };
+            assert!(matches!(value, Value::Error(_)), "{label}: {value:?}");
             let Statement::Assign { value, .. } = &statements[1] else {
                 panic!("{label}: second statement: {:?}", statements[1]);
             };
@@ -2728,33 +2579,6 @@ mod tests {
                 "{label}"
             );
         }
-        // A parenthesized position: the BadForm stops at the `,`, the
-        // sibling ARGUMENT lives — asserted STRUCTURALLY (review
-        // round 6): the call keeps BOTH arguments, recovery form
-        // first, the string intact.
-        let source = "graph g : App {\n  operator o {\n    on in { out = asset(json @, \"text/plain\"); out = data }\n  }\n  . -> o -> .\n}\n";
-        let (statements, bag) = handler_statements(source);
-        assert_eq!(bag.diagnostics().len(), 1, "paren position: {bag:?}");
-        assert_eq!(statements.len(), 2, "the statement sibling lives");
-        let Statement::Assign {
-            value: Value::Tagged(call),
-            ..
-        } = &statements[0]
-        else {
-            panic!("the asset call survives: {:?}", statements[0]);
-        };
-        assert_eq!(call.tag.text, "asset");
-        assert_eq!(call.args.len(), 2, "both arguments live: {:?}", call.args);
-        assert!(
-            matches!(call.args[0], Value::Error(_)),
-            "the recovery form first: {:?}",
-            call.args[0]
-        );
-        assert!(
-            matches!(&call.args[1], Value::StrLit { raw, .. } if raw == "\"text/plain\""),
-            "the string argument intact: {:?}",
-            call.args[1]
-        );
     }
 
     #[test]
@@ -2766,17 +2590,17 @@ mod tests {
         for (label, source, code) in [
             (
                 "bad json form + block comment hiding `;` and `}`",
-                "graph g : App {\n  operator o {\n    on in {\n      out = json foo /* ; } */\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = json! foo /* ; } */\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
                 E_JSON_VALUE,
             ),
             (
                 "bad json form + line comment hiding `;` and `}`",
-                "graph g : App {\n  operator o {\n    on in {\n      out = json foo // ; }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = json! foo // ; }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
                 E_JSON_VALUE,
             ),
             (
                 "dead struct body + comment hiding `}`",
-                "graph g : App {\n  operator o {\n    on in {\n      out = bounded { /* } */ x = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                "graph g : App {\n  operator o {\n    on in {\n      out = measure { /* } */ x = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
                 E_PARSE_EXPECTED,
             ),
             (
@@ -2859,7 +2683,7 @@ mod tests {
         // Round 6's remaining frontier proofs, committed: `text`
         // content is verbatim (apostrophes are data), and a closer
         // inside a comment never ends an opaque dead region.
-        let text = "graph g : App {\n  operator o {\n    on in { out = text {\n  don't panic\n} }\n  }\n  . -> o -> .\n}\n";
+        let text = "graph g : App {\n  operator o {\n    on in { out = text! {\n  don't panic\n} }\n  }\n  . -> o -> .\n}\n";
         let mut bag = Bag::new();
         let tree = parse(SourceId::new(0), text, &mut bag);
         assert!(bag.diagnostics().is_empty(), "verbatim: {bag:?}");
@@ -2883,10 +2707,10 @@ mod tests {
         // tests).
         for (label, bare) in [
             ("expr", "data + 1"),
-            ("json document", "json [1]"),
-            ("verbatim text", "text { don't panic }"),
-            ("base64", "base64 { AAEC }"),
-            ("guest", "jq { .x }"),
+            ("json document", "json! [1]"),
+            ("verbatim text", "text! { don't panic }"),
+            ("base64", "base64! { AAEC }"),
+            ("guest", "jq! { .x }"),
             ("nothing", "nothing"),
         ] {
             let source = format!(
@@ -2921,12 +2745,12 @@ mod tests {
         // lexicon. Balanced twins compile; a quoted lone closer ends
         // the block early (the named limitation: hostile text
         // belongs to a Rastok expression string).
-        let balanced = "graph g : App {\n  operator o {\n    on in { out = text { a \"{x}\" b } }\n  }\n  . -> o -> .\n}\n";
+        let balanced = "graph g : App {\n  operator o {\n    on in { out = text! { a \"{x}\" b } }\n  }\n  . -> o -> .\n}\n";
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), balanced, &mut bag);
         assert!(bag.diagnostics().is_empty(), "balanced: {bag:?}");
         // The balanced twin also keeps its sibling whole.
-        let with_sibling = "graph g : App {\n  operator o {\n    on in {\n      out = text { a \"{x}\" b }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+        let with_sibling = "graph g : App {\n  operator o {\n    on in {\n      out = text! { a \"{x}\" b }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
         let (statements, bag) = handler_statements(with_sibling);
         assert!(bag.diagnostics().is_empty(), "balanced + sibling: {bag:?}");
         assert_eq!(statements.len(), 2, "{statements:?}");
@@ -2935,7 +2759,7 @@ mod tests {
         // remainder (`\" b }`) as an unterminated string anchored
         // AFTER the early close; the cascade that follows belongs to
         // the mis-framed remainder, not to the framer.
-        let lone_closer = "graph g : App {\n  operator o {\n    on in { out = text { a \"}\" b } }\n  }\n  . -> o -> .\n}\n";
+        let lone_closer = "graph g : App {\n  operator o {\n    on in { out = text! { a \"}\" b } }\n  }\n  . -> o -> .\n}\n";
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), lone_closer, &mut bag);
         assert!(!bag.diagnostics().is_empty(), "the limitation refuses");
@@ -3170,24 +2994,23 @@ mod tests {
     }
 
     #[test]
-    fn parenthesized_arguments_share_one_trivia_policy() {
-        // Review round 8: a paren position is newline-free, and the
-        // string-argument probes must cross lines exactly like the
-        // position itself — opening, boundary, and continuation.
+    fn expression_calls_are_framed_as_one_value() {
+        // Asset is an ordinary expression call. The host owns only the complete
+        // expression extent; comments and line breaks inside its parens do not
+        // create a second host argument grammar.
         let multiline_string = "graph g : App {\n  operator o {\n    on in { out = asset(\n  \"README.md\"\n) }\n  }\n  . -> o -> .\n}\n";
         let (statements, bag) = handler_statements(multiline_string);
         assert!(bag.diagnostics().is_empty(), "multiline string: {bag:?}");
         let Statement::Assign {
-            value: Value::Tagged(call),
+            value: Value::Expr(call),
             ..
         } = &statements[0]
         else {
             panic!("the asset call: {:?}", statements[0]);
         };
         assert!(
-            matches!(&call.args[0], Value::StrLit { raw, .. } if raw == "\"README.md\""),
-            "the STRING literal is read across the line: {:?}",
-            call.args[0]
+            call.text.contains("\"README.md\""),
+            "the expression owns the multiline call: {call:?}"
         );
         let commented = "graph g : App {\n  operator o {\n    on in { out = asset( /* path\n      continues */ \"a.bin\" ) }\n  }\n  . -> o -> .\n}\n";
         let (statements, bag) = handler_statements(commented);
@@ -3196,30 +3019,28 @@ mod tests {
             "comment before string: {bag:?}"
         );
         let Statement::Assign {
-            value: Value::Tagged(call),
+            value: Value::Expr(call),
             ..
         } = &statements[0]
         else {
             panic!("the asset call: {:?}", statements[0]);
         };
-        assert!(matches!(&call.args[0], Value::StrLit { .. }));
-        // A string CONTINUING on the next line is the Rastok expression prefix —
-        // one argument, and the parse terminates.
+        assert!(call.text.contains("/* path"), "{call:?}");
+
+        // An arbitrary expression call obeys exactly the same framing.
         let continued = "graph g : App {\n  operator o {\n    on in { out = bounded(\"x\"\n  + \"y\") }\n  }\n  . -> o -> .\n}\n";
         let (statements, bag) = handler_statements(continued);
         assert!(bag.diagnostics().is_empty(), "continuation: {bag:?}");
         let Statement::Assign {
-            value: Value::Tagged(call),
+            value: Value::Expr(call),
             ..
         } = &statements[0]
         else {
             panic!("the bounded call: {:?}", statements[0]);
         };
-        assert_eq!(call.args.len(), 1, "{:?}", call.args);
         assert!(
-            matches!(&call.args[0], Value::Expr(expr) if expr.text.contains("+")),
-            "the continuation is ONE Rastok expression argument: {:?}",
-            call.args[0]
+            call.text.contains('+'),
+            "the continuation is one expression region: {call:?}"
         );
     }
 
@@ -3381,15 +3202,15 @@ graph m0_probe : App {
 
     #[test]
     fn a_raw_guest_body_stays_opaque() {
-        let tree = parse_clean("val j = jq { .items | {count: length} }\n");
+        let tree = parse_clean("val j = jq! { .items | {count: length} }\n");
         let TopDecl::Val(val) = &tree.decls[0] else {
             panic!("expected a val");
         };
-        let Value::Tagged(tagged) = &val.value else {
-            panic!("expected a tagged value");
+        let Value::Frontend(frontend) = &val.value else {
+            panic!("expected a frontend value");
         };
-        assert_eq!(tagged.tag.text, "jq");
-        let Some(TaggedBody::Raw { text, .. }) = &tagged.body else {
+        assert_eq!(frontend.name.text, "jq");
+        let FrontendPayload::Raw { text, .. } = &frontend.payload else {
             panic!("expected a raw body");
         };
         assert_eq!(text.trim(), ".items | {count: length}");

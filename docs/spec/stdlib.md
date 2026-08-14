@@ -453,7 +453,9 @@ subject to the pure guest contract in §5.
 ## 5. The pure guest-program contract — six clauses
 
 The **Rastok DSL is the host language**. Rastok expressions are its
-intrinsic CEL-compatible computation language, not a guest module. A
+intrinsic computation language; their compatible core is differentially
+tested against CEL, but CEL owns neither Rastok payload types nor the full
+language. Expressions are not a guest module. A
 tagged frontend carries source in a **guest language** — for example
 `jq! { }` and `sql! { }` — which the build
 turns into a versioned **`GuestProgram`**. A **`GuestExecutor`** executes a

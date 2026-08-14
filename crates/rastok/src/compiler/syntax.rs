@@ -511,28 +511,6 @@ pub enum Value {
     /// keep their SOURCE spelling and span: the checker decodes them
     /// through the ONE string rule (the Rastok expression language's) and owns duplicates.
     BracedMap(Vec<MapEntry>),
-    /// One bare STRING token in a tag-argument position — the
-    /// grammar's `STRING`, kept apart from Rastok expression so `("x")` and
-    /// `"a" + "b"` cannot impersonate it (D-2026-08-10-6). The raw
-    /// spelling keeps its quotes; the checker decodes it by the one
-    /// Rastok expression string rule.
-    StrLit {
-        /// As written, quotes included.
-        raw: String,
-        /// Where it was written.
-        span: Span,
-    },
-    /// `json <document>` — one complete JSON DOCUMENT (`{ … }` or
-    /// `[ … ]`, D-2026-08-13-1), read by the house reader, always
-    /// `variant` (D-2026-08-10-6/-7). Any other follower is an
-    /// INVALID json form — the reserved word never begins a Rastok expression
-    /// expression (D-2026-08-13-1, review round 3).
-    Json {
-        /// The parsed value — exact numbers, duplicate keys refused.
-        value: rastok_core::value::Value,
-        /// Where it was written.
-        span: Span,
-    },
     /// `nothing` — emit nothing.
     Nothing(Span),
     /// The parser's RECOVERY form: a diagnostic was already pushed
@@ -540,8 +518,8 @@ pub enum Value {
     /// voice. Never a user state: a genuinely empty expression
     /// still diagnoses (D-2026-08-12-1, review round).
     Error(Span),
-    /// `jq { … }`, `bounded(64)`, `exponential { … }`, …
-    Tagged(TaggedValue),
+    /// `IDENT!` followed by the region owned by the registered frontend.
+    Frontend(FrontendValue),
 }
 
 /// One `"key": value` entry of a braced map.
@@ -556,32 +534,36 @@ pub struct MapEntry {
     pub value: Value,
 }
 
-/// `TAG_KW ( "(" args ")" )? ( "{" body "}" )?`
+/// `IDENT "!" ( "(" args ")" )? FRONTEND_REGION`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TaggedValue {
-    /// The tag word.
-    pub tag: Name,
+pub struct FrontendValue {
+    /// The ordinary identifier selecting the registered frontend.
+    pub name: Name,
     /// Parenthesized arguments, possibly empty.
     pub args: Vec<Value>,
-    /// Whether a parenthesis list was WRITTEN — `base64()` and
-    /// `base64` differ, and the grammar knows which tags admit
+    /// Whether a parenthesis list was WRITTEN — `base64!()` and
+    /// `base64!` differ, and the frontend contract knows which forms admit
     /// which (D-2026-08-10-6).
     pub parens: bool,
-    /// Whether the argument list ended on a comma — the exact
-    /// grammar has no trailing comma in tag calls.
-    pub trailing_comma: bool,
-    /// The optional block body.
-    pub body: Option<TaggedBody>,
+    /// The complete region returned by the selected frontend reader/framer.
+    pub payload: FrontendPayload,
 }
 
-/// Body of a tagged value — tag-dependent.
+/// One complete region owned by a tagged frontend.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TaggedBody {
-    /// Raw guest text, never read by the host parser.
+pub enum FrontendPayload {
+    /// One complete JSON value, already read by the canonical house reader.
+    Json {
+        /// The parsed value — exact numbers, duplicate keys refused.
+        value: rastok_core::value::Value,
+        /// Where the JSON bytes were written.
+        span: Span,
+    },
+    /// Raw frontend text, never tokenized by the host parser.
     Raw {
-        /// The body text, braces excluded.
+        /// The region bytes, braces excluded.
         text: String,
-        /// Where it was written.
+        /// Where the region bytes were written.
         span: Span,
     },
 }

@@ -1,11 +1,13 @@
 # Rastok expressions and tagged frontends
 
-> **Status: normative M1.3 target; B3 core landed 2026-08-14.** The
+> **Status: normative M1.3 target; B3 core landed 2026-08-14 and B4
+> frontends landed 2026-08-15.** The
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as` trees execute and are type-checked in memory, while package v6
 > refuses them categorically until B8 assigns their single v7 wire form.
 > The two remaining compatibility bridges are named below rather than
-> presented as completed target behavior.
+> presented as completed target behavior. The `IDENT!` frontend surface
+> and full JSON-value reader described below are executable now.
 
 Rastok has an intrinsic, pure expression language. Its syntax and much of
 its operator semantics are inspired by CEL, and the compatible core stays

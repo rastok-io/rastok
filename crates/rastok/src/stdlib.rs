@@ -11,20 +11,9 @@
 //! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
 
 use crate::contract::{
-    AttributeSpec, ConnectorContract, DefaultValue, Presence, Profile, ProfileSelector,
-    ProfileSupport, Registry, ValueDomain,
+    AttributeSpec, ConnectorContract, DefaultValue, FrontendContract, FrontendFraming,
+    FrontendReader, Presence, Profile, ProfileSelector, ProfileSupport, Registry, ValueDomain,
 };
-
-/// Guest identity the manifest pins; M0 declares the languages with
-/// no available frontend so their names refuse explicitly. Not a node
-/// contract — it stays beside the catalogue, outside the metamodel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GuestContract {
-    /// The guest language tag (`jq`, `sql`).
-    pub language: &'static str,
-    /// Whether a frontend and executor ship in this build.
-    pub available: bool,
-}
 
 /// The `Process` sheet of `stdlib.md` §3.3 on the D-2026-08-12-1
 /// metamodel: the common attributes, and the `mode` selector picking
@@ -147,6 +136,91 @@ const DECLARED: &[&str] = &[
     "File",
 ];
 
+const M0_FRONTENDS: &[FrontendContract] = &[
+    FrontendContract {
+        name: "json",
+        reader: FrontendReader::Json,
+    },
+    FrontendContract {
+        name: "text",
+        reader: FrontendReader::Text,
+    },
+    FrontendContract {
+        name: "base64",
+        reader: FrontendReader::Base64,
+    },
+    FrontendContract {
+        name: "jq",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the jq guest frontend",
+        },
+    },
+    FrontendContract {
+        name: "sql",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the SQL guest frontend",
+        },
+    },
+    FrontendContract {
+        name: "bash",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the bash guest frontend",
+        },
+    },
+    FrontendContract {
+        name: "python",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the Python guest frontend",
+        },
+    },
+    FrontendContract {
+        name: "rust",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the Rust guest frontend",
+        },
+    },
+    FrontendContract {
+        name: "avro",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the Avro data frontend",
+        },
+    },
+    FrontendContract {
+        name: "protobuf",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the Protobuf data frontend",
+        },
+    },
+    FrontendContract {
+        name: "parquet",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the Parquet data frontend",
+        },
+    },
+    FrontendContract {
+        name: "msgpack",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the MessagePack data frontend",
+        },
+    },
+    FrontendContract {
+        name: "csv",
+        reader: FrontendReader::Deferred {
+            framing: FrontendFraming::QuotedBraced,
+            construct: "the CSV data frontend",
+        },
+    },
+];
+
 impl Registry {
     /// The M0 registry through its fallible door — the same
     /// validation any extension walks.
@@ -159,20 +233,15 @@ impl Registry {
         let base = Self {
             connectors: Vec::new(),
             declared: DECLARED.to_vec(),
-            guests: vec![
-                GuestContract {
-                    language: "jq",
-                    available: false,
-                },
-                GuestContract {
-                    language: "sql",
-                    available: false,
-                },
-            ],
+            frontends: Vec::new(),
         };
         // The standard catalogue walks through the SAME door as any
         // extension — never an unvalidated authority.
-        base.try_with(PROCESS)
+        M0_FRONTENDS
+            .iter()
+            .cloned()
+            .try_fold(base, Self::try_with_frontend)?
+            .try_with(PROCESS)
     }
 }
 
@@ -210,12 +279,22 @@ mod tests {
     }
 
     #[test]
-    fn guests_are_declared_but_unavailable() {
+    fn frontends_share_one_contract_registry() {
         let registry = Registry::try_m0().expect("the standard catalogue holds");
         assert_eq!(
-            registry.guest("jq").map(|guest| guest.available),
-            Some(false)
+            registry.frontend("json").map(|frontend| frontend.reader),
+            Some(FrontendReader::Json)
         );
-        assert_eq!(registry.guest("python"), None);
+        assert!(matches!(
+            registry.frontend("jq").map(|frontend| frontend.reader),
+            Some(FrontendReader::Deferred { .. })
+        ));
+        assert_eq!(
+            registry
+                .frontend("text")
+                .map(|frontend| frontend.reader.result_type()),
+            Some(Some(crate::datatype::DataType::Text))
+        );
+        assert_eq!(registry.frontend("starlark"), None);
     }
 }

@@ -8,8 +8,9 @@
 
 use rastok::compiler::compile;
 use rastok::contract::{
-    AttributeSpec, ConnectorContract, DefaultValue, Presence, Profile, ProfileSelector,
-    ProfileSupport, Registry, SheetDefect, ValueDomain,
+    AttributeSpec, ConnectorContract, DefaultValue, FrontendContract, FrontendFraming,
+    FrontendReader, Presence, Profile, ProfileSelector, ProfileSupport, Registry, SheetDefect,
+    ValueDomain,
 };
 
 fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
@@ -891,8 +892,9 @@ fn a_nested_block_entry_names_its_migration() {
 #[test]
 fn the_recovery_form_is_silent_in_every_position() {
     // The Value::Error arm matrix (D-2026-08-12-1, review round):
-    // var initializer, local val, state write, tag argument, asset
-    // argument — the parser's one voice, no wildcard second.
+    // var initializer, local val and state write — the parser's one
+    // voice, no wildcard second. Frontends have one generic argument
+    // grammar now, while `asset` is an ordinary expression call.
     for (label, source) in [
         (
             "var initializer",
@@ -906,14 +908,6 @@ fn the_recovery_form_is_silent_in_every_position() {
             "state write",
             "graph g : App {\n  operator o {\n    var v : int = 0\n    on in {\n      v = exponential { y = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
         ),
-        (
-            "tag argument",
-            "graph g : App {\n  operator o {\n    on in { out = base64(measure { z = 1 }) { SGVsbG8= } }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
-            "asset argument",
-            "graph g : App {\n  operator o {\n    on in { out = asset(fibonacci { z = 1 }) }\n  }\n  . -> o -> .\n}\n",
-        ),
     ] {
         let bag = compile_one(source).expect_err(label);
         assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
@@ -926,74 +920,29 @@ fn the_recovery_form_is_silent_in_every_position() {
 }
 
 #[test]
-fn json_and_nothing_are_unmaskable() {
-    // D-2026-08-13-1 (review round 2): the value-form words are
-    // RESERVED in every binding-introducing position — a masked
-    // `json` would make `json[0]` ambiguous between a document and
-    // an indexing. The refusal lands AT THE DECLARATION.
+fn structural_words_are_reserved_but_frontend_names_are_bindable() {
+    // B4: `json` is an ordinary name; only the adjacent `!` selects
+    // its frontend. Structural/literal words remain unmaskable.
     for (label, source) in [
-        (
-            "operator val json",
-            "graph g : App {\n  operator o {\n    val json = [42]\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
         (
             "operator val nothing",
             "graph g : App {\n  operator o {\n    val nothing = 42\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
-            "handler-local val json",
-            "graph g : App {\n  operator o {\n    on in { val json = 1\n      out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
-            "operator var json",
-            "graph g : App {\n  operator o {\n    var json : int = 0\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "operator var nothing",
             "graph g : App {\n  operator o {\n    var nothing : int = 0\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
-            "graph val json",
-            "graph g : App {\n  val json = 1\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
-            "node named json",
-            "graph g : App {\n  operator json {\n    on in { out = data }\n  }\n  . -> json -> .\n}\n",
-        ),
-        (
             "node named nothing",
             "graph g : App {\n  operator nothing {\n    on in { out = data }\n  }\n  . -> nothing -> .\n}\n",
-        ),
-        (
-            "type named json",
-            "type json = int\ngraph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
-            "declared node port json",
-            "graph g : App {\n  operator o {\n    output json\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        // The round-3 holes, pinned: the graph's own name, the lab
-        // that binds to it, and the BOUNDARY ports (a different
-        // checker route than node ports — the exact miss).
-        (
-            "graph named json",
-            "graph json : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "graph named nothing",
             "graph nothing : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
-            "boundary output json",
-            "graph g : App {\n  output json\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
             "boundary input nothing",
             "graph g : App {\n  input nothing\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
-            "lab named json",
-            "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\nlab json {\n}\n",
         ),
         // The expression literals: a masked one is a shadow Rastok expression can
         // never read (review round 3).
@@ -1027,38 +976,109 @@ fn json_and_nothing_are_unmaskable() {
             "{label}: {bag:?}"
         );
     }
+    compile_one(
+        "graph g : App {\n  input in: int\n  output out: int\n  operator o {\n    val json = 1\n    on in { out = json }\n  }\n  . -> o -> .\n}\n",
+    )
+    .expect("a frontend name remains an ordinary binding");
+    compile_one(
+        "graph g : App {\n  input in: variant\n  output out: variant\n  operator json {\n    on in { out = data }\n  }\n  . -> json -> .\n}\n",
+    )
+    .expect("a frontend name remains an ordinary node name");
     // The value forms themselves stay whole.
-    compile_one("graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json {\"a\": 1} }\n  }\n  . -> o -> .\n}\n")
+    compile_one("graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json! {\"a\": 1} }\n  }\n  . -> o -> .\n}\n")
         .expect("json object lives");
     compile_one(
-        "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json [1, 2] }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json! [1, 2] }\n  }\n  . -> o -> .\n}\n",
     )
     .expect("json array lives");
     compile_one(
         "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = nothing }\n  }\n  . -> o -> .\n}\n",
     )
     .expect("nothing lives");
-    // With no maskable binding, `json[0]` IS the document `[0]` —
+    // With no maskable binding, `json![0]` IS the document `[0]` —
     // the same program as its spaced twin, and never the Rastok expression list.
     let hash = |source: &str| compile_one(source).expect("valid").hash.to_string();
     assert_eq!(
         hash(
-            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n"
+            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json![0] }\n  }\n  . -> o -> .\n}\n"
         ),
         hash(
-            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json [0] }\n  }\n  . -> o -> .\n}\n"
+            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json! [0] }\n  }\n  . -> o -> .\n}\n"
         ),
         "spacing is not identity"
     );
     assert_ne!(
         hash(
-            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json[0] }\n  }\n  . -> o -> .\n}\n"
+            "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json![0] }\n  }\n  . -> o -> .\n}\n"
         ),
         hash(
             "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = [0] }\n  }\n  . -> o -> .\n}\n"
         ),
         "a variant document is not the Rastok expression list"
     );
+}
+
+#[test]
+fn a_registered_frontend_owns_framing_without_becoming_a_keyword() {
+    assert_eq!(
+        Registry::default().try_with_frontend(FrontendContract {
+            name: "bad name",
+            reader: FrontendReader::Text,
+        }),
+        Err(SheetDefect::InexpressibleName("bad name")),
+        "an admitted frontend contract must be writable before `!`"
+    );
+    let registry = Registry::try_m0()
+        .expect("the standard catalogue holds")
+        .try_with_frontend(FrontendContract {
+            name: "starlark",
+            reader: FrontendReader::Deferred {
+                framing: FrontendFraming::QuotedBraced,
+                construct: "the application Starlark frontend",
+            },
+        })
+        .expect("the registered name is expressible");
+    let source = "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = starlark! { x = '@'; nested { y = \"}\" } } }\n  }\n  . -> o -> .\n}\n";
+    let bag = compile(&[source], &registry).expect_err("the compiler is deliberately deferred");
+    assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+    assert!(
+        bag.diagnostics()[0]
+            .message()
+            .contains("the application Starlark frontend"),
+        "{bag:?}"
+    );
+
+    let unknown = compile_one(
+        "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = starlark! { x } }\n  }\n  . -> o -> .\n}\n",
+    )
+    .expect_err("an unregistered frontend refuses");
+    assert_eq!(unknown.diagnostics().len(), 1, "{unknown:?}");
+    assert_eq!(
+        unknown.diagnostics()[0].code().as_str(),
+        "E-RESOLVE-UNKNOWN"
+    );
+}
+
+#[test]
+fn a_frontend_fills_one_host_value_and_never_an_expression_atom() {
+    let embedded = compile_one(
+        "graph g : App {\n  input in: int\n  output out: int\n  operator o {\n    on in { out = 1 + json! 2 }\n  }\n  . -> o -> .\n}\n",
+    )
+    .expect_err("a frontend result must be bound before expression use");
+    assert_eq!(embedded.diagnostics().len(), 1, "{embedded:?}");
+    assert_eq!(embedded.diagnostics()[0].code().as_str(), "E-EXPR");
+
+    let spaced = compile_one(
+        "graph g : App {\n  input in: int\n  output out: int\n  operator o {\n    val json = 2\n    on in { out = json ! 1 }\n  }\n  . -> o -> .\n}\n",
+    )
+    .expect_err("trivia between the name and bang is not frontend syntax");
+    assert_eq!(spaced.diagnostics().len(), 1, "{spaced:?}");
+    assert_eq!(spaced.diagnostics()[0].code().as_str(), "E-EXPR");
+
+    compile_one(
+        "graph g : App {\n  input in: int\n  output out: bool\n  operator o {\n    val json = 2\n    on in { out = json!=data }\n  }\n  . -> o -> .\n}\n",
+    )
+    .expect("maximal munch keeps `!=` an expression operator");
 }
 
 #[test]
@@ -1069,48 +1089,25 @@ fn a_json_recovery_follows_the_position_terminators() {
     for (label, source) in [
         (
             "semicolon statement",
-            "graph g : App {\n  operator o {\n    on in { out = json {\"a\": ???}; out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = json! {\"a\": ???}; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "struct field",
-            "graph g : App {\n  operator o {\n    on in { out = { bad = json {\"a\": ???}, ok = 1 } }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = { bad = json! {\"a\": ???}, ok = 1 } }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "multiline json",
-            "graph g : App {\n  operator o {\n    on in {\n      out = json {\n        \"a\": ???\n      }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in {\n      out = json! {\n        \"a\": ???\n      }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
         ),
-        (
-            "paren position (comma boundary)",
-            "graph g : App {\n  operator o {\n    on in { out = asset(json {\"a\": ???}, \"text/plain\"); out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
-            "paren position (close-paren boundary)",
-            "graph g : App {\n  operator o {\n    on in { out = asset(json {\"a\": ???}); out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        // `json` is reserved (review round 3): any non-document
-        // follower is an invalid json form — one voice, forward
-        // recovery, sibling preserved.
+        // Any non-JSON follower after the explicit frontend sigil is
+        // one reader-owned refusal with forward host recovery.
         (
             "host-alien first byte",
-            "graph g : App {\n  operator o {\n    on in { out = json @; out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = json! @; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "quoted Rastok expression follower",
-            "graph g : App {\n  operator o {\n    on in { out = json 'x'; out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        // A former scalar spelling refuses the same way, with the
-        // `decimal(...)` migration in the message.
-        (
-            "scalar number",
-            "graph g : App {\n  operator o {\n    on in { out = json 19.99; out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
-            "scalar string",
-            "graph g : App {\n  operator o {\n    on in { out = json \"s\"; out = data }\n  }\n  . -> o -> .\n}\n",
-        ),
-        (
-            "scalar word",
-            "graph g : App {\n  operator o {\n    on in { out = json true; out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = json! 'x'; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
     ] {
         let bag = compile_one(source).expect_err(label);
@@ -1123,7 +1120,7 @@ fn a_json_recovery_follows_the_position_terminators() {
     }
     // The positive twin proves the SIBLING really lives there: with
     // the fault healed, the handler carries BOTH emissions.
-    let healed = "graph g : App {\n  operator o {\n    on in { out = json {\"a\": 1}; out = data }\n  }\n  . -> o -> .\n}\n";
+    let healed = "graph g : App {\n  operator o {\n    on in { out = json! {\"a\": 1}; out = data }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile_one(healed).expect("valid");
     let handler = &compilation.plan.plan().handlers[0];
     let emissions = handler
@@ -1132,6 +1129,13 @@ fn a_json_recovery_follows_the_position_terminators() {
         .filter(|step| matches!(step, rastok::plan::Step::Emit { .. }))
         .count();
     assert_eq!(emissions, 2, "both emissions live in the tree");
+
+    for scalar in ["19.99", "\"s\"", "true", "false", "null"] {
+        compile_one(&format!(
+            "graph g : App {{\n  input in: variant\n  output out: variant\n  operator o {{\n    on in {{ out = json! {scalar} }}\n  }}\n  . -> o -> .\n}}\n"
+        ))
+        .unwrap_or_else(|bag| panic!("scalar JSON `{scalar}` lives: {bag:?}"));
+    }
 }
 
 #[test]
@@ -1140,7 +1144,7 @@ fn a_semicolon_at_json_depth_is_a_strong_boundary() {
     // ANY depth, the sibling survives, and the two residual closer
     // errors are the file's REAL brace imbalance (the unterminated
     // json `{` — accepted as necessarily ambiguous).
-    let source = "graph g : App {\n  operator o {\n    on in { out = json { \"a\": ???; out = data } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = json! { \"a\": ???; out = data } }\n  }\n  . -> o -> .\n}\n";
     let bag = compile_one(source).expect_err("must refuse");
     let errors: Vec<_> = bag
         .diagnostics()
@@ -1159,11 +1163,11 @@ fn a_semicolon_at_json_depth_is_a_strong_boundary() {
 
 #[test]
 fn json_trivia_belongs_to_the_host() {
-    // A same-line comment between the tag and the body is HOST
+    // A same-line comment between the sigil and the payload is HOST
     // trivia — the reader never sees it, and the identity is the
     // same as the uncommented spelling.
-    let commented = "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json /* c */ {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
-    let plain = "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
+    let commented = "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json! /* c */ {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
+    let plain = "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json! {\"a\": 1} }\n  }\n  . -> o -> .\n}\n";
     let a = compile_one(commented).expect("valid");
     let b = compile_one(plain).expect("valid");
     assert_eq!(
@@ -1175,20 +1179,56 @@ fn json_trivia_belongs_to_the_host() {
     // the position's boundary, so the json form is invalid — the
     // boundary never depends on Unicode trim_start
     // (D-2026-08-13-1, review round 3).
-    let nbsp = "graph g : App {\n  operator o {\n    on in { out = json \u{a0}1 }\n  }\n  . -> o -> .\n}\n";
+    let nbsp = "graph g : App {\n  operator o {\n    on in { out = json!\u{a0}1 }\n  }\n  . -> o -> .\n}\n";
     let bag = compile_one(nbsp).expect_err("must refuse");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     assert_eq!(bag.diagnostics()[0].code().as_str(), "E-JSON-VALUE");
-    // A comment crossing the line means NO body on the line: bare
-    // word — never a truncated JSON literal.
-    let crossing = "graph g : App {\n  operator o {\n    on in { out = json /* c\n*/ 1 }\n  }\n  . -> o -> .\n}\n";
-    let bag = compile_one(crossing).expect_err("must refuse");
+    // Host trivia may cross lines after the explicit sigil; it is
+    // still not part of the JSON value or its identity.
+    let crossing = "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json! /* c\n*/ 1 }\n  }\n  . -> o -> .\n}\n";
+    let scalar = "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = json! 1 }\n  }\n  . -> o -> .\n}\n";
+    assert_eq!(
+        compile_one(crossing)
+            .expect("cross-line trivia is valid")
+            .hash,
+        compile_one(scalar).expect("scalar JSON is valid").hash,
+    );
+
+    let unterminated =
+        "graph g : App {\n  operator o {\n    on in { out = json! /* never\n  }\n}\n";
+    let bag = compile_one(unterminated).expect_err("the host comment is unterminated");
+    assert_eq!(
+        bag.diagnostics()[0].code().as_str(),
+        "E-LEX-UNTERMINATED-COMMENT",
+        "the host trivia authority speaks first: {bag:?}"
+    );
     assert!(
         bag.diagnostics()
             .iter()
-            .all(|d| d.code().as_str() != "E-JSON-VALUE"),
-        "bare word, not a JSON literal: {bag:?}"
+            .all(|diagnostic| diagnostic.code().as_str() != "E-JSON-VALUE"),
+        "the frontend reader must not diagnose the same missing payload: {bag:?}"
     );
+}
+
+#[test]
+fn frontend_leading_trivia_has_one_lexical_authority() {
+    for frontend in ["text", "jq"] {
+        let source = format!(
+            "graph g : App {{\n  operator o {{\n    on in {{ out = {frontend}! /* never\n  }}\n}}\n"
+        );
+        let bag = compile_one(&source).expect_err("the host comment is unterminated");
+        assert_eq!(
+            bag.diagnostics()[0].code().as_str(),
+            "E-LEX-UNTERMINATED-COMMENT",
+            "{frontend}: the trivia authority speaks first: {bag:?}"
+        );
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .all(|diagnostic| !diagnostic.message().contains("a braced frontend payload")),
+            "{frontend}: the parser must not rediagnose the missing opener: {bag:?}"
+        );
+    }
 }
 
 #[test]
@@ -1202,7 +1242,7 @@ fn dead_and_reserved_parens_are_opaque_too() {
         ),
         (
             "reserved format with alien parens",
-            "graph g : App {\n  operator o {\n    on in { out = protobuf('@') { message X {} } }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = protobuf!('@') { message X {} } }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "single-quoted open paren",
@@ -1210,7 +1250,7 @@ fn dead_and_reserved_parens_are_opaque_too() {
         ),
         (
             "single-quoted close paren",
-            "graph g : App {\n  operator o {\n    on in { out = protobuf(')') { message X {} }; out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = protobuf!(')') { message X {} }; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
             "double-quoted open paren",
@@ -1218,7 +1258,7 @@ fn dead_and_reserved_parens_are_opaque_too() {
         ),
         (
             "double-quoted close paren",
-            "graph g : App {\n  operator o {\n    on in { out = protobuf(\")\") { message X {} }; out = data }\n  }\n  . -> o -> .\n}\n",
+            "graph g : App {\n  operator o {\n    on in { out = protobuf!(\")\") { message X {} }; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
     ] {
         let bag = compile_one(source).expect_err(label);
@@ -1283,7 +1323,7 @@ fn an_omitted_value_never_absorbs_the_next_line() {
 fn a_json_error_resynchronizes_at_the_line_boundary() {
     // The faulty value is consumed to its line's end — one voice,
     // and the next emission survives in the tree.
-    let source = "graph g : App {\n  operator o {\n    on in {\n      out = json {\"a\": ???}\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in {\n      out = json! {\"a\": ???}\n      out = data\n    }\n  }\n  . -> o -> .\n}\n";
     let bag = compile_one(source).expect_err("must refuse");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     assert!(
@@ -1327,16 +1367,15 @@ fn an_omitted_expression_always_diagnoses() {
 
 #[test]
 fn a_reserved_format_body_defers_once_and_opaquely() {
-    // `avro { … }` is a reserved word with no living form: ONE
-    // named deferral, the body consumed opaquely — never five
-    // struct-parse errors.
-    let source = "graph g : App {\n  operator o {\n    on in { out = avro { \"type\": \"record\", \"name\": \"X\" } }\n  }\n  . -> o -> .\n}\n";
+    // `avro! { … }` selects its registered, currently deferred
+    // frontend: one named deferral and an opaque body.
+    let source = "graph g : App {\n  operator o {\n    on in { out = avro! { \"type\": \"record\", \"name\": \"X\" } }\n  }\n  . -> o -> .\n}\n";
     let bag = compile_one(source).expect_err("reserved defers");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     assert!(
         bag.diagnostics()[0]
             .message()
-            .contains("a reserved data-format body"),
+            .contains("the Avro data frontend"),
         "{bag:?}"
     );
 }
@@ -1353,26 +1392,24 @@ fn a_reserved_format_body_is_lexically_opaque() {
         ("nested blocks", "outer { inner { '@' } }"),
     ] {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = protobuf {{ {body} }} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  operator o {{\n    on in {{ out = protobuf! {{ {body} }} }}\n  }}\n  . -> o -> .\n}}\n"
         );
         let bag = compile_one(&source).expect_err(label);
         assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
         assert!(
             bag.diagnostics()[0]
                 .message()
-                .contains("a reserved data-format body"),
+                .contains("the Protobuf data frontend"),
             "{label}: {bag:?}"
         );
     }
-    // Unterminated: the named deferral is present; the truncated
-    // remainder ALSO surfaces its missing closers (pinned as-is —
-    // an unterminated block genuinely breaks everything after it).
-    let source = "graph g : App {\n  operator o {\n    on in { out = avro { never closed\n";
+    // Unterminated: framing fails before a complete frontend value
+    // exists, so the framer's lexical cause speaks first.
+    let source = "graph g : App {\n  operator o {\n    on in { out = avro! { never closed\n";
     let bag = compile_one(source).expect_err("unterminated refuses");
-    assert!(
-        bag.diagnostics()
-            .iter()
-            .any(|d| d.message().contains("a reserved data-format body")),
+    assert_eq!(
+        bag.diagnostics()[0].code().as_str(),
+        "E-LEX-UNTERMINATED-BLOCK",
         "{bag:?}"
     );
 }

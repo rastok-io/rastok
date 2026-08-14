@@ -670,6 +670,10 @@ pub enum DiagnosticKind {
     General,
     /// A static map literal carrying the same key twice.
     DuplicateMapKey,
+    /// A malformed build-time `asset(…)` call. The source compiler adapts
+    /// this to the asset diagnostic family rather than a generic expression
+    /// fault.
+    AssetCall,
     /// An expression nesting beyond the format budget — refused at
     /// the gate, before any recursive pass rides the machine stack.
     /// Carries the measured depth: the STRUCTURED payload the
@@ -841,6 +845,10 @@ pub enum BinaryOp {
 /// The registered function vocabulary of the subset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Function {
+    /// `asset("path", content_type?)` — compiler-bound build-time bytes.
+    /// The expression parser recognizes the ordinary call; the source compiler
+    /// must replace it with [`Expr::Asset`] before a plan can validate.
+    Asset,
     /// `duration("2h30m")` — CEL/Go format; no `min`, `d`, or `w`.
     Duration,
     /// `timestamp("2026-01-05T00:00:00Z")` — RFC 3339, UTC only.
@@ -1624,6 +1632,7 @@ impl<'a> ExprParser<'_, 'a> {
         }
         self.pos += 1;
         let function = match word {
+            "asset" => Function::Asset,
             "duration" => Function::Duration,
             "timestamp" => Function::Timestamp,
             "size" => Function::Size,
@@ -1876,6 +1885,25 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             }
         }
         Expr::Call { function, args } => match function {
+            Function::Asset => {
+                if !(1..=2).contains(&args.len()) {
+                    return Err(Diagnostic {
+                        kind: DiagnosticKind::AssetCall,
+                        message: String::from("`asset` takes a path and an optional content type"),
+                        range: whole.clone(),
+                    });
+                }
+                for arg in args {
+                    if check(arg, signature, text)? != DataType::Text {
+                        return Err(Diagnostic {
+                            kind: DiagnosticKind::AssetCall,
+                            message: String::from("`asset` arguments must be text"),
+                            range: whole.clone(),
+                        });
+                    }
+                }
+                Ok(DataType::BYTES)
+            }
             Function::Duration | Function::Timestamp | Function::Decimal => {
                 if args.len() != 1 {
                     return Err(fail(String::from("this function takes one argument")));
@@ -2241,6 +2269,9 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                 values.push(concrete(eval_expr(arg, bindings)?, bindings)?);
             }
             match (function, values.as_slice()) {
+                (Function::Asset, _) => Err(fault(String::from(
+                    "an asset call reached evaluation before build-time binding",
+                ))),
                 (Function::Duration, [EvalValue::Text(text)]) => {
                     parse_duration(text).map(EvalValue::Duration)
                 }

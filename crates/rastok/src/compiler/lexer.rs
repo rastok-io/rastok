@@ -5,7 +5,7 @@
 //! [`Lexer::next`] (keywords are not distinguished: every word is an
 //! [`TokenKind::Ident`], the parser deciding by position), consumes
 //! sub-language regions as COMPLETE specialized lexemes
-//! ([`Lexer::expr_region`], [`Lexer::json_tail`], [`Lexer::verbatim_region`],
+//! ([`Lexer::expr_region`], [`Lexer::json_region`], [`Lexer::verbatim_region`],
 //! [`Lexer::guest_region`],
 //! [`Lexer::swallow_opaque_on_line`]), and asks the named
 //! finite-byte-lookahead questions ([`Lexer::statement_head`],
@@ -127,20 +127,6 @@ pub struct TerminatorSet {
     pub keywords: &'static [&'static str],
 }
 
-/// A tag argument's head (review round 7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StringArgument<'a> {
-    /// The next significant input is not a double-quoted string —
-    /// nothing was consumed.
-    NotAString,
-    /// A bare STRING at the argument boundary: the grammar's
-    /// StrLit, consumed.
-    Alone(Token<'a>),
-    /// A STRING continuing into a larger expression: the Rastok expression
-    /// prefix, consumed — stitch from its start.
-    Prefix(Token<'a>),
-}
-
 /// A tag's same-line opener — a CLOSED type, never a raw byte at
 /// the parser's surface (review round 7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,47 +171,37 @@ pub enum StatementHead {
     Recovery,
 }
 
-/// The `json` continuation, classified totally by ONE probe
-/// (D-2026-08-13-1, review round 3).
+/// One complete JSON frontend region, or its typed refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JsonTail {
-    /// Nothing on the line, or the position's own boundary: the
-    /// bare word stands alone (a contract may judge it as a Word).
-    Bare,
-    /// A document read whole; the cursor sits past it.
-    Document {
+pub enum JsonRegion {
+    /// A value read whole; the cursor sits past it.
+    Value {
         /// The parsed document.
         value: rastok_core::value::Value,
         /// Where its bytes sit in the source.
         range: core::ops::Range<usize>,
     },
-    /// A follower that is neither a document nor the boundary — the
-    /// reserved word admits no Rastok expression continuation.
-    BadForm {
-        /// The diagnostic anchor: the follower's byte (an EMPTY
-        /// range at EOF, per Span's own contract).
+    /// A value that did not read, or that left non-trivia before the host
+    /// position's boundary.
+    Refused {
+        /// The recovery form's zero-width span at the region start.
+        opener: Span,
+        /// The diagnostic anchor: the faulty byte (an EMPTY range at
+        /// EOF, per Span's own contract).
         anchor: Span,
+        /// The reader's message.
+        message: String,
         /// One past the recovery's last consumed byte.
         recovered_to: usize,
     },
-    /// A document that opened but does not read.
-    Unreadable(JsonRefusal),
-}
-
-/// A refused json-document delegation: where the document opened,
-/// where the reader stopped, its message, and how far the FORWARD
-/// recovery consumed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JsonRefusal {
-    /// The recovery form's span (the opener, an empty range).
-    pub opener: Span,
-    /// The diagnostic anchor: the faulty byte (an EMPTY range at
-    /// EOF, per Span's own contract).
-    pub anchor: Span,
-    /// The reader's message.
-    pub message: String,
-    /// One past the recovery's last consumed byte.
-    pub recovered_to: usize,
+    /// Host trivia already diagnosed while advancing to the value. The parser
+    /// must preserve that one voice and emit only its recovery form.
+    HostError {
+        /// Zero-width recovery span after the consumed trivia.
+        at: Span,
+        /// One past the last byte consumed by the host trivia authority.
+        recovered_to: usize,
+    },
 }
 
 /// Result of the single read-only Rastok expression framer. A complete region ends
@@ -516,39 +492,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// A tag argument's head, decided WITHOUT tokenizing anything
-    /// but a proven double-quoted string (D-2026-08-13-1, review
-    /// round 7): a bare STRING followed by the argument boundary is
-    /// the grammar's StrLit; a string continuing into an expression
-    /// is the Rastok expression prefix; anything else — a single-quoted Rastok expression
-    /// string included — is untouched for the value dispatch.
-    pub fn string_argument(&mut self, bag: &mut Bag) -> StringArgument<'a> {
-        // ONE trivia policy: a paren position is newline-free, so
-        // BOTH probes cross lines — the opening string may sit on
-        // the next line, and so may its boundary or continuation
-        // (review round 8).
-        let opens_string = match &self.lookahead {
-            Some(token) => token.kind == TokenKind::Str,
-            None => self.first_significant_byte() == Some(b'"'),
-        };
-        if !opens_string {
-            return StringArgument::NotAString;
-        }
-        let token = self.next(bag);
-        let alone = match &self.lookahead {
-            Some(follower) => matches!(
-                follower.kind,
-                TokenKind::Comma | TokenKind::RParen | TokenKind::Eof
-            ),
-            None => matches!(self.first_significant_byte(), None | Some(b',' | b')')),
-        };
-        if alone {
-            StringArgument::Alone(token)
-        } else {
-            StringArgument::Prefix(token)
-        }
-    }
-
     /// Whether a SAME-LINE `.` follows — the path walk's question,
     /// asked WITHOUT tokenizing the follower (a path may be chased
     /// by Rastok expression bytes outside the host vocabulary, review round 7).
@@ -581,6 +524,25 @@ impl<'a> Lexer<'a> {
             b':' => Some(AssignmentHead::Typed),
             _ => None,
         }
+    }
+
+    /// Whether the just-consumed identifier is followed immediately by a
+    /// standalone `!`.  `ident_end` is the identifier token's end, so spaces
+    /// and comments cannot impersonate adjacency; maximal munch keeps `!=`
+    /// out of this production.
+    #[must_use]
+    pub fn frontend_bang_follows(&self, ident_end: usize) -> bool {
+        self.source.as_bytes().get(ident_end) == Some(&b'!')
+            && self.source.as_bytes().get(ident_end + 1) != Some(&b'=')
+    }
+
+    /// Whether an optional frontend argument list follows the consumed bang.
+    /// This is a read-only trivia-aware question: the parser consumes `(` only
+    /// after the production is known, leaving a payload's first byte entirely
+    /// to its registered framer.
+    #[must_use]
+    pub fn frontend_args_follow(&self) -> bool {
+        self.first_significant_byte() == Some(b'(')
     }
 
     /// The tag-opener question: does a `(` or `{` follow ON THE
@@ -775,57 +737,92 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The WHOLE `json` continuation, one probe and one atomic
-    /// forward walk (D-2026-08-13-1, review rounds 2–3): the word is
-    /// RESERVED, so its follower decides totally — nothing (or the
-    /// position's own boundary) leaves the bare word; `{`/`[` on the
-    /// line hands the window to the document reader; anything else
-    /// is an invalid json form, consumed forward to the position's
-    /// recovery point. Every cursor write is a locally-derived
-    /// forward offset — no repositioning primitive exists.
-    pub fn json_tail(&mut self, terminators: &TerminatorSet) -> JsonTail {
-        let Some((offset, byte)) = self.significant_on_line() else {
-            return JsonTail::Bare;
-        };
-        if matches!(byte, b'{' | b'[') {
-            return match rastok_core::json::parse_value(&self.source[offset..]) {
-                Ok((value, consumed)) => JsonTail::Document {
-                    value,
-                    range: {
-                        let end = offset + consumed;
-                        self.pos = end;
-                        offset..end
-                    },
-                },
-                Err(error) => {
-                    let at = (offset + error.offset).min(self.source.len());
-                    let end = (at + 1).min(self.source.len());
-                    self.pos = offset;
-                    let recovered_to = self.skip_json_recovery(terminators);
-                    JsonTail::Unreadable(JsonRefusal {
-                        opener: Span::new(self.source_id, offset..offset),
-                        anchor: Span::new(self.source_id, at..end),
-                        message: error.message,
-                        recovered_to,
-                    })
-                }
+    /// Reads one complete value after `json!`, then proves that only host
+    /// trivia remains before this value position's boundary.  Objects, arrays,
+    /// strings, exact numbers, booleans and null all use this one path.
+    pub fn json_region(&mut self, terminators: &TerminatorSet, bag: &mut Bag) -> JsonRegion {
+        // The parser deliberately did not peek at the payload: this is the
+        // first and only owner to advance over its leading host trivia.
+        let diagnostic_count = bag.diagnostics().len();
+        self.skip_trivia(bag);
+        let offset = self.pos;
+        let opener = Span::new(self.source_id, offset..offset);
+        if bag.diagnostics().len() != diagnostic_count {
+            return JsonRegion::HostError {
+                at: opener,
+                recovered_to: offset,
             };
         }
-        if matches!(byte, b')' | b']' | b'}') || self.terminates_at(offset, byte, terminators) {
-            // The position's own boundary: the word stands alone.
-            return JsonTail::Bare;
+        match rastok_core::json::parse_value(&self.source[offset..]) {
+            Ok((value, consumed)) => {
+                let end = offset + consumed;
+                match self.json_trailing_boundary(end, terminators) {
+                    Ok(()) => {
+                        self.pos = end;
+                        JsonRegion::Value {
+                            value,
+                            range: offset..end,
+                        }
+                    }
+                    Err(at) => {
+                        self.pos = at;
+                        let recovered_to = self.skip_json_trailing_recovery(terminators);
+                        let anchor_end = (at + 1).min(self.source.len());
+                        JsonRegion::Refused {
+                            opener,
+                            anchor: Span::new(self.source_id, at..anchor_end),
+                            message: String::from("trailing input after the JSON value"),
+                            recovered_to,
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                let at = (offset + error.offset).min(self.source.len());
+                let anchor_end = (at + 1).min(self.source.len());
+                self.pos = offset;
+                let recovered_to = self.skip_json_recovery(terminators);
+                JsonRegion::Refused {
+                    opener,
+                    anchor: Span::new(self.source_id, at..anchor_end),
+                    message: error.message,
+                    recovered_to,
+                }
+            }
         }
-        // A follower that is neither a document nor the boundary:
-        // the json form is invalid — `json` cannot begin a Rastok expression
-        // expression, being reserved (review round 3). The walk is
-        // the HOST-bounded one: garbage never crosses the line of a
-        // newline-ended position (review round 4).
-        self.pos = offset;
-        let recovered_to = self.skip_bad_form(terminators);
-        let end = (offset + 1).min(self.source.len());
-        JsonTail::BadForm {
-            anchor: Span::new(self.source_id, offset..end),
-            recovered_to,
+    }
+
+    /// Finds the host boundary following a successfully read JSON value without
+    /// committing trivia.  The selected JSON reader owns only the value bytes;
+    /// comments and statement separators remain the host's.
+    fn json_trailing_boundary(
+        &self,
+        mut pos: usize,
+        terminators: &TerminatorSet,
+    ) -> Result<(), usize> {
+        let bytes = self.source.as_bytes();
+        loop {
+            let Some(&byte) = bytes.get(pos) else {
+                return Ok(());
+            };
+            match byte {
+                b' ' | b'\t' | b'\r' => pos += 1,
+                b'\n' if terminators.newline => return Ok(()),
+                b'\n' => pos += 1,
+                b'/' if let Some(comment) = rastok_core::trivia::comment_at(self.source, pos) => {
+                    if !comment.terminated {
+                        // Leave the comment to the host trivia authority.
+                        return Ok(());
+                    }
+                    if terminators.newline && comment.multiline {
+                        return Ok(());
+                    }
+                    pos = comment.end;
+                }
+                b')' | b']' | b'}' => return Ok(()),
+                _ if self.terminates_at(pos, byte, terminators) => return Ok(()),
+                _ => return Err(pos),
+            }
         }
     }
 
@@ -942,19 +939,19 @@ impl<'a> Lexer<'a> {
         self.pos = extent.commit_end();
     }
 
-    /// A VERBATIM region (`text { … }`, `base64 { … }`): the OPENER
+    /// A VERBATIM region (`text! { … }`, `base64! { … }`): the OPENER
     /// is consumed HERE, so the region is selected before any
     /// content byte can meet the host vocabulary (D-2026-08-13-1,
     /// review round 6). Content is verbatim under the text
     /// contract: braces balance, EVERY other byte is ordinary data —
-    /// quotes and apostrophes included (`text { don't }` is text),
+    /// quotes and apostrophes included (`text! { don't }` is text),
     /// no escapes, no interpolation. Exact bytes, exact span, one
     /// forward commit.
     pub fn verbatim_region(&mut self, bag: &mut Bag) -> Option<Token<'a>> {
         self.region_after_opener(bag, false)
     }
 
-    /// A GUEST region (`jq { … }`, `bash { … }`, `sql { … }`, …):
+    /// A GUEST region (`jq! { … }`, `bash! { … }`, `sql! { … }`, …):
     /// the opener consumed HERE, the ENTIRE region belonging to the
     /// registered guest compiler — exact bytes, exact span, no
     /// normalization; the host never tokenizes the content and
@@ -1150,16 +1147,11 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Skips a NON-JSON garbage form (a `json` follower that opens
-    /// no document, D-2026-08-13-1 review round 4) to the HOST
-    /// position's boundary. Unlike the JSON-document recovery, the
-    /// bound is the position itself: at a newline-ended position the
-    /// newline is a STRONG boundary even inside a paren the garbage
-    /// opened — a balanced same-line form (`json(1)`) is swallowed
-    /// whole, an unbalanced one (`json(1` …) ends at its line.
-    /// Quoted content (both styles) is opaque; `;` always stops; a
-    /// closer the garbage did not open stops (it is the CALLER's).
-    fn skip_bad_form(&mut self, terminators: &TerminatorSet) -> usize {
+    /// Skips trailing non-JSON input to the host value position's boundary.
+    /// The bound is the position itself: a newline is strong in a
+    /// newline-ended position, `;` always stops, and a closer not opened by
+    /// the trailing input belongs to the caller. Quoted content is opaque.
+    fn skip_json_trailing_recovery(&mut self, terminators: &TerminatorSet) -> usize {
         let bytes = self.source.as_bytes();
         let mut expected: Vec<u8> = Vec::new();
         let mut quote: Option<u8> = None;
@@ -1250,9 +1242,20 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
                 continue;
             }
-            // Strong boundaries: impossible in JSON outside strings
-            // (a non-json BadForm walks `skip_bad_form` instead —
-            // review round 4 split the two invariants).
+            if byte == b'/'
+                && let Some(comment) = rastok_core::trivia::comment_at(self.source, self.pos)
+            {
+                // Host comments are not JSON bytes. A boundary hidden inside
+                // one cannot terminate recovery; a crossing or unterminated
+                // comment is left to the host trivia authority.
+                if !comment.terminated || (terminators.newline && comment.multiline) {
+                    return self.pos;
+                }
+                self.pos = comment.end;
+                continue;
+            }
+            // Strong boundaries are impossible in JSON outside strings; the
+            // separate trailing-input recovery is bounded by the host position.
             if byte == b';' || byte == b')' {
                 return self.pos;
             }

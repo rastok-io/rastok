@@ -10,10 +10,9 @@ Runtime outcome cases (`JoinExpired`, `LoopExhausted`,
 ordinary typed port payloads, hashed through their resolved types and
 compared in the causal core. They live in their home specs, not here.
 
-The current `E-EXPR` and bare-`json` rows describe executable v6.
-D-2026-08-14-1 migrates them with the `expr`/`IDENT!` implementation;
-new or renamed checks are registered only when their focused negative
-tests land, never pre-allocated by this planning pass.
+The current `E-EXPR` and `IDENT!` rows describe executable v6. New or
+renamed checks are registered only when their focused negative tests
+land, never pre-allocated by a planning pass.
 `E-EXPR` supersedes the unreleased `E-CEL-EXPR` spelling as part of B3;
 no public diagnostic contract ever carried the old code.
 
@@ -51,7 +50,7 @@ no public diagnostic contract ever carried the old code.
 | E-LEX-UNTERMINATED-COMMENT | error | parse | [grammar.md](grammar.md) | a block comment that never closes |
 | E-LEX-UNTERMINATED-BLOCK | error | parse | [grammar.md](grammar.md) | a raw guest block whose braces never balance |
 | E-PARSE-EXPECTED | error | parse | [grammar.md](grammar.md) | a token breaking the expected production; fields `expected`, `found` |
-| E-JSON-VALUE | error | parse | [grammar.md](grammar.md) | a JSON region the house reader refuses (`json` in current v6, `json!` after M1.3); field `detail` (JSON is not the Rastok expression grammar — its faults carry their own code) |
+| E-JSON-VALUE | error | parse | [grammar.md](grammar.md) | a `json!` region the house reader refuses; field `detail` (JSON is not the Rastok expression grammar — its faults carry their own code) |
 | E-PARSE-DEFERRED | error | parse | [grammar.md](grammar.md) | syntax admitted by the grammar but outside the subset this build implements; field `construct` |
 | E-APP-COUNT | error | resolve | [grammar.md](grammar.md) | a deployed unit without exactly one `: App` graph; field `count` |
 | E-DUP-NODE | error | resolve | [grammar.md](grammar.md) | a node name declared twice in one graph; field `name` |
@@ -70,7 +69,7 @@ no public diagnostic contract ever carried the old code.
 | E-META-ZONE | error | check | [envelope.md](envelope.md) | a metadata path outside the three zones (`sys`/`app`/`ext`), outside a zone's vocabulary, a dynamic `meta[…]` access, or a Lab write into the application's zone (D-2026-08-10-1); field `path` |
 | E-META-TYPE | error | check | [envelope.md](envelope.md) | one `meta.app` field written with two incompatible types — both sites carried as spans; field `field` |
 | E-META-PREFIX | error | check | [envelope.md](envelope.md) | two flat keys where one prefixes the other (`audit` vs `audit.origin`) — the nested projection cannot hold both; field `field` |
-| E-ASSET | error | check | [grammar.md](grammar.md) | an `asset(…)` that cannot resolve at build — missing file, App-root escape, per-asset (8 MiB) or total (32 MiB) budget breach, a Lab position, or a malformed CALL (wrong arity, a non-STRING argument, a trailing comma, a block) (D-2026-08-10-5); field `path` (empty when the call itself is malformed) |
+| E-ASSET | error | check | [grammar.md](grammar.md) | an `asset(…)` expression that cannot resolve at build — missing file, App-root escape, per-asset (8 MiB) or total (32 MiB) budget breach, a Lab position, wrong arity, or a non-literal text argument (D-2026-08-10-5); field `path` (empty when the call itself is malformed) |
 | E-DUP-TYPE | error | resolve | [grammar.md](grammar.md) | a named type declared twice in the unit (D-2026-08-10-8); field `name` |
 | E-TYPE-RECURSIVE | error | check | [grammar.md](grammar.md) | a named type reaching itself through its own expansion — recursion refuses in v1, the faulty reference underlined (D-2026-08-10-8); field `name` |
 | E-TYPE-DUP | error | check | [grammar.md](grammar.md) | a duplicate field or symbol inside one type declaration — the duplicate is underlined (D-2026-08-10-8); fields `name`, `field` |
@@ -78,7 +77,7 @@ no public diagnostic contract ever carried the old code.
 | E-TYPE-UNRESOLVED | error | check | [types.md](types.md) | an open source constraint reaches a position that requires one closed effective type (for example `struct { .. }` or an empty collection without contextual element type); field `type` |
 | E-CONTENT-TYPE | error | check | [decisions.md](decisions.md) | a content-typed byte form (`base64!(ct)`, `asset(path, ct)`) outside whole-payload position — a nested field has no `meta.ext` of its own (D-2026-08-10-5); field `tag` |
 | E-TYPE-BUDGET | error | check | [grammar.md](grammar.md) | a type expansion beyond a structural budget — depth (128), nodes (4096), width (256), or alias links followed (256) — with the MEASURED value in the payload (D-2026-08-10-8); fields `name` + `depth`/`nodes`/`count`/`aliases` |
-| E-NAME-RESERVED | error | resolve | [grammar.md](grammar.md) | a reserved word in a binding position: `nothing` or `true`/`false`/`null`; a node named `meta`/`data`/`sys`/`app`/`ext`; or a user `type` spelling a builtin type. Current v6 also reserves `json`; D-2026-08-14-1 removes only that entry when `json!` lands. One naming policy, refusal at the declaration; field `name` |
+| E-NAME-RESERVED | error | resolve | [grammar.md](grammar.md) | a reserved word in a binding position: `nothing` or `true`/`false`/`null`; a node named `meta`/`data`/`sys`/`app`/`ext`; or a user `type` spelling a builtin type. Frontend names are ordinary identifiers; only their adjacent `!` has structural meaning. One naming policy, refusal at the declaration; field `name` |
 | E-BRACE-MIXED | error | check | [grammar.md](grammar.md) | a braced value mixing ordinary data fields with reserved envelope roots (`data`, `meta` — `mime_type` left the list with D-2026-08-10-4) — wrap the data in `data = { … }`; never a silent reinterpretation (D-2026-08-09-1); field `field` |
 | E-PORT-TYPE | error | check | [grammar.md](grammar.md) | port constraints cannot produce one effective logical type: an unsolved variable, incompatible edge/emission/ingress requirements, or a dynamic `variant` flowing into a precise type without narrowing; fields `port`, `expected`, `found`. Since M1.3 B2, v6 validation owns a total resolved table and never substitutes `variant` for an unsolved variable. |
 | E-PARTITION-MISMATCH | error | check | [execution-model.md](execution-model.md) | a join input arriving under a different partition than the join requires — an explicit re-key step is needed; reserved for the joins slice; fields `port`, `expected`, `found` |

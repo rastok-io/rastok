@@ -97,8 +97,8 @@ rather than a parser accident.
 
 ### Stage 7 — `stdlib`
 
-`ConnectorContract` for `Process` and `GuestContract`, wired into the
-checker.
+`ConnectorContract` for `Process` and the compiler-layer
+`FrontendContract` registry, wired into parser and checker.
 
 Exit: a fixture rejected for violating the `Process` contract sheet.
 

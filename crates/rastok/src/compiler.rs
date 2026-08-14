@@ -64,12 +64,12 @@ pub fn compile(sources: &[&str], registry: &contract::Registry) -> Result<Compil
 /// parser's own reading — the CLI's asset-root anchor
 /// (D-2026-08-10-5). `None` when no source declares one.
 #[must_use]
-pub fn app_source_index(sources: &[&str]) -> Option<usize> {
+pub fn app_source_index(sources: &[&str], registry: &contract::Registry) -> Option<usize> {
     use crate::compiler::syntax::TopDecl;
     let mut scratch = Bag::new();
     for (index, source) in sources.iter().enumerate() {
         let source_id = SourceId::new(u32::try_from(index).unwrap_or(u32::MAX));
-        let tree = parser::parse(source_id, source, &mut scratch);
+        let tree = parser::parse(source_id, source, registry, &mut scratch);
         let declares_app = tree.decls.iter().any(|decl| {
             matches!(decl, TopDecl::Graph(graph) if graph
                 .annotation
@@ -97,7 +97,7 @@ pub fn compile_with_assets(
     let mut unit = Unit::default();
     for (index, source) in sources.iter().enumerate() {
         let source_id = SourceId::new(u32::try_from(index).unwrap_or(u32::MAX));
-        let tree = parser::parse(source_id, source, &mut bag);
+        let tree = parser::parse(source_id, source, registry, &mut bag);
         unit.files.push((source_id, tree));
     }
     let hir = check::check(&unit, registry, &mut bag, asset_root);

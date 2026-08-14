@@ -909,6 +909,7 @@ fn expression_requirement(expr: &expr::Expr, expected: &DataType) -> Option<Type
         }
         expr::Expr::Call { function, args } => {
             let argument = match function {
+                expr::Function::Asset => Some(DataType::Text),
                 expr::Function::Duration | expr::Function::Timestamp | expr::Function::Decimal => {
                     Some(DataType::Text)
                 }
@@ -1010,6 +1011,7 @@ fn resolved_expression_type(expr: &expr::Expr, input: &DataType) -> Option<DataT
             _ => None,
         },
         expr::Expr::Call { function, .. } => Some(match function {
+            expr::Function::Asset => DataType::BYTES,
             expr::Function::Duration => DataType::DURATION,
             expr::Function::Timestamp => DataType::TIMESTAMP,
             expr::Function::Size => DataType::INT,
@@ -1066,6 +1068,7 @@ fn intrinsic_expression_type(expr: &expr::Expr) -> Option<DataType> {
             }
         },
         expr::Expr::Call { function, .. } => Some(match function {
+            expr::Function::Asset => DataType::BYTES,
             expr::Function::Duration => DataType::DURATION,
             expr::Function::Timestamp => DataType::TIMESTAMP,
             expr::Function::Size => DataType::INT,

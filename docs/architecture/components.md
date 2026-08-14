@@ -1,8 +1,8 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated through the landed M1.3 B1 value completion and B3
-> expression core on 2026-08-14. The M0 deviations remain recorded in
+> of the build; updated through the landed M1.3 B4 frontend surface on
+> 2026-08-15. The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
 > evidence lives in [`m1-slice.md`](m1-slice.md). The specified M1.3
 > replacement of the type/value and boundary seams is tracked in
@@ -94,11 +94,10 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 ├── compiler.rs       # facade : parse → check → hash → lower → validate
 │   └── compiler/     #   lexer (cursor + lookahead), parser (lexemes only),
 │                     #   syntax, hir (graph + lab), check, lower
-├── contract.rs       # the node-contract METAMODEL (D-2026-08-12-1): AttributeSpec,
-│                     #   Presence, DefaultValue, ValueDomain, profiles, Registry,
-│                     #   validate_sheet — compiler-layer data, never serialized
-├── stdlib.rs         # the standard CATALOGUE instancing that metamodel (PROCESS,
-│                     #   the declared names, GuestContract, Registry::try_m0())
+├── contract.rs       # compiler contracts: node attributes plus tagged frontend
+│                     #   framing/readers, all admitted through Registry
+├── stdlib.rs         # the standard CATALOGUE instancing those contracts (PROCESS,
+│                     #   declared connector names, built-in/deferred frontends)
 ├── golden.rs         # Trace, Divergence — projection, seal, named diff
 ├── connectors.rs     # Process: bind effective settings, then async transport
 ├── conformance.rs    # adapter contract harness over the production seam
@@ -150,13 +149,13 @@ data out, the governing spec, and current status.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1 | M1.2 interlude, naming aligned in B3 |
+| **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; byte-adjacent `IDENT!` frontend selection; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes + frontend Registry → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1; D-2026-08-14-1 | M1.3 B4 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
 | **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles, mandatory legacy err sets, typed `is`/`as` narrowing, aspect admission | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.3 B3; new trees gated from v6 until B8 |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
 | **Lowering + plan gate** | node/edge/handler tables, expression trees, `Slot` resolution, schemas and assets; structural validation before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | M0.5, extended in M1 |
-| **Guest frontends** | future registered frontend: check one opaque guest-region lexeme against its signature; the host never tokenizes its body | guest bytes → future compiled guest program | [stdlib.md §5](../spec/stdlib.md) | guarded; no placeholder trait |
+| **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
 
 The facade returns `Result<Compilation, Diagnostics>` with
 `Compilation { plan, symbols, hash, warnings, labs }`: **a plan with errors is
@@ -369,7 +368,7 @@ bless, diff rendering) is driven by `lab` and `main`.
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
 | **`contract::ConnectorContract`** | the compiler-facing contract sheet: ports, common attributes, optional profile selector, effective presence/default/domain rules, and typed error set. The ten-case prose template remains the normative design review checklist; only executable checker facts belong in this type | consumed by the checker and adapter binding; **never depends on adapter code** | [stdlib.md §1–3](../spec/stdlib.md); D-2026-08-12-1 | M1.2 interlude (`Process` sheet only) |
-| **`stdlib::GuestContract`** | the currently declared guest name and availability bit. Version/ABI/lowering identity joins this model only with a real frontend and executor | consumed by the checker | [stdlib.md §5](../spec/stdlib.md); [identity.md §1](../spec/identity.md) | guarded |
+| **`contract::FrontendContract`** | an ordinary source name plus its registered framing/reader policy. Built-in JSON/text/base64 execute; guest/data names retain a specific framing contract and named deferral until their compiler lands | consumed by parser and checker; never serialized by itself | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md); [identity.md §1](../spec/identity.md) | M1.3 B4 |
 
 This module answers "how does the compiler know what `Process` is
 without linking tokio": the contracts are data, the adapters implement
@@ -536,10 +535,11 @@ The chronological detail and commit evidence remain in
   with declared/inferred origin, and makes unresolved/conflicting constraints
   typed refusals without a package-format move. B3 renames the consumer to
   `expr`, adds deterministic typed narrowing, and keeps its new AST behind the
-  v7 package gate.
-- **Next:** M1.3 lands tagged frontends, uniform connector port contracts,
-  external JSON/Avro/Arrow schema adapters, multi-output boundary completion
-  and v7.
+  v7 package gate. B4 selects every registered frontend through byte-adjacent
+  `IDENT!`, restores scalar JSON and keeps frontend framing out of the host
+  grammar without moving the v6 package identity.
+- **Next:** M1.3 lands uniform connector port contracts, external
+  JSON/Avro/Arrow schema adapters, multi-output boundary completion and v7.
   `per`, joins, new adapters,
   Loop, counters, and `--watch` remain guarded in the order recorded by
   the slice.

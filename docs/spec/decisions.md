@@ -243,6 +243,18 @@ records the target-relative index. Contextual construction or emission into
 a union is inserted once by check/lowering, while the VM and adapters only
 validate the already selected discriminant.
 
+**B4 implementation checkpoint (2026-08-15).** Byte-adjacent `IDENT!` is the
+only tagged-frontend production. The parser selects it without a frontend-name
+table or rewind, then consults the compiler Registry for the complete framing
+and reader contract. JSON, text, base64, deferred guests and reserved data
+formats share that door; frontend names remain ordinary bindings and maximal
+munch keeps `json!=x` an intrinsic expression. The JSON reader accepts its
+complete value grammar, including scalars, and reports trailing input at the
+host position boundary. `asset(path, content_type?)` is an ordinary expression
+call whose filesystem binding is resolved before HIR identity or plan
+validation; an unbound call is categorically refused by the v6 plan gate. No
+plan-format tag, valid-program hash or golden moved in this checkpoint.
+
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign
 literal spelling and `TAG_KW` partition in D-2026-08-12-1; the

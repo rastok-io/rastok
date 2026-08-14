@@ -60,7 +60,7 @@ fn verbatim_text_strips_the_closing_margin() {
     use rastok::envelope::{Data, Value};
     // The closing brace sits at column 4; the margin stripped from
     // every line is ITS indentation — lines keep their own extra.
-    let data = emitted("text {\n      first line\n        indented\n      last line\n    }");
+    let data = emitted("text! {\n      first line\n        indented\n      last line\n    }");
     assert_eq!(
         data,
         Data::materialized(Value::Text(String::from(
@@ -74,16 +74,16 @@ fn verbatim_text_strips_the_closing_margin() {
 fn base64_decodes_strictly() {
     use rastok::envelope::{Data, Value};
     // Whitespace ignored, padding mandatory, standard alphabet.
-    let data = emitted("base64 {\n      SGVs\n      bG8=\n    }");
+    let data = emitted("base64! {\n      SGVs\n      bG8=\n    }");
     assert_eq!(data, Data::materialized(Value::Bytes(b"Hello".to_vec())));
 }
 
 #[test]
 fn base64_refusals_are_located() {
     for (body, wrong) in [
-        ("base64 { SGVsbG8 }", "padding"),
-        ("base64 { SGVs-_8= }", "URL-safe"),
-        ("base64 { SG!s }", "alphabet"),
+        ("base64! { SGVsbG8 }", "padding"),
+        ("base64! { SGVs-_8= }", "URL-safe"),
+        ("base64! { SG!s }", "alphabet"),
     ] {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
@@ -110,7 +110,7 @@ fn base64_with_a_content_type_is_whole_payload() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::vm::Vm;
 
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = base64(\"image/png\") { AAEC } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = base64!(\"image/png\") { AAEC } }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -199,13 +199,13 @@ fn json_reads_every_form_directly() {
     );
     assert_eq!(emitted("true"), Data::materialized(Value::Bool(true)));
     // Object — a MAP (the variant JSON model), single braces.
-    let Data::Materialized(Value::Map(map)) = emitted("json { \"name\": \"Ada\" }") else {
+    let Data::Materialized(Value::Map(map)) = emitted("json! { \"name\": \"Ada\" }") else {
         panic!("an object is a map");
     };
     assert_eq!(map.get("name"), Some(&Value::Text(String::from("Ada"))));
     // Array.
     assert_eq!(
-        emitted("json [1, 2, 3]"),
+        emitted("json! [1, 2, 3]"),
         Data::materialized(Value::Array(vec![
             Value::Int(1),
             Value::Int(2),
@@ -242,7 +242,7 @@ fn json_reads_every_form_directly() {
     // A fraction inside a DOCUMENT stays exact too — value-canonical
     // (the document's numbers are standard JSON).
     assert_eq!(
-        emitted("json [19.99]"),
+        emitted("json! [19.99]"),
         Data::materialized(Value::Array(vec![Value::Decimal {
             unscaled: 1999,
             scale: 2
@@ -253,12 +253,12 @@ fn json_reads_every_form_directly() {
 #[test]
 fn json_refusals_are_located() {
     for (body, wrong) in [
-        ("json { \"a\": 1, \"a\": 2 }", "duplicate key"),
+        ("json! { \"a\": 1, \"a\": 2 }", "duplicate key"),
         (
-            "json [123456789012345678901234567890123456789]",
+            "json! [123456789012345678901234567890123456789]",
             "39 digits",
         ),
-        ("json { \"a\": }", "syntax"),
+        ("json! { \"a\": }", "syntax"),
     ] {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
@@ -279,18 +279,18 @@ fn json_refusals_are_located() {
 
 #[test]
 fn a_json_document_and_its_expression_twin_are_different_programs() {
-    // The static type is identity (D-2026-08-10-7): `json [1]` is a
+    // The static type is identity (D-2026-08-10-7): `json! [1]` is a
     // variant, `[1]` a list — same numeric leaf, two programs.
-    assert_ne!(hash_of("json [1]"), hash_of("[1]"));
+    assert_ne!(hash_of("json! [1]"), hash_of("[1]"));
     // Minimally different pairs stay distinct too.
-    assert_ne!(hash_of("json [1]"), hash_of("json [\"1\"]"));
-    assert_ne!(hash_of("json [19.99]"), hash_of("json [19.98]"));
+    assert_ne!(hash_of("json! [1]"), hash_of("json! [\"1\"]"));
+    assert_ne!(hash_of("json! [19.99]"), hash_of("json! [19.98]"));
     // And the canonical collapses ARE one program: a document's
     // numbers are standard JSON, VALUE-canonical — unlike
     // `decimal(...)`, whose scale is declared (D-2026-08-13-1).
-    assert_eq!(hash_of("json [1]"), hash_of("json [1.0]"));
-    assert_eq!(hash_of("json [1]"), hash_of("json [1e0]"));
-    assert_eq!(hash_of("json [-0]"), hash_of("json [0]"));
+    assert_eq!(hash_of("json! [1]"), hash_of("json! [1.0]"));
+    assert_eq!(hash_of("json! [1]"), hash_of("json! [1e0]"));
+    assert_eq!(hash_of("json! [-0]"), hash_of("json! [0]"));
 }
 
 #[test]
@@ -492,9 +492,9 @@ fn type_declarations_refuse_duplicates_cycles_and_unknowns() {
 fn bare_forms_embed_in_records_and_typed_forms_refuse_there() {
     use rastok::envelope::{Data, Value};
     // The bare forms are ordinary field values (D-2026-08-10-5/-6).
-    let Data::Materialized(Value::Struct(fields)) =
-        emitted("{ signature = base64 { AAEC }, note = text {\n      hi\n    }, blob = json [1] }")
-    else {
+    let Data::Materialized(Value::Struct(fields)) = emitted(
+        "{ signature = base64! { AAEC }, note = text! {\n      hi\n    }, blob = json! [1] }",
+    ) else {
         panic!("a struct");
     };
     assert_eq!(
@@ -519,7 +519,7 @@ fn bare_forms_embed_in_records_and_typed_forms_refuse_there() {
         Some(&Value::Array(vec![Value::Int(1)]))
     );
     // A content-typed form nested in a record refuses with the rule.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { document = base64(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { document = base64!(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -890,9 +890,9 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
 #[test]
 fn whole_data_bare_forms_run_in_the_builder() {
     use rastok::envelope::{Data, Value};
-    // `out = { data = base64 { … }, meta.app.tag = "x" }` — the
+    // `out = { data = base64! { … }, meta.app.tag = "x" }` — the
     // D-5 form the review named.
-    let Data::Materialized(value) = emitted("{ data = base64 { AAEC }, meta.app.tag = \"x\" }")
+    let Data::Materialized(value) = emitted("{ data = base64! { AAEC }, meta.app.tag = \"x\" }")
     else {
         panic!("materialized");
     };
@@ -976,7 +976,7 @@ fn the_review_round_three_matrix_holds() {
     .expect("app.content_type is application vocabulary, int included");
     // The whole-data content-typed builder forms run.
     let Data::Materialized(value) =
-        emitted("{ data = base64(\"image/png\") { AAEC }, meta.app.tag = \"x\" }")
+        emitted("{ data = base64!(\"image/png\") { AAEC }, meta.app.tag = \"x\" }")
     else {
         panic!("materialized");
     };
@@ -1317,21 +1317,16 @@ fn map_keys_keep_their_string_semantics() {
 
 #[test]
 fn content_type_arguments_are_literals_only() {
-    // An expression dressed as a string refuses — the grammar says
-    // STRING, and `"image/" + "png"` is not one.
+    // An operator expression dressed as text refuses. Parentheses and a
+    // trailing comma belong to the one generic frontend argument grammar.
     for body in [
-        "base64(\"image/\" + \"png\") { AAEC }",
+        "base64!(\"image/\" + \"png\") { AAEC }",
         "asset(\"a\" + \".bin\")",
-        // The grammar's exact shapes: wrapped strings, empty
-        // parens, trailing commas, and parenthesized text all
-        // refuse (D-2026-08-10-6).
-        "base64((\"image/png\")) { AAEC }",
-        "base64() { AAEC }",
-        "base64(\"image/png\",) { AAEC }",
-        "text() {\n      hi\n    }",
+        "base64!() { AAEC }",
+        "text!() {\n      hi\n    }",
     ] {
         let source = format!(
-            "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
+            "graph g : App {{\n  input in: variant\n  output out: variant\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"
         );
         let bag = compile(
             &[source.as_str()],
@@ -1349,6 +1344,11 @@ fn content_type_arguments_are_literals_only() {
             "`{body}` located: {bag:?}"
         );
     }
+    assert_eq!(
+        hash_of("base64!((\"image/png\")) { AAEC }"),
+        hash_of("base64!(\"image/png\",) { AAEC }"),
+        "argument presentation does not change the effective value",
+    );
 }
 
 #[test]
@@ -1404,7 +1404,7 @@ fn alias_and_bare_spellings_share_the_node_budget() {
 #[test]
 fn nested_content_type_gets_its_own_diagnostic() {
     // The dedicated code, on the TAG's span — never E-META-ZONE.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"image/png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1424,7 +1424,7 @@ fn nested_content_type_gets_its_own_diagnostic() {
     assert!(!hit.spans().is_empty(), "the tag is underlined");
     // Arity refuses FIRST: a malformed call is malformed wherever
     // it sits.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"a\", \"b\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"a\", \"b\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1487,7 +1487,7 @@ fn a_misplaced_malformed_call_refuses_once_for_the_malformation() {
     // The pipeline order: shape → arguments → position. A nested
     // call with a NON-STRING argument gets the argument truth, one
     // diagnostic, never E-CONTENT-TYPE noise.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"image/\" + \"png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"image/\" + \"png\") { AAEC } } }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1495,7 +1495,7 @@ fn a_misplaced_malformed_call_refuses_once_for_the_malformation() {
     .expect_err("argument truth first");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     assert!(
-        bag.diagnostics()[0].message().contains("STRING literal"),
+        bag.diagnostics()[0].message().contains("string literal"),
         "{bag:?}"
     );
     assert!(
@@ -1582,9 +1582,9 @@ fn the_alias_boundary_keeps_its_variable() {
 
 #[test]
 fn the_shape_gate_owns_the_body_and_speaks_once() {
-    // A content-typed base64 with NO body is a malformed CALL —
-    // the body is shape, never placement.
-    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64(\"image/png\") } }\n  }\n  . -> o -> .\n}\n";
+    // A content-typed base64 with no payload is a malformed frontend
+    // value: framing, never placement, owns the refusal.
+    let source = "graph g : App {\n  operator o {\n    on in { out = { \"x\": base64!(\"image/png\") } }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1592,7 +1592,9 @@ fn the_shape_gate_owns_the_body_and_speaks_once() {
     .expect_err("the body is shape");
     assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
     assert!(
-        bag.diagnostics()[0].message().contains("needs a body"),
+        bag.diagnostics()[0]
+            .message()
+            .contains("expected a braced frontend payload"),
         "{bag:?}"
     );
     assert!(
@@ -1640,12 +1642,12 @@ fn the_shape_gate_owns_the_body_and_speaks_once() {
 
 #[test]
 fn empty_parentheses_speak_once_through_the_checker() {
-    // `()` is a WRITTEN form: the parser stays silent and the shape
-    // gate produces the one specialized diagnostic.
+    // Empty frontend args followed by no payload fail at framing; the
+    // ordinary `asset()` expression fails at its function contract.
     for (body, expect) in [
-        ("text()", "takes no parentheses"),
-        ("base64()", "empty parentheses"),
-        ("asset()", "the path is required"),
+        ("text!()", "expected a braced frontend payload"),
+        ("base64!()", "expected a braced frontend payload"),
+        ("asset()", "takes a path"),
     ] {
         let source = format!(
             "graph g : App {{\n  operator o {{\n    on in {{ out = {body} }}\n  }}\n  . -> o -> .\n}}\n"

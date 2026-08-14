@@ -115,8 +115,8 @@ step touches `vm.rs` once.
    `4344d55` the v5 tables stated). Two deliberate identity moves,
    both pinned: the five-field spine with `mime` relocated to
    `meta.ext.content_type`, and trees sealing `[type, root]` so
-   `json [1]` and `[1]` are distinct programs (scalar `json`
-   spellings later died with D-2026-08-13-1). Deferred WITH their
+   `json! [1]` and `[1]` are distinct programs. B4 later restored
+   scalar JSON behind the unambiguous bang. Deferred WITH their
    reasons: `JoinMetaPlan` execution and the static presence
    analysis (they land with the joins slice — reserved format keys
    announced), `Encoding::Json` lazy decode (v1 decodes structured

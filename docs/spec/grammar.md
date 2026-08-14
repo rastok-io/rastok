@@ -1,10 +1,10 @@
 # Rastok DSL — Grammar notes
 
-> **Status: Normative M1.3 target.** The current v6 parser still accepts
-> the superseded bare frontend spellings while M1.3 lands; forms not yet
-> executable remain marked or refused with named deferrals
-> (`E-CHECK-DEFERRED`). This document defines the destination, not a
-> compatibility requirement for the old surface.
+> **Status: Normative M1.3 target; the B4 frontend grammar landed
+> 2026-08-15.** The parser accepts only `IDENT!` for frontend-owned
+> regions; the superseded bare spellings are not a compatibility
+> surface. Frontends whose compiler is not in this build remain admitted
+> by their registered framer and refuse with named `E-CHECK-DEFERRED`.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md). Concepts like `Operator`, `Connector`, event-driven transaction, the parameterization grid behind the named archetypes (Reducer, Aggregator, Window, Joiner), the dynamic dispatch primitives, and the partition model are introduced there. This document is the grammar ; foundations is the constitution.
 >
@@ -1547,7 +1547,8 @@ attr_entry        ::= lvalue "=" value                               // dotted k
 //   data/meta as binding names.
 // - any IDENT immediately followed by BANG introduces a tagged frontend.
 //   No closed keyword vocabulary participates in this syntax decision.
-//   The Registry validates the name and framing contract after parsing.
+//   After this syntax-only choice, the Registry resolves the name and framing
+//   contract before any payload byte is consumed.
 // - a CONTRACT WORD is a bare word judged by a contract's closed choice
 //   (mode = job, codec = jsonl). It introduces NO binding — reservation
 //   does not apply ; the contract judges the word.

@@ -77,17 +77,12 @@ pub const E_TYPE_UNRESOLVED: Code = Code::new("E-TYPE-UNRESOLVED");
 /// (D-2026-08-10-5); field `tag`.
 pub const E_CONTENT_TYPE: Code = Code::new("E-CONTENT-TYPE");
 
-/// A byte/text tag call whose SHAPE passed the grammar gate —
-/// arguments decoded, placement not yet judged.
-enum TagCall {
+/// A built-in frontend call whose contract and arguments have passed their
+/// shape gate; placement and payload decoding follow.
+enum FrontendCall {
+    Json(crate::value::Value),
     Text,
-    Base64 {
-        content_type: Option<String>,
-    },
-    Asset {
-        path: String,
-        content_type: Option<String>,
-    },
+    Base64 { content_type: Option<String> },
 }
 
 /// Why a type declaration refuses — one variant per rule, each with
@@ -419,25 +414,49 @@ impl Checker<'_, '_> {
     /// Compiles one Rastok expression span, adapting native diagnostics onto the
     /// source with offset-mapped spans.
     fn expr(&mut self, expr: &ExprSource, signature: &expr::Signature) -> Option<expr::Tree> {
+        self.expr_with_asset_policy(expr, signature, false)
+            .map(|(tree, _)| tree)
+    }
+
+    /// Compiles an expression used as the whole payload. Only this door may
+    /// retain the optional content type of a root `asset(path, ct)` call.
+    fn payload_expr(
+        &mut self,
+        expr: &ExprSource,
+        signature: &expr::Signature,
+    ) -> Option<(expr::Tree, Option<String>)> {
+        self.expr_with_asset_policy(expr, signature, true)
+    }
+
+    fn expr_with_asset_policy(
+        &mut self,
+        source: &ExprSource,
+        signature: &expr::Signature,
+        allow_root_content_type: bool,
+    ) -> Option<(expr::Tree, Option<String>)> {
         let signature = self
             .resolved_types
             .iter()
             .fold(signature.clone(), |signature, (name, ty)| {
                 signature.with_type(name.clone(), ty.clone())
             });
-        match expr::compile(&expr.text, &signature) {
-            Ok(tree) => {
-                self.collect_meta_reads(&tree.root, expr.span);
-                Some(tree)
+        match expr::compile(&source.text, &signature) {
+            Ok(mut tree) => {
+                let (root, content_type) =
+                    self.bind_asset_calls(tree.root, source.span, allow_root_content_type)?;
+                tree.root = root;
+                self.collect_meta_reads(&tree.root, source.span);
+                Some((tree, content_type))
             }
             Err(diagnostics) => {
-                let base = expr.span.range().start;
+                let base = source.span.range().start;
                 for diagnostic in diagnostics {
                     // The registry owns the codes, and the expression chain's
                     // typed kind chooses them — never the human text,
                     // which is free to change.
                     let code = match diagnostic.kind {
                         expr::DiagnosticKind::DuplicateMapKey => E_DUP_KEY,
+                        expr::DiagnosticKind::AssetCall => E_ASSET,
                         // The depth gate: the same named refusal the
                         // plan validator maps at the plan phase, first
                         // surfaced here — before any recursive pass.
@@ -446,7 +465,7 @@ impl Checker<'_, '_> {
                     };
                     let adapted = Diagnostic::new(code, Phase::Check, diagnostic.message.clone())
                         .with_span(Span::new(
-                            expr.span.source(),
+                            source.span.source(),
                             base + diagnostic.range.start..base + diagnostic.range.end,
                         ));
                     // The STABLE payload per the registry: E-PLAN-DEPTH
@@ -456,12 +475,158 @@ impl Checker<'_, '_> {
                         expr::DiagnosticKind::TooDeep { depth } => {
                             adapted.with_field("depth", depth.to_string())
                         }
+                        expr::DiagnosticKind::AssetCall => adapted.with_field("path", ""),
                         _ => adapted.with_field("detail", diagnostic.message),
                     });
                 }
                 None
             }
         }
+    }
+
+    /// Resolves every ordinary `asset(…)` expression call to the canonical
+    /// content table before hashing or planning. A content type is accepted
+    /// only on the root call of a whole-payload expression; nested calls have no
+    /// metadata namespace of their own.
+    fn bind_asset_calls(
+        &mut self,
+        node: expr::Expr,
+        at: Span,
+        allow_content_type: bool,
+    ) -> Option<(expr::Expr, Option<String>)> {
+        let bind_child = |checker: &mut Self, child: expr::Expr| {
+            checker
+                .bind_asset_calls(child, at, false)
+                .map(|(child, _)| child)
+        };
+        Some(match node {
+            expr::Expr::Call {
+                function: expr::Function::Asset,
+                args,
+            } => {
+                let literal = |checker: &mut Self, value: &expr::Expr| -> Option<String> {
+                    match value {
+                        expr::Expr::Literal(crate::value::Value::Text(text)) => Some(text.clone()),
+                        _ => {
+                            checker.bag.push(
+                                Diagnostic::new(
+                                    E_ASSET,
+                                    Phase::Check,
+                                    "asset arguments are build-time string literals",
+                                )
+                                .with_span(at)
+                                .with_field("path", ""),
+                            );
+                            None
+                        }
+                    }
+                };
+                let Some(path_arg) = args.first() else {
+                    self.bag.push(
+                        Diagnostic::new(E_ASSET, Phase::Check, "asset expects a repository path")
+                            .with_span(at)
+                            .with_field("path", ""),
+                    );
+                    return None;
+                };
+                let path = literal(self, path_arg)?;
+                let content_type = match args.get(1) {
+                    Some(value) => Some(literal(self, value)?),
+                    None => None,
+                };
+                if content_type.is_some() && !allow_content_type {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTENT_TYPE,
+                            Phase::Check,
+                            "a content type qualifies the WHOLE payload — a nested value has no `meta.ext` of its own",
+                        )
+                        .with_span(at)
+                        .with_field("tag", "asset"),
+                    );
+                    return None;
+                }
+                let index = self.asset_resolve(&path, at)?;
+                (expr::Expr::Asset(index), content_type)
+            }
+            expr::Expr::Literal(_) | expr::Expr::Path(_) | expr::Expr::Asset(_) => (node, None),
+            expr::Expr::Unary { op, expr } => (
+                expr::Expr::Unary {
+                    op,
+                    expr: Box::new(bind_child(self, *expr)?),
+                },
+                None,
+            ),
+            expr::Expr::Binary { op, left, right } => (
+                expr::Expr::Binary {
+                    op,
+                    left: Box::new(bind_child(self, *left)?),
+                    right: Box::new(bind_child(self, *right)?),
+                },
+                None,
+            ),
+            expr::Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => (
+                expr::Expr::Ternary {
+                    cond: Box::new(bind_child(self, *cond)?),
+                    then: Box::new(bind_child(self, *then)?),
+                    otherwise: Box::new(bind_child(self, *otherwise)?),
+                },
+                None,
+            ),
+            expr::Expr::Index { base, index } => (
+                expr::Expr::Index {
+                    base: Box::new(bind_child(self, *base)?),
+                    index: Box::new(bind_child(self, *index)?),
+                },
+                None,
+            ),
+            expr::Expr::Call { function, args } => (
+                expr::Expr::Call {
+                    function,
+                    args: args
+                        .into_iter()
+                        .map(|arg| bind_child(self, arg))
+                        .collect::<Option<Vec<_>>>()?,
+                },
+                None,
+            ),
+            expr::Expr::List(items) => (
+                expr::Expr::List(
+                    items
+                        .into_iter()
+                        .map(|item| bind_child(self, item))
+                        .collect::<Option<Vec<_>>>()?,
+                ),
+                None,
+            ),
+            expr::Expr::MapLit(entries) => (
+                expr::Expr::MapLit(
+                    entries
+                        .into_iter()
+                        .map(|(key, value)| Some((key, bind_child(self, value)?)))
+                        .collect::<Option<Vec<_>>>()?,
+                ),
+                None,
+            ),
+            expr::Expr::Is { expr, target } => (
+                expr::Expr::Is {
+                    expr: Box::new(bind_child(self, *expr)?),
+                    target,
+                },
+                None,
+            ),
+            expr::Expr::As { expr, target } => (
+                expr::Expr::As {
+                    expr: Box::new(bind_child(self, *expr)?),
+                    target,
+                },
+                None,
+            ),
+        })
     }
 
     /// Compiles and reduces a constant expression, keeping both the
@@ -2279,16 +2444,16 @@ impl Checker<'_, '_> {
     /// names and shadowing are refused — which is also what keeps
     /// compile-time constant substitution sound.
     /// THE naming policy, one door for every live declaration
-    /// (D-2026-08-13-1, review rounds 2–3): the value forms
-    /// (`json`, `nothing`) and the expression literals
-    /// (`true`/`false`/`null`) refuse in EVERY binding-introducing
-    /// position — a masked `json` would make `json[0]` ambiguous,
-    /// and a masked literal is a silent shadow Rastok expression can never read.
+    /// (D-2026-08-14-1): the structural value form `nothing` and the
+    /// expression literals (`true`/`false`/`null`) refuse in every
+    /// binding-introducing position. Frontend names such as `json`
+    /// remain ordinary identifiers because only the adjacent `!`
+    /// selects a frontend.
     /// The refusal lands AT THE DECLARATION, one voice, the name's
     /// span.
     fn guard_binding_name(&mut self, name: &crate::compiler::syntax::Name, what: &str) -> bool {
         let reason = match name.text.as_str() {
-            "json" | "nothing" => "a value form of the language",
+            "nothing" => "a value form of the language",
             "true" | "false" | "null" => "a literal of the expression language",
             _ => return true,
         };
@@ -2860,19 +3025,16 @@ impl Checker<'_, '_> {
         );
     }
 
-    /// The verbatim `text { … }` block (D-2026-08-10-6): the first
+    /// The verbatim `text! { … }` block: the first
     /// newline is excluded, the closing brace's column sets the
     /// margin stripped from every line, the trailing newline before
     /// the brace is excluded. No interpolation, no escapes.
-    /// The CALL-SHAPE gate for the byte/text tags — the grammar's
-    /// exact productions, validated in order (syntax → arguments),
-    /// ONE diagnostic on the first breach:
-    /// `text RAW_BLOCK` · `base64 ("(" STRING ")")? RAW_BLOCK` ·
-    /// `asset "(" STRING ("," STRING)? ")"` (D-2026-08-10-6).
-    fn tagged_call_shape(
+    /// The shape gate for built-in frontends validates the shared
+    /// `IDENT! args? payload` production before decoding its payload.
+    fn frontend_data(
         &mut self,
-        tagged: &crate::compiler::syntax::TaggedValue,
-    ) -> Option<TagCall> {
+        frontend: &crate::compiler::syntax::FrontendValue,
+    ) -> Option<FrontendCall> {
         let refuse = |checker: &mut Self, span: Span, message: &str, detail: &str| {
             checker.bag.push(
                 Diagnostic::new(E_EXPR, Phase::Check, message.to_string())
@@ -2880,100 +3042,75 @@ impl Checker<'_, '_> {
                     .with_field("detail", detail.to_string()),
             );
         };
-        // One STRING argument, by the SYNTAX — a wrapped or
-        // concatenated spelling is not the grammar's STRING.
+        // One text literal after ordinary frontend-argument parsing.
+        // Parentheses and a trailing comma are presentation; an
+        // operator expression is not a build-time literal.
         let string_arg = |checker: &mut Self, value: &SynValue| -> Option<String> {
             match value {
                 // The parser already spoke for its recovery form.
                 SynValue::Error(_) => None,
-                SynValue::StrLit { raw, span } => checker.decode_string(raw, *span),
-                SynValue::Expr(expr) => {
-                    refuse(
-                        checker,
-                        expr.span,
-                        "one STRING literal is required here — not an expression",
-                        "the argument is not a bare string token",
-                    );
-                    None
-                }
+                SynValue::Expr(expr) => checker.string_literal(expr),
                 _ => {
                     refuse(
                         checker,
-                        tagged.tag.span,
-                        "one STRING literal is required here",
+                        frontend.name.span,
+                        "one string literal is required here",
                         "the argument is not a string",
                     );
                     None
                 }
             }
         };
-        // A tag with NO argument list and NO body already refused at
-        // parse ("arguments or a block") — one fault, one voice.
-        if !tagged.parens && tagged.args.is_empty() && tagged.body.is_none() {
-            return None;
-        }
-        match tagged.tag.text.as_str() {
-            "text" => {
-                if tagged.parens {
+        let contract = self.registry.frontend(&frontend.name.text)?;
+        match contract.reader {
+            crate::contract::FrontendReader::Json => {
+                if frontend.parens {
                     refuse(
                         self,
-                        tagged.tag.span,
-                        "`text { … }` takes no parentheses",
-                        "the grammar is `text RAW_BLOCK` exactly",
+                        frontend.name.span,
+                        "`json!` takes no argument list",
+                        "the JSON reader owns one complete following value",
                     );
                     return None;
                 }
-                if tagged.body.is_none() {
-                    refuse(
-                        self,
-                        tagged.tag.span,
-                        "`text { … }` needs a verbatim body",
-                        "no block",
-                    );
+                let crate::compiler::syntax::FrontendPayload::Json { value, .. } =
+                    &frontend.payload
+                else {
                     return None;
-                }
-                Some(TagCall::Text)
+                };
+                Some(FrontendCall::Json(value.clone()))
             }
-            "base64" => {
-                if tagged.trailing_comma {
+            crate::contract::FrontendReader::Text => {
+                if frontend.parens {
                     refuse(
                         self,
-                        tagged.tag.span,
-                        "no trailing comma in a tag call",
-                        "the grammar is `base64 (\"(\" STRING \")\")?` exactly",
+                        frontend.name.span,
+                        "`text! { … }` takes no parentheses",
+                        "the text reader owns one verbatim block",
                     );
                     return None;
                 }
-                if tagged.parens && tagged.args.is_empty() {
+                Some(FrontendCall::Text)
+            }
+            crate::contract::FrontendReader::Base64 => {
+                if frontend.parens && frontend.args.is_empty() {
                     refuse(
                         self,
-                        tagged.tag.span,
-                        "empty parentheses — write `base64 { … }`",
-                        "the optional argument list is one STRING or nothing",
+                        frontend.name.span,
+                        "empty parentheses — write `base64! { … }`",
+                        "the optional argument list is one text literal or nothing",
                     );
                     return None;
                 }
-                if tagged.body.is_none() {
-                    // The body is part of the SHAPE: `base64(ct)`
-                    // without a block is malformed wherever it sits
-                    // — never a placement question.
-                    refuse(
-                        self,
-                        tagged.tag.span,
-                        "`base64 { … }` needs a body",
-                        "no block",
-                    );
-                    return None;
-                }
-                match tagged.args.as_slice() {
-                    [] => Some(TagCall::Base64 { content_type: None }),
-                    [only] => Some(TagCall::Base64 {
+                match frontend.args.as_slice() {
+                    [] => Some(FrontendCall::Base64 { content_type: None }),
+                    [only] => Some(FrontendCall::Base64 {
                         content_type: Some(string_arg(self, only)?),
                     }),
                     _ => {
                         refuse(
                             self,
-                            tagged.tag.span,
+                            frontend.name.span,
                             "base64 takes at most one content-type argument",
                             "too many arguments",
                         );
@@ -2981,121 +3118,32 @@ impl Checker<'_, '_> {
                     }
                 }
             }
-            "asset" => {
-                // A malformed asset CALL is E-ASSET, per the
-                // registry — the code that owns the asset contract.
-                let refuse_asset = |checker: &mut Self, span: Span, message: &str| {
-                    checker.bag.push(
-                        Diagnostic::new(E_ASSET, Phase::Check, message.to_string())
-                            .with_span(span)
-                            .with_field("path", String::new()),
-                    );
-                };
-                let asset_string = |checker: &mut Self, value: &SynValue| -> Option<String> {
-                    match value {
-                        // The parser already spoke for its recovery
-                        // form.
-                        SynValue::Error(_) => None,
-                        SynValue::StrLit { raw, span } => checker.decode_string(raw, *span),
-                        SynValue::Expr(expr) => {
-                            refuse_asset(
-                                checker,
-                                expr.span,
-                                "one STRING literal is required here — not an expression",
-                            );
-                            None
-                        }
-                        _ => {
-                            refuse_asset(
-                                checker,
-                                tagged.tag.span,
-                                "one STRING literal is required here",
-                            );
-                            None
-                        }
-                    }
-                };
-                if tagged.trailing_comma {
-                    refuse_asset(self, tagged.tag.span, "no trailing comma in a tag call");
-                    return None;
-                }
-                if tagged.body.is_some() {
-                    refuse_asset(self, tagged.tag.span, "asset(…) takes no block");
-                    return None;
-                }
-                match tagged.args.as_slice() {
-                    [path] => Some(TagCall::Asset {
-                        path: asset_string(self, path)?,
-                        content_type: None,
-                    }),
-                    [path, ct] => {
-                        // The path is the FIRST argument — it
-                        // speaks first when both are faulty.
-                        let path = asset_string(self, path)?;
-                        Some(TagCall::Asset {
-                            path,
-                            content_type: Some(asset_string(self, ct)?),
-                        })
-                    }
-                    [] => {
-                        refuse_asset(
-                            self,
-                            tagged.tag.span,
-                            "asset(path, content_type?) — the path is required",
-                        );
-                        None
-                    }
-                    _ => {
-                        refuse_asset(
-                            self,
-                            tagged.tag.span,
-                            "asset(path, content_type?) — one path, at most one type",
-                        );
-                        None
-                    }
-                }
+            crate::contract::FrontendReader::Deferred { construct, .. } => {
+                self.deferred(construct, frontend.name.span);
+                None
             }
-            _ => unreachable!("only the byte/text tags take this gate"),
         }
     }
 
-    /// Decodes one raw STRING token by the Rastok expression rule — the single
-    /// escape semantics of the language.
-    fn decode_string(&mut self, raw: &str, span: Span) -> Option<String> {
-        self.string_literal(&ExprSource {
-            text: String::from(raw),
-            span,
-        })
-    }
-
-    /// The verbatim body of a shape-validated `text` call.
+    /// The verbatim payload of a shape-validated `text!` call.
     fn verbatim_body(
         &mut self,
-        tagged: &crate::compiler::syntax::TaggedValue,
+        frontend: &crate::compiler::syntax::FrontendValue,
     ) -> Option<crate::value::Value> {
-        use crate::compiler::syntax::TaggedBody;
-        let Some(TaggedBody::Raw { text, .. }) = &tagged.body else {
-            self.bag.push(
-                Diagnostic::new(E_EXPR, Phase::Check, "`text { … }` needs a verbatim body")
-                    .with_span(tagged.tag.span)
-                    .with_field("detail", "no block"),
-            );
+        let crate::compiler::syntax::FrontendPayload::Raw { text, .. } = &frontend.payload else {
             return None;
         };
         Some(crate::value::Value::Text(strip_verbatim_margin(text)))
     }
 
-    /// The decoded body of a shape-validated `base64` call —
+    /// The decoded payload of a shape-validated `base64!` call —
     /// RFC 4648 standard alphabet, mandatory padding, ASCII
     /// whitespace ignored, URL-safe refused (D-2026-08-10-5/-6).
-    fn base64_body(&mut self, tagged: &crate::compiler::syntax::TaggedValue) -> Option<Vec<u8>> {
-        use crate::compiler::syntax::TaggedBody;
-        let Some(TaggedBody::Raw { text, span }) = &tagged.body else {
-            self.bag.push(
-                Diagnostic::new(E_EXPR, Phase::Check, "`base64 { … }` needs a body")
-                    .with_span(tagged.tag.span)
-                    .with_field("detail", "no block"),
-            );
+    fn base64_body(
+        &mut self,
+        frontend: &crate::compiler::syntax::FrontendValue,
+    ) -> Option<Vec<u8>> {
+        let crate::compiler::syntax::FrontendPayload::Raw { text, span } = &frontend.payload else {
             return None;
         };
         match decode_base64(text) {
@@ -3479,9 +3527,8 @@ impl Checker<'_, '_> {
         )
     }
 
-    /// THE nested-value lowering, shared by struct fields and map
-    /// entries: Rastok expression, JSON, recursive maps, the EMPTY struct
-    /// (tag 17's literal), verbatim text, bare base64, bare asset.
+    /// THE nested-value lowering, shared by struct fields and map entries:
+    /// expression, frontend, recursive maps and the EMPTY struct.
     /// A content-typed byte form refuses with the dedicated rule —
     /// a nested field has no `meta.ext` of its own — and the one
     /// genuinely inexpressible form, a NON-EMPTY struct inside a
@@ -3497,7 +3544,6 @@ impl Checker<'_, '_> {
             // The parser already spoke for its recovery form.
             SynValue::Error(_) => None,
             SynValue::Expr(expr) => self.expr(expr, signature),
-            SynValue::Json { value, .. } => Some(literal_tree(value.clone(), DataType::Variant)),
             SynValue::BracedMap(entries) => self.map_value_tree(entries, signature, at),
             SynValue::Braced(body) if body.entries.is_empty() => Some(literal_tree(
                 crate::value::Value::Struct(Vec::new()),
@@ -3507,54 +3553,34 @@ impl Checker<'_, '_> {
                 self.deferred("a struct inside a map entry", at);
                 None
             }
-            SynValue::Tagged(tagged) => match tagged.tag.text.as_str() {
-                // The pipeline (D-2026-08-10-6): call SHAPE and
-                // argument validity first — a malformed call is a
-                // malformed call wherever it sits — then the
-                // placement rule on the TAG's span, then body
-                // decode / asset resolution. One diagnostic.
-                "text" | "base64" | "asset" => {
-                    let call = self.tagged_call_shape(tagged)?;
-                    match call {
-                        TagCall::Text => self
-                            .verbatim_body(tagged)
-                            .map(|value| literal_tree(value, DataType::Text)),
-                        TagCall::Base64 { content_type: None } => {
-                            let bytes = self.base64_body(tagged)?;
-                            Some(literal_tree(
-                                crate::value::Value::Bytes(bytes),
-                                DataType::BYTES,
-                            ))
-                        }
-                        TagCall::Asset {
-                            path,
-                            content_type: None,
-                        } => {
-                            let index = self.asset_resolve(&path, tagged.tag.span)?;
-                            Some(expr::Tree {
-                                root: expr::Expr::Asset(index),
-                                ty: DataType::BYTES,
-                            })
-                        }
-                        TagCall::Base64 { .. } | TagCall::Asset { .. } => {
-                            self.bag.push(
-                                Diagnostic::new(
-                                    E_CONTENT_TYPE,
-                                    Phase::Check,
-                                    "a content type qualifies the WHOLE payload — a nested field has no `meta.ext` of its own",
-                                )
-                                .with_span(tagged.tag.span)
-                                .with_field("tag", tagged.tag.text.clone()),
-                            );
-                            None
-                        }
+            SynValue::Frontend(frontend) => {
+                let call = self.frontend_data(frontend)?;
+                match call {
+                    FrontendCall::Json(value) => Some(literal_tree(value, DataType::Variant)),
+                    FrontendCall::Text => self
+                        .verbatim_body(frontend)
+                        .map(|value| literal_tree(value, DataType::Text)),
+                    FrontendCall::Base64 { content_type: None } => {
+                        let bytes = self.base64_body(frontend)?;
+                        Some(literal_tree(
+                            crate::value::Value::Bytes(bytes),
+                            DataType::BYTES,
+                        ))
+                    }
+                    FrontendCall::Base64 { .. } => {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_CONTENT_TYPE,
+                                Phase::Check,
+                                "a content type qualifies the WHOLE payload — a nested field has no `meta.ext` of its own",
+                            )
+                            .with_span(frontend.name.span)
+                            .with_field("tag", frontend.name.text.clone()),
+                        );
+                        None
                     }
                 }
-                _ => {
-                    self.deferred("this nested value form", at);
-                    None
-                }
-            },
+            }
             _ => {
                 self.deferred("this nested value form", at);
                 None
@@ -3638,7 +3664,7 @@ impl Checker<'_, '_> {
                     Diagnostic::new(
                         E_EXPR,
                         Phase::Check,
-                        "one string LITERAL is required here — not an expression",
+                        "one string literal is required here — not an expression",
                     )
                     .with_span(expr.span)
                     .with_field("detail", "the value is not a text literal"),
@@ -3884,22 +3910,8 @@ impl Checker<'_, '_> {
             SynValue::Identity(_) => Some(EmitValue::Identity),
             SynValue::Braced(body) => self.braced(body, signature, at),
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
-            // The parser mints StrLit only inside tag-argument
-            // lists; a value position never sees one.
-            SynValue::StrLit { .. } => unreachable!("StrLit lives in tag arguments"),
-            SynValue::Json { value, .. } => {
-                // Always `variant` — the literal is a DOCUMENT
-                // (D-2026-08-13-1), exact numbers included; its `variant`
-                // type is what distinguishes `json [1]` from `[1]`
-                // in the hash (D-2026-08-10-7: the tree seals type
-                // and root).
-                Some(EmitValue::Data(literal_tree(
-                    value.clone(),
-                    DataType::Variant,
-                )))
-            }
             SynValue::Expr(expr) => {
-                let tree = self.expr(expr, signature)?;
+                let (tree, content_type) = self.payload_expr(expr, signature)?;
                 if matches!(
                     tree.ty,
                     DataType::DURATION | DataType::TIMESTAMP | DataType::Null
@@ -3907,7 +3919,22 @@ impl Checker<'_, '_> {
                     self.deferred("a duration, timestamp, or null emission", expr.span);
                     return None;
                 }
-                Some(EmitValue::Data(tree))
+                Some(match content_type {
+                    Some(content_type) => EmitValue::FreshData(vec![
+                        FieldWrite {
+                            target: crate::envelope::WriteTarget::Data(Vec::new()),
+                            value: tree,
+                        },
+                        FieldWrite {
+                            target: crate::envelope::WriteTarget::Ext(String::from("content_type")),
+                            value: literal_tree(
+                                crate::value::Value::Text(content_type),
+                                DataType::Text,
+                            ),
+                        },
+                    ]),
+                    None => EmitValue::Data(tree),
+                })
             }
             SynValue::BracedMap(entries) => {
                 // `{ "k": v }` and `{:}` are executable emissions:
@@ -3916,71 +3943,40 @@ impl Checker<'_, '_> {
                 self.map_value_tree(entries, signature, at)
                     .map(EmitValue::Data)
             }
-            SynValue::Tagged(tagged) => match tagged.tag.text.as_str() {
-                // Whole-payload position: shape first, then build —
-                // resolution and body decode come LAST
-                // (D-2026-08-10-5/-6).
-                "text" | "base64" | "asset" => {
-                    let call = self.tagged_call_shape(tagged)?;
-                    match call {
-                        TagCall::Text => self
-                            .verbatim_body(tagged)
-                            .map(|value| EmitValue::Data(literal_tree(value, DataType::Text))),
-                        TagCall::Base64 { content_type } => {
-                            let bytes = self.base64_body(tagged)?;
-                            let data =
-                                literal_tree(crate::value::Value::Bytes(bytes), DataType::BYTES);
-                            Some(match content_type {
-                                Some(content_type) => EmitValue::FreshData(vec![
-                                    FieldWrite {
-                                        target: crate::envelope::WriteTarget::Data(Vec::new()),
-                                        value: data,
-                                    },
-                                    FieldWrite {
-                                        target: crate::envelope::WriteTarget::Ext(String::from(
-                                            "content_type",
-                                        )),
-                                        value: literal_tree(
-                                            crate::value::Value::Text(content_type),
-                                            DataType::Text,
-                                        ),
-                                    },
-                                ]),
-                                None => EmitValue::Data(data),
-                            })
-                        }
-                        TagCall::Asset { path, content_type } => {
-                            let index = self.asset_resolve(&path, tagged.tag.span)?;
-                            let data = expr::Tree {
-                                root: expr::Expr::Asset(index),
-                                ty: DataType::BYTES,
-                            };
-                            Some(match content_type {
-                                Some(content_type) => EmitValue::FreshData(vec![
-                                    FieldWrite {
-                                        target: crate::envelope::WriteTarget::Data(Vec::new()),
-                                        value: data,
-                                    },
-                                    FieldWrite {
-                                        target: crate::envelope::WriteTarget::Ext(String::from(
-                                            "content_type",
-                                        )),
-                                        value: literal_tree(
-                                            crate::value::Value::Text(content_type),
-                                            DataType::Text,
-                                        ),
-                                    },
-                                ]),
-                                None => EmitValue::Data(data),
-                            })
-                        }
-                    }
-                }
-                _ => {
-                    self.deferred("a guest or tagged emission", tagged.tag.span);
-                    None
-                }
-            },
+            SynValue::Frontend(frontend) => {
+                let call = self.frontend_data(frontend)?;
+                let (tree, content_type) = match call {
+                    FrontendCall::Json(value) => (literal_tree(value, DataType::Variant), None),
+                    FrontendCall::Text => (
+                        self.verbatim_body(frontend)
+                            .map(|value| literal_tree(value, DataType::Text))?,
+                        None,
+                    ),
+                    FrontendCall::Base64 { content_type } => (
+                        literal_tree(
+                            crate::value::Value::Bytes(self.base64_body(frontend)?),
+                            DataType::BYTES,
+                        ),
+                        content_type,
+                    ),
+                };
+                Some(match content_type {
+                    Some(content_type) => EmitValue::FreshData(vec![
+                        FieldWrite {
+                            target: crate::envelope::WriteTarget::Data(Vec::new()),
+                            value: tree,
+                        },
+                        FieldWrite {
+                            target: crate::envelope::WriteTarget::Ext(String::from("content_type")),
+                            value: literal_tree(
+                                crate::value::Value::Text(content_type),
+                                DataType::Text,
+                            ),
+                        },
+                    ]),
+                    None => EmitValue::Data(tree),
+                })
+            }
         }
     }
 
@@ -4123,7 +4119,13 @@ impl Checker<'_, '_> {
                     };
                     match value {
                         SynValue::Expr(expr) => {
-                            if let Some(tree) = self.expr(expr, signature) {
+                            let whole_data = matches!(&target, crate::envelope::WriteTarget::Data(path) if path.is_empty());
+                            let compiled = if whole_data {
+                                self.payload_expr(expr, signature)
+                            } else {
+                                self.expr(expr, signature).map(|tree| (tree, None))
+                            };
+                            if let Some((tree, content_type)) = compiled {
                                 if matches!(&target, crate::envelope::WriteTarget::Ext(field) if field == "content_type")
                                     && !tree.ty.is_assignable_to(&DataType::Text)
                                 {
@@ -4160,6 +4162,17 @@ impl Checker<'_, '_> {
                                     target,
                                     value: tree,
                                 });
+                                if let Some(content_type) = content_type {
+                                    writes.push(FieldWrite {
+                                        target: crate::envelope::WriteTarget::Ext(String::from(
+                                            "content_type",
+                                        )),
+                                        value: literal_tree(
+                                            crate::value::Value::Text(content_type),
+                                            DataType::Text,
+                                        ),
+                                    });
+                                }
                             }
                         }
                         // `data = { … }`: the braced value is a data
@@ -4176,116 +4189,59 @@ impl Checker<'_, '_> {
                         SynValue::Braced(_) => {
                             self.deferred("a record under a data path", key.span);
                         }
-                        // The byte/text forms are data values in
-                        // the builder too (D-2026-08-10-5): bare
-                        // anywhere, content-typed at WHOLE data —
-                        // `data = ` names exactly the payload the
-                        // content type qualifies.
-                        SynValue::Tagged(tagged)
-                            if matches!(&target, crate::envelope::WriteTarget::Data(_))
-                                && matches!(
-                                    tagged.tag.text.as_str(),
-                                    "text" | "base64" | "asset"
-                                ) =>
+                        SynValue::Frontend(frontend)
+                            if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
                         {
                             let crate::envelope::WriteTarget::Data(path) = &target else {
                                 unreachable!("guarded")
                             };
                             let whole = path.is_empty();
-                            // Shape first, everywhere; then the
-                            // position decides whether a content
-                            // type is admissible (`data =` names
-                            // exactly the whole payload).
-                            let Some(call) = self.tagged_call_shape(tagged) else {
+                            let Some(call) = self.frontend_data(frontend) else {
                                 continue;
                             };
-                            match call {
-                                TagCall::Text => {
-                                    if let Some(value) = self.verbatim_body(tagged) {
-                                        writes.push(FieldWrite {
-                                            target: crate::envelope::WriteTarget::Data(
-                                                path.clone(),
-                                            ),
-                                            value: literal_tree(value, DataType::Text),
-                                        });
-                                    }
+                            let (tree, content_type) = match call {
+                                FrontendCall::Json(value) => {
+                                    (literal_tree(value, DataType::Variant), None)
                                 }
-                                TagCall::Base64 { content_type } => {
-                                    if content_type.is_some() && !whole {
-                                        self.bag.push(
-                                            Diagnostic::new(
-                                                E_CONTENT_TYPE,
-                                                Phase::Check,
-                                                "a content type qualifies the WHOLE payload — a nested field has no `meta.ext` of its own",
-                                            )
-                                            .with_span(tagged.tag.span)
-                                            .with_field("tag", tagged.tag.text.clone()),
-                                        );
-                                        continue;
-                                    }
-                                    if let Some(bytes) = self.base64_body(tagged) {
-                                        writes.push(FieldWrite {
-                                            target: crate::envelope::WriteTarget::Data(
-                                                path.clone(),
-                                            ),
-                                            value: literal_tree(
-                                                crate::value::Value::Bytes(bytes),
-                                                DataType::BYTES,
-                                            ),
-                                        });
-                                        if let Some(ct) = content_type {
-                                            writes.push(FieldWrite {
-                                                target: crate::envelope::WriteTarget::Ext(
-                                                    String::from("content_type"),
-                                                ),
-                                                value: literal_tree(
-                                                    crate::value::Value::Text(ct),
-                                                    DataType::Text,
-                                                ),
-                                            });
-                                        }
-                                    }
-                                }
-                                TagCall::Asset {
-                                    path: file,
+                                FrontendCall::Text => (
+                                    self.verbatim_body(frontend)
+                                        .map(|value| literal_tree(value, DataType::Text))?,
+                                    None,
+                                ),
+                                FrontendCall::Base64 { content_type } => (
+                                    literal_tree(
+                                        crate::value::Value::Bytes(self.base64_body(frontend)?),
+                                        DataType::BYTES,
+                                    ),
                                     content_type,
-                                } => {
-                                    if content_type.is_some() && !whole {
-                                        self.bag.push(
-                                            Diagnostic::new(
-                                                E_CONTENT_TYPE,
-                                                Phase::Check,
-                                                "a content type qualifies the WHOLE payload — a nested field has no `meta.ext` of its own",
-                                            )
-                                            .with_span(tagged.tag.span)
-                                            .with_field("tag", tagged.tag.text.clone()),
-                                        );
-                                        continue;
-                                    }
-                                    if let Some(index) = self.asset_resolve(&file, tagged.tag.span)
-                                    {
-                                        writes.push(FieldWrite {
-                                            target: crate::envelope::WriteTarget::Data(
-                                                path.clone(),
-                                            ),
-                                            value: expr::Tree {
-                                                root: expr::Expr::Asset(index),
-                                                ty: DataType::BYTES,
-                                            },
-                                        });
-                                        if let Some(ct) = content_type {
-                                            writes.push(FieldWrite {
-                                                target: crate::envelope::WriteTarget::Ext(
-                                                    String::from("content_type"),
-                                                ),
-                                                value: literal_tree(
-                                                    crate::value::Value::Text(ct),
-                                                    DataType::Text,
-                                                ),
-                                            });
-                                        }
-                                    }
-                                }
+                                ),
+                            };
+                            if content_type.is_some() && !whole {
+                                self.bag.push(
+                                    Diagnostic::new(
+                                        E_CONTENT_TYPE,
+                                        Phase::Check,
+                                        "a content type qualifies the WHOLE payload — a nested field has no `meta.ext` of its own",
+                                    )
+                                    .with_span(frontend.name.span)
+                                    .with_field("tag", frontend.name.text.clone()),
+                                );
+                                continue;
+                            }
+                            writes.push(FieldWrite {
+                                target: crate::envelope::WriteTarget::Data(path.clone()),
+                                value: tree,
+                            });
+                            if let Some(content_type) = content_type {
+                                writes.push(FieldWrite {
+                                    target: crate::envelope::WriteTarget::Ext(String::from(
+                                        "content_type",
+                                    )),
+                                    value: literal_tree(
+                                        crate::value::Value::Text(content_type),
+                                        DataType::Text,
+                                    ),
+                                });
                             }
                         }
                         // `data = { "k": v }` — the map value is the
@@ -4299,14 +4255,6 @@ impl Checker<'_, '_> {
                                     value: tree,
                                 });
                             }
-                        }
-                        SynValue::Json { value, .. }
-                            if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
-                        {
-                            writes.push(FieldWrite {
-                                target,
-                                value: literal_tree(value.clone(), DataType::Variant),
-                            });
                         }
                         SynValue::Error(_) => {}
                         _ => self.deferred("a nested envelope builder", key.span),
@@ -4392,12 +4340,6 @@ impl Checker<'_, '_> {
                                 self.record_fields(nested, signature, &path, writes);
                             }
                         }
-                        SynValue::Json { value, .. } => {
-                            writes.push(FieldWrite {
-                                target: crate::envelope::WriteTarget::Data(path),
-                                value: literal_tree(value.clone(), DataType::Variant),
-                            });
-                        }
                         SynValue::BracedMap(entries) => {
                             // A map is an ordinary field value —
                             // `{ nested = { "a": 1 } }` composes.
@@ -4408,13 +4350,9 @@ impl Checker<'_, '_> {
                                 });
                             }
                         }
-                        SynValue::Tagged(tagged) => {
-                            // The BARE byte/text forms embed anywhere
-                            // (D-2026-08-10-5/-6); the content-typed
-                            // forms refuse — a nested field has no
-                            // `meta.ext` of its own.
+                        SynValue::Frontend(frontend) => {
                             if let Some(tree) = self.nested_value_tree(
-                                &SynValue::Tagged(tagged.clone()),
+                                &SynValue::Frontend(frontend.clone()),
                                 signature,
                                 key.span,
                             ) {
@@ -5295,16 +5233,12 @@ mod tests {
 
     fn check_source(source: &str) -> (Option<Hir>, Bag) {
         let mut bag = Bag::new();
-        let tree = parse(SourceId::new(0), source, &mut bag);
+        let registry = contract::Registry::try_m0().expect("the standard catalogue holds");
+        let tree = parse(SourceId::new(0), source, &registry, &mut bag);
         let unit = Unit {
             files: vec![(SourceId::new(0), tree)],
         };
-        let hir = check(
-            &unit,
-            &contract::Registry::try_m0().expect("the standard catalogue holds"),
-            &mut bag,
-            None,
-        );
+        let hir = check(&unit, &registry, &mut bag, None);
         (hir, bag)
     }
 

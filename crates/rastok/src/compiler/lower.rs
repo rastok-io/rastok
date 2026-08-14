@@ -796,7 +796,7 @@ impl Writer<'_> {
     }
 
     /// A compiled tree seals its STATIC TYPE with its expression —
-    /// `json [1]` (variant) and `[1]` (list) are different programs
+    /// `json! [1]` (variant) and `[1]` (list) are different programs
     /// (D-2026-08-10-7), exactly as a pinned port differs from an
     /// unpinned one.
     fn tree(&mut self, tree: &expr::Tree) {
@@ -871,6 +871,7 @@ impl Writer<'_> {
             expr::Expr::Call { function, args } => {
                 self.tag(7);
                 self.tag(match function {
+                    expr::Function::Asset => 5,
                     expr::Function::Duration => 1,
                     expr::Function::Timestamp => 2,
                     expr::Function::Size => 3,

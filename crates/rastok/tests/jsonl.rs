@@ -320,7 +320,7 @@ fn json_null_is_an_executable_value() {
     // `json` takes documents only (D-2026-08-13-1), and a BARE
     // `null` emission stays deferred with the null static type —
     // but null inside a document must EXECUTE, not merely compile.
-    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = json [null] }\n  }\n  . -> o -> .\n}\n";
+    let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = json! [null] }\n  }\n  . -> o -> .\n}\n";
     let (outputs, errors) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(

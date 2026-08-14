@@ -1375,6 +1375,13 @@ fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
             expr_canonical(base)?;
             expr_canonical(index)
         }
+        expr::Expr::Call {
+            function: expr::Function::Asset,
+            ..
+        } => Err(PlanValidationError::ExpressionNotInFormat {
+            form: "an unbound asset() call",
+            format: crate::plan::FORMAT_VERSION,
+        }),
         expr::Expr::Call { args, .. } => args.iter().try_for_each(expr_canonical),
         expr::Expr::List(items) => items.iter().try_for_each(expr_canonical),
         expr::Expr::MapLit(pairs) => {

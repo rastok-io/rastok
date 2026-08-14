@@ -494,6 +494,10 @@ fn expr_tree(expr: &expr::Expr) -> Cbor {
         expr::Expr::Call { function, args } => Cbor::Array(vec![
             Cbor::Uint(7),
             Cbor::Uint(match function {
+                // `asset(…)` must be rebound to `Expr::Asset` before plan
+                // validation. This code is deliberately decodable so a forged
+                // tree reaches the categorical validator refusal.
+                expr::Function::Asset => 5,
                 expr::Function::Duration => 1,
                 expr::Function::Timestamp => 2,
                 expr::Function::Size => 3,
@@ -1145,6 +1149,7 @@ fn expr_from(tree: &Cbor) -> Result<expr::Expr, DecodeError> {
                 2 => expr::Function::Timestamp,
                 3 => expr::Function::Size,
                 4 => expr::Function::Decimal,
+                5 => expr::Function::Asset,
                 _ => return Err(err("function")),
             },
             args: args.iter().map(expr_from).collect::<Result<Vec<_>, _>>()?,
