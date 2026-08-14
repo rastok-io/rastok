@@ -25,6 +25,14 @@
 > the HIR canonical form, and the goldens re-blessed for the
 > version byte alone (the spike re-proved the same semantic hash
 > on target). The v5 entry below stays as history.
+> **M1.3 target:** D-2026-08-14-1 replaces the current type/value
+> authority and resolved port tables in one categorical format v7
+> landing. v7 is not current until its full validator and sabotage
+> matrix land; the ordered work is in
+> [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). It will
+> carry canonical union discriminants and complete effective types, not
+> Avro branch indexes, Arrow dense/sparse layout, or unresolved compiler
+> variables.
 > Format v5 (D-2026-08-10-9, landed 2026-08-10): the
 > three-zone metadata write targets, the travelling `app`/`ext`
 > schemas, the content-addressed asset table, expanded named types

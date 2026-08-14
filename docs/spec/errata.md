@@ -73,6 +73,11 @@ and execution-equivalence round-trip tests pin the fix.
 
 ## E-2026-08-03-2 — unwired data outputs: warning or error?
 
+> **Resolved in the M1.3 target by D-2026-08-14-1.** There is no
+> name-based `err` exception. Every resolved output carries an explicit
+> `UnwiredPolicy`; the v6 warning/bubble behavior remains documented below
+> only as implementation history until that gate lands.
+
 - **Where:** [grammar.md](grammar.md) (wiring prose) vs
   [delivery-semantics.md](delivery-semantics.md) (routing rules).
 - **Contradiction:** grammar.md calls an unwired non-`err` data

@@ -4,6 +4,12 @@
 > **semantic identity** of a graph, the
 > **allocation of `graph_version`**, and the **canonical byte form** of
 > journal records.
+>
+> The registry below describes executable plan-package v6. The M1.3
+> target in D-2026-08-14-1 lands a canonical `DataType` registry,
+> complete resolved port types and structural/tagged unions together in
+> v7. Until that validator lands, this table remains the current wire
+> authority; it is not the design constraint for the v7 registry.
 
 ## 1. The semantic hash
 
@@ -32,8 +38,9 @@ production graph).
 **Sensitive to** : topology (nodes, edges, ports, edge configs),
 partitions and `per` bindings ; handlers, the order of statements inside
 a handler (`emission_index` = text order) and the order of ports in a
-join ; every CEL expression (hashed as its canonical CEL AST) ; types,
-err sets, attributes, annotations, `variant` clauses ; `var` defaults
+join ; every Rastok expression (hashed as its canonical expression AST) ;
+resolved logical types and complete port tables, attributes,
+annotations, `variant` clauses ; `var` defaults
 (the recovery fold reads them) ; guest-language block bodies (opaque — raw bytes
 after common-indentation stripping) and the pinned guest language,
 frontend/compiler/lowering profile, ABI and `GuestExecutor` identities.
@@ -96,8 +103,15 @@ Migration of a journal onto a modified graph is deferred.
 model ; the manifest ledger is the kept-forever
 piece and is never pruned (~40 bytes per *distinct* graph ever
 deployed — a ledger of dozens of KB after a century of daily
-deploys). The schemas needed to decode any historical Avro zone are
-referenced from manifest rows and retained with them.
+deploys). The schemas needed to decode any historical
+JSON/Avro/Arrow-backed zone are referenced from manifest rows and
+retained with them.
+
+Retaining a schema makes historical bytes readable; it does not make a
+new graph accept the old logical type. A V1→V2 migration is an explicit
+typed Operator which emits a new envelope and normal lineage. It is not
+a package reader and does not rewrite old records. Plan-package v6→v7 is
+a separate categorical transport change (D-2026-08-14-1).
 
 ## 3. The canonical record form
 
@@ -147,7 +161,7 @@ a record is canonicalized (its full `meta.sys`, per envelope.md §1) :
 | 5 | graph_version | uint (u64) | constant 1 in embedded/sim (§2) |
 | 6 | — | — | RETIRED (extend-only: never reused). Held `mime_type` until D-2026-08-10-4 moved the content type to `meta.ext.content_type`, sealed in key 9 like every ext field. |
 | 7 | tier2 | array | Tier-2 birth stamps (`saga_*`, `loop_*` — envelope.md §1.2), present only when born in scope ; the **sorted pair list** of the sub-form below — never `map` ; keys extend-only |
-| 8 | data | array | the tagged payload `[encoding_tag (uint), bytes]` (sub-form below) — opaque, zero-copy, compared as bytes and never re-encoded ; a typed err payload is an ordinary envelope, no separate key |
+| 8 | data | array | the tagged payload `[encoding_tag (uint), bytes]` (sub-form below) — opaque, zero-copy, compared as bytes and never re-encoded; an outcome/status payload is an ordinary envelope, no separate key |
 | 9 | app_meta | array | the causal writable metadata — a **canonical sorted list of triples `[zone (text), field (text), tagged_value]`**, sorted UTF-8 by `(zone, field)` ; `zone` ∈ {`app`, `ext`} (D-2026-08-10-1 — root customs died), `field` is the flat dotted key (`audit.origin`) ; sealed because a handler reads them ; omitted when empty |
 
 **Record — shared header** (key `10` ; virtual time is an annotation, below) :
@@ -295,7 +309,7 @@ cannot diverge on bytes for the same journal :
     delivery-semantics §4 / execution-model §6.3, **graph-invisible**) is
     **NOT a sealed OUTBOUND status** : it is a separate
     NON-CAUSAL observability record, never part of the seal. Its payload
-    (the late reply, possibly a typed err) is a diagnostic
+    (the late reply, possibly a typed outcome) is a diagnostic
     annotation, so two runs seal identically regardless of a discarded
     late reply. The correlator (runtime) decides it; the adapter never
     returns it as a normal outcome.
@@ -334,4 +348,4 @@ executions differ on this field ?* Yes → annotation. No → core.
 
 | Causal core (in the canonical form, compared bytewise) | Annotations (recorded if useful, excluded from the form and the seal) |
 |---|---|
-| record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call key/digest/status) ; `data` bytes and typed err payloads | **virtual dated time** (derivable — annotation, simulation-semantics §6.1) ; wall-clock (`committed_at`) ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; all non-normative diagnostics |
+| record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call key/digest/status) ; every typed port payload | **virtual dated time** (derivable — annotation, simulation-semantics §6.1) ; wall-clock (`committed_at`) ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; all non-normative diagnostics |

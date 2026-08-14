@@ -44,7 +44,7 @@ the standard `content_type` (§5.2); handlers may rewrite declared
 ext fields, never invent one. Each zone's leaves are
 `scalar | array<scalar>` (flat — nested/heavy data goes in `data`);
 physically a field is ONE dotted string key inside its zone
-(`"app.audit.origin"`), and the CEL/guest projections nest by
+(`"app.audit.origin"`), and the expression/guest projections nest by
 splitting on dots. Propagation is uniform on a single-input
 emission (`app` and `ext` copied, `sys` reminted, explicit writes
 last-write-wins) and merges BY VALUE at joins — CommonOrAbsent per
@@ -97,7 +97,7 @@ on envelopes born outside, and they simply travel wherever the wires go
 (nothing strips them — nothing *can* : edges are wires, envelopes are
 immutable ; and it is honest provenance : that envelope *is* the scope's
 product). **In the language**, the aspect context is *instance* context —
-inside the lexical scope, the CEL env exposes `meta.sys.saga_id`,
+inside the lexical scope, the Rastok expression environment exposes `meta.sys.saga_id`,
 `saga_stack`, `loop_id`, `loop_stack`, `iter_count` **resolved from the
 aspect instance** (exactly like partition fields `session.key`) : always
 present inside — even while processing the scope-*creating* envelope, which
@@ -331,7 +331,7 @@ transactions that no port arrival triggers :
 | `on stop` via the `stop` action | `l:stop` | the envelope being processed when `stop` ran | the node itself |
 | `on stop` via lifetime expiry | `l:stop` | **the envelope that armed the deadline** — the instance's last-activity envelope (idle-ttl) or its creator (fixed/window). Always exists; there is no phantom tick | the node itself |
 | Loop re-injection | `l:next` | the previous call's output — the chain *is* the iteration history | **the `: Loop`-carrying node** |
-| Saga compensation envelope | `l:compensate` | **the envelope that caused the rollback** (the permanent failure — or the saga's `SagaExpired` timeout event) ; for compensations 2..n : the previous compensation's ack (the chain IS the reverse rollback order) | **the `: Saga`-carrying node**, port `compensate` (reserved), index 0 |
+| Saga compensation envelope | `l:compensate` | **the envelope explicitly routed to `Saga.rollback`** (or the saga's `SagaExpired` timeout event); for compensations 2..n: the previous compensation's ack (the chain IS the reverse rollback order) | **the `: Saga`-carrying node**, port `compensate` (reserved), index 0 |
 | Budget expiry (call `timeout`, `Saga.timeout`) | `l:timeout` | **the envelope that ARMED the budget** — the request (call) ; the instance-creating envelope (saga) | the Connector node / the `: Saga` node |
 | Join-buffer eviction | `l:evict` | the evicted envelope ([execution-model.md §7](execution-model.md)) | the Operator node |
 | Recovery resolution of an unknown outbound | `l:recover` | the request envelope whose outcome is unknown ([delivery-semantics.md §4.4](delivery-semantics.md)) | the Connector node |
@@ -374,7 +374,13 @@ content-derived identity, which lives in the manifest and is re-hashable.
 So **humans say "v1.4.0", the runtime uses the number, the manifest bridges
 them**. `spec_version` and per-namespace schema fingerprints are *derived* via
 the manifest, not carried per-envelope. During a rolling upgrade, envelopes
-from different builds coexist, each self-labelled by its number.
+from different builds coexist, each self-labelled by its number. The retained
+manifest schema makes an old envelope decodable; it does not silently make its
+logical type acceptable to a new graph. A schema change is crossed by an
+explicit typed Operator which consumes the old value and emits a new envelope
+under the current `graph_version`, with ordinary parent lineage. Journal
+migration onto a different semantic hash remains deferred and refuses typed
+until that execution contract lands ([types.md §6](types.md)).
 
 In single-process mode the manifest is a local file with one deployer.
 Scaled multi-host allocation of the number requires a separate cluster
@@ -415,13 +421,13 @@ envelope (storage = wire) =
 
 | Plane | Answers | Carried by |
 |---|---|---|
-| Logical type | what does CEL see? | the graph schema (`text`, `Invoice`, `variant`, …) |
+| Logical type | what do ports and Rastok expressions see? | the graph schema (`text`, `Invoice`, `variant`, …; [types.md](types.md)) |
 | Internal encoding | how are the bytes represented NOW? | `Data::Encoded.encoding` (`raw \| avro \| arrow-ipc`) |
 | Connector codec | how does a boundary serialize/deserialize? | the connector's `codec` attribute |
 | External content type | what does the outside world call this exchange? | `meta.ext.content_type` (§5.2) |
 
 The content type is neither a logical type nor an internal decode
-tag: a `json { … }` literal is a materialized `variant` VALUE and
+tag: a `json! { … }` literal is a materialized `variant` VALUE and
 carries no content type — only a boundary that serializes it mints
 bytes and a matching `content_type`.
 
@@ -433,9 +439,9 @@ bytes and a matching `content_type`.
    structured bodies awaits a lazy `Encoding::Json`; in the v1 regime a JSON
    body is decoded eagerly at the frontier — D-2026-08-10-4 — because parking
    it under `raw` would make a structural access materialize raw text.)
-2. **Access → transcode once** to the guest-native form (`jq` on a document →
-   parse ; `sql {}` on a table → Arrow, once).
-3. **A value built by the graph** (output of a `jq`, a join) is born in memory
+2. **Access → transcode once** to the guest-native form (`jq!` on a document →
+   parse ; `sql! {}` on a table → Arrow, once).
+3. **A value built by the graph** (output of a `jq!`, a join) is born in memory
    with no original bytes ; on persistence it takes its guest-native form :
    `avro` for documents, `arrow-ipc` for tables, raw bytes for `bytes`/`text`.
 4. **Persistence stores the current form** — never a forced transcode at write.
@@ -465,7 +471,7 @@ all preserve representation and content type together. Outbound, a
 serializing codec dictates and writes the produced value; a byte
 pass-through uses the current value if compatible, else the
 connector's configuration, else `application/octet-stream`; a
-codec/content-type contradiction is a typed error, never a silently
+codec/content-type contradiction is a typed boundary outcome, never a silently
 false header.
 
 ## 6. Writing `meta.sys` — there is no write
@@ -479,7 +485,7 @@ that look like writes are not :
 2. **Emission constructor.** Content metadata is ordinary `ext`
    writing now — `out = { data = …, meta.ext.content_type = "image/png" }`,
    or the whole-payload constructors (`asset("…", "image/png")`,
-   `base64("image/png") { … }`). Nothing reaches `meta.sys`: the
+   `base64!("image/png") { … }`). Nothing reaches `meta.sys`: the
    payload-coupling invariant (§5.2) derives or strikes
    `content_type` when `data` is replaced — a reformulation of the
    old "runtime nulls the hint" rule, executed at the same atomic

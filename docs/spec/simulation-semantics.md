@@ -146,7 +146,7 @@ mock bank {
   on in { out = { status = "charged", deduplicated = true } }   // §4 : a data record
 }
 // never answer  = { out = nothing }   → the Connector's `timeout` machinery works
-// typed failure = { err = PaymentDeclined { transient = false } }   (handler grammar already)
+// typed outcome = { status = PaymentDeclined { reason = "policy" } }
 
 // EXPECTATION = a guard head, read in the mirror
 expect ledger.in where data.status == "settled"
@@ -156,7 +156,8 @@ expect ledger.in where data.status == "settled"
 
 Only ~six words are simulation-specific : `simulation`, `scenario`, `mock`,
 `expect`, `advance`, `after`. Everything else — `on`, `where`, `out =`,
-`err =`, `nothing`, the braced builder, CEL — is the language the developer
+ordinary port assignments, `nothing`, the braced builder, Rastok
+expressions — is the language the developer
 (and the generating LLM) already speaks.
 
 
@@ -195,8 +196,9 @@ is `.` (`out = .`).
   the request (node, key, digest, data) and fails. Wanting silence is
   *written* : `mock bank { on in { out = nothing } }`. No guessed defaults —
   this is what keeps failure-space coverage (§7) honest.
-- **`err` replies are compile-checked** against the Connector's declared
-  static error set.
+- **Every mock output is compile-checked** against the resolved type of
+  that Connector port. One mock completion may emit several ports
+  atomically, exactly like the real boundary.
 - **Deterministic and stateless** : a mock is a pure function of the
   request envelope ; `after <duration>` joins the dated-events queue (swept
   by `advance`) ; `meta.sys.iter_count` covers retry branching (sim 3). A
@@ -213,7 +215,7 @@ deliveries of that window**, without consuming it :
 ```rastok
 orders.out = { … }               // ACTION → window ①
 expect pay.in where …            // reads window ①
-expect nothing app.err           // reads the SAME window ①
+expect nothing pay.status        // reads the SAME window ①
 advance duration("30s")                      // ACTION → window ②
 expect ledger.in where …         // reads window ②
 ```
@@ -222,14 +224,16 @@ expect ledger.in where …         // reads window ②
 
 ```rastok
 expect ledger.in where data.status == "settled"            // ∃ — at least one match
-expect nothing codex.in [where <cel>]                      // ∅ — zero deliveries (the void word)
+expect nothing codex.in [where <expr>]                     // ∅ — zero deliveries (the void word)
 expect ledger.in count == 1 where data.charge_id == "ch_1" // exact count
 expect "charged exactly once" ledger.in count == 1 …       // optional label, for reports
 ```
 
-- **`app.err`** names the root error sink — `app` is the pre-bound identifier
-  for the `: App` entry graph (delivery-semantics §5) — assertable in scenarios, wirable in production (`app.err -> my_dlq`
-  replaces the default sink). One name, both worlds.
+- **Every typed output is observable by port.** `app` remains the pre-bound
+  identifier for the `: App` entry graph, so declared App boundary ports use
+  `app.<port>`; node outputs use their qualified node path (`pay.status`,
+  `process.err`, …). The Lab reads the resolved `UnwiredPolicy` exactly as
+  production does. There is no synthetic root-error port.
 - **Black-box only** : expectations target ports ; internal state (`var`,
   partition fields) is not directly assertable — the golden trace (§6) sees
   everything anyway, and scenarios stay robust to internal refactorings.
@@ -295,7 +299,7 @@ Byte-identical **iff** :
    state-delta paths use UTF-8 name order; `app_meta` triples use
    UTF-8 `(zone, field)` order; and Rastok `Value::Map` pairs use the
    key's canonical tagged bytes (so `"b"` precedes `"aa"`);
-   the homegrown CEL evaluator guarantees **sorted-key iteration inside
+   the homegrown Rastok expression evaluator guarantees **sorted-key iteration inside
    macros** (`map`/`filter`/`exists` over a map) — iteration order is a
    promise *because we own the evaluator*, so a macro-produced list is
    byte-stable too.
@@ -322,20 +326,21 @@ index leave no fingerprint.
    diff). Never a silent regeneration.
 
 
-## 7. The failure-space checklist — enumerable, therefore checkable
+## 7. The outcome-space checklist — enumerable, therefore checkable
 
-In most languages "test all the error cases" is hope. In Rastok the failure
-space of an app is **statically enumerable** :
+In most languages "test all the outcome cases" is hope. In Rastok the closed
+outcome surface of an app is **statically enumerable** :
 
-- the `err` channel is **typed** → each node's error kinds are a finite,
-  declared list ;
+- every effective output port is **typed** → enum/union cases and
+  completion combinations form a finite declared set where the type is
+  closed;
 - the lifecycle events are a **closed registry** → `l:timeout`, `l:evict`,
   `l:recover`… applicable per node, listable ;
 - effects are **declared** → every **unkeyed `compensable`** has its
   `OutcomeUnknown` case (an `irreversible` is always keyed and
   resolves by recall), every `compensable` its failing-compensation case,
   every retry Loop its `LoopExhausted`, every saga its `rollback_failed` ;
-- the CEL checker already emits its **residual obligations** (bare
+- the expression checker already emits its **residual obligations** (bare
   `meta.app` reads, `.orValue()` branches, fallible narrows).
 
 So the compiler can print the checklist, and the simulator can score it :
@@ -550,8 +555,8 @@ the opaque block.
 - [execution-model.md](execution-model.md) — virtual time, the `advance`
   sweep, dated events, the node transaction.
 - [delivery-semantics.md](delivery-semantics.md) — the journal (INBOUND /
-  TRANSACTION / OUTBOUND), recovery, `app.err`'s production side.
+  TRANSACTION / OUTBOUND), recovery, and boundary completion.
 - [envelope.md](envelope.md) — the id recipe the traces fingerprint ;
   storage form (the trace serializes it).
 - [grammar.md](grammar.md) — the simulation grammar productions ;
-  expectations are CEL predicates and the absent-field grid applies.
+  expectations are Rastok expression predicates and the absent-field grid applies.

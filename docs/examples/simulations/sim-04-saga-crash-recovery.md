@@ -4,14 +4,14 @@
 > is derived by hand from
 > [delivery-semantics.md](../../spec/delivery-semantics.md) §5-§7 and
 > [effects-and-sagas.md](../../spec/effects-and-sagas.md). It is a
-> conformance target for err bubbling, the state fold, recovery during
+> conformance target for explicit typed rollback routing, the state fold, recovery during
 > rollback and idempotent compensation replay.
 
 ## 1. What this sim exercises
 
 | Rule | Source |
 |---|---|
-| Unwired `err` bubbles into the enclosing `: Saga` = the compensation trigger | delivery §5 |
+| A selected typed outcome is explicitly routed to `Saga.rollback` | effects-and-sagas §5.1 |
 | Saga state = a fold over the scope's records (no 4th record type) | delivery §7.1 |
 | `l:compensate` : parent = the failing envelope, emitter = the `: Saga` node | envelope §3.1 |
 | Crash mid-rollback → fold + outbound triage + resume at j+1 | delivery §7.2 |
@@ -49,7 +49,7 @@ graph sim04 : App {
       idempotency_key = meta.app.booking_id + "/charge"
     }
     . -> reserve -> pay -> .
-    // pay.err is UNWIRED on purpose : it bubbles into `: Saga` — the trigger.
+    pay.status -> Saga.rollback when data is PaymentDeclined
   }
 
   bookings -> book_trip -> confirmed.in
@@ -71,7 +71,7 @@ lab sim04 {
         on in                            { out = { status = "held" } }
       }
       mock pay {
-        on in { err = PaymentDeclined { transient = false } }
+        on in { status = PaymentDeclined }
       }
 
       bookings.out = {
@@ -80,7 +80,7 @@ lab sim04 {
       }
       crash after reserve.outbound_open#2        // the 2nd outbound open of reserve = the compensation's
       restart
-      expect "saga rolled back, loudly" app.err where err.kind == "SagaRolledBack"
+      expect "saga rolled back, loudly" book_trip.status where data is SagaRolledBack
       //   (the window rule : restart is an ACTION step — the recovery deliveries,
       //    including the saga's terminal SagaRolledBack emission, are ITS window)
     }
@@ -100,11 +100,11 @@ t=0  E0 born (bookings) ; enters book_trip → saga instance created
      reserve : OUTBOUND open { key "bk_7/hold" } → mock replies "held"
                → OUTBOUND closed · TRANSACTION (reserve sealed)      → E1 on out
      pay     : E1 delivered ; OUTBOUND open { key "bk_7/charge" }
-               → mock replies err PaymentDeclined (transient = false)
-               → OUTBOUND closed · TRANSACTION : E2 on pay.err
-                  err kind = PaymentDeclined, parent = E1
+               → mock replies status PaymentDeclined
+               → OUTBOUND closed · TRANSACTION : E2 on pay.status
+                  tagged case = PaymentDeclined, parent = E1
 
-     pay.err is UNWIRED → E2 BUBBLES : pay → book_trip, intercepted by `: Saga`
+     the guarded edge selects E2 → Saga.rollback : the `: Saga` manager consumes it
      fold so far : open, 1 step sealed (reserve), permanent failure seen
                  → rolling_back, 0/1 compensations done
 
@@ -124,7 +124,7 @@ restart :
   ① FOLD the journal of scope book_trip/bk_7 :
        instance-creating tx @ t=0            → open
        reserve sealed                        → 1 step
-       E2 err bubbled into the saga          → rolling_back
+       E2 delivered to Saga.rollback         → rolling_back
        l:compensate E3 emitted               → compensation 1 in flight
      state : « rolling_back, 0/1 acked »           ← computed, not stored
   ② OUTBOUND triage : open(E3), no closure → unknown outcome
@@ -132,13 +132,13 @@ restart :
        → RECALL with the byte-same key "bk_7/release" (digest d3 re-checked ✓)
        mock : "released" → OUTBOUND closed · TRANSACTION (compensation acked)
   ③ resume the fold : 1/1 compensations acked → rolled_back
-       the saga emits its terminal typed err SagaRolledBack { saga_id } —
-       it bubbles to the app root's default sink : the §5 bubble ends LOUDLY.
+       the saga emits SagaRolledBack { saga_id } on book_trip.status —
+       an ordinary typed output observed through its resolved journal policy.
   ④ Saga.timeout : re-armed for the REMAINING budget
        (opened at committed_at = 0 ; 10min budget ; recovery at journal-time —
         the chrono did not restart from zero, it resumed)
 ```
 
 The expectation reads the `restart` step's window (the recovery deliveries) at
-`app.err` : **pass** — rolled back, exactly one hold, exactly one
+`book_trip.status` : **pass** — rolled back, exactly one hold, exactly one
 release, zero charges kept.

@@ -1,6 +1,8 @@
 # Standard library contracts
 
-> **Status: Normative — under review.**
+> **Status: Normative M1.3 target — under review.** The current v6
+> `error_set` and success/failure boundary seam are implementation
+> scaffolding superseded by D-2026-08-14-1.
 > Companion to [execution-model.md](execution-model.md) (`timeout` /
 > `on_timeout`, the correlator duty), [delivery-semantics.md](delivery-semantics.md)
 > (INBOUND / OUTBOUND records) and [simulation-semantics.md](simulation-semantics.md)
@@ -29,17 +31,17 @@ optional — a Connector whose contract leaves a case blank is not spec'd:
 | 5 | **`behavior`** | deterministic / probabilistic — §2; pre-declared or per-instance |
 | 6 | **Attributes** | the config surface (boot phase: `env()`/`secret()` legal); `timeout`/`on_timeout`/`restart` inherited where calls/instances exist |
 | 7 | **Correlator** | what "a call" is in its protocol (execution-model §6.1: the Connector matches) |
-| 8 | **Error set** | its typed errors — the finite list the future `rastok simulate --coverage` enumerates |
+| 8 | **Outcome coverage** | the finite typed cases each output may emit and the completion rule the future `rastok simulate --coverage` enumerates |
 | 9 | **Instances** | singleton / `per`-keyed (each with `run_id`) / per-call; the terminal envelope |
 | 10 | **Journal & sim** | which records it writes (INBOUND w/ `inbound_seq`; OUTBOUND open-closed); how it is mocked/injected |
 
-Case 8 deserves the emphasis: a Connector without a declared error set would
-make the failure space non-enumerable — so the error set is **as mandatory as
-`effect`**. The *effective* set =
-the declared kinds **plus the runtime-common kinds** the machinery can emit
-for any caller: `TimeoutExpired` (any budget), `OutcomeUnknown` (unkeyed
-compensable, recovery), `OutputOverflow` (job mode) — `--coverage` counts
-both halves.
+Case 8 deserves the emphasis: coverage must enumerate the cases a
+Connector can emit, but they are described by the ordinary types of its
+output ports, not by a parallel `error_set`. Runtime-produced cases such
+as timeout or unknown outcome must appear in the resolved port type just
+like adapter-produced cases. A boundary completion is a separate control
+fact: it closes one obligation and may carry several typed port outputs.
+`--coverage` counts the cases and the completion paths.
 
 **Naming rule**: stdlib traits carry **no suffix** — the keyword already says
 it (`connector c: Clock`). Applies to all future traits too (`Postgres`,
@@ -103,9 +105,9 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Ports | `out` (decoded requests); `in` (mode `respond`: the graph's answers); `err` |
 | Populates | `meta.ext` : `content_type` (the request's full Content-Type), `request_id: text?`, `path: text`, `method: text` — written once at ingress; handlers may rewrite, never invent (D-2026-08-10-1) |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
-| Attributes | `path`, `mode = ack (default) \| respond`, `codec`, `auth`, `timeout` (respond: the open-request budget), **`correlate = <CEL path on the response>`** (respond; default: lineage) |
+| Attributes | `path`, `mode = ack (default) \| respond`, `codec`, `auth`, `timeout` (respond: the open-request budget), **`correlate = <Rastok expression path on the response>`** (respond; default: lineage) |
 | Correlator | mode `respond`: **default = lineage** (`origin_id == R.id`) — valid on join-free return paths ONLY. **A return path crossing a root-mixing join ⇒ explicit `correlate` required (compile error otherwise)**: the join output inherits the TRIGGER's origin, creating a race. The author carries the token (`meta.app.request_id = meta.sys.id`) and attributes it through joins with the explicit-attribution rule; matching = correlate-value == the open request's root id. An orphan response (no open request — it already expired, the 504 went out) is **discarded-and-journaled** (the call-closed rule's cousin). |
-| Error set | `MalformedRequest` (400 to the client AND a journaled typed err), `AuthFailed` (401), `RequestExpired` (respond: 504, `l:timeout`, call-closed — a late graph answer is discarded-and-journaled, never two HTTP responses), `Overloaded` (respond: open requests are **bounded** → 503; composes with §3-delivery bounded lag) |
+| Outcome cases | The resolved status/diagnostic output includes `MalformedRequest`, `AuthFailed`, `RequestExpired` and `Overloaded`; none is inferred from a port named `err`. Exact payloads land with the HttpServer slice. |
 | Instances | singleton |
 | Journal / sim | INBOUND records, `inbound_seq` atomic with the accept; fixture injects at `out` |
 
@@ -121,12 +123,12 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Case | Contract |
 |---|---|
 | Role / Direction | HTTP calls; **outbound caller** |
-| Ports | `in` (requests), `out` (responses), `err` |
+| Ports | `in` (requests), `out` (all usable HTTP responses, including non-2xx bodies), `err` (raw transport diagnostics only when the adapter actually has bytes), `status` (typed outcomes with no usable HTTP response) |
 | Populates | `meta.ext` : `content_type` (the response's Content-Type), `status: int` — on the reply envelope |
 | effect / behavior | **per-instance, both mandatory** |
 | Attributes | `url`/`base_url`+`path`, `method`, `codec`, `auth`, `tls`, `timeout`, `on_timeout = bypass (default) \| kill`, `idempotency_key` (mandatory when `irreversible`) |
 | Correlator | protocol-native: HTTP request ↔ response |
-| Error set | `ConnectFailed { transient = true }`, `TimeoutExpired { transient = true }`, `HttpStatus { status, body, transient }` — **default mapping: status ≥ 400 → err**, `transient = status ∈ {408, 429, 5xx}`. (`on err where err.transient` reads naturally; the mapping is stated, revisit only with evidence.) |
+| Outcome cases | `ConnectFailed`, `TimeoutExpired`, `DecodeFailed` and recovery's `OutcomeUnknown` belong to `status`. A completed HTTP response — 2xx or otherwise — remains on `out`, with its code in `meta.ext.status`; retry policy explicitly selects response codes and/or status cases instead of inheriting a universal `transient` bit. Exact payloads land with the HttpClient slice. |
 | Instances | singleton (`per` legal, rarely useful) |
 | Journal / sim | OUTBOUND open (key, digest) / closed / discarded; mocked in scenarios |
 
@@ -135,11 +137,12 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Case | Contract |
 |---|---|
 | Role / Direction | child process over stdio; **both** (caller + source) |
-| Ports | `in` → stdin; `out` ← stdout; `err` ← stderr + lifecycle |
+| Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← stderr bytes; `status` ← `ProcessStatus` |
 | effect / behavior | **per-instance, both mandatory** |
 | Attributes | the normative table below (D-2026-08-12-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
 | Correlator | see modes below |
-| Error set | `SpawnFailed`, `DecodeError` (invalid CONTENT — for framing/jsonl faults the offending line rides the payload; a UTF-8 fault has no line and carries its message), `CaptureFailed` (a pipe READ failed: incomplete capture for an I/O reason; closed empty payload), `StderrLine` (stderr output; route it or write `-> nothing`), `TimeoutExpired`, `ExecFailed { exit_code, stderr }` (job), `OutputOverflow { limit, reason }` (job — `reason` = declared budget crossed, or the host's capture capacity refused; no stream, no size: no journaled thread race), `ProcessExited { exit_code, signal, run_id }` (service: the **terminal** error — terminal BY KIND; its data lives in the typed payload, `meta.sys` stays closed) |
+| Outcome cases | `ProcessStatus` below; exactly one terminal status per job completion. stderr never carries lifecycle data. |
+| Unwired policy | `out = require_wire`; `err` and `status` default to the journal sink. Explicit edges consume them; `-> nothing` records intentional discard. |
 | Instances | see modes below |
 | Journal / sim | OUTBOUND records per call (job: per run); spontaneous emissions = INBOUND roots; mocked in scenarios |
 
@@ -152,16 +155,16 @@ values and never reintroduces a default.
 
 | Attribute | Profile | Domain | Presence |
 |---|---|---|---|
-| `command` | common | CEL → `text` | **Required** |
-| `args` | common | CEL → `array<text>` | Defaulted(`[]`) — omission ≡ `[]`; `null` refuses (no domain is implicitly nullable) |
+| `command` | common | Rastok expression → `text` | **Required** |
+| `args` | common | Rastok expression → `array<text>` | Defaulted(`[]`) — omission ≡ `[]`; `null` refuses (no domain is implicitly nullable) |
 | `codec` | common | choice `lines \| jsonl` (`bytes` **reserved**) | **Required** — the framing is never chosen silently (D-2026-08-11-1) |
 | `effect` | common | choice, typed | **Required** |
 | `behavior` | common | choice, typed | **Required** |
-| `timeout` | common | CEL → `duration` | Optional — a true optional: no budget declared, no budget |
+| `timeout` | common | Rastok expression → `duration` | Optional — a true optional: no budget declared, no budget |
 | `env` | common | composite map — **deferred** (named diagnostic until composite domains land; the canonical spelling will be `env = { "K": v }`) | — |
 | `max_output` | job | byte size: `<digits><unit>`, unit ∈ `B \| KiB \| MiB \| GiB` (explicit, required), ASCII whitespace tolerated around and between, ≤ 4 GiB (syntax bound; the adapter binding additionally proves the budget is REPRESENTABLE on this host — at most `isize::MAX` — while actual allocation is judged chunk by chunk at intake via `try_reserve`, surfacing as the typed overflow, never an abort) — one parser (`contract::byte_size`) judges at check AND enforces at run | Defaulted(`"8MiB"`) |
 | `on_timeout` | job | choice `kill` (one word — "fixed to `kill`") | Defaulted(`kill`) |
-| `correlate` | service | CEL path over runtime data (deferred-only domain) | Optional |
+| `correlate` | service | Rastok expression path over runtime data (deferred-only domain) | Optional |
 | `restart` | service | struct (deferred-only domain) | Optional |
 
 `correlate` and `restart` do NOT exist on the job profile: writing
@@ -169,26 +172,52 @@ one there refuses by NAME (« `restart` belongs to
 `Process(mode = service)` and is not applicable to
 `Process(mode = job)` ») — never a generic "forbidden".
 
+`ProcessStatus` is an ordinary tagged union on the ordinary `status`
+port:
+
+```rastok
+type ProcessStatus = union {
+  Exited         { exit_code: int32, signal: int32? }
+  SpawnFailed    { message: text }
+  TimeoutExpired
+  DecodeFailed   { message: text, line: text? }
+  CaptureFailed
+  OutputOverflow { limit: uint64, reason: enum { budget, capacity } }
+}
+```
+
+For a job, one boundary completion carries exactly one terminal
+`ProcessStatus` and may also carry `out` and `err`. `err` contains only
+the stderr bytes observed for that run; on a normally collected child it
+is the complete stderr byte stream. It is absent when no stderr bytes
+were observed. A non-zero exit is still `Exited`, not an automatically
+classified failure. A graph narrows/tests the status case and decides
+whether to retry, alert, discard or continue. `run_id` and causal lineage
+remain runtime identity/provenance rather than fields invented inside
+stderr or every status payload.
+
 **`mode = job` (default — the Unix one-shot; systemd `Type=oneshot`, k8s Job
 lineage)**: one envelope = one spawn. stdin = the request (codec-framed);
-stdout, complete at exit, = **one reply envelope**: `codec =
-lines` → `data = text` (the whole stdout as one text value); `codec = jsonl` →
-`data = array<variant>` (the decoded lines — possibly length 1). The CAPTURE is
+when stdout decodes successfully the completion carries `out`: `codec =
+lines` → `data = text` (the whole stdout as one text value); `codec =
+jsonl` → `data = array<variant>` (the decoded lines — possibly length
+1). The same completion independently carries `err` when stderr is
+non-empty and always carries one `status`. The CAPTURE is
 bounded: **`max_output = 8MiB` (default)** is the AGGREGATE budget
 across stdout and stderr (D-2026-08-12-1, review round) — the total
 is judged before any byte is stored, so neither stream ever loses
-bytes silently; crossing it → typed err
-`OutputOverflow { limit, reason }` + the run is killed. `reason`
+bytes silently; crossing it → status
+`OutputOverflow { limit, reason }` and the run is killed. `reason`
 distinguishes `budget` (the declared cap) from `capacity` (the
 host's capture allocation refused — judged chunk by chunk via
 `try_reserve`; the pump's own bounded 8 KiB chunk copies remain
 ordinary allocations). The payload carries NO stream and NO exact
 size: the two capture pumps have no total order, and the journal
 records no thread race. A pipe READ error is its own fact — the
-reply refuses as `CaptureFailed` (closed, empty payload: the OS
+completion reports `CaptureFailed` (closed, empty status payload: the OS
 detail and the failing stream would race between two pumps),
-truncated bytes never presented as the whole. exit ≠ 0 / signal →
-`ExecFailed`. The **process boundary IS the correlation** — `correlate` is a
+truncated bytes never presented as the whole. Every observed exit emits
+`Exited { exit_code, signal }`, including exit ≠ 0. The **process boundary IS the correlation** — `correlate` is a
 compile error here. `timeout` = the whole-run budget; `on_timeout = kill`
 **forced** (bypassing a detached run is meaningless). `restart` is likewise
 a compile error on a job (re-running a possibly-irreversible one-shot is a
@@ -207,13 +236,13 @@ writes `aa` first),
 numbers exact (`int` as the integer, `decimal` in plain decimal
 notation at its sealed scale, `double` in shortest round-trip form),
 strings JSON-escaped, one trailing `\n`. Unserializable requests
-refuse TYPED as `DecodeError` before any open fact: `bytes` (no JSON
+refuse as `DecodeFailed` before any open fact: `bytes` (no JSON
 form — `lines` or a future `bytes` codec carry those), a
 non-finite `double`, and any ENCODED payload (`jsonl` frames the
 JSON model, not opaque representations). INBOUND, each line decodes
 EAGERLY through the house JSON reader (D-2026-08-10-4/-7): exact
 numbers, duplicate keys refused; a line that does not parse — an
-interior empty line included — is `DecodeError` with the offending
+interior empty line included — is `DecodeFailed` with the offending
 line in the payload; the single trailing newline's empty tail is
 framing, not a line; empty stdout is the empty array — but a LONE
 `\n` is one empty line and refuses (the framing is judged before
@@ -243,9 +272,9 @@ spawn (first delivery).
 | Role / Direction | periodic physical time; **inbound source** |
 | Ports | `out`: tick envelopes (`timestamp`) |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
-| Attributes | `every = duration("…")` (a constant CEL duration) |
+| Attributes | `every = duration("…")` (a constant Rastok duration expression) |
 | Correlator | **none** (a pure source makes no calls) |
-| Error set | **empty** (a metronome has no failure mode worth an envelope) |
+| Outcome cases | none (a metronome has no runtime outcome worth an envelope) |
 | Instances | singleton per declaration; `system_clock` = the implicit instance the supervision plane already uses (lifetimes, `within`) |
 | Journal / sim | ticks = INBOUND records; in sim, driven by `advance` |
 
@@ -258,7 +287,7 @@ spawn (first delivery).
 | effect / behavior | `none` / `deterministic` (pre-declared) |
 | Attributes | **either** `cron = <expr>` + `tz = <IANA zone>` (mandatory together — never the host's implicit zone) **or** `at = timestamp("…")` (fires **once**; the zone lives in the RFC-3339 string) |
 | Correlator | **none** (a pure source makes no calls) |
-| Error set | empty (misconfiguration is compile-time: bad cron/tz = refusal) |
+| Outcome cases | none (misconfiguration is compile-time: bad cron/tz = refusal) |
 | Instances | singleton per declaration |
 | Journal / sim | ticks = INBOUND records; a scenario using `Calendar` should declare its `origin` (simulation-semantics §5: virtual t=0 ≡ a civil instant; absent → epoch + **warning**) |
 
@@ -274,11 +303,11 @@ relative — vs calendar time — civil, absolute.)*
 | Case | Contract |
 |---|---|
 | Role / Direction | bounded, ordered, in-process value store; **append and snapshot read** |
-| Ports | `in: T` appends `data`; `read: struct { }` requests a snapshot; `out: array<T>` returns it; `err` |
+| Ports | `in: T` appends `data`; `read: struct { }` requests a snapshot; `out: array<T>` returns it; `status: MemoryStatus` |
 | effect / behavior | `idempotent` / `deterministic` (pre-declared) |
 | Attributes | `cap = <n>` (default 10 000 — bounded **by construction**), `overflow = evict_oldest (default, evictions journaled) \| reject` |
-| Correlator | a delivery to `read` is one call and produces exactly one `out` snapshot or one typed `err` |
-| Error set | `CapacityExceeded` (mode `reject`) |
+| Correlator | a delivery to `read` is one call and completes with an `out` snapshot plus its ordinary typed status facts |
+| Outcome cases | `CapacityExceeded` on `status` when `overflow = reject` |
 | Instances | one store per declared Node instance and therefore per partition key when the declaration uses `per` |
 | Journal / sim | content is Node state, recovered by folding appends and evictions at the Node's effective durability scope; reads and their snapshots are journaled and deterministic |
 
@@ -309,7 +338,7 @@ These names expose common patterns without adding a second execution model:
 | `Aggregator` | a Reducer whose partition has a window lifetime |
 | `Joiner` | a multi-input handler using the ordinary join and bound rules |
 | `Dispatch` | the runtime role of a declared `graph ... per <partition>` |
-| `Jaq` | a pure Operator whose computation is a pinned `jq { ... }` guest program |
+| `Jaq` | a pure Operator whose computation is a pinned `jq! { ... }` guest program |
 
 They are deterministic by construction. Their names may improve diagnostics
 and generated diagrams, but the semantics below reduce to the same handlers,
@@ -380,7 +409,7 @@ type is loaded.
 
 ```rastok
 operator normalize : Jaq {
-  program = jq {
+  program = jq! {
     .data | with_entries(.key |= ascii_downcase)
   }
 }
@@ -391,9 +420,10 @@ subject to the pure guest contract in §5.
 
 ## 5. The pure guest-program contract — six clauses
 
-The **Rastok DSL is the host language**. CEL is its integrated core expression
-language, not a guest module. A tagged block carries source in a **guest
-language** — for example `jq { }` and `sql { }` — which the build
+The **Rastok DSL is the host language**. Rastok expressions are its
+intrinsic CEL-compatible computation language, not a guest module. A
+tagged frontend carries source in a **guest language** — for example
+`jq! { }` and `sql! { }` — which the build
 turns into a versioned **`GuestProgram`**. A **`GuestExecutor`** executes a
 pure `GuestProgram` inside the enclosing Operator's node transaction. A pure
 guest exists only by signing these six clauses:
@@ -411,16 +441,18 @@ guest exists only by signing these six clauses:
 3. **Typed boundary** — pin-or-variant at both block edges; inside, the
    guest language's own law applies (jq's *missing ≡ null* survives only there).
 4. **Bounded cost** — the guest declares its bound mechanism (jq fuel, SQL
-   row/memory limits); a blown budget = typed err `GuestBudgetExceeded`,
-   **never a hang**.
-5. **One grain, one grammar** — one block position, one guest language; the tag
-   is the name (`jq { }`, `sql { }`); no `cel { }` block; a guest absent
+   row/memory limits); a blown budget emits its declared typed outcome
+   case `GuestBudgetExceeded`, **never a hang**.
+5. **One grain, one grammar** — one block position, one guest language;
+   `IDENT!` is the common host form (`jq! { }`, `sql! { }`); there is no
+   `cel!` block; a guest absent
    from the build (Cargo feature) = a compile error naming the missing
    feature.
-6. **Typed errors, parsed early** — block syntax is parsed **at compile
-   time** (no runtime syntax surprises); runtime eval failure = typed err
-   `GuestError { language, message }` on `err` — it enters the coverage
-   checklist like everything else.
+6. **Typed outcomes, parsed early** — block syntax is parsed **at compile
+   time** (no runtime syntax surprises); runtime evaluation failure is a
+   declared tagged case such as `GuestError { language, message }` on the
+   frontend's typed output contract — it enters coverage like everything
+   else.
 
 The core knows no guest language by name — it knows `GuestProgram` and the
 contract.
@@ -467,8 +499,8 @@ spans; nothing wall-clock in the data plane). This note pins four things:
 The surface reserves the following mapping:
 
 - **An exposed graph = an MCP tool**: typed input ports → `inputSchema`
-  (the Arrow-anchored types project to JSON Schema); output → result; the
-  typed error set → tool errors.
+  (the Arrow-anchored types project to JSON Schema); typed output ports and
+  tagged status cases → result/tool errors according to the export profile.
 - **`effect` → the existing MCP annotations**, derived (the max over the
   graph's Connectors): `idempotent` → `idempotentHint`, `irreversible` →
   `destructiveHint`, `none` → `readOnlyHint`.
@@ -497,14 +529,14 @@ The surface reserves the following mapping:
 
 - A correlated request/reply round-trip closes its OUTBOUND call.
 - An uncorrelated service notification becomes a spontaneous INBOUND root.
-- A protocol error is returned as a correlated typed error.
+- A protocol failure is returned as a correlated typed status/output case.
 - A reply after `TimeoutExpired` is discarded-and-counted, never delivered.
-- Process death emits `ProcessExited`; the restart policy may respawn the
+- Process death emits `Exited` on `status`; the restart policy may respawn the
   service and invoke its protocol-specific resume operation.
 
 A partner may persist per activity rather than per creation, so an empty
 session can legitimately be unresumable. The recovery recipe for such
-partners is **resume-or-start-fresh, routed on the typed error** — graph-side
+partners is **resume-or-start-fresh, routed on the typed status case** — graph-side
 wiring, no new mechanism.
 
 
@@ -515,7 +547,7 @@ wiring, no new mechanism.
 - [delivery-semantics.md](delivery-semantics.md) — INBOUND/OUTBOUND records,
   the key-stability rule these contracts obey.
 - [simulation-semantics.md](simulation-semantics.md) — mocks, the coverage
-  checklist fed by the error sets, `origin` for `Calendar` scenarios.
+  checklist fed by resolved port cases, `origin` for `Calendar` scenarios.
 - [envelope.md](envelope.md) — `inbound_seq`, terminal envelopes.
 - [effects-and-sagas.md](effects-and-sagas.md) — the `effect` axis;
   `behavior` is its sibling.

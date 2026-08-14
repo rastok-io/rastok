@@ -162,6 +162,13 @@ run the same engine. The frontier is machine-checked: CI builds
 `rastok-core` for a Cortex-M target on every push, and the std crate
 re-exports the kernel so callers see one surface.
 
+M1.3 deliberately revisits one name and ownership boundary inside that
+crate: Rastok's canonical logical `DataType`/`Value` moves to the core,
+while the CEL-compatible machinery becomes the `expr` consumer of that
+domain. JSON Schema, Avro and Arrow adapters stay in the std/boundary
+layer; their library types never leak into the no_std kernel. See the
+[M1.3 backlog](docs/architecture/m1.3-type-system-backlog.md).
+
 ## Views
 
 - [System context](docs/architecture/01-system-context.svg) —

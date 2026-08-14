@@ -1,7 +1,7 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-13 through M1.2 and
-> its compiler interludes.** The table first preserves the M0 evidence;
+> Planning aid — non-normative. **Updated 2026-08-14 through M1.2 and
+> the specified M1.3 target.** The table first preserves the M0 evidence;
 > the M1 extension below records which normative owners gained new
 > executable responsibility. Where implementation surfaced a semantic
 > ambiguity, it stopped at the boundary as required: the errata live in
@@ -39,9 +39,16 @@ they are not promised crate names.
 | Parser interlude | Forward lexeme stream with lexer-owned cursor/lookahead; reserved `json`/`nothing`; no implicit yield; semantic region delegation; bounded structural recovery | `compiler::{lexer,parser,syntax}`, `trivia`, `cel`, `json` | success/rejection/diagnostic-location matrices, sibling-preservation regressions, unchanged valid-program hash |
 | Plan package v6 | The VM accepts only `ValidatedExecutionPlan`; shared bounded canonical CBOR; v5 body plus decimal call id 4 under a v6 envelope | `plan::{serialization,validation}`, `canonical_cbor`, `identity::encoding` | canonical round trip, typed corruptions, `no_std` decode and emulated Cortex-M33 spike |
 
-The next row to add is M1.3, the author-written typed-error half
-(`err = Kind { … }` and mock failures). Until then, connector/machine
-failures execute but operator-authored error emissions remain guarded.
+## M1.3 target (not yet landed)
+
+| Slice | Normative responsibility | Intended owner boundary | Required evidence |
+|---|---|---|---|
+| M1.3 logical payload types and uniform ports | One canonical `DataType`/`Value`; complete effective port types; JSON/Avro/Arrow projections including unions; Rastok expressions as a consumer; `IDENT!` frontends; ordinary multi-output completion and Process `err`/`status` separation | core `datatype`/`value`/`expr`/envelope/plan vocabulary plus std compiler, contract, schema-projection and boundary adapters; exact module names are chosen only when the boundary lands | the ordered gates in [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md), one categorical v7 move, external-schema mapping matrices, differential CEL-compatible tests, package sabotage, Lab/real Process parity, no_std and spike |
+
+The current `cel::Type`/`cel::Value`, `error_set`, `TypedError` and
+success/failure-only boundary reply remain implementation scaffolding
+until this row lands. They are not the target model and must not acquire
+new normative responsibilities.
 
 ## Keeping the map honest
 

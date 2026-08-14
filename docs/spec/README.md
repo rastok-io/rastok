@@ -35,7 +35,9 @@ semantic ownership rather than by release layer.
 ## Reader path
 
 `README.md` → `WHITEPAPER.md` (the conceptual model) → this file →
-[grammar.md](grammar.md) (surface + CEL) →
+[types.md](types.md) (logical payload types) →
+[expressions.md](expressions.md) (pure expressions + tagged frontends) →
+[grammar.md](grammar.md) (host surface and delimitation) →
 [envelope.md](envelope.md) (identity, metadata, storage) →
 [execution-model.md](execution-model.md) (transactions, mailboxes, time) →
 [delivery-semantics.md](delivery-semantics.md) (journal, recovery,
@@ -52,7 +54,9 @@ six Connectors and guest languages) →
 
 | Document | Normative home of |
 |---|---|
-| [grammar.md](grammar.md) | surface syntax, keywords, LL(1) productions, CEL positions and delimitation, simulation grammar |
+| [types.md](types.md) | logical payload/value tree, inference boundary, parametric port types, schema adapters, classification boundary |
+| [expressions.md](expressions.md) | Rastok expression contract, CEL-compatible core, `IDENT!` tagged frontends, JSON values, narrowing |
+| [grammar.md](grammar.md) | host syntax, keywords, LL(1) productions, expression/frontend positions and delimitation, simulation grammar |
 | [envelope.md](envelope.md) | envelope structure, `meta.sys`, identity framing, storage and wire form, provenance |
 | [execution-model.md](execution-model.md) | node transactions, mailboxes M:N, ordering, dated events, timeouts, windows, `advance` |
 | [delivery-semantics.md](delivery-semantics.md) | journal records, cursors, backpressure, boundary WAL, recovery, sagas × lifecycle |
@@ -63,7 +67,6 @@ six Connectors and guest languages) →
 | [loop.md](loop.md) | `Loop.variant`, bounded iteration, retry, and theorem mapping |
 | [identity.md](identity.md) | semantic hash, `graph_version` allocation and manifest, canonical record form |
 | [diagnostics.md](diagnostics.md) | diagnostic-code registry, stability contract, lazy assignment |
-| Types *(extraction pending; currently in `WHITEPAPER.md` §2.1 and [grammar.md](grammar.md))* | value-type tree |
 
 Known internal contradictions awaiting a spec-side fix are tracked in
 [errata.md](errata.md).

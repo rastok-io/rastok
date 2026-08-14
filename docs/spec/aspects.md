@@ -52,8 +52,9 @@ connector pay : HttpClient + Loop {
     until = value <= 0
   }
   Loop.backoff = { curve = exponential, initial = duration("200ms") }
-  on err where !err.transient
-  on err where err.transient { }
+  on out where meta.ext.status < 500
+  on out where meta.ext.status >= 500 { }
+  on status where data is ConnectFailed || data is TimeoutExpired { }
 }
 
 // A saga STEP is not annotated : participation = effect + being inside a `: Saga`
@@ -68,7 +69,7 @@ connector reserve : Postgres + Loop {
     until = value <= 0
   }
   Loop.backoff = { curve = exponential, initial = duration("200ms") }
-  on err where err.transient { }
+  on status where data is ConnectFailed { }
   on compensate {
     idempotency_key = meta.app.order_id + "/unreserve"    // its own operation
     query = "DELETE ..."
@@ -99,7 +100,7 @@ operator refine : Loop {
     until = data.error_margin < 0.001
     limit = 100
   }
-  on in { data = jq { .data | step } }
+  on in { data = jq! { .data | step } }
 }
 
 // Plain — no trait, no aspect
@@ -159,7 +160,7 @@ strict admission test before adding any new aspect to the stdlib.
 
 A construct X is admitted as an aspect **only if it passes all five tests**.
 If it fails one or more, it is expressed via existing primitives (typed
-ports, `on err`, `per K`, provenance, `Router`, …) or via an attribute on
+ports, handlers on typed outcome ports, `per K`, provenance, `Router`, …) or via an attribute on
 an existing aspect.
 
 | # | Test | Question |
@@ -167,7 +168,7 @@ an existing aspect.
 | **T1** | **Runtime layer** | Does X require a non-trivial runtime mechanism (state machine, scheduler, manager) that is not already provided by the partition manager, the saga manager, the loop manager, the provenance chain, or the trait's own implementation ? |
 | **T2** | **Dedicated vocabulary** | Does X introduce clauses, attributes, or hooks that would be illegal or meaningless outside of X's scope ? If the vocabulary is generic (e.g. `timeout = duration("30s")`), X is probably just an attribute of a containing aspect, not its own aspect. |
 | **T3** | **Active orchestration** | Does X actively modify envelope flow — re-route, delay, retry, compensate, emit derived envelopes ? If X only observes (audit, trace), it is better expressed as a runtime-wide concern, not a per-node opt-in. |
-| **T4** | **Non-redundancy** | Can X be expressed naturally with existing primitives (`on err`, typed ports, `per K`, `Router`, `durability = global`, etc.) ? If yes, X is a pattern, not an aspect. |
+| **T4** | **Non-redundancy** | Can X be expressed naturally with existing primitives (handlers on typed ports, `per K`, `Router`, `durability = global`, etc.)? If yes, X is a pattern, not an aspect. |
 | **T5** | **Lexical scope** | Does X wrap a *region* (graph body or node body) and behave as a cross-cutting concern over multiple operations within ? If X parameterizes a single operation, it is an attribute. |
 
 The tests are intentionally strict. They are meant to keep the catalogue
@@ -181,7 +182,7 @@ The two initially specified aspects pass all five tests strongly.
 | Aspect | What it scopes | Spec | Passes |
 |---|---|---|---|
 | **`Saga`** | long-running, compensation-based workflow ; lifecycle = `open → committed / rolling_back → rolled_back / rollback_failed` | [effects-and-sagas.md](effects-and-sagas.md) | T1-T5 ✅ |
-| **`Loop`** | bounded tail-recursive iteration for retry, convergence, and counted work; lifecycle = `running → committed / variant_violated / exhausted / exited_on_err`; configured by the qualified `Loop.variant = { ... }` attribute | [loop.md](loop.md) | T1-T5 ✅ |
+| **`Loop`** | bounded tail-recursive iteration for retry, convergence, and counted work; lifecycle = `running → committed / variant_violated / exhausted / selected_base_outcome`; configured by the qualified `Loop.variant = { ... }` attribute | [loop.md](loop.md) | T1-T5 ✅ |
 
 
 ### 3.3 Deferred candidates
@@ -208,10 +209,10 @@ belong at the per-node level at all.
 | Rejected | Why not an aspect | Express via |
 |---|---|---|
 | **`Timeout`** | Fails **T2** (generic vocabulary — `timeout = …`) and **T4** (already an attribute of `Saga`, and `Loop` is bounded by its variant). | `Saga { timeout = … }` as an attribute. A node-wide timeout outside any aspect can be a `Timeout` attribute on the node itself, not a kind. |
-| **`Fallback`** | Fails **T4** — fully expressible with the typed `err` channel and a `Router` on the alternate path. | `on err { … }` handler + alternate edge wiring. |
+| **`Fallback`** | Fails **T4** — fully expressible with a typed outcome port and a `Router` on the alternate path. | handler on the selected status/case + alternate edge wiring. |
 | **`Audit`** | Fails **T3** — audit is observation, not orchestration. Fails **T4** — `durability = global` already provides provenance, and a manual audit tee is just an explicit emission. | `durability = global` + an emission on an `audit_out` port wired to a sink. |
 | **`Trace`** | Fails **T3** (observation) and **T5** — tracing is a runtime-wide concern, not a per-node opt-in. Activating it for some nodes and not others would create blind spans. | A runtime-wide configuration option (`runtime.tracing.enabled = true`), with `meta.sys.trace_*` populated automatically. |
-| **`Validate`** | Fails **T4** — already expressible via typed ports (`input X : SomeSchema`) and the existing fallible-cast / err routing. | `input X : Schema` declarations + `as` cast for narrowing. |
+| **`Validate`** | Fails **T4** — already expressible via typed ports (`input X : SomeSchema`) and checked narrowing. | `input X : Schema` declarations + `as` cast, with its typed refusal routed through the containing contract's ordinary outcome port. |
 | **`Mutex`** | Fails **T4** for the common case — `per <K>` already provides single-active-instance-per-key. Cross-key mutex is rare and niche. | `per <K>` for the keyed case. For the rare cross-key case, use a `Postgres` advisory-lock Connector explicitly. |
 
 **Principle** : when a concern can be expressed via existing primitives
@@ -228,7 +229,7 @@ tests :
 **Saga**
 - **T1** ✅ saga manager : provenance walker + compensation dispatcher + 5-state lifecycle tracker
 - **T2** ✅ `on compensate`, `name`, `Saga.timeout`, the saga env entries (`meta.sys.saga_*`) — this *vocabulary* is scope-gated. (**Not** `effect` : effect is mandatory on every Connector, saga or not — effects-and-sagas §2.1.)
-- **T3** ✅ re-routes compensation envelopes upstream on failure
+- **T3** ✅ re-routes compensation envelopes upstream after an envelope reaches the declared `Saga.rollback` input
 - **T4** ✅ no existing primitive expresses bounded compensation chains over arbitrary compensable Connectors
 - **T5** ✅ scope = the graph body, wraps multiple steps
 
@@ -317,7 +318,8 @@ not compile.
 
 A graph annotated `: Saga + Loop` composes both managers. Loop resolves
 each bounded application; successful compensable effects become Saga
-steps, and terminal failure follows the Saga rollback path. The pair's
+steps, and a guarded edge explicitly routes a selected terminal case to
+`Saga.rollback`. The pair's
 rules live in [loop.md §7](loop.md#7-composition-with-saga) and
 [effects-and-sagas.md §5.1](effects-and-sagas.md#51-workflow-on-permanent-failure).
 
@@ -333,16 +335,16 @@ graph outer : Saga {
       next = value - 1
       until = value <= 0
     }
-    on err where !err.transient
+    on status where data is Completed
     ...
   }
   ...
 }
 ```
 
-Outer is a saga ; inner is a loop nested inside it. The inner's failure
-becomes the outer's failure on its branch (and may trigger the saga's
-rollback). The inner's success is sealed (cannot be reopened by the
+Outer is a saga ; inner is a loop nested inside it. A selected inner
+status may be wired to the outer aspect's `Saga.rollback` input. The
+inner's success is sealed (cannot be reopened by the
 outer's rollback — see [effects-and-sagas.md §4.4](effects-and-sagas.md#44-runtime-semantics-sealed-sub-sagas)).
 
 
@@ -363,6 +365,22 @@ declarations and execute them.
 
 Each layer is statically declared, deterministically executable, and
 visible in the provenance.
+
+
+### 4.6 Ports contributed by an aspect are ordinary typed ports
+
+An aspect contract may contribute inputs or outputs to the resolved node
+contract. Once resolved, those ports use the same direction, effective
+`DataType`, wiring, emission and journal rules as every declared port;
+an aspect does not gain a private control channel. The qualified spelling
+keeps the aspect-owned input unambiguous inside its scope, for example
+`Saga.rollback`. A status exposed by that contract is likewise an
+ordinary typed output, and a guarded edge must explicitly select the case
+that should reach `Saga.rollback`.
+
+A contributed name that collides incompatibly with a declared or
+trait-contributed port is a contract error. The compiler records the
+resolved port once; the runtime does not rediscover its aspect origin.
 
 
 ## 5. Multi-type resolution rules

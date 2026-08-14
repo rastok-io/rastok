@@ -4,7 +4,10 @@
 > of the build; updated through the landed M1.2 compiler interludes on
 > 2026-08-13. The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
-> evidence lives in [`m1-slice.md`](m1-slice.md).
+> evidence lives in [`m1-slice.md`](m1-slice.md). The specified M1.3
+> replacement of the type/value and boundary seams is tracked in
+> [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
+> describes the current v6 implementation until that landing is complete.
 
 This document refines the responsibility table of
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md) to the component level: the
@@ -188,7 +191,7 @@ only — the lab never enters it.
 
 Two compiler rules with consequences elsewhere:
 
-1. **The CEL chain is isolable** (§3.2): the checker hands it a
+1. **The current CEL chain is isolable** (§3.2): the checker hands it a
    *signature*, never an envelope or node.
 2. **Desugaring is provable.** Because identity hashes the desugared
    HIR, "sugared and long forms hash identically" is a free, mechanical
@@ -211,6 +214,11 @@ bridged in exactly one place: the `Bindings` adapter the runtime
 implements. Inside the kernel it shares only foundational utilities:
 the canonical nesting/double rules, the exact number reader, and the
 single comment recognizer.
+
+This is current implementation state, not the M1.3 authority. M1.3
+replaces both domains with core `DataType`/`Value`, renames this consumer
+boundary to `expr`, and retains differential cel-spec evidence only for
+the explicitly compatible operator subset.
 
 ### 3.3 The executable plan (`plan`)
 
@@ -262,7 +270,7 @@ single-stepping and future journal-relative inspection structural.
 | **Mailboxes** | per-key FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered per-key delivery | [execution-model.md §2–3](../spec/execution-model.md) | M0 |
 | **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
-| **Error routing** | connector- and machine-produced typed failures already take the same emission gate; author-written `err = Kind { … }` is the next language lift | typed outcomes → routed envelopes | [delivery-semantics.md §5](../spec/delivery-semantics.md) | connector half landed; operator half M1.3 |
+| **Legacy failure routing** | connector- and machine-produced failures currently take a dedicated success/failure seam; M1.3 replaces it with ordinary typed port outputs and a separate completion control fact | current typed outcomes → routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md) | current scaffold; removed by M1.3 |
 | **`GuestExecutor`** | the existing runtime seam future guest engines implement: `run(&[u8], value, budget)` — pure, deterministic, budgeted, inside the node transaction; the bytes become a typed/versioned `GuestProgram` only when that slice lands | opaque program bytes → value or typed error | [stdlib.md §5](../spec/stdlib.md) | seam only; no engine/program type yet |
 | **`BootBindings`** | future `env()` / `secret()` resolution at boot; a missing or ill-typed binding will be a typed refusal, never a default; `Secret<T>` remains a design requirement, not a current type | plan + deployment profile → bound constants | [grammar.md](../spec/grammar.md) initializer positions | guarded / later |
 
@@ -512,6 +520,8 @@ The chronological detail and commit evidence remain in
   metamodel; defaults are injected before identity, and the parser is a
   forward lexeme-stream parser. The lexer owns cursor/lookahead and
   delegates CEL, JSON, verbatim, and guest regions without rewind.
-- **Next:** M1.3 lifts author-written typed errors. `per`, joins, new
-  adapters, Loop, counters, and `--watch` remain guarded in the order
-  recorded by the slice.
+- **Next:** M1.3 lands one logical `DataType`/`Value`, uniform resolved
+  port contracts, JSON/Avro/Arrow union projections, tagged frontends,
+  and multi-output boundary completion. `per`, joins, new adapters,
+  Loop, counters, and `--watch` remain guarded in the order recorded by
+  the slice.

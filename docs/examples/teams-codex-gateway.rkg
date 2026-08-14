@@ -1,14 +1,15 @@
 // =============================================================================
 // teams-codex-gateway.rkg
 //
-// Teams <-> Codex bridge — larger target-surface example, current host syntax.
+// Teams <-> Codex bridge — larger M1.3 target-surface example.
 // It is intentionally ahead of the executable subset: Http/File/Memory,
-// partitions, Loop, Process(service), and jq remain guarded as of 2026-08-13.
+// partitions, Loop, Process(service), jq, and IDENT! frontends remain guarded
+// as of 2026-08-14. This is a design reference, not a current fixture.
 //
 // Demonstrates :
 //   - graph composability : `sessions` = a per-key sub-graph, declared in place
 //   - inference-first ports : Connectors declare none (their type + codec
-//     define them) ; nodes lean on the default in/out/err ; extra ports are
+//     define them) ; nodes lean on conventional in/out/err ; extra ports are
 //     declared by NAME only (types inferred ; annotate `: T` only to pin)
 //   - Composite configuration attributes (env = { … }, jwt = { … }, auth = { … })
 //   - handler guards, the `data` payload, meta.sys / meta.app / meta.ext,
@@ -49,7 +50,7 @@ graph sessions per session {          // declaration = instance
     protocol = "jsonrpc"
     effect = idempotent
     behavior = probabilistic
-    // in / out / err = stdin / stdout / stderr (Process defaults, typed by codec)
+    // in / out / err / status = stdin / decoded stdout / stderr bytes / lifecycle
 
     init = {
       message = { method = "initialize" }
@@ -74,7 +75,7 @@ graph sessions per session {          // declaration = instance
 // Teams gateway.
 // Owns the HTTP listener and outbound HTTP client → singleton top-level graph,
 // and the DEPLOYMENT ENTRY POINT of the unit (`: App` — exactly one per unit).
-// `app` is pre-bound to it (app.err = root error sink).
+// `app` is pre-bound to it; every observable output remains a declared port.
 // User isolation is delegated to `sessions` instances keyed by session_key.
 // -----------------------------------------------------------------------------
 
@@ -123,7 +124,7 @@ graph teams_inbound : App {
 
   operator to_codex {
     on in {
-      out = jq {
+      out = jq! {
         if .data.type == "invoke" then
           .meta.app.kind = "jsonrpc.peer_response"
           | .meta.app.rpc_id = (.data.value.approval_id | tostring)
@@ -146,10 +147,10 @@ graph teams_inbound : App {
   operator route_codex_out {
 
     on in {
-      peer_request = jq { select(.meta.app.kind == "jsonrpc.peer_request") }
-      delta = jq { select(.meta.app.method == "item/agentMessage/delta") }
-      flush = jq { select(.meta.app.method == "turn/completed") }
-      message = jq {
+      peer_request = jq! { select(.meta.app.kind == "jsonrpc.peer_request") }
+      delta = jq! { select(.meta.app.method == "item/agentMessage/delta") }
+      flush = jq! { select(.meta.app.method == "turn/completed") }
+      message = jq! {
         select(.meta.app.kind == "jsonrpc.notification" and .meta.app.method == "item/agentMessage")
       }
     }
@@ -157,7 +158,7 @@ graph teams_inbound : App {
 
   operator typing_feedback {
     on in {
-      out = jq { .data = { type: "typing" } }
+      out = jq! { .data = { type: "typing" } }
     }
   }
 
@@ -166,11 +167,11 @@ graph teams_inbound : App {
 
 
     on delta {
-      buffer = jq { $buffer + (.data.params.delta // "") }
+      buffer = jq! { $buffer + (.data.params.delta // "") }
     }
 
     on flush {
-      out = jq {
+      out = jq! {
         .meta.app.kind = "jsonrpc.notification"
         | .meta.app.method = "item/agentMessage"
         | .data = {
@@ -184,7 +185,7 @@ graph teams_inbound : App {
 
   operator to_teams {
     on in {
-      out = jq {
+      out = jq! {
         .meta.app.delivery_id = .meta.sys.id
         | if .meta.app.kind == "jsonrpc.peer_request" then
           .data = {
@@ -235,7 +236,7 @@ graph teams_inbound : App {
 
   connector teams_out : HttpClient + Loop {
     base_url = env("TEAMS_SERVICE_URL")
-    path = "/v3/conversations/" + meta.app.conversation_id + "/activities"   // per-call CEL
+    path = "/v3/conversations/" + meta.app.conversation_id + "/activities"   // per-call Rastok expression
     method = "POST"
     codec = json
     protocol = "teams_activity"
@@ -252,7 +253,7 @@ graph teams_inbound : App {
       until = value <= 0
     }
     Loop.backoff = { curve = exponential, initial = duration("200ms") }
-    on err where err.transient { }
+    on status where data is ConnectFailed { }
     auth = {
       scheme = oauth2_client_credentials
       token_endpoint = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
@@ -267,8 +268,8 @@ graph teams_inbound : App {
   operator delivery_dispatch {
 
     on in {
-      delivered = jq { select(.data.delivered) }
-      failed = jq { select(.data.delivered | not) }
+      delivered = jq! { select(.data.delivered) }
+      failed = jq! { select(.data.delivered | not) }
     }
   }
 

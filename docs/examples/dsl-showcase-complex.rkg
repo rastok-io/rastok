@@ -1,6 +1,7 @@
-// Illustrative target-surface example. HttpServer, Postgres, File, partitions,
-// joins, and the jq/SQL guests remain guarded as of 2026-08-13; Process(job)
-// is executable. The host syntax is current even where semantics are deferred.
+// Illustrative M1.3 target-surface example. HttpServer, Postgres, File,
+// partitions, joins, and the jq/SQL guests remain guarded as of 2026-08-14;
+// Process(job) is executable. The IDENT! frontend syntax shown here lands in
+// M1.3; this file is a design reference, not a current executable fixture.
 graph agent_gateway : App {
 
   partition user {
@@ -40,10 +41,10 @@ graph agent_gateway : App {
   operator normalize_and_lookup {
 
     on in {
-      val user_id = jq { .data.actor.id }
-      val intent  = jq { .data.message.intent }
+      val user_id = jq! { .data.actor.id }
+      val intent  = jq! { .data.message.intent }
 
-      db = jq {
+      db = jq! {
         select($intent == "deep_work")
         | {
             query: "SELECT * FROM user_history WHERE uid = $1",
@@ -51,7 +52,7 @@ graph agent_gateway : App {
           }
       }
 
-      agent = jq {
+      agent = jq! {
         select($intent != "deep_work")
         | .meta.app.user_id = $user_id
         | .meta.app.needs_history = false
@@ -68,20 +69,20 @@ graph agent_gateway : App {
 
     on (req, hist) {
 
-      requests_count = requests_count + 1           // mutate (CEL) ; the audit below reads the new value
+      requests_count = requests_count + 1           // Rastok expression; the audit below reads the new value
 
-      val risk_score = sql(hist.data) {
+      val risk_score = sql!(hist.data) {
         SELECT SUM(flag_weight) FROM data WHERE incident = true
       }
 
-      // jq(req) names req as the base envelope → the emitted envelope
+      // jq!(req) names req as the base envelope → the emitted envelope
       // inherits req's meta (explicit attribution required on a join).
-      rejection = jq(req) {
+      rejection = jq!(req) {
         select($risk_score > 50 or $total_tokens_used > 10000)
         | .data = "Policy Violation: Account locked or Quota exceeded."
       }
 
-      approval = jq(req) {
+      approval = jq!(req) {
         select($risk_score <= 50 and $total_tokens_used <= 10000)
         | .data += {
             context: {
@@ -91,7 +92,7 @@ graph agent_gateway : App {
           }
       }
 
-      audit = jq(req) {
+      audit = jq!(req) {
         .data = {
           user:   .meta.app.user_id,
           action: "gateway_evaluation",

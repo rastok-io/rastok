@@ -15,14 +15,14 @@ these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
 the primitive `operator` / `connector` keywords stand on their own
 when no alias fits.
 
-The parser now implements the current host syntax as a forward lexeme
-stream, but this page deliberately ranges beyond the executable subset.
-As of 2026-08-13, `Process(mode = job)` with `lines`/`jsonl`, multiport,
-the three metadata zones, current literals, and structural type aliases
-execute; HTTP/File adapters, `per`, joins, Loop, Process service mode,
-and guest engines still refuse by their named checker diagnostics. Thus
-these are parser- and design-reference snippets, not a claim that every
-section runs today. The small executable fixtures under
+The parser implements executable v6 as a forward lexeme stream, but this
+page shows the M1.3 target surface and deliberately ranges beyond that
+subset. As of 2026-08-14, `Process(mode = job)` with `lines`/`jsonl`,
+multiport, the three metadata zones, v6 literals, and structural type
+aliases execute; `IDENT!`, the unified type/value domain, HTTP/File
+adapters, `per`, joins, Loop, Process service mode, and guest engines are
+still pending or guarded. Thus these are parser- and design-reference
+snippets, not a claim that every section runs today. The small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.
 
 ## 1. Minimal — HTTP echo + log
@@ -38,7 +38,7 @@ graph hello_echo {
 
   operator tag_received {
     on in {
-      out = jq {
+      out = jq! {
         .meta.app.tag = "received"
         | .data   = { echo: .data }
       }
@@ -58,7 +58,7 @@ graph hello_echo {
 ```
 
 `tag_received` declares no ports : it uses the default `in` and `out`,
-and the handler writes it explicitly — `out = jq { ... }` (there is no
+and the handler writes it explicitly — `out = jq! { ... }` (there is no
 implicit yield, D-2026-08-13-1).
 
 ## 2. Codex session — one `Process` Connector, multi-port stdio bridge
@@ -66,10 +66,11 @@ implicit yield, D-2026-08-13-1).
 A graph is itself a node when composed inside another graph, and — like an
 Operator — it declares its own keying with `per <partition>`. Here
 `sessions per session` means one `Process` instance per session key ; its
-per-session paths are **graph-level `val`s** derived from `session.key` (CEL) and
+per-session paths are **graph-level `val`s** derived from `session.key` (Rastok expression) and
 referenced by name inside. A single-in/out graph just uses the default `in` /
 `out` ports — no declaration needed. A `Process` Connector's `in` / `out` /
-`err` ports *are* its stdin / stdout / stderr — likewise no declaration.
+`err` ports *are* its stdin / stdout / stderr, while `status` carries its
+tagged lifecycle outcome — likewise no declaration.
 
 ```rastok
 graph sessions per session {   // declaration = instance
@@ -98,7 +99,7 @@ graph sessions per session {   // declaration = instance
     protocol = "jsonrpc"
     effect = idempotent
     behavior = probabilistic
-    // in = stdin, out = stdout, err = stderr (Process defaults)
+    // in = stdin, out = stdout, err = stderr, status = lifecycle (Process defaults)
 
     init = {
       message = {
@@ -140,7 +141,7 @@ graph teams_inbound {
 
   operator auth {
     on in where data.?from.aadObjectId.orValue("") != "" {
-      meta.app.session_key = data.from.aadObjectId          // CEL — scalar write, no jq needed
+      meta.app.session_key = data.from.aadObjectId          // Rastok expression — no jq needed
       out = .
     }
     on in { out = . }                                // pass-through otherwise
@@ -172,8 +173,8 @@ graph turn_stream {
   operator route {
 
     on in {
-      delta = jq { select(.meta.app.method == "item/agentMessage/delta") }
-      flush = jq { select(.meta.app.method == "turn/completed") }
+      delta = jq! { select(.meta.app.method == "item/agentMessage/delta") }
+      flush = jq! { select(.meta.app.method == "turn/completed") }
     }
   }
 
@@ -182,11 +183,11 @@ graph turn_stream {
     var buffer: text = ""
 
     on delta {
-      buffer = jq { $buffer + (.data.params.delta // "") }
+      buffer = jq! { $buffer + (.data.params.delta // "") }
     }
 
     on flush {
-      out = jq {
+      out = jq! {
         .meta.app.kind     = "jsonrpc.notification"
         | .meta.app.method = "item/agentMessage"
         | .data        = { method: "item/agentMessage", params: { message: $buffer } }
@@ -225,7 +226,7 @@ graph teams_outbound {
 
   connector teams_out : HttpClient + Loop {
     base_url = env("TEAMS_SERVICE_URL")
-    path = "/v3/conversations/" + meta.app.conversation_id + "/activities"   // per-call CEL
+    path = "/v3/conversations/" + meta.app.conversation_id + "/activities"   // per-call Rastok expression
     method = "POST"
     codec = json
     protocol = "teams_activity"
@@ -250,15 +251,15 @@ graph teams_outbound {
       until = value <= 0
     }
     Loop.backoff = { curve = exponential, initial = duration("200ms") }
-    on err where err.transient { }               // iterating case : runtime re-injects
+    on status where data is ConnectFailed { }    // explicit iterating outcome
     rate_limit = "10/s per meta.app.session_key"
   }
 
   operator delivery_dispatch {
 
     on in {
-      delivered = jq { select(.data.delivered) }
-      failed    = jq { select(.data.delivered | not) }
+      delivered = jq! { select(.data.delivered) }
+      failed    = jq! { select(.data.delivered | not) }
     }
   }
 
@@ -355,8 +356,8 @@ graph city_weather {
   // user-facing city in meta so it survives the round-trip.
   operator build_request {
     on in {
-      meta.app.request_city = data.city                     // scalar write = CEL
-      data = jq {                                           // structural build = the jq guest
+      meta.app.request_city = data.city                     // scalar Rastok expression
+      data = jq! {                                           // structural build = the jq guest
         .data | {
             url: "https://api.weather.example/v1/current",
             method: "GET",
@@ -377,7 +378,7 @@ graph city_weather {
   // Pure Operator : extract the user-facing fields.
   operator format {
     on in {
-      out = jq {
+      out = jq! {
         .data = {
           city:        .meta.app.request_city,
           temperature: .data.temp_c,
@@ -434,11 +435,11 @@ Four things visible here :
   garbage-collected when the session key idle-outs. For multi-key
   partitioning, use `per user, workspace`, etc.
 - `var count : int = 0` declares the **typed state field**. It is
-  read by bare `count` (or `$count` inside `jq { … }` — jq's own
+  read by bare `count` (or `$count` inside `jq! { … }` — jq's own
   syntax) and mutated **in place** — `count = count + 1` here — so the
   emit on the same transaction reads the new value (imperative
-  intra-transaction semantics ; the RHS is plain CEL, structural
-  reshaping goes in a `jq { … }` block).
+  intra-transaction semantics; the RHS is a Rastok expression, structural
+  reshaping goes in a `jq! { … }` block).
 - `on in { … }` is the single-port handler. The handler forms
   (`on start`, `on <port>`, the `on (a, b)` join with optional
   `where` / `having` / `within` / `last` clauses, `on stop`) cover
@@ -468,19 +469,19 @@ graph meta_control_plane {
     val DEFAULT_PRIORITY = "normal"
 
     on in {
-      meta.app.source    = SOURCE                               // CEL — vals by bare name
+      meta.app.source    = SOURCE                               // Rastok expression — vals by bare name
       meta.app.tenant_id = data.?tenant_id.orValue("public")    // absence explicit (the grid)
       meta.app.user_id   = data.user.id
       meta.app.priority  = data.?priority.orValue(DEFAULT_PRIORITY)
-      data = jq { .data.payload }                               // structural extraction = jq
+      data = jq! { .data.payload }                               // structural extraction = jq
     }
   }
 
   operator route_priority {
 
     on in {
-      urgent = jq { select(.meta.app.priority == "urgent") }
-      normal = jq { select(.meta.app.priority != "urgent") }
+      urgent = jq! { select(.meta.app.priority == "urgent") }
+      normal = jq! { select(.meta.app.priority != "urgent") }
     }
   }
 
@@ -550,8 +551,8 @@ graph quota_control : App {
 
 
       on update {
-        plan = jq { .data.plan // $plan }
-        monthly_limit = jq { $PLAN_LIMITS[$plan] // $FALLBACK_LIMIT }   // reads the just-written plan
+        plan = jq! { .data.plan // $plan }
+        monthly_limit = jq! { $PLAN_LIMITS[$plan] // $FALLBACK_LIMIT }   // reads the just-written plan
 
         updated = {
           meta.app.tenant_id = tenant.key
@@ -566,19 +567,19 @@ graph quota_control : App {
 
 
       on event {
-        val cost = jq { (.data.tokens // 0) | tonumber }
+        val cost = jq! { (.data.tokens // 0) | tonumber }
         val limit = tenant.?monthly_limit.orValue(FALLBACK_LIMIT)
 
         used_tokens = used_tokens + cost           // jq below reads the new $used_tokens
 
-        approval = jq {
+        approval = jq! {
           select($used_tokens <= $limit)
           | .meta.app.quota_status = "approved"
           | .meta.app.tokens_used  = $used_tokens
           | .meta.app.tokens_limit = $limit
         }
 
-        rejection = jq {
+        rejection = jq! {
           select($used_tokens > $limit)
           | .meta.app.quota_status = "rejected"
           | .meta.app.tokens_used  = $used_tokens
@@ -616,19 +617,19 @@ the optional read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
 | Sub-graph instance | declaration = instance : `graph <name> per <partition> { max_instances = … ; … }`, wired by name (`compose` is not a declaration form) |
 | Operator port | **Implicit** : `on <name>` ⇒ input, `<name> = …` ⇒ output. Declare `input`/`output <name>[: T]` only to pin a type/schema or document. `in`/`out`/`err` are defaults. |
 | Public graph port | single-in/out → defaults `in`/`out` ; a multi-port graph declares its interface by name (`input admin`, …), optionally typed |
-| Connector port | never declared — the Connector type + `codec` define `in`/`out`/`err` |
+| Connector port | never redeclared — the Connector contract + attributes resolve its complete typed port table (`in`/`out`/`err`/`status` for Process) |
 | Type | `variant`, scalar (`text`/`int`/`bytes`/…), `struct { … }`, `map<text, V>`, `array<T>`, `enum`, `union`, `T?` |
 | State field | `var <name>: <type> [= <default>]` |
 | Connector attribute | `<name> = <value>` |
-| Tagged-value attribute | `<name> = <tag> { ... }` (`restart = { ... }`, `Loop.backoff = { curve = exponential, ... }`) |
+| Composite attribute | `<name> = { ... }` (`restart = { ... }`, `Loop.backoff = { curve = exponential, ... }`) |
 | Handler | `on <trigger> [where … having … within … last …] { ... }` (`on (a, b)` join, `on start`, `on stop`) |
 | State read (inside jq) | `$<name>` (bare `<name>` in DSL) |
 | State write | `<name> = <expr>` |
 | Local binding | `val <name> = <expr>` |
-| Port emission | `<out_port> = <expr>` (trailing expression yields to `out`) ; atomic multi-emit `(a, b) = (e1, e2)` |
-| Narrowing | `<expr> as <type>` (fallible → `err`) |
+| Port emission | `<out_port> = <expr>` (always explicit); atomic multi-emit `(a, b) = (e1, e2)` |
+| Narrowing | `<expr> as <type>` (checked; no implicit dynamic cast or privileged `err` route) |
 | List / array | `[a, b, c]` |
-| References | boot : `env("VAR")` / `secret("path")` (initializers only) ; runtime : plain CEL (`session.key`, `meta.app.x`, `"a" + b`) — the `${…}` interp is gone |
+| References | boot: `env("VAR")` / `secret("path")` (initializers only); runtime: Rastok expressions (`session.key`, `meta.app.x`, `"a" + b`) — the `${…}` interpolation is gone |
 | Edge | `a -> b` |
 | Port-qualified edge | `a.<out_port> -> b.<in_port>` |
 | Edge with config | `a -> b { capacity = 1024, backpressure = block }` |

@@ -57,12 +57,15 @@ The repository opens publicly with this milestone (15 October 2026).
 - Multiport execution, then the constructs that stand on it: the
   `per` partition surface and bounded joins.
 - A JSON/JSONL codec chain across the boundaries.
-- The error half of the language: typed emissions and mock failure
-  replies.
+- M1.3 resets the payload foundation: one Rastok-owned logical type and
+  value algebra, complete effective types on every port, unions across
+  JSON/Avro/Arrow projections, one expression consumer, and ordinary
+  multi-output completions (for `Process`: decoded `out`, exact stderr on
+  `err`, and typed `status`).
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
-- Governed retry: the `Loop` aspect, driven by typed transient
-  errors.
+- Governed retry: the `Loop` aspect, driven by an explicitly selected
+  typed outcome/status case rather than a privileged error channel.
 - Per-flow cost counters, carried by the journal.
 - A live view of the running graph, fed by the journal.
 - A guided example gallery seeded by the benchmark's reference

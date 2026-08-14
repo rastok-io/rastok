@@ -10,6 +10,9 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`m0.5-slice.md`](m0.5-slice.md) for the kernel/package consolidation;
 - [`m1-slice.md`](m1-slice.md) for the current public-opening milestone
   and its landed/pending inventory;
+- [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md) for the
+  ordered landing of logical payload types, uniform ports and tagged
+  frontends;
 - [`build-order.md`](build-order.md) for the dependency-driven stage
   sequence used to build the M0 modules;
 - [`components.md`](components.md) for the component blueprint: owned

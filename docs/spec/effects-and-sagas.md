@@ -8,6 +8,13 @@
 > orchestrates long-running compensation-based workflows. Section 8 lists
 > known open points.
 
+> **M1.3 amendment.** The former rule “an unwired `err` bubbles into the
+> nearest Saga” is superseded by the uniform-port model. A `Saga` aspect
+> contributes an ordinary typed input `Saga.rollback` and an ordinary typed
+> output `status: SagaStatus`. The graph explicitly routes the outcome cases
+> that should trigger compensation to `Saga.rollback`; no port name implies
+> failure and an unwired output never triggers rollback by accident.
+
 This document is the source of truth for: which actions can be retried, which
 must be compensated, which are irreversible — and how Rastok bounds and
 orchestrates long-running workflows that mix them. The whole machinery is
@@ -82,7 +89,7 @@ dev MUST declare it per instance. An LLM may pre-fill based on conventions
 |---|---|---|
 | `idempotent` | (nothing extra) | — |
 | `compensable` | `on compensate { … }` | — |
-| `irreversible` | `idempotency_key = <cel>` | `on compensate { … }` (a pivot cannot be undone) |
+| `irreversible` | `idempotency_key = <expr>` | `on compensate { … }` (a pivot cannot be undone) |
 
 A compensation must be **safe to retry** (the saga manager may re-deliver
 it — recovery replays with the byte-same key). The compensating
@@ -194,7 +201,7 @@ connector reserve : Postgres + Loop {        // inside a `: Saga` graph
     until = value <= 0
   }
   Loop.backoff = { curve = exponential, initial = duration("200ms") }
-  on err where err.transient { }             // iterating case : runtime re-injects
+  on status where data is ConnectFailed { }  // explicit iterating outcome
   on compensate {
     idempotency_key = meta.app.order_id + "/unreserve"   // its OWN operation
     query = "DELETE ..."
@@ -204,8 +211,8 @@ connector reserve : Postgres + Loop {        // inside a `: Saga` graph
 
 The Loop policy applies to **both** the forward call and the
 compensation handler — the same retry/backoff settings cover both
-directions. This is the usual default because transient errors are
-transient regardless of direction.
+directions. A contract does not attach a universal `transient` bit;
+the graph names the exact cases or status codes its policy repeats.
 
 When two distinct policies are required, delegate the compensation to
 its own Loop-wrapped Connector — see [loop.md §7.1](loop.md#71-same-node-composition).
@@ -254,9 +261,10 @@ graph payment : Saga {
 
 The `{ }` of the graph body **is** the saga's scope. Every compensable
 Connector traversed inside that scope is tagged with the saga's id in
-the provenance ; on permanent failure, the saga manager walks back
-through them. No `BeginSaga` / `EndSaga` markers, no path-walking with a
-stack — the parser's own bracket matching delimits the saga.
+the provenance. When a selected outcome reaches the aspect's explicit
+`Saga.rollback` input, the saga manager walks back through them. No
+`BeginSaga` / `EndSaga` markers, no path-walking
+with a stack — the parser's own bracket matching delimits the saga.
 
 A Connector can also carry the aspect directly when the saga is a
 single external call wrapped with effect classification — but the
@@ -318,9 +326,9 @@ When an outer saga contains a nested inner saga :
   effects are definitive at its level ; the outer saga cannot reopen
   it. The sealed inner saga acts as a **local pivot** within the
   outer's flow.
-- Inner **fails** → rollback of the inner only. The outer continues and
-  receives the error on the relevant branch ; it may handle the error and
-  carry on.
+- Inner **rolls back** → rollback of the inner only. The outer receives the
+  inner saga's typed `status` case on the explicitly wired branch; it may
+  handle it, route it to its own `Saga.rollback`, or carry on.
 - Outer **fails** → rollback of the outer's compensable steps. Already-**sealed**
   inner sagas are **not** retroactively rolled back (the inner has already
   reached its point of no return at its level).
@@ -354,31 +362,57 @@ hidden magic**.
 | **Loop manager** | `: Loop` aspect | re-injection scheduler + iteration counter + measure checker |
 
 
-### 5.1 Workflow on permanent failure
+### 5.1 Workflow on a selected rollback outcome
 
-Rollback triggers when a **permanent failure reaches the saga boundary** —
-aligned with the err-bubbling model (delivery-semantics §5) and the
-Loop valence rule (loop.md §3) :
+Rollback triggers when a typed outcome is **explicitly routed to
+`Saga.rollback`**. The aspect input's effective type is inferred as the
+canonical union of the narrowed incoming cases. The manager does not need to
+interpret that value: it preserves the triggering envelope as the causal
+rollback reason. For example:
+
+```rastok
+pay.status -> Saga.rollback when data is PaymentDeclined
+settle.status -> Saga.rollback when data is LoopExhausted
+```
+
+The aspect's output type is an ordinary tagged union:
+
+```rastok
+type SagaStatus = union {
+  SagaCommitted      { saga_id: uuid }
+  SagaExpired        { saga_id: uuid }
+  SagaRolledBack     { saga_id: uuid }
+  SagaRollbackFailed { saga_id: uuid, step: text }
+}
+```
+
+The exact case payloads are finalized with the Saga implementation slice;
+their port and union semantics are already fixed by M1.3.
+
+This is ordinary guarded edge routing. A business rejection can travel on
+another output, a handled status can be consumed elsewhere, and neither the
+name `err` nor an unwired port has hidden Saga semantics.
 
 ```text
-0. THE TRIGGER : an unhandled typed err BUBBLES lexically and is intercepted
-   by the INNERMOST enclosing `: Saga` — a non-retriable failure, a Loop's
-   LoopExhausted { calls, last_error } (its measure exhausted WHILE ERRING — a Loop whose
-   until fires after a normal completion exits cleanly and triggers nothing),
-   or the saga's own SagaExpired (Saga.timeout — a transaction of the saga
-   node, trigger l:timeout, parent = the instance-creating envelope).
-   Explicit err wiring CUTS the bubble — a caught err never rolls back.
+0. THE TRIGGER : an envelope reaches `Saga.rollback` through an explicit
+   edge, or the saga's own completion budget expires (`Saga.timeout` — a
+   transaction of the saga node, trigger `l:timeout`, parent = the
+   instance-creating envelope). A Loop may therefore route
+   `LoopExhausted { calls, last_outcome }`; an ordinary successful outcome
+   takes no such edge. Guard narrowing is checked before the plan validates.
 1. The intercepted saga enters rolling_back.
 2. Its sealed compensable steps are compensated in REVERSE order, read from
    the journal fold : each compensation = a sequential transaction of the
    `: Saga` node (trigger l:compensate, port `compensate`, index 0 ; parent =
    the rollback's cause for the first, then the previous compensation's ack —
    envelope.md §3.1). A `: Loop` on the target retries per its policy.
-3. All acked → rolled_back ; the saga emits the typed err
-   SagaRolledBack { saga_id } on its err port — which BUBBLES OUTWARD : the
-   enclosing scope (or app.err) decides — propagate, compensate in turn, or
-   handle. A compensation exhausting its Loop → rollback_failed, emitting
-   SagaRollbackFailed { saga_id, step } (manual review — §5.3).
+3. All acked → rolled_back ; the saga emits
+   `SagaRolledBack { saga_id }` on its ordinary typed `status` output. The
+   graph's resolved wiring policy decides whether to journal it, route it,
+   or feed a selected case into an enclosing saga's `Saga.rollback`. A
+   compensation exhausting its Loop → rollback_failed, emitting
+   `SagaRollbackFailed { saga_id, step }` on the same output (manual review
+   — §5.3).
    Sealed inner sub-SAGAS of this saga are not re-opened (their own
    compensation already ran or their commit stands — §7.2's nesting rule).
 ```
@@ -434,8 +468,8 @@ provenance, and all of them queryable / alertable :
                           │
               ┌───────────┼────────────┐
               │           │            │
-        exit `: Saga`  permanent failure   timeout
-        scope cleanly     downstream         elapsed
+        exit `: Saga`  selected outcome    timeout
+        scope cleanly reaches rollback      elapsed
               │           │            │
               ▼           ▼            ▼
        ┌──────────┐   ┌─────────────┐   (treated as
@@ -461,8 +495,8 @@ provenance, and all of them queryable / alertable :
 | `open` | the saga is in flight | yes | observe |
 | `committed` | exited `: Saga` scope successfully | yes | nothing |
 | `rolling_back` | downstream failed, compensations in progress | yes | observe |
-| `rolled_back` | all compensations succeeded — the saga emits typed err `SagaRolledBack { saga_id }` on `err` (bubbles outward) | yes | nothing |
-| `rollback_failed` | at least one compensation exhausted its `Loop` variant (`LoopExhausted`) — the saga emits `SagaRollbackFailed { saga_id, step }` on `err` | yes | **manual review required** |
+| `rolled_back` | all compensations succeeded — the saga emits `SagaRolledBack { saga_id }` on `status` | yes | nothing |
+| `rollback_failed` | at least one compensation exhausted its `Loop` variant (`LoopExhausted`) — the saga emits `SagaRollbackFailed { saga_id, step }` on `status` | yes | **manual review required** |
 
 The crucial point is `rollback_failed` : it is a **first-class terminal state**,
 durable, observable, alertable. The runtime never silently drops a failed
@@ -480,7 +514,7 @@ silent."
 
 Two mechanisms carry saga context :
 
-- **In the CEL env** (inside the lexical `: Saga` scope, resolved from the
+- **In the Rastok expression environment** (inside the lexical `: Saga` scope, resolved from the
   **saga instance**, like partition fields) : `meta.sys.saga_id`,
   `saga_stack`. Always present inside — even while processing the
   scope-creating envelope ; not in the env outside (compile error, even with
@@ -554,10 +588,10 @@ fixed by the normative contracts.
    recovery = fold + outbound triage + resume — a crash mid-saga or
    mid-rollback resumes exactly where the records stop, compensations are
    idempotent on replay (same derived keys), `Saga.timeout` is re-armed from
-   the creator record's `committed_at`. A `Process` step's death emits the
-   standard terminal envelope on `err`, which **bubbles** into the enclosing
-   `: Saga` (delivery-semantics §5) and triggers rollback through the normal
-   path ; respawn stays the `restart` policy's business, orthogonal.
+   the creator record's `committed_at`. A `Process` step emits its terminal
+   case on `status`; only an explicit guarded edge from a selected case to
+   `Saga.rollback` triggers compensation. Respawn stays the `restart`
+   policy's business, orthogonal.
 
 7. **Forward vs compensation envelope routing.**
    The marker is `meta.sys.role` — an extensible enum whose value is

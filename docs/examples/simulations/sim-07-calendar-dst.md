@@ -16,7 +16,7 @@
 | **Spring forward : a nonexistent civil time is SKIPPED** | stdlib.md §3.5 (DST policy) |
 | **Fall back : an ambiguous civil time fires ONCE, first occurrence** | stdlib.md §3.5 (DST policy) |
 | `origin` : virtual t=0 ≡ a declared civil instant ; absent = epoch + warning | simulation-semantics.md §5.3 |
-| Calendar's error set is empty — bad cron/tz is a compile refusal | stdlib.md §3.5 |
+| Calendar declares no runtime failure case — bad cron/tz is a compile refusal | stdlib.md §3.5 |
 | `Memory` bounded store receives the ticks' descendants | stdlib.md §3.6 |
 
 The civil facts (IANA `Europe/Paris`, year 2026) : spring forward on
@@ -113,7 +113,7 @@ expect Saturday's instant : data.fired_at == 2026-03-28T02:30+01:00 → PASS
 
 The night of the 29th leaves **no trace at all** — no INBOUND, no dated
 event, no error : a skipped nonexistent time is silence, not a failure
-(Calendar's error set is empty).
+(Calendar declares no runtime failure case).
 
 ### Scenario `fall_back`  (origin ≡ 2026-10-23T22:00:00Z)
 
@@ -141,6 +141,6 @@ expect the ambiguous one, once, as CEST :
    civil label and 3 for the window — both expects would catch it)
 ```
 
-The expectations rely on CEL timestamp equality being instant-based
+The expectations rely on Rastok timestamp equality being instant-based
 (offset-insensitive), so the author can write the civil representation while
 asserting the instant.

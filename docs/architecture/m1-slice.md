@@ -6,11 +6,12 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-13): items 1 and 2 are landed, as are
+**Current checkpoint (2026-08-14): items 1 and 2 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 The current transport is plan-package v6; valid-program identity for
-the spike remains `c75b840d…`. The next feature slice is item 3, the
-author-written typed-error half.**
+the spike remains `c75b840d…`. Item 3 has been replaced before public
+release by the logical payload-type and uniform-port foundation in
+[`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md).**
 
 ## The shape of M1
 
@@ -217,10 +218,19 @@ step touches `vm.rs` once.
    from v5 to **v6** without moving semantic identity. Parser recovery
    changes affected invalid programs only; the full valid corpus and
    the embedded spike kept `c75b840d…`.
-3. **The error half of the language** — typed-error emissions from
-   operators (`err = Kind {…}`) and mock `err` replies in the Lab.
-   Referees can then provoke connector failures without adapters;
-   the benchmark's task set grows the same way.
+3. **Logical payload types and uniform typed ports** — one no_std-ready
+   `DataType`/`Value` authority for envelopes, ports, state and
+   expressions; complete effective port types after inference;
+   structural and tagged unions; lossless supported projections from
+   JSON Schema, Avro and Arrow; and `IDENT!` frontends (`json!`, `jq!`,
+   `sql!`, …). Connector sheets become parametric typed port contracts.
+   Boundary completion may carry several ordinary port outputs, so
+   `Process.err` is exact stderr while `Process.status` carries its
+   tagged lifecycle/outcome. The existing `cel::Type`/`cel::Value`,
+   `error_set`, `TypedError` and success/failure-only reply split are
+   removed in the same v7 landing, not promoted as an intermediate
+   model. Ordered gates and evidence are in the dedicated
+   [M1.3 backlog](m1.3-type-system-backlog.md).
 4. **`per` — the partition surface** — keyed nodes and graphs on the
    flat two-concept model; scheduler keys over the proven multiport
    routing.

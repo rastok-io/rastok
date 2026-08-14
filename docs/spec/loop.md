@@ -10,7 +10,8 @@ envelope. It covers three related cases:
 
 - counted work: apply a body a known number of times;
 - convergence: refine data until a declared condition holds;
-- retry: repeat an external call while its typed error is retryable.
+- retry: repeat an external call while an explicitly selected typed
+  outcome case satisfies graph policy.
 
 The graph remains acyclic. Re-entry is performed by the Loop manager after
 one call has completed; it is not a graph edge and it does not suspend a
@@ -78,8 +79,9 @@ connector pay : HttpClient + Loop {
     max = duration("5s")
   }
 
-  on err where !err.transient
-  on err where err.transient { }
+  on out where meta.ext.status < 500
+  on out where meta.ext.status >= 500 { }
+  on status where data is ConnectFailed || data is TimeoutExpired { }
 }
 ```
 
@@ -91,7 +93,7 @@ connector pay : HttpClient + Loop {
 
 Each application must produce at most one continuation envelope. A Loop
 whose iterating path emits none or more than one is rejected statically when
-possible and fails with a typed Loop error otherwise.
+possible and emits a typed Loop status case otherwise.
 
 ## 2. The `Loop.variant` measure
 
@@ -101,9 +103,9 @@ fields:
 | Field | Rule | Meaning |
 |---|---|---|
 | `initial` | exactly one of `initial` or `source` | the measure before the first application |
-| `source` | exactly one of `source` or `initial` | a CEL expression evaluated on the entering envelope and on each continuation envelope |
-| `next` | required with `initial`; forbidden with `source` | a CEL expression producing the next measure after an application |
-| `until` | required | a CEL boolean checked before each application |
+| `source` | exactly one of `source` or `initial` | a Rastok expression evaluated on the entering envelope and on each continuation envelope |
+| `next` | required with `initial`; forbidden with `source` | a Rastok expression producing the next measure after an application |
+| `until` | required | a Rastok boolean expression checked before each application |
 | `limit` | required unless a finite bound is proved statically | maximum number of body applications |
 
 Inside the block, `value` is the current measure. The current envelope is
@@ -111,7 +113,7 @@ also in scope, so `source` and `until` may read `data` and writable `meta`.
 Elsewhere in the Loop's lexical body, the same read-only value is available
 as `Loop.value`.
 
-`initial`, `source`, `next`, `until`, and `limit` are ordinary CEL
+`initial`, `source`, `next`, `until`, and `limit` are ordinary Rastok
 expressions. They cannot read a clock, perform I/O, or mutate state.
 
 ### 2.1 Counted form
@@ -196,15 +198,20 @@ Loop has three exit paths:
 | Event | Result |
 |---|---|
 | `until` becomes true on a normal Graph or Operator iteration | current envelope leaves on `out` |
-| a Connector succeeds | successful result leaves immediately on `out` |
-| a body-less `on err where <predicate>` matches | original typed error leaves on `err` |
+| a Connector completion reaches a body-less outcome handler | the original typed completion outputs leave unchanged |
+| the measure exhausts or violates its invariant | `LoopExhausted` or `LoopVariantViolation` leaves on the Loop's typed `status` output |
 
-An `on err where <predicate> { ... }` handler with a body is an iterating
-case. If such a case requests another call after the measure is exhausted,
-the Loop emits `LoopExhausted { calls, last_error }`.
+An `on <output> where <predicate> { ... }` handler with a body is an
+iterating case. `<output>` is an ordinary typed port selected by the
+author (`status` for Process); no port name and no common `transient`
+field has privileged meaning. The Loop judges the boundary completion as
+one unit so simultaneous `out`/`err`/`status` facts cannot be split by
+scheduler order. If an iterating case requests another call after the
+measure is exhausted, the Loop emits
+`LoopExhausted { calls, last_outcome }` on its declared status output.
 
-An unmatched error follows the normal unwired-error rule; Loop never turns a
-technical exhaustion into a business outcome.
+An unmatched outcome follows the ordinary resolved sink/wiring policy;
+Loop never turns technical exhaustion into a business outcome.
 
 ## 4. Backoff
 
@@ -236,7 +243,7 @@ on Loop.stop  { finished = . }
 ```
 
 `Loop.start` fires once before the first predicate check. `Loop.stop` fires
-once after any terminal result: success, base error, exhaustion, or variant
+once after any terminal result: success, selected base outcome, exhaustion, or variant
 violation. Bare `on start` and `on stop` remain Node lifecycle hooks.
 
 ## 6. Envelope context
@@ -268,8 +275,9 @@ connector reserve : HttpClient + Saga + Loop {
     until = value <= 0
   }
 
-  on err where !err.transient
-  on err where err.transient { }
+  on out where meta.ext.status < 500
+  on out where meta.ext.status >= 500 { }
+  on status where data is ConnectFailed || data is TimeoutExpired { }
   on compensate { /* inverse request */ }
 }
 ```

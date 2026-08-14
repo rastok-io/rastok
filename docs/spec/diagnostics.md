@@ -5,10 +5,15 @@
 
 **Scope.** This catalog norms diagnostics emitted by *tools* (compiler,
 planner, sim runner) — they never appear in a journal or a golden trace.
-Runtime typed errors (`JoinExpired`, `LoopExhausted`, `SagaRolledBack`,
-`OutcomeUnknown`, …) are **language material** : err-port payloads,
-part of err sets, hashed into the semantic identity and compared in the
-causal core. They live in their home specs, not here.
+Runtime outcome cases (`JoinExpired`, `LoopExhausted`,
+`SagaRolledBack`, `OutcomeUnknown`, …) are **language material**:
+ordinary typed port payloads, hashed through their resolved types and
+compared in the causal core. They live in their home specs, not here.
+
+The current `E-CEL-EXPR` and bare-`json` rows describe executable v6.
+D-2026-08-14-1 migrates them with the `expr`/`IDENT!` implementation;
+new or renamed checks are registered only when their focused negative
+tests land, never pre-allocated by this planning pass.
 
 ## Rules
 
@@ -38,13 +43,13 @@ causal core. They live in their home specs, not here.
 | E-COMPENSATE-KEY | error | plan | [effects-and-sagas.md](effects-and-sagas.md) | compensation without a stable business key |
 | E-REPLAY-VERSION-MISMATCH | error | replay | [identity.md](identity.md) | journal segment hash ≠ loaded graph hash ; replay refused |
 | E-DUP-KEY | error | check | [identity.md](identity.md) | a STATIC map/struct literal with two keys that canonicalize equal; a runtime collision is instead a typed language error, not a tool diagnostic; field `detail` |
-| E-UNION-OVERLAP | error | check | [identity.md](identity.md) | a `union` with overlapping or identical branches (`int \| int`, `int \| long`, `number \| long`) — no canonical `branch_index` |
+| E-UNION-OVERLAP | error | check | [identity.md](identity.md) | a structural union (`A \| B`) with overlapping or identical branches (`int \| int`, `int \| long`, `number \| long`) — no unique branch; a tagged union may deliberately distinguish equal-shaped cases by name |
 | E-LEX-CHAR | error | parse | [grammar.md](grammar.md) | a character outside the lexical grammar; field `character` |
 | E-LEX-UNTERMINATED-STRING | error | parse | [grammar.md](grammar.md) | a string literal that never closes |
 | E-LEX-UNTERMINATED-COMMENT | error | parse | [grammar.md](grammar.md) | a block comment that never closes |
 | E-LEX-UNTERMINATED-BLOCK | error | parse | [grammar.md](grammar.md) | a raw guest block whose braces never balance |
 | E-PARSE-EXPECTED | error | parse | [grammar.md](grammar.md) | a token breaking the expected production; fields `expected`, `found` |
-| E-JSON-VALUE | error | parse | [grammar.md](grammar.md) | a `json` literal the house reader refuses; field `detail` (JSON is not CEL — its faults carry their own code) |
+| E-JSON-VALUE | error | parse | [grammar.md](grammar.md) | a JSON region the house reader refuses (`json` in current v6, `json!` after M1.3); field `detail` (JSON is not the Rastok expression grammar — its faults carry their own code) |
 | E-PARSE-DEFERRED | error | parse | [grammar.md](grammar.md) | syntax admitted by the grammar but outside the subset this build implements; field `construct` |
 | E-APP-COUNT | error | resolve | [grammar.md](grammar.md) | a deployed unit without exactly one `: App` graph; field `count` |
 | E-DUP-NODE | error | resolve | [grammar.md](grammar.md) | a node name declared twice in one graph; field `name` |
@@ -67,16 +72,16 @@ causal core. They live in their home specs, not here.
 | E-DUP-TYPE | error | resolve | [grammar.md](grammar.md) | a named type declared twice in the unit (D-2026-08-10-8); field `name` |
 | E-TYPE-RECURSIVE | error | check | [grammar.md](grammar.md) | a named type reaching itself through its own expansion — recursion refuses in v1, the faulty reference underlined (D-2026-08-10-8); field `name` |
 | E-TYPE-DUP | error | check | [grammar.md](grammar.md) | a duplicate field or symbol inside one type declaration — the duplicate is underlined (D-2026-08-10-8); fields `name`, `field` |
-| E-CONTENT-TYPE | error | check | [decisions.md](decisions.md) | a content-typed byte form (`base64(ct)`, `asset(path, ct)`) outside whole-payload position — a nested field has no `meta.ext` of its own (D-2026-08-10-5); field `tag` |
+| E-CONTENT-TYPE | error | check | [decisions.md](decisions.md) | a content-typed byte form (`base64!(ct)`, `asset(path, ct)`) outside whole-payload position — a nested field has no `meta.ext` of its own (D-2026-08-10-5); field `tag` |
 | E-TYPE-BUDGET | error | check | [grammar.md](grammar.md) | a type expansion beyond a structural budget — depth (128), nodes (4096), width (256), or alias links followed (256) — with the MEASURED value in the payload (D-2026-08-10-8); fields `name` + `depth`/`nodes`/`count`/`aliases` |
-| E-NAME-RESERVED | error | resolve | [grammar.md](grammar.md) | a reserved word in a binding position : `json`/`nothing` (value forms) or `true`/`false`/`null` (expression literals) anywhere a name is introduced — graph, lab, node, boundary or node port, val/var/let, type ; a node named `meta`/`data`/`sys`/`app`/`ext` (envelope surfaces) ; or a user `type` spelling a builtin type (silently-dead declaration). ONE naming policy, refusal at the declaration (D-2026-08-13-1) ; field `name` |
+| E-NAME-RESERVED | error | resolve | [grammar.md](grammar.md) | a reserved word in a binding position: `nothing` or `true`/`false`/`null`; a node named `meta`/`data`/`sys`/`app`/`ext`; or a user `type` spelling a builtin type. Current v6 also reserves `json`; D-2026-08-14-1 removes only that entry when `json!` lands. One naming policy, refusal at the declaration; field `name` |
 | E-BRACE-MIXED | error | check | [grammar.md](grammar.md) | a braced value mixing ordinary data fields with reserved envelope roots (`data`, `meta` — `mime_type` left the list with D-2026-08-10-4) — wrap the data in `data = { … }`; never a silent reinterpretation (D-2026-08-09-1); field `field` |
-| E-PORT-TYPE | error | check | [grammar.md](grammar.md) | a value crossing a port against its PINNED type — an emission or injection whose precise type disagrees, or an edge whose two pinned ends disagree; `dyn` on either side passes (inference territory); fields `port`, `expected`, `found` |
+| E-PORT-TYPE | error | check | [grammar.md](grammar.md) | a value crossing a port against its resolved effective type — an emission or injection whose precise type disagrees, or an edge whose endpoint constraints cannot unify; fields `port`, `expected`, `found`. Current v6's `dyn` shortcut is implementation scaffolding and disappears with M1.3 inference. |
 | E-PARTITION-MISMATCH | error | check | [execution-model.md](execution-model.md) | a join input arriving under a different partition than the join requires — an explicit re-key step is needed; reserved for the joins slice; fields `port`, `expected`, `found` |
 | E-DUP-EDGE | error | check | [envelope.md](envelope.md) | the same source endpoint wired twice to the same target, compared after desugaring — the deliveries would derive one call ref; field `edge` |
 | E-DUP-LAB-IDENTITY | error | resolve | [simulation-semantics.md](simulation-semantics.md) | a duplicated lab identity — simulation, scenario, or mock of one connector at one level; fragments merge, homonyms refuse; field `name` |
 | E-INTERNAL-PLAN | error | plan | [plan-package.md](../architecture/plan-package.md) | the lowering emitted a plan its own validator refuses — a compiler defect surfaced as a diagnostic, never a panic; field `detail` |
 | E-PLAN-DEPTH | error | check, plan | [plan-package.md](../architecture/plan-package.md) | a program nesting deeper than the format reader's budget (`MAX_NESTING`) — gated at check on the parsed expression (the parser also bounds its production recursion at the same budget, one unit per syntactic level), and again at plan on the exact serialized depth; field `depth` in both phases |
 | W-DEAD-GRAPH | warning | resolve | [grammar.md](grammar.md) | a top-level graph reachable from no App composition |
-| W-UNWIRED-OUTPUT | warning | check | [delivery-semantics.md](delivery-semantics.md) | a non-`err` node output wired to no edge and not discarded with `-> nothing`; `err` is exempt — it bubbles to the root error sink; fields `node`, `port` (severity divergence recorded as erratum E-2026-08-03-2) |
+| W-UNWIRED-OUTPUT | warning | check | [delivery-semantics.md](delivery-semantics.md) | current v6 diagnostic for an unwired output. M1.3 replaces the name-based `err` exemption with each resolved port's `UnwiredPolicy`: `require_wire` refuses, `journal` observes, `bubble(port)` forwards, and `discard` must be explicit; fields `node`, `port` (the current severity divergence remains recorded as erratum E-2026-08-03-2 until the new validator lands) |
 | W-DURABILITY-WEAKENED | warning | plan | [delivery-semantics.md](delivery-semantics.md) | a Node or nested Graph explicitly selects a weaker scope than its closest inherited value |

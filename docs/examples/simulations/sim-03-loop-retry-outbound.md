@@ -12,7 +12,7 @@
 |---|---|
 | Outbound record : `open` (key, digest, t) before the call | delivery-semantics §4.2 |
 | One closure : response XOR timeout ; late response → `discarded` | execution-model §6.3, delivery §4.2 |
-| `TimeoutExpired` on `err` (l:timeout, parent = the request) | execution-model §6.2 |
+| `TimeoutExpired` on typed `status` (l:timeout, parent = request) | execution-model §6.2 |
 | Loop re-injection : `l:next`, parent = the previous call's output | loop.md §1, envelope §3.1 |
 | **Stable business key across attempts → partner dedups** | delivery §4.3 |
 | Recovery triage : `open` + key present → recall byte-same key | delivery §4.4 |
@@ -42,13 +42,14 @@ graph sim03 : App {
       until = value <= 0
     }
     Loop.backoff = { curve = constant, delay = duration("5s") }
-    on err where !err.transient                       // base case : permanent err
-    on err where err.transient { }                    // iterating case (TimeoutExpired is transient)
+    on out where meta.ext.status < 500                         // base case
+    on out where meta.ext.status >= 500 { }                    // response retry
+    on status where data is TimeoutExpired { }                 // no-response retry
   }
 
   orders -> pay.in
   pay.out -> ledger.in
-  pay.err -> dlq.in
+  pay.status -> dlq.in
   connector dlq : Memory { }
 }
 ```
@@ -92,9 +93,9 @@ t=0    E0 born (orders, seq 0) ; delivered to pay.in
 advance duration("30s") (target 30) :
   earliest ≤ 30 ?  t=10 : call-timeout of E0
     t := 10 ; OUTBOUND(E0) := closed(timeout) — THE CALL IS CLOSED
-    E1 on pay.err : id = H("pay" ‖ "l:timeout" ‖ E0.id ‖ "err" ‖ 0)
-       err kind = TimeoutExpired (transient)
-    drain : Loop matches `on err where err.transient` → re-injection scheduled
+    E1 on pay.status : id = H("pay" ‖ "l:timeout" ‖ E0.id ‖ "status" ‖ 0)
+       status case = TimeoutExpired
+    drain : Loop matches `on status where data is TimeoutExpired` → re-injection scheduled
        AFTER backoff : dated event at t = 10 + 5 = 15
        (E1 also wired to dlq — it lands there : the timeout is visible, by design)
 
@@ -147,6 +148,6 @@ Crash right after `OUTBOUND open { call E0, key "pay_42" }`, before any reply :
      call had landed. EITHER WAY : exactly one charge.
 ```
 
-Because `pay.err` is wired to the DLQ, the timeout attempt remains visible
+Because `pay.status` is wired to the DLQ, the timeout attempt remains visible
 even when the Loop later succeeds. That DLQ records *attempts* ; the final
 outcome lives on `pay.out`.

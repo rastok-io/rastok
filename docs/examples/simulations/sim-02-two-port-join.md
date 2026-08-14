@@ -14,10 +14,10 @@
 | Join emission : parent = the trigger, trigger = the trigger's port | envelope.md §3 |
 | Explicit namespace attribution on join output | envelope.md §3 |
 | `within duration("15m")` : the eviction chrono as a dated event | execution-model.md §5/§7 |
-| Eviction of a join buffer = `JoinExpired` on `err` (l:evict, parent = evictee) | execution-model.md §7 |
-| Window vs join boundary : this err is JOIN-only | execution-model.md §7/§9 |
+| Eviction of a join buffer = `JoinExpired` on typed `expired` (l:evict, parent = evictee) | execution-model.md §7 |
+| Window vs join boundary: this outcome is JOIN-only | execution-model.md §7/§9 |
 | Two keys = two mailboxes = independent lifecycles | execution-model.md §2 |
-| DLQ wiring of the err path (never silent) | philosophy + `Memory` connector |
+| DLQ wiring of the expiry path (never silent) | philosophy + `Memory` connector |
 
 ## 2. The graph
 
@@ -49,7 +49,7 @@ graph sim02 : App {
   orders   -> settle.order
   payments -> settle.payment
   settle.out -> ledger.in
-  settle.err -> dlq.in                                  // JoinExpired lands here, written not silent
+  settle.expired -> dlq.in                              // JoinExpired lands here, written not silent
 }
 ```
 
@@ -79,7 +79,7 @@ lab sim02 {
 
       advance duration("15m")
 
-      expect "43's order evicted, loudly" dlq.in where err.kind == "JoinExpired"
+      expect "43's order evicted, loudly" dlq.in where data is JoinExpired
     }
   }
 }
@@ -132,11 +132,11 @@ t=0   B0 born at inbound (orders, seq 1)   id = H("orders" ‖ 1)    origin = B0
 advance duration("15m") (target t=15min) :
   earliest dated event ≤ 15min ? YES : t=15min, eviction of B0's buffer
     t := 15min ; the supervision journals the eviction and delivers :
-    X0 on settle.err :
-       id        = H( "settle" ‖ "l:evict" ‖ B0.id ‖ "err" ‖ 0 )
+    X0 on settle.expired :
+       id        = H( "settle" ‖ "l:evict" ‖ B0.id ‖ "expired" ‖ 0 )
        parent_id = B0.id        origin_id = B0.id      role = default
-       err kind  = JoinExpired
-    (this is a JOIN-buffer eviction → err. A closing WINDOW would have
+       tagged case = JoinExpired
+    (this is a JOIN-buffer eviction → expired. A closing WINDOW would have
      emitted its aggregate via on stop instead — the §7/§9 boundary.)
 
     drain : dlq.in ◄─ X0 (Memory stores it — the loss is explicit and visible)

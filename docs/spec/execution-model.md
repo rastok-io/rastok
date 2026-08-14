@@ -155,11 +155,11 @@ Concretely, the supervision plane maintains **one queue of dated events** :
 | Dated event | Armed by | Delivered as |
 |---|---|---|
 | clock tick | `Clock` (`system_clock` incl.) | a root tick envelope (inbound) |
-| per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the Connector's `err` |
-| join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's `err` |
+| per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the contract's typed outcome port (`status` for Process) |
+| join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's declared typed expiry output (conventionally `expired`) |
 | partition lifetime expiry | `lifetime = …` | the instance's `on stop` (parent = **the envelope that armed the deadline** — last activity for idle-ttl, the creator for fixed/window) |
 | loop backoff delay | `Loop.backoff` ([loop.md](loop.md) §4) | the re-injected call (trigger `l:next`) |
-| saga completion budget | `Saga.timeout` ([effects-and-sagas.md](effects-and-sagas.md)) | a transaction of the `: Saga` node — trigger `l:timeout`, parent = the instance-creating envelope ; emits typed err `SagaExpired` (bubbles) and the instance enters `rolling_back` |
+| saga completion budget | `Saga.timeout` ([effects-and-sagas.md](effects-and-sagas.md)) | a transaction of the `: Saga` node — trigger `l:timeout`, parent = the instance-creating envelope; emits `SagaExpired` on the ordinary typed `status` output and the instance enters `rolling_back` |
 
 In production the queue is driven by wall-clock ; in simulation, by the
 fixture (§8). **The delivery contract — order, causality, identity — is
@@ -196,24 +196,24 @@ have no impact on graph determinism.
 supervision : the chrono of call e42 expired
      │  journals the decision (replayable)
      ▼
-codex.err ──► typed error envelope TimeoutExpired
+codex.status ──► typed outcome envelope TimeoutExpired
                 parent_id = e42          (the cause — the timed-out request)
                 trigger   = l:timeout    (emitted on behalf of the Connector node)
-                err kind  = TimeoutExpired ∈ the Connector's static error set
+                case      = TimeoutExpired ∈ ProcessStatus
 ```
 
 *(`l:timeout` is general : it fires for ANY declared budget's expiry, with
 parent = **the envelope that armed the budget** — the request for a call, the
 instance-creating envelope for `Saga.timeout`. One trigger, one rule.)*
 
-No new handler form : the graph reacts by ordinary wiring
-(`codex.err -> triage`, guards on `err.kind`). The typed `err` channel already
-carries "the Connector's declared failure modes" — `TimeoutExpired` joins that
-set.
+No new handler form: the graph reacts by ordinary wiring and union
+narrowing (`codex.status -> triage`, guards on `data is
+TimeoutExpired`). The output name and union type come from the resolved
+Connector contract; timeout does not create a privileged error channel.
 
 ### 6.3 The call-closed rule (anti-ghost)
 
-**A timeout closes the call, definitively.** If the response arrives late, the
+**A timeout completion closes the call, definitively.** If the response arrives late, the
 Connector's correlator discards it and the discard is **journaled** (`late
 response, discarded` — visible to observability, invisible to the graph). One
 call = exactly one outcome : a response or a timeout, never both.
@@ -281,13 +281,13 @@ consumes it. Eviction cannot be a silent drop; the rule is:
 eviction of a JOIN buffer (within elapsed OR last overflow)
      │
      ▼
-settle.err ──► typed error envelope JoinExpired
+settle.expired ──► typed outcome envelope JoinExpired
                  parent_id = the evicted envelope   (the cause)
                  trigger   = l:evict
-                 err kind  = JoinExpired ∈ the Operator's static error set
+                 case      = JoinExpired ∈ the declared `expired` port type
 ```
 
-The graph decides by wiring — compensate, alert, DLQ via `Memory`, or
+The graph decides by ordinary wiring — compensate, alert, DLQ via `Memory`, or
 `-> nothing` if abandonment is genuinely normal (then it is *written*, not
 silent).
 

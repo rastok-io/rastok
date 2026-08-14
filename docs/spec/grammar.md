@@ -1,8 +1,10 @@
 # Rastok DSL — Grammar notes
 
-> **Status: Normative.** The parser exists and honors this contract
-> for the implemented subset; forms not yet executable are marked or
-> refused with named deferrals (`E-CHECK-DEFERRED`).
+> **Status: Normative M1.3 target.** The current v6 parser still accepts
+> the superseded bare frontend spellings while M1.3 lands; forms not yet
+> executable remain marked or refused with named deferrals
+> (`E-CHECK-DEFERRED`). This document defines the destination, not a
+> compatibility requirement for the old surface.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md). Concepts like `Operator`, `Connector`, event-driven transaction, the parameterization grid behind the named archetypes (Reducer, Aggregator, Window, Joiner), the dynamic dispatch primitives, and the partition model are introduced there. This document is the grammar ; foundations is the constitution.
 >
@@ -34,9 +36,18 @@ Rules :
 
 - **Attributes always use `=`.** `command = "codex"`, `args = ["app-server"]`, `timeout = duration("5s")`, `env = { "HOME": "/tmp" }`. No exceptions — there are NO configuration sub-blocks (`env { … }`, `init { … }`, `tls { … }`, `auth oauth2_client_credentials { … }` are dead forms; they refuse with a migration hint, D-2026-08-12-1).
 - **Type annotations always use `:`.** `input msg: struct`, `var count: int`, `connector X : HttpClient`. Never `=`.
-- **An attribute value belongs to one of FOUR families** (D-2026-08-12-1): a BARE WORD from the contract's closed choice (`mode = job`); a CEL EXPRESSION, where a tag with positional arguments and no body is an ordinary call (`duration("5s")`, `asset("logo.png")`); a BRACED LITERAL — `=` entries build a struct, `:` entries a map (D-2026-08-10-6), replaced atomically, never patched; or a FOREIGN LITERAL `tag [(binding)] body` whose body belongs to the tag's reader (`sql { … }`, `text { … }`, `base64(ct) { … }`, `jq(request) { … }`, `json { … }` / `json [ … ]` — a DOCUMENT,
-self-delimiting; scalar spellings are dead, scalars are CEL's and
-exactness is `decimal("…")`, D-2026-08-13-1). Tagged INITIALIZERS (`on_crash { … }`, `measure { … }`, `exponential { … }`) are dead: a plain struct plus the attribute's name suffices, a former discriminant is a closed-choice FIELD (`Loop.backoff = { curve = exponential, … }`).
+- **An attribute value belongs to one of FOUR families** (D-2026-08-12-1,
+  amended by D-2026-08-14-1): a BARE WORD from the contract's closed
+  choice (`mode = job`); a Rastok EXPRESSION (`duration("5s")`,
+  `asset("logo.png")`); a BRACED LITERAL — `=` entries build a struct,
+  `:` entries a map (D-2026-08-10-6), replaced atomically, never
+  patched; or a TAGGED FRONTEND `name!(args?) payload` whose payload
+  belongs to that reader/compiler (`sql!(data) { … }`, `text! { … }`,
+  `base64!(ct) { … }`, `jq!(data) { … }`, `json! <json-value>`).
+  Tagged INITIALIZERS (`on_crash { … }`, `measure { … }`,
+  `exponential { … }`) remain dead: a plain struct plus the attribute's
+  name suffices, and a former discriminant is a closed-choice FIELD
+  (`Loop.backoff = { curve = exponential, … }`).
 - **Dotted attribute names are owner qualification ONLY** (`Loop.backoff`, `Saga.timeout`, `HttpClient.timeout`) — never a patch path into a composite value.
 - **The host grammar is LL(1) after left-factoring the identifier
   prefixes** (D-2026-08-13-1): classification observes the form (one
@@ -59,7 +70,7 @@ connector codex : Process {        // type annotation with ":"
   protocol = "jsonrpc"
   effect   = idempotent
   behavior = probabilistic
-  // in / out / err = stdin / stdout / stderr (Process defaults — Connectors declare no ports)
+  // in / out / err / status = stdin / stdout / stderr / lifecycle (Process defaults)
 
   init = {                         // composite attribute : startup handshake
     message = { method = "initialize" }
@@ -123,9 +134,10 @@ The rules :
   and aspects) : it marks the deployment entry point. A deployed unit has
   **exactly one** `: App` graph (0 or ≥2 = build error). App-level concerns —
   `durability`, retention overrides, shared partitions — are its attributes
-  and body. `app` is no longer a keyword ; it survives as a **pre-bound
-  identifier** aliasing the `: App` graph (so `app.err`, the root error
-  sink, is unchanged — like `in`/`out`/`err`, pre-bound, not reserved).
+  and body. `app` is no longer a keyword; it survives as a **pre-bound
+  identifier** aliasing the `: App` graph, so a declared App boundary port
+  remains addressable as `app.<port>`. M1.3 removes the special `app.err`
+  root sink: observation and bubbling are resolved per output contract.
 - **Durability is lexical.** A stateful Node's effective value is its
   explicit `durability`, otherwise the closest enclosing Graph's explicit
   value, otherwise the App's value, otherwise `none`. A child may strengthen
@@ -199,7 +211,11 @@ protocol  = jsonrpc | teams_activity | mcp | log | raw
 
 HTTP and JSON-RPC are therefore not the same layer : HTTP is a transport/application binding, JSON-RPC is a message protocol that can run over `stdio+jsonl`, WebSocket text, HTTP JSON, etc.
 
-Example : a `Process` node for `codex app-server` owns one child process address, binds `stdin/stdout/stderr` to the world, and exposes three envelope ports. The compiler lowers those ports to runtime Reader/Writer halves that share one process handle and one correlator.
+Example : a `Process` node for `codex app-server` owns one child process
+address, binds `stdin/stdout/stderr` to `in`/`out`/`err`, and exposes an
+additional typed `status` output. The compiler lowers those ports to
+runtime Reader/Writer halves that share one process handle and one
+correlator.
 
 `HttpServer` and `HttpClient` are deliberately separate node types because
 they have different external roles even though both can have read and write
@@ -266,7 +282,7 @@ graph sessions per session {
     protocol = "jsonrpc"
     effect   = idempotent
     behavior = probabilistic
-    // in / out / err = stdin / stdout / stderr (Process defaults — no port declaration)
+    // in / out / err / status = stdin / stdout / stderr / lifecycle (Process defaults)
 
     init = {
       message = { method = "initialize" }
@@ -332,8 +348,8 @@ Braces and names carry ALL the semantics — indentation carries none.
   `W-DEAD-GRAPH` (warning, not an error — work-in-progress graphs are
   legitimate), and its boundary-port wiring obligations are suspended.
   Any partial wiring, or any source Connector inside, re-arms the normal
-  port rules (unwired data output = compile error, `-> nothing` to
-  discard).
+  resolved `UnwiredPolicy` of every output (`require_wire`, `journal`,
+  `bubble(port)`, or explicit discard with `-> nothing`).
 
 ## Operator parameterization : state + per + transaction
 
@@ -367,7 +383,7 @@ Less frequent patterns (filter-with-dedup, buffer-by-size, rate-limit, debouncer
 
 ### State semantics — read-modify-write per transaction
 
-State is **read-modify-write, imperatively, within a transaction**. A persistent field `var x: T = default` is read by its bare name `x` (or `$x` inside a `jq { … }` block — jq's own convention). At the *start* of a transaction `x` holds the value the previous transaction committed (or the default if uninitialized) ; assignments mutate it **in place**, so a later read in the same transaction sees the new value, like an imperative function. The transaction commits atomically (state + emissions + audit) at its end.
+State is **read-modify-write, imperatively, within a transaction**. A persistent field `var x: T = default` is read by its bare name `x` (or `$x` inside a `jq! { … }` block — jq's own convention). At the *start* of a transaction `x` holds the value the previous transaction committed (or the default if uninitialized) ; assignments mutate it **in place**, so a later read in the same transaction sees the new value, like an imperative function. The transaction commits atomically (state + emissions + audit) at its end.
 
 ```rastok
 operator counter {
@@ -375,16 +391,16 @@ operator counter {
   // no `per` → single state cell shared across all envelopes (graph-scoped)
 
   on msg {
-    count = count + 1                         // mutate (plain CEL) ; reads below see the new value
+    count = count + 1                         // Rastok expression; later reads see the new value
     out = { meta.app.count = count }          // default 'out' port
   }
 }
 ```
 
-**State expressions are plain CEL** : `count = count + 1`, `x = x * 2 + data.n`.
+**State expressions are Rastok expressions**: `count = count + 1`, `x = x * 2 + data.n`.
 There are no mutation shortcuts (`x++` / `x += v`) ; they are redundant with
-CEL. Structural reshaping stays in guest-language blocks (`jq { … }` /
-`sql { … }`).
+ordinary expressions. Structural reshaping may use tagged frontends
+(`jq! { … }` / `sql! { … }`).
 
 **Emitting** : a braced value is classified ONCE by its top-level roots (D-2026-08-09-1). With only the reserved roots `data` and `meta` it is the ENVELOPE form : `out = { meta.app.count = count }` inherits the input envelope (meta + data) and patches the listed fields, and a whole-`data` assignment makes the data fresh. With no reserved root, `out = { total = n }` builds a fresh data record (a `struct`), keeping the input's heritable metadata per the uniform propagation rule (D-2026-08-10-2 ; `content_type` excluded — D-2026-08-10-4). Mixing the two refuses with `E-BRACE-MIXED` — business fields named `data` or `meta` take the explicit escape `data = { … }`. `out = .` re-emits the input envelope unchanged ; `out = nothing` emits nothing on that port this transaction. There is no `previous(x)` operator — a transaction reads the previous transaction's committed state at its start, then proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE applies at the **inter-transaction** boundary (each transaction is one cycle), not inside a transaction. Wall-clock time enters only through a `Clock` observed via `on <clock_port>` (see [WHITEPAPER.md §5](../../WHITEPAPER.md)).
 
@@ -455,7 +471,7 @@ The "switch on a value" pattern (forward an envelope to one of a declared set of
 
 ```rastok
 operator forward : Router {
-  select = jq { .meta.app.target }
+  select = jq! { .meta.app.target }
 }
 forward.a -> a_handler
 forward.b -> b_handler
@@ -486,7 +502,7 @@ operator user_workspace_quota per user, workspace {
   var quota: int = 0
 
   on msg {
-    quota = jq { $quota + .data.cost }
+    quota = jq! { $quota + .data.cost }
   }
 }
 ```
@@ -504,7 +520,7 @@ partition workspace {
 }
 ```
 
-A bare duration value as a lifetime is interpreted as `idle_ttl`. For other lifetime kinds, use the explicit form : `persistent`, `single_pass`, `fixed duration("…")`, `window duration("…") <mode>` — the structural words are DSL, the durations are ordinary CEL values.
+A bare duration value as a lifetime is interpreted as `idle_ttl`. For other lifetime kinds, use the explicit form : `persistent`, `single_pass`, `fixed duration("…")`, `window duration("…") <mode>` — the structural words are DSL, the durations are ordinary Rastok expression values.
 
 ## Naming convention
 
@@ -524,7 +540,7 @@ No `Reader`, `Writer`, or `Endpoint` suffix is needed in the DSL :
 |---|---|---|
 | `HttpServer` | server address/binding | inbound request on `out`, optional response on `in` (default ports) |
 | `HttpClient` | client address/binding | outbound POST, GET download, delivery/report output |
-| `Process` | `stdio` ports | default `in`/`out`/`err` = `stdin`/`stdout`/`stderr`, one child-process lifecycle |
+| `Process` | typed stdio + lifecycle ports | default `in`/`out`/`err`/`status` = `stdin`/`stdout`/`stderr`/tagged lifecycle, one child-process lifecycle |
 | `Jaq` | its transformer contract | pure `in -> out` envelope transform |
 | `Memory` | its fixed store contract | `in` appends; `read` requests a bounded snapshot on `out` |
 | `File` (deferred) | its future ports and configuration | read side, write side, or both |
@@ -537,31 +553,32 @@ user-facing node type.
 
 ## Port naming and default edges
 
-**Ports are implicit from the handler.** `on <name>` declares an input ;
+**Ports may be inferred from the handler.** `on <name>` contributes an input ;
 assigning `<name> = …` in a handler declares an output. So Operators
 usually declare *no* ports at all — the `input` / `output` keywords are
 optional, needed only to **pin** a type/schema (`output x: T`), or to
 document a node with no handler (e.g. a saga) or a graph's public
 interface. Direction is carried by the keyword, not the name. The names
-**`in` / `out` / `err`** are *default ports* — pre-bound, stdio-aligned
-(a `Process` maps them onto stdin/stdout/stderr — a transport analogy:
-`out` is stdout decoded by the codec, and `err` speaks the TYPED error
-model, stderr lines arriving as `StderrLine` envelopes alongside the
-lifecycle kinds of the declared error set). Conventions :
+**`in` / `out` / `err`** are conventional default ports — pre-bound but
+typed by the same mechanism as every other port. A `Process` maps them
+exactly to stdin, decoded stdout and raw stderr; its ordinary `status`
+output carries the tagged lifecycle/outcome value. Conventions :
 
 - ports are named for their role, **no direction suffix** (`event`, `delta`, `flush`)
 - a single-input / single-output node just uses the defaults `in` and `out`
 - a port's **type is inferred** ; annotate (`output x: T`) only to pin / force
-- **Connectors declare no ports** — the Connector type + `codec` define them
-- `err` is the conventional error / diagnostic output (a typed error set, §2.3)
+- Connector contracts declare fixed or parametric port rules; the
+  instantiated contract plus codec resolves their effective types
+- `err` conventionally carries diagnostic bytes/data; it has no special
+  grammar, type or transaction semantics
 
-Error/diagnostic outputs are never part of bidirectional wiring ; they must be
-wired explicitly :
+Every output is wired explicitly or sent to its resolved sink policy:
 
 ```rastok
 client.out -> codex.in
 codex.out      -> client.in
 codex.err      -> logs.in
+codex.status   -> lifecycle.in
 ```
 
 Multi-port nodes (`Router`, `Aggregator`, ...) expose additional named ports
@@ -570,7 +587,7 @@ needed :
 
 ```rastok
 operator route : Router {
-  select = jq {
+  select = jq! {
     if .data.kind == "invoice" then ["audit", "invoice"]
     elif .data.kind == "refund" then "refund"
     else []
@@ -605,7 +622,7 @@ The explicit `Router` node is the canonical form. The parser may also accept
 an inline sugar for local routing :
 
 ```rastok
-codex.out -> route jq {
+codex.out -> route jq! {
   if .meta.app.method == "item/agentMessage/delta" then ["aggregate", "typing"]
   elif .meta.app.method == "turn/completed" then "flush"
   else []
@@ -810,7 +827,7 @@ Writing two arrows in opposite directions gives a compile error. Express the sam
 
 | Need | Pattern |
 |---|---|
-| Retry on failure | The `: Loop` aspect on the Connector (`Loop.variant = { kind = measure, initial = N, next = value - 1, until = value <= 0 }`; `Loop.backoff = { curve = exponential, … }`; `on err where err.transient { }`) — see [loop.md](loop.md) |
+| Retry after a selected outcome | The `: Loop` aspect on the Connector, with an explicit handler/guard over the connector's typed outcome port (for Process, normally `status`) — see [loop.md](loop.md) |
 | DLQ + replay | Failed → `Memory`; operations tooling reads a bounded snapshot, then injects selected values as roots of a new run |
 | Iterative refinement, fixed N | Static unfolding : `step -> step -> step` |
 | Iterative refinement, dynamic N | the bounded `: Loop` aspect |
@@ -819,22 +836,22 @@ Writing two arrows in opposite directions gives a compile error. Express the sam
 
 These idioms are **the** way to express the corresponding patterns. They're not workarounds — they're the expected vocabulary.
 
-## Guest languages : tagged blocks
+## Tagged frontends and guest languages
 
-The Rastok DSL is the **host language**. A tag names a **guest language** ;
-the block is a **guest-language block**, compiled or validated into a
-`GuestProgram`. CEL remains the integrated core expression language and does
-not use this mechanism. Placement follows effects ([stdlib.md](stdlib.md) §5) :
+The Rastok DSL is the **host language**. `IDENT!` selects a dedicated
+reader/compiler; a guest-language body is compiled or validated into a
+`GuestProgram`. Rastok expressions are intrinsic and do not use this
+mechanism. Placement follows effects ([stdlib.md](stdlib.md) §5) :
 a pure guest program executes inside an Operator ; a guest program with I/O
 executes behind a Connector. Wasm is an execution format for either case, not
 by itself a guest language or a purity guarantee. An Operator guest whose
 imports exceed the pure host ABI is a compile error.
 
-Guest-language source uses the **tagged block** syntax :
+Guest-language source uses the **tagged frontend** syntax:
 
 ```rastok
 operator to_codex : Jaq {
-  program = jq {
+  program = jq! {
     if .data.type == "invoke" then
       .data = { decision: .data.value.verb }
     else . end
@@ -842,25 +859,29 @@ operator to_codex : Jaq {
 }
 ```
 
-Rules :
-- Tag (`jq`, `bash`, `sql`, `python`, …) appears immediately before `{`
-- Block body is **raw text** to the DSL parser (no `${...}` interpolation, no DSL comments)
-- Block delimited by **balanced** `{}` counting
+Rules:
+- Frontend name and bang (`jq!`, `bash!`, `sql!`, `python!`, …) appear
+  before the frontend-owned payload
+- The selected frontend owns the source region (no `${...}` interpolation,
+  no host-language comments inside it)
+- A braced frontend may use balanced `{}` only when its registered framer
+  declares that contract; guest-specific strings and comments belong to
+  the guest's framer, never to a universal host scanner
 - Tooling hint : `.rkg`-aware LSP can route the block to a matching language server
 
 Generalizes uniformly :
 
 ```
-connector cleanup : Shell    { script = bash { rm -rf /tmp/work } }
-connector audit : Postgres   { insert = sql  { INSERT INTO audit_events ... } }
-operator custom : Wasm       { source = rust { pub fn transform(env: Envelope) -> Envelope { ... } } } // pure ; I/O imports require a Connector
+connector cleanup : Shell    { script = bash! { rm -rf /tmp/work } }
+connector audit : Postgres   { insert = sql!  { INSERT INTO audit_events ... } }
+operator custom : Wasm       { source = rust! { pub fn transform(env: Envelope) -> Envelope { ... } } } // pure ; I/O imports require a Connector
 ```
 
-For one-line expressions, `lang(...)` is allowed : `expr = jq(.data.type)`.
+Bindings use ordinary frontend arguments: `expr = jq!(data) { .type }`.
 
 ## jaq operates on the full envelope
 
-Inside `Jaq { program = jq { ... } }`, the input visible to the program is the
+Inside `Jaq { program = jq! { ... } }`, the input visible to the program is the
 **full envelope** in its canonical `meta + data` shape :
 
 ```json
@@ -889,7 +910,21 @@ scope. All ids are blake3-derived 128-bit values.)
 | `data` | ✅ |
 | All of `meta.*` | ❌ — guests READ metadata, never write it (v1, D-2026-08-10-1): metadata writes belong to the DSL, where the checker sees every key |
 
-`meta` has exactly THREE zones (D-2026-08-10-1) : `sys` (runtime, read-only), `app` (application, read-write, INFERRED from the deployed graph's writes alone), `ext` (external-boundary context, read-write, sheet-declared). Each zone is a flat struct whose leaves are scalars or `array<scalar>` — the TARGET model admits `bool`, `number`, `text`, `uuid`, `timestamp`, `duration`, `enum`; the EXECUTABLE subset today is `bool | int | double | text | bytes | decimal` and their arrays (duration/timestamp leaves await their physical form — the checker refuses them by name) — a field is one dotted key inside its zone (`app.audit.origin`), composites (`struct` / `map` / `array`) belong in `data`. There is NO bare form : `meta.customer_id` is invalid, no alias resolves it. `app` fields are INFERRED from the DEPLOYED GRAPH's writes alone (the Lab is checked against the resolved schema and extends nothing) : types unify across writers, a conflict refusing with both sites named — there is no declaration form. `ext` fields come from the connector sheets' `Populates` rows plus the standard `content_type` ; handlers may rewrite them, never invent one. `meta.sys` is read-only — its fixed 5-field Tier 1 (`id` / `parent_id` / `origin_id` / `role` / `graph_version`, see [envelope.md](envelope.md)), plus the scope-conditional `saga_*` / `loop_*`. A Connector's **terminal envelope** (WHITEPAPER §2.7) does NOT extend it : the outcome lives in the typed error payload (`ProcessExited { exit_code, signal, run_id }`, … — terminal *by kind* ; see [stdlib.md](stdlib.md)). Absent-field semantics are fixed by the **CEL grid** : an `app` leaf the graph writes nowhere, or an `ext` leaf no sheet declares = compile error (reads name a LEAF exactly — a projected branch is not a value) ; a BARE (required) read of a field a join merge may have dropped = compile error until an explicit write chooses the value (D-2026-08-10-2 — the read form is the requirement marker) ; a bare read whose field is absent at runtime routes the envelope to `err` — defense in depth, never the primary check ; legitimate absence is explicit (`meta.app.?x.orValue(…)`). The jq rule *missing ≡ null* applies **only inside `jq { }` blocks** (extension). On the wire an absent key is simply **omitted**, never serialized as `key: null`.
+`meta` has exactly THREE zones (D-2026-08-10-1): `sys` (runtime,
+read-only), `app` (application, read-write, inferred from the deployed
+graph's writes), and `ext` (external-boundary context, read-write,
+sheet-declared). Each zone is a flat struct whose leaves are scalars or
+`array<scalar>`; nested composites belong in `data`. There is no bare
+form: `meta.customer_id` is invalid. Types unify across all writers of an
+`app` field; `ext` fields come from Connector contracts plus the standard
+`content_type`. `meta.sys` is the fixed five-field Tier 1 plus
+scope-conditional aspect fields; Connector outcome data lives on its
+ordinary typed output port, not in `meta.sys`. Absent-field semantics are
+checked by the Rastok expression grid: an undeclared leaf is a compile
+error, a required read after an ambiguous join merge must be resolved by
+an explicit write, and legitimate absence uses `.?` / `.orValue(...)`.
+The jq rule *missing ≡ null* applies only inside `jq!` programs. On the
+wire an absent key is omitted, never serialized as `key: null`.
 
 ## Data : typed values and literals
 
@@ -905,10 +940,10 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 | `struct`  | `{ k = v, … }` ; `{}` empty                   | typed record — `=` decides (D-2026-08-10-6) ; schema inferred, or annotated `: <Schema>` |
 | `map`     | `{ "k": v, … }` ; `{:}` empty                 | text keys — `:` decides ; mixing `=` and `:` refuses           |
 | `array`   | `[ v, v, … ]`                                  | ordered sequence ; `array<struct>` is the relational `table` view |
-| `text`    | `"…"` ; `text { … }`                          | CEL string, or the VERBATIM block — first newline excluded, margin set by the closing brace, no interpolation, braces balanced |
-| `bytes`   | `base64 { … }` ; `asset("path")`              | RFC 4648 standard, mandatory padding, ASCII whitespace ignored ; or build-time repo bytes (D-2026-08-10-5). `hex` and `bytes …` forms are DEAD |
-| `variant` | `json <json-document>`                        | a JSON DOCUMENT (`json { "k": 1 }`, `json [1]`) ; always `variant` ; duplicate keys refuse ; numbers exact per D-2026-08-10-7 ; `{`/`[` are the ONLY special followers — any other spelling is an INVALID json form, refused with the migration (scalars are CEL's, exact numbers `decimal("…")`, D-2026-08-13-1) |
-| whole payload | `asset("path", "content_type")` ; `base64("ct") { … }` | fresh bytes + `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
+| `text`    | `"…"` ; `text! { … }`                         | Rastok string, or the verbatim frontend — first newline excluded, margin set by the closing delimiter, no interpolation |
+| `bytes`   | `base64! { … }` ; `asset("path")`             | RFC 4648 standard, mandatory padding, ASCII whitespace ignored ; or build-time repo bytes (D-2026-08-10-5). `hex` and `bytes …` forms are DEAD |
+| `variant` | `json! <json-value>`                           | the complete JSON value grammar (object, array, string, exact number, boolean, null); always `variant`; duplicate keys refuse |
+| whole payload | `asset("path", "content_type")` ; `base64!("ct") { … }` | fresh bytes + `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
 
 The `<type> file { … }` forms are DEAD — `asset` replaces them for
 build-time resources ; runtime files and URLs are Connectors'
@@ -932,21 +967,22 @@ array<struct { name: text, age: int, city: text }> [
   { name = "Bob",   age = 42, city = "Rome"  }
 ]
 
-// Text — the CEL string, or the verbatim block (margin set by the
+// Text — the Rastok string, or the verbatim frontend (margin set by the
 // closing brace; no escapes, no interpolation)
 "INFO: agent started"
-text {
+text! {
     INFO: agent started
     INFO: thread created
 }
 
 // Bytes — inline base64 (RFC 4648 standard, mandatory padding), or
 // build-time repo bytes
-base64 { 3q2+7wEC/w== }
+base64! { 3q2+7wEC/w== }
 asset("fixtures/sample.pdf")
 
-// Dynamic / semi-structured → variant : a JSON object or array document
-json { "anything": [1, 2, 3] }
+// Dynamic / semi-structured → variant : any complete JSON value
+json! { "anything": [1, 2, 3] }
+json! null
 ```
 
 The pre-reform spellings — `bytes base64 { … }`, `bytes hex { … }`,
@@ -960,21 +996,29 @@ Avro, JSON, …) into the declared type.
 
 When data is omitted from an envelope declaration, it defaults to `{}` (an empty record).
 
-**Wire codecs versus value types.** Wire codecs (`json`, `jsonl`, `csv`, `parquet`, `avro`, `protobuf`, `msgpack`, `xml`, `text`, `raw`, …) live on Connector attributes (`codec`) and are *orthogonal* to the in-graph value type : the codec is the bytes↔value cast at the boundary (parse / serialize, fallible → `err`), the type is *what the parsed value is*. A `S3` reading Parquet produces `array<struct>` ; a `Kafka` reading Avro the same. Inside the graph, operators see the type regardless of the wire format that delivered it.
+**Wire codecs versus value types.** Wire codecs (`json`, `jsonl`, `csv`,
+`parquet`, `avro`, `protobuf`, `msgpack`, `xml`, `text`, `raw`, …) live
+on Connector attributes and are orthogonal to the in-graph value type:
+the codec is the fallible bytes↔value boundary; the type is what the
+parsed value is. Its failure is a declared typed output/status case, not
+a privileged `err` mechanism. A Parquet source can produce
+`array<struct>` and an Avro source the same; JSON, Avro and Arrow unions
+all project into the union forms in [types.md](types.md).
 
-## References — CEL everywhere, without interpolation
+## References — Rastok expressions, without interpolation
 
 The DSL has no `${…}` interpolation token.
 
 - **Boot phase** (initializer positions only : `val` initializers, Connector
-  config attributes) : the CEL functions **`env("VAR")`** and
+  config attributes) : the expression functions **`env("VAR")`** and
   **`secret("path")`**. Using them in a guard/key/state position is a compile
   error — the language has explicit phases (boot → runtime → blocks).
-- **Runtime** : plain CEL paths, no sigil — `session.key` (the partition
-  field), `meta.app.x`, `data.y`, `err.kind`, a `val`/`var`/alias by name.
-  String building is CEL concatenation :
+- **Runtime** : plain expression paths, no sigil — `session.key` (the partition
+  field), `meta.app.x`, `data.y`, `status is TimeoutExpired`, a
+  `val`/`var`/alias by name.
+  String building is expression concatenation :
   `val cwd = "/workspace/" + session.key`.
-- **Inside guest-language blocks** (`jq { … }`, `bash { … }`, …) : the block is fully
+- **Inside guest-language blocks** (`jq! { … }`, `bash! { … }`, …) : the block is fully
   raw — no interpolation, ever ; DSL refs enter jq as `$name` bindings (the
   jq convention).
 
@@ -1138,11 +1182,11 @@ Required Rust extensions for the parser to land :
 | Stdlib aliases | Short names exposed by the stdlib for frequent Operator parameterizations : `Jaq`, `Reducer`, `Aggregator`, `Window`, `Joiner`, `HttpClient`, `Process`, etc. The compiler resolves them to configurations of the primitive `operator` or to native `Connector` types. |
 | Dynamic primitives | The two runtime-decision nodes : Router, Dispatch. They preserve topology staticity. Broadcast is the inline `(a, b, c) = x` statement. See [Dynamic dispatch primitives](#dynamic-dispatch-primitives-router-dispatch). |
 | Partition | A `(Key, Lifetime)` pair under which a Node's state is materialized. Partitions are flat — no parent declaration, no automatic cascade. Declared with `partition <name> { key = …; lifetime = … }`. See [WHITEPAPER.md §3](../../WHITEPAPER.md). |
-| State read-modify-write | **Imperative within a transaction.** `x` (bare in DSL, or `$x` inside `jq { … }`) starts at the value the previous transaction committed (or the default) ; assignments mutate it in place, so later reads see the new value (RHS = plain CEL ; no `++`-style shortcuts). The transaction commits atomically at its end. The Lustre `pre` is *inter-transaction*, not intra. |
+| State read-modify-write | **Imperative within a transaction.** `x` (bare in DSL, or `$x` inside `jq! { … }`) starts at the value the previous transaction committed (or the default); assignments mutate it in place, so later reads see the new value (RHS = Rastok expression; no `++`-style shortcuts). The transaction commits atomically at its end. The Lustre `pre` is *inter-transaction*, not intra. |
 | Value types | The data's type tree : `variant` (dynamic, JSON model), scalars (`text`/`bytes`/numeric + logical `date`/`timestamp`/`uuid`/`decimal`/`duration`), composites (`struct`/`map`/`array`), `enum` (closed symbols), `union` (sum type). `table` is the relational view of `array<struct>`, not a type. See [Data](#data--typed-values-and-literals). |
 | Envelope | `meta + data`. `meta` is three zones of typed scalars (`meta.sys` read-only/runtime, `meta.app` application-owned, `meta.ext` external context — D-2026-08-10-1) ; `data` is the typed payload. See [WHITEPAPER.md §2.1](../../WHITEPAPER.md). |
 | Edge config | The `{ ... }` block after an arrow, configuring `capacity / backpressure / close / trace`. |
-| Tagged block | `lang { ... }` — source in a registered guest language. |
+| Tagged frontend | `name! <region>` — source owned by a registered reader/compiler. |
 | Port naming | Ports are role-named with no direction suffix ; direction comes from the `input` / `output` keyword. `in` / `out` / `err` are default pre-bound ports (stdio-aligned), not keywords. |
 | Branchement | Fan-out (`a -> { b; c }`) or fan-in (`{ a; b } -> c`). Real DSL primitive. |
 | Endpoint | Connector that owns an external resource address/lifecycle and declares explicit envelope ports. |
@@ -1162,7 +1206,7 @@ IDENT      ::= [a-zA-Z_] [a-zA-Z0-9_]*
 INT        ::= "-"? [0-9]+
 FLOAT      ::= "-"? [0-9]+ "." [0-9]+
 STRING     ::= '"' ( [^"\\\r\n] | "\\" [^\r\n] )* '"'            // host STRING is line-bounded;
-                                                                    // multiline text uses `text { … }`
+                                                                    // multiline text uses `text! { … }`
 BOOL       ::= "true" | "false"
 NULL       ::= "null"
 ARROW      ::= "->"
@@ -1176,6 +1220,8 @@ RPAREN     ::= ")"
 EQ         ::= "="
 EQEQ       ::= "=="                                                   // the HOST's comparison lexemes — the simulation
 BANGEQ     ::= "!="                                                   //   expect grammar, never a copy of CEL's vocabulary
+BANG       ::= "!"                                                    // tagged frontend after IDENT; prefix `!` inside an expression
+                                                                      // belongs to the expression-region lexer
 LTEQ       ::= "<="
 GTEQ       ::= ">="
 COLON      ::= ":"
@@ -1183,22 +1229,22 @@ DOT        ::= "."
 COMMA      ::= ","
 SEMI       ::= ";"
 COMMENT    ::= "//" .* EOL  |  "/*" any* "*/"
-// A single-quoted string ('…') is CEL's spelling : the host lexes it as ONE
+// A single-quoted string ('…') is an expression-language spelling : the host lexes it as ONE
 // opaque Error lexeme with one voice — its content never re-speaks, and
 // recoveries walking lexemes stay quote-immune. Any physical line ending
 // terminates either host quote spelling as an unterminated token (backslash
 // does not continue it), preserving the next statement for recovery.
 
-// Durations and timestamps have NO dedicated tokens : they are ordinary CEL
+// Durations and timestamps have NO dedicated tokens : they are ordinary Rastok expressions
 // values — `duration("2h")`, `duration("2h30m")`,
 // `timestamp("2026-01-05T00:00:00Z")` — in any scalar position. The duration string
-// follows the CEL/Go format (ns/us/ms/s/m/h, compound, fractional — `min`/`d`/`w`
+// follows the retained CEL/Go-compatible format (ns/us/ms/s/m/h, compound, fractional — `min`/`d`/`w`
 // are not accepted). Rate strings stay opaque Connector-attribute values
 // ("10/s per …").
-// There is no `${…}` INTERP atom. Boot-time resolution uses the CEL functions
+// There is no `${…}` INTERP atom. Boot-time resolution uses the Rastok expression functions
 // `env("NAME")` / `secret("path")`, legal in initializer positions only ;
-// runtime references are plain CEL paths (`session.key`, `meta.app.x`).
-// CEL expression spans are handed to the CEL SUB-LEXER : the DSL lexer only
+// runtime references are plain Rastok expression paths (`session.key`, `meta.app.x`).
+// Rastok expression spans are handed to the expression lexer: the DSL lexer only
 // finds the span's END (delimitation rules below).
 // Maximal-munch : "->", "<->", "==", "!=", "<=" and ">=" tokenize as single
 // atoms — `=` vs `==` is a KIND question, never a premature diagnostic
@@ -1214,7 +1260,7 @@ DECL_KW    = { "graph", "partition", "operator", "connector",
                "per", "val", "var", "input", "output", "on",
                "start", "stop", "compensate",                          // lifecycle / saga handler triggers (see effects-and-sagas.md for `compensate`)
                "by", "where", "having", "within", "last",
-               "when",                                                 // edge guard : a -> b when <cel_expr>
+               "when",                                                 // edge guard : a -> b when <expr>
                "key", "lifetime",
                "persistent", "single_pass", "fixed", "window",
                "tumbling", "sliding",                                  // window modes
@@ -1226,18 +1272,18 @@ DECL_KW    = { "graph", "partition", "operator", "connector",
                "as" }
 // `profile` is an ordinary attribute name (experiment body), not a keyword.
 // Simulation setup uses ordinary fixture injections.
-TYPE_KW    = { "variant",                                             // the value-type tree (WHITEPAPER §2.1)
+TYPE_KW    = { "variant",                                             // the value-type tree (types.md)
                "struct", "map", "array", "table", "enum", "union",   // composites (+ table view)
-               "bool", "int", "long", "float", "double", "number",   // scalar physical
+               "bool", "int", "long", "uint", "float", "double", "number", // friendly scalar aliases
+               "int8", "int16", "int32", "int64",
+               "uint8", "uint16", "uint32", "uint64",
+               "float16", "float32", "float64",                    // canonical explicit widths
                "bytes", "text", "null",
                "decimal", "date", "timestamp", "timestamp_ntz",      // scalar logical
-               "time", "uuid", "duration" }
-TAG_KW     = { "jq", "bash", "sql", "python", "rust",                // guests — raw bodies
-               "avro", "protobuf", "parquet", "msgpack",             // data formats (reserved) — `json` is NOT here: a RESERVED word with its own total continuation (D-2026-08-13-1)
-               "base64", "csv",                                       // `hex` and `file` are DEAD (D-2026-08-10-5/-6)
-               "text",                                                // the verbatim block tag (also a TYPE_KW — position disambiguates)
-               "asset",                                               // build-time repo bytes (D-2026-08-10-5) — parens, no body
-               "bounded", "unbounded", "regex" }                      // expression-space constructors
+               "time", "interval", "uuid", "duration" }
+// Frontend names are deliberately NOT a keyword set. IDENT BANG selects
+// the production; the Registry later resolves `json!`, `jq!`, `sql!`,
+// application names, and future formats through one contract.
 // Tagged INITIALIZERS are DEAD (D-2026-08-12-1): oauth2_client_credentials,
 // measure, exponential, linear, constant, fibonacci, on_crash left the
 // vocabulary — a plain struct with a closed-choice discriminant FIELD
@@ -1258,10 +1304,11 @@ LITERAL_KW = { "true", "false", "null", "nothing",
 
 `DECL_KW` introduces declarations, labeled blocks, handler clauses
 (`where`/`having`/`within`/`last`) and the narrowing operator `as`.
-`TAG_KW` introduces foreign-literal expressions (`jq { ... }`,
-`jq(req) { ... }`, `base64(ct) { ... }`) and the
-expression-space constructors (`bounded(64)` — parens, no body).
-`TYPE_KW` names the value-type tree — `variant` (top), the
+`IDENT BANG` introduces every tagged frontend (`jq! { ... }`,
+`jq!(req) { ... }`, `base64!(ct) { ... }`). No frontend name is a
+keyword. Expression-space constructors (`bounded(64)`, `asset(...)`,
+`decimal(...)`) are ordinary calls.
+`TYPE_KW` names the value-type tree — `variant` (the explicit dynamic case), the
 composites, and the scalar physical / logical types. `LITERAL_KW` are enum-like
 idents allowed as scalar values.
 
@@ -1269,14 +1316,11 @@ Simulation setup uses fixtures: injection is the setup, and preloading a
 `Memory` is expressed as ordinary injections at its feeding edge. Reading
 uses the Connector's explicit `read` and `out` ports.
 
-The default ports **`in` / `out` / `err`** are *not* keywords : they
-are ordinary pre-bound identifiers, usable without declaration and
-redefinable (only `input` / `output` are the declaration keywords).
-Redefinable is bounded like every declaration: a default may be
-explicitly restated **once**, in its implicit direction, and the
-restatement never enters the serialized table; a second explicit
-declaration, or a contradictory direction, is `E-PORT-CONFLICT`
-(D-2026-08-08-1).
+The conventional ports **`in` / `out` / `err`** are not keywords. They
+are ordinary pre-bound identifiers and may be explicitly restated once
+in their conventional direction; a second declaration or contradictory
+direction is `E-PORT-CONFLICT`. M1.3 materializes their effective types
+in the resolved port table exactly like every other port.
 Reservation is BY POSITION, never a global ban on a spelling
 (D-2026-08-12-1; enforcement stated exactly by D-2026-08-13-1
 review round 3 — this section supersedes the earlier draft that
@@ -1284,8 +1328,8 @@ claimed `DECL_KW` unmaskable):
 
 - **Binding positions** (graph, lab, node, port — boundary and node
   alike — val/var/let at every level, type names): the value forms
-  `json` and `nothing`, and the expression literals `true`, `false`
-  and `null`, are RESERVED — one naming policy, refusing at the
+  `nothing` and the expression literals `true`, `false` and `null` are
+  RESERVED — one naming policy, refusing at the
   declaration with `E-NAME-RESERVED`. The envelope surfaces
   (`meta`/`data`/`sys`/`app`/`ext`) additionally refuse as node
   names, and `data`/`meta` as binding names. `DECL_KW` words
@@ -1301,19 +1345,16 @@ claimed `DECL_KW` unmaskable):
 - **Bare-word VALUE positions**: any expressible word the contract's
   choice domain admits — `codec = json`, `framing = text` and
   `capacity = unbounded` are all legal choice words (a choice
-  introduces NO binding), because a `TAG_KW` word is a tag only
-  WHEN ITS FORM follows (`(` or `{` on its line), and a bare `json`
-  stands alone only at the position's boundary. `LITERAL_KW`
+  introduces NO binding). Only a following `!` selects a frontend;
+  the name itself remains ordinary. `LITERAL_KW`
   words and the `nothing` sentinel keep their literal meaning and
   cannot serve as contract choices.
 
-Four sub-categories exist within the tag vocabulary: verbatim values
-(`text`, `base64`), registered guests (`jq`, `bash`, `sql`, `python`,
-`rust`), call-shaped values (`asset`, `bounded`, `unbounded`, `regex`),
-and reserved data-format words (`avro`, `protobuf`, `parquet`,
-`msgpack`, `csv`) whose attempted bodies defer opaquely. Each live
-category has its own reader; `json` left the tag set when it became a
-RESERVED word with its own total continuation (D-2026-08-13-1).
+Frontend names (`json`, `text`, `base64`, `jq`, `sql`, application
+names, and future formats) are ordinary identifiers. The Registry
+selects a reader/compiler only after `IDENT!` has selected the grammar
+production. Old bare tag spellings may receive migration diagnostics,
+but do not reserve their names.
 Concrete NodeType names such as `HttpServer`,
 `Process` and `Postgres` are ordinary PascalCase identifiers resolved
 later by the stdlib registry, not lexer keywords.
@@ -1335,7 +1376,7 @@ top_decl          ::= graph_decl                       // incl. the one `: App` 
 graph_decl        ::= "graph" IDENT ( ":" type_annotation )? per_clause? "{" graph_body "}"    // top level = graph | lab | val, STRICTLY — nodes, partitions and edges live in graph bodies ; per_clause → composed per-key (Dispatch), graph-level val/state is per-instance ; `: <aspects>` opt-in to Saga / Loop scoping (see aspects.md)
 
 partition_decl    ::= "partition" IDENT "{" partition_body "}"
-partition_body    ::= ( "key" "=" cel_expr
+partition_body    ::= ( "key" "=" expr
                        | "lifetime" "=" lifetime_value )*
 
 operator_decl     ::= "operator" IDENT ( ":" type_annotation )? per_clause? operator_body
@@ -1381,11 +1422,11 @@ per_clause        ::= "per" ( IDENT ( "," IDENT )*                   // referenc
                             | partition_inline )                      // inline ANONYMOUS partition (private to this node ; no name ⇒ no cross-partition read, no <part>.key reference)
 partition_inline  ::= "{" partition_body "}"                          // block form — newline- or ;-separated (like a `partition` block)
                     | "(" partition_field ( "," partition_field )* ")"  // compact form
-partition_field   ::= "key" "=" cel_expr | "lifetime" "=" lifetime_value
+partition_field   ::= "key" "=" expr | "lifetime" "=" lifetime_value
 
-port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // type OPTIONAL → inferred ; annotate only to pin/force or as a public contract
-                    // in / out / err are default ports : usable without declaration, restatable ONCE in their implicit direction (never serialized) ; twice or against direction = E-PORT-CONFLICT.
-                    // Connectors do NOT declare ports — their type defines the ports, the codec gives the value type.
+port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source annotation OPTIONAL; every validated port has an effective type
+                    // in / out / err are conventional pre-bound ports and use this same model; the resolved plan materializes them like every other port.
+                    // Connector contracts declare fixed or parametric port rules; attributes/codecs resolve them per instantiation.
                     // No port-side inbound shortcut : wiring is always graph-level.
                     // To bind a port to a source, declare the Connector then wire it :
                     //    connector c : Clock { every = duration("1s") }
@@ -1397,10 +1438,10 @@ var_decl          ::= "var" IDENT ":" type_ref ( "=" value )?        // mutable 
 handler_decl      ::= "on" trigger guard_clause* handler_body?
                     // handler_body is OPTIONAL :
                     // a BODY-LESS handler is the Loop BASE-CASE declaration
-                    // (`on err where !err.transient` — loop.md §3) ; compile rule :
+                    // (`on status where data is Exited` — loop.md §3) ; compile rule :
                     // body-less handlers are legal ONLY on nodes carrying `: Loop`.
                     // The ITERATING case carries a body, possibly empty :
-                    // `on err where err.transient { }`.
+                    // `on status where data is TimeoutExpired { }`.
 trigger           ::= "start"
                     | "stop"
                     | "compensate"                                   // compensation event on a `compensable` Connector — see effects-and-sagas.md
@@ -1408,39 +1449,39 @@ trigger           ::= "start"
                                                                      //   bare start/stop bind to the NODE ; the aspect qualifies (aspects.md §6)
                     | "(" IDENT ( "," IDENT )* ")"                   // join : presence of all named ports
                     | IDENT                                          // single port
-guard_clause      ::= "where" cel_expr                               // content predicate (Tier 1 = 1 port, Tier 2 = ≥2)
-                    | "having" cel_expr                              // aggregate predicate (quorum, e.g. count(p) >= k)
-                    | "by" cel_expr                                  // join-key override (default = partition key)
-                    | "within" cel_expr                              // join time window (optional ; constant, duration-typed)
+guard_clause      ::= "where" expr                                   // content predicate (Tier 1 = 1 port, Tier 2 = ≥2)
+                    | "having" expr                                  // aggregate predicate (quorum, e.g. count(p) >= k)
+                    | "by" expr                                      // join-key override (default = partition key)
+                    | "within" expr                                  // join time window (optional ; constant, duration-typed)
                     | "last" INT                                     // join count bound — a Tier-2 θ-join requires AT LEAST ONE bound (within or last) ; presence joins may use either or none
-                    // The `where` clause on `on err` doubles as the Loop base-case predicate when the enclosing node carries `: Loop` — see loop.md §3.
+                    // A `where` clause on any selected outcome input may define the Loop base case when the enclosing node carries `: Loop` — see loop.md §3.
 handler_body      ::= "{" ( val_decl | statement )* "}"
 statement         ::= "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast   // atomic multi-emit — `(` decides ; tuple = explicit per-port ; broadcast = same value everywhere (`Fanout` is not a surface alias)
                     | "stop" IDENT?                                   // stop action (lifecycle) — word-decided
                     | IDENT path_tail assignment_tail                 // left-factored : ONE consumed word ; the ASSIGNMENT PROBE decides
-assignment_tail   ::= ( ":" type_ref )? "=" value                     // the consumed path is the LVALUE : var write / port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value ). The path `err` routes the value to err_value — the TYPED-ERROR emission (err = PaymentDeclined { transient = false })
+assignment_tail   ::= ( ":" type_ref )? "=" value                     // the consumed path is the LVALUE : var write / ordinary port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value ). `err` has no special branch.
                     // There is NO implicit yield (D-2026-08-13-1, review round 7) : a
                     // bare expression — IDENT-led or not — is not a statement. It
                     // refuses with ONE statement error hole and the migration hint
-                    // (`out = <value>`, `err = Kind { … }`). A well-framed value is
+                    // (`out = <value>`). A well-framed value is
                     // consumed by its REAL value/region reader before that refusal, so
                     // its interior never becomes enclosing statements. After an IDENT
-                    // fails the assignment production, the CEL framer chooses only
+                    // fails the assignment production, the expression framer chooses only
                     // recovery extent: it commits a complete continuation as one region,
                     // or leaves the stream untouched for line-bounded host-lexeme
                     // recovery. Normal values and recovery share one Complete | Incomplete
                     // extent computation. Behind `=`, a complete value commits to FOLLOW;
-                    // an incomplete value commits only its safe line boundary and the CEL
+                    // an incomplete value commits only its safe line boundary and the expression
                     // compiler emits the one syntax diagnostic — the next statement never
-                    // becomes CEL text.
+                    // becomes expression text.
                     // A precise structural lexical
                     // fault replaces the generic position voice. A future explicit
                     // `yield <value>` sugar may reopen the position.
                     // In STATEMENT position `(` always selects multi-emit; a
-                    // parenthesized CEL value is legal only in a VALUE position.
+                    // parenthesized expression value is legal only in a VALUE position.
                     // A malformed multi-emit recovers forward at the statement
                     // boundary — no tentative parse, syntactic predicate, or rewind.
-path_tail         ::= ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )*       // the dotted walk shared by lvalues and CEL prefixes ; reserved segments after a dot permit qualified names such as Loop.variant and stdlib ports such as store.read
+path_tail         ::= ( "." ( IDENT | TYPE_KW | LITERAL_KW ) )*       // the dotted walk shared by lvalues and expression prefixes ; reserved segments after a dot permit qualified names such as Loop.variant and stdlib ports such as store.read
 lvalue            ::= IDENT path_tail                                 // assignment target: port, var, or dotted writable meta/data path — meta.sys is read-only, never an lvalue
 tuple_or_broadcast ::= "(" value ( "," value )* ")"                    // explicit tuple — one value per lvalue, counts must match
                     | value                                            // broadcast — same value to every lvalue
@@ -1455,21 +1496,23 @@ base_type         ::= scalar_type
                     | "array" "<" type_ref ">"
                     | "table" "<" type_ref ">"                        // alias for array<struct>
                     | "enum" "{" IDENT ( "," IDENT )* "}"
+                    | "union" "{" tagged_case ( ","? tagged_case )* "}" // tagged union; case names are semantic discriminants
                     | IDENT                                           // named type / Schema / declared enum|union
 scalar_type       ::= "bool" | "int" | "long" | "float" | "double" | "number"
                     | "bytes" | "text" | "null"
                     | "decimal" "(" INT "," INT ")"
-                    | "date" | "timestamp" | "timestamp_ntz" | "time" | "uuid" | "duration"
+                    | "date" | "timestamp" | "timestamp_ntz" | "time" | "interval" | "uuid" | "duration"
 field_decl        ::= field_name ":" type_ref
                     | ".."                                            // open record (row polymorphism)
+tagged_case       ::= IDENT ( "{" ( field_decl ( ","? field_decl )* )? "}" )?
 field_name        ::= IDENT | TYPE_KW                                 // field NAMES may reuse type words (`text: text`,
                                                                       //   `kind: text`) — position disambiguates
 
-lifetime_value    ::= cel_expr                                        // bare duration value = idle_ttl (constant, duration-typed)
+lifetime_value    ::= expr                                            // bare duration value = idle_ttl (constant, duration-typed)
                     | "persistent"
                     | "single_pass"
-                    | "fixed" cel_expr                                 //   (constant, duration-typed)
-                    | "window" cel_expr ( "tumbling" | "sliding" )     //   (constant, duration-typed)
+                    | "fixed" expr                                     //   (constant, duration-typed)
+                    | "window" expr ( "tumbling" | "sliding" )         //   (constant, duration-typed)
 
 attribute         ::= lvalue "=" value                               // dots = owner qualification ONLY (Loop.backoff = …)
 struct_body       ::= ( attr_entry ( ","? attr_entry )* )?
@@ -1478,107 +1521,74 @@ attr_entry        ::= lvalue "=" value                               // dotted k
 // the parser still recognizes it to refuse with the migration hint
 // « `env { … }` is no longer a configuration form; write `env = { … }` ».
 
-// ============ WORD CLASSES (D-2026-08-13-1, review round 2) ============
-// Three disjoint roles a word can play — the factoring below names them:
+// ============ WORD CLASSES (D-2026-08-14-1) ============
+// Three roles a word can play — the factoring below names them:
 // - a USER IDENTIFIER introduces a binding (val/var/let, node, port, type,
-//   partition, alias). `json` and `nothing` are RESERVED here — they name
-//   value forms and refuse AT THE DECLARATION (E-NAME-RESERVED) ; the
+//   partition, alias). `nothing` is RESERVED here — it names a structural
+//   value form and refuses AT THE DECLARATION (E-NAME-RESERVED) ; the
 //   envelope surfaces (meta/data/sys/app/ext) refuse as node names, and
 //   data/meta as binding names.
-// - a TAG_KW is one of the closed tag vocabulary (jq bash sql python rust
-//   avro protobuf parquet msgpack base64 csv text asset bounded
-//   unbounded regex — `json` is NOT a tag: it is a reserved word with
-//   its own total continuation). A tag is a tag only WITH its same-line
-//   opener ; alone, or followed by anything else, it reads as an
-//   ordinary CEL word.
+// - any IDENT immediately followed by BANG introduces a tagged frontend.
+//   No closed keyword vocabulary participates in this syntax decision.
+//   The Registry validates the name and framing contract after parsing.
 // - a CONTRACT WORD is a bare word judged by a contract's closed choice
 //   (mode = job, codec = jsonl). It introduces NO binding — reservation
 //   does not apply ; the contract judges the word.
 
-// ============ VALUES : builders by prefix, CEL for everything scalar ============
-// CEL is the core's expression grammar. There are no `ref`, `interp`, or
+// ============ VALUES : structural forms, tagged frontends, expressions ============
+// Rastok expressions cover intrinsic computation. There are no `ref`, `interp`, or
 // leading-dot path forms.
-
-VERBATIM_TAG      ::= "text" | "base64"                              // balanced-brace verbatim framing
-GUEST_TAG         ::= "jq" | "bash" | "sql" | "python" | "rust"   // guest-region framing
-RAW_TAG           ::= VERBATIM_TAG | GUEST_TAG                        // classification only; there is no universal body framer
-RESERVED_FORMAT   ::= "avro" | "protobuf" | "parquet" | "msgpack" | "csv"
-DEAD_TAG          ::= "oauth2_client_credentials" | "measure" | "exponential"
-                    | "linear" | "constant" | "fibonacci" | "on_crash"
-TAG_KW            ::= RAW_TAG | RESERVED_FORMAT | "asset" | "bounded"
-                    | "unbounded" | "regex"
 
 value             ::= braced_value                                    // { … } — the braced record ; classified in envelope positions
                     | "."                                             // identity — exact re-emission (envelope positions only)
                     | "nothing"                                       // emission positions : emit nothing (reserved word, unmaskable)
-                    | "json" json_after_ident                         // the json document literal (reserved word, unmaskable)
                     | IDENT value_after_ident                         // left-factored : ONE consumed word, the tail decides
-                    | cel_non_ident_start                             // any other first token — CEL from that token on
+                    | expr_non_ident_start                            // any other first token — expression from that token on
 
 value_after_ident ::= ε                                               // nothing significant on the line and the line ends the
-                                                                      //   value : the word ALONE is the CEL expression (span exact)
-                    | ⟨IDENT ∈ TAG_KW⟩  "(" tag_args ")" tag_body?    // a tag WITH its `(` on the SAME LINE → a tagged call
-                    | ⟨IDENT ∈ VERBATIM_TAG⟩ verbatim_body             // text/base64 contract
-                    | ⟨IDENT ∈ GUEST_TAG⟩ guest_body                   // frozen guest contract
-                    | ⟨IDENT ∈ DEAD_TAG | RESERVED_FORMAT⟩ …          // dead initializers refuse with the migration ; reserved
-                                                                      //   data formats defer — either way the attempted form is opaque
-                    | cel_continuation                                // anything else : CEL beginning with the word — a non-tag
-                                                                      //   word before `(`/`{` is CEL too (`size(data)`, `x {`)
+                                                                      //   value : the word ALONE is the expression (span exact)
+                    | "!" frontend_args? frontend_payload             // IDENT ! selects the frontend with one-token lookahead
+                    | expr_continuation                               // anything else : expression beginning with the word
 
-json_after_ident  ::= JSON_OBJECT                                     // { … } on the SAME line — the document reader owns the braces
-                    | JSON_ARRAY                                      // [ … ] on the SAME line
-                    | ε                                               // the position's boundary : the bare word stands alone (a
-                                                                      //   contract may judge the Word)
-                                                                      // ANY other follower is an INVALID json form (E-JSON-VALUE,
-                                                                      //   host-bounded forward recovery) — the reserved word never
-                                                                      //   begins a CEL expression (D-2026-08-13-1, review round 3)
+frontend_args     ::= "(" ( value ( "," value )* ","? )? ")"
+frontend_payload  ::= FRONTEND_REGION                                 // one atomic region returned by the resolved frontend;
+                                                                      // its contract chooses JSON, braced, STRING, or a future form
+FRONTEND_REGION   ::= /* exact source region returned by the selected frontend reader/framer;
+                         json! reads one complete JSON object, array, string, number,
+                         boolean, or null */
 
-cel_non_ident_start ::= cel_expr                                      // the region scan starts AT the current token (a literal,
+expr_non_ident_start ::= expr                                         // the region scan starts AT the current token (a literal,
                                                                       //   `-`, `(`, `[`, a string, …)
-cel_continuation  ::= cel_expr                                        // the region scan CONTINUES a consumed prefix : the token is
+expr_continuation ::= expr                                             // the region scan CONTINUES a consumed prefix : the token is
                                                                       //   re-read through the immutable source slice, forward only ;
                                                                       //   a peeked BOUNDARY token (closer, position byte, line-crossing
                                                                       //   token at a newline-ended position, keyword, EOF) ends the
                                                                       //   expression at the prefix and stays the HOST's
-tag_args          ::= ( value ( "," value )* ","? )?                  // PAREN position ; a BARE STRING token followed by `,`/`)` is
-                                                                      //   the grammar's STRING — `("x")` and `"a" + "b"` cannot
-                                                                      //   impersonate it (D-2026-08-10-6)
-tag_body          ::= verbatim_body                                   // only when the tag ∈ VERBATIM_TAG
-                    | guest_body                                      // only when the tag ∈ GUEST_TAG
-                                                                      // a struct body on another tag is a DEAD form; the parser
-                                                                      // refuses with its migration (D-2026-08-12-1)
-verbatim_body     ::= "{" VERBATIM_TEXT "}"                           // braces balance; every other byte is data, no quote/escape syntax
-guest_body        ::= "{" GUEST_TEXT "}"                              // exact bytes; braces balance with dual-quote opacity under the
-                                                                      // frozen host/guest contract pending guest-registered framers
-VERBATIM_TEXT     ::= /* exact UTF-8 bytes framed by verbatim_region */
-GUEST_TEXT        ::= /* exact bytes framed by guest_region */
 
                     // THE LEXER/PARSER FRONTIER (D-2026-08-13-1, review round 5) : the
                     // lexer owns the byte cursor AND the token lookahead ; the parser
                     // reads complete lexemes (peek/next) and consumes sub-language
-                    // regions as specialized lexemes — a complete or safely bounded CEL
-                    // region, a json document (or its complete refusal), a
-                    // guest/verbatim body, an opaque dead/reserved region. It never
+                    // regions as specialized lexemes — a complete or safely bounded
+                    // Rastok expression, or a tagged frontend payload. It never
                     // touches bytes, and no path
                     // can combine a buffered lexeme with a second read of the same bytes.
                     // The named finite-byte-lookahead points — lexer-owned QUESTIONS,
                     // the only byte-driven production choices : the distinct statement
-                    // and value head classifications (a CEL region may open with bytes
+                    // and value head classifications (an expression region may open with bytes
                     // outside the host vocabulary), the path/assignment questions,
-                    // the tag-opener question (a tag's `(`/`{` sits on the TAG's line),
-                    // the tag-argument STRING question, and the line questions
+                    // the IDENT-BANG frontend question and the line questions
                     // (value-missing, line-exhausted). Inside braced_value,
                     // ONE lexeme decides struct/map/empty : "}" → {} struct ; ":" →
                     // {:} map ; STRING → map_entries ; IDENT → struct_entries. The
                     // host grammar is predictive (LL(1)) up to those named points and
                     // its delegations — each byte has one lexical authority, comments
-                    // are trivia in CEL regions AND in recoveries (a boundary byte
+                    // are trivia in expression regions AND in recoveries (a boundary byte
                     // inside a comment never bounds), and a line's end can only end a
-                    // value at depth zero of a newline-ended position. The shared CEL
+                    // value at depth zero of a newline-ended position. The shared expression
                     // extent is explicit Complete | Incomplete: it may look past newlines
                     // to prove balanced valid input, while normal value parsing commits an
                     // incomplete extent only to its first safe line boundary and leaves the
-                    // CEL compiler as the one syntax-diagnostic authority, except that an
+                    // expression compiler as the one syntax-diagnostic authority, except that an
                     // unterminated block comment stops before `/*` and belongs to the host's
                     // one trivia authority during parsing. Parser error
                     // recovery skips LEXEMES to a sync set ; misplaced complete values
@@ -1590,27 +1600,28 @@ GUEST_TEXT        ::= /* exact bytes framed by guest_region */
                     // reserved-format bodies are OPAQUE
                     // regions (their bytes may be host-alien, documented).
 
-cel_expr          ::= /* a CEL expression (homegrown parser+checker+eval).
-                       Pure-CEL subset : literals, member/index access, operators, ternary,
+expr              ::= /* a Rastok expression (homegrown parser+checker+eval).
+                       CEL-compatible subset : literals, member/index access, operators, ternary,
                        exists/all/map/filter/has/size macros, duration()/timestamp(),
                        optional_types (`.?` / `.orValue()`), declared join aggregates.
                        Macro iteration over a MAP is in SORTED-KEY order (an
                        evaluator guarantee — golden-trace stability).
-                       `as <type_ref>` checked narrowing composes at the END of the span.
-                       NO leading dots (CEL paths are bare : data.x, meta.app.y, session.key,
-                       err.kind, alias names). No coalesce shorthand and no
+                       `is <type-or-case>` tests/narrows and `as <type_ref>` performs a
+                       checked conversion at the END of the span.
+                       NO leading dots (paths are bare : data.x, meta.app.y, session.key,
+                       alias names). No coalesce shorthand and no
                        string-interpolation tokens. `env()`/`secret()` are
                        legal in initializer positions only. NO `now`/`now()` and
                        no ambient clock read of any kind : time enters an
                        expression only as envelope data (a Clock tick's payload)
                        or as a constant duration()/timestamp() value — replay
                        and simulation depend on it. */
-cel_path          ::= /* a CEL access path (subset of cel_expr) : IDENT ( "." IDENT )* —
+expr_path         ::= /* a Rastok expression access path (subset of expr) : IDENT ( "." IDENT )* —
                        used by correlators and key extractors. */
 
-// DELIMITATION of a cel_expr span — how the DSL lexer finds the end.
-// The span runs at BRACKET DEPTH 0 (the CEL sub-lexer tracks ( ) [ ] { } nesting,
-// so CEL map literals `{"a": 1}` — the SAME punctuation as the DSL map,
+// DELIMITATION of an expr span — how the DSL lexer finds the end.
+// The span runs at BRACKET DEPTH 0 (the expression lexer tracks ( ) [ ] { } nesting,
+// so expression map literals `{"a": 1}` — the SAME punctuation as the DSL map,
 // D-2026-08-10-6 — and struct-ish braces inside the span are fine)
 // until the position's terminator set :
 //   guard positions   (where/having/by/when)  → { having by within last when NEWLINE "{" "->" }
@@ -1618,22 +1629,20 @@ cel_path          ::= /* a CEL access path (subset of cel_expr) : IDENT ( "." ID
 //   emission          (out = …)               → { NEWLINE ";" "}" }
 //   paren positions   (args, tuples)          → { "," ")" } at depth 0
 //   expect predicate  (where …)               → { NEWLINE "}" }
-// A terminator is never consumed by the CEL sub-lexer ; the DSL parser resumes on it.
+// A terminator is never consumed by the expression lexer; the DSL parser resumes on it.
 // MULTI-LINE spans : NEWLINE terminates at depth 0 — a predicate spanning lines is
 // wrapped in parentheses OPENED ON THE SAME LINE as the keyword
 // (`where (a == 1 &&` … `)`) : inside parens, depth > 0, newlines are free.
 // The read-only extent calculation may inspect beyond a newline to prove those balanced
 // delimiters. Its result is explicit : Complete ends at FOLLOW ; Incomplete in a
 // newline-ended value commits only through the first safe line boundary. This preserves
-// the next RKG construct while the CEL compiler reports the single expression fault.
-// Ordinary CEL strings cannot contain a physical CR/LF (nor use backslash as physical-line
-// continuation) ; write `\n`, or use `text { … }` for multiline text.
-// An unterminated `/*` remains a HOST-TRIVIA fault : the CEL extent stops before the
+// the next RKG construct while the expression compiler reports the single fault.
+// Ordinary expression strings cannot contain a physical CR/LF (nor use backslash as physical-line
+// continuation); write `\n`, or use `text! { … }` for multiline text.
+// An unterminated `/*` remains a HOST-TRIVIA fault : the expression extent stops before the
 // comment and the trivia reader emits E-LEX-UNTERMINATED-COMMENT during parsing. It is
 // never deferred to CHECK, which missing-closer parse errors can prevent from running.
 
-err_value         ::= IDENT ( "{" struct_body "}" )?                  // the error kind ∈ the node's declared error set,
-                                                                      //   with optional typed fields — compile-checked
 braced_value      ::= "{" braced_body? "}"                            // ONE brace, punctuation decides (D-2026-08-10-6)
 braced_body       ::= struct_entries | map_entries | ":"              // `{}` empty struct ; `{:}` empty map ;
                                                                       // mixing `=` and `:` entries REFUSES (one diagnostic, first offender named)
@@ -1644,13 +1653,8 @@ map_entries       ::= map_entry ( ","? map_entry )*
 map_entry         ::= STRING ":" value                                // text keys in this milestone ; a NON-EMPTY
                                                                       //   struct as the value is inexpressible in v1
                                                                       //   (deferred by name — D-2026-08-10-6 as amended) ;
-                                                                      //   `json { … }` covers dynamic nesting but is
+                                                                      //   `json! { … }` covers dynamic nesting but is
                                                                       //   always `variant`, never a typed struct
-json_document     ::= JSON_OBJECT | JSON_ARRAY                        // a document only ({…}/[…]), delegated to the house reader,
-                                                                      // read whole by brace/bracket balance ; duplicate keys refuse ;
-                                                                      // numbers exact (identity.md tag-6 rule, D-2026-08-10-7) ; any
-                                                                      // other follower of `json` is an INVALID json form — the word
-                                                                      // is reserved and never begins a CEL expression (D-2026-08-13-1)
                     // In ENVELOPE positions (handler emissions, fixture injections,
                     // mock replies) the checker classifies the body ONCE by its
                     // top-level roots : no reserved root → a fresh data record
@@ -1661,47 +1665,23 @@ json_document     ::= JSON_OBJECT | JSON_ARRAY                        // a docum
                     // empty record, never an identity. Elsewhere the body is
                     // simply a record. (simulation-semantics.md §4)
 
-// The tag family reads through `value_after_ident` above — ONE
-// production family (review round 3; `tagged_value`,
-// `tagged_block_value` and `arg_list` were its pre-factoring
-// spellings). The LIVE raw-bodied tags are exactly the guests
-// (jq, bash, sql, python, rust — `jq(req) { … }` scopes the body to
-// envelope `req`) and the raw literals (`text`, `base64(ct?)`);
-// `asset(path, ct?)` takes arguments only; the data formats (avro,
-// protobuf, parquet, msgpack, csv) are RESERVED words whose bodies
-// defer by name; a STRUCT body on any tag is a DEAD form the parser
-// refuses with its migration (D-2026-08-12-1 — the AST has no such
-// node). `json` is not a tag: it is a reserved word with its own
-// `json_after_ident` continuation.
+// IDENT BANG is the sole tagged-frontend family (D-2026-08-14-1).
+// Built-ins (`json!`, `text!`, `base64!`, `jq!`, `sql!`) and registered
+// frontends share this syntax. The host chooses the production without a
+// Registry lookup; the resolved frontend then supplies its reader/framer,
+// type contract and compiler. `asset`, `duration` and `decimal` remain
+// ordinary expression calls.
 //
-// THE REGION TAXONOMY (D-2026-08-13-1). Four region kinds by
-// SEMANTICS, selected before their content: value-position dispatch
-// selects CEL (the intrinsic expression language); the reserved
-// `json` continuation selects the document reader; `text`/`base64`
-// select VERBATIM regions (braces balance, every other byte ordinary
-// data, quotes and apostrophes included, no escapes); registered
-// jq/bash/sql/python/rust tags select GUEST regions. The brace-bodied
-// methods consume their own `{`, then hand off exact bytes and span;
-// the host resumes exactly past the closing `}`, and guest errors
-// return as typed results remapped by span. Never one universal
-// framer, never one abstraction over the four.
+// REGION TAXONOMY. Expression regions remain intrinsic. JSON is a
+// self-delimited frontend payload; text/base64 are verbatim frontends;
+// jq/bash/sql/python/rust are guest frontends. The bang selects the owner,
+// not the framing algorithm: each frontend returns one exact region and
+// the host resumes after it. Never one universal guest scanner.
 //
-// THE FRAMING QUESTION — EXPOSED, NOT DECIDED. The frozen
-// delimitation contract (brace balance, both quote styles opaque
-// with backslash escapes) is the HOST's rule, and it cannot know a
-// guest's lexicon. Named failure modes, demonstrated: a `}` inside
-// a guest comment closes the frame early (`bash { echo hi # } }`,
-// `sql { -- } }`); a bare apostrophe (`bash { echo don't }`)
-// starts an opaque quote skip and the HOST diagnoses an
-// unterminated string over guest bytes; guest string lexicons
-// without backslash escapes (SQL doubled quotes) are read by the
-// host's escape rule. The host will NOT grow per-guest lexicons.
-// Arbitration options, for the guest slice: (a) keep the contract
-// and DOCUMENT the authoring rule (braces balanced even in guest
-// comments; quotes paired); (b) fenced raw delimiters for hostile
-// bodies (a heredoc-style spelling); (c) the registered guest
-// brings its OWN framer with its compiler — the frame becomes part
-// of the guest's registration, never the host's lexicon.
+// GUEST FRAMING. The registered frontend brings the framer used for its
+// source form; the host does not grow per-guest comment/string rules.
+// A future fenced payload is another frontend payload form, not an
+// exception to this ownership boundary.
 
 defaults_block    ::= "defaults" "{" struct_body "}"
 
@@ -1726,7 +1706,7 @@ branch_target     ::= "{" port_ref ( ";" port_ref )* "}"
 chain_edge        ::= port_ref ( ARROW port_ref )+ edge_config?       // a -> b -> c ; or `. -> a -> b -> c -> .` with the boundary sugar
 
 edge_config       ::= "{" struct_body "}"
-edge_guard        ::= "when" cel_expr                                 // boolean edge guard : route -> audit.in when data.kind == "approval_response"
+edge_guard        ::= "when" expr                                     // boolean edge guard : route -> audit.in when data.kind == "approval_response"
 
 // ============ SIMULATION GRAMMAR ============
 // A simulation = a named SET of scenarios sharing a world (mocks, prelude).
@@ -1756,8 +1736,8 @@ experiment_decl   ::= "experiment" IDENT "on" "app" "{" experiment_body "}"
                                                                       // the deployed App ; a sub-graph target is meaningless
                                                                       // here (unlike simulation, whose graph_ref is kept for
                                                                       // future sub-graph closure).
-experiment_body   ::= ( "profile" "=" cel_expr                        // EXACTLY ONE (0 or ≥2 = E-EXPERIMENT-PROFILE) ;
-                                                                      // a constant, text-typed CEL value referencing an
+experiment_body   ::= ( "profile" "=" expr                            // EXACTLY ONE (0 or ≥2 = E-EXPERIMENT-PROFILE) ;
+                                                                      // a constant, text-typed Rastok expression referencing an
                                                                       // EXTERNAL deployment profile — no secret, no
                                                                       // endpoint in the DSL
                       | mock_decl                                     // mocks stay legal for the boundaries NOT under test
@@ -1783,11 +1763,11 @@ reserved_block    ::= /* balanced braces, content opaque — reserved until the
                        theorem property grammar is specified */
 scenario_decl     ::= "scenario" IDENT STRING? "{" scenario_body "}"
 scenario_body     ::= ( scenario_attr | mock_decl | scenario_step )*
-scenario_attr     ::= "origin" "=" cel_expr                           // civil-time anchor : virtual t=0 ≡ this instant
+scenario_attr     ::= "origin" "=" expr                               // civil-time anchor : virtual t=0 ≡ this instant
                                                                       // (needed by Calendar ; absent + Calendar used = warning)
 
 scenario_step     ::= injection
-                    | "advance" cel_expr                              // the discrete sweep (constant duration ; execution-model §8)
+                    | "advance" expr                                  // the discrete sweep (constant duration ; execution-model §8)
                     | "crash" "after" crash_selector                  // fault injection : stop at a journal-record boundary
                     | "restart"                                       // standard recovery (fold + outbound triage)
                     | expect_step
@@ -1804,19 +1784,19 @@ expect_step       ::= "expect" STRING?                                // optiona
                       ( "nothing" )?                                  // the void quantifier (∅)
                       port_ref
                       ( "count" cmp_op INT )?                         // exact-count quantifier
-                      ( "where" cel_expr )?                           // the predicate (CEL — the grid applies)
+                      ( "where" expr )?                               // the predicate (Rastok expression — the grid applies)
 cmp_op            ::= "==" | "!=" | "<" | ">" | "<=" | ">="
                     // window rule : an expect reads the deliveries since the last
                     // ACTION step (injection / advance / crash / restart), without
                     // consuming them. Default quantifier = ∃ (at least one match).
-                    // `app.err` is a legal port_ref (the root sink).
+                    // `app.<port>` is a legal port_ref when that App boundary port exists.
 
 mock_decl         ::= "mock" IDENT ( "." IDENT )* "{" handler_decl* "}"   // dotted = a composed node (sessions.codex) ; body IS handler grammar
-                                                                      // (on in where <cel> { … }) ; two levels :
+                                                                      // (on in where <expr> { … }) ; two levels :
                                                                       // simulation-shared / scenario override
                                                                       // (whole-mock replacement, nearest wins)
 // Inside a MOCK handler body only, one extra statement is legal :
-//   "after" cel_expr                                                 // dated emission (constant duration) — the reply joins the
+//   "after" expr                                                     // dated emission (constant duration) — the reply joins the
                                                                       // dated-events queue, swept by advance
 ```
 
@@ -1842,7 +1822,7 @@ parser never needs to peek further than one token.
 | `scenario_body` | `advance` / `crash` / `restart` / `expect` | the matching `scenario_step` |
 | `scenario_body` | IDENT — next is `.` or `=` | `injection` (`port_ref = value`) |
 | `expect_step` | after `port_ref` : IDENT `count` | count quantifier ; `where` → predicate ; else done |
-| mock `handler_body` | `after` — next is a CEL span | dated-emission statement (mocks only ; constant duration) |
+| mock `handler_body` | `after` — next is an expression span | dated-emission statement (mocks only ; constant duration) |
 | `graph_body` | IDENT — next is `->` / `<->` | `edge_decl` |
 | `graph_body` | `.` | `edge_decl` (boundary sugar — `port_ref` starting with `.`) |
 | `graph_body` | `{` | `edge_decl` (branch_source) |
@@ -1869,16 +1849,15 @@ parser never needs to peek further than one token.
 | `handler_body` (statement) | anything else — a bare expression, IDENT-led or not | REFUSAL (`out = <value>` hint): a complete value is consumed by its real reader into one error hole; incomplete input recovers at the line; the implicit yield is REMOVED (D-2026-08-13-1) |
 | `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
-| `value` | `json` — a same-line `{` or `[` follows | `json_after_ident` : the document ; ANY other follower = invalid json form (E-JSON-VALUE) ; word alone = bare word, judged by the contract |
-| `value` | TAG_KW — its same-line `(` (and for raw tags `{`) follows | `value_after_ident` : tagged call / raw block (a dead-initializer tag, a reserved data format, or a struct body refuse with their own voices) |
-| `value` | TAG_KW — word alone or any other follower | CEL expression / bare word, judged by the contract |
+| `value` | IDENT — next token is `!` | `value_after_ident`: tagged frontend; the Registry resolves the name only after the grammar branch is chosen |
+| `value` | IDENT — any other follower | Rastok expression / bare word, judged by the expression checker or contract |
 | `value` | `{` — then `}` / `:` / STRING / IDENT | `braced_value` : empty struct / empty map / map_entries / struct_entries |
 | `value` | `.` (envelope position) | identity — exact re-emission |
 | `value` | `nothing` (emission position) | no-emit |
-| `value` | anything else | hand the span to the CEL sub-parser (`cel_expr` ; `as type_ref` composes at span end) |
-| `lifetime_value` | a CEL span | bare duration value → `idle_ttl` |
+| `value` | anything else | hand the span to the Rastok expression parser (`expr`; `is`/`as type_ref` compose at span end) |
+| `lifetime_value` | an expression span | bare duration value → `idle_ttl` |
 | `lifetime_value` | `persistent` / `single_pass` | keyword |
-| `lifetime_value` | `fixed` / `window` | followed by a constant duration CEL span (and mode for window) |
+| `lifetime_value` | `fixed` / `window` | followed by a constant duration expression span (and mode for window) |
 | `port_decl` | `input` / `output` IDENT — next is `:` | typed (pinned) port |
 | `port_decl` | `input` / `output` IDENT — no `:` | port with **inferred** type |
 
@@ -1890,19 +1869,21 @@ symbol of lookahead after the IDENT is consumed. The parser never needs to
 ### What this grammar excludes on purpose
 
 - **One braced form, classified once** (D-2026-08-09-1, punctuated by D-2026-08-10-6). `{ … }` with `=` entries is the struct literal, with `:` entries the map literal (`{}` empty struct, `{:}` empty map, mixing refuses) ; in ENVELOPE positions (handler emissions, fixture injections, mock replies) the checker classifies a struct-form body's top-level roots — no reserved root builds a fresh data record, only reserved roots (`data`, `meta`) select the envelope form, a mix refuses with `E-BRACE-MIXED`. There is no `envelope { … }` keyword form, no `struct { … }` value literal, and no `map { … }` spelling. No silent reinterpretation, LL(1)-clean.
-- **No tag aliasing** for user-defined languages without a sigil. If we ever allow user-defined tags, they must use a sigil (`@mylang { ... }`) so the lexer can recognise them at one token of lookahead without a global registry lookup.
+- **No tag keyword partition.** Built-in and user-registered frontends
+  use `name!`; a bare `name` remains an identifier. `@` is unallocated
+  and may later introduce schema classification, not guest dispatch.
 - **Separators are Scala-style, scoped by bracket.** Inside a **`{ }` block**
   (node body, `partition` block, inline `per { … }`, struct), a newline
   terminates each statement / attribute and **`;` is the optional same-line
   separator** (`{ key = meta.app.x ; lifetime = duration("2h") }`). Inside **`( … )`** (compact
   values, arg lists, the inline `per ( … )` form) items are separated by **`,`**
   — never `;`.
-- **The expression grammar is CEL, and only CEL.** Every scalar position —
+- **The intrinsic expression grammar is Rastok's CEL-compatible core.** Every expression position —
   guards, keys, selectors, state expressions, `variant` clauses,
-  expectations, attribute values — hands its span to the CEL chain
+  expectations, attribute values — hands its span to the expression chain
   (delimitation rules above). The DSL itself stays declarative ; structural
-  reshaping belongs to guest-language blocks (`jq { … }`, `sql { … }` —
-  stdlib.md §5) ; no position accepts two guest languages.
+  reshaping may use tagged frontends (`jq! { … }`, `sql! { … }` —
+  stdlib.md §5); the `!` makes that choice explicit.
 
 ### Error recovery
 
@@ -1923,7 +1904,6 @@ For forward compatibility, the lexer reserves a few additional identifiers
 that may enter the DSL later :
 
 ```
-app        // pre-bound identifier for the `: App` graph (app.err) ; not a declaration keyword
 compose    // reserved for a possible future reuse-instantiation form
 foreach    // future per-item fan-out node
 spawn      // explicit per-key spawn directive

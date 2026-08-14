@@ -5,7 +5,139 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-14-1 — Rastok owns payload types; frontends are `name!`
+
+**The owner changes.** Rastok's logical payload type system is the
+canonical [`DataType`](types.md) tree. It types envelope data, ports,
+state and the admitted metadata subset. The intrinsic expression
+language consumes `DataType` and the one materialized `Value` domain; it
+does not define either. The current `cel::Type` and parallel
+`cel::Value` domains are implementation scaffolding to remove in M1.3.
+The language is named **Rastok expressions**. Its compatible operator
+core remains differentially checked against cel-spec, with every
+Rastok-owned divergence named, but “CEL” is no longer the specification
+or module-level type authority.
+
+**Static means resolved, not monomorphic.** Source type annotations may
+be omitted and inferred; a validated plan nevertheless carries an
+effective type for every port. `variant` is the explicit dynamic type,
+never the fallback for an unsolved inference variable. A Connector
+contract may describe fixed, same-as, profile/attribute-selected or
+constrained generic port types. Compilation resolves those rules for the
+particular instantiation and ships the complete table; the runtime never
+consults the compiler Registry. A codec changes bytes ↔ value
+representation. A logical schema change requires a visible typed
+Operator/adapter.
+
+**All ports share one model.** A Node has typed input and output ports;
+`in`, `out` and `err` are conventional default names, not a second type
+or emission mechanism. Tagged-union construction is a general value
+form and every assignment to a port lowers through the ordinary emit
+path. The connector-level `error_set`, `TypedError`, failure-only
+`CallOutcome` branch and error-specific `err_value` grammar are temporary
+approximations to remove, not a model to extend.
+
+For `Process(job)`, the intended port contract is exact:
+
+```text
+in      -> stdin, framed by the selected request codec
+out     <- stdout, interpreted by the selected reply codec
+err     <- exact stderr bytes
+status  <- one tagged ProcessStatus lifecycle/outcome value
+```
+
+An observed non-zero exit is still `Exited { exit_code, signal }`; it is
+a fact, not an automatically classified application failure. Spawn,
+timeout, capture, output-budget/capacity and decode outcomes are cases of
+`status`, never invented stderr. One boundary completion is the control
+fact that closes an obligation and may carry several typed port outputs;
+the VM alone turns those drafts into envelopes and journal emissions.
+Call closure is therefore not inferred from the name `err` or `status`.
+
+**One marked frontend form.** A value region owned by a dedicated
+reader/compiler is introduced by:
+
+```text
+tagged_value ::= IDENT "!" frontend_args? frontend_payload
+```
+
+Examples are `json! ...`, `text! { ... }`,
+`base64!(content_type) { ... }`, `jq!(data) { ... }`,
+`sql!(data) { ... }` and an application-registered
+`starlark!(data) { ... }`. The postfix bang is host syntax, distinct
+from the expression language's prefix negation and `!=`. It lets the
+left-factored parser select the frontend production with one token of
+lookahead, without a keyword set or rewind. Built-ins and registered
+frontends use the same surface. The selected frontend still owns its
+framing; the sigil identifies the owner but cannot teach the host a
+guest's comments and strings.
+
+Frontend names are consequently ordinary bindable identifiers. `json`
+is no longer reserved. `nothing` remains a host structural word.
+`asset(...)`, `duration(...)` and `decimal(...)` remain ordinary Rastok
+expression constructors because they consume arguments rather than a
+foreign source region.
+
+**Full JSON values return.** The unambiguous `json!` reader accepts
+object, array, string, number, boolean and null. Every result has static
+type `variant`; an untagged Rastok scalar keeps its static scalar type.
+The house reader consumes exactly one JSON value, refuses trailing
+non-trivia, duplicate keys and out-of-budget exact numbers, and never
+silently narrows to double.
+
+**External schemas project into the same algebra.** The canonical type
+tree covers the supported JSON Schema, Avro and Arrow profiles without a
+lossy `bytes`/`variant` escape: widths and signedness, decimal/temporal
+parameters, records/structs, maps, arrays/lists, enums, fixed binary,
+nullability and unions. Avro branch identity and Arrow union type codes
+become stable logical discriminants when structure alone is
+insufficient; container indexes and dense/sparse layout remain codec
+facts. A JSON `variant` may be checked or narrowed to any declared union:
+exactly one structural branch must match unless a discriminator selects
+a tagged case. Zero or multiple matches refuse. Unsupported recursive or
+extension schemas refuse at their exact path rather than degrading the
+type. The core stays independent of Avro/Arrow libraries; boundary
+adapters own the projections.
+
+**Versions remain separate.** The M1.3 plan/package change is one
+categorical format v7 landing; v6 packages are refused and no backward
+reader constrains the new canonical type registry. That does not remove
+application schema evolution. `graph_version` continues to select
+retained historical schemas from the manifest. A V1→V2 adapter consumes
+the old typed envelope and emits a new one with normal lineage; it never
+rewrites history. Journal migration onto a different semantic hash stays
+deferred and refuses typed until that explicit execution contract lands.
+
+**Classifications wait beside types.** A future marker such as
+`@sensitive` is schema policy, not a new logical text/struct type. It may
+later affect propagation, sinks, redaction, retention, telemetry and
+plan identity. This decision frees `@` from the proposed custom-guest
+sigil but neither allocates it nor serializes placeholder annotation
+tables in M1.3.
+
+**One landing, not a public intermediate.** M1.3 replaces the former
+typed-error item and follows the ordered backlog in
+[`m1.3-type-system-backlog.md`](../architecture/m1.3-type-system-backlog.md).
+Intermediate commits may use private adapters to keep the suite green;
+no transitory `error_set`/kind-list architecture becomes normative or a
+published package format. If schedule pressure appears, later M1 breadth
+is reduced before this foundation.
+
+**Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
+scalars are removed, and CEL is the intrinsic authority; the foreign
+literal spelling and `TAG_KW` partition in D-2026-08-12-1; the
+`json <json-value>`, `text { ... }`, `base64(...) { ... }` and bare guest
+spellings of D-2026-08-10-5/-6; the proposed `@mylang` guest sigil; the
+Process/error-set interpretation recorded in D-2026-08-12-1's capture
+amendments and the current stdlib sheet. Their still-compatible parser,
+exact-number, capture-budget, attribute-contract and framing invariants
+survive.
+
 ## D-2026-08-13-1 — A lexeme-stream parser, json documents, and `decimal(…)`
+
+> **Partly superseded by D-2026-08-14-1.** The forward lexeme-stream,
+> recovery, trivia, line-bounded string and exact-decimal rules survive.
+> The reserved-`json`, object/array-only and CEL-authority clauses do not.
 
 Consolidated after the parser review (the round-by-round history lives
 in Git; the drafts each round superseded are named at the end). The

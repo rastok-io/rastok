@@ -15,12 +15,12 @@
 | Edge = same envelope, same id | envelope.md §3 |
 | Mailbox drain to stable state between fixture steps | execution-model.md §8 |
 | Per-call `timeout`, armed at delivery, matched by the Connector's correlator | execution-model.md §6.1 |
-| Expiry = `TimeoutExpired` typed err on `err`, trigger `l:timeout`, parent = the request | execution-model.md §6.2 |
+| Expiry = `TimeoutExpired` on typed `status`, trigger `l:timeout`, parent = request | execution-model.md §6.2 |
 | The call-closed rule : late response discarded-and-journaled | execution-model.md §6.3 |
 | `on_timeout = bypass` (default) : the instance lives | execution-model.md §6.4 |
 | `advance` = discrete sweep (dated events in date order, zero-time computation) | execution-model.md §8 |
 | Fixture seeds via `meta.ext` (never `meta.sys` — A2) | envelope.md §6 |
-| CEL guard on typed pinned input ; absent-field grid row 1 | grammar.md, CEL references |
+| Rastok-expression guard on typed pinned input; absent-field grid row 1 | grammar.md, expression references |
 | Per-hop journal entries : arrival seq, partition key, committed_at | envelope.md §7 |
 
 ## 2. The graph
@@ -65,8 +65,8 @@ graph sim01 : App {
   }
 
   operator triage {
-    input in : struct { }               // reacts to err envelopes from codex
-    on in where err.kind == "TimeoutExpired" {
+    input in : ProcessStatus             // reacts to selected status cases from codex
+    on in where data is TimeoutExpired {
       out = {
         data = { kind = "apology", text = "The agent timed out. Retrying soon." }
       }
@@ -74,7 +74,7 @@ graph sim01 : App {
   }
 
   teams -> route -> codex.in
-  codex.err -> triage
+  codex.status -> triage
   { codex.out ; triage.out } -> teams.in
 }
 ```
@@ -151,16 +151,16 @@ E1, `data.op == "turn/start"` → **pass**. (Zero virtual time consumed.)
 sweep :
   mailboxes empty ✓ → earliest dated event ≤ 30 ?  YES : t=10, call-timeout of E1
     t := 10 ; the supervision journals the decision and delivers :
-    E2 on codex.err :
-       id        = H( "codex" ‖ "l:timeout" ‖ E1.id ‖ "err" ‖ 0 )
+    E2 on codex.status :
+       id        = H( "codex" ‖ "l:timeout" ‖ E1.id ‖ "status" ‖ 0 )
        parent_id = E1.id      origin_id = E0.id     role = default
-       err kind  = TimeoutExpired
+       tagged case = TimeoutExpired
     on_timeout = bypass → the codex instance LIVES (no terminal envelope, no restart)
     THE CALL IS CLOSED : E1's correlation entry is retired (§6.3)
 
     drain : mailbox (triage is unkeyed → its singleton box) ◄─ E2
       TRANSACTION triage (trigger p:in, parent E2)
-        guard : err.kind == "TimeoutExpired" → true
+        guard : data is TimeoutExpired → true
         emits E3 on out (index 0) :
           id        = H( "triage" ‖ "p:in" ‖ E2.id ‖ "out" ‖ 0 )
           parent_id = E2.id    origin_id = E0.id

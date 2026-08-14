@@ -355,8 +355,8 @@ graph expense_approval : App {                     // `: App` marks the deployme
   decide.approval  -> accounting
   decide.rejection -> rejection
   accounting.out -> nothing                        // reply discarded ON PURPOSE (explicit, or it won't compile)
-  // decide.err is deliberately not wired: errors bubble to `app.err`,
-  // the root error sink — observable in simulation, wirable in production.
+  // `decide.expired` carries JoinExpired. Its contract journals an unwired
+  // value; wiring or `-> nothing` can override that explicit policy.
 }
 
 lab expense_approval {
@@ -396,7 +396,7 @@ lab expense_approval {
 
       advance duration("48h")                                    // virtual time — nothing sleeps
 
-      expect "expiry is typed" app.err where err.kind == "JoinExpired"
+      expect "expiry is typed" decide.expired where data is JoinExpired
       expect nothing accounting.in                   // window ② : and nothing moved at expiry
       // (each action step — injection or advance — opens a fresh observation
       //  window ; only asserting the absence in BOTH windows covers the whole
@@ -414,18 +414,18 @@ and bounds the wait.** Note what is already visible:
   keys the operator's state; the join `on (request, decision)` matches
   the two legs of the *same* expense automatically, whatever the arrival
   order.
-- **Business outcomes and technical errors remain distinct.** The two
+- **Business outcomes and technical outcomes remain distinct.** The two
   guarded handlers emit `approval` or `rejection`. Missing input is not a
-  business refusal: after 48 hours it becomes the technical
-  `JoinExpired` error on `err`.
+  business refusal: after 48 hours it becomes the typed `JoinExpired`
+  case on `decide.expired`.
 - **The simulation drives the world.** The *called* system
   (`accounting`) is mocked; the *sources* are driven by injection;
   `advance duration("48h")` moves virtual time deterministically. Nothing here
   touches a network or a clock.
 - **The lab is the App's twin.** `lab expense_approval` binds to the
   homonymous `: App` graph (§2.2, §6) and is never deployed; its
-  simulation names the graph it closes (`on app` — `app` is pre-bound,
-  hence `app.err` above), and node references resolve in the unit's
+  simulation names the graph it closes (`on app` — `app` is pre-bound),
+  and node references resolve in the unit's
   namespace as root-relative qualified names.
 
 Now count what this file does **not** contain: no state-machine class
@@ -463,7 +463,7 @@ graph sessions per session {          // declaration = instantiation; `per` = on
   spawn_policy  = lazy
 
   partition session { key = meta.app.session_key ; lifetime = duration("2h") }
-  val cwd = "/workspace/" + session.key            // per-instance constant (CEL)
+  val cwd = "/workspace/" + session.key            // per-instance Rastok expression
 
   connector codex : Process {
     command = "codex"
@@ -479,8 +479,10 @@ graph sessions per session {          // declaration = instantiation; `per` = on
 
   in        -> codex.in { capacity = 1024, backpressure = block }
   codex.out -> out
-  // codex termination = a typed terminal error (ProcessExited) on codex.err,
-  // bubbling to app.err; every boundary crossing is journaled, so
+  codex.err    -> nothing             // abridged: production wires a byte log sink
+  codex.status -> nothing             // abridged: production wires lifecycle policy
+  // err is stderr; status carries Exited/TimeoutExpired/etc. Every
+  // boundary crossing is journaled, so
   // per-session cost is an aggregate over the journal, not a guess.
 }
 
@@ -760,11 +762,17 @@ It is *safe*, `unknown`-style — it must be **narrowed** before any
 structural access, and it never disables checking elsewhere.
 
 The type system is the common core of JSON, Avro, Rust/serde, Delta,
-Arrow/Polars and SQL-style tables. It keeps the important distinction between
-value-world coercions, boundary codecs, and lazy parsing so pure routing does
-not pay parse cost. The exact type tree and grammar are normative in
-[docs/spec/grammar.md](docs/spec/grammar.md); the remaining `types.md`
-extraction is tracked in [docs/spec/README.md](docs/spec/README.md).
+Arrow/Polars and SQL-style tables. Supported JSON Schema, Avro and Arrow
+schemas project losslessly into the same algebra, including nullable,
+structural and tagged unions; an unsupported or ambiguous projection
+refuses instead of degrading to `bytes` or `variant`. It keeps logical
+type, internal representation, boundary codec and external content type
+distinct. Persisted and transported payload representations are bytes,
+but bytes are the logical type only for opaque binary data; an Avro or
+Arrow buffer may represent a logical struct, collection or union. Pure
+routing therefore does not pay parse cost. The exact authority is
+[docs/spec/types.md](docs/spec/types.md), with host syntax in
+[docs/spec/grammar.md](docs/spec/grammar.md).
 
 ### 2.2 The shared Node shape
 
@@ -783,20 +791,18 @@ annotation : trait/role + aspects — optional on operator/graph (implicit canon
 ```
 
 The port-declaration keywords are **`input`** and **`output`**; the names
-**`in`**, **`out`** and **`err`** are *default ports*, pre-bound and
-non-reserved (usable without declaration, redefinable). `in` is the
-default input; `out` and `err` are default outputs. This mirrors Unix
-stdio — a `Process` Connector maps `in` / `out` / `err` onto
-stdin / stdout / stderr. The mapping is a transport analogy, not an
-identity: `out` carries stdout *decoded by the declared codec*, and
-`err` speaks the typed error model — a stderr line arrives as a
-`StderrLine { … }` envelope, alongside the lifecycle kinds
-(`SpawnFailed`, `TimeoutExpired`, `ExecFailed { exit_code, stderr }`,
-…) from the connector's declared error set.
+**`in`**, **`out`** and **`err`** are conventional pre-bound ports,
+non-reserved and typed by the same mechanism as every other port. A
+validated plan carries an effective type for all ports, whether inferred
+or explicitly pinned. For `Process`, the mapping is exact: `in` is stdin,
+`out` is stdout decoded by the selected codec, `err` is stderr bytes, and
+the additional `status` output carries the tagged `ProcessStatus`
+(`Exited`, `SpawnFailed`, `TimeoutExpired`, `DecodeFailed`, …). A
+non-zero exit is an `Exited` fact; graph policy decides what it means.
 
 ```rastok
 operator <name> [: <trait + aspects>] [per <partition>] {
-  input  <port> [: <type>]   // type OPTIONAL — inferred unless pinned ; in/out/err exist by default
+  input  <port> [: <type>]   // source annotation optional; effective type mandatory after validation
   output <port> [: <type>]   // a single-in/out node just uses the defaults
 
   var <field>: <type> [= <default>]    // optional state fields
@@ -814,7 +820,7 @@ defines them):
 ```
 connector <name> : <NativeType> [per <partition>] {
   <attr> = <value>           // e.g., url = "...", codec = json ; Connectors declare NO ports
-  on <trigger> { ... }       // (the type + codec define in/out/err)
+  on <trigger> { ... }       // the contract + codec resolve every typed port
 }
 ```
 
@@ -825,7 +831,7 @@ are body attributes:
 ```
 graph <name> [: App | <aspects>] [per <partition>] {   // per → one instance per key (Dispatch, §2.6)
   max_instances = 1000                 // optional Dispatch knobs (body attributes)
-  val <field> = "..." + <partition>.key + "..."   // per-instance graph-level constants (CEL)
+  val <field> = "..." + <partition>.key + "..."   // per-instance graph-level Rastok expressions
   ...                                  // operators / connectors / sub-graphs / wiring
 }
 ```
@@ -839,12 +845,10 @@ Three categories of section:
   `output` are written only to *pin* a type/schema, or to document a
   node with no handler (a saga) or a graph's public interface. `var`
   holds state; `per` keys it to a partition.
-- **Active behavior** — the `on <trigger>` handlers (§2.3).
-  - *Implicit yield:* for an Operator with a single output, an
-    unassigned trailing expression (e.g. `jq { ... }`) yields to
-    `out`. Multiple ports are written explicitly; **atomic
-    multi-emit** uses tuple assignment `(out, err) = (e1, e2)`. A
-    handler may also emit nothing (pure state update).
+- **Active behavior** — the `on <trigger>` handlers (§2.3). Outputs are
+  assigned explicitly; **atomic multi-emit** uses tuple assignment
+  `(out, status) = (e1, e2)`. A handler may emit nothing (pure state
+  update). There is no implicit yield.
 - **Connector boundary** — only on Connectors: flat attributes such
   as URL/path/command, **codec** (the bytes↔value boundary cast,
   §2.1), protocol, timeout, auth and retry policy.
@@ -891,24 +895,24 @@ bounded by edge backpressure. A join whose `where` *correlates the
 content* of several ports is a θ-join and must declare an explicit
 bound: `last N` (count — the static memory guarantee, clock-free)
 and/or `within D` (staleness — ksqlDB's `WITHIN`). A candidate that
-leaves the join unmatched exits as the typed error **`JoinExpired`** on
-`err` — routed and observable like any other error, never a silent
+leaves the join unmatched emits **`JoinExpired`** on a declared typed
+output such as `expired` — routed and observable like any other fact, never a silent
 drop, never a background timer. The exact tier classification, bound
 composition and lazy-eviction rules are normative in
 [execution-model.md](docs/spec/execution-model.md) §7 and
 [grammar.md](docs/spec/grammar.md).
 
-**The typed `err` channel.** A transaction may emit on `err`; its error
-set is *statically derivable* (explicit `err = …` writes, fallible
-narrowings on inputs, a Connector's declared failure modes — the `E`
-of `f: in → Result<out, err>`). Genuine panics (bugs) are supervision
-faults, never an envelope — this preserves static analysis and
-deterministic simulation.
+**Uniform typed ports.** A transaction may emit on any declared output,
+including `err`, `status`, `expired` or application-specific names. Each
+is checked by the same resolved `DataType`; tagged unions make finite
+outcome spaces enumerable without an `error_set` side channel. Port
+names do not close calls or classify failures. Genuine panics (bugs) are
+supervision faults, never envelopes.
 
 **Guest-language blocks in multi-input handlers.** In a single-input handler a
 jq block's `.` is the input envelope; in a join there is no implicit
-`.` — reference envelopes by port name (`a.data.x`, plain CEL) and scope
-a jq block to one input when needed (`a | jq { … }`). See §2.5 for the
+`.` — reference envelopes by port name (`a.data.x`, a Rastok expression) and scope
+a jq block to one input when needed (`a | jq! { … }`). See §2.5 for the
 languages themselves.
 
 **Meta on a join.** `meta.sys` is always runtime-fresh on the emitted
@@ -941,7 +945,7 @@ operator stats per session {
   input  tick : timestamp                // a Clock tick's payload IS the timestamp
   var count: int = 0
 
-  on event { count = count + 1 }         // scalar state update : plain CEL
+  on event { count = count + 1 }         // scalar state update: Rastok expression
 
   on tick  {
     metric = { meta.app.count_per_min = count }
@@ -981,7 +985,7 @@ instead of reading the host clock.
 
 State is **read-modify-write, imperatively**, within a transaction. A
 persistent field `var x: T = default` is read by its bare name (`x`)
-— or `$x` inside a `jq { … }` block (jq's own syntax for bound
+— or `$x` inside a `jq! { … }` block (jq's own syntax for bound
 variables). At the *start* of a transaction, `x` holds the value committed
 by the previous transaction (or the default if uninitialized); assignments
 mutate it **in place**, so a later read in the same transaction sees the new
@@ -999,19 +1003,17 @@ operator counter per session {
 }
 ```
 
-**Scalar computation uses CEL.** The
-[Common Expression Language](https://cel.dev) is a small, typed,
-terminating expression language designed for safe embedding. Rastok
-uses it because expressions can be checked, bounded, and evaluated
-without granting ambient I/O. The right-hand side of an assignment is
-a CEL expression (§2.5): `count = count + 1`,
-`x = x * 2 + data.n`, `label = meta.app.region + "-" + tenant.key`. CEL is
-total — no loops, no recursion, no side effects — so every state
-expression is statically checkable. Structural *reshaping* of documents
-(building nested JSON, filtering arrays) belongs to guest-language blocks
-`jq { … }` / `sql { … }` (§2.5); scalar state never needs them. CEL
-positions do not admit effectful functions such as `now()`,
-environment lookup, network access, or filesystem reads.
+**Intrinsic computation uses Rastok expressions.** Their syntax and a
+large operator subset are inspired by the
+[Common Expression Language](https://cel.dev), whose reference behavior
+remains a differential oracle for the compatible core. Rastok owns the
+actual `DataType`/`Value` domain and extensions such as exact decimal,
+unions and narrowing. Expressions are checked, bounded, pure and have no
+ambient I/O. The right-hand side of an assignment is a Rastok expression
+(§2.5): `count = count + 1`, `x = x * 2 + data.n`,
+`label = meta.app.region + "-" + tenant.key`. Structural reshaping may
+use tagged frontends such as `jq! { … }` / `sql! { … }`. No expression
+position admits `now()`, environment lookup, network or filesystem I/O.
 
 **Emitting.**
 - A port emits **once per transaction** — the value of its *final* assignment
@@ -1069,14 +1071,14 @@ partitions declared in the graph (see §3).
    cross-partition read produces `T?` (an optional). If upstream
    paths to the reading Operator don't all guarantee the
    partition's key is present in `meta.app`, the compiler emits a
-   warning. Absence follows the CEL absent-field grid
+   warning. Absence follows the Rastok expression absent-field grid
    ([grammar.md](docs/spec/grammar.md) §References; the old « missing ≡ null » rule
-   survives only inside `jq { }` blocks). The dev handles legitimate
-   absence explicitly — `.?` + `.orValue()` in CEL, `//` in jq:
+   survives only inside `jq! { }` blocks). The dev handles legitimate
+   absence explicitly — `.?` + `.orValue()` in Rastok expressions, `//` in jq:
 
    ```
-   val plan = tenant.?plan_tier.orValue("free")   // CEL: absence is explicit
-   val cap  = jq { .data.max_tokens // 1000 }     // inside jq: a missing DOCUMENT field is null
+   val plan = tenant.?plan_tier.orValue("free")   // expression: absence is explicit
+   val cap  = jq! { .data.max_tokens // 1000 }     // inside jq: a missing DOCUMENT field is null
    ```
 
 Writes are not allowed across partitions — only the Operator
@@ -1093,7 +1095,7 @@ not by the keyword.
 | Keyword | Where | Mutable? | Lifetime |
 |---|---|---|---|
 | `val` | App-level | no | App run (global constants) |
-| `val` | Graph-level | no | Graph instance — per partition key when the graph is `per …` (derive from `<partition>.key`, plain CEL) |
+| `val` | Graph-level | no | Graph instance — per partition key when the graph is `per …` (derive from `<partition>.key`, a Rastok expression) |
 | `val` | Operator-level | no | App run (Operator-scoped constants) |
 | `val` | Inside a handler | no | One transaction (handler-local binding) |
 | `var` | Operator-level (with or without `per`) | yes (read-modify-write per transaction) | Partition slot (or graph-scoped) |
@@ -1112,13 +1114,13 @@ operator pricing per tenant {
   on upgrade {
     val tier = data.new_tier                           // handler-local binding (val = DRY, used twice)
     subscribed_tier = tier
-    out = { meta.app.price = TIERS[tier] }    // all of it plain CEL
+    out = { meta.app.price = TIERS[tier] }    // all of it is a Rastok expression
   }
 }
 ```
 
 A graph declared `per <partition>` also holds **graph-level `val`s** — per-instance
-constants derived from `<partition>.key` in plain CEL (e.g. a session's home dir / cwd),
+constants derived from `<partition>.key` in Rastok expressions (e.g. a session's home dir / cwd),
 referenced by name by the nodes inside it (see §3 and the
 [grammar](docs/spec/grammar.md)). Mutable per-key state stays in an operator
 `var per …`; a *shared* graph-level `var` across operators is deferred (it
@@ -1127,7 +1129,7 @@ depends on a complete per-key concurrency contract).
 Reading rules:
 - **In bare DSL** (envelope literals, assignments, conditions):
   `val` and `var` are both read by their bare name (`X`).
-- **Inside `jq { … }` / `sql { … }` blocks**: the guest language's
+- **Inside `jq! { … }` / `sql! { … }` blocks**: the guest language's
   own convention applies — jq uses `$X` for bound variables,
   SQL uses `?` parameters or named bindings depending on dialect.
 - **Writing `var X`**: `X = <expr>` (assignment, bare).
@@ -1159,21 +1161,20 @@ an Operator without `per` holds a single graph-scoped cell, and other
 nodes read it by name (`settings.rate_limit`) under the same rules as a
 cross-partition read: one writer, read-only for everyone else.
 
-### 2.5 Computation: CEL, guest languages, helpers, and primitives
+### 2.5 Computation: Rastok expressions, tagged frontends, helpers, and primitives
 
 #### 2.5.1 The core expression language and its guests
 
 The DSL itself is deliberately **declarative** — nodes, ports, handlers,
-wiring. Scalar computation uses one integrated core expression language,
-CEL. Structural or specialized computation may use registered guest
-languages with fixed frontends/executors and typed boundaries. jq is
-the initial document guest; SQL is the planned relational guest.
+wiring. Intrinsic computation uses Rastok expressions. Structural or
+specialized computation may use registered tagged frontends with fixed
+compilers/executors and typed boundaries. jq is the initial document
+guest; SQL is the planned relational guest.
 Additional guests are admitted only through the same contract.
 
-**CEL — the scalar core.** Every *scalar position* in the DSL — a
+**Rastok expressions — the intrinsic core.** Every expression position in the DSL — a
 `where` guard, a partition key, a Router selector, a state expression,
-an attribute value, a simulation expectation — is one expression in the
-[Common Expression Language](https://cel.dev):
+an attribute value, a simulation expectation — is one pure Rastok expression:
 
 ```rastok
 on payment where data.amount > 100 && meta.app.region == "eu" { … }
@@ -1181,19 +1182,19 @@ count = count + 1
 key   = meta.app.session_id
 ```
 
-CEL is *total*: it always terminates, has no side effects, and cannot
-express loops. That is the point — every scalar expression in a graph
+The expression language is *total*: it always terminates, has no side
+effects, and cannot express loops. That is the point — every expression in a graph
 can be type-checked, costed, and simulated without running anything.
 Absence is explicit: `data.?discount.orValue(0)` reads a
-possibly-missing field with a default; a *bare* read of an absent field
-routes the envelope to `err`, never a silent null.
+possibly-missing field with a default; a *bare* read is accepted only
+when the type proves the field present, never converted to a silent null.
 
-**`jq { … }` — document reshaping.** When the job is structural — build
+**`jq! { … }` — document reshaping.** When the job is structural — build
 a nested JSON body, filter and restructure a collection — a tagged jq
 block hands its body to the jq guest:
 
 ```rastok
-data = jq {
+data = jq! {
   .data | { url:    "https://api.weather.example/v1/current",
             method: "GET",
             query:  { city: .city, country: (.country // "FR") } }
@@ -1204,23 +1205,23 @@ Inside the block, jq's own conventions apply: `.` is the input
 envelope, DSL bindings are read as `$x`, and a missing field is `null`
 (the jq tradition — it survives *only* inside jq blocks).
 
-**`sql { … }` — the planned relational view.** Data of type
+**`sql! { … }` — the planned relational view.** Data of type
 `array<struct>` can be treated as a `table` (a view, not a type) and
 queried with SQL — aggregations, group-bys, top-k — instead of
 simulating relational algebra in jq.
 
-The Rastok DSL is the host language; CEL is its integrated core expression
-language. The host parser never interprets a guest-language block's body: it
-delimits it, hands it to the named guest frontend, and type-checks the
-boundary. The build produces a versioned `GuestProgram`, executed by a pinned
-`GuestExecutor`. Three rules keep this analyzable: each tag has a **fixed
-frontend and executor** — no unregistered host-language code can be smuggled
-through a block (§9.7); every block has **typed input and output**; and **no
-position accepts two guest languages** — where CEL is expected, only CEL
-parses. jq is the initial specified pure guest; SQL is planned and must
+The Rastok DSL is the host language. A postfix bang makes delegation
+explicit: `json!`, `jq!`, `sql!`, `text!` and application-registered
+names all select the tagged-frontend production without reserving their
+identifier. The host never interprets a guest body; the registered
+frontend supplies its framer/compiler and typed boundary. The build
+produces a versioned `GuestProgram`, executed by a pinned
+`GuestExecutor`. Each frontend/executor profile is fixed, every block has
+typed input and output, and no source region has two lexical owners. jq
+is the initial specified pure guest; SQL is planned and must
 satisfy the same six-clause contract in
-[stdlib.md](docs/spec/stdlib.md) (pure determinism, resource budgets, typed
-errors — a guest program may never hang the graph).
+[stdlib.md](docs/spec/stdlib.md) (pure determinism, resource budgets,
+typed outcomes — a guest program may never hang the graph).
 
 The execution format is orthogonal to the source language. JavaScript, Rust
 or another future guest may compile to Wasm before entering the
@@ -1313,7 +1314,7 @@ route.invoice -> handle_invoice
 route.refund  -> handle_refund
 ```
 
-Here, `select` is CEL. The runtime value chooses a route, while the
+Here, `select` is a Rastok expression. The runtime value chooses a route, while the
 possible ports remain visible to the compiler. A list of port names
 selects several outputs.
 
@@ -1370,7 +1371,7 @@ journaled:
 
   `Loop.variant` is an attribute of the `Loop` aspect, not a `var` in
   Operator state and not the dynamic data type named `variant`. The
-  fields on the right are CEL expressions; `value` is the current
+  fields on the right are Rastok expressions; `value` is the current
   measure bound by the `measure` value.
 
   The runtime re-injects the node's output as its next input (trigger
@@ -1414,14 +1415,14 @@ connection, a database transaction — has an **implicit partition keyed by
 the resource instance** (a runtime handle, e.g. a per-spawn `run_id`),
 whose lifetime *is* the resource's. Composed under an explicit `per K`,
 this is simply a flat composite key `(K, run_id)` — never a hierarchy
-(§3). When the resource ends, the Connector emits a **terminal envelope**
-on `err`: a typed error, terminal *by kind*, whose payload carries the
-outcome — `ProcessExited { exit_code, signal, run_id }` for a `Process`,
-the close code / reason for a `WebSocket`, the final status for a
-transaction. The outcome lives in the typed error payload; `meta.sys`
-stays closed (its five fields never grow per-Connector). `out`
-stays the data stream; a graph that reacts to termination wires
-`process.err -> …`. `restart = { … }` (a Connector attribute)
+(§3). When the resource ends, the Connector emits its declared
+**terminal status case** on an ordinary typed output — `Exited {
+exit_code, signal }` on `Process.status`, the close case for a
+WebSocket, the final status for a transaction. `meta.sys` stays closed
+(its five fields never grow per Connector), while runtime identity and
+lineage remain in the journal/envelope spine. `out` stays the data stream
+and `Process.err` stays stderr; a graph reacting to termination wires
+`process.status -> …`. `restart = { … }` (a Connector attribute)
 spawns a fresh instance — a new `run_id`, a new partition instance — with
 no cascade to any enclosing partition.
 
@@ -1445,8 +1446,8 @@ partition tenant {
 }
 ```
 
-The key is a CEL expression. The lifetime is a DSL policy:
-`persistent` is a structural DSL value, not a CEL expression or a
+The key is a Rastok expression. The lifetime is a DSL policy:
+`persistent` is a structural DSL value, not a Rastok expression or a
 clock read. That is the entire shape of a partition: a name, a key,
 and a lifetime. **No parent declaration. No hierarchy. No automatic
 cascade.** This is deliberate — the same flat keyed-state
@@ -1527,7 +1528,7 @@ graph    session_graph   per { key = meta.app.session_key ; lifetime = duration(
 ```
 
 The inline form has **no name** — so it supports no cross-partition reads and no
-`<partition>.key` references (plain CEL — the `${…}` interpolation is gone, [grammar.md](docs/spec/grammar.md) §References). When a partition is shared by several nodes,
+`<partition>.key` references (plain Rastok expressions — the `${…}` interpolation is gone, [grammar.md](docs/spec/grammar.md) §References). When a partition is shared by several nodes,
 or a graph needs to interpolate its key, declare it as a named block and
 reference it by name. Composite keys (`per a, b`) are named references only.
 
@@ -1547,7 +1548,7 @@ operator session_metric per session {
   var tier_cached: text?
 
   on msg {
-    tier_cached = tenant.?plan_tier.orValue("free")   // plain CEL, absence explicit
+    tier_cached = tenant.?plan_tier.orValue("free")   // Rastok expression, absence explicit
     // ...
   }
 }
@@ -1617,7 +1618,7 @@ no side effect. The runtime compares that declared duration with ticks
 from `system_clock`. Production supplies real ticks, while the Lab
 supplies virtual ticks. A bare duration is interpreted as an idle TTL.
 The structural words (`persistent`, `single_pass`, `fixed`, `window`)
-belong to the DSL, and their duration arguments are ordinary CEL
+belong to the DSL, and their duration arguments are ordinary Rastok
 values. When the lifetime ends, the optional `on stop` handler fires
 before the slot is reclaimed.
 
@@ -1875,7 +1876,7 @@ advances the relevant timeline.
 ### 5.1 Sequence
 
 State is read-modify-write, imperatively, within a transaction. A field
-`var x` is read by its bare name `x` (or `$x` inside `jq { … }`).
+`var x` is read by its bare name `x` (or `$x` inside `jq! { … }`).
 At the start of a transaction `x` holds the value the previous transaction
 left; assignments mutate it in place, so later reads see the new
 value. The transaction commits atomically at its end. Each transaction is one
@@ -2112,10 +2113,10 @@ anything along the way.
 A simulation block describes a possibility space around a graph in a form a
 non-developer can read and write. §1.5 already showed the full shape on the
 approval flow — a mocked partner, injected sources, `advance duration("48h")`, a typed
-error asserted on `app.err`, an `expect nothing`. Its scenarios are
+outcome asserted on `decide.expired`, an `expect nothing`. Its scenarios are
 acceptance criteria a product owner can read: "the decision may arrive
 first," "a rejection is a business outcome," and "no decision within
-48 hours becomes the technical `JoinExpired` error." Nothing waits
+48 hours becomes the typed `JoinExpired` outcome." Nothing waits
 forty-eight real hours: `advance` moves the *virtual*
 clock, and every time-dependent decision in the graph (join expiry,
 Connector timeouts, lifetime and window closes) fires deterministically —
@@ -2131,8 +2132,8 @@ Key properties:
   — `lab <name>` binds to the unit's `graph <name>: App`, and each
   simulation declares its target: `on app` (the only executable target
   today; sub-graph closure is deferred until a birth recipe exists for
-  mid-lineage envelopes). `app` stays pre-bound (`app.err` = the root
-  error sink), and node references in mocks and expectations are
+  mid-lineage envelopes). `app` stays pre-bound, and node references in
+  mocks and expectations are
   root-relative qualified paths (`sessions.codex`).
 - **A scenario is a named slice of that space**: when executed, it becomes
   one deterministic trajectory through the graph, with concrete fixture
@@ -2179,7 +2180,7 @@ lab checkout {
   }
 
   experiment payment_sandbox on app {
-    profile = "bank-sandbox"          // exactly one; a constant CEL text —
+    profile = "bank-sandbox"          // exactly one; a constant Rastok text expression —
                                       // no secret, no endpoint in the DSL
     // `bank` is deliberately NOT mocked here : it is the real boundary
     // under test, reached through the profile's sandbox credentials.
@@ -2501,7 +2502,7 @@ algebraic-effects calculus. The kinship is in the boundary discipline:
 App execution and Lab simulation interpret the same effect intents
 through different handlers.
 
-### 9.7 Tagged blocks and guest languages
+### 9.7 Tagged frontends and guest languages
 
 Many DSLs and host languages have explored the pattern of
 *embedding* a guest language (jq, SQL, regex, shell) as a tagged
@@ -2509,16 +2510,16 @@ block, with the host parser treating the body as opaque. Tcl, Lua
 inside Nginx, jq filters embedded in scripts, SQL inside JOOQ —
 all variations on the same host/guest pattern.
 
-**What Rastok takes:** the tagged-block syntax (`jq { ... }`,
-`sql { ... }`) for embedding guest languages inside the
-DSL without requiring the host parser to understand them. The guest
+**What Rastok takes:** the uniform `IDENT!` frontend syntax (`jq! {
+... }`, `sql! { ... }`, `json! <value>`) for embedding readers and
+guest languages without requiring the host parser to understand them. The guest
 language has its own evaluation rules; the DSL turns the body into a
 `GuestProgram` for the corresponding `GuestExecutor`.
 
 **What Rastok leaves behind:** the open-ended escape-hatch posture.
-Each tagged block in Rastok has a fixed frontend/executor profile (jq,
-SQL, …) and typed boundaries; you cannot smuggle an unregistered
-language implementation through a tag. A guest that performs external
+Each resolved frontend in Rastok has a fixed framer/compiler/executor
+profile (jq, SQL, …) and typed boundaries; the host chooses the syntax
+branch from `!`, then the Registry validates the name. A guest that performs external
 I/O is Connector-owned rather than Operator-owned. This preserves the
 DSL's static-analyzability guarantees while leaving room for pure guests
 compiled to Wasm.
@@ -2714,15 +2715,19 @@ wins.
     binding (App-level, Operator-level, or handler-local), `var`
     for partition state with read-modify-write per transaction. Position
     determines lifetime.**
-16. **Ports are implicit from the handler (`on X` ⇒ input, `X = …` ⇒
-    output); `input` / `output` only pin a type or document. `in` /
-    `out` / `err` are the default ports, stdio-aligned; Connectors
-    declare none. `err` carries a statically-typed error set (the `E`
-    of `Result<out, err>`); panics are supervision, never envelopes.**
+16. **Ports may be inferred from handlers, while `input` / `output`
+    pin or document constraints. Every validated port has one effective
+    logical type. `in` / `out` / `err` are conventions, not categories;
+    Connector contracts declare fixed or parametric port rules. For
+    Process, `err` is stderr and `status` carries the tagged outcome.
+    Boundary completion is a separate control fact and may carry several
+    port outputs atomically; panics are supervision, never envelopes.**
 17. **The `data` payload is statically typed by default; `variant` is
     the only dynamic type, narrowed before use. The type tree is
-    scalar(encoding+logical) / struct / map / array / enum / union,
-    anchored on Arrow. `table` is the relational view of
+    scalar(parameters+logical) / struct / map / array / enum / union,
+    anchored on Arrow. Supported JSON Schema, Avro and Arrow schemas —
+    including unions — project into this one algebra without lossy
+    fallback. `table` is the relational view of
     `array<struct>`, not a type. Numbers are lossless until narrowed.**
 18. **A handler is a transaction guard. `on (a, b)` is a join keyed by the
     partition; correlating two ports' content is a θ-join and demands

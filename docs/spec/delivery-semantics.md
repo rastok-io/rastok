@@ -173,7 +173,7 @@ loud error, never a silent divergence (§2's cousin).
 ### 4.3 Retry with the byte-same key — and the key-stability rule
 
 On an unknown partner outcome, **retry with the re-derived key** : replaying
-the same transaction re-evaluates the same CEL expression on the same
+the same transaction re-evaluates the same Rastok expression on the same
 envelope → **the key is byte-identical for free**. At-least-once against the
 world ; the partner's dedup makes it effectively-once when the partner
 cooperates.
@@ -222,7 +222,7 @@ At restart, `open` outbound records without closure = the set of unknowns :
 | emission delivered, **no** outbound record | the call never left → call now. Trivial. |
 | open + `effect = idempotent` | recall, blindly (safe by declaration) |
 | open + `idempotency_key` present | recall with the **byte-same key** (§4.3) |
-| open + `compensable`, **no key** | do NOT guess : typed err **`OutcomeUnknown`** on the Connector's `err` (trigger **`l:recover`**, parent = the request envelope) **and the record closes as `abandoned`** — no eternal re-triage, no duplicate err. The graph/saga decides : verify at the partner, compensate, park ; a deliberate retry is a NEW call. Loud, never silent. |
+| open + `compensable`, **no key** | do NOT guess: emit **`OutcomeUnknown`** on the Connector contract's typed outcome port (normally `status`; trigger **`l:recover`**, parent = request) and close the record as `abandoned` — no eternal re-triage, no duplicate case. The graph/saga decides: verify, compensate, or park; a deliberate retry is a NEW call. |
 
 **The general principle: recovery rebuilds the dated-events
 queue by the same fold that rebuilds state.** Every dated obligation is
@@ -241,34 +241,27 @@ journal, not reconstruction), and a fixture can write an unresolved `open`
 record to test this table — the crash becomes an ordinary simulation case.
 
 
-## 5. Unwired ports — nothing silent
+## 5. Unwired ports — one typed model, explicit policy
 
-Two port families, two gravities :
+Outputs do not acquire gravity from their name. Every resolved output
+port carries an `UnwiredPolicy` in the validated plan:
 
-1. **Data ports : strict, with a written escape.** A data output *used* by a
-   handler but *unwired* = **compile error**. Intentional discard is written :
-   `route.audit -> nothing` (the built-in sink, May vocabulary — its handler
-   twin `out = nothing` is unchanged). The answer to "where did my messages
-   go ?" is always in the text.
-2. **`err` : bubbles lexically, like an exception.** Every node has `err`
-   (the runtime itself emits on it) — mandatory wiring would be boilerplate,
-   silent dropping would be the worst crime. Composition already gives the
-   answer : an unwired `err` **bubbles to the enclosing graph's `err`** ;
+- `require_wire`: an emitted but unwired output is a compile error;
+- `journal`: the output is delivered to the app's journal/observation
+  sink when no graph edge consumes it;
+- `bubble(<boundary-port>)`: composition forwards it to a named graph
+  boundary of a compatible type;
+- `discard`: allowed only when declared by the contract or written as an
+  explicit `-> nothing` edge.
 
-   ```
-   app
-   └─ graph sessions                 err unwired → bubbles up
-      └─ graph payment : Saga        ← an err bubbling into a `: Saga` is
-         └─ connector pay               INTERCEPTED here : THE compensation
-              err ───────╯               trigger. Bubbling UNIFIES the err
-                                         channel and saga rollback.
-   app root : never intercepted → the app's default sink :
-   journaled + visible in observability (+ configurable DLQ).
-   (`app` = the pre-bound identifier for the `: App` entry graph ;
-    `app.err` is wirable and assertable.)
-   Explicit wiring (`pay.err -> triage`) cuts the bubble at that level.
-   ```
-3. **Inputs : a warning, not an error.** A declared, required input that is
+The compiler desugars defaults from the node contract into this data; the
+VM never compares a port name with `"err"` or `"status"`. Ordinary
+application outputs default to `require_wire`. Standard Connector tables
+state their diagnostic/status policy explicitly. Thus `err` remains a
+useful convention without becoming a second emission or typing mechanism.
+The answer to “where did this output go?” is always in the resolved plan.
+
+Inputs keep their existing rule: a declared, required input that is
    never fed = dead handlers = **compile warning** (work-in-progress graphs
    are legitimate) ; a `?`-marked optional input may stay unwired silently
    (its handlers simply never fire).
@@ -330,7 +323,7 @@ rollback_failed`) is **computed from the records of its scope** :
 ```
    scope entered      = the instance-creating transaction record   → open
    steps 1..k sealed  = their transaction records                  → open, k sealed
-   permanent failure  = the err that bubbled into the `: Saga`     → rolling_back
+   selected outcome reaches `Saga.rollback`                        → rolling_back
    compensations sent = the saga node's transactions (l:compensate)→ rolling_back, j/k done
    compensations acked= their transaction + outbound records         → rolled_back
    a compensation exhausted its Loop variant                       → rollback_failed
