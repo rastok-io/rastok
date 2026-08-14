@@ -38,7 +38,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
     common: &[
         AttributeSpec {
             name: "args",
-            presence: Presence::Defaulted(DefaultValue::CelExpression("[]")),
+            presence: Presence::Defaulted(DefaultValue::Expression("[]")),
             domain: ValueDomain::TextList,
         },
         AttributeSpec {
@@ -86,7 +86,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                         // parser the adapter enforces the budget
                         // with (D-2026-08-12-1, review round).
                         name: "max_output",
-                        presence: Presence::Defaulted(DefaultValue::CelExpression(r#""8MiB""#)),
+                        presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
                         domain: ValueDomain::ByteSize,
                     },
                     AttributeSpec {
@@ -108,7 +108,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                         // runtime data, not a boot-phase constant.
                         name: "correlate",
                         presence: Presence::Optional,
-                        domain: ValueDomain::CelPath,
+                        domain: ValueDomain::ExprPath,
                     },
                     AttributeSpec {
                         // The restart policy struct (`{ backoff = …,

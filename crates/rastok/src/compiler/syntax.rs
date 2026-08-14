@@ -3,7 +3,7 @@
 //! The tree mirrors the productions of `grammar.md` with sugar intact:
 //! nothing is desugared, resolved, or typed here — that is the HIR's
 //! job. Error nodes mark holes left by parse recovery; a tree holding
-//! one is never lowered. CEL expressions and guest bodies are opaque
+//! one is never lowered. Rastok expressions and guest bodies are opaque
 //! spans of text: the host tree never interprets them.
 //!
 //! Nodes are owned plain data with public fields; spans ride along for
@@ -29,9 +29,9 @@ pub struct IntLit {
     pub span: Span,
 }
 
-/// Opaque CEL expression span, handed untouched to the CEL chain.
+/// Opaque Rastok expression span, handed untouched to the expression chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CelExpr {
+pub struct ExprSource {
     /// The expression text, exactly as delimited.
     pub text: String,
     /// Where it was written.
@@ -134,10 +134,10 @@ pub enum ScenarioItem {
         /// The explicit inbound sequence, when written.
         seq: Option<IntLit>,
     },
-    /// `advance <cel duration>` — the discrete sweep.
+    /// `advance <expr duration>` — the discrete sweep.
     Advance {
         /// The constant duration expression.
-        expr: CelExpr,
+        expr: ExprSource,
         /// The step's span.
         span: Span,
     },
@@ -147,7 +147,7 @@ pub enum ScenarioItem {
     Mock(MockDecl),
 }
 
-/// `expect STRING? nothing? port_ref (count cmp INT)? (where cel)?`.
+/// `expect STRING? nothing? port_ref (count cmp INT)? (where expr)?`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpectStep {
     /// The optional report label.
@@ -159,7 +159,7 @@ pub struct ExpectStep {
     /// The exact-count quantifier, when written.
     pub count: Option<(CmpOp, IntLit)>,
     /// The predicate over each delivery.
-    pub predicate: Option<CelExpr>,
+    pub predicate: Option<ExprSource>,
     /// The whole step.
     pub span: Span,
 }
@@ -343,8 +343,8 @@ pub struct PartitionDecl {
 /// One field of a partition body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PartitionField {
-    /// `key = <cel_expr>`
-    Key(CelExpr),
+    /// `key = <expr_token>`
+    Key(ExprSource),
     /// `lifetime = <lifetime_value>`
     Lifetime(LifetimeValue),
 }
@@ -353,17 +353,17 @@ pub enum PartitionField {
 #[derive(Debug, Clone, PartialEq)]
 pub enum LifetimeValue {
     /// Bare duration value — idle-ttl.
-    Expr(CelExpr),
+    Expr(ExprSource),
     /// `persistent`
     Persistent(Span),
     /// `single_pass`
     SinglePass(Span),
     /// `fixed <duration>`
-    Fixed(CelExpr),
+    Fixed(ExprSource),
     /// `window <duration> (tumbling | sliding)`
     Window {
         /// The window duration.
-        duration: CelExpr,
+        duration: ExprSource,
         /// The window mode.
         mode: WindowMode,
     },
@@ -437,14 +437,14 @@ pub enum AspectEvent {
 /// One guard clause of a handler.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Guard {
-    /// `where <cel_expr>` — content predicate.
-    Where(CelExpr),
-    /// `having <cel_expr>` — aggregate predicate.
-    Having(CelExpr),
-    /// `by <cel_expr>` — join-key override.
-    By(CelExpr),
-    /// `within <cel_expr>` — join time window.
-    Within(CelExpr),
+    /// `where <expr_token>` — content predicate.
+    Where(ExprSource),
+    /// `having <expr_token>` — aggregate predicate.
+    Having(ExprSource),
+    /// `by <expr_token>` — join-key override.
+    By(ExprSource),
+    /// `within <expr_token>` — join time window.
+    Within(ExprSource),
     /// `last INT` — join count bound.
     Last(IntLit),
 }
@@ -492,11 +492,11 @@ pub struct LValue {
     pub span: Span,
 }
 
-/// A value position: builders by prefix, CEL for everything scalar.
+/// A value position: builders by prefix, Rastok expression for everything scalar.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    /// Opaque CEL expression.
-    Cel(CelExpr),
+    /// Opaque Rastok expression.
+    Expr(ExprSource),
     /// `.` — exact re-emission of the current envelope (identity).
     Identity(Span),
     /// `{ … }` — a braced body, the record literal in every value
@@ -509,13 +509,13 @@ pub enum Value {
     /// `{ "k": v, … }` — the map literal, decided by its `:`
     /// punctuation; `{:}` is the empty map (D-2026-08-10-6). Keys
     /// keep their SOURCE spelling and span: the checker decodes them
-    /// through the ONE string rule (CEL's) and owns duplicates.
+    /// through the ONE string rule (the Rastok expression language's) and owns duplicates.
     BracedMap(Vec<MapEntry>),
     /// One bare STRING token in a tag-argument position — the
-    /// grammar's `STRING`, kept apart from CEL so `("x")` and
+    /// grammar's `STRING`, kept apart from Rastok expression so `("x")` and
     /// `"a" + "b"` cannot impersonate it (D-2026-08-10-6). The raw
     /// spelling keeps its quotes; the checker decodes it by the one
-    /// CEL string rule.
+    /// Rastok expression string rule.
     StrLit {
         /// As written, quotes included.
         raw: String,
@@ -525,7 +525,7 @@ pub enum Value {
     /// `json <document>` — one complete JSON DOCUMENT (`{ … }` or
     /// `[ … ]`, D-2026-08-13-1), read by the house reader, always
     /// `variant` (D-2026-08-10-6/-7). Any other follower is an
-    /// INVALID json form — the reserved word never begins a CEL
+    /// INVALID json form — the reserved word never begins a Rastok expression
     /// expression (D-2026-08-13-1, review round 3).
     Json {
         /// The parsed value — exact numbers, duplicate keys refused.
@@ -548,8 +548,8 @@ pub enum Value {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MapEntry {
     /// The key as WRITTEN — quotes and escapes included; decoded at
-    /// check by the CEL string rule.
-    pub key: CelExpr,
+    /// check by the Rastok expression string rule.
+    pub key: ExprSource,
     /// The key's location.
     pub span: Span,
     /// The entry's value.
@@ -641,8 +641,8 @@ pub struct EdgeDecl {
     pub endpoints: Vec<EdgeEndpoint>,
     /// `<->` instead of `->`; syntactically a two-endpoint form.
     pub bidirectional: bool,
-    /// `when <cel_expr>` boolean edge guard.
-    pub guard: Option<CelExpr>,
+    /// `when <expr_token>` boolean edge guard.
+    pub guard: Option<ExprSource>,
     /// `{ … }` trailing edge configuration.
     pub config: Option<StructBody>,
     /// The whole declaration.
@@ -840,7 +840,7 @@ mod tests {
                     segments: vec![name("n", 2..3)],
                     span: span(2..3),
                 },
-                value: Value::Cel(CelExpr {
+                value: Value::Expr(ExprSource {
                     text: String::from("1"),
                     span: span(6..7),
                 }),
@@ -889,7 +889,7 @@ mod tests {
                 TopDecl::Val(ValDecl {
                     name: name("x", 14..15),
                     ty: None,
-                    value: Value::Cel(CelExpr {
+                    value: Value::Expr(ExprSource {
                         text: String::from("1"),
                         span: span(18..19),
                     }),

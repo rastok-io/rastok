@@ -19,9 +19,9 @@ extern crate std;
 
 pub mod boundary;
 pub mod canonical_cbor;
-pub mod cel;
 pub mod datatype;
 pub mod envelope;
+pub mod expr;
 pub mod identity;
 pub mod journal;
 pub mod json;

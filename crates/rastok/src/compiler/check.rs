@@ -1,21 +1,21 @@
 //! Resolution and semantic checking: syntax trees in, HIR out.
 //!
 //! The checker resolves names, desugars default ports and envelope
-//! sugar into semantic forms, compiles every admitted CEL expression,
+//! sugar into semantic forms, compiles every admitted Rastok expression,
 //! and refuses explicitly — never accidentally — every grammatical
 //! construct outside the executable subset of this build
 //! (`E-CHECK-DEFERRED`). Rules with a normative home carry their own
 //! codes; `meta.sys` writes are the canonical example.
 
-use crate::cel;
 use crate::compiler::hir::{
     AttrValue, Attribute, Const, Direction, Edge, EdgeTarget, EmitValue, Endpoint, FieldWrite,
     Graph, Handler, Hir, Node, NodeRole, Statement, Val, Var,
 };
 use crate::compiler::syntax::{
-    BaseType, CelExpr, ConnectorDecl, EdgeDecl, EdgeEndpoint, GraphDecl, GraphItem, OperatorDecl,
-    OperatorItem, PortRef, ScalarType, Statement as SynStatement, StructBody, StructEntry,
-    SyntaxTree, TopDecl, Trigger as SynTrigger, TypeRef, ValDecl, Value as SynValue, VarDecl,
+    BaseType, ConnectorDecl, EdgeDecl, EdgeEndpoint, ExprSource, GraphDecl, GraphItem,
+    OperatorDecl, OperatorItem, PortRef, ScalarType, Statement as SynStatement, StructBody,
+    StructEntry, SyntaxTree, TopDecl, Trigger as SynTrigger, TypeRef, ValDecl, Value as SynValue,
+    VarDecl,
 };
 use crate::contract;
 use crate::datatype::{
@@ -23,6 +23,7 @@ use crate::datatype::{
     TypeError, TypeField,
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
+use crate::expr;
 use crate::node;
 use std::collections::BTreeMap;
 
@@ -101,8 +102,8 @@ enum TypeRefusal {
     NodeBudget { measured: usize },
     WidthBudget { what: &'static str, measured: usize },
 }
-/// Diagnostic adapted from the CEL chain, span mapped to the source.
-pub const E_CEL_EXPR: Code = Code::new("E-CEL-EXPR");
+/// Diagnostic adapted from the expression chain, span mapped to the source.
+pub const E_EXPR: Code = Code::new("E-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
 pub const E_CHECK_DEFERRED: Code = Code::new("E-CHECK-DEFERRED");
 /// Diagnostic for a connector type without an adapter in this build.
@@ -216,6 +217,7 @@ pub fn check(
         asset_root: asset_root.map(std::path::Path::to_path_buf),
         assets: Vec::new(),
         type_decls: BTreeMap::new(),
+        resolved_types: BTreeMap::new(),
         type_stack: Vec::new(),
     };
     // No top-level declaration is silently ignored, and none is
@@ -263,10 +265,13 @@ pub fn check(
             }
         }
     }
+    let mut valid_type_names = std::collections::BTreeSet::new();
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
-            if let TopDecl::Type(type_decl) = decl {
-                checker.validate_type_decl(type_decl);
+            if let TopDecl::Type(type_decl) = decl
+                && checker.validate_type_decl(type_decl)
+            {
+                valid_type_names.insert(type_decl.name.text.clone());
             }
         }
     }
@@ -276,6 +281,7 @@ pub fn check(
     // (the 256-link boundary included; longer chains and cycles
     // were refused above and collapse stops harmlessly on them).
     checker.collapse_alias_chains();
+    checker.resolve_expression_types(&valid_type_names);
     let checked_app = checker.graph(app);
     // The production schema seals HERE — from the deployed graph's
     // writes alone. Everything the Lab compiles below is checked
@@ -390,6 +396,9 @@ struct Checker<'bag, 'registry> {
     /// The unit's named types (D-2026-08-10-8): structural sugar,
     /// pre-validated for cycles and budgets at collection.
     type_decls: BTreeMap<String, crate::compiler::syntax::TypeRef>,
+    /// Named aliases expanded to their logical type for `is`/`as`. Expression
+    /// trees carry the expansion, never the source spelling.
+    resolved_types: BTreeMap<String, DataType>,
     /// The expansion stack — a name on it twice is a cycle.
     type_stack: Vec<String>,
 }
@@ -407,10 +416,16 @@ impl Checker<'_, '_> {
         );
     }
 
-    /// Compiles one CEL span, adapting native diagnostics onto the
+    /// Compiles one Rastok expression span, adapting native diagnostics onto the
     /// source with offset-mapped spans.
-    fn cel(&mut self, expr: &CelExpr, signature: &cel::Signature) -> Option<cel::Tree> {
-        match cel::compile(&expr.text, signature) {
+    fn expr(&mut self, expr: &ExprSource, signature: &expr::Signature) -> Option<expr::Tree> {
+        let signature = self
+            .resolved_types
+            .iter()
+            .fold(signature.clone(), |signature, (name, ty)| {
+                signature.with_type(name.clone(), ty.clone())
+            });
+        match expr::compile(&expr.text, &signature) {
             Ok(tree) => {
                 self.collect_meta_reads(&tree.root, expr.span);
                 Some(tree)
@@ -418,16 +433,16 @@ impl Checker<'_, '_> {
             Err(diagnostics) => {
                 let base = expr.span.range().start;
                 for diagnostic in diagnostics {
-                    // The registry owns the codes, and the CEL chain's
+                    // The registry owns the codes, and the expression chain's
                     // typed kind chooses them — never the human text,
                     // which is free to change.
                     let code = match diagnostic.kind {
-                        cel::DiagnosticKind::DuplicateMapKey => E_DUP_KEY,
+                        expr::DiagnosticKind::DuplicateMapKey => E_DUP_KEY,
                         // The depth gate: the same named refusal the
                         // plan validator maps at the plan phase, first
                         // surfaced here — before any recursive pass.
-                        cel::DiagnosticKind::TooDeep { .. } => crate::compiler::E_PLAN_DEPTH,
-                        cel::DiagnosticKind::General => E_CEL_EXPR,
+                        expr::DiagnosticKind::TooDeep { .. } => crate::compiler::E_PLAN_DEPTH,
+                        expr::DiagnosticKind::General => E_EXPR,
                     };
                     let adapted = Diagnostic::new(code, Phase::Check, diagnostic.message.clone())
                         .with_span(Span::new(
@@ -438,7 +453,7 @@ impl Checker<'_, '_> {
                     // carries the numeric `depth` in every phase; the
                     // human sentence stays a message, never a field.
                     self.bag.push(match diagnostic.kind {
-                        cel::DiagnosticKind::TooDeep { depth } => {
+                        expr::DiagnosticKind::TooDeep { depth } => {
                             adapted.with_field("depth", depth.to_string())
                         }
                         _ => adapted.with_field("detail", diagnostic.message),
@@ -453,17 +468,17 @@ impl Checker<'_, '_> {
     /// identity-bearing tree and its reduction.
     fn constant(
         &mut self,
-        expr: &CelExpr,
-        signature: &cel::Signature,
+        expr: &ExprSource,
+        signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Const> {
-        let tree = self.cel(expr, signature)?;
-        match cel::const_eval(&tree, consts) {
+        let tree = self.expr(expr, signature)?;
+        match expr::const_eval(&tree, consts) {
             Ok(value) => Some(Const { tree, value }),
             Err(error) => {
                 self.bag.push(
                     Diagnostic::new(
-                        E_CEL_EXPR,
+                        E_EXPR,
                         Phase::Check,
                         format!("this position requires a constant: {error}"),
                     )
@@ -638,7 +653,7 @@ impl Checker<'_, '_> {
             // EFFECTIVE out pin (`node_port_pin`): a jsonl mock is
             // judged against `array<variant>` exactly like the edge
             // audit and the machine judge it.
-            let signature = cel::Signature::new();
+            let signature = expr::Signature::new();
             let mut handlers = Vec::new();
             for handler in &decl.handlers {
                 if let Some(checked) = self.handler(handler, &signature, node, &BTreeMap::new()) {
@@ -768,7 +783,7 @@ impl Checker<'_, '_> {
                     };
                     // A draft is world-authored: it is built from
                     // constants, with no input to read.
-                    let signature = cel::Signature::new();
+                    let signature = expr::Signature::new();
                     let Some(value) = self.emit_value(value, &signature, target.span) else {
                         continue;
                     };
@@ -821,7 +836,7 @@ impl Checker<'_, '_> {
                             Err(_) => {
                                 self.bag.push(
                                     Diagnostic::new(
-                                        E_CEL_EXPR,
+                                        E_EXPR,
                                         Phase::Check,
                                         "an inbound sequence must be a non-negative integer"
                                             .to_string(),
@@ -836,14 +851,14 @@ impl Checker<'_, '_> {
                     steps.push(ScenarioStep::Inject { port, value, seq });
                 }
                 ScenarioItem::Advance { expr, span } => {
-                    let signature = cel::Signature::new();
+                    let signature = expr::Signature::new();
                     let Some(constant) = self.constant(expr, &signature, &BTreeMap::new()) else {
                         continue;
                     };
                     let crate::value::Value::Duration(nanos) = constant.value else {
                         self.bag.push(
                             Diagnostic::new(
-                                E_CEL_EXPR,
+                                E_EXPR,
                                 Phase::Check,
                                 "advance takes a constant duration".to_string(),
                             )
@@ -959,7 +974,7 @@ impl Checker<'_, '_> {
                         // win silently.
                         self.bag.push(
                             Diagnostic::new(
-                                E_CEL_EXPR,
+                                E_EXPR,
                                 Phase::Check,
                                 "`nothing` and `count` are two quantifiers; pick one",
                             )
@@ -976,7 +991,7 @@ impl Checker<'_, '_> {
                             // refusal, never a dropped expectation.
                             self.bag.push(
                                 Diagnostic::new(
-                                    E_CEL_EXPR,
+                                    E_EXPR,
                                     Phase::Check,
                                     "this count does not fit a 64-bit integer",
                                 )
@@ -1000,15 +1015,15 @@ impl Checker<'_, '_> {
                     let predicate = match &expect.predicate {
                         None => None,
                         Some(expr) => {
-                            let signature = cel::Signature::new()
+                            let signature = expr::Signature::new()
                                 .with("data", DataType::Variant)
                                 .with("meta", DataType::Variant);
-                            match self.cel(expr, &signature) {
+                            match self.expr(expr, &signature) {
                                 Some(tree) => {
                                     if !matches!(tree.ty, DataType::Bool | DataType::Variant) {
                                         self.bag.push(
                                             Diagnostic::new(
-                                                E_CEL_EXPR,
+                                                E_EXPR,
                                                 Phase::Check,
                                                 "an expectation predicate must be a bool",
                                             )
@@ -1063,7 +1078,7 @@ impl Checker<'_, '_> {
             edges: Vec::new(),
         };
         let mut consts = BTreeMap::new();
-        let mut signature = cel::Signature::new();
+        let mut signature = expr::Signature::new();
         let mut edges = Vec::new();
         let mut redeclared_defaults = std::collections::BTreeSet::new();
         for item in &decl.body {
@@ -1387,7 +1402,7 @@ impl Checker<'_, '_> {
     fn graph_val(
         &mut self,
         val: &ValDecl,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Const> {
         if val.ty.is_some() {
@@ -1396,7 +1411,7 @@ impl Checker<'_, '_> {
         match &val.value {
             // The parser already spoke for its recovery form.
             SynValue::Error(_) => None,
-            SynValue::Cel(expr) => self.constant(expr, signature, consts),
+            SynValue::Expr(expr) => self.constant(expr, signature, consts),
             _ => {
                 self.deferred("a non-expression val initializer", val.span);
                 None
@@ -1407,7 +1422,7 @@ impl Checker<'_, '_> {
     fn operator(
         &mut self,
         decl: &OperatorDecl,
-        graph_signature: &cel::Signature,
+        graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
         if let Some(annotation) = &decl.annotation {
@@ -1434,7 +1449,7 @@ impl Checker<'_, '_> {
     fn connector(
         &mut self,
         decl: &ConnectorDecl,
-        graph_signature: &cel::Signature,
+        graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
         let mut symbols = decl.annotation.symbols.iter();
@@ -1621,7 +1636,7 @@ impl Checker<'_, '_> {
                                 span_of(selector.attribute),
                                 format!(
                                     "the profile selector expects one of {words:?} as a bare \
-                                     word, not a CEL expression"
+                                     word, not a Rastok expression"
                                 ),
                             );
                             None
@@ -1779,7 +1794,7 @@ impl Checker<'_, '_> {
                     match &constant.value {
                         crate::value::Value::Text(text) if words.contains(&text.as_str()) => {
                             Some(format!(
-                                "expected one of {words:?} as a bare word; `\"{text}\"` is CEL \
+                                "expected one of {words:?} as a bare word; `\"{text}\"` is Rastok expression \
                              text — write `{text}`"
                             ))
                         }
@@ -1792,7 +1807,7 @@ impl Checker<'_, '_> {
                     | contract::ValueDomain::Duration,
                     AttrValue::Word(word),
                 ) => Some(format!(
-                    "expected a CEL expression fitting the {:?} domain; `{word}` is a bare word",
+                    "expected a Rastok expression fitting the {:?} domain; `{word}` is a bare word",
                     spec.domain
                 )),
                 (domain, AttrValue::Const(constant)) if domain.implemented() => {
@@ -1842,7 +1857,7 @@ impl Checker<'_, '_> {
         }
         // 5. Defaults become EFFECTIVE HIR (D-2026-08-12-1): the
         // selector's word first, then every absent Defaulted
-        // attribute — a Choice word directly, a CEL default through
+        // attribute — a Choice word directly, a Rastok expression default through
         // the SAME chain as author expressions (closed signature, no
         // consts: a standard contract reads nothing).
         let mut injected: Vec<Attribute> = Vec::new();
@@ -1865,13 +1880,13 @@ impl Checker<'_, '_> {
             }
             let value = match default {
                 contract::DefaultValue::Choice(word) => Some(AttrValue::Word(word.to_string())),
-                contract::DefaultValue::CelExpression(source) => self
+                contract::DefaultValue::Expression(source) => self
                     .constant(
-                        &CelExpr {
+                        &ExprSource {
                             text: (*source).to_string(),
                             span: decl.span,
                         },
-                        &cel::Signature::new(),
+                        &expr::Signature::new(),
                         &BTreeMap::new(),
                     )
                     .map(AttrValue::Const),
@@ -1905,7 +1920,7 @@ impl Checker<'_, '_> {
         &mut self,
         body: &[OperatorItem],
         node: &mut Node,
-        graph_signature: &cel::Signature,
+        graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
         is_connector: bool,
     ) {
@@ -2197,7 +2212,7 @@ impl Checker<'_, '_> {
     fn var(
         &mut self,
         decl: &VarDecl,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Var> {
         if !self.guard_binding_name(&decl.name, "a var") {
@@ -2206,7 +2221,7 @@ impl Checker<'_, '_> {
         let (ty, int_bounded) = self.state_type(&decl.ty)?;
         let init = match &decl.value {
             None => None,
-            Some(SynValue::Cel(expr)) => {
+            Some(SynValue::Expr(expr)) => {
                 let constant = self.constant(expr, signature, consts)?;
                 if int_bounded
                     && let crate::value::Value::Int(value) = constant.value
@@ -2214,7 +2229,7 @@ impl Checker<'_, '_> {
                 {
                     self.bag.push(
                         Diagnostic::new(
-                            E_CEL_EXPR,
+                            E_EXPR,
                             Phase::Check,
                             format!("`{value}` does not fit `int` (32-bit)"),
                         )
@@ -2232,7 +2247,7 @@ impl Checker<'_, '_> {
                     };
                     self.bag.push(
                         Diagnostic::new(
-                            E_CEL_EXPR,
+                            E_EXPR,
                             Phase::Check,
                             format!(
                                 "`{}` is declared {ty}, its initializer is {init_ty}",
@@ -2268,7 +2283,7 @@ impl Checker<'_, '_> {
     /// (`json`, `nothing`) and the expression literals
     /// (`true`/`false`/`null`) refuse in EVERY binding-introducing
     /// position — a masked `json` would make `json[0]` ambiguous,
-    /// and a masked literal is a silent shadow CEL can never read.
+    /// and a masked literal is a silent shadow Rastok expression can never read.
     /// The refusal lands AT THE DECLARATION, one voice, the name's
     /// span.
     fn guard_binding_name(&mut self, name: &crate::compiler::syntax::Name, what: &str) -> bool {
@@ -2321,7 +2336,7 @@ impl Checker<'_, '_> {
     fn bindable(
         &mut self,
         name: &crate::compiler::syntax::Name,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
     ) -> bool {
         if !self.guard_binding_name(name, "a binding") {
             return false;
@@ -2571,17 +2586,17 @@ impl Checker<'_, '_> {
     fn attribute_value(
         &mut self,
         value: &SynValue,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
         span: Span,
     ) -> Option<AttrValue> {
         match value {
             // The parser already spoke for its recovery form.
             SynValue::Error(_) => None,
-            SynValue::Cel(expr) if is_bare_word(&expr.text) => {
+            SynValue::Expr(expr) if is_bare_word(&expr.text) => {
                 Some(AttrValue::Word(expr.text.clone()))
             }
-            SynValue::Cel(expr) => self.constant(expr, signature, consts).map(AttrValue::Const),
+            SynValue::Expr(expr) => self.constant(expr, signature, consts).map(AttrValue::Const),
             _ => {
                 self.deferred("this attribute value form", span);
                 None
@@ -2592,7 +2607,7 @@ impl Checker<'_, '_> {
     fn handler(
         &mut self,
         decl: &crate::compiler::syntax::HandlerDecl,
-        node_signature: &cel::Signature,
+        node_signature: &expr::Signature,
         node: &Node,
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Handler> {
@@ -2666,19 +2681,16 @@ impl Checker<'_, '_> {
         for clause in &decl.guards {
             match clause {
                 crate::compiler::syntax::Guard::Where(expr) if guard.is_none() => {
-                    let tree = self.cel(expr, &signature)?;
+                    let tree = self.expr(expr, &signature)?;
                     if !matches!(tree.ty, DataType::Bool | DataType::Variant) {
                         self.bag.push(
-                            Diagnostic::new(
-                                E_CEL_EXPR,
-                                Phase::Check,
-                                "a where guard must be a bool",
-                            )
-                            .with_span(expr.span)
-                            .with_field("detail", "the guard type is not bool"),
+                            Diagnostic::new(E_EXPR, Phase::Check, "a where guard must be a bool")
+                                .with_span(expr.span)
+                                .with_field("detail", "the guard type is not bool"),
                         );
                         return None;
                     }
+                    signature = signature.narrowed_by(&tree.root);
                     guard = Some(tree);
                 }
                 crate::compiler::syntax::Guard::Where(expr) => {
@@ -2699,9 +2711,9 @@ impl Checker<'_, '_> {
                 SynStatement::Val(val) => match &val.value {
                     // The parser already spoke for its recovery form.
                     SynValue::Error(_) => {}
-                    SynValue::Cel(expr) => {
+                    SynValue::Expr(expr) => {
                         if self.bindable(&val.name, &signature)
-                            && let Some(tree) = self.cel(expr, &signature)
+                            && let Some(tree) = self.expr(expr, &signature)
                         {
                             signature = signature.with(val.name.text.clone(), tree.ty.clone());
                             statements.push(Statement::Let {
@@ -2730,15 +2742,15 @@ impl Checker<'_, '_> {
                             // The parser already spoke for its
                             // recovery form.
                             SynValue::Error(_) => {}
-                            SynValue::Cel(expr) => {
-                                if let Some(tree) = self.cel(expr, &signature) {
+                            SynValue::Expr(expr) => {
+                                if let Some(tree) = self.expr(expr, &signature) {
                                     let unresolved_input = declared_data_type.is_none()
                                         && tree.ty == DataType::Variant
                                         && expression_reads_data(&tree.root);
                                     if !unresolved_input && !tree.ty.is_assignable_to(&var.ty) {
                                         self.bag.push(
                                             Diagnostic::new(
-                                                E_CEL_EXPR,
+                                                E_EXPR,
                                                 Phase::Check,
                                                 format!(
                                                     "`{}` is a {:?}, this value is a {:?}",
@@ -2863,7 +2875,7 @@ impl Checker<'_, '_> {
     ) -> Option<TagCall> {
         let refuse = |checker: &mut Self, span: Span, message: &str, detail: &str| {
             checker.bag.push(
-                Diagnostic::new(E_CEL_EXPR, Phase::Check, message.to_string())
+                Diagnostic::new(E_EXPR, Phase::Check, message.to_string())
                     .with_span(span)
                     .with_field("detail", detail.to_string()),
             );
@@ -2875,7 +2887,7 @@ impl Checker<'_, '_> {
                 // The parser already spoke for its recovery form.
                 SynValue::Error(_) => None,
                 SynValue::StrLit { raw, span } => checker.decode_string(raw, *span),
-                SynValue::Cel(expr) => {
+                SynValue::Expr(expr) => {
                     refuse(
                         checker,
                         expr.span,
@@ -2985,7 +2997,7 @@ impl Checker<'_, '_> {
                         // form.
                         SynValue::Error(_) => None,
                         SynValue::StrLit { raw, span } => checker.decode_string(raw, *span),
-                        SynValue::Cel(expr) => {
+                        SynValue::Expr(expr) => {
                             refuse_asset(
                                 checker,
                                 expr.span,
@@ -3047,10 +3059,10 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Decodes one raw STRING token by the CEL rule — the single
+    /// Decodes one raw STRING token by the Rastok expression rule — the single
     /// escape semantics of the language.
     fn decode_string(&mut self, raw: &str, span: Span) -> Option<String> {
-        self.string_literal(&CelExpr {
+        self.string_literal(&ExprSource {
             text: String::from(raw),
             span,
         })
@@ -3064,13 +3076,9 @@ impl Checker<'_, '_> {
         use crate::compiler::syntax::TaggedBody;
         let Some(TaggedBody::Raw { text, .. }) = &tagged.body else {
             self.bag.push(
-                Diagnostic::new(
-                    E_CEL_EXPR,
-                    Phase::Check,
-                    "`text { … }` needs a verbatim body",
-                )
-                .with_span(tagged.tag.span)
-                .with_field("detail", "no block"),
+                Diagnostic::new(E_EXPR, Phase::Check, "`text { … }` needs a verbatim body")
+                    .with_span(tagged.tag.span)
+                    .with_field("detail", "no block"),
             );
             return None;
         };
@@ -3084,7 +3092,7 @@ impl Checker<'_, '_> {
         use crate::compiler::syntax::TaggedBody;
         let Some(TaggedBody::Raw { text, span }) = &tagged.body else {
             self.bag.push(
-                Diagnostic::new(E_CEL_EXPR, Phase::Check, "`base64 { … }` needs a body")
+                Diagnostic::new(E_EXPR, Phase::Check, "`base64 { … }` needs a body")
                     .with_span(tagged.tag.span)
                     .with_field("detail", "no block"),
             );
@@ -3094,7 +3102,7 @@ impl Checker<'_, '_> {
             Ok(bytes) => Some(bytes),
             Err(detail) => {
                 self.bag.push(
-                    Diagnostic::new(E_CEL_EXPR, Phase::Check, "the base64 body does not decode")
+                    Diagnostic::new(E_EXPR, Phase::Check, "the base64 body does not decode")
                         .with_span(*span)
                         .with_field("detail", detail),
                 );
@@ -3142,12 +3150,29 @@ impl Checker<'_, '_> {
         }
     }
 
+    /// Expands every validated alias once for the expression signature.
+    /// Source names are ergonomics; `is`/`as` trees seal the resolved
+    /// `DataType`, so renaming an alias cannot change runtime semantics.
+    fn resolve_expression_types(&mut self, valid_names: &std::collections::BTreeSet<String>) {
+        let declarations: Vec<(String, crate::compiler::syntax::TypeRef)> = self
+            .type_decls
+            .iter()
+            .filter(|(name, _)| valid_names.contains(*name))
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect();
+        for (name, ty) in declarations {
+            if let Some(resolved) = self.resolve_type_ref(&ty) {
+                self.resolved_types.insert(name, resolved);
+            }
+        }
+    }
+
     /// Validates one named-type declaration at collection: cycles
     /// refuse, and the EXPANDED tree answers to the structural
     /// budgets — ≤ 4096 nodes, ≤ 256 fields per struct, ≤ 256 enum
     /// symbols (D-2026-08-10-8). The 64 KiB canonical-byte budget
     /// re-verifies at the plan validator once composite pins ship.
-    fn validate_type_decl(&mut self, decl: &crate::compiler::syntax::TypeDecl) {
+    fn validate_type_decl(&mut self, decl: &crate::compiler::syntax::TypeDecl) -> bool {
         let mut nodes = 0usize;
         let mut stack: Vec<String> = Vec::new();
         if let Err(refusal) = self.walk_type(&decl.ty, &mut nodes, 0, &mut stack) {
@@ -3234,7 +3259,9 @@ impl Checker<'_, '_> {
                 .with_field("count", measured.to_string()),
             };
             self.bag.push(diagnostic);
+            return false;
         }
+        true
     }
 
     /// Walks a type reference through its named expansions — every
@@ -3453,7 +3480,7 @@ impl Checker<'_, '_> {
     }
 
     /// THE nested-value lowering, shared by struct fields and map
-    /// entries: CEL, JSON, recursive maps, the EMPTY struct
+    /// entries: Rastok expression, JSON, recursive maps, the EMPTY struct
     /// (tag 17's literal), verbatim text, bare base64, bare asset.
     /// A content-typed byte form refuses with the dedicated rule —
     /// a nested field has no `meta.ext` of its own — and the one
@@ -3463,13 +3490,13 @@ impl Checker<'_, '_> {
     fn nested_value_tree(
         &mut self,
         value: &SynValue,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
         at: Span,
-    ) -> Option<cel::Tree> {
+    ) -> Option<expr::Tree> {
         match value {
             // The parser already spoke for its recovery form.
             SynValue::Error(_) => None,
-            SynValue::Cel(expr) => self.cel(expr, signature),
+            SynValue::Expr(expr) => self.expr(expr, signature),
             SynValue::Json { value, .. } => Some(literal_tree(value.clone(), DataType::Variant)),
             SynValue::BracedMap(entries) => self.map_value_tree(entries, signature, at),
             SynValue::Braced(body) if body.entries.is_empty() => Some(literal_tree(
@@ -3504,8 +3531,8 @@ impl Checker<'_, '_> {
                             content_type: None,
                         } => {
                             let index = self.asset_resolve(&path, tagged.tag.span)?;
-                            Some(cel::Tree {
-                                root: cel::Expr::Asset(index),
+                            Some(expr::Tree {
+                                root: expr::Expr::Asset(index),
                                 ty: DataType::BYTES,
                             })
                         }
@@ -3540,13 +3567,13 @@ impl Checker<'_, '_> {
     fn map_value_tree(
         &mut self,
         entries: &[crate::compiler::syntax::MapEntry],
-        signature: &cel::Signature,
+        signature: &expr::Signature,
         at: Span,
-    ) -> Option<cel::Tree> {
-        let mut pairs: Vec<(String, cel::Expr, DataType)> = Vec::new();
+    ) -> Option<expr::Tree> {
+        let mut pairs: Vec<(String, expr::Expr, DataType)> = Vec::new();
         for entry in entries {
-            // ONE string semantics: the key decodes through CEL —
-            // `"a\nb"` here and `{"a\nb": 1}` inside a CEL span are
+            // ONE string semantics: the key decodes through Rastok expression —
+            // `"a\nb"` here and `{"a\nb": 1}` inside a Rastok expression span are
             // the same key, the same hash.
             let key = self.string_literal(&entry.key)?;
             if pairs.iter().any(|(known, _, _)| known == &key) {
@@ -3568,8 +3595,8 @@ impl Checker<'_, '_> {
             pairs.push((key, tree.root, tree.ty));
         }
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
-        // CEL's own MapLit inference (join over the value types) —
-        // `{ "k": 1 }` here and inside a CEL span are ONE program,
+        // the Rastok expression language's own MapLit inference (join over the value types) —
+        // `{ "k": 1 }` here and inside a Rastok expression span are ONE program,
         // one type, one hash.
         let mut values = None;
         for (_, _, ty) in &pairs {
@@ -3584,8 +3611,8 @@ impl Checker<'_, '_> {
                 None => ty.clone(),
             });
         }
-        Some(cel::Tree {
-            root: cel::Expr::MapLit(
+        Some(expr::Tree {
+            root: expr::Expr::MapLit(
                 pairs
                     .into_iter()
                     .map(|(key, root, _)| (key, root))
@@ -3599,17 +3626,17 @@ impl Checker<'_, '_> {
     }
 
     /// Compiles an expression that MUST be one text literal — map
-    /// keys and the STRING arguments of `asset`/`base64`. The CEL
+    /// keys and the STRING arguments of `asset`/`base64`. The Rastok expression
     /// compiler owns the escape rule; an expression, however
     /// string-shaped its spelling, refuses.
-    fn string_literal(&mut self, expr: &CelExpr) -> Option<String> {
-        let tree = self.cel(expr, &cel::Signature::new())?;
+    fn string_literal(&mut self, expr: &ExprSource) -> Option<String> {
+        let tree = self.expr(expr, &expr::Signature::new())?;
         match tree.root {
-            cel::Expr::Literal(crate::value::Value::Text(text)) => Some(text),
+            expr::Expr::Literal(crate::value::Value::Text(text)) => Some(text),
             _ => {
                 self.bag.push(
                     Diagnostic::new(
-                        E_CEL_EXPR,
+                        E_EXPR,
                         Phase::Check,
                         "one string LITERAL is required here — not an expression",
                     )
@@ -3632,15 +3659,15 @@ impl Checker<'_, '_> {
     /// verified against the sealed schema once inference closes.
     /// A DYNAMIC meta access (`meta["…"]`) refuses on the spot: the
     /// grid only holds if the checker sees every key.
-    fn collect_meta_reads(&mut self, expr: &cel::Expr, span: Span) {
+    fn collect_meta_reads(&mut self, expr: &expr::Expr, span: Span) {
         match expr {
-            cel::Expr::Path(segments) => {
+            expr::Expr::Path(segments) => {
                 if segments.first().is_some_and(|root| root == "meta") {
                     self.meta_reads.push((segments.clone(), span));
                 }
             }
-            cel::Expr::Index { base, index } => {
-                if matches!(&**base, cel::Expr::Path(segments)
+            expr::Expr::Index { base, index } => {
+                if matches!(&**base, expr::Expr::Path(segments)
                     if segments.first().is_some_and(|root| root == "meta"))
                 {
                     self.meta_zone_refusal(
@@ -3652,12 +3679,14 @@ impl Checker<'_, '_> {
                 self.collect_meta_reads(base, span);
                 self.collect_meta_reads(index, span);
             }
-            cel::Expr::Unary { expr, .. } => self.collect_meta_reads(expr, span),
-            cel::Expr::Binary { left, right, .. } => {
+            expr::Expr::Unary { expr, .. }
+            | expr::Expr::Is { expr, .. }
+            | expr::Expr::As { expr, .. } => self.collect_meta_reads(expr, span),
+            expr::Expr::Binary { left, right, .. } => {
                 self.collect_meta_reads(left, span);
                 self.collect_meta_reads(right, span);
             }
-            cel::Expr::Ternary {
+            expr::Expr::Ternary {
                 cond,
                 then,
                 otherwise,
@@ -3666,22 +3695,22 @@ impl Checker<'_, '_> {
                 self.collect_meta_reads(then, span);
                 self.collect_meta_reads(otherwise, span);
             }
-            cel::Expr::Call { args, .. } => {
+            expr::Expr::Call { args, .. } => {
                 for arg in args {
                     self.collect_meta_reads(arg, span);
                 }
             }
-            cel::Expr::List(items) => {
+            expr::Expr::List(items) => {
                 for item in items {
                     self.collect_meta_reads(item, span);
                 }
             }
-            cel::Expr::MapLit(pairs) => {
+            expr::Expr::MapLit(pairs) => {
                 for (_, value) in pairs {
                     self.collect_meta_reads(value, span);
                 }
             }
-            cel::Expr::Literal(_) | cel::Expr::Asset(_) => {}
+            expr::Expr::Literal(_) | expr::Expr::Asset(_) => {}
         }
     }
 
@@ -3759,7 +3788,7 @@ impl Checker<'_, '_> {
     }
 
     /// Verifies every collected `meta.*` read against the sealed
-    /// vocabulary — the CEL grid, statically: three zones only, and
+    /// vocabulary — the Rastok expression grid, statically: three zones only, and
     /// a name written nowhere refuses.
     fn verify_meta_reads(&mut self) {
         const SYS_FIELDS: &[&str] = &[
@@ -3817,7 +3846,7 @@ impl Checker<'_, '_> {
                         self.meta_zone_refusal(
                             span,
                             &format!("meta.app.{field}"),
-                            "the graph writes this exact leaf nowhere — reads name a leaf, never a branch (the CEL grid)",
+                            "the graph writes this exact leaf nowhere — reads name a leaf, never a branch (the Rastok expression grid)",
                         );
                     }
                 }
@@ -3846,7 +3875,7 @@ impl Checker<'_, '_> {
     fn emit_value(
         &mut self,
         value: &SynValue,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
         at: Span,
     ) -> Option<EmitValue> {
         match value {
@@ -3869,8 +3898,8 @@ impl Checker<'_, '_> {
                     DataType::Variant,
                 )))
             }
-            SynValue::Cel(expr) => {
-                let tree = self.cel(expr, signature)?;
+            SynValue::Expr(expr) => {
+                let tree = self.expr(expr, signature)?;
                 if matches!(
                     tree.ty,
                     DataType::DURATION | DataType::TIMESTAMP | DataType::Null
@@ -3922,8 +3951,8 @@ impl Checker<'_, '_> {
                         }
                         TagCall::Asset { path, content_type } => {
                             let index = self.asset_resolve(&path, tagged.tag.span)?;
-                            let data = cel::Tree {
-                                root: cel::Expr::Asset(index),
+                            let data = expr::Tree {
+                                root: expr::Expr::Asset(index),
                                 ty: DataType::BYTES,
                             };
                             Some(match content_type {
@@ -3971,7 +4000,7 @@ impl Checker<'_, '_> {
     fn braced(
         &mut self,
         body: &StructBody,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
         at: Span,
     ) -> Option<EmitValue> {
         // ONE root extraction for both entry forms: a field's first
@@ -4035,7 +4064,7 @@ impl Checker<'_, '_> {
     fn field_writes(
         &mut self,
         body: &StructBody,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
     ) -> Option<Vec<FieldWrite>> {
         let mut writes = Vec::new();
         for entry in &body.entries {
@@ -4093,14 +4122,14 @@ impl Checker<'_, '_> {
                         ),
                     };
                     match value {
-                        SynValue::Cel(expr) => {
-                            if let Some(tree) = self.cel(expr, signature) {
+                        SynValue::Expr(expr) => {
+                            if let Some(tree) = self.expr(expr, signature) {
                                 if matches!(&target, crate::envelope::WriteTarget::Ext(field) if field == "content_type")
                                     && !tree.ty.is_assignable_to(&DataType::Text)
                                 {
                                     self.bag.push(
                                         Diagnostic::new(
-                                            E_CEL_EXPR,
+                                            E_EXPR,
                                             Phase::Check,
                                             "content_type takes text",
                                         )
@@ -4239,8 +4268,8 @@ impl Checker<'_, '_> {
                                             target: crate::envelope::WriteTarget::Data(
                                                 path.clone(),
                                             ),
-                                            value: cel::Tree {
-                                                root: cel::Expr::Asset(index),
+                                            value: expr::Tree {
+                                                root: expr::Expr::Asset(index),
                                                 ty: DataType::BYTES,
                                             },
                                         });
@@ -4316,7 +4345,7 @@ impl Checker<'_, '_> {
     fn struct_fields(
         &mut self,
         body: &StructBody,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
     ) -> Option<Vec<FieldWrite>> {
         let mut writes = Vec::new();
         self.record_fields(body, signature, &[], &mut writes);
@@ -4326,7 +4355,7 @@ impl Checker<'_, '_> {
     fn record_fields(
         &mut self,
         body: &StructBody,
-        signature: &cel::Signature,
+        signature: &expr::Signature,
         prefix: &[String],
         writes: &mut Vec<FieldWrite>,
     ) {
@@ -4336,8 +4365,8 @@ impl Checker<'_, '_> {
                     let mut path: Vec<String> = prefix.to_vec();
                     path.extend(key.segments.iter().map(|segment| segment.text.clone()));
                     match value {
-                        SynValue::Cel(expr) => {
-                            if let Some(tree) = self.cel(expr, signature) {
+                        SynValue::Expr(expr) => {
+                            if let Some(tree) = self.expr(expr, signature) {
                                 writes.push(FieldWrite {
                                     target: crate::envelope::WriteTarget::Data(path),
                                     value: tree,
@@ -4352,8 +4381,8 @@ impl Checker<'_, '_> {
                                 // would write nothing at all.
                                 writes.push(FieldWrite {
                                     target: crate::envelope::WriteTarget::Data(path),
-                                    value: cel::Tree {
-                                        root: cel::Expr::Literal(crate::value::Value::Struct(
+                                    value: expr::Tree {
+                                        root: expr::Expr::Literal(crate::value::Value::Struct(
                                             Vec::new(),
                                         )),
                                         ty: DataType::Variant,
@@ -4639,11 +4668,11 @@ impl Checker<'_, '_> {
     /// answers exactly like the literal.
     fn constant_breach(
         pinned: &DataType,
-        tree: &cel::Tree,
+        tree: &expr::Tree,
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<String> {
         if *pinned == DataType::INT
-            && let Ok(crate::value::Value::Int(value)) = cel::const_eval(tree, consts)
+            && let Ok(crate::value::Value::Int(value)) = expr::const_eval(tree, consts)
             && i32::try_from(value).is_err()
         {
             return Some(format!("the constant {value}, outside the 32-bit int"));
@@ -4820,7 +4849,7 @@ enum BuildOrigin<'a> {
 /// represented by an actual closed `DataType::Struct`, never a sentinel.
 enum DataShape<'a> {
     Unknown,
-    Known(DataType, Option<&'a cel::Tree>),
+    Known(DataType, Option<&'a expr::Tree>),
 }
 
 /// The pin a node's port carries: its table entry when declared, or the
@@ -4907,18 +4936,20 @@ fn direction_words(direction: Direction) -> &'static str {
 /// Rewrites every `Expr::Asset` index in a checked graph after the
 /// table's canonical digest sort.
 fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
-    fn expr(node: &mut cel::Expr, remap: &[u32]) {
+    fn expr(node: &mut expr::Expr, remap: &[u32]) {
         match node {
-            cel::Expr::Asset(index) => {
+            expr::Expr::Asset(index) => {
                 *index = remap[*index as usize];
             }
-            cel::Expr::Literal(_) | cel::Expr::Path(_) => {}
-            cel::Expr::Unary { expr: inner, .. } => expr(inner, remap),
-            cel::Expr::Binary { left, right, .. } => {
+            expr::Expr::Literal(_) | expr::Expr::Path(_) => {}
+            expr::Expr::Unary { expr: inner, .. }
+            | expr::Expr::Is { expr: inner, .. }
+            | expr::Expr::As { expr: inner, .. } => expr(inner, remap),
+            expr::Expr::Binary { left, right, .. } => {
                 expr(left, remap);
                 expr(right, remap);
             }
-            cel::Expr::Ternary {
+            expr::Expr::Ternary {
                 cond,
                 then,
                 otherwise,
@@ -4927,21 +4958,21 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
                 expr(then, remap);
                 expr(otherwise, remap);
             }
-            cel::Expr::Index { base, index } => {
+            expr::Expr::Index { base, index } => {
                 expr(base, remap);
                 expr(index, remap);
             }
-            cel::Expr::Call { args, .. } => {
+            expr::Expr::Call { args, .. } => {
                 for arg in args {
                     expr(arg, remap);
                 }
             }
-            cel::Expr::List(items) => {
+            expr::Expr::List(items) => {
                 for item in items {
                     expr(item, remap);
                 }
             }
-            cel::Expr::MapLit(pairs) => {
+            expr::Expr::MapLit(pairs) => {
                 for (_, value) in pairs {
                     expr(value, remap);
                 }
@@ -5025,9 +5056,9 @@ fn key_path(key: &crate::compiler::syntax::LValue) -> String {
 }
 
 /// A literal expression tree — the compiler's own constants.
-fn literal_tree(value: crate::value::Value, ty: DataType) -> cel::Tree {
-    cel::Tree {
-        root: cel::Expr::Literal(value),
+fn literal_tree(value: crate::value::Value, ty: DataType) -> expr::Tree {
+    expr::Tree {
+        root: expr::Expr::Literal(value),
         ty,
     }
 }
@@ -5148,20 +5179,22 @@ fn inferred_join(left: &DataType, right: &DataType) -> Result<DataType, TypeErro
     }
 }
 
-fn expression_reads_data(expr: &cel::Expr) -> bool {
+fn expression_reads_data(expr: &expr::Expr) -> bool {
     let mut stack = vec![expr];
     while let Some(expr) = stack.pop() {
         match expr {
-            cel::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {
+            expr::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {
                 return true;
             }
-            cel::Expr::Path(_) | cel::Expr::Literal(_) | cel::Expr::Asset(_) => {}
-            cel::Expr::Unary { expr, .. } => stack.push(expr),
-            cel::Expr::Binary { left, right, .. } => {
+            expr::Expr::Path(_) | expr::Expr::Literal(_) | expr::Expr::Asset(_) => {}
+            expr::Expr::Unary { expr, .. }
+            | expr::Expr::Is { expr, .. }
+            | expr::Expr::As { expr, .. } => stack.push(expr),
+            expr::Expr::Binary { left, right, .. } => {
                 stack.push(left);
                 stack.push(right);
             }
-            cel::Expr::Ternary {
+            expr::Expr::Ternary {
                 cond,
                 then,
                 otherwise,
@@ -5170,12 +5203,12 @@ fn expression_reads_data(expr: &cel::Expr) -> bool {
                 stack.push(then);
                 stack.push(otherwise);
             }
-            cel::Expr::Index { base, index } => {
+            expr::Expr::Index { base, index } => {
                 stack.push(base);
                 stack.push(index);
             }
-            cel::Expr::Call { args, .. } | cel::Expr::List(args) => stack.extend(args),
-            cel::Expr::MapLit(entries) => {
+            expr::Expr::Call { args, .. } | expr::Expr::List(args) => stack.extend(args),
+            expr::Expr::MapLit(entries) => {
                 stack.extend(entries.iter().map(|(_, value)| value));
             }
         }
@@ -5195,9 +5228,9 @@ fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError
             }
             DataType::Struct(StructType::new(resolved)?)
         }
-        // B3 gives exact decimals their expression-level static type. The
-        // v6 expression tree still carries the explicit dynamic case; this
-        // is a known frontend type, never an unresolved inference variable.
+        // The exact value is not an inference hole. v6 can only transport
+        // the historical `variant` tree type; B8 switches this bridge to the
+        // canonical `number` type together with the single v7 registry.
         crate::value::Value::Decimal { .. } => DataType::Variant,
         crate::value::Value::Bool(_) => DataType::Bool,
         crate::value::Value::Int(_) => DataType::INT,
@@ -5240,6 +5273,9 @@ fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError
             };
             DataType::text_map(element)
         }
+        crate::value::Value::Enum(_)
+        | crate::value::Value::StructuralUnion { .. }
+        | crate::value::Value::TaggedUnion(_) => DataType::Variant,
     }))
 }
 
@@ -5344,7 +5380,7 @@ graph m0_probe : App {
         let EmitValue::Data(tree) = value else {
             panic!("expected a whole-data expression");
         };
-        assert!(matches!(&tree.root, cel::Expr::Path(path) if path == &["data", "text"]));
+        assert!(matches!(&tree.root, expr::Expr::Path(path) if path == &["data", "text"]));
     }
 
     #[test]
@@ -5412,14 +5448,14 @@ graph m0_probe : App {
     }
 
     #[test]
-    fn cel_faults_map_back_to_source_spans() {
+    fn expression_faults_map_back_to_source_spans() {
         let source = "graph g : App {\n  operator o {\n    on in where mystery > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
         let (_, bag) = check_source(source);
         let diagnostic = bag
             .diagnostics()
             .iter()
-            .find(|diagnostic| diagnostic.code() == E_CEL_EXPR)
-            .expect("a CEL diagnostic");
+            .find(|diagnostic| diagnostic.code() == E_EXPR)
+            .expect("a Rastok expression diagnostic");
         let span = diagnostic.spans()[0];
         let range = span.range();
         assert_eq!(&source[range], "mystery > 0");
@@ -5506,9 +5542,47 @@ graph m0_probe : App {
             panic!("a data emission");
         };
         assert!(
-            matches!(&tree.root, cel::Expr::MapLit(pairs) if pairs.len() == 1),
+            matches!(&tree.root, expr::Expr::MapLit(pairs) if pairs.len() == 1),
             "the MapLit form: {tree:?}"
         );
+    }
+
+    #[test]
+    fn a_named_type_guard_narrows_the_handler_body() {
+        let source = r#"
+type Customer = struct { id: int }
+
+graph g : App {
+  operator inspect {
+    on in where data is Customer {
+      out = data.id
+    }
+  }
+
+  . -> inspect -> .
+}
+"#;
+        let hir = check_clean(source);
+        let handler = &hir.app.nodes[0].handlers[0];
+        let guard = handler.guard.as_ref().expect("the compiled guard");
+        let customer = DataType::Struct(
+            StructType::new(vec![TypeField::new("id", DataType::INT)]).expect("one closed field"),
+        );
+        let expr::Expr::Is { target, .. } = &guard.root else {
+            panic!("the narrowing guard");
+        };
+        assert!(matches!(
+            target.as_ref(),
+            expr::NarrowTarget::Type(target) if target.ty() == &customer
+        ));
+        let Statement::Emit { value, .. } = &handler.body[0] else {
+            panic!("the guarded emission");
+        };
+        let EmitValue::Data(tree) = value else {
+            panic!("the expression emission");
+        };
+        assert_eq!(tree.ty, DataType::INT);
+        assert!(matches!(&tree.root, expr::Expr::Path(path) if path == &["data", "id"]));
     }
 
     #[test]
@@ -5621,7 +5695,7 @@ graph m0_probe : App {
         let cases = [
             ("expect nothing relay.typo", E_PORT_UNKNOWN),
             ("expect nothing app.typo", E_PORT_UNKNOWN),
-            ("expect nothing app.out where 42", E_CEL_EXPR),
+            ("expect nothing app.out where 42", E_EXPR),
         ];
         for (expect, code) in cases {
             let source = base.replace("EXPECT", expect);
@@ -5732,7 +5806,7 @@ graph m0_probe : App {
         let diagnostic = bag
             .diagnostics()
             .iter()
-            .find(|diagnostic| diagnostic.code() == E_CEL_EXPR)
+            .find(|diagnostic| diagnostic.code() == E_EXPR)
             .expect("the type mismatch");
         assert!(diagnostic.message().contains("declared int32"));
     }

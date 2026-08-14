@@ -1,5 +1,5 @@
 //! The three-zone metadata model (D-2026-08-10-1 … -4): inference
-//! from the graph's writes, the static CEL grid, prefix-freedom,
+//! from the graph's writes, the static Rastok expression grid, prefix-freedom,
 //! zone refusals, the Lab's inability to touch production, and the
 //! content-type lifecycle. Every refusal here is a named diagnostic,
 //! never a silent reinterpretation.
@@ -56,7 +56,7 @@ fn an_unknown_ext_write_refuses() {
 
 #[test]
 fn a_read_never_written_refuses() {
-    // The CEL grid, statically: the graph writes `meta.app.known`
+    // The Rastok expression grid, statically: the graph writes `meta.app.known`
     // nowhere, so reading it is a compile error — not a runtime err.
     refuses_with(
         "graph g : App {\n  operator o {\n    on in where meta.app.ghost == \"x\" { out = data }\n  }\n  . -> o -> .\n}\n",

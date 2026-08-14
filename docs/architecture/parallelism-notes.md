@@ -91,7 +91,7 @@ effective `max_instances`, no joins, no placement.
    [`m0-exit-notes.md`](m0-exit-notes.md): identities must see the
    delivering edge before two ports or two instances can receive one
    envelope.
-6. **Long CPU work** — small CEL runs on the worker; heavy guest
+6. **Long CPU work** — small Rastok expressions run on the worker; heavy guest
    programs (jq/SQL) go to a bounded compute pool. The partition
    stays reserved; the general scheduler is never monopolized.
 7. **Hot keys** — telemetry first, guidance after; no speculative

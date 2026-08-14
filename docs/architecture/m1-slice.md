@@ -91,7 +91,8 @@ step touches `vm.rs` once.
    bench card v1 is restored byte-for-byte with the M1 surface on a
    new v2, and the fresh-data variant is named `FreshData`; ninth
    pass — laziness is SEMANTIC, not syntactic: the whole payload
-   rides evaluation as `cel::EvalValue::Payload`, a witness that
+   rides evaluation as the then-named `cel::EvalValue::Payload` (now
+   `expr::EvalValue::Payload`), a witness that
    carries through `val` bindings and ternaries and materializes
    only where an operation demands structure, so `val copy = data;
    out = copy` ships the representation exactly like `out = data`
@@ -231,14 +232,16 @@ step touches `vm.rs` once.
    distinct lifecycle implemented by the following `per` slice. Core
    `datatype::DataType` already owns the executable type subset without an
    identity move. Core `value::Value` now also owns the executable
-   materialized-value subset; `cel::EvalValue` is only the transient carrier
+   materialized-value subset; `expr::EvalValue` is only the transient carrier
    of the lazy payload witness. Core `Value::validate` and
    `DataType::violation` now provide the single structural-validation and
    recursive-conformance doors used by plans, metadata, state, ingress and
    emissions; JSON no longer owns the decimal128 domain. B2 now resolves every
    used or declared port into a total `Declared`/`Inferred` table on
    `ValidatedExecutionPlan`; v6 decoders re-derive it, and no unresolved hole
-   becomes `variant`. The remaining
+   becomes `variant`. B3 has renamed the consumer to `expr`, added typed
+   deterministic `is`/`as` narrowing and pinned the compatible operator
+   oracle; v6 refuses those new AST nodes until B8 publishes v7. The remaining
    `error_set`, `TypedError` and
    success/failure-only reply split are removed by the ordered M1.3 gates,
    not promoted as an intermediate model. Ordered gates and evidence are in

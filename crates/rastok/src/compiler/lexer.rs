@@ -5,7 +5,7 @@
 //! [`Lexer::next`] (keywords are not distinguished: every word is an
 //! [`TokenKind::Ident`], the parser deciding by position), consumes
 //! sub-language regions as COMPLETE specialized lexemes
-//! ([`Lexer::cel_region`], [`Lexer::json_tail`], [`Lexer::verbatim_region`],
+//! ([`Lexer::expr_region`], [`Lexer::json_tail`], [`Lexer::verbatim_region`],
 //! [`Lexer::guest_region`],
 //! [`Lexer::swallow_opaque_on_line`]), and asks the named
 //! finite-byte-lookahead questions ([`Lexer::statement_head`],
@@ -85,8 +85,8 @@ pub enum TokenKind {
     /// `>=`
     GtEq,
 
-    /// Opaque CEL expression span, produced only by [`Lexer::cel_region`].
-    CelExpr,
+    /// Opaque Rastok expression span, produced only by [`Lexer::expr_region`].
+    ExprSource,
     /// Opaque raw region text, produced only by the region framers
     /// ([`Lexer::verbatim_region`], [`Lexer::guest_region`]).
     RawText,
@@ -111,7 +111,7 @@ pub struct Token<'a> {
     pub newline_before: bool,
 }
 
-/// Terminators ending a CEL expression span at bracket depth 0, chosen
+/// Terminators ending a Rastok expression span at bracket depth 0, chosen
 /// by the parser per grammar position. The terminator is never
 /// consumed.
 #[derive(Debug, Clone, Copy)]
@@ -136,7 +136,7 @@ pub enum StringArgument<'a> {
     /// A bare STRING at the argument boundary: the grammar's
     /// StrLit, consumed.
     Alone(Token<'a>),
-    /// A STRING continuing into a larger expression: the CEL
+    /// A STRING continuing into a larger expression: the Rastok expression
     /// prefix, consumed — stitch from its start.
     Prefix(Token<'a>),
 }
@@ -165,13 +165,13 @@ pub enum AssignmentHead {
 pub enum ValueHead {
     /// The host tokenizes a builder form.
     Structural,
-    /// Delegate one expression region to CEL.
-    Cel,
+    /// Delegate one expression region to Rastok expression.
+    Expr,
 }
 
 /// How the next significant input opens a STATEMENT position.
 ///
-/// This is deliberately distinct from [`ValueHead`]: a CEL-shaped
+/// This is deliberately distinct from [`ValueHead`]: a Rastok expression-shaped
 /// value is valid in a value position, while the same spelling is an
 /// error in a statement position (there is no implicit yield).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,7 +200,7 @@ pub enum JsonTail {
         range: core::ops::Range<usize>,
     },
     /// A follower that is neither a document nor the boundary — the
-    /// reserved word admits no CEL continuation.
+    /// reserved word admits no Rastok expression continuation.
     BadForm {
         /// The diagnostic anchor: the follower's byte (an EMPTY
         /// range at EOF, per Span's own contract).
@@ -228,16 +228,16 @@ pub struct JsonRefusal {
     pub recovered_to: usize,
 }
 
-/// Result of the single read-only CEL framer. A complete region ends
+/// Result of the single read-only Rastok expression framer. A complete region ends
 /// at the host position's FOLLOW. An incomplete region carries the
 /// earlier boundary normal value parsing may commit without consuming
 /// a following construct; statement recovery commits nothing.
-enum CelExtent {
+enum ExprExtent {
     Complete { end: usize },
     Incomplete { recovery_end: usize },
 }
 
-impl CelExtent {
+impl ExprExtent {
     fn commit_end(&self) -> usize {
         match self {
             Self::Complete { end } => *end,
@@ -336,8 +336,8 @@ impl<'a> Lexer<'a> {
             }
             // The COMPARISON lexemes, maximal munch — the HOST's
             // own vocabulary (the simulation expect grammar), not a
-            // copied CEL operator set. Error recovery may observe
-            // them, but no valid CEL production depends on them.
+            // copied Rastok expression operator set. Error recovery may observe
+            // them, but no valid Rastok expression production depends on them.
             b'=' if self.peek_byte_at(1) == Some(b'=') => {
                 self.pos += 2;
                 self.token(TokenKind::EqEq, start)
@@ -350,7 +350,7 @@ impl<'a> Lexer<'a> {
                 self.pos += 2;
                 self.token(TokenKind::GtEq, start)
             }
-            // A single-quoted string is CEL's spelling, never the
+            // A single-quoted string is the Rastok expression language's spelling, never the
             // host's — lexed as ONE opaque Error token (its content
             // never re-speaks, and recoveries stay quote-immune).
             // An unescaped line ending bounds an unterminated token:
@@ -381,7 +381,7 @@ impl<'a> Lexer<'a> {
                     Diagnostic::new(
                         E_LEX_CHAR,
                         Phase::Parse,
-                        "a single-quoted string is CEL's spelling; host strings are \
+                        "a single-quoted string is the Rastok expression language's spelling; host strings are \
                          double-quoted",
                     )
                 } else {
@@ -415,24 +415,24 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// An opaque CEL expression span, scanned at bracket depth 0 until
+    /// An opaque Rastok expression span, scanned at bracket depth 0 until
     /// `terminators` — the delimitation rules of `grammar.md`. Quoted
-    /// strings (both CEL quote styles) are opaque and line-bounded; any
+    /// strings (both Rastok expression quote styles) are opaque and line-bounded; any
     /// closing bracket below depth 0 also terminates.
-    fn cel_expr(&mut self, terminators: &TerminatorSet) -> Token<'a> {
+    fn expr_token(&mut self, terminators: &TerminatorSet) -> Token<'a> {
         while matches!(self.peek_byte(), Some(b' ' | b'\t' | b'\r')) {
             self.pos += 1;
         }
         let start = self.pos;
-        let extent = self.cel_extent(self.pos, Vec::new(), terminators);
-        self.commit_cel_extent(&extent);
+        let extent = self.expr_extent(self.pos, Vec::new(), terminators);
+        self.commit_expr_extent(&extent);
         let end = self
             .source
             .as_bytes()
             .get(start..self.pos)
             .map_or(self.pos, |scanned| start + scanned.trim_ascii_end().len());
         Token {
-            kind: TokenKind::CelExpr,
+            kind: TokenKind::ExprSource,
             text: &self.source[start..end],
             span: Span::new(self.source_id, start..end),
             newline_before: false,
@@ -459,7 +459,7 @@ impl<'a> Lexer<'a> {
     /// bare value, or input for line-bounded recovery. With
     /// [`Self::tag_opener_on_line`] and the line questions, this is
     /// one of THE named finite-byte-lookahead points of the grammar:
-    /// CEL regions may open with bytes the host refuses, so the
+    /// Rastok expression regions may open with bytes the host refuses, so the
     /// choice reads one byte — inside the lexer.
     pub fn statement_head(&mut self) -> StatementHead {
         match self.shape() {
@@ -474,12 +474,12 @@ impl<'a> Lexer<'a> {
     }
 
     /// How a VALUE opens: with a builder form (`{`, `.`, a word), or
-    /// as a CEL expression — same contract as
+    /// as a Rastok expression — same contract as
     /// [`Self::statement_head`].
     pub fn value_head(&mut self) -> ValueHead {
         match self.shape() {
             Some(b'{' | b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => ValueHead::Structural,
-            _ => ValueHead::Cel,
+            _ => ValueHead::Expr,
         }
     }
 
@@ -520,7 +520,7 @@ impl<'a> Lexer<'a> {
     /// but a proven double-quoted string (D-2026-08-13-1, review
     /// round 7): a bare STRING followed by the argument boundary is
     /// the grammar's StrLit; a string continuing into an expression
-    /// is the CEL prefix; anything else — a single-quoted CEL
+    /// is the Rastok expression prefix; anything else — a single-quoted Rastok expression
     /// string included — is untouched for the value dispatch.
     pub fn string_argument(&mut self, bag: &mut Bag) -> StringArgument<'a> {
         // ONE trivia policy: a paren position is newline-free, so
@@ -551,7 +551,7 @@ impl<'a> Lexer<'a> {
 
     /// Whether a SAME-LINE `.` follows — the path walk's question,
     /// asked WITHOUT tokenizing the follower (a path may be chased
-    /// by CEL bytes outside the host vocabulary, review round 7).
+    /// by Rastok expression bytes outside the host vocabulary, review round 7).
     pub fn dot_follows(&mut self) -> bool {
         if let Some(token) = &self.lookahead {
             return token.kind == TokenKind::Dot && !token.newline_before;
@@ -560,10 +560,10 @@ impl<'a> Lexer<'a> {
     }
 
     /// Whether an ASSIGNMENT follows the consumed path: `=` (alone —
-    /// `==` is CEL's), or `:` (a typed assignment). Answered without
+    /// `==` belongs to expressions), or `:` (a typed assignment). Answered without
     /// tokenizing, so a bare-expression statement can refuse with
     /// ONE positional voice without first manufacturing a host token
-    /// for a CEL-only follower (review round 7 — the implicit yield is
+    /// for a Rastok expression-only follower (review round 7 — the implicit yield is
     /// REMOVED).
     pub fn assignment_follows(&mut self) -> Option<AssignmentHead> {
         if let Some(token) = &self.lookahead {
@@ -669,7 +669,7 @@ impl<'a> Lexer<'a> {
         token.kind == TokenKind::Ident && terminators.keywords.contains(&token.text)
     }
 
-    /// One CEL region lexeme (D-2026-08-13-1) — complete to the
+    /// One Rastok expression region lexeme (D-2026-08-13-1) — complete to the
     /// position's FOLLOW, or bounded at the safe recovery point of an
     /// incomplete extent. `prefix_start` names
     /// the already-consumed lexeme(s) beginning the expression; the
@@ -677,7 +677,7 @@ impl<'a> Lexer<'a> {
     /// the same owner as the buffer and the cursor. A buffered
     /// boundary lexeme ends the region before itself and SURVIVES;
     /// a buffered opener deepens the scan it already entered.
-    pub fn cel_region(
+    pub fn expr_region(
         &mut self,
         prefix_start: Option<usize>,
         terminators: &TerminatorSet,
@@ -694,14 +694,14 @@ impl<'a> Lexer<'a> {
                 Some(TokenKind::LBrace) => vec![b'}'],
                 _ => Vec::new(),
             };
-            let extent = self.cel_extent(self.pos, expected, terminators);
-            self.commit_cel_extent(&extent);
+            let extent = self.expr_extent(self.pos, expected, terminators);
+            self.commit_expr_extent(&extent);
             return self.stitched(start, self.pos);
         }
         match prefix_start {
             Some(start) => {
-                let extent = self.cel_extent(self.pos, Vec::new(), terminators);
-                self.commit_cel_extent(&extent);
+                let extent = self.expr_extent(self.pos, Vec::new(), terminators);
+                self.commit_expr_extent(&extent);
                 self.stitched(start, self.pos)
             }
             None => {
@@ -709,19 +709,19 @@ impl<'a> Lexer<'a> {
                 // bare newline is not — it still reads as an empty
                 // expression.
                 self.advance_within_line();
-                self.cel_expr(terminators)
+                self.expr_token(terminators)
             }
         }
     }
 
-    /// Commits and returns one CEL region only when the single CEL
+    /// Commits and returns one Rastok expression region only when the single Rastok expression
     /// framer reaches this position's boundary with every delimiter
     /// and quote closed. `None` leaves both cursor and lookahead
     /// untouched, so line-bounded host recovery can preserve the next
     /// statement. This chooses only ERROR-RECOVERY extent after the
     /// parser has already rejected the statement production; it never
     /// chooses between valid grammar productions.
-    pub fn try_complete_cel_region(
+    pub fn try_complete_expr_region(
         &mut self,
         prefix_start: Option<usize>,
         terminators: &TerminatorSet,
@@ -746,7 +746,7 @@ impl<'a> Lexer<'a> {
                 TokenKind::LBrace => vec![b'}'],
                 _ => Vec::new(),
             };
-            let extent = self.cel_extent(self.pos, expected, terminators);
+            let extent = self.expr_extent(self.pos, expected, terminators);
             let end = extent.complete_end()?;
             let _ = self.lookahead.take();
             self.pos = end;
@@ -754,7 +754,7 @@ impl<'a> Lexer<'a> {
         }
 
         let start = prefix_start.unwrap_or(self.pos);
-        let extent = self.cel_extent(self.pos, Vec::new(), terminators);
+        let extent = self.expr_extent(self.pos, Vec::new(), terminators);
         let end = extent.complete_end()?;
         self.pos = end;
         Some(self.stitched(start, end))
@@ -768,7 +768,7 @@ impl<'a> Lexer<'a> {
                 .trim_end_matches([' ', '\t', '\r', '\n'])
                 .len();
         Token {
-            kind: TokenKind::CelExpr,
+            kind: TokenKind::ExprSource,
             text: &self.source[start..end],
             span: Span::new(self.source_id, start..end),
             newline_before: false,
@@ -816,7 +816,7 @@ impl<'a> Lexer<'a> {
             return JsonTail::Bare;
         }
         // A follower that is neither a document nor the boundary:
-        // the json form is invalid — `json` cannot begin a CEL
+        // the json form is invalid — `json` cannot begin a Rastok expression
         // expression, being reserved (review round 3). The walk is
         // the HOST-bounded one: garbage never crosses the line of a
         // newline-ended position (review round 4).
@@ -829,25 +829,25 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The ONE CEL framer. It is read-only so the normal value path
+    /// The ONE Rastok expression framer. It is read-only so the normal value path
     /// and the misplaced-value recovery consult exactly the same
     /// delimiter, quote, comment, and terminator rules. A mismatched
     /// closer never pays down an unrelated opener. It may scan past a
     /// newline to prove a valid balanced expression, but an incomplete
     /// newline-ended value commits only its first safe recovery line;
-    /// the CEL compiler, not this host framer, diagnoses its syntax.
-    fn cel_extent(
+    /// the Rastok expression compiler, not this host framer, diagnoses its syntax.
+    fn expr_extent(
         &self,
         start: usize,
         mut expected: Vec<u8>,
         terminators: &TerminatorSet,
-    ) -> CelExtent {
+    ) -> ExprExtent {
         let bytes = self.source.as_bytes();
         let mut pos = start;
         let mut recovery_end = None;
         while let Some(&byte) = bytes.get(pos) {
             if expected.is_empty() && self.terminates_at(pos, byte, terminators) {
-                return CelExtent::Complete { end: pos };
+                return ExprExtent::Complete { end: pos };
             }
             if byte == b'/'
                 && let Some(comment) = rastok_core::trivia::comment_at(self.source, pos)
@@ -855,16 +855,16 @@ impl<'a> Lexer<'a> {
                 if !comment.terminated {
                     // Stop BEFORE the comment. The host trivia reader is
                     // the one authority that diagnoses an unterminated
-                    // comment, and it runs during parsing — unlike the CEL
+                    // comment, and it runs during parsing — unlike the Rastok expression
                     // checker, which cannot run after missing-closer parse
                     // cascades have already rejected the source.
-                    return CelExtent::Incomplete { recovery_end: pos };
+                    return ExprExtent::Incomplete { recovery_end: pos };
                 }
                 let reaches_line_end = comment.multiline
                     || bytes.get(comment.end) == Some(&b'\n')
                     || comment.end == bytes.len();
                 if expected.is_empty() && terminators.newline && reaches_line_end {
-                    return CelExtent::Complete { end: pos };
+                    return ExprExtent::Complete { end: pos };
                 }
                 if !expected.is_empty() && terminators.newline && reaches_line_end {
                     recovery_end.get_or_insert(comment.end);
@@ -882,15 +882,15 @@ impl<'a> Lexer<'a> {
                     while let Some(&quoted) = bytes.get(pos) {
                         match quoted {
                             b'\r' | b'\n' => {
-                                // Ordinary CEL strings are line-bounded.
+                                // Ordinary Rastok expression strings are line-bounded.
                                 // Include the malformed prefix, keep the
                                 // following line for the host, and let the
-                                // CEL compiler own the syntax diagnostic.
-                                return CelExtent::Incomplete { recovery_end: pos };
+                                // Rastok expression compiler own the syntax diagnostic.
+                                return ExprExtent::Incomplete { recovery_end: pos };
                             }
                             b'\\' => {
                                 if matches!(bytes.get(pos + 1), Some(b'\r' | b'\n')) {
-                                    return CelExtent::Incomplete {
+                                    return ExprExtent::Incomplete {
                                         recovery_end: pos + 1,
                                     };
                                 }
@@ -905,7 +905,7 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     if !closed {
-                        return CelExtent::Incomplete { recovery_end: pos };
+                        return ExprExtent::Incomplete { recovery_end: pos };
                     }
                     continue;
                 }
@@ -914,10 +914,10 @@ impl<'a> Lexer<'a> {
                         expected.pop();
                     }
                     None => {
-                        return CelExtent::Complete { end: pos };
+                        return ExprExtent::Complete { end: pos };
                     }
                     Some(_) => {
-                        return CelExtent::Incomplete {
+                        return ExprExtent::Incomplete {
                             recovery_end: recovery_end.unwrap_or(pos),
                         };
                     }
@@ -930,15 +930,15 @@ impl<'a> Lexer<'a> {
             pos += 1;
         }
         if expected.is_empty() {
-            CelExtent::Complete { end: pos }
+            ExprExtent::Complete { end: pos }
         } else {
-            CelExtent::Incomplete {
+            ExprExtent::Incomplete {
                 recovery_end: recovery_end.unwrap_or(pos),
             }
         }
     }
 
-    fn commit_cel_extent(&mut self, extent: &CelExtent) {
+    fn commit_expr_extent(&mut self, extent: &ExprExtent) {
         self.pos = extent.commit_end();
     }
 
@@ -1053,7 +1053,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Consumes trivia so an opaque scan starts at significant input.
-    /// Needed before a shape-dispatched CEL scan: the scan itself
+    /// Needed before a shape-dispatched Rastok expression scan: the scan itself
     /// treats a leading newline as an empty expression, but the
     /// newline separating two statements is not part of either. A
     /// no-op when a lexeme is buffered — its peek consumed the
@@ -1092,7 +1092,7 @@ impl<'a> Lexer<'a> {
 
     /// The first significant byte ahead, past trivia, without consuming
     /// anything and without diagnosing. The parser's dispatch probe for
-    /// value positions: CEL text must reach the CEL chain untouched,
+    /// value positions: Rastok expression text must reach the expression chain untouched,
     /// never partially interpreted — or rejected — by this lexer.
     #[must_use]
     fn first_significant_byte(&self) -> Option<u8> {
@@ -1659,11 +1659,11 @@ mod tests {
         keywords: &[],
     };
 
-    fn cel(source: &str, terminators: &TerminatorSet) -> (String, String) {
+    fn lex_expression(source: &str, terminators: &TerminatorSet) -> (String, String) {
         let mut bag = Bag::new();
         let mut lexer = Lexer::new(SourceId::new(0), source);
-        let token = lexer.cel_expr(terminators);
-        assert_eq!(token.kind, TokenKind::CelExpr);
+        let token = lexer.expr_token(terminators);
+        assert_eq!(token.kind, TokenKind::ExprSource);
         let mut rest = String::new();
         loop {
             let token = lexer.next_token(&mut bag);
@@ -1676,27 +1676,27 @@ mod tests {
     }
 
     #[test]
-    fn a_cel_span_stops_at_the_unconsumed_terminator() {
-        let (expr, rest) = cel("meta.app.user_id ; x = 1", &ATTRIBUTE_POSITION);
+    fn an_expression_span_stops_at_the_unconsumed_terminator() {
+        let (expr, rest) = lex_expression("meta.app.user_id ; x = 1", &ATTRIBUTE_POSITION);
         assert_eq!(expr, "meta.app.user_id");
         assert_eq!(rest, ";x=1");
     }
 
     #[test]
-    fn a_cel_span_tracks_bracket_depth() {
-        let (expr, _) = cel("{'a': 1}.size() > 0 ; tail", &ATTRIBUTE_POSITION);
+    fn an_expression_span_tracks_bracket_depth() {
+        let (expr, _) = lex_expression("{'a': 1}.size() > 0 ; tail", &ATTRIBUTE_POSITION);
         assert_eq!(expr, "{'a': 1}.size() > 0");
     }
 
     #[test]
-    fn a_cel_span_skips_terminators_inside_strings() {
-        let (expr, _) = cel("\"a;b\" + 'c}d' ; tail", &ATTRIBUTE_POSITION);
+    fn an_expression_span_skips_terminators_inside_strings() {
+        let (expr, _) = lex_expression("\"a;b\" + 'c}d' ; tail", &ATTRIBUTE_POSITION);
         assert_eq!(expr, "\"a;b\" + 'c}d'");
     }
 
     #[test]
     fn a_newline_terminates_at_depth_zero_only() {
-        let (expr, _) = cel("(a &&\n b)\n next = 1", &ATTRIBUTE_POSITION);
+        let (expr, _) = lex_expression("(a &&\n b)\n next = 1", &ATTRIBUTE_POSITION);
         assert_eq!(expr, "(a &&\n b)");
     }
 
@@ -1708,21 +1708,21 @@ mod tests {
             arrow: true,
             keywords: &["having", "within"],
         };
-        let (expr, _) = cel(
+        let (expr, _) = lex_expression(
             "count(p) + shaving >= k having size(p) > 0",
             &GUARD_POSITION,
         );
         assert_eq!(expr, "count(p) + shaving >= k");
-        let (arrowed, _) = cel("data.kind == \"x\" -> audit", &GUARD_POSITION);
+        let (arrowed, _) = lex_expression("data.kind == \"x\" -> audit", &GUARD_POSITION);
         assert_eq!(arrowed, "data.kind == \"x\"");
     }
 
     #[test]
     fn an_unbalanced_closer_terminates_defensively() {
-        let (expr, _) = cel("a + b) leftovers", &ATTRIBUTE_POSITION);
+        let (expr, _) = lex_expression("a + b) leftovers", &ATTRIBUTE_POSITION);
         assert_eq!(expr, "a + b");
 
-        let (expr, rest) = cel("[a + b)\nnext", &ATTRIBUTE_POSITION);
+        let (expr, rest) = lex_expression("[a + b)\nnext", &ATTRIBUTE_POSITION);
         assert_eq!(expr, "[a + b", "a `)` never closes a `[` opener");
         assert!(
             rest.starts_with(')'),

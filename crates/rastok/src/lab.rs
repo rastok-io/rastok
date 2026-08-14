@@ -18,7 +18,7 @@ use crate::envelope::{Data, Envelope, Namespace, WriteTarget};
 use crate::journal::{MemJournal, Record};
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::{Observed, Vm};
-use crate::{cel, node, runtime};
+use crate::{expr, node, runtime};
 use std::collections::BTreeMap;
 
 /// The verdict of one scenario: green when `failures` is empty.
@@ -226,7 +226,7 @@ fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<S
                 let mut env = BTreeMap::new();
                 match runtime::data_value(observed.envelope.data()) {
                     Ok(data) => {
-                        env.insert(String::from("data"), cel::EvalValue::from(data));
+                        env.insert(String::from("data"), expr::EvalValue::from(data));
                     }
                     Err(fault) => {
                         return Some(format!(
@@ -236,14 +236,14 @@ fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<S
                 }
                 env.insert(
                     String::from("meta"),
-                    cel::EvalValue::from(runtime::meta_value(observed.envelope.meta())),
+                    expr::EvalValue::from(runtime::meta_value(observed.envelope.meta())),
                 );
                 // A faulting or non-boolean predicate fails the
                 // expectation itself — "did not match" would be a
                 // false green with the void quantifier.
-                match cel::eval(tree, &env) {
-                    Ok(cel::EvalValue::Bool(true)) => matches += 1,
-                    Ok(cel::EvalValue::Bool(false)) => {}
+                match expr::eval(tree, &env) {
+                    Ok(expr::EvalValue::Bool(true)) => matches += 1,
+                    Ok(expr::EvalValue::Bool(false)) => {}
                     Ok(other) => {
                         return Some(format!(
                             "expect {name}: the predicate is not a bool (got {other:?})"
@@ -293,7 +293,7 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
     match value {
         EmitValue::Data(tree) => {
             let value =
-                cel::eval(tree, &empty).map_err(|error| format!("the injection: {error}"))?;
+                expr::eval(tree, &empty).map_err(|error| format!("the injection: {error}"))?;
             Ok(Draft {
                 data: Data::materialized(
                     value
@@ -309,7 +309,7 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
             let mut data = crate::envelope::Value::Struct(Vec::new());
             let mut ext = Namespace::new();
             for write in writes {
-                let value = cel::eval(&write.value, &empty)
+                let value = expr::eval(&write.value, &empty)
                     .map_err(|error| format!("the injection: {error}"))?
                     .into_value()
                     .map_err(|error| format!("the injection: {error}"))?;
@@ -370,10 +370,10 @@ impl MockPartner<'_> {
         // guard, a losing later branch, or a statement past the
         // reply must never force an opaque request to decode. The
         // slot caches across branches — one decode at most.
-        let mut env: BTreeMap<String, cel::EvalValue> = BTreeMap::new();
+        let mut env: BTreeMap<String, expr::EvalValue> = BTreeMap::new();
         env.insert(
             String::from("meta"),
-            cel::EvalValue::from(runtime::meta_value(request.meta())),
+            expr::EvalValue::from(runtime::meta_value(request.meta())),
         );
         let slot = runtime::DataSlot::new(request.data());
         for handler in &mock.handlers {
@@ -385,14 +385,14 @@ impl MockPartner<'_> {
                         data: &slot,
                         assets: &[],
                     };
-                    let result = cel::eval(guard, &lazy);
+                    let result = expr::eval(guard, &lazy);
                     if let Some(fault) = slot.take_fault() {
                         self.faults
                             .push(format!("the mock request is unreadable: {fault}"));
                         return None;
                     }
                     match result {
-                        Ok(cel::EvalValue::Bool(passes)) => passes,
+                        Ok(expr::EvalValue::Bool(passes)) => passes,
                         // A faulting or non-boolean guard is a fault
                         // of the scenario, never a silent
                         // fall-through to the next branch.
@@ -432,7 +432,7 @@ impl MockPartner<'_> {
         &mut self,
         handler: &crate::compiler::hir::Handler,
         request: &Envelope,
-        mut env: BTreeMap<String, cel::EvalValue>,
+        mut env: BTreeMap<String, expr::EvalValue>,
         slot: &runtime::DataSlot<'_>,
     ) -> Option<CallOutcome> {
         use crate::compiler::hir::Statement;
@@ -470,16 +470,16 @@ impl MockPartner<'_> {
     /// dedicated message, any other fault is the mock's own.
     fn lazy_eval(
         &self,
-        tree: &cel::Tree,
-        env: &BTreeMap<String, cel::EvalValue>,
+        tree: &expr::Tree,
+        env: &BTreeMap<String, expr::EvalValue>,
         slot: &runtime::DataSlot<'_>,
-    ) -> Result<cel::EvalValue, String> {
+    ) -> Result<expr::EvalValue, String> {
         let lazy = runtime::LazyBindings {
             base: env,
             data: slot,
             assets: &[],
         };
-        let result = cel::eval(tree, &lazy);
+        let result = expr::eval(tree, &lazy);
         if let Some(fault) = slot.take_fault() {
             return Err(format!("the mock request is unreadable: {fault}"));
         }
@@ -490,7 +490,7 @@ impl MockPartner<'_> {
         &self,
         value: &EmitValue,
         request: &Envelope,
-        env: &BTreeMap<String, cel::EvalValue>,
+        env: &BTreeMap<String, expr::EvalValue>,
         slot: &runtime::DataSlot<'_>,
     ) -> Result<Option<Data>, String> {
         match value {
@@ -501,7 +501,7 @@ impl MockPartner<'_> {
                 // arriving uninspected — `out = data`, a local carry
                 // — ships the REPRESENTATION, whatever the spelling.
                 let value = self.lazy_eval(tree, env, slot)?;
-                if matches!(value, cel::EvalValue::Payload) {
+                if matches!(value, expr::EvalValue::Payload) {
                     return Ok(Some(request.data().clone()));
                 }
                 let value = runtime::resolve_payload(value, slot)

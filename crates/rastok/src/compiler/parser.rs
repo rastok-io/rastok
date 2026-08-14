@@ -15,13 +15,12 @@ use crate::compiler::lexer::{
     Token, TokenKind, ValueHead,
 };
 use crate::compiler::syntax::{
-    Annotation, AspectEvent, Attribute, BaseType, CelExpr, CmpOp, ConnectorDecl, EdgeDecl,
-    EdgeEndpoint, ErrorNode, ExpectStep, FieldDecl, GraphDecl, GraphItem, Guard, HandlerDecl,
-    IntLit, LValue, LabDecl, LifetimeValue, MockDecl, Name, OperatorDecl, OperatorItem,
-    PartitionDecl, PartitionField, PerClause, PortDecl, PortDirection, PortRef, ScalarType,
-    ScenarioDecl, ScenarioItem, SimulationDecl, Statement, StructBody, StructEntry, SubBlock,
-    SyntaxTree, TaggedBody, TaggedValue, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
-    WindowMode,
+    Annotation, AspectEvent, Attribute, BaseType, CmpOp, ConnectorDecl, EdgeDecl, EdgeEndpoint,
+    ErrorNode, ExpectStep, ExprSource, FieldDecl, GraphDecl, GraphItem, Guard, HandlerDecl, IntLit,
+    LValue, LabDecl, LifetimeValue, MockDecl, Name, OperatorDecl, OperatorItem, PartitionDecl,
+    PartitionField, PerClause, PortDecl, PortDirection, PortRef, ScalarType, ScenarioDecl,
+    ScenarioItem, SimulationDecl, Statement, StructBody, StructEntry, SubBlock, SyntaxTree,
+    TaggedBody, TaggedValue, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl, WindowMode,
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 
@@ -31,7 +30,7 @@ pub const E_PARSE_EXPECTED: Code = Code::new("E-PARSE-EXPECTED");
 pub const E_PARSE_DEFERRED: Code = Code::new("E-PARSE-DEFERRED");
 
 /// Diagnostic for a `json` literal the house reader refuses — its
-/// own code: JSON is not CEL (D-2026-08-12-1, review round).
+/// own code: JSON is not Rastok expression (D-2026-08-12-1, review round).
 pub const E_JSON_VALUE: Code = Code::new("E-JSON-VALUE");
 
 /// Terminators for attribute, initializer, and emission positions.
@@ -341,18 +340,18 @@ impl<'src> Parser<'src, '_> {
                 let start = self.peek().span.range().start;
                 (start, self.present_value(&ATTR_POSITION))
             }
-            ValueHead::Cel => {
+            ValueHead::Expr => {
                 // This value starts a NEW statement line. Cross the
                 // preceding statement trivia before probing/framing;
                 // otherwise that leading newline would be the
                 // ATTR_POSITION terminator and yield an empty lexeme.
                 self.lexer.advance_to_significant(self.bag);
-                let Some(expr) = self.try_complete_cel_lexeme(None, &ATTR_POSITION) else {
+                let Some(expr) = self.try_complete_expr_lexeme(None, &ATTR_POSITION) else {
                     let recovery = self.skip_bare_statement(false);
                     let start = recovery.range.start;
                     return self.recovered_bare_statement(start, recovery);
                 };
-                (expr.span.range().start, Value::Cel(expr))
+                (expr.span.range().start, Value::Expr(expr))
             }
         };
         let end = self.last_end.max(start);
@@ -669,7 +668,7 @@ impl<'src> Parser<'src, '_> {
                 (TokenKind::Ident, "advance") => {
                     let step_start = token.span.range().start;
                     self.bump();
-                    let expr = self.cel(&ATTR_POSITION);
+                    let expr = self.expr(&ATTR_POSITION);
                     body.push(ScenarioItem::Advance {
                         expr,
                         span: self.span_from(step_start),
@@ -738,7 +737,7 @@ impl<'src> Parser<'src, '_> {
     }
 
     /// `expect STRING? nothing? port_ref (count cmp INT)? (where
-    /// cel)?`.
+    /// expr)?`.
     fn expect_step(&mut self) -> Option<ExpectStep> {
         let start = self.peek().span.range().start;
         self.bump();
@@ -766,7 +765,7 @@ impl<'src> Parser<'src, '_> {
         };
         let predicate = if self.peek().kind == TokenKind::Ident && self.peek().text == "where" {
             self.bump();
-            Some(self.cel(&ATTR_POSITION))
+            Some(self.expr(&ATTR_POSITION))
         } else {
             None
         };
@@ -990,7 +989,7 @@ impl<'src> Parser<'src, '_> {
         }
         let guard = if self.at_word("when") {
             self.bump();
-            Some(self.cel(&GUARD_POSITION))
+            Some(self.expr(&GUARD_POSITION))
         } else {
             None
         };
@@ -1212,19 +1211,19 @@ impl<'src> Parser<'src, '_> {
             match token.text {
                 "where" => {
                     self.bump();
-                    guards.push(Guard::Where(self.cel(&GUARD_POSITION)));
+                    guards.push(Guard::Where(self.expr(&GUARD_POSITION)));
                 }
                 "having" => {
                     self.bump();
-                    guards.push(Guard::Having(self.cel(&GUARD_POSITION)));
+                    guards.push(Guard::Having(self.expr(&GUARD_POSITION)));
                 }
                 "by" => {
                     self.bump();
-                    guards.push(Guard::By(self.cel(&GUARD_POSITION)));
+                    guards.push(Guard::By(self.expr(&GUARD_POSITION)));
                 }
                 "within" => {
                     self.bump();
-                    guards.push(Guard::Within(self.cel(&GUARD_POSITION)));
+                    guards.push(Guard::Within(self.expr(&GUARD_POSITION)));
                 }
                 "last" => {
                     self.bump();
@@ -1452,13 +1451,13 @@ impl<'src> Parser<'src, '_> {
                     return self.bare_statement_refusal(start..end);
                 }
                 // The grammar has already rejected this position. If
-                // the CEL continuation is structurally complete, let
+                // the Rastok expression continuation is structurally complete, let
                 // its real region framer consume the whole misplaced
                 // value (including balanced multiline calls/lists) so
                 // its interior cannot become phantom host statements.
                 // If it is incomplete, line recovery preserves the
                 // next healthy statement instead.
-                if let Some(expr) = self.try_complete_cel_lexeme(Some(start), &ATTR_POSITION) {
+                if let Some(expr) = self.try_complete_expr_lexeme(Some(start), &ATTR_POSITION) {
                     return self.bare_statement_refusal(start..expr.span.range().end.max(start));
                 }
                 let recovery = self.skip_bare_statement(true);
@@ -1578,7 +1577,7 @@ impl<'src> Parser<'src, '_> {
                     if self.expect(TokenKind::Eq, "`=`").is_none() {
                         break;
                     }
-                    fields.push(PartitionField::Key(self.cel(position)));
+                    fields.push(PartitionField::Key(self.expr(position)));
                 }
                 TokenKind::Ident if token.text == "lifetime" => {
                     self.bump();
@@ -1609,11 +1608,11 @@ impl<'src> Parser<'src, '_> {
             }
             (TokenKind::Ident, "fixed") => {
                 self.bump();
-                LifetimeValue::Fixed(self.cel(position))
+                LifetimeValue::Fixed(self.expr(position))
             }
             (TokenKind::Ident, "window") => {
                 self.bump();
-                let duration = self.cel(&WINDOW_POSITION);
+                let duration = self.expr(&WINDOW_POSITION);
                 let mode = if self.at_word("sliding") {
                     self.bump();
                     WindowMode::Sliding
@@ -1626,7 +1625,7 @@ impl<'src> Parser<'src, '_> {
                 };
                 LifetimeValue::Window { duration, mode }
             }
-            _ => LifetimeValue::Expr(self.cel(position)),
+            _ => LifetimeValue::Expr(self.expr(position)),
         }
     }
 
@@ -1683,7 +1682,7 @@ impl<'src> Parser<'src, '_> {
         // line: the newline flag separates `a -> b` from a `. -> c`
         // that follows, while spaces and comments stay trivia. The
         // walk PROBES (review round 7): the follower after a path
-        // may be CEL bytes outside the host vocabulary, and only a
+        // may be Rastok expression bytes outside the host vocabulary, and only a
         // proven dot is tokenized.
         while self.lexer.dot_follows() {
             self.bump();
@@ -1697,7 +1696,7 @@ impl<'src> Parser<'src, '_> {
 
     // ----- values -----
 
-    /// A value position; `position` chooses the CEL terminators.
+    /// A value position; `position` chooses the Rastok expression terminators.
     fn value(&mut self, position: &TerminatorSet) -> Value {
         // A newline-terminated position must hold a value ON ITS
         // LINE: an omitted value diagnoses HERE and consumes
@@ -1733,17 +1732,17 @@ impl<'src> Parser<'src, '_> {
     /// newline.
     fn present_value(&mut self, position: &TerminatorSet) -> Value {
         // Classified by the lexer before touching the token stream:
-        // CEL text may open with bytes outside the host vocabulary,
+        // Rastok expression text may open with bytes outside the host vocabulary,
         // so only builder-shaped input is tokenized here.
-        if self.lexer.value_head() == ValueHead::Cel {
-            return Value::Cel(self.cel(position));
+        if self.lexer.value_head() == ValueHead::Expr {
+            return Value::Expr(self.expr(position));
         }
         let token = self.peek();
         match (token.kind, token.text) {
             (TokenKind::LBrace, _) => self.braced_value(token.span),
             (TokenKind::Dot, _) => {
                 // `.` — the exact re-emission of the current
-                // envelope; grammar forbids leading dots in CEL, so
+                // envelope; grammar forbids leading dots in Rastok expression, so
                 // the form is unambiguous here.
                 self.bump();
                 Value::Identity(token.span)
@@ -1755,7 +1754,7 @@ impl<'src> Parser<'src, '_> {
                 let ident = self.bump();
                 self.ident_tail(ident, position)
             }
-            _ => Value::Cel(self.cel(position)),
+            _ => Value::Expr(self.expr(position)),
         }
     }
 
@@ -1777,7 +1776,7 @@ impl<'src> Parser<'src, '_> {
             // comment crossing the line stays HOST trivia, and an
             // unterminated one is the trivia authority's diagnostic
             // (D-2026-08-13-1).
-            return Value::Cel(CelExpr {
+            return Value::Expr(ExprSource {
                 text: String::from(ident.text),
                 span: ident.span,
             });
@@ -1801,19 +1800,19 @@ impl<'src> Parser<'src, '_> {
         if TAG_WORDS.contains(&word) && opens {
             return self.tagged_value(ident);
         }
-        // An ordinary word — or a tag word standing alone: the CEL
+        // An ordinary word — or a tag word standing alone: the Rastok expression
         // continuation re-reads the immutable prefix slice.
-        Value::Cel(self.cel_from(ident.span.range().start, position))
+        Value::Expr(self.expr_from(ident.span.range().start, position))
     }
 
     /// The `json` continuation — the word is RESERVED, so ONE lexer
     /// probe classifies it totally (D-2026-08-13-1, review round 3):
     /// a document, the bare word (a contract may judge the Word), or
-    /// an invalid json form. No CEL fallback exists — `json` can
+    /// an invalid json form. No Rastok expression fallback exists — `json` can
     /// never be a name.
     fn json_tail(&mut self, ident: &Token<'_>, position: &TerminatorSet) -> Value {
         match self.lexer.json_tail(position) {
-            crate::compiler::lexer::JsonTail::Bare => Value::Cel(CelExpr {
+            crate::compiler::lexer::JsonTail::Bare => Value::Expr(ExprSource {
                 text: String::from(ident.text),
                 span: ident.span,
             }),
@@ -1832,9 +1831,8 @@ impl<'src> Parser<'src, '_> {
                     crate::diagnostics::Diagnostic::new(
                         E_JSON_VALUE,
                         crate::diagnostics::Phase::Parse,
-                        "`json` takes a document ({ … } or [ … ]) on its line; a scalar \
-                         is CEL's — write it directly, or `decimal(\"…\")` for an exact \
-                         number",
+                        "`json` takes a document ({ … } or [ … ]) on its line; write a scalar \
+                         as an ordinary expression, or use `decimal(\"…\")` for an exact number",
                     )
                     .with_span(anchor)
                     .with_field("detail", "not a document after `json`"),
@@ -1859,40 +1857,42 @@ impl<'src> Parser<'src, '_> {
         }
     }
 
-    /// The CEL continuation of an already-consumed prefix: the END
+    /// The Rastok expression continuation of an already-consumed prefix: the END
     /// is scanned forward from the cursor, the text is the immutable
     /// `source[prefix_start..end]` slice — a bounded re-read, never
     /// a rewind (D-2026-08-13-1). Any peeked token is DROPPED (its
     /// bytes sit inside the slice).
-    fn cel(&mut self, terminators: &TerminatorSet) -> CelExpr {
-        self.cel_lexeme(None, terminators)
+    fn expr(&mut self, terminators: &TerminatorSet) -> ExprSource {
+        self.expr_lexeme(None, terminators)
     }
 
-    fn cel_from(&mut self, prefix_start: usize, position: &TerminatorSet) -> CelExpr {
-        self.cel_lexeme(Some(prefix_start), position)
+    fn expr_from(&mut self, prefix_start: usize, position: &TerminatorSet) -> ExprSource {
+        self.expr_lexeme(Some(prefix_start), position)
     }
 
-    /// One CEL region lexeme from the lexer — complete, or bounded at
+    /// One Rastok expression region lexeme from the lexer — complete, or bounded at
     /// an incomplete extent's safe recovery point. The parser consumes
-    /// it as a grammatical unit and never touches bytes; CEL remains
+    /// it as a grammatical unit and never touches bytes; Rastok expression remains
     /// the sole syntax-diagnostic authority for value regions.
-    fn cel_lexeme(&mut self, prefix_start: Option<usize>, position: &TerminatorSet) -> CelExpr {
-        let token = self.lexer.cel_region(prefix_start, position);
+    fn expr_lexeme(&mut self, prefix_start: Option<usize>, position: &TerminatorSet) -> ExprSource {
+        let token = self.lexer.expr_region(prefix_start, position);
         self.last_end = self.last_end.max(token.span.range().end);
-        CelExpr {
+        ExprSource {
             text: String::from(token.text),
             span: token.span,
         }
     }
 
-    fn try_complete_cel_lexeme(
+    fn try_complete_expr_lexeme(
         &mut self,
         prefix_start: Option<usize>,
         position: &TerminatorSet,
-    ) -> Option<CelExpr> {
-        let token = self.lexer.try_complete_cel_region(prefix_start, position)?;
+    ) -> Option<ExprSource> {
+        let token = self
+            .lexer
+            .try_complete_expr_region(prefix_start, position)?;
         self.last_end = self.last_end.max(token.span.range().end);
-        Some(CelExpr {
+        Some(ExprSource {
             text: String::from(token.text),
             span: token.span,
         })
@@ -1941,14 +1941,14 @@ impl<'src> Parser<'src, '_> {
             parens = true;
             loop {
                 // Probed, never tokenized: the argument may open
-                // with CEL bytes outside the host vocabulary
+                // with Rastok expression bytes outside the host vocabulary
                 // (review round 7 — `bounded('x')`).
                 if self.lexer.arguments_close() {
                     break;
                 }
                 trailing_comma = false;
                 // A BARE string token followed by `,` or `)` is the
-                // grammar's STRING — kept apart from CEL so wrapped
+                // grammar's STRING — kept apart from Rastok expression so wrapped
                 // or concatenated spellings cannot impersonate it.
                 match self.lexer.string_argument(self.bag) {
                     crate::compiler::lexer::StringArgument::Alone(token) => {
@@ -1960,8 +1960,8 @@ impl<'src> Parser<'src, '_> {
                     }
                     crate::compiler::lexer::StringArgument::Prefix(token) => {
                         self.last_end = token.span.range().end;
-                        args.push(Value::Cel(
-                            self.cel_from(token.span.range().start, &PAREN_POSITION),
+                        args.push(Value::Expr(
+                            self.expr_from(token.span.range().start, &PAREN_POSITION),
                         ));
                     }
                     crate::compiler::lexer::StringArgument::NotAString => {
@@ -2085,7 +2085,7 @@ impl<'src> Parser<'src, '_> {
                             self.bump();
                         }
                         TokenKind::Str => {
-                            let key = CelExpr {
+                            let key = ExprSource {
                                 text: String::from(token.text),
                                 span: token.span,
                             };
@@ -2383,7 +2383,7 @@ mod tests {
         let Statement::Assign { value, .. } = &statements[1] else {
             panic!("second statement: {:?}", statements[1]);
         };
-        assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+        assert!(matches!(value, Value::Expr(expr) if expr.text == "data"));
     }
 
     /// The first emitted value of a one-operator graph, with its
@@ -2417,17 +2417,17 @@ mod tests {
         // in exactly the family the grammar names — no tag greed, no
         // struct misread, no second consumer.
         for (label, value, want) in [
-            // Ordinary words: always CEL, whatever follows.
-            ("word alone", "data", "cel"),
-            ("word + operator", "data + 1", "cel"),
-            ("word + call parens", "size(data)", "cel"),
-            ("word + brace", "data { }", "cel"),
+            // Ordinary words: always Rastok expression, whatever follows.
+            ("word alone", "data", "expr"),
+            ("word + operator", "data + 1", "expr"),
+            ("word + call parens", "size(data)", "expr"),
+            ("word + brace", "data { }", "expr"),
             // Tag words: a tag only WITH its opener. (`duration`,
-            // `decimal`, … are CEL functions, not host tags.)
+            // `decimal`, … are Rastok expression functions, not host tags.)
             ("tag + parens", "bounded(64)", "tagged"),
-            ("tag alone", "bounded", "cel"),
-            ("tag + operator", "bounded + 1", "cel"),
-            ("cel function call", "duration(\"5s\")", "cel"),
+            ("tag alone", "bounded", "expr"),
+            ("tag + operator", "bounded + 1", "expr"),
+            ("expr function call", "duration(\"5s\")", "expr"),
             // Dead and reserved tags: one refusal, forward recovery.
             ("dead tag + parens", "exponential(1, 2)", "error"),
             ("dead tag + brace", "measure { x = 1 }", "error"),
@@ -2438,15 +2438,15 @@ mod tests {
             // `json` is a RESERVED word (D-2026-08-13-1, review
             // round 3): `{`/`[` open its document, the bare word
             // stands alone for the contract to judge, and any other
-            // follower is an invalid json form — never CEL.
+            // follower is an invalid json form — never Rastok expression.
             ("json + scalar spelling", "json 1", "error"),
-            ("json alone", "json", "cel"),
+            ("json alone", "json", "expr"),
             ("json + parens", "json(1)", "error"),
             ("json + alien byte", "json @", "error"),
         ] {
             let (value, bag) = first_value(value);
             let got = match &value {
-                Value::Cel(_) => "cel",
+                Value::Expr(_) => "expr",
                 Value::Tagged(_) => "tagged",
                 Value::Json { .. } => "json",
                 Value::Error(_) => "error",
@@ -2489,7 +2489,7 @@ mod tests {
         let statements = handler.body.as_ref().expect("a body");
         assert_eq!(statements.len(), 2, "the next line is a NEW statement");
         let Statement::Assign {
-            value: Value::Cel(expr),
+            value: Value::Expr(expr),
             ..
         } = &statements[0]
         else {
@@ -2513,7 +2513,7 @@ mod tests {
         // D-2026-08-13-1 §6: `json /* never closed` — the probe finds
         // no body, the value is the bare word, and the unterminated
         // comment is diagnosed by the ONE trivia authority, never by
-        // a JSON or CEL reader.
+        // a JSON or Rastok expression reader.
         let source = "graph g : App {\n  operator o {\n    on in { out = json /* never closed\n  }\n  . -> o -> .\n}\n";
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), source, &mut bag);
@@ -2526,8 +2526,8 @@ mod tests {
     }
 
     #[test]
-    fn an_unterminated_comment_in_a_cel_value_returns_to_trivia() {
-        // The CEL extent stops BEFORE an unterminated comment. Parsing
+    fn an_unterminated_comment_in_an_expression_value_returns_to_trivia() {
+        // The Rastok expression extent stops BEFORE an unterminated comment. Parsing
         // therefore reaches the one trivia authority and reports the
         // cause before the inevitable missing-closer cascades; CHECK is
         // not required to make the primary fault visible.
@@ -2553,8 +2553,8 @@ mod tests {
                 rejected
                     .diagnostics()
                     .iter()
-                    .all(|diagnostic| diagnostic.code() != crate::compiler::check::E_CEL_EXPR),
-                "{label}: CEL never duplicates the trivia authority — {rejected:?}"
+                    .all(|diagnostic| diagnostic.code() != crate::compiler::check::E_EXPR),
+                "{label}: Rastok expression never duplicates the trivia authority — {rejected:?}"
             );
         }
 
@@ -2567,7 +2567,7 @@ mod tests {
     fn a_refused_bare_expression_keeps_the_boundary_token() {
         // Review round 7: the implicit yield is REMOVED — a bare
         // expression refuses with ONE voice carrying the migration
-        // hint. Its complete CEL continuation is framed as one region,
+        // hint. Its complete Rastok expression continuation is framed as one region,
         // and the boundary (`}`, `;`, the next line) still belongs to
         // the HOST: closers and siblings survive.
         let expressions = ["data", "data.member", "data + 1", "size(data)"];
@@ -2631,7 +2631,7 @@ mod tests {
                     let Statement::Assign { value, .. } = &statements[1] else {
                         panic!("{expression} {label}: the sibling: {:?}", statements[1]);
                     };
-                    assert!(matches!(value, Value::Cel(expr) if expr.text == "1"));
+                    assert!(matches!(value, Value::Expr(expr) if expr.text == "1"));
                 }
             }
         }
@@ -2688,7 +2688,7 @@ mod tests {
                 panic!("{label}: second statement: {:?}", statements[1]);
             };
             assert!(
-                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                matches!(value, Value::Expr(expr) if expr.text == "data"),
                 "{label}"
             );
         }
@@ -2724,7 +2724,7 @@ mod tests {
                 panic!("{label}: second statement: {:?}", statements[1]);
             };
             assert!(
-                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                matches!(value, Value::Expr(expr) if expr.text == "data"),
                 "{label}"
             );
         }
@@ -2809,7 +2809,7 @@ mod tests {
                 panic!("{label}: second statement: {:?}", statements[1]);
             };
             assert!(
-                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                matches!(value, Value::Expr(expr) if expr.text == "data"),
                 "{label}"
             );
         }
@@ -2818,7 +2818,7 @@ mod tests {
     #[test]
     fn a_complete_bare_expression_is_one_refused_value_region() {
         // The implicit yield is REMOVED. Once `=`/`:` have failed, a
-        // structurally complete continuation is framed as ONE CEL
+        // structurally complete continuation is framed as ONE Rastok expression
         // value — with and without spaces, every operator row is ONE
         // refusal voice with the migration hint; no lexical fault, no
         // phantom assignment.
@@ -2871,7 +2871,7 @@ mod tests {
         let Statement::Assign { value, .. } = &statements[1] else {
             panic!("second statement: {:?}", statements[1]);
         };
-        assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+        assert!(matches!(value, Value::Expr(expr) if expr.text == "data"));
     }
 
     #[test]
@@ -2882,7 +2882,7 @@ mod tests {
         // forms behind `out =` stay whole programs (their own
         // tests).
         for (label, bare) in [
-            ("cel", "data + 1"),
+            ("expr", "data + 1"),
             ("json document", "json [1]"),
             ("verbatim text", "text { don't panic }"),
             ("base64", "base64 { AAEC }"),
@@ -2907,7 +2907,7 @@ mod tests {
                 panic!("{label}: the sibling: {:?}", statements[1]);
             };
             assert!(
-                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                matches!(value, Value::Expr(expr) if expr.text == "data"),
                 "{label}"
             );
         }
@@ -2920,7 +2920,7 @@ mod tests {
         // sit, quotes included, because verbatim text has no string
         // lexicon. Balanced twins compile; a quoted lone closer ends
         // the block early (the named limitation: hostile text
-        // belongs to a CEL string).
+        // belongs to a Rastok expression string).
         let balanced = "graph g : App {\n  operator o {\n    on in { out = text { a \"{x}\" b } }\n  }\n  . -> o -> .\n}\n";
         let mut bag = Bag::new();
         let _ = parse(SourceId::new(0), balanced, &mut bag);
@@ -2981,7 +2981,7 @@ mod tests {
                 panic!("{label}: the sibling lives: {statements:?}");
             };
             assert!(
-                matches!(value, Value::Cel(expr) if expr.text == "data"),
+                matches!(value, Value::Expr(expr) if expr.text == "data"),
                 "{label}"
             );
         }
@@ -2997,9 +2997,12 @@ mod tests {
         for (label, bare) in [
             ("struct", "{\n        a = 1\n      }"),
             ("map", "{\n        \"a\": 1\n      }"),
-            ("CEL array", "[\n        1,\n        2\n      ]"),
-            ("CEL call", "size(\n        data\n      )"),
-            ("CEL unary", "!size(\n        data\n      )"),
+            (
+                "Rastok expression array",
+                "[\n        1,\n        2\n      ]",
+            ),
+            ("Rastok expression call", "size(\n        data\n      )"),
+            ("Rastok expression unary", "!size(\n        data\n      )"),
         ] {
             let source = format!(
                 "graph g : App {{\n  operator o {{\n    on in {{\n      {bare}\n      out = data\n    }}\n  }}\n  . -> o -> .\n}}\n"
@@ -3020,7 +3023,7 @@ mod tests {
                 panic!("{label}: the sibling lives: {:?}", statements[1]);
             };
             assert_eq!(target.segments[0].text, "out", "{label}");
-            assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+            assert!(matches!(value, Value::Expr(expr) if expr.text == "data"));
 
             let rejected = crate::compiler::compile(&[&source], &registry)
                 .expect_err("a misplaced value refuses the compilation");
@@ -3065,7 +3068,7 @@ mod tests {
             let Statement::Assign { value, .. } = &statements[1] else {
                 panic!("{label}: the sibling lives: {:?}", statements[1]);
             };
-            assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+            assert!(matches!(value, Value::Expr(expr) if expr.text == "data"));
         }
 
         // A block comment really extends to EOF, so no sibling can
@@ -3082,10 +3085,10 @@ mod tests {
     }
 
     #[test]
-    fn an_incomplete_cel_value_never_consumes_the_next_statement() {
-        // The CEL framer may look beyond a newline to prove a balanced
+    fn an_incomplete_expression_value_never_consumes_the_next_statement() {
+        // The Rastok expression framer may look beyond a newline to prove a balanced
         // multiline expression, but an INCOMPLETE extent must recover
-        // at the value position's first safe line boundary. The CEL
+        // at the value position's first safe line boundary. The Rastok expression
         // compiler owns the one syntax diagnostic; the host parser
         // only preserves the surrounding RKG structure.
         let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
@@ -3101,16 +3104,16 @@ mod tests {
             let (statements, parse_bag) = handler_statements(&source);
             assert!(
                 parse_bag.diagnostics().is_empty(),
-                "{label}: CEL, not the host parser, owns the malformed expression — {parse_bag:?}"
+                "{label}: Rastok expression, not the host parser, owns the malformed expression — {parse_bag:?}"
             );
             assert_eq!(statements.len(), 2, "{label}: {statements:?}");
             let Statement::Assign {
-                value: Value::Cel(expr),
+                value: Value::Expr(expr),
                 ..
             } = &statements[0]
             else {
                 panic!(
-                    "{label}: malformed CEL remains one value: {:?}",
+                    "{label}: malformed Rastok expression remains one value: {:?}",
                     statements[0]
                 );
             };
@@ -3121,25 +3124,25 @@ mod tests {
             let Statement::Assign { value, .. } = &statements[1] else {
                 panic!("{label}: the sibling lives: {:?}", statements[1]);
             };
-            assert!(matches!(value, Value::Cel(expr) if expr.text == "data"));
+            assert!(matches!(value, Value::Expr(expr) if expr.text == "data"));
 
             let rejected = crate::compiler::compile(&[source.as_str()], &registry)
-                .expect_err("malformed CEL refuses the compilation");
+                .expect_err("malformed Rastok expression refuses the compilation");
             assert_eq!(
                 rejected.diagnostics().len(),
                 1,
-                "{label}: one fault, one CEL voice — {rejected:?}"
+                "{label}: one fault, one Rastok expression voice — {rejected:?}"
             );
             assert_eq!(
                 rejected.diagnostics()[0].code(),
-                crate::compiler::check::E_CEL_EXPR,
+                crate::compiler::check::E_EXPR,
                 "{label}"
             );
         }
     }
 
     #[test]
-    fn incomplete_cel_has_one_voice_in_attributes_and_guards() {
+    fn incomplete_expression_has_one_voice_in_attributes_and_guards() {
         let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
         for (label, source) in [
             (
@@ -3152,7 +3155,7 @@ mod tests {
             ),
         ] {
             let rejected = crate::compiler::compile(&[source], &registry)
-                .expect_err("malformed CEL refuses the compilation");
+                .expect_err("malformed Rastok expression refuses the compilation");
             assert_eq!(
                 rejected.diagnostics().len(),
                 1,
@@ -3160,7 +3163,7 @@ mod tests {
             );
             assert_eq!(
                 rejected.diagnostics()[0].code(),
-                crate::compiler::check::E_CEL_EXPR,
+                crate::compiler::check::E_EXPR,
                 "{label}"
             );
         }
@@ -3200,7 +3203,7 @@ mod tests {
             panic!("the asset call: {:?}", statements[0]);
         };
         assert!(matches!(&call.args[0], Value::StrLit { .. }));
-        // A string CONTINUING on the next line is the CEL prefix —
+        // A string CONTINUING on the next line is the Rastok expression prefix —
         // one argument, and the parse terminates.
         let continued = "graph g : App {\n  operator o {\n    on in { out = bounded(\"x\"\n  + \"y\") }\n  }\n  . -> o -> .\n}\n";
         let (statements, bag) = handler_statements(continued);
@@ -3214,8 +3217,8 @@ mod tests {
         };
         assert_eq!(call.args.len(), 1, "{:?}", call.args);
         assert!(
-            matches!(&call.args[0], Value::Cel(expr) if expr.text.contains("+")),
-            "the continuation is ONE CEL argument: {:?}",
+            matches!(&call.args[0], Value::Expr(expr) if expr.text.contains("+")),
+            "the continuation is ONE Rastok expression argument: {:?}",
             call.args[0]
         );
     }
@@ -3292,10 +3295,10 @@ graph m0_probe : App {
         let OperatorItem::Attribute(command) = &echo.body[1] else {
             panic!("expected an attribute");
         };
-        let Value::Cel(cel) = &command.value else {
+        let Value::Expr(expr) = &command.value else {
             panic!("expected an expression value");
         };
-        assert_eq!(cel.text, "\"cat\"");
+        assert_eq!(expr.text, "\"cat\"");
     }
 
     #[test]
@@ -3596,14 +3599,14 @@ graph m0_probe : App {
         let Statement::Assign { value, .. } = &statements[3] else {
             panic!("expected the assignment: {:?}", statements[3]);
         };
-        assert!(matches!(value, Value::Cel(cel) if cel.text == "count + doubled"));
+        assert!(matches!(value, Value::Expr(expr) if expr.text == "count + doubled"));
         assert!(matches!(&statements[4], Statement::Stop(None)));
     }
 
     #[test]
-    fn cel_openings_never_meet_the_host_lexer() {
+    fn expression_openings_never_meet_the_host_lexer() {
         // `!`, a single quote, and `-(` are not Rastok tokens, but they
-        // open valid CEL: they must reach the CEL chain untouched.
+        // open valid Rastok expression: they must reach the expression chain untouched.
         let source = "graph g : App {\n  operator o {\n    val a = !false\n    val b = 'hello'\n    val c = -(1)\n    on in {\n      out = !done\n    }\n  }\n}\n";
         let tree = parse_clean(source);
         let TopDecl::Graph(graph) = &tree.decls[0] else {
@@ -3618,8 +3621,8 @@ graph m0_probe : App {
             .take(3)
             .map(|item| match item {
                 OperatorItem::Val(val) => match &val.value {
-                    Value::Cel(cel) => cel.text.as_str(),
-                    other => panic!("expected CEL, got {other:?}"),
+                    Value::Expr(expr) => expr.text.as_str(),
+                    other => panic!("expected Rastok expression, got {other:?}"),
                 },
                 other => panic!("expected a val, got {other:?}"),
             })
@@ -3630,7 +3633,7 @@ graph m0_probe : App {
         };
         assert!(matches!(
             &handler.body.as_ref().unwrap()[0],
-            Statement::Assign { value: Value::Cel(cel), .. } if cel.text == "!done"
+            Statement::Assign { value: Value::Expr(expr), .. } if expr.text == "!done"
         ));
     }
 
@@ -3715,7 +3718,7 @@ graph m0_probe : App {
         let OperatorItem::Val(val) = &operator.body[0] else {
             panic!("expected the val");
         };
-        assert!(matches!(&val.value, Value::Cel(cel) if cel.text == "!false"));
+        assert!(matches!(&val.value, Value::Expr(expr) if expr.text == "!false"));
     }
 
     #[test]

@@ -285,7 +285,7 @@ impl fmt::Display for Trigger {
 ///   are for open external calls only, and partial arrivals keep
 ///   consuming;
 /// - partial join inputs live in durable internal state owned by the
-///   runtime, never in the CEL-visible variable space;
+///   runtime, never in the Rastok expression-visible variable space;
 /// - the canonical order of a join's inputs is the port order
 ///   declared in the handler, and every derived form (ids, hashes,
 ///   bindings) reads them in that order.

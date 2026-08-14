@@ -8,22 +8,22 @@
 //! The admitted subset covers literals, paths, member and index
 //! access, arithmetic, comparisons, logic with short-circuit, the
 //! ternary, list and map literals, and the `duration`, `timestamp`,
-//! and `size` functions. Macros, optional types, and `as` narrowing
-//! are recognized and refused explicitly. There is no `now()` and no
-//! ambient clock: time enters only as data or constants.
+//! and `size` functions. Checked `is`/`as` narrowing is a Rastok extension;
+//! macros and optional access remain refused explicitly. There is no `now()`
+//! and no ambient clock: time enters only as data or constants.
 //!
 //! Map iteration and map value ordering are sorted-key — an evaluator
 //! guarantee that golden-trace stability relies on.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::fmt;
 use core::ops::Range;
 
-use crate::datatype::DataType;
+use crate::datatype::{DataType, Discriminator, NarrowingFailure};
 use crate::value::Value;
 
 /// Names refused explicitly: admitted by full CEL, outside this build.
@@ -60,9 +60,9 @@ pub enum EvalValue {
     Map(BTreeMap<String, EvalValue>),
     /// Named fields in declaration order — the LOGICAL twin of
     /// [`Value::Struct`] (canonical tag 17, where a map is
-    /// 18): the witness that lets a struct cross the CEL bridge —
+    /// 18): the witness that lets a struct cross the expression evaluator —
     /// bindings, locals, ternaries — without silently becoming a
-    /// map. CEL cannot construct one; it can only carry, access,
+    /// map. The expression surface cannot construct one; it can only carry, access,
     /// and re-emit what the envelope domain handed it.
     Struct(Vec<(String, EvalValue)>),
     /// An exact decimal — `unscaled × 10^(−scale)` — the dynamic
@@ -79,6 +79,22 @@ pub enum EvalValue {
         unscaled: i128,
         /// Digits after the point (negative = trailing zeros).
         scale: i32,
+    },
+    /// One closed enum symbol.
+    Enum(String),
+    /// One selected structural-union branch.
+    StructuralUnion {
+        /// Canonical branch index.
+        branch: u16,
+        /// Selected value.
+        value: Box<EvalValue>,
+    },
+    /// One named tagged-union case.
+    TaggedUnion {
+        /// Case discriminant.
+        case: String,
+        /// Closed struct payload.
+        payload: Vec<(String, EvalValue)>,
     },
     /// The WHOLE `data` payload, unmaterialized — the laziness
     /// witness. Resolving the name `data` is not yet inspecting its
@@ -125,6 +141,27 @@ impl PartialEq for EvalValue {
                     scale: other_scale,
                 },
             ) => unscaled == other_unscaled && scale == other_scale,
+            (Self::Enum(a), Self::Enum(b)) => a == b,
+            (
+                Self::StructuralUnion {
+                    branch: a_branch,
+                    value: a_value,
+                },
+                Self::StructuralUnion {
+                    branch: b_branch,
+                    value: b_value,
+                },
+            ) => a_branch == b_branch && a_value == b_value,
+            (
+                Self::TaggedUnion {
+                    case: a_case,
+                    payload: a_payload,
+                },
+                Self::TaggedUnion {
+                    case: b_case,
+                    payload: b_payload,
+                },
+            ) => a_case == b_case && struct_fields_eq(a_payload, b_payload, EvalValue::eq),
             // One payload exists per evaluation; two witnesses can
             // only name the same thing.
             (Self::Payload, Self::Payload) => true,
@@ -161,6 +198,19 @@ impl From<Value> for EvalValue {
                     .collect(),
             ),
             Value::Decimal { unscaled, scale } => Self::Decimal { unscaled, scale },
+            Value::Enum(symbol) => Self::Enum(symbol),
+            Value::StructuralUnion { branch, value } => Self::StructuralUnion {
+                branch,
+                value: Box::new(Self::from(*value)),
+            },
+            Value::TaggedUnion(tagged) => Self::TaggedUnion {
+                case: tagged.case,
+                payload: tagged
+                    .payload
+                    .into_iter()
+                    .map(|(name, value)| (name, Self::from(value)))
+                    .collect(),
+            },
         }
     }
 }
@@ -201,6 +251,20 @@ impl EvalValue {
                     .collect::<Result<_, Error>>()?,
             ),
             Self::Decimal { unscaled, scale } => Value::Decimal { unscaled, scale },
+            Self::Enum(symbol) => Value::Enum(symbol),
+            Self::StructuralUnion { branch, value } => Value::StructuralUnion {
+                branch,
+                value: Box::new(value.into_value()?),
+            },
+            Self::TaggedUnion { case, payload } => {
+                Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+                    case,
+                    payload: payload
+                        .into_iter()
+                        .map(|(name, value)| Ok((name, value.into_value()?)))
+                        .collect::<Result<_, Error>>()?,
+                }))
+            }
             Self::Payload => {
                 return Err(fault(String::from(
                     "an unresolved payload cannot leave expression evaluation",
@@ -211,7 +275,7 @@ impl EvalValue {
 }
 
 /// Sorted-field struct comparison, shared by structural equality and
-/// the CEL `==` operator: stable-sort both sides by name, compare
+/// the expression `==` operator: stable-sort both sides by name, compare
 /// positionally. For well-formed structs (unique names — the door
 /// invariant) this IS by-name equality and agrees with the canonical
 /// bytes; for malformed values it stays reflexive, symmetric, and
@@ -241,6 +305,7 @@ fn struct_fields_eq(
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Signature {
     names: BTreeMap<String, DataType>,
+    types: BTreeMap<String, NarrowType>,
 }
 
 impl Signature {
@@ -262,9 +327,182 @@ impl Signature {
     pub fn get(&self, name: &str) -> Option<&DataType> {
         self.names.get(name)
     }
+
+    /// Returns the signature that holds when `predicate` evaluated to true.
+    ///
+    /// The operation is deliberately syntactic and conservative: a positive
+    /// `is` test narrows its path, and both sides of `&&` hold on the true
+    /// branch. Negation, disjunction and arbitrary boolean equivalence do not
+    /// manufacture facts.
+    #[must_use]
+    pub fn narrowed_by(&self, predicate: &Expr) -> Self {
+        let mut narrowed = self.clone();
+        narrowed.apply_true_facts(predicate);
+        narrowed
+    }
+
+    fn apply_true_facts(&mut self, predicate: &Expr) {
+        match predicate {
+            Expr::Is { expr, target } => {
+                if let Expr::Path(segments) = expr.as_ref() {
+                    let ty = match target.as_ref() {
+                        NarrowTarget::Type(target) => target.ty().clone(),
+                        NarrowTarget::Case { payload, .. } => (**payload).clone(),
+                    };
+                    self.names.insert(segments.join("."), ty);
+                }
+            }
+            Expr::Binary {
+                op: BinaryOp::And,
+                left,
+                right,
+            } => {
+                self.apply_true_facts(left);
+                self.apply_true_facts(right);
+            }
+            _ => {}
+        }
+    }
+
+    /// Declares one named narrowing target. Alias spelling is compile-time
+    /// only; expression trees carry the resolved logical type.
+    #[must_use]
+    pub fn with_type(mut self, name: impl Into<String>, ty: DataType) -> Self {
+        self.types.insert(name.into(), NarrowType::new(ty));
+        self
+    }
+
+    /// Declares a tagged-union target whose untagged variant projection uses
+    /// a boundary-supplied discriminator.
+    pub fn with_discriminated_type(
+        mut self,
+        name: impl Into<String>,
+        ty: DataType,
+        discriminator: Discriminator,
+    ) -> Result<Self, NarrowTypeError> {
+        self.types
+            .insert(name.into(), NarrowType::discriminated(ty, discriminator)?);
+        Ok(self)
+    }
+
+    fn type_named(&self, name: &str) -> Option<NarrowType> {
+        self.types
+            .get(name)
+            .cloned()
+            .or_else(|| builtin_type(name).map(NarrowType::new))
+    }
 }
 
-/// Bridge exposing Rastok state to CEL. Lookup mirrors compilation:
+/// One resolved type target carried by `is` or `as`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NarrowType {
+    ty: DataType,
+    discriminator: Option<Discriminator>,
+}
+
+impl NarrowType {
+    /// A target requiring no external discriminator.
+    #[must_use]
+    pub fn new(ty: DataType) -> Self {
+        Self {
+            ty,
+            discriminator: None,
+        }
+    }
+
+    /// A target with its resolved boundary discriminator.
+    pub fn discriminated(
+        ty: DataType,
+        discriminator: Discriminator,
+    ) -> Result<Self, NarrowTypeError> {
+        let DataType::TaggedUnion(union) = &ty else {
+            return Err(NarrowTypeError::DiscriminatorOnNonTaggedType(ty));
+        };
+        if let Some(case) = discriminator.mapping().values().find(|case| {
+            !union
+                .cases()
+                .iter()
+                .any(|candidate| candidate.name() == case.as_str())
+        }) {
+            return Err(NarrowTypeError::UnknownMappedCase(case.clone()));
+        }
+        Ok(Self {
+            ty,
+            discriminator: Some(discriminator),
+        })
+    }
+
+    /// Logical target.
+    #[must_use]
+    pub const fn ty(&self) -> &DataType {
+        &self.ty
+    }
+
+    /// Optional external-to-tagged projection rule.
+    #[must_use]
+    pub const fn discriminator(&self) -> Option<&Discriminator> {
+        self.discriminator.as_ref()
+    }
+}
+
+/// Invalid declaration of a named expression narrowing target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NarrowTypeError {
+    /// Only a tagged union can consume an external discriminator.
+    DiscriminatorOnNonTaggedType(DataType),
+    /// A static external mapping names no case in the target union.
+    UnknownMappedCase(String),
+}
+
+impl fmt::Display for NarrowTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DiscriminatorOnNonTaggedType(ty) => {
+                write!(f, "a discriminator cannot be attached to {ty}")
+            }
+            Self::UnknownMappedCase(case) => {
+                write!(f, "a discriminator mapping names undeclared case `{case}`")
+            }
+        }
+    }
+}
+
+impl core::error::Error for NarrowTypeError {}
+
+/// Resolved target of a narrowing operator.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NarrowTarget {
+    /// A logical type, possibly with a boundary discriminator.
+    Type(Box<NarrowType>),
+    /// One named case of the operand's tagged-union type.
+    Case {
+        /// Semantic discriminant.
+        name: String,
+        /// Resolved closed struct payload exposed after a successful test.
+        payload: Box<DataType>,
+    },
+}
+
+fn builtin_type(name: &str) -> Option<DataType> {
+    Some(match name {
+        "null" => DataType::Null,
+        "bool" => DataType::Bool,
+        "int" => DataType::INT,
+        "long" => DataType::LONG,
+        "uint" => DataType::UINT,
+        "float" => DataType::FLOAT,
+        "double" => DataType::DOUBLE,
+        "number" => DataType::Number,
+        "text" => DataType::Text,
+        "bytes" => DataType::BYTES,
+        "duration" => DataType::DURATION,
+        "timestamp" => DataType::TIMESTAMP,
+        "variant" => DataType::Variant,
+        _ => return None,
+    })
+}
+
+/// Bridge exposing Rastok state to the expression evaluator. Lookup mirrors compilation:
 /// the full dotted path is offered first, then the bare root.
 pub trait Bindings {
     /// The value bound to `name`, if any.
@@ -317,7 +555,7 @@ pub enum DiagnosticKind {
     },
 }
 
-/// Native CEL compiler diagnostic; the caller adapts it.
+/// Native expression compiler diagnostic; the caller adapts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     /// The stable machine-readable discriminant.
@@ -328,12 +566,23 @@ pub struct Diagnostic {
     pub range: Range<usize>,
 }
 
-/// CEL evaluation error — value errors only; static type errors are
+/// Expression evaluation error — value errors only; static type errors are
 /// rejected at compilation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    /// Stable failure family.
+    pub kind: ErrorKind,
     /// What failed.
     pub message: String,
+}
+
+/// Stable expression failure family.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// Ordinary evaluation failure.
+    Evaluation,
+    /// Checked `as`/`is` narrowing failure that is not a simple mismatch.
+    Narrowing(NarrowingFailure),
 }
 
 impl fmt::Display for Error {
@@ -408,6 +657,20 @@ pub enum Expr {
     List(Vec<Expr>),
     /// Map literal with text keys.
     MapLit(Vec<(String, Expr)>),
+    /// Checked type or tagged-case predicate.
+    Is {
+        /// Tested expression.
+        expr: Box<Expr>,
+        /// Resolved target.
+        target: Box<NarrowTarget>,
+    },
+    /// Checked conversion to a type or tagged-case payload.
+    As {
+        /// Converted expression.
+        expr: Box<Expr>,
+        /// Resolved target.
+        target: Box<NarrowTarget>,
+    },
 }
 
 /// Unary operators.
@@ -459,7 +722,7 @@ pub enum Function {
     Timestamp,
     /// `size(text | bytes | list | map)`
     Size,
-    /// `decimal("1.50")` — CEL's exact-number constructor: a
+    /// `decimal("1.50")` — Rastok's exact-number constructor: a
     /// standard JSON number at its WRITTEN scale (D-2026-08-13-1);
     /// the integer fold applies to the written scale.
     Decimal,
@@ -477,6 +740,7 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
         tokens: &tokens,
         pos: 0,
         text,
+        signature,
         depth: 0,
     };
     let root = parser.ternary().map_err(|diagnostic| vec![diagnostic])?;
@@ -501,15 +765,6 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
         }]);
     }
     if let Some(token) = parser.tokens.get(parser.pos) {
-        if let Tok::Ident(word) = &token.tok
-            && *word == "as"
-        {
-            return Err(vec![Diagnostic {
-                kind: DiagnosticKind::General,
-                message: String::from("`as` narrowing is outside this build's subset"),
-                range: token.range.clone(),
-            }]);
-        }
         return Err(vec![Diagnostic {
             kind: DiagnosticKind::General,
             message: String::from("unexpected trailing input"),
@@ -601,7 +856,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                 continue;
             }
             // Host trivia is trivia HERE too (one authority,
-            // D-2026-08-13-1 review round): `//` per cel-spec, and
+            // D-2026-08-13-1 review round): `//` per expr-spec, and
             // the host's `/* … */` so a commented spelling shares
             // the compiled form (and so the hash) of the plain one.
             // The FACT of the comment comes from the one primitive.
@@ -697,7 +952,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                         return Err(vec![Diagnostic {
                             kind: DiagnosticKind::General,
                             message: String::from(
-                                "an ordinary CEL string cannot cross a physical line",
+                                "an ordinary Rastok expression string cannot cross a physical line",
                             ),
                             range: start..pos,
                         }]);
@@ -715,7 +970,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                             return Err(vec![Diagnostic {
                                 kind: DiagnosticKind::General,
                                 message: String::from(
-                                    "a backslash cannot continue an ordinary CEL string",
+                                    "a backslash cannot continue an ordinary Rastok expression string",
                                 ),
                                 range: start..pos,
                             }]);
@@ -816,7 +1071,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                 } else {
                     return Err(vec![Diagnostic {
                         kind: DiagnosticKind::General,
-                        message: String::from("`&` is not a CEL operator"),
+                        message: String::from("`&` is not a Rastok expression operator"),
                         range: pos..pos + 1,
                     }]);
                 }
@@ -828,7 +1083,7 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                 } else {
                     return Err(vec![Diagnostic {
                         kind: DiagnosticKind::General,
-                        message: String::from("`|` is not a CEL operator"),
+                        message: String::from("`|` is not a Rastok expression operator"),
                         range: pos..pos + 1,
                     }]);
                 }
@@ -837,7 +1092,9 @@ fn lex(text: &str) -> Result<Vec<Spanned<'_>>, Vec<Diagnostic>> {
                 let character = text[pos..].chars().next().unwrap_or('\u{fffd}');
                 return Err(vec![Diagnostic {
                     kind: DiagnosticKind::General,
-                    message: format!("the character `{character}` is not part of CEL"),
+                    message: format!(
+                        "the character `{character}` is not part of the Rastok expression grammar"
+                    ),
                     range: pos..pos + character.len_utf8(),
                 }]);
             }
@@ -861,6 +1118,7 @@ struct ExprParser<'t, 'a> {
     tokens: &'t [Spanned<'a>],
     pos: usize,
     text: &'a str,
+    signature: &'t Signature,
     /// Production-nesting depth — the recursion guard. Bounded at
     /// the format budget so a parenthesis tower or a unary chain
     /// refuses by name instead of overflowing the parser's stack;
@@ -976,6 +1234,10 @@ impl<'a> ExprParser<'_, 'a> {
     fn relation(&mut self) -> Result<Expr, Diagnostic> {
         let mut left = self.addition()?;
         loop {
+            if matches!(self.peek(), Some(Tok::Ident("is"))) {
+                left = self.is_suffix(left)?;
+                continue;
+            }
             let op = match self.peek() {
                 Some(Tok::EqEq) => BinaryOp::Eq,
                 Some(Tok::NotEq) => BinaryOp::Ne,
@@ -1078,10 +1340,78 @@ impl<'a> ExprParser<'_, 'a> {
                     base: Box::new(expr),
                     index: Box::new(index),
                 };
+            } else if matches!(self.peek(), Some(Tok::Ident("as"))) {
+                expr = self.as_suffix(expr)?;
             } else {
                 return Ok(expr);
             }
         }
+    }
+
+    // Keep narrowing's resolved `DataType` locals out of the recursive hot
+    // frames (`relation`/`postfix`). The parser's exact 128-level guard is a
+    // stack-safety contract, so an unused suffix must not enlarge every
+    // ordinary parenthesized-expression frame.
+    fn is_suffix(&mut self, expr: Expr) -> Result<Expr, Diagnostic> {
+        self.pos += 1;
+        let (name, range) = self.narrowing_name()?;
+        let target = self.resolve_narrow_target(&expr, name, range)?;
+        Ok(Expr::Is {
+            expr: Box::new(expr),
+            target: Box::new(target),
+        })
+    }
+
+    fn as_suffix(&mut self, expr: Expr) -> Result<Expr, Diagnostic> {
+        self.pos += 1;
+        let (name, range) = self.narrowing_name()?;
+        let target = self.resolve_narrow_target(&expr, name, range)?;
+        Ok(Expr::As {
+            expr: Box::new(expr),
+            target: Box::new(target),
+        })
+    }
+
+    fn narrowing_name(&mut self) -> Result<(&'a str, Range<usize>), Diagnostic> {
+        match self.bump().cloned() {
+            Some(Spanned {
+                tok: Tok::Ident(name),
+                range,
+            }) => Ok((name, range)),
+            _ => Err(self.fail("expected a named type or tagged-union case")),
+        }
+    }
+
+    fn resolve_narrow_target(
+        &self,
+        expr: &Expr,
+        name: &str,
+        range: Range<usize>,
+    ) -> Result<NarrowTarget, Diagnostic> {
+        let source = check(expr, self.signature, self.text)?;
+        if let DataType::TaggedUnion(union) = &source
+            && let Some(case) = union.cases().iter().find(|case| case.name() == name)
+        {
+            return Ok(NarrowTarget::Case {
+                name: String::from(name),
+                payload: Box::new(DataType::Struct(case.payload().clone())),
+            });
+        }
+        let Some(target) = self.signature.type_named(name) else {
+            return Err(Diagnostic {
+                kind: DiagnosticKind::General,
+                message: format!("`{name}` names neither a logical type nor a case of {source}"),
+                range,
+            });
+        };
+        if let Err(error) = target.ty().validate() {
+            return Err(Diagnostic {
+                kind: DiagnosticKind::General,
+                message: format!("`{name}` resolves to an invalid logical type: {error}"),
+                range,
+            });
+        }
+        Ok(NarrowTarget::Type(Box::new(target)))
     }
 
     fn primary(&mut self) -> Result<Expr, Diagnostic> {
@@ -1096,105 +1426,116 @@ impl<'a> ExprParser<'_, 'a> {
             Tok::True => Ok(Expr::Literal(Value::Bool(true))),
             Tok::False => Ok(Expr::Literal(Value::Bool(false))),
             Tok::Null => Ok(Expr::Literal(Value::Null)),
-            Tok::LParen => {
-                let expr = self.ternary()?;
-                self.expect(&Tok::RParen, "`)`")?;
-                Ok(expr)
-            }
-            Tok::LBrack => {
-                let mut items = Vec::new();
-                while self.peek() != Some(&Tok::RBrack) {
-                    items.push(self.ternary()?);
-                    if !self.eat(&Tok::Comma) {
-                        break;
-                    }
-                }
-                self.expect(&Tok::RBrack, "`]`")?;
-                Ok(Expr::List(items))
-            }
-            Tok::LBrace => {
-                let mut entries: Vec<(String, Expr)> = Vec::new();
-                while self.peek() != Some(&Tok::RBrace) {
-                    let (key, range) = match self.bump().cloned() {
-                        Some(Spanned {
-                            tok: Tok::Str(key),
-                            range,
-                        }) => (key, range),
-                        _ => return Err(self.fail("map keys are string literals in this subset")),
-                    };
-                    if entries.iter().any(|(existing, _)| existing == &key) {
-                        // Stable message prefix: callers key on
-                        // "duplicate map key" to assign E-DUP-KEY.
-                        return Err(Diagnostic {
-                            kind: DiagnosticKind::DuplicateMapKey,
-                            message: format!("duplicate map key `{key}`"),
-                            range,
-                        });
-                    }
-                    self.expect(&Tok::Colon, "`:`")?;
-                    entries.push((key, self.ternary()?));
-                    if !self.eat(&Tok::Comma) {
-                        break;
-                    }
-                }
-                self.expect(&Tok::RBrace, "`}`")?;
-                // Maps are semantically unordered: ONE canonical form
-                // serves hashing, planning, and evaluation alike.
-                entries.sort_by(|a, b| a.0.cmp(&b.0));
-                Ok(Expr::MapLit(entries))
-            }
-            Tok::Ident(word) => {
-                if self.peek() == Some(&Tok::LParen) {
-                    self.pos += 1;
-                    let function = match word {
-                        "duration" => Function::Duration,
-                        "timestamp" => Function::Timestamp,
-                        "size" => Function::Size,
-                        "decimal" => Function::Decimal,
-                        "now" => {
-                            return Err(Diagnostic {
-                                kind: DiagnosticKind::General,
-                                message: String::from(
-                                    "there is no `now()`: time enters only as data or constants",
-                                ),
-                                range: token.range,
-                            });
-                        }
-                        other if UNSUPPORTED_FUNCTIONS.contains(&other) => {
-                            return Err(Diagnostic {
-                                kind: DiagnosticKind::General,
-                                message: format!(
-                                    "the `{other}` macro is outside this build's subset"
-                                ),
-                                range: token.range,
-                            });
-                        }
-                        other => {
-                            return Err(Diagnostic {
-                                kind: DiagnosticKind::General,
-                                message: format!("unknown function `{other}`"),
-                                range: token.range,
-                            });
-                        }
-                    };
-                    let mut args = Vec::new();
-                    while self.peek() != Some(&Tok::RParen) {
-                        args.push(self.ternary()?);
-                        if !self.eat(&Tok::Comma) {
-                            break;
-                        }
-                    }
-                    self.expect(&Tok::RParen, "`)`")?;
-                    return Ok(Expr::Call { function, args });
-                }
-                Ok(Expr::Path(vec![String::from(word)]))
-            }
+            Tok::LParen => self.grouped(),
+            Tok::LBrack => self.list(),
+            Tok::LBrace => self.map(),
+            Tok::Ident(word) => self.name_or_call(word, token.range),
             _ => Err(Diagnostic {
                 kind: DiagnosticKind::General,
                 message: String::from("expected an expression"),
                 range: token.range,
             }),
         }
+    }
+
+    // Keep the recursive grouping route small. In an unoptimized build Rust
+    // reserves one frame large enough for every local in a function. Putting
+    // map/call builders in `primary` therefore made a parenthesis tower pay
+    // for temporaries belonging to branches it never entered, defeating the
+    // explicit nesting guard before that guard could report the error.
+    fn grouped(&mut self) -> Result<Expr, Diagnostic> {
+        let expr = self.ternary()?;
+        self.expect(&Tok::RParen, "`)`")?;
+        Ok(expr)
+    }
+
+    fn list(&mut self) -> Result<Expr, Diagnostic> {
+        let mut items = Vec::new();
+        while self.peek() != Some(&Tok::RBrack) {
+            items.push(self.ternary()?);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBrack, "`]`")?;
+        Ok(Expr::List(items))
+    }
+
+    fn map(&mut self) -> Result<Expr, Diagnostic> {
+        let mut entries: Vec<(String, Expr)> = Vec::new();
+        while self.peek() != Some(&Tok::RBrace) {
+            let (key, range) = match self.bump().cloned() {
+                Some(Spanned {
+                    tok: Tok::Str(key),
+                    range,
+                }) => (key, range),
+                _ => return Err(self.fail("map keys are string literals in this subset")),
+            };
+            if entries.iter().any(|(existing, _)| existing == &key) {
+                // Stable message prefix: callers key on
+                // "duplicate map key" to assign E-DUP-KEY.
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::DuplicateMapKey,
+                    message: format!("duplicate map key `{key}`"),
+                    range,
+                });
+            }
+            self.expect(&Tok::Colon, "`:`")?;
+            entries.push((key, self.ternary()?));
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBrace, "`}`")?;
+        // Maps are semantically unordered: ONE canonical form serves
+        // hashing, planning, and evaluation alike.
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(Expr::MapLit(entries))
+    }
+
+    fn name_or_call(&mut self, word: &'a str, range: Range<usize>) -> Result<Expr, Diagnostic> {
+        if self.peek() != Some(&Tok::LParen) {
+            return Ok(Expr::Path(vec![String::from(word)]));
+        }
+        self.pos += 1;
+        let function = match word {
+            "duration" => Function::Duration,
+            "timestamp" => Function::Timestamp,
+            "size" => Function::Size,
+            "decimal" => Function::Decimal,
+            "now" => {
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::General,
+                    message: String::from(
+                        "there is no `now()`: time enters only as data or constants",
+                    ),
+                    range,
+                });
+            }
+            other if UNSUPPORTED_FUNCTIONS.contains(&other) => {
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::General,
+                    message: format!("the `{other}` macro is outside this build's subset"),
+                    range,
+                });
+            }
+            other => {
+                return Err(Diagnostic {
+                    kind: DiagnosticKind::General,
+                    message: format!("unknown function `{other}`"),
+                    range,
+                });
+            }
+        };
+        let mut args = Vec::new();
+        while self.peek() != Some(&Tok::RParen) {
+            args.push(self.ternary()?);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RParen, "`)`")?;
+        Ok(Expr::Call { function, args })
     }
 }
 
@@ -1210,7 +1551,9 @@ fn structural_depth(root: &Expr) -> usize {
         max = max.max(depth);
         match expr {
             Expr::Literal(_) | Expr::Path(_) | Expr::Asset(_) => {}
-            Expr::Unary { expr, .. } => stack.push((expr, depth + 1)),
+            Expr::Unary { expr, .. } | Expr::Is { expr, .. } | Expr::As { expr, .. } => {
+                stack.push((expr, depth + 1));
+            }
             Expr::Binary { left, right, .. } => {
                 stack.push((left, depth + 1));
                 stack.push((right, depth + 1));
@@ -1257,7 +1600,9 @@ fn dismantle(root: Expr) {
     while let Some(expr) = stack.pop() {
         match expr {
             Expr::Literal(_) | Expr::Path(_) | Expr::Asset(_) => {}
-            Expr::Unary { expr, .. } => stack.push(*expr),
+            Expr::Unary { expr, .. } | Expr::Is { expr, .. } | Expr::As { expr, .. } => {
+                stack.push(*expr);
+            }
             Expr::Binary { left, right, .. } => {
                 stack.push(*left);
                 stack.push(*right);
@@ -1301,20 +1646,42 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
     };
     match expr {
         Expr::Literal(value) => Ok(literal_type(value)),
-        // Compiler-constructed only — CEL text never spells one.
+        // Compiler-constructed only — expression source never spells one.
         Expr::Asset(_) => Ok(DataType::BYTES),
         Expr::Path(segments) => {
             let dotted = segments.join(".");
-            if let Some(ty) = signature.get(&dotted) {
-                return Ok(ty.clone());
+            let mut resolved = None;
+            for length in (1..=segments.len()).rev() {
+                let prefix = segments[..length].join(".");
+                if let Some(ty) = signature.get(&prefix) {
+                    resolved = Some((ty.clone(), length));
+                    break;
+                }
             }
-            match signature.get(&segments[0]) {
-                Some(DataType::Variant) => Ok(DataType::Variant),
-                Some(DataType::Map(map)) if segments.len() > 1 => Ok(map.value().clone()),
-                Some(other) if segments.len() == 1 => Ok(other.clone()),
-                Some(_) => Err(fail(format!("`{dotted}` does not resolve to a member"))),
-                None => Err(fail(format!("`{}` is not a visible name", segments[0]))),
+            let Some((mut current, consumed)) = resolved else {
+                return Err(fail(format!("`{}` is not a visible name", segments[0])));
+            };
+            for segment in &segments[consumed..] {
+                current = match current {
+                    // Dynamic structural access remains admitted during the
+                    // M1.3 migration; B9 removes it once every producer has a
+                    // resolved schema. `is`/`as` never rely on this fallback.
+                    DataType::Variant => DataType::Variant,
+                    DataType::Map(map) if map.key() == &DataType::Text => map.value().clone(),
+                    DataType::Struct(structure) => structure
+                        .fields()
+                        .iter()
+                        .find(|field| field.name() == segment)
+                        .map(|field| field.ty().clone())
+                        .ok_or_else(|| {
+                            fail(format!("`{dotted}` has no declared member `{segment}`"))
+                        })?,
+                    _ => {
+                        return Err(fail(format!("`{dotted}` does not resolve to a member")));
+                    }
+                };
             }
+            Ok(current)
         }
         Expr::Unary { op, expr } => {
             let inner = check(expr, signature, text)?;
@@ -1333,7 +1700,14 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
         }
         Expr::Binary { op, left, right } => {
             let lhs = check(left, signature, text)?;
-            let rhs = check(right, signature, text)?;
+            let narrowed;
+            let rhs_signature = if *op == BinaryOp::And {
+                narrowed = signature.narrowed_by(left);
+                &narrowed
+            } else {
+                signature
+            };
+            let rhs = check(right, rhs_signature, text)?;
             binary_type(*op, &lhs, &rhs).ok_or_else(|| {
                 fail(format!(
                     "operator {op:?} does not accept {lhs:?} and {rhs:?}"
@@ -1349,7 +1723,8 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             if !matches!(cond_ty, DataType::Bool | DataType::Variant) {
                 return Err(fail(String::from("the condition must be a bool")));
             }
-            let then_ty = check(then, signature, text)?;
+            let narrowed = signature.narrowed_by(cond);
+            let then_ty = check(then, &narrowed, text)?;
             let else_ty = check(otherwise, signature, text)?;
             Ok(join_types(&then_ty, &else_ty))
         }
@@ -1386,9 +1761,10 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                 }
                 Ok(match function {
                     Function::Duration => DataType::DURATION,
-                    // A dynamic decimal conforms to no precise M0
-                    // type — `variant`, narrowed before use
-                    // (D-2026-08-10-7).
+                    // The value is an exact Rastok decimal. The static
+                    // `variant` result is the one remaining v6 package
+                    // compatibility bridge; B8 replaces it with `number`
+                    // when the complete type registry ships in v7.
                     Function::Decimal => DataType::Variant,
                     _ => DataType::TIMESTAMP,
                 })
@@ -1432,6 +1808,54 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             }
             Ok(DataType::text_map(values))
         }
+        Expr::Is { expr, target } => {
+            let source = check(expr, signature, text)?;
+            check_narrowing_compatibility(&source, target).map_err(fail)?;
+            Ok(DataType::Bool)
+        }
+        Expr::As { expr, target } => {
+            let source = check(expr, signature, text)?;
+            check_narrowing_compatibility(&source, target).map_err(fail)?;
+            Ok(match target.as_ref() {
+                NarrowTarget::Type(target) => target.ty().clone(),
+                NarrowTarget::Case { payload, .. } => (**payload).clone(),
+            })
+        }
+    }
+}
+
+fn check_narrowing_compatibility(source: &DataType, target: &NarrowTarget) -> Result<(), String> {
+    match target {
+        NarrowTarget::Case { name, .. } => match source {
+            DataType::TaggedUnion(union)
+                if union.cases().iter().any(|case| case.name() == name) =>
+            {
+                Ok(())
+            }
+            _ => Err(format!(
+                "case `{name}` does not belong to the operand type {source}"
+            )),
+        },
+        NarrowTarget::Type(target) => {
+            let target = target.ty();
+            if matches!(source, DataType::Variant)
+                || matches!(target, DataType::Variant)
+                || source.is_assignable_to(target)
+                || target.is_assignable_to(source)
+                || matches!(
+                    source,
+                    DataType::StructuralUnion(_) | DataType::TaggedUnion(_)
+                )
+                || matches!(
+                    target,
+                    DataType::StructuralUnion(_) | DataType::TaggedUnion(_)
+                )
+            {
+                Ok(())
+            } else {
+                Err(format!("a {source} cannot be narrowed to {target}"))
+            }
+        }
     }
 }
 
@@ -1451,8 +1875,10 @@ fn literal_type(value: &Value) -> DataType {
         // No struct type exists in the annotation subset; the value
         // carries its own witness and types as dynamic.
         Value::Struct(_) => DataType::Variant,
-        // The dynamic decimal types as `variant` until narrowing exists.
+        // The exact value already belongs to Rastok's decimal domain. Its
+        // v6 tree type remains `variant` until B8 can transport `number`.
         Value::Decimal { .. } => DataType::Variant,
+        Value::Enum(_) | Value::StructuralUnion { .. } | Value::TaggedUnion(_) => DataType::Variant,
     }
 }
 
@@ -1517,6 +1943,11 @@ fn numeric(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
 fn concrete(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
     match value {
         EvalValue::Payload => bindings.payload(),
+        // A structural-union branch is transparent once an expression
+        // consumes it. Its branch index remains intact in the materialized
+        // `Value` and journal; the expression sees the selected logical
+        // value after the checker has proved the narrowing.
+        EvalValue::StructuralUnion { value, .. } => concrete(*value, bindings),
         other => Ok(other),
     }
 }
@@ -1546,6 +1977,17 @@ fn concrete_deep(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue,
                 .map(|(name, value)| Ok((name, concrete_deep(value, bindings)?)))
                 .collect::<Result<_, _>>()?,
         ),
+        // Structural branches are pairwise disjoint, so exposing the selected
+        // value cannot guess between cases. Tagged unions stay tagged because
+        // their case name is semantic and payload shapes may coincide.
+        EvalValue::StructuralUnion { value, .. } => concrete_deep(*value, bindings)?,
+        EvalValue::TaggedUnion { case, payload } => EvalValue::TaggedUnion {
+            case,
+            payload: payload
+                .into_iter()
+                .map(|(name, value)| Ok((name, concrete_deep(value, bindings)?)))
+                .collect::<Result<_, Error>>()?,
+        },
         other => other,
     })
 }
@@ -1573,6 +2015,15 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                     }
                     EvalValue::Struct(fields) => {
                         value = fields
+                            .into_iter()
+                            .find(|(name, _)| name == segment)
+                            .map(|(_, value)| value)
+                            .ok_or_else(|| {
+                                fault(format!("`{dotted}` has no member `{segment}`"))
+                            })?;
+                    }
+                    EvalValue::TaggedUnion { payload, .. } => {
+                        value = payload
                             .into_iter()
                             .find(|(name, _)| name == segment)
                             .map(|(_, value)| value)
@@ -1690,6 +2141,63 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
             }
             Ok(EvalValue::Map(map))
         }
+        Expr::Is { expr, target } => {
+            let value = concrete_deep(eval_expr(expr, bindings)?, bindings)?.into_value()?;
+            match target.as_ref() {
+                NarrowTarget::Type(target) => target
+                    .ty()
+                    .is_instance(&value, target.discriminator())
+                    .map(EvalValue::Bool)
+                    .map_err(narrowing_fault),
+                NarrowTarget::Case { name, payload } => match narrow_case(value, name, payload) {
+                    Ok(_) => Ok(EvalValue::Bool(true)),
+                    Err(error) if error.is_mismatch() => Ok(EvalValue::Bool(false)),
+                    Err(error) => Err(narrowing_fault(error)),
+                },
+            }
+        }
+        Expr::As { expr, target } => {
+            let value = concrete_deep(eval_expr(expr, bindings)?, bindings)?.into_value()?;
+            match target.as_ref() {
+                NarrowTarget::Type(target) => target
+                    .ty()
+                    .narrow(value, target.discriminator())
+                    .map(EvalValue::from)
+                    .map_err(narrowing_fault),
+                NarrowTarget::Case { name, payload } => narrow_case(value, name, payload)
+                    .map(EvalValue::from)
+                    .map_err(narrowing_fault),
+            }
+        }
+    }
+}
+
+fn narrow_case(
+    value: Value,
+    expected: &str,
+    payload: &DataType,
+) -> Result<Value, NarrowingFailure> {
+    match value {
+        Value::TaggedUnion(tagged) if tagged.case == expected => {
+            let case = tagged.case;
+            let fields = tagged.payload;
+            let value = Value::Struct(fields);
+            if let Some(violation) = payload.violation("case payload", &value) {
+                Err(NarrowingFailure::CasePayload {
+                    case,
+                    violation: Box::new(violation),
+                })
+            } else {
+                Ok(value)
+            }
+        }
+        Value::TaggedUnion(tagged) => Err(NarrowingFailure::CaseMismatch {
+            expected: expected.to_string(),
+            found: tagged.case,
+        }),
+        _ => Err(NarrowingFailure::NoMatch {
+            target: Box::new(payload.clone()),
+        }),
     }
 }
 
@@ -1759,7 +2267,7 @@ fn values_equal(lhs: &EvalValue, rhs: &EvalValue) -> bool {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(x, y))
         }
         (EvalValue::Struct(a), EvalValue::Struct(b)) => {
-            // Sorted like the canonical seal — CEL `==` must not
+            // Sorted like the canonical seal — expression `==` must not
             // split two values one identity owns, and stays total on
             // malformed duplicates (see `struct_fields_eq`).
             struct_fields_eq(a, b, values_equal)
@@ -1770,6 +2278,27 @@ fn values_equal(lhs: &EvalValue, rhs: &EvalValue) -> bool {
                     .zip(b)
                     .all(|((ka, va), (kb, vb))| ka == kb && values_equal(va, vb))
         }
+        (EvalValue::Enum(a), EvalValue::Enum(b)) => a == b,
+        (
+            EvalValue::StructuralUnion {
+                branch: a_branch,
+                value: a_value,
+            },
+            EvalValue::StructuralUnion {
+                branch: b_branch,
+                value: b_value,
+            },
+        ) => a_branch == b_branch && values_equal(a_value, b_value),
+        (
+            EvalValue::TaggedUnion {
+                case: a_case,
+                payload: a_payload,
+            },
+            EvalValue::TaggedUnion {
+                case: b_case,
+                payload: b_payload,
+            },
+        ) => a_case == b_case && struct_fields_eq(a_payload, b_payload, values_equal),
         _ => false,
     }
 }
@@ -1857,7 +2386,17 @@ fn arithmetic(op: BinaryOp, lhs: EvalValue, rhs: EvalValue) -> Result<EvalValue,
 }
 
 fn fault(message: String) -> Error {
-    Error { message }
+    Error {
+        kind: ErrorKind::Evaluation,
+        message,
+    }
+}
+
+fn narrowing_fault(reason: NarrowingFailure) -> Error {
+    Error {
+        message: reason.to_string(),
+        kind: ErrorKind::Narrowing(reason),
+    }
 }
 
 // ===== time parsing =====
@@ -2021,7 +2560,7 @@ mod tests {
         assert_eq!(duplicated, duplicated.clone(), "reflexive");
         assert!(
             values_equal(&duplicated, &duplicated),
-            "the CEL `==` agrees"
+            "the expression `==` agrees"
         );
         // Symmetry, on two DIFFERENT malformed spellings.
         let reversed = EvalValue::Struct(alloc::vec![
@@ -2053,6 +2592,70 @@ mod tests {
         eval(&tree, &BTreeMap::new()).unwrap()
     }
 
+    fn oracle_value(value: cel_interpreter::Value) -> EvalValue {
+        use cel_interpreter::objects::Key;
+        match value {
+            cel_interpreter::Value::Int(value) => EvalValue::Int(value),
+            cel_interpreter::Value::UInt(value) => EvalValue::Uint(value),
+            cel_interpreter::Value::Float(value) => EvalValue::Double(value),
+            cel_interpreter::Value::String(value) => EvalValue::Text((*value).clone()),
+            cel_interpreter::Value::Bytes(value) => EvalValue::Bytes((*value).clone()),
+            cel_interpreter::Value::Bool(value) => EvalValue::Bool(value),
+            cel_interpreter::Value::Null => EvalValue::Null,
+            cel_interpreter::Value::List(items) => {
+                EvalValue::List(items.iter().cloned().map(oracle_value).collect())
+            }
+            cel_interpreter::Value::Map(map) => EvalValue::Map(
+                map.map
+                    .iter()
+                    .map(|(key, value)| {
+                        let Key::String(key) = key else {
+                            panic!("the compatible corpus uses text map keys only");
+                        };
+                        ((*key).as_ref().clone(), oracle_value(value.clone()))
+                    })
+                    .collect(),
+            ),
+            cel_interpreter::Value::Function(_, _) => {
+                panic!("a function is not a materialized compatible result")
+            }
+        }
+    }
+
+    #[test]
+    fn the_cel_compatible_core_matches_the_pinned_oracle() {
+        // This table is intentionally source-level and versioned by the exact
+        // dev dependency. Rastok-owned syntax and semantics live in the
+        // divergence table in docs/spec/expressions.md, not in this oracle.
+        let compatible = [
+            "null",
+            "true",
+            "1 + 2 * 3",
+            "7 / 2",
+            "7 % 3",
+            "3u + 4u",
+            "1.5 + 0.25",
+            "\"a\" + \"b\"",
+            "1 < 2 && 2 <= 2",
+            "true ? 1 : 2",
+            "[1, 2, 3][1]",
+            "{\"a\": 1, \"b\": 2}[\"b\"]",
+            "size([1, 2, 3])",
+        ];
+        let context = cel_interpreter::Context::default();
+        for source in compatible {
+            let oracle = cel_interpreter::Program::compile(source)
+                .unwrap_or_else(|error| panic!("oracle rejected {source:?}: {error}"))
+                .execute(&context)
+                .unwrap_or_else(|error| panic!("oracle failed {source:?}: {error}"));
+            assert_eq!(
+                eval_const(source),
+                oracle_value(oracle),
+                "compatible CEL drift for {source:?}"
+            );
+        }
+    }
+
     #[test]
     fn literals_and_arithmetic_evaluate() {
         assert_eq!(eval_const("1 + 2 * 3"), EvalValue::Int(7));
@@ -2070,8 +2673,9 @@ mod tests {
     #[test]
     fn ordinary_strings_never_cross_a_physical_line() {
         for source in ["\"left\nright\"", "'left\nright'", "\"left\\\nright\""] {
-            let diagnostics = compile(source, &Signature::new())
-                .expect_err("a physical line ending cannot live in an ordinary CEL string");
+            let diagnostics = compile(source, &Signature::new()).expect_err(
+                "a physical line ending cannot live in an ordinary Rastok expression string",
+            );
             assert_eq!(diagnostics.len(), 1, "{source:?}: {diagnostics:?}");
             assert!(
                 diagnostics[0].message.contains("physical line")
@@ -2096,13 +2700,13 @@ mod tests {
         assert_eq!(eval_const("!false || false"), EvalValue::Bool(true));
     }
 
-    /// The CEL `==` OPERATOR keeps IEEE semantics — `values_equal`,
+    /// The expression `==` OPERATOR keeps IEEE semantics — `values_equal`,
     /// not the structural `PartialEq` (which compares canonical bits
     /// so plans stay equal to themselves across the byte trip). The
     /// two equalities answer different questions and must not bleed
     /// into each other.
     #[test]
-    fn the_cel_operator_keeps_ieee_while_structure_keeps_bits() {
+    fn the_expression_operator_keeps_ieee_while_structure_keeps_bits() {
         // IEEE, through the operator: NaN never equals itself, and
         // the two zeros are numerically one.
         assert_eq!(eval_const("0.0 / 0.0 == 0.0 / 0.0"), EvalValue::Bool(false));
@@ -2150,6 +2754,257 @@ mod tests {
             EvalValue::Text(String::from("s-1")),
         );
         assert_eq!(eval(&tree, &bindings).unwrap(), EvalValue::Bool(true));
+    }
+
+    fn customer_type() -> DataType {
+        DataType::Struct(
+            crate::datatype::StructType::new(alloc::vec![
+                crate::datatype::TypeField::new("id", DataType::INT),
+                crate::datatype::TypeField::new("name", DataType::Text),
+            ])
+            .expect("two unique fields"),
+        )
+    }
+
+    #[test]
+    fn variant_narrowing_is_checked_and_flow_sensitive() {
+        let customer = customer_type();
+        let signature = Signature::new()
+            .with("data", DataType::Variant)
+            .with_type("Customer", customer.clone());
+        let predicate = compile_ok("data is Customer && data.id > 0", &signature);
+        assert_eq!(predicate.ty, DataType::Bool);
+
+        let value = EvalValue::Struct(alloc::vec![
+            (String::from("name"), EvalValue::Text(String::from("Ada"))),
+            (String::from("id"), EvalValue::Int(37)),
+        ]);
+        let bindings = BTreeMap::from([(String::from("data"), value.clone())]);
+        assert_eq!(
+            eval(&predicate, &bindings).expect("the struct matches"),
+            EvalValue::Bool(true)
+        );
+
+        let converted = compile_ok("data as Customer", &signature);
+        assert_eq!(converted.ty, customer);
+        assert_eq!(
+            eval(&converted, &bindings).expect("the checked conversion succeeds"),
+            value
+        );
+
+        let wrong = BTreeMap::from([(
+            String::from("data"),
+            EvalValue::Struct(alloc::vec![(
+                String::from("name"),
+                EvalValue::Text(String::from("Ada")),
+            )]),
+        )]);
+        assert_eq!(
+            eval(&predicate, &wrong).expect("an ordinary mismatch is false"),
+            EvalValue::Bool(false)
+        );
+        assert!(matches!(
+            eval(&converted, &wrong)
+                .expect_err("`as` must refuse the mismatch")
+                .kind,
+            ErrorKind::Narrowing(NarrowingFailure::NoMatch { .. })
+        ));
+
+        let nested = compile_ok(
+            "data.customer is Customer && data.customer.id > 0",
+            &signature,
+        );
+        let nested_value = EvalValue::Struct(alloc::vec![(String::from("customer"), value,)]);
+        assert_eq!(
+            eval(
+                &nested,
+                &BTreeMap::from([(String::from("data"), nested_value)])
+            )
+            .expect("a fact about a dotted path types its descendants"),
+            EvalValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn structural_and_tagged_unions_use_the_same_narrowing_path() {
+        let structural = DataType::structural_union(alloc::vec![DataType::Text, DataType::INT])
+            .expect("text and int are disjoint");
+        let structural_signature = Signature::new()
+            .with("data", DataType::Variant)
+            .with_type("Payload", structural.clone());
+        let structural_tree = compile_ok("data as Payload", &structural_signature);
+        let structural_value = eval(
+            &structural_tree,
+            &BTreeMap::from([(String::from("data"), EvalValue::Text(String::from("hello")))]),
+        )
+        .expect("exactly one structural branch matches");
+        let predicate = compile_ok(
+            "data is text && size(data) == 5",
+            &Signature::new().with("data", structural.clone()),
+        );
+        let wrapped = structural
+            .narrow(Value::Text(String::from("hello")), None)
+            .expect("one branch matches");
+        assert_eq!(
+            eval(
+                &predicate,
+                &BTreeMap::from([(String::from("data"), EvalValue::from(wrapped))])
+            )
+            .expect("the selected structural value is visible after `is`"),
+            EvalValue::Bool(true)
+        );
+        let EvalValue::StructuralUnion { branch, value } = structural_value else {
+            panic!("narrowing records the selected structural branch");
+        };
+        let DataType::StructuralUnion(branches) = structural else {
+            panic!("the target is a structural union");
+        };
+        assert_eq!(
+            branches.branches()[usize::from(branch)],
+            DataType::Text,
+            "the index addresses canonical branch order"
+        );
+        assert_eq!(*value, EvalValue::Text(String::from("hello")));
+
+        let exited_payload =
+            crate::datatype::StructType::new(alloc::vec![crate::datatype::TypeField::new(
+                "exit_code",
+                DataType::INT
+            ),])
+            .expect("one field");
+        let failed_payload =
+            crate::datatype::StructType::new(alloc::vec![crate::datatype::TypeField::new(
+                "reason",
+                DataType::Text
+            ),])
+            .expect("one field");
+        let exit_type = DataType::TaggedUnion(
+            crate::datatype::TaggedUnionType::new(alloc::vec![
+                crate::datatype::TaggedCase::new("Exited", exited_payload).expect("a named case"),
+                crate::datatype::TaggedCase::new("Failed", failed_payload).expect("a named case"),
+            ])
+            .expect("two tagged cases"),
+        );
+        let exit_signature = Signature::new().with("data", exit_type);
+        let exit_guard = compile_ok("data is Exited && data.exit_code == 0", &exit_signature);
+        let exit_value = EvalValue::TaggedUnion {
+            case: String::from("Exited"),
+            payload: alloc::vec![(String::from("exit_code"), EvalValue::Int(0))],
+        };
+        assert_eq!(
+            eval(
+                &exit_guard,
+                &BTreeMap::from([(String::from("data"), exit_value)])
+            )
+            .expect("the selected case exposes its payload on the true branch"),
+            EvalValue::Bool(true)
+        );
+        assert_eq!(
+            eval(
+                &exit_guard,
+                &BTreeMap::from([(
+                    String::from("data"),
+                    EvalValue::TaggedUnion {
+                        case: String::from("Exited"),
+                        payload: alloc::vec![],
+                    },
+                )])
+            )
+            .expect("a malformed case payload is an ordinary failed predicate"),
+            EvalValue::Bool(false)
+        );
+
+        let exited = compile_ok("data as Exited", &exit_signature);
+        let failed_value = EvalValue::TaggedUnion {
+            case: String::from("Failed"),
+            payload: alloc::vec![(
+                String::from("reason"),
+                EvalValue::Text(String::from("boom")),
+            )],
+        };
+        assert!(matches!(
+            eval(
+                &exited,
+                &BTreeMap::from([(String::from("data"), failed_value)])
+            )
+            .expect_err("a different tagged case cannot pass `as Exited`")
+            .kind,
+            ErrorKind::Narrowing(NarrowingFailure::CaseMismatch { expected, found })
+                if expected == "Exited" && found == "Failed"
+        ));
+    }
+
+    #[test]
+    fn an_external_discriminator_tags_a_variant_before_use() {
+        let payload = crate::datatype::StructType::new(alloc::vec![
+            crate::datatype::TypeField::new("kind", DataType::Text),
+            crate::datatype::TypeField::new("id", DataType::INT),
+        ])
+        .expect("two fields");
+        let event = DataType::TaggedUnion(
+            crate::datatype::TaggedUnionType::new(alloc::vec![
+                crate::datatype::TaggedCase::new("Customer", payload).expect("a named case"),
+            ])
+            .expect("one tagged case"),
+        );
+        let discriminator =
+            Discriminator::new("kind", BTreeMap::new()).expect("the field name is non-empty");
+        let signature = Signature::new()
+            .with("data", DataType::Variant)
+            .with_discriminated_type("Event", event, discriminator)
+            .expect("the mapping only names declared cases");
+        let tree = compile_ok("data as Event", &signature);
+        let result = eval(
+            &tree,
+            &BTreeMap::from([(
+                String::from("data"),
+                EvalValue::Struct(alloc::vec![
+                    (
+                        String::from("kind"),
+                        EvalValue::Text(String::from("Customer")),
+                    ),
+                    (String::from("id"), EvalValue::Int(7)),
+                ]),
+            )]),
+        )
+        .expect("the declared discriminator selects the case");
+        assert!(matches!(
+            result,
+            EvalValue::TaggedUnion { case, .. } if case == "Customer"
+        ));
+
+        let predicate = compile_ok("data is Event", &signature);
+        assert_eq!(
+            eval(
+                &predicate,
+                &BTreeMap::from([(
+                    String::from("data"),
+                    EvalValue::Struct(alloc::vec![
+                        (
+                            String::from("kind"),
+                            EvalValue::Text(String::from("Unknown")),
+                        ),
+                        (String::from("id"), EvalValue::Int(7)),
+                    ]),
+                )])
+            )
+            .expect("an unknown external discriminant is an ordinary failed predicate"),
+            EvalValue::Bool(false)
+        );
+
+        let invalid = Discriminator::new(
+            "kind",
+            BTreeMap::from([(String::from("external"), String::from("Missing"))]),
+        )
+        .expect("the mapping is syntactically valid");
+        assert!(matches!(
+            Signature::new().with_discriminated_type(
+                "Event",
+                tree.ty.clone(),
+                invalid,
+            ),
+            Err(NarrowTypeError::UnknownMappedCase(case)) if case == "Missing"
+        ));
     }
 
     #[test]

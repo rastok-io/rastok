@@ -4,13 +4,12 @@
 //! The canonical byte form follows `identity.md` §1: insensitive to
 //! formatting, file order, and declaration order — nodes, vals,
 //! attributes, vars, ports, and edges are sorted before hashing —
-//! sensitive to topology, statement order inside a handler, every CEL
+//! sensitive to topology, statement order inside a handler, every Rastok expression
 //! expression as its canonical tree, and `var` defaults. Constants
 //! hash as the expressions they were written as, before const-eval;
 //! spans never enter the bytes. The plan then ships the reduced
 //! values.
 
-use crate::cel;
 use crate::compiler::hir::{
     AttrValue, Direction, EdgeTarget, EmitValue, Hir, Node as HirNode, NodeRole,
     Statement as HirStatement,
@@ -19,6 +18,7 @@ use crate::datatype::{
     BinaryType, DataType, DateUnit, FloatType, IntegerType, IntegerWidth, IntervalUnit,
     TemporalType, TimeUnit, TimeZone,
 };
+use crate::expr;
 use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
@@ -198,7 +198,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         for val in &hir_node.vals {
             consts.insert(val.name.clone(), val.value.value.clone());
         }
-        let subst = |tree: &cel::Tree| substitute_tree(tree, &consts);
+        let subst = |tree: &expr::Tree| substitute_tree(tree, &consts);
         // Declaration order between handlers carries no semantics and
         // no identity (identity.md): they ship sorted by their
         // activation's canonical key, the same key the hash sorts by.
@@ -246,7 +246,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
     (plan, symbols)
 }
 
-fn lower_emission(value: &EmitValue, subst: &impl Fn(&cel::Tree) -> cel::Tree) -> Emission {
+fn lower_emission(value: &EmitValue, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Emission {
     let writes = |fields: &[crate::compiler::hir::FieldWrite]| {
         fields
             .iter()
@@ -280,30 +280,30 @@ fn canonical_target(target: &crate::envelope::WriteTarget) -> String {
 /// access on a constant becomes evaluable indexing. Sound because
 /// shadowing is refused at check time.
 fn substitute_tree(
-    tree: &cel::Tree,
+    tree: &expr::Tree,
     consts: &std::collections::BTreeMap<String, crate::value::Value>,
-) -> cel::Tree {
-    cel::Tree {
+) -> expr::Tree {
+    expr::Tree {
         root: substitute(&tree.root, consts),
         ty: tree.ty.clone(),
     }
 }
 
 fn substitute(
-    expr: &cel::Expr,
+    expr: &expr::Expr,
     consts: &std::collections::BTreeMap<String, crate::value::Value>,
-) -> cel::Expr {
-    let recurse = |inner: &cel::Expr| Box::new(substitute(inner, consts));
+) -> expr::Expr {
+    let recurse = |inner: &expr::Expr| Box::new(substitute(inner, consts));
     match expr {
-        cel::Expr::Asset(_) => expr.clone(),
-        cel::Expr::Path(segments) => match consts.get(&segments[0]) {
+        expr::Expr::Asset(_) => expr.clone(),
+        expr::Expr::Path(segments) => match consts.get(&segments[0]) {
             None => expr.clone(),
             Some(value) => {
-                let mut result = cel::Expr::Literal(value.clone());
+                let mut result = expr::Expr::Literal(value.clone());
                 for segment in &segments[1..] {
-                    result = cel::Expr::Index {
+                    result = expr::Expr::Index {
                         base: Box::new(result),
-                        index: Box::new(cel::Expr::Literal(crate::value::Value::Text(
+                        index: Box::new(expr::Expr::Literal(crate::value::Value::Text(
                             segment.clone(),
                         ))),
                     };
@@ -311,42 +311,50 @@ fn substitute(
                 result
             }
         },
-        cel::Expr::Literal(_) => expr.clone(),
-        cel::Expr::Unary { op, expr } => cel::Expr::Unary {
+        expr::Expr::Literal(_) => expr.clone(),
+        expr::Expr::Unary { op, expr } => expr::Expr::Unary {
             op: *op,
             expr: recurse(expr),
         },
-        cel::Expr::Binary { op, left, right } => cel::Expr::Binary {
+        expr::Expr::Binary { op, left, right } => expr::Expr::Binary {
             op: *op,
             left: recurse(left),
             right: recurse(right),
         },
-        cel::Expr::Ternary {
+        expr::Expr::Ternary {
             cond,
             then,
             otherwise,
-        } => cel::Expr::Ternary {
+        } => expr::Expr::Ternary {
             cond: recurse(cond),
             then: recurse(then),
             otherwise: recurse(otherwise),
         },
-        cel::Expr::Index { base, index } => cel::Expr::Index {
+        expr::Expr::Index { base, index } => expr::Expr::Index {
             base: recurse(base),
             index: recurse(index),
         },
-        cel::Expr::Call { function, args } => cel::Expr::Call {
+        expr::Expr::Call { function, args } => expr::Expr::Call {
             function: *function,
             args: args.iter().map(|arg| substitute(arg, consts)).collect(),
         },
-        cel::Expr::List(items) => {
-            cel::Expr::List(items.iter().map(|item| substitute(item, consts)).collect())
+        expr::Expr::List(items) => {
+            expr::Expr::List(items.iter().map(|item| substitute(item, consts)).collect())
         }
-        cel::Expr::MapLit(entries) => cel::Expr::MapLit(
+        expr::Expr::MapLit(entries) => expr::Expr::MapLit(
             entries
                 .iter()
                 .map(|(key, value)| (key.clone(), substitute(value, consts)))
                 .collect(),
         ),
+        expr::Expr::Is { expr, target } => expr::Expr::Is {
+            expr: recurse(expr),
+            target: target.clone(),
+        },
+        expr::Expr::As { expr, target } => expr::Expr::As {
+            expr: recurse(expr),
+            target: target.clone(),
+        },
     }
 }
 
@@ -790,18 +798,18 @@ impl Writer<'_> {
     /// `json [1]` (variant) and `[1]` (list) are different programs
     /// (D-2026-08-10-7), exactly as a pinned port differs from an
     /// unpinned one.
-    fn tree(&mut self, tree: &cel::Tree) {
+    fn tree(&mut self, tree: &expr::Tree) {
         self.ty(&tree.ty);
         self.expr(&tree.root);
     }
 
-    fn expr(&mut self, expr: &cel::Expr) {
+    fn expr(&mut self, expr: &expr::Expr) {
         match expr {
-            cel::Expr::Literal(value) => {
+            expr::Expr::Literal(value) => {
                 self.tag(1);
                 self.value(value);
             }
-            cel::Expr::Asset(index) => {
+            expr::Expr::Asset(index) => {
                 // The CONTENT digest is the identity — the path is
                 // spelling and the index is layout (D-2026-08-10-5).
                 self.tag(9);
@@ -812,39 +820,39 @@ impl Writer<'_> {
                     .unwrap_or_else(|| unreachable!("the checker minted the index"));
                 self.hasher.update(&digest);
             }
-            cel::Expr::Path(segments) => {
+            expr::Expr::Path(segments) => {
                 self.tag(2);
                 self.str(&segments.join("."));
             }
-            cel::Expr::Unary { op, expr } => {
+            expr::Expr::Unary { op, expr } => {
                 self.tag(3);
                 self.tag(match op {
-                    cel::UnaryOp::Not => 1,
-                    cel::UnaryOp::Neg => 2,
+                    expr::UnaryOp::Not => 1,
+                    expr::UnaryOp::Neg => 2,
                 });
                 self.expr(expr);
             }
-            cel::Expr::Binary { op, left, right } => {
+            expr::Expr::Binary { op, left, right } => {
                 self.tag(4);
                 self.tag(match op {
-                    cel::BinaryOp::Mul => 1,
-                    cel::BinaryOp::Div => 2,
-                    cel::BinaryOp::Rem => 3,
-                    cel::BinaryOp::Add => 4,
-                    cel::BinaryOp::Sub => 5,
-                    cel::BinaryOp::Eq => 6,
-                    cel::BinaryOp::Ne => 7,
-                    cel::BinaryOp::Lt => 8,
-                    cel::BinaryOp::Le => 9,
-                    cel::BinaryOp::Gt => 10,
-                    cel::BinaryOp::Ge => 11,
-                    cel::BinaryOp::And => 12,
-                    cel::BinaryOp::Or => 13,
+                    expr::BinaryOp::Mul => 1,
+                    expr::BinaryOp::Div => 2,
+                    expr::BinaryOp::Rem => 3,
+                    expr::BinaryOp::Add => 4,
+                    expr::BinaryOp::Sub => 5,
+                    expr::BinaryOp::Eq => 6,
+                    expr::BinaryOp::Ne => 7,
+                    expr::BinaryOp::Lt => 8,
+                    expr::BinaryOp::Le => 9,
+                    expr::BinaryOp::Gt => 10,
+                    expr::BinaryOp::Ge => 11,
+                    expr::BinaryOp::And => 12,
+                    expr::BinaryOp::Or => 13,
                 });
                 self.expr(left);
                 self.expr(right);
             }
-            cel::Expr::Ternary {
+            expr::Expr::Ternary {
                 cond,
                 then,
                 otherwise,
@@ -854,32 +862,32 @@ impl Writer<'_> {
                 self.expr(then);
                 self.expr(otherwise);
             }
-            cel::Expr::Index { base, index } => {
+            expr::Expr::Index { base, index } => {
                 self.tag(6);
                 self.expr(base);
                 self.expr(index);
             }
-            cel::Expr::Call { function, args } => {
+            expr::Expr::Call { function, args } => {
                 self.tag(7);
                 self.tag(match function {
-                    cel::Function::Duration => 1,
-                    cel::Function::Timestamp => 2,
-                    cel::Function::Size => 3,
-                    cel::Function::Decimal => 4,
+                    expr::Function::Duration => 1,
+                    expr::Function::Timestamp => 2,
+                    expr::Function::Size => 3,
+                    expr::Function::Decimal => 4,
                 });
                 self.count(args.len());
                 for arg in args {
                     self.expr(arg);
                 }
             }
-            cel::Expr::List(items) => {
+            expr::Expr::List(items) => {
                 self.tag(8);
                 self.count(items.len());
                 for item in items {
                     self.expr(item);
                 }
             }
-            cel::Expr::MapLit(entries) => {
+            expr::Expr::MapLit(entries) => {
                 self.tag(9);
                 // Maps are semantically unordered; the canonical form
                 // sorts keys (duplicates are rejected at compilation).
@@ -890,6 +898,42 @@ impl Writer<'_> {
                     self.str(key);
                     self.expr(value);
                 }
+            }
+            expr::Expr::Is { expr, target } => {
+                self.tag(10);
+                self.expr(expr);
+                self.narrow_target(target);
+            }
+            expr::Expr::As { expr, target } => {
+                self.tag(11);
+                self.expr(expr);
+                self.narrow_target(target);
+            }
+        }
+    }
+
+    fn narrow_target(&mut self, target: &expr::NarrowTarget) {
+        match target {
+            expr::NarrowTarget::Type(target) => {
+                self.tag(1);
+                self.ty(target.ty());
+                match target.discriminator() {
+                    None => self.tag(0),
+                    Some(discriminator) => {
+                        self.tag(1);
+                        self.str(discriminator.field());
+                        self.count(discriminator.mapping().len());
+                        for (external, case) in discriminator.mapping() {
+                            self.str(external);
+                            self.str(case);
+                        }
+                    }
+                }
+            }
+            expr::NarrowTarget::Case { name, payload } => {
+                self.tag(2);
+                self.str(name);
+                self.ty(payload);
             }
         }
     }
@@ -954,12 +998,32 @@ impl Writer<'_> {
             }
             crate::value::Value::Struct(fields) => {
                 // Reached by exactly one literal — the EMPTY record
-                // (`parent = {}`; CEL itself cannot construct a
+                // (`parent = {}`; Rastok expression itself cannot construct a
                 // struct). Hashed totally anyway: a distinct tag,
                 // fields sorted by name — the same canonical reading
                 // the seal registry gives structs.
                 self.tag(12);
                 let mut sorted: Vec<_> = fields.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                self.count(sorted.len());
+                for (name, item) in sorted {
+                    self.str(name);
+                    self.value(item);
+                }
+            }
+            crate::value::Value::Enum(symbol) => {
+                self.tag(14);
+                self.str(symbol);
+            }
+            crate::value::Value::StructuralUnion { branch, value } => {
+                self.tag(15);
+                self.hasher.update(&branch.to_le_bytes());
+                self.value(value);
+            }
+            crate::value::Value::TaggedUnion(tagged) => {
+                self.tag(16);
+                self.str(&tagged.case);
+                let mut sorted: Vec<_> = tagged.payload.iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));
                 self.count(sorted.len());
                 for (name, item) in sorted {
@@ -1148,7 +1212,7 @@ graph m0_probe : App {
             .unwrap()
             .hash,
             original,
-            "a CEL expression is identity material"
+            "a Rastok expression is identity material"
         );
     }
 
@@ -1159,7 +1223,7 @@ graph m0_probe : App {
         // and must be deliberate, reviewed, and re-blessed.
         // DELIBERATE MOVE 2026-08-10 (D-2026-08-10-7): a compiled
         // tree seals its STATIC TYPE with its root, so a `json`
-        // document and its CEL twin are distinct programs — every
+        // document and its Rastok expression twin are distinct programs — every
         // tree-carrying graph moved once.
         // DELIBERATE MOVE 2026-08-12 (D-2026-08-12-1): contract
         // defaults are injected into the effective HIR before the

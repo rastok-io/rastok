@@ -5,6 +5,14 @@
 > refuse by name. This document is nevertheless the semantic authority:
 > the implementation is being brought to this model, not the other way
 > around.
+>
+> **Implementation checkpoint (B3, 2026-08-14).** The no_std core owns the
+> complete `DataType` algebra and the currently executable materialized
+> `Value` cases; the `expr` engine consumes those authorities. Deterministic
+> `is`/`as` narrowing for precise, structural-union and tagged-union targets
+> is executable in memory. B1 still tracks the remaining value families, and
+> package v6 refuses the new expression forms categorically; B8 publishes
+> their sole v7 encoding.
 
 Rastok owns the logical type system of envelope payloads. The expression
 language, Connectors, codecs, guest frontends, state and metadata consume

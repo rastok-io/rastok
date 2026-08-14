@@ -494,8 +494,8 @@ mod tests {
 
     #[test]
     fn codes_deduplicate_in_first_seen_order() {
-        let stderr = "error[E-PARSE-EXPECTED]: a\nerror[E-CEL-EXPR]: b\nerror[E-PARSE-EXPECTED]: c";
-        assert_eq!(diagnostic_codes(stderr), vec!["E-PARSE-EXPECTED", "E-CEL-EXPR"]);
+        let stderr = "error[E-PARSE-EXPECTED]: a\nerror[E-EXPR]: b\nerror[E-PARSE-EXPECTED]: c";
+        assert_eq!(diagnostic_codes(stderr), vec!["E-PARSE-EXPECTED", "E-EXPR"]);
     }
 
     #[test]

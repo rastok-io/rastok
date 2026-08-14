@@ -56,7 +56,7 @@ pub enum Value {
 /// BITS — so equality of values is equality of encoded bytes,
 /// `-0.0` stays distinct from `+0.0`, and all NaNs are one value.
 /// This is structural equality of the canonical representation; the
-/// CEL `==` operator is a different question and untouched.
+/// Rastok expression `==` operator is a different question and untouched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CanonicalDouble(u64);
 

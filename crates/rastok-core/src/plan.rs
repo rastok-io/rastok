@@ -14,8 +14,8 @@ pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
 pub use type_resolution::{ResolvedPort, ResolvedPortTable, TypeOrigin};
 pub use validation::{PlanValidationError, ValidatedExecutionPlan};
 
-use crate::cel;
 use crate::datatype::DataType;
+use crate::expr;
 use crate::node;
 use crate::value::Value;
 use alloc::format;
@@ -107,7 +107,7 @@ pub struct ExecutionPlan {
     /// (D-2026-08-10-4).
     pub ext_schema: Vec<(alloc::string::String, DataType)>,
     /// The build-time asset table (D-2026-08-10-5): content-addressed,
-    /// DEDUPLICATED by digest; `cel::Expr::Asset` indexes it. Sorted
+    /// DEDUPLICATED by digest; `expr::Expr::Asset` indexes it. Sorted
     /// by digest — one content, one order, one identity.
     pub assets: Vec<AssetBlob>,
 }
@@ -235,7 +235,7 @@ pub struct Handler {
     /// transaction records; see [`node::HandlerActivation`].
     pub activation: node::HandlerActivation,
     /// The compiled guard, when present.
-    pub guard: Option<cel::Tree>,
+    pub guard: Option<expr::Tree>,
     /// The steps, in text order — the order fixing emission indices.
     pub body: Vec<Step>,
 }
@@ -248,7 +248,7 @@ pub enum Step {
         /// The binding name.
         name: String,
         /// The expression.
-        expr: cel::Tree,
+        expr: expr::Tree,
     },
     /// Emission on a port.
     Emit {
@@ -262,7 +262,7 @@ pub enum Step {
         /// The cell name.
         name: String,
         /// The expression.
-        expr: cel::Tree,
+        expr: expr::Tree,
     },
 }
 
@@ -276,7 +276,7 @@ pub enum Emission {
     /// Full-data replacement; meta untouched.
     Replace(Vec<FieldWrite>),
     /// A computed value becoming the whole `data`.
-    Data(cel::Tree),
+    Data(expr::Tree),
     /// No emission on this port this transaction.
     Nothing,
 }
@@ -287,7 +287,7 @@ pub struct FieldWrite {
     /// The checked landing site.
     pub target: crate::envelope::WriteTarget,
     /// The expression.
-    pub expr: cel::Tree,
+    pub expr: expr::Tree,
 }
 
 /// One planned edge.

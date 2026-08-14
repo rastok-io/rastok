@@ -14,9 +14,9 @@
 pub mod vm;
 
 use crate::boundary::{BoundaryEvent, CallOutcome};
-use crate::cel;
 use crate::datatype::DataType;
 use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue, Scalar};
+use crate::expr;
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
 use crate::plan::{
@@ -49,8 +49,8 @@ pub trait GuestExecutor {
 /// transaction changed nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
-    /// A CEL evaluation fault.
-    Eval(cel::Error),
+    /// A Rastok expression evaluation fault.
+    Eval(expr::Error),
     /// A value that envelope data cannot represent yet.
     Unrepresentable(String),
     /// A materialized value violates the core value algebra.
@@ -441,22 +441,22 @@ impl<'plan> TransactionExecutor<'plan> {
         // Scratch isolation: the handler runs against copies; nothing
         // below touches the caller's state.
         let mut scratch = state.clone();
-        let mut lets: BTreeMap<String, cel::EvalValue> = BTreeMap::new();
+        let mut lets: BTreeMap<String, expr::EvalValue> = BTreeMap::new();
         let mut buffer = EmissionBuffer::new();
         let input = &delivery.envelope;
         let base = |scratch: &BTreeMap<String, Value>,
-                    lets: &BTreeMap<String, cel::EvalValue>|
-         -> BTreeMap<String, cel::EvalValue> {
-            let mut map: BTreeMap<String, cel::EvalValue> = scratch
+                    lets: &BTreeMap<String, expr::EvalValue>|
+         -> BTreeMap<String, expr::EvalValue> {
+            let mut map: BTreeMap<String, expr::EvalValue> = scratch
                 .iter()
-                .map(|(name, value)| (name.clone(), cel::EvalValue::from(value.clone())))
+                .map(|(name, value)| (name.clone(), expr::EvalValue::from(value.clone())))
                 .collect();
             for (name, value) in lets {
                 map.insert(name.clone(), value.clone());
             }
             map.insert(
                 String::from("meta"),
-                cel::EvalValue::from(meta_value(input.meta())),
+                expr::EvalValue::from(meta_value(input.meta())),
             );
             map
         };
@@ -487,7 +487,8 @@ impl<'plan> TransactionExecutor<'plan> {
                     });
                 }
                 other => {
-                    return Err(Fault::Eval(cel::Error {
+                    return Err(Fault::Eval(expr::Error {
+                        kind: expr::ErrorKind::Evaluation,
                         message: format!("the guard evaluated to {other:?}"),
                     }));
                 }
@@ -517,7 +518,8 @@ impl<'plan> TransactionExecutor<'plan> {
                     if let Some(cell) = node.vars.iter().find(|cell| &cell.name == name)
                         && let Some(violation) = cell.ty.violation(name, &value)
                     {
-                        return Err(Fault::Eval(cel::Error {
+                        return Err(Fault::Eval(expr::Error {
+                            kind: expr::ErrorKind::Evaluation,
                             message: alloc::string::ToString::to_string(&violation),
                         }));
                     }
@@ -840,7 +842,7 @@ fn inherit_zones(meta: Meta, input: &Meta) -> Meta {
 fn emitted_content(
     emission: &PlanEmission,
     input: &Envelope,
-    base: &BTreeMap<String, cel::EvalValue>,
+    base: &BTreeMap<String, expr::EvalValue>,
     slot: &DataSlot<'_>,
     plan: &crate::plan::ExecutionPlan,
 ) -> Result<Option<Built>, Fault> {
@@ -872,7 +874,7 @@ fn emitted_content(
             // content type included; anything else is FRESH data and
             // strikes it (D-2026-08-10-4).
             let value = eval_lazy(expr, base, slot, assets)?;
-            if matches!(value, cel::EvalValue::Payload) {
+            if matches!(value, expr::EvalValue::Payload) {
                 return Ok(Some(inherited(BuiltData::Unchanged, false)));
             }
             let value = resolve_payload(value, slot)?;
@@ -901,7 +903,7 @@ fn emitted_content(
                 matches!(&write.target, envelope::WriteTarget::Data(path) if path.is_empty())
                     && matches!(
                         eval_lazy(&write.expr, base, slot, assets)?,
-                        cel::EvalValue::Payload
+                        expr::EvalValue::Payload
                     )
             } else {
                 false
@@ -1005,7 +1007,8 @@ impl PinViolation {
     /// The flattening callers on the Fault path use.
     #[must_use]
     pub fn into_fault(self) -> Fault {
-        Fault::Eval(cel::Error {
+        Fault::Eval(expr::Error {
+            kind: expr::ErrorKind::Evaluation,
             message: alloc::string::ToString::to_string(&self.violation),
         })
     }
@@ -1120,9 +1123,9 @@ impl<'a> DataSlot<'a> {
 
     /// The evaluator's demand: a failed materialization parks its
     /// fault for [`eval_lazy`] to surface and answers "unbound".
-    fn demand(&self) -> Option<cel::EvalValue> {
+    fn demand(&self) -> Option<expr::EvalValue> {
         match self.materialize() {
-            Ok(value) => Some(cel::EvalValue::from(value)),
+            Ok(value) => Some(expr::EvalValue::from(value)),
             Err(fault) => {
                 *self.fault.borrow_mut() = Some(fault);
                 None
@@ -1142,34 +1145,36 @@ impl<'a> DataSlot<'a> {
 #[derive(Debug)]
 pub struct LazyBindings<'a> {
     /// Everything already materialized: state scratch, locals, meta.
-    pub base: &'a BTreeMap<String, cel::EvalValue>,
+    pub base: &'a BTreeMap<String, expr::EvalValue>,
     /// The on-demand payload.
     pub data: &'a DataSlot<'a>,
     /// The plan's build-time asset table (D-2026-08-10-5).
     pub assets: &'a [crate::plan::AssetBlob],
 }
 
-impl cel::Bindings for LazyBindings<'_> {
-    fn get(&self, name: &str) -> Option<cel::EvalValue> {
+impl expr::Bindings for LazyBindings<'_> {
+    fn get(&self, name: &str) -> Option<expr::EvalValue> {
         if let Some(value) = self.base.get(name) {
             return Some(value.clone());
         }
         // Resolving the NAME is not yet inspecting the structure:
         // the witness carries; `Bindings::payload` materializes.
-        (name == "data").then_some(cel::EvalValue::Payload)
+        (name == "data").then_some(expr::EvalValue::Payload)
     }
 
-    fn payload(&self) -> Result<cel::EvalValue, cel::Error> {
-        self.data.demand().ok_or_else(|| cel::Error {
+    fn payload(&self) -> Result<expr::EvalValue, expr::Error> {
+        self.data.demand().ok_or_else(|| expr::Error {
+            kind: expr::ErrorKind::Evaluation,
             message: String::from("the payload could not materialize"),
         })
     }
 
-    fn asset(&self, index: u32) -> Result<cel::EvalValue, cel::Error> {
+    fn asset(&self, index: u32) -> Result<expr::EvalValue, expr::Error> {
         self.assets
             .get(index as usize)
-            .map(|blob| cel::EvalValue::Bytes(blob.bytes.clone()))
-            .ok_or_else(|| cel::Error {
+            .map(|blob| expr::EvalValue::Bytes(blob.bytes.clone()))
+            .ok_or_else(|| expr::Error {
+                kind: expr::ErrorKind::Evaluation,
                 message: format!("asset {index} is outside the validated table"),
             })
     }
@@ -1182,28 +1187,41 @@ impl cel::Bindings for LazyBindings<'_> {
 ///
 /// # Errors
 /// The materialization fault, if the payload cannot decode.
-pub fn resolve_payload(value: cel::EvalValue, slot: &DataSlot<'_>) -> Result<Value, Fault> {
+pub fn resolve_payload(value: expr::EvalValue, slot: &DataSlot<'_>) -> Result<Value, Fault> {
     Ok(match value {
-        cel::EvalValue::Payload => slot.materialize()?,
-        cel::EvalValue::List(items) => Value::Array(
+        expr::EvalValue::Payload => slot.materialize()?,
+        expr::EvalValue::List(items) => Value::Array(
             items
                 .into_iter()
                 .map(|item| resolve_payload(item, slot))
                 .collect::<Result<_, _>>()?,
         ),
-        cel::EvalValue::Map(map) => {
+        expr::EvalValue::Map(map) => {
             let mut deep = BTreeMap::new();
             for (key, value) in map {
                 deep.insert(key, resolve_payload(value, slot)?);
             }
             Value::Map(deep)
         }
-        cel::EvalValue::Struct(fields) => Value::Struct(
+        expr::EvalValue::Struct(fields) => Value::Struct(
             fields
                 .into_iter()
                 .map(|(name, value)| Ok((name, resolve_payload(value, slot)?)))
                 .collect::<Result<_, _>>()?,
         ),
+        expr::EvalValue::StructuralUnion { branch, value } => Value::StructuralUnion {
+            branch,
+            value: Box::new(resolve_payload(*value, slot)?),
+        },
+        expr::EvalValue::TaggedUnion { case, payload } => {
+            Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+                case,
+                payload: payload
+                    .into_iter()
+                    .map(|(name, value)| Ok((name, resolve_payload(value, slot)?)))
+                    .collect::<Result<_, Fault>>()?,
+            }))
+        }
         other => other.into_value().map_err(Fault::Eval)?,
     })
 }
@@ -1217,17 +1235,17 @@ pub fn resolve_payload(value: cel::EvalValue, slot: &DataSlot<'_>) -> Result<Val
 /// # Errors
 /// The materialization fault, or the evaluation's own.
 pub fn eval_lazy(
-    tree: &cel::Tree,
-    base: &BTreeMap<String, cel::EvalValue>,
+    tree: &expr::Tree,
+    base: &BTreeMap<String, expr::EvalValue>,
     slot: &DataSlot<'_>,
     assets: &[crate::plan::AssetBlob],
-) -> Result<cel::EvalValue, Fault> {
+) -> Result<expr::EvalValue, Fault> {
     let env = LazyBindings {
         base,
         data: slot,
         assets,
     };
-    let result = cel::eval(tree, &env).map_err(Fault::Eval);
+    let result = expr::eval(tree, &env).map_err(Fault::Eval);
     if let Some(fault) = slot.take_fault() {
         return Err(fault);
     }
@@ -1301,7 +1319,7 @@ pub fn meta_value(meta: &Meta) -> Value {
     Value::Map(root)
 }
 
-/// Nests a zone's flat dotted keys into the CEL map tree the
+/// Nests a zone's flat dotted keys into the Rastok expression map tree the
 /// projection exposes — one storage form, nested views derived.
 fn nested_from_pairs(pairs: impl Iterator<Item = (String, Value)>) -> Value {
     let mut root: BTreeMap<String, Value> = BTreeMap::new();
@@ -1425,6 +1443,29 @@ mod metadata_conformance_tests {
         assert!(
             !meta_conforms(&malformed_decimal, &DataType::Variant),
             "variant is dynamic, not an escape from value well-formedness"
+        );
+    }
+}
+
+#[cfg(test)]
+mod payload_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn union_payloads_resolve_lazy_witnesses_recursively() {
+        let data = Data::materialized(Value::Text(String::from("carried")));
+        let slot = DataSlot::new(&data);
+        let value = expr::EvalValue::TaggedUnion {
+            case: String::from("Done"),
+            payload: vec![(String::from("value"), expr::EvalValue::Payload)],
+        };
+
+        assert_eq!(
+            resolve_payload(value, &slot).expect("the nested witness materializes"),
+            Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+                case: String::from("Done"),
+                payload: vec![(String::from("value"), Value::Text(String::from("carried")))],
+            }))
         );
     }
 }

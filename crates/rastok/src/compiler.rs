@@ -2,8 +2,8 @@
 //!
 //! Governing rule: [`grammar.md`] — the LL(1) reference grammar. The
 //! implementation target it fixes is a hand-written recursive-descent
-//! parser with one token of lookahead over a hand-written lexer; CEL
-//! expression spans are delimited here and handed to the CEL chain
+//! parser with one token of lookahead over a hand-written lexer; Rastok
+//! expression spans are delimited here and handed to the expression chain
 //! untouched.
 //!
 //! [`grammar.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/grammar.md
@@ -153,6 +153,19 @@ pub fn compile_with_assets(
                     ),
                 )
                 .with_field("construct", "plan-package v7 type transport"),
+            );
+            return Err(bag);
+        }
+        Err(PlanValidationError::ExpressionNotInFormat { form, format }) => {
+            bag.push(
+                Diagnostic::new(
+                    check::E_CHECK_DEFERRED,
+                    Phase::Check,
+                    format!(
+                        "the `{form}` expression is valid but plan-package v{format} cannot transport it"
+                    ),
+                )
+                .with_field("construct", "plan-package v7 expression transport"),
             );
             return Err(bag);
         }

@@ -10,10 +10,12 @@ Runtime outcome cases (`JoinExpired`, `LoopExhausted`,
 ordinary typed port payloads, hashed through their resolved types and
 compared in the causal core. They live in their home specs, not here.
 
-The current `E-CEL-EXPR` and bare-`json` rows describe executable v6.
+The current `E-EXPR` and bare-`json` rows describe executable v6.
 D-2026-08-14-1 migrates them with the `expr`/`IDENT!` implementation;
 new or renamed checks are registered only when their focused negative
 tests land, never pre-allocated by this planning pass.
+`E-EXPR` supersedes the unreleased `E-CEL-EXPR` spelling as part of B3;
+no public diagnostic contract ever carried the old code.
 
 ## Rules
 
@@ -56,7 +58,7 @@ tests land, never pre-allocated by this planning pass.
 | E-RESOLVE-UNKNOWN | error | resolve | [grammar.md](grammar.md) | a name resolving to no declaration; field `name` |
 | E-PORT-UNKNOWN | error | check | [grammar.md](grammar.md) | a port the addressed node does not expose; field `port` |
 | E-META-SYS-READONLY | error | check | [envelope.md](envelope.md) | a write reaching the read-only `meta.sys` namespace (§6: there is no write) |
-| E-CEL-EXPR | error | check | [grammar.md](grammar.md) | a CEL expression fault, adapted from the CEL chain; field `detail` |
+| E-EXPR | error | check | [grammar.md](grammar.md) | a Rastok expression fault, adapted from the isolated expression compiler; field `detail` |
 | E-CHECK-DEFERRED | error | check | [grammar.md](grammar.md) | grammar admitted but outside the executable subset of this build; field `construct` |
 | E-CONNECTOR-UNAVAILABLE | error | check | [stdlib.md](stdlib.md) | a connector type with no adapter in this build — declared catalogue or unknown; field `type` |
 | E-CONTRACT-ATTR | error | check | [stdlib.md](stdlib.md) | an attribute violating its connector contract sheet; fields `attribute`, `detail` |

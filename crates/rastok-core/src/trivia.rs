@@ -2,8 +2,8 @@
 //! each consumer. The primitive answers "is there a comment at this
 //! offset, and where does it end"; it decides NOTHING about
 //! expression termination, trivia consumption, or diagnostics —
-//! those are the consumers' policies (host trivia consumes, the CEL
-//! region scan applies its depth rule, probes stay read-only)
+//! those are the consumers' policies (host trivia consumes, the Rastok
+//! expression-region scan applies its depth rule, probes stay read-only)
 //! (D-2026-08-13-1, review round: divergent hand-rolled copies of
 //! this fact were the root of a real bug).
 

@@ -851,6 +851,16 @@ fn write_into(
             }
             out.push('}');
         }
+        Value::Enum(symbol) => write_string(symbol, out),
+        Value::StructuralUnion { value, .. } => write_into(value, out, depth + 1)?,
+        Value::TaggedUnion(_) => {
+            return Err(JsonError {
+                offset: 0,
+                message: String::from(
+                    "a tagged union requires an explicit JSON discriminator projection",
+                ),
+            });
+        }
     }
     Ok(())
 }

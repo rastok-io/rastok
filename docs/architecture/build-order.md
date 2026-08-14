@@ -74,7 +74,7 @@ Lexer and parser for the selected M0 grammar subset, producing
 Exit: accepted and rejected `.rkg` fixtures with spans, per
 [`../spec/grammar.md`](../spec/grammar.md).
 
-### Stage 5 — Rastok expressions (module `cel` during M1.3)
+### Stage 5 — Rastok expressions (`expr`)
 
 The isolated expression consumer: compilation (`Signature`, `Tree`, native
 diagnostics) and evaluation (`EvalValue`, `Bindings`, `Error`) over the core

@@ -70,6 +70,18 @@ pub fn value_tagged(value: &Value) -> Cbor {
             Cbor::Uint(19),
             Cbor::Array(items.iter().map(value_tagged).collect()),
         ]),
+        Value::Enum(symbol) => Cbor::Array(vec![Cbor::Uint(20), Cbor::Text(symbol.clone())]),
+        Value::StructuralUnion { branch, value } => Cbor::Array(vec![
+            Cbor::Uint(21),
+            Cbor::Array(vec![Cbor::Uint(u64::from(*branch)), value_tagged(value)]),
+        ]),
+        Value::TaggedUnion(tagged) => Cbor::Array(vec![
+            Cbor::Uint(21),
+            Cbor::Array(vec![
+                Cbor::Text(tagged.case.clone()),
+                value_tagged(&Value::Struct(tagged.payload.clone())),
+            ]),
+        ]),
     }
 }
 
@@ -175,5 +187,39 @@ mod tests {
             Cbor::Text(String::from("b")),
             "shorter text is byte-smaller"
         );
+    }
+
+    #[test]
+    fn the_two_union_families_seal_their_semantic_discriminant() {
+        let structural = value_tagged(&crate::value::Value::StructuralUnion {
+            branch: 2,
+            value: alloc::boxed::Box::new(crate::value::Value::Text(String::from("value"))),
+        });
+        let tagged = value_tagged(&crate::value::Value::TaggedUnion(alloc::boxed::Box::new(
+            crate::value::TaggedUnionValue {
+                case: String::from("Exited"),
+                payload: alloc::vec![(String::from("exit_code"), crate::value::Value::Int(0))],
+            },
+        )));
+
+        let Cbor::Array(structural) = structural else {
+            panic!("a tagged structural union");
+        };
+        let Cbor::Array(structural_body) = &structural[1] else {
+            panic!("a structural union body");
+        };
+        assert_eq!(structural_body[0], Cbor::Uint(2));
+
+        let Cbor::Array(tagged) = tagged else {
+            panic!("a tagged named union");
+        };
+        let Cbor::Array(tagged_body) = &tagged[1] else {
+            panic!("a named union body");
+        };
+        assert_eq!(tagged_body[0], Cbor::Text(String::from("Exited")));
+        assert!(matches!(
+            tagged_body[1],
+            Cbor::Array(ref payload) if payload.first() == Some(&Cbor::Uint(17))
+        ));
     }
 }

@@ -4,13 +4,13 @@
 //! The HIR carries only what survived every check: names are resolved,
 //! the port table is complete — declared and inferred, defaults
 //! implicit — every braced value is classified into its semantic
-//! form (D-2026-08-09-1), and every expression is a compiled CEL
+//! form (D-2026-08-09-1), and every expression is a compiled Rastok expression
 //! tree. Spans
 //! and other diagnostic material stay in side tables owned by later
 //! stages; nothing here is hashed with positions in it.
 
-use crate::cel;
 use crate::datatype::DataType;
+use crate::expr;
 use crate::node;
 
 /// The checked unit: the single `: App` graph of the deployed unit,
@@ -57,7 +57,7 @@ pub struct Graph {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Const {
     /// The expression as compiled; enters the semantic hash.
-    pub tree: cel::Tree,
+    pub tree: expr::Tree,
     /// The boot-time reduction; never identity material.
     pub value: crate::value::Value,
 }
@@ -178,7 +178,7 @@ pub struct Handler {
     /// transaction records; see [`node::HandlerActivation`].
     pub activation: node::HandlerActivation,
     /// The compiled `where` guard, when present.
-    pub guard: Option<cel::Tree>,
+    pub guard: Option<expr::Tree>,
     /// The body, in text order — the order that fixes emission
     /// indices.
     pub body: Vec<Statement>,
@@ -192,7 +192,7 @@ pub enum Statement {
         /// The binding name.
         name: String,
         /// The compiled expression.
-        value: cel::Tree,
+        value: expr::Tree,
     },
     /// Emission on a port.
     Emit {
@@ -206,7 +206,7 @@ pub enum Statement {
         /// The cell name.
         name: String,
         /// The compiled expression.
-        value: cel::Tree,
+        value: expr::Tree,
     },
 }
 
@@ -224,7 +224,7 @@ pub enum EmitValue {
     /// Lowered to the plan's `Replace`.
     FreshData(Vec<FieldWrite>),
     /// A computed value becoming the whole `data`.
-    Data(cel::Tree),
+    Data(expr::Tree),
     /// `nothing` — no emission on this port this transaction.
     Nothing,
 }
@@ -239,7 +239,7 @@ pub struct FieldWrite {
     /// The checked landing site — what the runtime executes.
     pub target: crate::envelope::WriteTarget,
     /// The compiled expression.
-    pub value: cel::Tree,
+    pub value: expr::Tree,
 }
 
 /// One desugared edge: a single source-to-target pair.
@@ -347,7 +347,7 @@ pub struct Expectation {
     /// The observed target.
     pub target: ExpectTarget,
     /// The compiled predicate over each delivery.
-    pub predicate: Option<cel::Tree>,
+    pub predicate: Option<expr::Tree>,
 }
 
 /// The three quantifiers, nothing more.

@@ -147,10 +147,10 @@ fn a_selector_colliding_with_an_attribute_is_a_sheet_defect() {
 }
 
 #[test]
-fn an_uncompilable_cel_default_is_a_sheet_defect() {
+fn an_uncompilable_expression_default_is_a_sheet_defect() {
     const BAD: &[AttributeSpec] = &[AttributeSpec {
         name: "x",
-        presence: Presence::Defaulted(DefaultValue::CelExpression("] not cel [")),
+        presence: Presence::Defaulted(DefaultValue::Expression("] not expr [")),
         domain: ValueDomain::Text,
     }];
     assert!(matches!(
@@ -167,7 +167,7 @@ fn a_default_outside_its_domain_is_a_sheet_defect() {
     // `1` compiles and reduces — but it is no Text.
     const MISFIT: &[AttributeSpec] = &[AttributeSpec {
         name: "x",
-        presence: Presence::Defaulted(DefaultValue::CelExpression("1")),
+        presence: Presence::Defaulted(DefaultValue::Expression("1")),
         domain: ValueDomain::Text,
     }];
     assert!(matches!(
@@ -213,7 +213,7 @@ fn a_deferred_only_domain_needs_a_deferred_profile() {
     const RAW: &[AttributeSpec] = &[AttributeSpec {
         name: "correlate",
         presence: Presence::Optional,
-        domain: ValueDomain::CelPath,
+        domain: ValueDomain::ExprPath,
     }];
     assert_eq!(
         Registry::try_m0()
@@ -326,7 +326,7 @@ fn writing_a_default_exactly_is_the_same_identity() {
 
 #[test]
 fn args_null_refuses_as_a_type() {
-    // Omission resolves to `[]`; `null` is a real, distinct CEL
+    // Omission resolves to `[]`; `null` is a real, distinct Rastok expression
     // value and the domain is not nullable.
     let source = process_graph(&format!("{FULL}\n    args = null"));
     refusal_with(
@@ -350,7 +350,7 @@ fn codec_stays_required() {
 }
 
 #[test]
-fn a_choice_written_as_cel_text_names_the_bare_word() {
+fn a_choice_written_as_expression_text_names_the_bare_word() {
     let source = process_graph(
         "    mode = \"job\"\n    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic",
     );
@@ -358,7 +358,7 @@ fn a_choice_written_as_cel_text_names_the_bare_word() {
 }
 
 #[test]
-fn a_cel_domain_refuses_a_bare_word() {
+fn an_expression_domain_refuses_a_bare_word() {
     let source = process_graph(
         "    command = cat ; codec = lines\n    effect = idempotent ; behavior = deterministic",
     );
@@ -864,7 +864,7 @@ fn a_deferred_domain_carries_no_default() {
             support: ProfileSupport::Deferred("someday"),
             attributes: &[AttributeSpec {
                 name: "x",
-                presence: Presence::Defaulted(DefaultValue::CelExpression("[]")),
+                presence: Presence::Defaulted(DefaultValue::Expression("[]")),
                 domain: ValueDomain::Struct,
             }],
         }],
@@ -995,7 +995,7 @@ fn json_and_nothing_are_unmaskable() {
             "lab named json",
             "graph g : App {\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\nlab json {\n}\n",
         ),
-        // The expression literals: a masked one is a shadow CEL can
+        // The expression literals: a masked one is a shadow Rastok expression can
         // never read (review round 3).
         (
             "val true",
@@ -1039,7 +1039,7 @@ fn json_and_nothing_are_unmaskable() {
     )
     .expect("nothing lives");
     // With no maskable binding, `json[0]` IS the document `[0]` —
-    // the same program as its spaced twin, and never the CEL list.
+    // the same program as its spaced twin, and never the Rastok expression list.
     let hash = |source: &str| compile_one(source).expect("valid").hash.to_string();
     assert_eq!(
         hash(
@@ -1057,7 +1057,7 @@ fn json_and_nothing_are_unmaskable() {
         hash(
             "graph g : App {\n  input in: variant\n  output out: variant\n  operator o {\n    on in { out = [0] }\n  }\n  . -> o -> .\n}\n"
         ),
-        "a variant document is not the CEL list"
+        "a variant document is not the Rastok expression list"
     );
 }
 
@@ -1095,7 +1095,7 @@ fn a_json_recovery_follows_the_position_terminators() {
             "graph g : App {\n  operator o {\n    on in { out = json @; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         (
-            "quoted CEL follower",
+            "quoted Rastok expression follower",
             "graph g : App {\n  operator o {\n    on in { out = json 'x'; out = data }\n  }\n  . -> o -> .\n}\n",
         ),
         // A former scalar spelling refuses the same way, with the
@@ -1297,7 +1297,7 @@ fn a_json_error_resynchronizes_at_the_line_boundary() {
 #[test]
 fn an_omitted_expression_always_diagnoses() {
     // The review's blocker: the recovery form is Value::Error, never
-    // an empty CelExpr a user could also produce — a genuinely
+    // an empty ExprSource a user could also produce — a genuinely
     // omitted expression must diagnose, everywhere.
     for (label, source) in [
         (

@@ -6,8 +6,8 @@ use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::{String, ToString};
 
-use crate::cel;
 use crate::datatype::{DataType, TypeError};
+use crate::expr;
 use crate::node;
 use crate::plan::{Emission, EndpointRef, ExecutionPlan, Node, NodeKind, Slot, Step};
 
@@ -91,7 +91,7 @@ pub enum PlanValidationError {
         /// The repeated kind.
         kind: String,
     },
-    /// A CEL map literal names one key twice.
+    /// A Rastok expression map literal names one key twice.
     DuplicateMapKey {
         /// The repeated key.
         key: String,
@@ -129,7 +129,7 @@ pub enum PlanValidationError {
         name: String,
     },
     /// A constant value no source can express — a struct constant:
-    /// CEL cannot construct one, so the compiler never emits one,
+    /// Rastok expressions cannot construct one, so the compiler never emits one,
     /// and the codec's tables do not carry one. Refused so
     /// `encode ⇒ decode` stays total.
     UnrepresentableConstant,
@@ -257,6 +257,15 @@ pub enum PlanValidationError {
         location: String,
         /// The valid but not-yet-transportable type.
         ty: DataType,
+        /// Published format that cannot carry it.
+        format: u32,
+    },
+    /// The logical expression is valid in memory but its AST node has no
+    /// spelling in the currently published package format. B8 lifts this
+    /// categorical gate with v7 rather than extending v6 piecemeal.
+    ExpressionNotInFormat {
+        /// Expression form requiring the later registry.
+        form: &'static str,
         /// Published format that cannot carry it.
         format: u32,
     },
@@ -446,6 +455,10 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: type `{ty}` at {location} has no plan-package v{format} encoding"
             ),
+            Self::ExpressionNotInFormat { form, format } => write!(
+                f,
+                "invalid plan: expression form `{form}` has no plan-package v{format} encoding"
+            ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
             }
@@ -551,7 +564,7 @@ fn kind_rank(kind: &NodeKind) -> u8 {
 }
 
 /// A metadata write target must sit inside the travelling zone
-/// schema — the Registry-less half of the CEL grid.
+/// schema — the Registry-less half of the Rastok expression grid.
 fn meta_target_known(
     plan: &ExecutionPlan,
     target: &crate::envelope::WriteTarget,
@@ -657,9 +670,9 @@ fn schema_well_formed(
 
 /// Every `Expr::Asset` index must sit inside the asset table — the
 /// VM dereferences without checking.
-fn asset_indexes_bound(plan: &ExecutionPlan, expr: &cel::Expr) -> Result<(), PlanValidationError> {
+fn asset_indexes_bound(plan: &ExecutionPlan, expr: &expr::Expr) -> Result<(), PlanValidationError> {
     match expr {
-        cel::Expr::Asset(index) => {
+        expr::Expr::Asset(index) => {
             if (*index as usize) < plan.assets.len() {
                 Ok(())
             } else {
@@ -669,13 +682,15 @@ fn asset_indexes_bound(plan: &ExecutionPlan, expr: &cel::Expr) -> Result<(), Pla
                 })
             }
         }
-        cel::Expr::Literal(_) | cel::Expr::Path(_) => Ok(()),
-        cel::Expr::Unary { expr, .. } => asset_indexes_bound(plan, expr),
-        cel::Expr::Binary { left, right, .. } => {
+        expr::Expr::Literal(_) | expr::Expr::Path(_) => Ok(()),
+        expr::Expr::Unary { expr, .. }
+        | expr::Expr::Is { expr, .. }
+        | expr::Expr::As { expr, .. } => asset_indexes_bound(plan, expr),
+        expr::Expr::Binary { left, right, .. } => {
             asset_indexes_bound(plan, left)?;
             asset_indexes_bound(plan, right)
         }
-        cel::Expr::Ternary {
+        expr::Expr::Ternary {
             cond,
             then,
             otherwise,
@@ -684,17 +699,17 @@ fn asset_indexes_bound(plan: &ExecutionPlan, expr: &cel::Expr) -> Result<(), Pla
             asset_indexes_bound(plan, then)?;
             asset_indexes_bound(plan, otherwise)
         }
-        cel::Expr::Index { base, index } => {
+        expr::Expr::Index { base, index } => {
             asset_indexes_bound(plan, base)?;
             asset_indexes_bound(plan, index)
         }
-        cel::Expr::Call { args, .. } => args
+        expr::Expr::Call { args, .. } => args
             .iter()
             .try_for_each(|arg| asset_indexes_bound(plan, arg)),
-        cel::Expr::List(items) => items
+        expr::Expr::List(items) => items
             .iter()
             .try_for_each(|item| asset_indexes_bound(plan, item)),
-        cel::Expr::MapLit(pairs) => pairs
+        expr::Expr::MapLit(pairs) => pairs
             .iter()
             .try_for_each(|(_, value)| asset_indexes_bound(plan, value)),
     }
@@ -768,7 +783,7 @@ fn data_type_at(ty: &DataType, location: String) -> Result<(), PlanValidationErr
     }
 }
 
-fn tree_type_at(tree: &cel::Tree, location: String) -> Result<(), PlanValidationError> {
+fn tree_type_at(tree: &expr::Tree, location: String) -> Result<(), PlanValidationError> {
     data_type_at(&tree.ty, location)
 }
 
@@ -1278,7 +1293,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     Ok(())
 }
 
-/// The expressible-constant gate. CEL cannot construct a struct, so
+/// The expressible-constant gate. Rastok expressions cannot construct a struct, so
 /// the one struct constant a compiled plan holds is the EMPTY record
 /// literal (`parent = {}`, D-2026-08-09-2) — the v4 tables read it
 /// back, and anything with fields still refuses: admitting more than the
@@ -1312,7 +1327,10 @@ fn value_shape_expressible(value: &crate::value::Value) -> Result<(), PlanValida
                 Err(PlanValidationError::UnrepresentableConstant)
             }
         }
-        crate::value::Value::Struct(_) => Err(PlanValidationError::UnrepresentableConstant),
+        crate::value::Value::Struct(_)
+        | crate::value::Value::Enum(_)
+        | crate::value::Value::StructuralUnion { .. }
+        | crate::value::Value::TaggedUnion(_) => Err(PlanValidationError::UnrepresentableConstant),
         crate::value::Value::Array(items) => items.iter().try_for_each(value_shape_expressible),
         crate::value::Value::Map(entries) => entries.values().try_for_each(value_shape_expressible),
         _ => Ok(()),
@@ -1325,20 +1343,20 @@ fn value_shape_expressible(value: &crate::value::Value) -> Result<(), PlanValida
 /// check cannot catch (it faithfully reproduces whatever order the
 /// tree carries). Recursion is safe here: the nesting budget has
 /// already bounded the tree.
-fn expr_canonical(expr: &cel::Expr) -> Result<(), PlanValidationError> {
+fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
     match expr {
-        cel::Expr::Literal(value) => value_expressible(value),
+        expr::Expr::Literal(value) => value_expressible(value),
         // The index is bounds-checked against the asset table in
         // the walk that owns the plan (`meta_target_known`'s
         // sibling); canonical here.
-        cel::Expr::Asset(_) => Ok(()),
-        cel::Expr::Path(_) => Ok(()),
-        cel::Expr::Unary { expr, .. } => expr_canonical(expr),
-        cel::Expr::Binary { left, right, .. } => {
+        expr::Expr::Asset(_) => Ok(()),
+        expr::Expr::Path(_) => Ok(()),
+        expr::Expr::Unary { expr, .. } => expr_canonical(expr),
+        expr::Expr::Binary { left, right, .. } => {
             expr_canonical(left)?;
             expr_canonical(right)
         }
-        cel::Expr::Ternary {
+        expr::Expr::Ternary {
             cond,
             then,
             otherwise,
@@ -1347,13 +1365,13 @@ fn expr_canonical(expr: &cel::Expr) -> Result<(), PlanValidationError> {
             expr_canonical(then)?;
             expr_canonical(otherwise)
         }
-        cel::Expr::Index { base, index } => {
+        expr::Expr::Index { base, index } => {
             expr_canonical(base)?;
             expr_canonical(index)
         }
-        cel::Expr::Call { args, .. } => args.iter().try_for_each(expr_canonical),
-        cel::Expr::List(items) => items.iter().try_for_each(expr_canonical),
-        cel::Expr::MapLit(pairs) => {
+        expr::Expr::Call { args, .. } => args.iter().try_for_each(expr_canonical),
+        expr::Expr::List(items) => items.iter().try_for_each(expr_canonical),
+        expr::Expr::MapLit(pairs) => {
             let mut keys = alloc::collections::BTreeSet::new();
             for (key, _) in pairs {
                 if !keys.insert(key.as_str()) {
@@ -1372,5 +1390,13 @@ fn expr_canonical(expr: &cel::Expr) -> Result<(), PlanValidationError> {
                 .map(|(_, value)| value)
                 .try_for_each(expr_canonical)
         }
+        expr::Expr::Is { .. } => Err(PlanValidationError::ExpressionNotInFormat {
+            form: "is",
+            format: crate::plan::serialization::FORMAT_VERSION,
+        }),
+        expr::Expr::As { .. } => Err(PlanValidationError::ExpressionNotInFormat {
+            form: "as",
+            format: crate::plan::serialization::FORMAT_VERSION,
+        }),
     }
 }

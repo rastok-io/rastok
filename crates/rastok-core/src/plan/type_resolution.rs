@@ -9,9 +9,9 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::cel;
 use crate::datatype::{DataType, StructType, TypeField};
 use crate::envelope::WriteTarget;
+use crate::expr;
 use crate::node;
 use crate::plan::{
     Emission, EndpointRef, ExecutionPlan, NodeKind, PlanValidationError, Slot, Step,
@@ -132,7 +132,7 @@ struct EmissionRule<'plan> {
 
 struct ExpressionRule<'plan> {
     input: usize,
-    expression: &'plan cel::Tree,
+    expression: &'plan expr::Tree,
     expected: DataType,
 }
 
@@ -571,7 +571,7 @@ impl<'plan> Solver<'plan> {
     fn constrain_expression(
         &mut self,
         input: usize,
-        expression: &cel::Tree,
+        expression: &expr::Tree,
         expected: &DataType,
     ) -> Result<bool, PlanValidationError> {
         if !expression_reads_data(&expression.root) {
@@ -656,12 +656,12 @@ fn emission_type(
 }
 
 fn expression_type(
-    tree: &cel::Tree,
+    tree: &expr::Tree,
     input: Option<&DataType>,
     expected: Option<&DataType>,
     require_input: &mut impl FnMut(TypeRequirement) -> Result<bool, PlanValidationError>,
 ) -> Result<Option<DataType>, PlanValidationError> {
-    if matches!(&tree.root, cel::Expr::Path(path) if path.as_slice() == ["data"]) {
+    if matches!(&tree.root, expr::Expr::Path(path) if path.as_slice() == ["data"]) {
         return Ok(input.cloned());
     }
     if expression_reads_data(&tree.root) {
@@ -683,10 +683,10 @@ fn expression_type(
         return Ok(Some(expected.clone()));
     }
     match &tree.root {
-        cel::Expr::List(items) if items.is_empty() => Ok(expected
+        expr::Expr::List(items) if items.is_empty() => Ok(expected
             .filter(|ty| matches!(ty, DataType::Array(_) | DataType::Variant))
             .cloned()),
-        cel::Expr::MapLit(entries) if entries.is_empty() => Ok(expected
+        expr::Expr::MapLit(entries) if entries.is_empty() => Ok(expected
             .filter(|ty| matches!(ty, DataType::Map(_) | DataType::Variant))
             .cloned()),
         _ => Ok(intrinsic_expression_type(&tree.root).or_else(|| Some(tree.ty.clone()))),
@@ -721,7 +721,7 @@ fn emission_preserves_payload(emission: &Emission) -> bool {
     match emission {
         Emission::Identity => true,
         Emission::Data(tree) => {
-            matches!(&tree.root, cel::Expr::Path(path) if path.as_slice() == ["data"])
+            matches!(&tree.root, expr::Expr::Path(path) if path.as_slice() == ["data"])
         }
         Emission::Patch(fields) | Emission::Replace(fields) => {
             // Match the runtime's whole-payload witness rule: metadata-only
@@ -735,7 +735,7 @@ fn emission_preserves_payload(emission: &Emission) -> bool {
                 return matches!(emission, Emission::Patch(_));
             };
             matches!(&last.target, WriteTarget::Data(path) if path.is_empty())
-                && matches!(&last.expr.root, cel::Expr::Path(path) if path.as_slice() == ["data"])
+                && matches!(&last.expr.root, expr::Expr::Path(path) if path.as_slice() == ["data"])
         }
         Emission::Nothing => false,
     }
@@ -843,21 +843,21 @@ fn join_produced(
     }
 }
 
-fn expression_requirement(expr: &cel::Expr, expected: &DataType) -> Option<TypeRequirement> {
+fn expression_requirement(expr: &expr::Expr, expected: &DataType) -> Option<TypeRequirement> {
     match expr {
-        cel::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => Some(
+        expr::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => Some(
             requirement_at_path(&path[1..], TypeRequirement::Exact(expected.clone())),
         ),
-        cel::Expr::Path(_) | cel::Expr::Literal(_) | cel::Expr::Asset(_) => None,
-        cel::Expr::Unary { op, expr } => expression_requirement(
+        expr::Expr::Path(_) | expr::Expr::Literal(_) | expr::Expr::Asset(_) => None,
+        expr::Expr::Unary { op, expr } => expression_requirement(
             expr,
             match op {
-                cel::UnaryOp::Not => &DataType::Bool,
-                cel::UnaryOp::Neg => expected,
+                expr::UnaryOp::Not => &DataType::Bool,
+                expr::UnaryOp::Neg => expected,
             },
         ),
-        cel::Expr::Binary { op, left, right } => {
-            use cel::BinaryOp::{And, Eq, Ge, Gt, Le, Lt, Ne, Or};
+        expr::Expr::Binary { op, left, right } => {
+            use expr::BinaryOp::{And, Eq, Ge, Gt, Le, Lt, Ne, Or};
             let (left_expected, right_expected) = match op {
                 And | Or => (Some(DataType::Bool), Some(DataType::Bool)),
                 Eq | Ne | Lt | Le | Gt | Ge => (
@@ -875,7 +875,7 @@ fn expression_requirement(expr: &cel::Expr, expected: &DataType) -> Option<TypeR
                     .and_then(|ty| expression_requirement(right, ty)),
             )
         }
-        cel::Expr::Ternary {
+        expr::Expr::Ternary {
             cond,
             then,
             otherwise,
@@ -886,7 +886,7 @@ fn expression_requirement(expr: &cel::Expr, expected: &DataType) -> Option<TypeR
                 expression_requirement(otherwise, expected),
             ),
         ),
-        cel::Expr::Index { base, index } => {
+        expr::Expr::Index { base, index } => {
             let collection = match intrinsic_expression_type(index) {
                 Some(DataType::Text) => DataType::text_map(expected.clone()),
                 Some(DataType::Integer(_)) => DataType::array(expected.clone()),
@@ -894,17 +894,17 @@ fn expression_requirement(expr: &cel::Expr, expected: &DataType) -> Option<TypeR
             };
             expression_requirement(base, &collection)
         }
-        cel::Expr::Call { function, args } => {
+        expr::Expr::Call { function, args } => {
             let argument = match function {
-                cel::Function::Duration | cel::Function::Timestamp | cel::Function::Decimal => {
+                expr::Function::Duration | expr::Function::Timestamp | expr::Function::Decimal => {
                     Some(DataType::Text)
                 }
-                cel::Function::Size => None,
+                expr::Function::Size => None,
             }?;
             args.first()
                 .and_then(|expr| expression_requirement(expr, &argument))
         }
-        cel::Expr::List(items) => {
+        expr::Expr::List(items) => {
             let DataType::Array(array) = expected else {
                 return None;
             };
@@ -912,7 +912,7 @@ fn expression_requirement(expr: &cel::Expr, expected: &DataType) -> Option<TypeR
                 merge_optional_requirements(merged, expression_requirement(item, array.element()))
             })
         }
-        cel::Expr::MapLit(entries) => {
+        expr::Expr::MapLit(entries) => {
             let DataType::Map(map) = expected else {
                 return None;
             };
@@ -920,6 +920,9 @@ fn expression_requirement(expr: &cel::Expr, expected: &DataType) -> Option<TypeR
                 merge_optional_requirements(merged, expression_requirement(value, map.value()))
             })
         }
+        // Narrowing inspects the input but does not infer that every value on
+        // the source port inhabits the tested target.
+        expr::Expr::Is { .. } | expr::Expr::As { .. } => None,
     }
 }
 
@@ -939,9 +942,9 @@ fn merge_optional_requirements(
 /// real dynamic value from an unsolved variable. Once a path crosses an
 /// explicit `variant`, its result remains `variant`; no precise constraint is
 /// invented from later field/index spelling.
-fn resolved_expression_type(expr: &cel::Expr, input: &DataType) -> Option<DataType> {
+fn resolved_expression_type(expr: &expr::Expr, input: &DataType) -> Option<DataType> {
     match expr {
-        cel::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {
+        expr::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {
             let mut current = input.clone();
             for segment in &path[1..] {
                 current = match current {
@@ -958,48 +961,48 @@ fn resolved_expression_type(expr: &cel::Expr, input: &DataType) -> Option<DataTy
             }
             Some(current)
         }
-        cel::Expr::Path(_) => intrinsic_expression_type(expr),
-        cel::Expr::Literal(value) => intrinsic_value_type(value),
-        cel::Expr::Asset(_) => Some(DataType::BYTES),
-        cel::Expr::Unary { op, expr } => match op {
-            cel::UnaryOp::Not => Some(DataType::Bool),
-            cel::UnaryOp::Neg => resolved_expression_type(expr, input),
+        expr::Expr::Path(_) => intrinsic_expression_type(expr),
+        expr::Expr::Literal(value) => intrinsic_value_type(value),
+        expr::Expr::Asset(_) => Some(DataType::BYTES),
+        expr::Expr::Unary { op, expr } => match op {
+            expr::UnaryOp::Not => Some(DataType::Bool),
+            expr::UnaryOp::Neg => resolved_expression_type(expr, input),
         },
-        cel::Expr::Binary { op, left, right } => match op {
-            cel::BinaryOp::Eq
-            | cel::BinaryOp::Ne
-            | cel::BinaryOp::Lt
-            | cel::BinaryOp::Le
-            | cel::BinaryOp::Gt
-            | cel::BinaryOp::Ge
-            | cel::BinaryOp::And
-            | cel::BinaryOp::Or => Some(DataType::Bool),
+        expr::Expr::Binary { op, left, right } => match op {
+            expr::BinaryOp::Eq
+            | expr::BinaryOp::Ne
+            | expr::BinaryOp::Lt
+            | expr::BinaryOp::Le
+            | expr::BinaryOp::Gt
+            | expr::BinaryOp::Ge
+            | expr::BinaryOp::And
+            | expr::BinaryOp::Or => Some(DataType::Bool),
             _ => {
                 let left = resolved_expression_type(left, input)?;
                 let right = resolved_expression_type(right, input)?;
                 join_produced(&left, &right).ok()
             }
         },
-        cel::Expr::Ternary {
+        expr::Expr::Ternary {
             then, otherwise, ..
         } => {
             let then = resolved_expression_type(then, input)?;
             let otherwise = resolved_expression_type(otherwise, input)?;
             join_produced(&then, &otherwise).ok()
         }
-        cel::Expr::Index { base, .. } => match resolved_expression_type(base, input)? {
+        expr::Expr::Index { base, .. } => match resolved_expression_type(base, input)? {
             DataType::Array(array) => Some(array.element().clone()),
             DataType::Map(map) => Some(map.value().clone()),
             DataType::Variant => Some(DataType::Variant),
             _ => None,
         },
-        cel::Expr::Call { function, .. } => Some(match function {
-            cel::Function::Duration => DataType::DURATION,
-            cel::Function::Timestamp => DataType::TIMESTAMP,
-            cel::Function::Size => DataType::INT,
-            cel::Function::Decimal => DataType::Variant,
+        expr::Expr::Call { function, .. } => Some(match function {
+            expr::Function::Duration => DataType::DURATION,
+            expr::Function::Timestamp => DataType::TIMESTAMP,
+            expr::Function::Size => DataType::INT,
+            expr::Function::Decimal => DataType::Variant,
         }),
-        cel::Expr::List(items) => {
+        expr::Expr::List(items) => {
             let mut element = None;
             for item in items {
                 let item = resolved_expression_type(item, input)?;
@@ -1010,7 +1013,7 @@ fn resolved_expression_type(expr: &cel::Expr, input: &DataType) -> Option<DataTy
             }
             element.map(DataType::array)
         }
-        cel::Expr::MapLit(entries) => {
+        expr::Expr::MapLit(entries) => {
             let mut value = None;
             for (_, item) in entries {
                 let item = resolved_expression_type(item, input)?;
@@ -1021,39 +1024,41 @@ fn resolved_expression_type(expr: &cel::Expr, input: &DataType) -> Option<DataTy
             }
             value.map(DataType::text_map)
         }
+        expr::Expr::Is { .. } => Some(DataType::Bool),
+        expr::Expr::As { target, .. } => Some(narrow_target_type(target)),
     }
 }
 
-fn intrinsic_expression_type(expr: &cel::Expr) -> Option<DataType> {
+fn intrinsic_expression_type(expr: &expr::Expr) -> Option<DataType> {
     match expr {
-        cel::Expr::Literal(value) => intrinsic_value_type(value),
-        cel::Expr::Asset(_) => Some(DataType::BYTES),
-        cel::Expr::Unary { op, expr } => match op {
-            cel::UnaryOp::Not => Some(DataType::Bool),
-            cel::UnaryOp::Neg => intrinsic_expression_type(expr),
+        expr::Expr::Literal(value) => intrinsic_value_type(value),
+        expr::Expr::Asset(_) => Some(DataType::BYTES),
+        expr::Expr::Unary { op, expr } => match op {
+            expr::UnaryOp::Not => Some(DataType::Bool),
+            expr::UnaryOp::Neg => intrinsic_expression_type(expr),
         },
-        cel::Expr::Binary { op, left, right } => match op {
-            cel::BinaryOp::Eq
-            | cel::BinaryOp::Ne
-            | cel::BinaryOp::Lt
-            | cel::BinaryOp::Le
-            | cel::BinaryOp::Gt
-            | cel::BinaryOp::Ge
-            | cel::BinaryOp::And
-            | cel::BinaryOp::Or => Some(DataType::Bool),
+        expr::Expr::Binary { op, left, right } => match op {
+            expr::BinaryOp::Eq
+            | expr::BinaryOp::Ne
+            | expr::BinaryOp::Lt
+            | expr::BinaryOp::Le
+            | expr::BinaryOp::Gt
+            | expr::BinaryOp::Ge
+            | expr::BinaryOp::And
+            | expr::BinaryOp::Or => Some(DataType::Bool),
             _ => {
                 let left = intrinsic_expression_type(left)?;
                 let right = intrinsic_expression_type(right)?;
                 join_produced(&left, &right).ok()
             }
         },
-        cel::Expr::Call { function, .. } => Some(match function {
-            cel::Function::Duration => DataType::DURATION,
-            cel::Function::Timestamp => DataType::TIMESTAMP,
-            cel::Function::Size => DataType::INT,
-            cel::Function::Decimal => DataType::Variant,
+        expr::Expr::Call { function, .. } => Some(match function {
+            expr::Function::Duration => DataType::DURATION,
+            expr::Function::Timestamp => DataType::TIMESTAMP,
+            expr::Function::Size => DataType::INT,
+            expr::Function::Decimal => DataType::Variant,
         }),
-        cel::Expr::List(items) => {
+        expr::Expr::List(items) => {
             let mut element = None;
             for item in items {
                 let item = intrinsic_expression_type(item)?;
@@ -1064,7 +1069,7 @@ fn intrinsic_expression_type(expr: &cel::Expr) -> Option<DataType> {
             }
             Some(DataType::array(element.unwrap_or(DataType::Variant)))
         }
-        cel::Expr::MapLit(entries) => {
+        expr::Expr::MapLit(entries) => {
             let mut value = None;
             for (_, item) in entries {
                 let item = intrinsic_expression_type(item)?;
@@ -1075,7 +1080,9 @@ fn intrinsic_expression_type(expr: &cel::Expr) -> Option<DataType> {
             }
             Some(DataType::text_map(value.unwrap_or(DataType::Variant)))
         }
-        cel::Expr::Path(_) | cel::Expr::Ternary { .. } | cel::Expr::Index { .. } => None,
+        expr::Expr::Is { .. } => Some(DataType::Bool),
+        expr::Expr::As { target, .. } => Some(narrow_target_type(target)),
+        expr::Expr::Path(_) | expr::Expr::Ternary { .. } | expr::Expr::Index { .. } => None,
     }
 }
 
@@ -1126,6 +1133,9 @@ fn intrinsic_value_type(value: &crate::value::Value) -> Option<DataType> {
             }
             DataType::Struct(StructType::new(resolved).ok()?)
         }
+        crate::value::Value::Enum(_)
+        | crate::value::Value::StructuralUnion { .. }
+        | crate::value::Value::TaggedUnion(_) => DataType::Variant,
     })
 }
 
@@ -1161,20 +1171,22 @@ fn write_type_path(
     Ok(DataType::Struct(structure))
 }
 
-fn expression_reads_data(expr: &cel::Expr) -> bool {
+fn expression_reads_data(expr: &expr::Expr) -> bool {
     let mut stack = alloc::vec![expr];
     while let Some(expr) = stack.pop() {
         match expr {
-            cel::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {
+            expr::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {
                 return true;
             }
-            cel::Expr::Path(_) | cel::Expr::Literal(_) | cel::Expr::Asset(_) => {}
-            cel::Expr::Unary { expr, .. } => stack.push(expr),
-            cel::Expr::Binary { left, right, .. } => {
+            expr::Expr::Path(_) | expr::Expr::Literal(_) | expr::Expr::Asset(_) => {}
+            expr::Expr::Unary { expr, .. }
+            | expr::Expr::Is { expr, .. }
+            | expr::Expr::As { expr, .. } => stack.push(expr),
+            expr::Expr::Binary { left, right, .. } => {
                 stack.push(left);
                 stack.push(right);
             }
-            cel::Expr::Ternary {
+            expr::Expr::Ternary {
                 cond,
                 then,
                 otherwise,
@@ -1183,15 +1195,22 @@ fn expression_reads_data(expr: &cel::Expr) -> bool {
                 stack.push(then);
                 stack.push(otherwise);
             }
-            cel::Expr::Index { base, index } => {
+            expr::Expr::Index { base, index } => {
                 stack.push(base);
                 stack.push(index);
             }
-            cel::Expr::Call { args, .. } | cel::Expr::List(args) => stack.extend(args),
-            cel::Expr::MapLit(entries) => {
+            expr::Expr::Call { args, .. } | expr::Expr::List(args) => stack.extend(args),
+            expr::Expr::MapLit(entries) => {
                 stack.extend(entries.iter().map(|(_, value)| value));
             }
         }
     }
     false
+}
+
+fn narrow_target_type(target: &expr::NarrowTarget) -> DataType {
+    match target {
+        expr::NarrowTarget::Type(target) => target.ty().clone(),
+        expr::NarrowTarget::Case { payload, .. } => (**payload).clone(),
+    }
 }

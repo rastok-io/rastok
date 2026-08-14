@@ -66,15 +66,15 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (430-byte v6 package, full invariant validation + effective-port resolution + canonicity re-encode; re-measured 2026-08-14 after M1.3 B2) | 6 041 | 302 k | 2.01 ms |
-| — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and CEL bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32; re-measured 2026-08-14 — deterministic under this QEMU icount run) | 2 215 (min 2 156 / max 2 460) | **111 k** | **0.74 ms** |
+| `plan::decode` (430-byte v6 package, full invariant validation + effective-port resolution + canonicity re-encode; re-measured 2026-08-14 after M1.3 B3) | 6 039 | 302 k | 2.01 ms |
+| — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
+| relay transaction (avg of 32; re-measured 2026-08-14 — deterministic under this QEMU icount run) | 2 270 (min 2 211 / max 2 515) | **114 k** | **0.76 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.6 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
 | Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-14 with the B2 resolved table aboard) | 63 832 B (62.3 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 267 836 + 36 344 = 304 180 B (297.1 KiB; re-measured 2026-08-14) | < 1 MiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 282 732 + 37 464 = 320 196 B (312.7 KiB; re-measured 2026-08-14 after B3) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
@@ -82,7 +82,7 @@ Notes the numbers carry:
 - The relay transaction meets its criterion with a **1.35× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 6 041 across the
+- Package decode grew from v1's 1 468 ticks to 6 039 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
   nesting budget, the domain-order audits) and the canonicity
@@ -95,13 +95,17 @@ Notes the numbers carry:
   does not substitute `variant` merely to save these resources. No
   criterion bounds boot cost; the transaction path remains below its
   recorded bound.
-- Flash grew from 193 KiB to 297.1 KiB (`.text` 267 836 B +
-  `.rodata` 36 344 B, re-measured 2026-08-14): the consolidated
+- B3 leaves the v6 package, heap peak and semantic hash unchanged. Linking
+  the expression narrowing and union-consumption paths adds 55 ticks to the
+  measured relay and 15 508 bytes to `.text + .rodata`; both costs are stated
+  before v7 activates those trees in packages.
+- Flash grew from 193 KiB to 312.7 KiB (`.text` 282 732 B +
+  `.rodata` 37 464 B, re-measured 2026-08-14): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
   complete logical-type algebra, inference solver and validator link into
   the kernel even for a `lines` plan — the core is one crate, and dead-code
   elimination keeps what the plan decoder can reach. The 1 MiB criterion holds with a
-  3.4× margin; trimming by feature gate is noted, not needed.
+  3.2× margin; trimming by feature gate is noted, not needed.
 - The true high-water mark (62.3 KiB) sits above the old sampled
   figure (57.2 KiB), as a real peak must; the first M1 lift added
   the ingress port to every inbound record (+688 B over 32 rounds),

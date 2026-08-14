@@ -1,8 +1,8 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated through the landed M1.2 compiler interludes on
-> 2026-08-13. The M0 deviations remain recorded in
+> of the build; updated through the landed M1.3 B3 expression core on
+> 2026-08-14. The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
 > evidence lives in [`m1-slice.md`](m1-slice.md). The specified M1.3
 > replacement of the type/value and boundary seams is tracked in
@@ -69,7 +69,7 @@ canonical record projection ─▶ golden compare
 | syntax tree + spans | `compiler` (parse) | check passes, `diagnostics` | faithful to the text, sugar intact; may contain error nodes; an error node is never lowered |
 | HIR | `compiler` (check) | canonicalize, lower | desugared, name-resolved, typed — the hash input ([identity.md §1](../spec/identity.md)); spans live in side tables; **the entire lab is excluded from the hash** |
 | canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
-| `plan::ValidatedExecutionPlan` | `compiler` (lower, then validate) or `plan::decode` | `runtime`, `lab`, `plan::encode` | the only executable/package boundary: an immutable `ExecutionPlan` whose tables, `cel::Tree`s, slots, contracts, and structural budgets have already passed the plan gate |
+| `plan::ValidatedExecutionPlan` | `compiler` (lower, then validate) or `plan::decode` | `runtime`, `lab`, `plan::encode` | the only executable/package boundary: an immutable `ExecutionPlan` whose tables, `expr::Tree`s, slots, contracts, and structural budgets have already passed the plan gate |
 | `boundary::Intent` (open OUTBOUND) | `runtime` | dispatcher → `boundary::Partner` impls | journaled before any handler runs, carrying the canonical call fields — emitting id, connector path, request digest, optional idempotency key ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
 | `boundary::Response` | `connectors` or the lab's mock partner | `runtime` (as an input event) | returns with the internal `CallRef`, correlated by the *connector's own protocol correlator* — never by the business key; a partner only ever answers: it never decides a timeout and never mints `OutcomeUnknown` |
 | `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | adapters and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
@@ -81,7 +81,7 @@ canonical record projection ─▶ golden compare
 ```text
 crates/rastok-core/src/       # the kernel — #![no_std] + alloc (split at M0.5)
 ├── datatype.rs, value.rs       # logical types, values, validation/conformance
-├── node.rs, envelope.rs, cel.rs, plan.rs
+├── node.rs, envelope.rs, expr.rs, plan.rs
 ├── canonical_cbor.rs         # one bounded canonical byte discipline
 ├── identity/encoding.rs      # tagged-value identity registry
 ├── json.rs, trivia.rs        # shared exact JSON and lexical-comment facts
@@ -120,13 +120,13 @@ crate promotion (the final layout stays open per `ARCHITECTURE.md`):
    owns its invariant in the normative corpus (`envelope`, `journal`,
    `lab`, `node`, `stdlib`) or in the whitepaper (`plan` — the
    executable plan); purely internal machinery takes plain engineering
-   names (`compiler`, `runtime`, `boundary`, `cel`).
+   names (`compiler`, `runtime`, `boundary`, `expr`).
 2. **Explicit English over abbreviations.** A newcomer must understand
    a name without the project's internal vocabulary: `diagnostics`,
-   `guest_engines`, `ScenarioReport`, `RecoveryFold`. `cel` is a
-   proper noun, not an abbreviation. No blessed abbreviations remain.
+   `guest_engines`, `ScenarioReport`, `RecoveryFold`. No blessed
+   abbreviations remain.
 3. **Qualified paths give context; precision beats brevity.** A type
-   never repeats its module name (`cel::Tree`, never `CelTree`), but
+   never repeats its module name (`expr::Tree`, never `ExpressionTree`), but
    keeps a precise compound when the bare word would be too generic
    (`lab::ScenarioRun`, `golden::Divergence`) and keeps the
    corpus term even when it overlaps the module word
@@ -150,10 +150,10 @@ data out, the governing spec, and current status.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; specialized CEL/JSON/verbatim/guest regions; spans and structural recovery | source bytes → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1 | M1.2 interlude |
+| **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1 | M1.2 interlude, naming aligned in B3 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles, mandatory err sets, variant boundaries (`as` narrowing remains guarded), aspect admission | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.2 subset |
+| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles, mandatory legacy err sets, typed `is`/`as` narrowing, aspect admission | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.3 B3; new trees gated from v6 until B8 |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
 | **Lowering + plan gate** | node/edge/handler tables, expression trees, `Slot` resolution, schemas and assets; structural validation before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | M0.5, extended in M1 |
 | **Guest frontends** | future registered frontend: check one opaque guest-region lexeme against its signature; the host never tokenizes its body | guest bytes → future compiled guest program | [stdlib.md §5](../spec/stdlib.md) | guarded; no placeholder trait |
@@ -198,20 +198,20 @@ Two compiler rules with consequences elsewhere:
    HIR, "sugared and long forms hash identically" is a free, mechanical
    test for every sugar in the table.
 
-### 3.2 The expression chain (module `cel` during M1.3)
+### 3.2 The expression chain (`expr`)
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`cel`** | the current expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 migration in progress |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core landed; v7 transport remains B8 |
 
-`cel` never sees an envelope, node, or partition, and owns its own
-`cel::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
+`expr` never sees an envelope, node, or partition, and owns its own
+`expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
 The *signature* — the typed names visible at one expression position —
 is the entire interface, which keeps the chain independently
 conformance-testable against the compatible upstream CEL subset. Its
 signatures and trees consume core `datatype::DataType` and `value::Value`; it
 owns neither semantic domain. `envelope::Value` is a re-export of that one
-core value type. `cel::EvalValue` exists only inside evaluation because the
+core value type. `expr::EvalValue` exists only inside evaluation because the
 lazy whole-payload witness may flow through locals and expressions; conversion
 to a core value rejects any unresolved witness. Inside the kernel the chain
 also shares foundational utilities: canonical nesting/double rules, the exact
@@ -224,10 +224,10 @@ path. The plan gate, metadata/state doors, VM ingress and emission gate consume
 those same operations; JSON retains only its origin-specific number and
 document rules.
 
-This is current implementation state, not the completed M1.3 authority.
-M1.3 expands the core value algebra, renames this consumer boundary to `expr`,
-and retains differential cel-spec evidence only for the explicitly compatible
-operator subset.
+The boundary rename and typed `is`/`as` narrowing are landed. The compatible
+operator corpus is executed against a pinned independent CEL oracle; Rastok's
+extensions and divergences are listed in `expressions.md`. v6 validation
+categorically refuses the new AST forms, so only B8 assigns their package ids.
 
 ### 3.3 The executable plan (`plan`)
 
@@ -431,7 +431,7 @@ main (bin)
 compiler ──▶ plan (the execution plan) ◀── interprets ──────────────────── runtime
     │    └─▶ stdlib (contract sheets)
     ▼
-   cel   (signatures in, trees out; shares only canonical/json/trivia foundations)
+   expr  (signatures in, trees out; shares only canonical/json/trivia foundations)
 ```
 
 Rules, in force from the first commit:
@@ -442,7 +442,7 @@ Rules, in force from the first commit:
    `boundary::prepare_request` creates one `PreparedRequest`, so the
    digest and transported bytes are the same sealed value without a
    VM→`connectors` dependency.
-2. **`cel`** depends on no graph/runtime concept; it shares only
+2. **`expr`** depends on no graph/runtime concept; it shares only
    `canonical_cbor`, `json`, and `trivia` primitives from the kernel.
 3. **Adapters** (`connectors`, `guest_engines`, the lab's boundary
    implementations) implement traits; nothing depends on an adapter
@@ -500,7 +500,7 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Slice stage | Exercised |
 |---|---|
 | Parse | `compiler` (parse), `diagnostics` |
-| Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `cel` (compile) |
+| Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `expr` (compile) |
 | Plan | `compiler` (canonicalize, lower), `plan::Manifest` |
 | Step | `runtime` (Scheduler, Mailboxes, TransactionExecutor, EmissionBuffer, error routing) |
 | Handle | `boundary::Dispatcher` + `boundary::Partner` behind the OutcomeGate; `connectors::Process` (App) or the lab mock (Lab) |
@@ -528,14 +528,16 @@ The chronological detail and commit evidence remain in
 - **Compiler interludes:** `contract` is the sole node-attribute
   metamodel; defaults are injected before identity, and the parser is a
   forward lexeme-stream parser. The lexer owns cursor/lookahead and
-  delegates CEL, JSON, verbatim, and guest regions without rewind.
+  delegates expression, JSON, verbatim, and guest regions without rewind.
 - **M1.3 foundation:** one executable `DataType`/`Value` ownership,
   validation and recursive conformance authority serves plans, state,
   metadata, expressions and VM doors. B2 adds a total effective port table,
   with declared/inferred origin, and makes unresolved/conflicting constraints
-  typed refusals without a package-format move.
-- **Next:** M1.3 completes the new value families and lands uniform connector
-  port contracts, JSON/Avro/Arrow union projections, tagged frontends and
-  multi-output boundary completion. `per`, joins, new adapters,
+  typed refusals without a package-format move. B3 renames the consumer to
+  `expr`, adds deterministic typed narrowing, and keeps its new AST behind the
+  v7 package gate.
+- **Next:** M1.3 lands tagged frontends, uniform connector port contracts,
+  JSON/Avro/Arrow projections, multi-output boundary completion and v7.
+  `per`, joins, new adapters,
   Loop, counters, and `--watch` remain guarded in the order recorded by
   the slice.

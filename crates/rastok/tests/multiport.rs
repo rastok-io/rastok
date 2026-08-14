@@ -311,7 +311,7 @@ fn a_pinned_input_types_the_handler_data() {
     assert!(
         bag.diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code().as_str() == "E-CEL-EXPR"),
+            .any(|diagnostic| diagnostic.code().as_str() == "E-EXPR"),
         "{bag:?}"
     );
 }
@@ -1893,7 +1893,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
 
 #[test]
 fn the_struct_witness_survives_every_equivalent_spelling() {
-    // The logical type rides the VALUE through the CEL bridge — not
+    // The logical type rides the VALUE through the Rastok expression bridge — not
     // an AST special case: a local binding and a ternary preserve it
     // exactly like the bare relay.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
@@ -2006,7 +2006,7 @@ lab g {
 fn an_encoded_bare_relay_passes_the_representation_through() {
     // DECIDED: `out = data` on an ENCODED input relays the
     // representation — bytes, encoding, and content-type hint —
-    // before any CEL binding materializes. An Avro relay therefore
+    // before any Rastok expression binding materializes. An Avro relay therefore
     // works; reading an Avro FIELD still faults, typed.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
     use rastok::envelope::{Data, Encoding};
@@ -2124,7 +2124,7 @@ lab g {
 
 #[test]
 fn a_struct_constant_cannot_enter_a_plan() {
-    // CEL cannot construct a struct, so no source produces one — a
+    // Rastok expression cannot construct a struct, so no source produces one — a
     // hand-built plan carrying one would break `encode ⇒ decode`
     // (the tables refuse the form). The validator holds the line.
     use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
@@ -2451,11 +2451,11 @@ fn struct_equality_is_by_name_like_the_seal() {
         rastok_core::canonical_cbor::encode(&rastok_core::identity::encoding::value_tagged(&right)),
         "the canonical bytes already agreed"
     );
-    // The CEL operator agrees too.
-    let signature = rastok::cel::Signature::new()
+    // The Rastok expression operator agrees too.
+    let signature = rastok::expr::Signature::new()
         .with("a", rastok::datatype::DataType::Variant)
         .with("b", rastok::datatype::DataType::Variant);
-    let tree = rastok::cel::compile("a == b", &signature).expect("a valid expression");
+    let tree = rastok::expr::compile("a == b", &signature).expect("a valid expression");
     let mut env = std::collections::BTreeMap::new();
     env.insert(
         String::from("a"),
@@ -2474,9 +2474,9 @@ fn struct_equality_is_by_name_like_the_seal() {
         .into(),
     );
     assert_eq!(
-        rastok::cel::eval(&tree, &env).expect("the comparison evaluates"),
-        rastok::cel::EvalValue::Bool(true),
-        "CEL == follows the canonical identity"
+        rastok::expr::eval(&tree, &env).expect("the comparison evaluates"),
+        rastok::expr::EvalValue::Bool(true),
+        "Rastok expression == follows the canonical identity"
     );
 }
 

@@ -19,9 +19,9 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use crate::canonical_cbor::{self, Value as Cbor};
-use crate::cel;
 use crate::datatype::DataType;
 use crate::envelope::WriteTarget;
+use crate::expr;
 use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
@@ -423,7 +423,7 @@ fn target_tree(target: &WriteTarget) -> Cbor {
     }
 }
 
-fn tree_tree(tree: &cel::Tree) -> Cbor {
+fn tree_tree(tree: &expr::Tree) -> Cbor {
     Cbor::Array(vec![type_tree(&tree.ty), expr_tree(&tree.root)])
 }
 
@@ -454,29 +454,31 @@ fn type_tree(ty: &DataType) -> Cbor {
     }
 }
 
-fn expr_tree(expr: &cel::Expr) -> Cbor {
+fn expr_tree(expr: &expr::Expr) -> Cbor {
     match expr {
-        cel::Expr::Literal(value) => Cbor::Array(vec![Cbor::Uint(1), value_tagged(value)]),
-        cel::Expr::Asset(index) => Cbor::Array(vec![Cbor::Uint(10), Cbor::Uint(u64::from(*index))]),
-        cel::Expr::Path(segments) => Cbor::Array(vec![
+        expr::Expr::Literal(value) => Cbor::Array(vec![Cbor::Uint(1), value_tagged(value)]),
+        expr::Expr::Asset(index) => {
+            Cbor::Array(vec![Cbor::Uint(10), Cbor::Uint(u64::from(*index))])
+        }
+        expr::Expr::Path(segments) => Cbor::Array(vec![
             Cbor::Uint(2),
             Cbor::Array(segments.iter().map(|seg| Cbor::Text(seg.clone())).collect()),
         ]),
-        cel::Expr::Unary { op, expr } => Cbor::Array(vec![
+        expr::Expr::Unary { op, expr } => Cbor::Array(vec![
             Cbor::Uint(3),
             Cbor::Uint(match op {
-                cel::UnaryOp::Not => 1,
-                cel::UnaryOp::Neg => 2,
+                expr::UnaryOp::Not => 1,
+                expr::UnaryOp::Neg => 2,
             }),
             expr_tree(expr),
         ]),
-        cel::Expr::Binary { op, left, right } => Cbor::Array(vec![
+        expr::Expr::Binary { op, left, right } => Cbor::Array(vec![
             Cbor::Uint(4),
             Cbor::Uint(binop_code(*op)),
             expr_tree(left),
             expr_tree(right),
         ]),
-        cel::Expr::Ternary {
+        expr::Expr::Ternary {
             cond,
             then,
             otherwise,
@@ -486,27 +488,27 @@ fn expr_tree(expr: &cel::Expr) -> Cbor {
             expr_tree(then),
             expr_tree(otherwise),
         ]),
-        cel::Expr::Index { base, index } => {
+        expr::Expr::Index { base, index } => {
             Cbor::Array(vec![Cbor::Uint(6), expr_tree(base), expr_tree(index)])
         }
-        cel::Expr::Call { function, args } => Cbor::Array(vec![
+        expr::Expr::Call { function, args } => Cbor::Array(vec![
             Cbor::Uint(7),
             Cbor::Uint(match function {
-                cel::Function::Duration => 1,
-                cel::Function::Timestamp => 2,
-                cel::Function::Size => 3,
+                expr::Function::Duration => 1,
+                expr::Function::Timestamp => 2,
+                expr::Function::Size => 3,
                 // v6 (D-2026-08-13-1): the exact-number constructor
                 // extends the call alphabet — the categorical rule
                 // of plan-package.md bumps the format.
-                cel::Function::Decimal => 4,
+                expr::Function::Decimal => 4,
             }),
             Cbor::Array(args.iter().map(expr_tree).collect()),
         ]),
-        cel::Expr::List(items) => Cbor::Array(vec![
+        expr::Expr::List(items) => Cbor::Array(vec![
             Cbor::Uint(8),
             Cbor::Array(items.iter().map(expr_tree).collect()),
         ]),
-        cel::Expr::MapLit(pairs) => Cbor::Array(vec![
+        expr::Expr::MapLit(pairs) => Cbor::Array(vec![
             Cbor::Uint(9),
             Cbor::Array(
                 pairs
@@ -517,6 +519,10 @@ fn expr_tree(expr: &cel::Expr) -> Cbor {
                     .collect(),
             ),
         ]),
+        // A validated v6 plan categorically refuses these B3 forms. Tag zero
+        // is intentionally unreadable and only keeps this private encoder
+        // total if a future caller violates that proof.
+        expr::Expr::Is { .. } | expr::Expr::As { .. } => Cbor::Array(vec![Cbor::Uint(0)]),
     }
 }
 
@@ -534,12 +540,12 @@ fn expr_tree(expr: &cel::Expr) -> Cbor {
 /// `the_level_walker_matches_the_builders` pins the equality.
 pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     enum Item<'a> {
-        Expr(&'a cel::Expr, usize),
+        Expr(&'a expr::Expr, usize),
         Val(&'a Value, usize),
         Ty(&'a DataType, usize),
     }
     /// A `tree_tree`: its type and expression roots sit at `level`.
-    fn tree<'a>(tree: &'a cel::Tree, level: usize, stack: &mut Vec<Item<'a>>) {
+    fn tree<'a>(tree: &'a expr::Tree, level: usize, stack: &mut Vec<Item<'a>>) {
         stack.push(Item::Ty(&tree.ty, level));
         stack.push(Item::Expr(&tree.root, level));
     }
@@ -635,19 +641,23 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 // Every variant is an array whose tag sits one down.
                 max = max.max(level + 1);
                 match expr {
-                    cel::Expr::Asset(_) => {}
-                    cel::Expr::Literal(value) => stack.push(Item::Val(value, level + 1)),
-                    cel::Expr::Path(segments) => {
+                    expr::Expr::Asset(_) => {}
+                    expr::Expr::Literal(value) => stack.push(Item::Val(value, level + 1)),
+                    expr::Expr::Path(segments) => {
                         if !segments.is_empty() {
                             max = max.max(level + 2);
                         }
                     }
-                    cel::Expr::Unary { expr, .. } => stack.push(Item::Expr(expr, level + 1)),
-                    cel::Expr::Binary { left, right, .. } => {
+                    expr::Expr::Unary { expr, .. }
+                    | expr::Expr::Is { expr, .. }
+                    | expr::Expr::As { expr, .. } => {
+                        stack.push(Item::Expr(expr, level + 1));
+                    }
+                    expr::Expr::Binary { left, right, .. } => {
                         stack.push(Item::Expr(left, level + 1));
                         stack.push(Item::Expr(right, level + 1));
                     }
-                    cel::Expr::Ternary {
+                    expr::Expr::Ternary {
                         cond,
                         then,
                         otherwise,
@@ -656,21 +666,21 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                         stack.push(Item::Expr(then, level + 1));
                         stack.push(Item::Expr(otherwise, level + 1));
                     }
-                    cel::Expr::Index { base, index } => {
+                    expr::Expr::Index { base, index } => {
                         stack.push(Item::Expr(base, level + 1));
                         stack.push(Item::Expr(index, level + 1));
                     }
-                    cel::Expr::Call { args, .. } => {
+                    expr::Expr::Call { args, .. } => {
                         for arg in args {
                             stack.push(Item::Expr(arg, level + 2));
                         }
                     }
-                    cel::Expr::List(items) => {
+                    expr::Expr::List(items) => {
                         for item in items {
                             stack.push(Item::Expr(item, level + 2));
                         }
                     }
-                    cel::Expr::MapLit(pairs) => {
+                    expr::Expr::MapLit(pairs) => {
                         for (_, value) in pairs {
                             // pair array at +2, key text and value
                             // at +3.
@@ -711,6 +721,15 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                         // sits one deeper than the tag.
                         max = max.max(level + 2);
                     }
+                    Value::StructuralUnion { value, .. } => {
+                        stack.push(Item::Val(value, level + 2));
+                    }
+                    Value::TaggedUnion(tagged) => {
+                        for (_, value) in &tagged.payload {
+                            max = max.max(level + 3);
+                            stack.push(Item::Val(value, level + 3));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -730,21 +749,21 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     max
 }
 
-fn binop_code(op: cel::BinaryOp) -> u64 {
+fn binop_code(op: expr::BinaryOp) -> u64 {
     match op {
-        cel::BinaryOp::Mul => 1,
-        cel::BinaryOp::Div => 2,
-        cel::BinaryOp::Rem => 3,
-        cel::BinaryOp::Add => 4,
-        cel::BinaryOp::Sub => 5,
-        cel::BinaryOp::Eq => 6,
-        cel::BinaryOp::Ne => 7,
-        cel::BinaryOp::Lt => 8,
-        cel::BinaryOp::Le => 9,
-        cel::BinaryOp::Gt => 10,
-        cel::BinaryOp::Ge => 11,
-        cel::BinaryOp::And => 12,
-        cel::BinaryOp::Or => 13,
+        expr::BinaryOp::Mul => 1,
+        expr::BinaryOp::Div => 2,
+        expr::BinaryOp::Rem => 3,
+        expr::BinaryOp::Add => 4,
+        expr::BinaryOp::Sub => 5,
+        expr::BinaryOp::Eq => 6,
+        expr::BinaryOp::Ne => 7,
+        expr::BinaryOp::Lt => 8,
+        expr::BinaryOp::Le => 9,
+        expr::BinaryOp::Gt => 10,
+        expr::BinaryOp::Ge => 11,
+        expr::BinaryOp::And => 12,
+        expr::BinaryOp::Or => 13,
     }
 }
 
@@ -1046,13 +1065,13 @@ fn target_from(tree: &Cbor) -> Result<WriteTarget, DecodeError> {
     }
 }
 
-fn tree_from(tree: &Cbor) -> Result<cel::Tree, DecodeError> {
-    match array_of(tree, "cel tree")? {
-        [ty, expr] => Ok(cel::Tree {
+fn tree_from(tree: &Cbor) -> Result<expr::Tree, DecodeError> {
+    match array_of(tree, "expression tree")? {
+        [ty, expr] => Ok(expr::Tree {
             ty: type_from(ty)?,
             root: expr_from(expr)?,
         }),
-        _ => Err(err("cel tree")),
+        _ => Err(err("expression tree")),
     }
 }
 
@@ -1077,55 +1096,55 @@ fn type_from(tree: &Cbor) -> Result<DataType, DecodeError> {
     }
 }
 
-fn expr_from(tree: &Cbor) -> Result<cel::Expr, DecodeError> {
-    let parts = array_of(tree, "cel expr")?;
+fn expr_from(tree: &Cbor) -> Result<expr::Expr, DecodeError> {
+    let parts = array_of(tree, "expression")?;
     match parts {
-        [Cbor::Uint(1), value] => Ok(cel::Expr::Literal(value_from(value)?)),
-        [Cbor::Uint(10), Cbor::Uint(index)] => Ok(cel::Expr::Asset(
+        [Cbor::Uint(1), value] => Ok(expr::Expr::Literal(value_from(value)?)),
+        [Cbor::Uint(10), Cbor::Uint(index)] => Ok(expr::Expr::Asset(
             u32::try_from(*index).map_err(|_| err("asset index"))?,
         )),
-        [Cbor::Uint(2), Cbor::Array(segments)] => Ok(cel::Expr::Path(
+        [Cbor::Uint(2), Cbor::Array(segments)] => Ok(expr::Expr::Path(
             segments
                 .iter()
                 .map(|seg| Ok(text_of(seg, "path segment")?.to_string()))
                 .collect::<Result<Vec<_>, DecodeError>>()?,
         )),
-        [Cbor::Uint(3), Cbor::Uint(op), expr] => Ok(cel::Expr::Unary {
+        [Cbor::Uint(3), Cbor::Uint(op), expr] => Ok(expr::Expr::Unary {
             op: match op {
-                1 => cel::UnaryOp::Not,
-                2 => cel::UnaryOp::Neg,
+                1 => expr::UnaryOp::Not,
+                2 => expr::UnaryOp::Neg,
                 _ => return Err(err("unary op")),
             },
             expr: alloc::boxed::Box::new(expr_from(expr)?),
         }),
-        [Cbor::Uint(4), Cbor::Uint(op), left, right] => Ok(cel::Expr::Binary {
+        [Cbor::Uint(4), Cbor::Uint(op), left, right] => Ok(expr::Expr::Binary {
             op: binop_from(*op)?,
             left: alloc::boxed::Box::new(expr_from(left)?),
             right: alloc::boxed::Box::new(expr_from(right)?),
         }),
-        [Cbor::Uint(5), cond, then, otherwise] => Ok(cel::Expr::Ternary {
+        [Cbor::Uint(5), cond, then, otherwise] => Ok(expr::Expr::Ternary {
             cond: alloc::boxed::Box::new(expr_from(cond)?),
             then: alloc::boxed::Box::new(expr_from(then)?),
             otherwise: alloc::boxed::Box::new(expr_from(otherwise)?),
         }),
-        [Cbor::Uint(6), base, index] => Ok(cel::Expr::Index {
+        [Cbor::Uint(6), base, index] => Ok(expr::Expr::Index {
             base: alloc::boxed::Box::new(expr_from(base)?),
             index: alloc::boxed::Box::new(expr_from(index)?),
         }),
-        [Cbor::Uint(7), Cbor::Uint(function), Cbor::Array(args)] => Ok(cel::Expr::Call {
+        [Cbor::Uint(7), Cbor::Uint(function), Cbor::Array(args)] => Ok(expr::Expr::Call {
             function: match function {
-                1 => cel::Function::Duration,
-                2 => cel::Function::Timestamp,
-                3 => cel::Function::Size,
-                4 => cel::Function::Decimal,
+                1 => expr::Function::Duration,
+                2 => expr::Function::Timestamp,
+                3 => expr::Function::Size,
+                4 => expr::Function::Decimal,
                 _ => return Err(err("function")),
             },
             args: args.iter().map(expr_from).collect::<Result<Vec<_>, _>>()?,
         }),
-        [Cbor::Uint(8), Cbor::Array(items)] => Ok(cel::Expr::List(
+        [Cbor::Uint(8), Cbor::Array(items)] => Ok(expr::Expr::List(
             items.iter().map(expr_from).collect::<Result<Vec<_>, _>>()?,
         )),
-        [Cbor::Uint(9), Cbor::Array(pairs)] => Ok(cel::Expr::MapLit(
+        [Cbor::Uint(9), Cbor::Array(pairs)] => Ok(expr::Expr::MapLit(
             pairs
                 .iter()
                 .map(|pair| match array_of(pair, "map literal entry")? {
@@ -1134,25 +1153,25 @@ fn expr_from(tree: &Cbor) -> Result<cel::Expr, DecodeError> {
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         )),
-        _ => Err(err("cel expr")),
+        _ => Err(err("expression")),
     }
 }
 
-fn binop_from(code: u64) -> Result<cel::BinaryOp, DecodeError> {
+fn binop_from(code: u64) -> Result<expr::BinaryOp, DecodeError> {
     Ok(match code {
-        1 => cel::BinaryOp::Mul,
-        2 => cel::BinaryOp::Div,
-        3 => cel::BinaryOp::Rem,
-        4 => cel::BinaryOp::Add,
-        5 => cel::BinaryOp::Sub,
-        6 => cel::BinaryOp::Eq,
-        7 => cel::BinaryOp::Ne,
-        8 => cel::BinaryOp::Lt,
-        9 => cel::BinaryOp::Le,
-        10 => cel::BinaryOp::Gt,
-        11 => cel::BinaryOp::Ge,
-        12 => cel::BinaryOp::And,
-        13 => cel::BinaryOp::Or,
+        1 => expr::BinaryOp::Mul,
+        2 => expr::BinaryOp::Div,
+        3 => expr::BinaryOp::Rem,
+        4 => expr::BinaryOp::Add,
+        5 => expr::BinaryOp::Sub,
+        6 => expr::BinaryOp::Eq,
+        7 => expr::BinaryOp::Ne,
+        8 => expr::BinaryOp::Lt,
+        9 => expr::BinaryOp::Le,
+        10 => expr::BinaryOp::Gt,
+        11 => expr::BinaryOp::Ge,
+        12 => expr::BinaryOp::And,
+        13 => expr::BinaryOp::Or,
         _ => return Err(err("binary op")),
     })
 }
@@ -1337,8 +1356,8 @@ mod tests {
         node::Port::new(name).unwrap()
     }
 
-    fn tree(root: cel::Expr) -> cel::Tree {
-        cel::Tree {
+    fn tree(root: expr::Expr) -> expr::Tree {
+        expr::Tree {
             ty: DataType::Variant,
             root,
         }
@@ -1359,25 +1378,25 @@ mod tests {
             );
             Value::Map(entries)
         };
-        let expr = cel::Expr::Ternary {
-            cond: Box::new(cel::Expr::Binary {
-                op: cel::BinaryOp::Lt,
-                left: Box::new(cel::Expr::Path(vec![text("seen")])),
-                right: Box::new(cel::Expr::Literal(Value::Int(3))),
+        let expr = expr::Expr::Ternary {
+            cond: Box::new(expr::Expr::Binary {
+                op: expr::BinaryOp::Lt,
+                left: Box::new(expr::Expr::Path(vec![text("seen")])),
+                right: Box::new(expr::Expr::Literal(Value::Int(3))),
             }),
-            then: Box::new(cel::Expr::Call {
-                function: cel::Function::Size,
-                args: vec![cel::Expr::List(vec![cel::Expr::MapLit(vec![(
+            then: Box::new(expr::Expr::Call {
+                function: expr::Function::Size,
+                args: vec![expr::Expr::List(vec![expr::Expr::MapLit(vec![(
                     text("k"),
-                    cel::Expr::Unary {
-                        op: cel::UnaryOp::Neg,
-                        expr: Box::new(cel::Expr::Literal(Value::Int(1))),
+                    expr::Expr::Unary {
+                        op: expr::UnaryOp::Neg,
+                        expr: Box::new(expr::Expr::Literal(Value::Int(1))),
                     },
                 )])])],
             }),
-            otherwise: Box::new(cel::Expr::Index {
-                base: Box::new(cel::Expr::Path(vec![text("data"), text("f")])),
-                index: Box::new(cel::Expr::Literal(Value::Uint(0))),
+            otherwise: Box::new(expr::Expr::Index {
+                base: Box::new(expr::Expr::Path(vec![text("data"), text("f")])),
+                index: Box::new(expr::Expr::Literal(Value::Uint(0))),
             }),
         };
         ExecutionPlan {
@@ -1476,11 +1495,11 @@ mod tests {
                             },
                             FieldWrite {
                                 target: WriteTarget::App(text("m.dotted")),
-                                expr: tree(cel::Expr::Literal(Value::Null)),
+                                expr: tree(expr::Expr::Literal(Value::Null)),
                             },
                             FieldWrite {
                                 target: WriteTarget::Ext(text("content_type")),
-                                expr: tree(cel::Expr::Literal(Value::Text(text("t")))),
+                                expr: tree(expr::Expr::Literal(Value::Text(text("t")))),
                             },
                         ]),
                     },
@@ -1488,7 +1507,7 @@ mod tests {
                         port: port("out"),
                         value: Emission::Replace(vec![FieldWrite {
                             target: WriteTarget::Data(vec![]),
-                            expr: tree(cel::Expr::Literal(Value::Duration(5))),
+                            expr: tree(expr::Expr::Literal(Value::Duration(5))),
                         }]),
                     },
                 ],
@@ -1501,7 +1520,7 @@ mod tests {
 
     /// A one-step plan carrying one expression — the chassis for the
     /// nested chains.
-    fn one_step_plan(root: cel::Expr) -> ExecutionPlan {
+    fn one_step_plan(root: expr::Expr) -> ExecutionPlan {
         ExecutionPlan {
             nodes: vec![Node {
                 path: node::Path::new(["o"]).unwrap(),
@@ -1556,15 +1575,15 @@ mod tests {
 
     #[test]
     fn the_level_walker_matches_the_builders() {
-        let mut nested_binary = cel::Expr::Literal(Value::Int(1));
-        let mut nested_maplit = cel::Expr::Literal(Value::Int(1));
+        let mut nested_binary = expr::Expr::Literal(Value::Int(1));
+        let mut nested_maplit = expr::Expr::Literal(Value::Int(1));
         for _ in 0..60 {
-            nested_binary = cel::Expr::Binary {
-                op: cel::BinaryOp::Add,
+            nested_binary = expr::Expr::Binary {
+                op: expr::BinaryOp::Add,
                 left: Box::new(nested_binary),
-                right: Box::new(cel::Expr::Literal(Value::Int(0))),
+                right: Box::new(expr::Expr::Literal(Value::Int(0))),
             };
-            nested_maplit = cel::Expr::MapLit(vec![(text("k"), nested_maplit)]);
+            nested_maplit = expr::Expr::MapLit(vec![(text("k"), nested_maplit)]);
         }
         let mut nested_value = Value::Int(1);
         let mut nested_type = DataType::INT;
@@ -1572,12 +1591,12 @@ mod tests {
             nested_value = Value::Array(vec![nested_value]);
             nested_type = DataType::text_map(nested_type);
         }
-        let mut deep_type_plan = one_step_plan(cel::Expr::Literal(Value::Null));
+        let mut deep_type_plan = one_step_plan(expr::Expr::Literal(Value::Null));
         deep_type_plan.handlers[0].body = vec![Step::Let {
             name: text("x"),
-            expr: cel::Tree {
+            expr: expr::Tree {
                 ty: nested_type,
-                root: cel::Expr::Literal(Value::Null),
+                root: expr::Expr::Literal(Value::Null),
             },
         }];
         let plans = [
@@ -1593,7 +1612,7 @@ mod tests {
             rich_plan(),
             one_step_plan(nested_binary),
             one_step_plan(nested_maplit),
-            one_step_plan(cel::Expr::Literal(nested_value)),
+            one_step_plan(expr::Expr::Literal(nested_value)),
             deep_type_plan,
         ];
         for plan in &plans {

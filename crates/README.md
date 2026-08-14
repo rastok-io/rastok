@@ -4,7 +4,7 @@ Rastok's compiler and runtime live in this Cargo workspace, as one
 bootstrap crate.
 
 `rastok` carries the whole M0 slice — lexer through checker and
-planner, the CEL chain, the journal and transactional VM, the real
+planner, the Rastok expression chain, the journal and transactional VM, the real
 `Process` adapter, the lab runner, the canonical trace projection,
 and the `rastok` binary (`check` / `run` / `simulate`). The seams the
 architecture names (compiler, runtime, boundary, lab, golden) are

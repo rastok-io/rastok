@@ -270,6 +270,14 @@ cannot diverge on bytes for the same journal :
   | 22 | variant | the dynamic tree, encoded as the `tagged_value` of its resolved concrete tag |
   | 23 | uint | CBOR unsigned integer (u64 range) — the Rastok `uint` domain (originally introduced by the CEL-compatible evaluator) ; appended 2026-08-07 (see errata E-2026-08-07-1) : it previously borrowed tag 3, making `long 2^31` and `uint 2^31` seal identically |
 
+  The v6 row for tag 21 describes its only executable union form:
+  structural `[branch_index, tagged_value]`. The M1.3 logical value algebra
+  also has name-stable tagged unions; its in-memory canonical projection is
+  `[case_name (text), tagged struct payload]`, deliberately distinguishable
+  from the unsigned structural selector. No validated v6 plan can carry that
+  form. B8 freezes both selector forms as part of the one v7 registry rather
+  than retroactively extending v6.
+
   (Sort keys — struct by `field` UTF-8 ; map by the key's canonical
   `tagged_value` bytes. All temporal logical types share the Arrow
   nanosecond convention — no µs anywhere in the seal.)

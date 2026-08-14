@@ -4,6 +4,7 @@
 //! expressions, state, codecs and ports share this representation; lazy
 //! evaluation markers do not belong here and can never be serialized.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
@@ -44,6 +45,35 @@ pub enum Value {
         /// Digits after the point (negative means trailing zeros).
         scale: i32,
     },
+    /// One symbol of a closed enum. The surrounding [`DataType`](crate::datatype::DataType)
+    /// owns the admitted symbol set.
+    Enum(String),
+    /// One selected branch of a structural union.
+    ///
+    /// The index addresses the union's canonical branch order. Conformance
+    /// verifies that the index exists and that the nested value inhabits that
+    /// exact branch.
+    StructuralUnion {
+        /// Selected canonical branch index.
+        branch: u16,
+        /// Value carried by the selected branch.
+        value: Box<Value>,
+    },
+    /// One named case of a tagged union.
+    TaggedUnion(Box<TaggedUnionValue>),
+}
+
+/// The semantic discriminant and closed payload of one tagged-union value.
+///
+/// Keeping the pair behind one pointer prevents this uncommon composite from
+/// inflating every [`Value`] — and therefore every expression AST node — while
+/// preserving a named, inspectable domain object.
+#[derive(Debug, Clone)]
+pub struct TaggedUnionValue {
+    /// Semantic case discriminant.
+    pub case: String,
+    /// Closed struct payload carried by the case.
+    pub payload: Vec<(String, Value)>,
 }
 
 impl PartialEq for Value {
@@ -73,6 +103,20 @@ impl PartialEq for Value {
                     scale: other_scale,
                 },
             ) => unscaled == other_unscaled && scale == other_scale,
+            (Self::Enum(a), Self::Enum(b)) => a == b,
+            (
+                Self::StructuralUnion {
+                    branch: a_branch,
+                    value: a_value,
+                },
+                Self::StructuralUnion {
+                    branch: b_branch,
+                    value: b_value,
+                },
+            ) => a_branch == b_branch && a_value == b_value,
+            (Self::TaggedUnion(a), Self::TaggedUnion(b)) => {
+                a.case == b.case && struct_fields_eq(&a.payload, &b.payload, Value::eq)
+            }
             _ => false,
         }
     }
@@ -138,6 +182,41 @@ impl Value {
                 }
                 Ok(())
             }
+            Self::StructuralUnion { branch, value } => {
+                path.push(ValuePathSegment::UnionBranch(*branch));
+                let result = value.validate_at(path);
+                path.pop();
+                result
+            }
+            Self::TaggedUnion(tagged) => {
+                if tagged.case.is_empty() {
+                    return Err(ValueError {
+                        path: path.clone(),
+                        defect: ValueDefect::EmptyTaggedCase,
+                    });
+                }
+                let mut names = BTreeSet::new();
+                for (name, value) in &tagged.payload {
+                    if !names.insert(name) {
+                        return Err(ValueError {
+                            path: path.clone(),
+                            defect: ValueDefect::DuplicateStructField(name.clone()),
+                        });
+                    }
+                    path.push(ValuePathSegment::TaggedField {
+                        case: tagged.case.clone(),
+                        field: name.clone(),
+                    });
+                    let result = value.validate_at(path);
+                    path.pop();
+                    result?;
+                }
+                Ok(())
+            }
+            Self::Enum(symbol) if symbol.is_empty() => Err(ValueError {
+                path: path.clone(),
+                defect: ValueDefect::EmptyEnumSymbol,
+            }),
             _ => Ok(()),
         }
     }
@@ -152,6 +231,15 @@ pub enum ValuePathSegment {
     Index(usize),
     /// A value under a text map key.
     MapValue(String),
+    /// Value carried by one structural-union branch.
+    UnionBranch(u16),
+    /// Field of one tagged-union case payload.
+    TaggedField {
+        /// Case discriminant.
+        case: String,
+        /// Payload field.
+        field: String,
+    },
 }
 
 /// A structural defect independent of the boundary that observed it.
@@ -166,6 +254,10 @@ pub enum ValueDefect {
     },
     /// Two fields of one struct carry the same semantic name.
     DuplicateStructField(String),
+    /// An enum value cannot carry an empty symbol.
+    EmptyEnumSymbol,
+    /// A tagged value cannot carry an empty case name.
+    EmptyTaggedCase,
 }
 
 impl fmt::Display for ValueDefect {
@@ -178,6 +270,8 @@ impl fmt::Display for ValueDefect {
             Self::DuplicateStructField(name) => {
                 write!(f, "a struct whose field `{name}` appears twice")
             }
+            Self::EmptyEnumSymbol => f.write_str("an enum whose symbol is empty"),
+            Self::EmptyTaggedCase => f.write_str("a tagged union whose case name is empty"),
         }
     }
 }
@@ -199,6 +293,8 @@ impl fmt::Display for ValueError {
                 ValuePathSegment::Field(name) => write!(f, ".{name}")?,
                 ValuePathSegment::Index(index) => write!(f, "[{index}]")?,
                 ValuePathSegment::MapValue(key) => write!(f, "[{key:?}]")?,
+                ValuePathSegment::UnionBranch(branch) => write!(f, "<branch:{branch}>")?,
+                ValuePathSegment::TaggedField { case, field } => write!(f, "<{case}>.{field}")?,
             }
         }
         write!(f, " contains {}", self.defect)
@@ -234,6 +330,12 @@ pub enum ValueKind {
     Struct,
     /// An exact decimal.
     Decimal,
+    /// A closed enum symbol.
+    Enum,
+    /// A selected structural-union branch.
+    StructuralUnion,
+    /// A named tagged-union case.
+    TaggedUnion,
 }
 
 impl ValueKind {
@@ -253,6 +355,9 @@ impl ValueKind {
             Value::Map(_) => Self::Map,
             Value::Struct(_) => Self::Struct,
             Value::Decimal { .. } => Self::Decimal,
+            Value::Enum(_) => Self::Enum,
+            Value::StructuralUnion { .. } => Self::StructuralUnion,
+            Value::TaggedUnion(_) => Self::TaggedUnion,
         }
     }
 }
@@ -272,6 +377,9 @@ impl fmt::Display for ValueKind {
             Self::Map => "map",
             Self::Struct => "struct",
             Self::Decimal => "decimal",
+            Self::Enum => "enum",
+            Self::StructuralUnion => "structural union",
+            Self::TaggedUnion => "tagged union",
         })
     }
 }

@@ -8,10 +8,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::canonical_cbor::MAX_NESTING;
-use rastok::cel;
 use rastok::compiler::compile;
 use rastok::contract::Registry;
 use rastok::datatype::DataType;
+use rastok::expr;
 use rastok::node::{Direction, Port};
 use rastok::plan::{
     self, Edge, EndpointRef, ExecutionPlan, PlanValidationError, Slot, Step, ValidatedExecutionPlan,
@@ -700,18 +700,18 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
         }
     );
 
-    let plan = with_setvar_root(cel::Expr::MapLit(vec![
+    let plan = with_setvar_root(expr::Expr::MapLit(vec![
         (
             String::from("z"),
-            cel::Expr::Literal(rastok::value::Value::Int(1)),
+            expr::Expr::Literal(rastok::value::Value::Int(1)),
         ),
         (
             String::from("a"),
-            cel::Expr::Literal(rastok::value::Value::Int(2)),
+            expr::Expr::Literal(rastok::value::Value::Int(2)),
         ),
         (
             String::from("z"),
-            cel::Expr::Literal(rastok::value::Value::Int(3)),
+            expr::Expr::Literal(rastok::value::Value::Int(3)),
         ),
     ]));
     assert_eq!(
@@ -828,7 +828,7 @@ fn a_duplicated_error_kind_refuses() {
 
 /// Replaces the probe's `seen = …` expression — the chassis for the
 /// map-literal canonicity provocations.
-fn with_setvar_root(root: cel::Expr) -> ExecutionPlan {
+fn with_setvar_root(root: expr::Expr) -> ExecutionPlan {
     let mut plan = raw_probe();
     for step in &mut plan.handlers[0].body {
         if let Step::SetVar { expr, .. } = step {
@@ -844,14 +844,14 @@ fn an_unsorted_map_literal_is_not_canonical() {
     // an unsorted one is a second byte form of the same expression —
     // one the re-encoding check reproduces faithfully, so the
     // validator must refuse it by walking the trees.
-    let plan = with_setvar_root(cel::Expr::MapLit(vec![
+    let plan = with_setvar_root(expr::Expr::MapLit(vec![
         (
             String::from("b"),
-            cel::Expr::Literal(rastok::value::Value::Int(1)),
+            expr::Expr::Literal(rastok::value::Value::Int(1)),
         ),
         (
             String::from("a"),
-            cel::Expr::Literal(rastok::value::Value::Int(2)),
+            expr::Expr::Literal(rastok::value::Value::Int(2)),
         ),
     ]));
     assert_eq!(
@@ -864,14 +864,14 @@ fn an_unsorted_map_literal_is_not_canonical() {
 
 #[test]
 fn a_duplicated_map_literal_key_refuses() {
-    let plan = with_setvar_root(cel::Expr::MapLit(vec![
+    let plan = with_setvar_root(expr::Expr::MapLit(vec![
         (
             String::from("a"),
-            cel::Expr::Literal(rastok::value::Value::Int(1)),
+            expr::Expr::Literal(rastok::value::Value::Int(1)),
         ),
         (
             String::from("a"),
-            cel::Expr::Literal(rastok::value::Value::Int(2)),
+            expr::Expr::Literal(rastok::value::Value::Int(2)),
         ),
     ]));
     assert_eq!(
@@ -904,12 +904,12 @@ fn what_the_type_accepts_the_format_reads_back() {
             if let Step::SetVar { expr, .. } = step {
                 let previous = core::mem::replace(
                     &mut expr.root,
-                    cel::Expr::Literal(rastok::value::Value::Int(0)),
+                    expr::Expr::Literal(rastok::value::Value::Int(0)),
                 );
-                expr.root = cel::Expr::Binary {
-                    op: cel::BinaryOp::Add,
+                expr.root = expr::Expr::Binary {
+                    op: expr::BinaryOp::Add,
                     left: Box::new(previous),
-                    right: Box::new(cel::Expr::Literal(rastok::value::Value::Int(0))),
+                    right: Box::new(expr::Expr::Literal(rastok::value::Value::Int(0))),
                 };
             }
         }
@@ -979,6 +979,74 @@ fn expression_result_types_share_the_v6_package_gate() {
             format: plan::FORMAT_VERSION,
         }) if location.contains("state expression")
     ));
+}
+
+#[test]
+fn narrowing_expressions_cannot_leak_into_a_v6_package() {
+    for (form, predicate) in [("is", true), ("as", false)] {
+        let mut plan = raw_probe();
+        let expression = plan
+            .handlers
+            .iter_mut()
+            .flat_map(|handler| handler.body.iter_mut())
+            .find_map(|step| match step {
+                Step::SetVar { expr, .. } => Some(expr),
+                _ => None,
+            })
+            .expect("the probe state write");
+        let operand = core::mem::replace(
+            &mut expression.root,
+            expr::Expr::Literal(rastok::value::Value::Int(0)),
+        );
+        let target = expr::NarrowTarget::Type(Box::new(expr::NarrowType::new(DataType::INT)));
+        expression.root = if predicate {
+            expression.ty = DataType::Bool;
+            expr::Expr::Is {
+                expr: Box::new(operand),
+                target: Box::new(target),
+            }
+        } else {
+            expression.ty = DataType::INT;
+            expr::Expr::As {
+                expr: Box::new(operand),
+                target: Box::new(target),
+            }
+        };
+
+        assert_eq!(
+            ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+            PlanValidationError::ExpressionNotInFormat {
+                form,
+                format: plan::FORMAT_VERSION,
+            }
+        );
+    }
+}
+
+#[test]
+fn source_narrowing_names_the_v7_transport_gate() {
+    let source = r#"
+graph g : App {
+  input in: variant
+
+  operator o {
+    input in: variant
+    on in where data is text { out = data }
+  }
+
+  . -> o -> .
+}
+"#;
+    let bag = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("v6 has no narrowing-expression spelling");
+    assert!(bag.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code() == rastok::compiler::check::E_CHECK_DEFERRED
+            && diagnostic.message().contains("plan-package v6")
+            && diagnostic.message().contains("`is`")
+    }));
 }
 
 fn shell_path() -> rastok::node::Path {

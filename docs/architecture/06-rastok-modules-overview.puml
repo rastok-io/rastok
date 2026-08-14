@@ -81,20 +81,20 @@ package "datatype / value — core logical data authority" as P_DATA {
   CORE_Value : one materialized domain and structural validator
 }
 
-package "cel — current Rastok expression engine" as P_CEL {
+package "expr — Rastok expression engine" as P_EXPR {
   class Signature <<struct>>
   Signature : names and types visible to an expression
   class Tree <<struct>>
   Tree : canonical typed expression tree
   enum EvalValue <<enum>>
   EvalValue : transient core value or lazy payload witness
-  class "Diagnostic" as CEL_Diagnostic <<struct>>
-  CEL_Diagnostic : native CEL compiler diagnostic
-  class "Error" as CEL_Error <<struct>>
-  CEL_Error : CEL evaluation error
+  class "Diagnostic" as Expr_Diagnostic <<struct>>
+  Expr_Diagnostic : native expression compiler diagnostic
+  class "Error" as Expr_Error <<struct>>
+  Expr_Error : expression evaluation error
 }
 
-note bottom of P_CEL
+note bottom of P_EXPR
   owns neither DataType nor materialized Value;
   compatible operations retain the CEL oracle
 end note
@@ -139,7 +139,7 @@ package "compiler — source-to-plan compilation pipeline" as P_COMP {
   enum StatementHead <<enum>>
   StatementHead : structural, bare value, or recovery
   enum ValueHead <<enum>>
-  ValueHead : structural or CEL region
+  ValueHead : structural or expression region
   class Unit <<struct>>
   Unit : merged application and lab sources
   class Hir <<struct>>
@@ -191,7 +191,7 @@ package "contract — compiler-layer node contract metamodel" as P_CONTRACT {
   enum Presence <<enum>>
   Presence : required, optional, or defaulted
   enum DefaultValue <<enum>>
-  DefaultValue : choice word or constant CEL expression
+  DefaultValue : choice word or constant Rastok expression
   enum ValueDomain <<enum>>
   ValueDomain : choice, scalar constant, or deferred composite domain
   enum Availability <<enum>>
@@ -355,7 +355,7 @@ package "cli — binary assembly (main.rs)" as P_CLI {
 
 ' ===== module-level uses =====
 
-P_COMP ..> P_CEL : uses
+P_COMP ..> P_EXPR : uses
 P_COMP ..> P_PLAN : uses
 P_COMP ..> P_STD : uses
 P_COMP ..> P_CONTRACT : validates sheets
@@ -363,10 +363,10 @@ P_COMP ..> P_JSON : delegates documents
 P_COMP ..> P_TRIVIA : shares comment facts
 P_STD ..> P_CONTRACT : instantiates
 P_ENV ..> P_DATA : carries core values
-P_CEL ..> P_DATA : consumes types / values
-P_CEL ..> P_CBOR : canonical doubles / nesting budget
-P_CEL ..> P_JSON : exact number reader
-P_CEL ..> P_TRIVIA : shares comment facts
+P_EXPR ..> P_DATA : consumes types / values
+P_EXPR ..> P_CBOR : canonical doubles / nesting budget
+P_EXPR ..> P_JSON : exact number reader
+P_EXPR ..> P_TRIVIA : shares comment facts
 P_JSON ..> P_DATA : produces core values
 P_IDENT ..> P_CBOR : emits tagged trees
 P_IDENT ..> P_ENV : tags envelope scalars
@@ -377,7 +377,7 @@ P_PLAN ..> P_DATA : carries types / values
 P_RT ..> P_PLAN : uses
 P_RT ..> P_BND : uses
 P_RT ..> P_J : uses
-P_RT ..> P_CEL : uses
+P_RT ..> P_EXPR : uses
 P_BND ..> P_JSON : jsonl framing
 P_BND ..> P_J : uses
 P_GOLD ..> P_J : projects

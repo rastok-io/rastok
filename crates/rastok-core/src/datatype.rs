@@ -6,6 +6,7 @@
 //! budgets are checked before a type enters a resolved plan.
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
@@ -471,6 +472,9 @@ impl EnumType {
             return Err(TypeError::EmptyEnum);
         }
         symbols.sort();
+        if symbols.first().is_some_and(String::is_empty) {
+            return Err(TypeError::EmptyEnumSymbol);
+        }
         if let Some(symbol) = duplicate_adjacent(symbols.iter().map(String::as_str)) {
             return Err(TypeError::DuplicateEnumSymbol(symbol.to_string()));
         }
@@ -602,6 +606,204 @@ pub enum DataType {
     /// Explicitly dynamic self-describing tree.
     Variant,
 }
+
+/// A boundary-declared discriminator used when a self-describing struct is
+/// narrowed to a tagged union.
+///
+/// The discriminator is projection metadata, not part of [`DataType`]: Avro
+/// branch indexes and Arrow type codes can provide the same logical case by a
+/// different physical mechanism. An expression tree carries this resolved
+/// rule when it needs to narrow an untagged `variant` at runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Discriminator {
+    field: String,
+    mapping: BTreeMap<String, String>,
+}
+
+impl Discriminator {
+    /// Builds a field discriminator. An empty mapping means that the field's
+    /// text is already the canonical tagged-case name.
+    ///
+    /// # Errors
+    ///
+    /// Empty field names, external spellings, or case names refuse.
+    pub fn new(
+        field: impl Into<String>,
+        mapping: BTreeMap<String, String>,
+    ) -> Result<Self, DiscriminatorError> {
+        let field = field.into();
+        if field.is_empty() {
+            return Err(DiscriminatorError::EmptyField);
+        }
+        if let Some((external, case)) = mapping
+            .iter()
+            .find(|(external, case)| external.is_empty() || case.is_empty())
+        {
+            return Err(DiscriminatorError::EmptyMapping {
+                external: external.clone(),
+                case: case.clone(),
+            });
+        }
+        Ok(Self { field, mapping })
+    }
+
+    /// Struct field carrying the external discriminant.
+    #[must_use]
+    pub fn field(&self) -> &str {
+        &self.field
+    }
+
+    /// Canonical case selected by one external text.
+    #[must_use]
+    pub fn case_for<'a>(&'a self, external: &'a str) -> Option<&'a str> {
+        if self.mapping.is_empty() {
+            Some(external)
+        } else {
+            self.mapping.get(external).map(String::as_str)
+        }
+    }
+
+    /// Explicit external-to-case mapping. Empty means identity.
+    #[must_use]
+    pub fn mapping(&self) -> &BTreeMap<String, String> {
+        &self.mapping
+    }
+}
+
+/// Invalid discriminator declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiscriminatorError {
+    /// The field name is empty.
+    EmptyField,
+    /// One mapping endpoint is empty.
+    EmptyMapping {
+        /// External spelling.
+        external: String,
+        /// Canonical case name.
+        case: String,
+    },
+}
+
+impl fmt::Display for DiscriminatorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyField => f.write_str("a discriminator field cannot be empty"),
+            Self::EmptyMapping { external, case } => write!(
+                f,
+                "a discriminator mapping cannot contain an empty endpoint ({external:?} -> {case:?})"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for DiscriminatorError {}
+
+/// Typed reason why an explicit narrowing could not produce its target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NarrowingFailure {
+    /// The value conforms to no requested target or union branch.
+    NoMatch {
+        /// Requested logical target.
+        target: Box<DataType>,
+    },
+    /// More than one branch accepted the same untagged value.
+    AmbiguousUnion {
+        /// Canonical indexes of the accepting branches.
+        branches: Vec<u16>,
+    },
+    /// A tagged target needs a discriminator for an untagged value.
+    DiscriminatorRequired,
+    /// The configured discriminator field is absent.
+    MissingDiscriminator {
+        /// Required field.
+        field: String,
+    },
+    /// The discriminator field is not text.
+    NonTextDiscriminator {
+        /// Offending field.
+        field: String,
+    },
+    /// The external discriminant maps to no canonical case.
+    UnknownDiscriminator {
+        /// External value.
+        value: String,
+    },
+    /// The discriminator selected a case absent from the target union.
+    UnknownCase {
+        /// Canonical case name.
+        case: String,
+    },
+    /// A case-level conversion was applied to another tagged case.
+    CaseMismatch {
+        /// Requested canonical case.
+        expected: String,
+        /// Case actually carried by the value.
+        found: String,
+    },
+    /// The selected case payload does not conform to its declared struct.
+    CasePayload {
+        /// Canonical case name.
+        case: String,
+        /// Precise payload refusal.
+        violation: Box<ConformanceViolation>,
+    },
+    /// A type exceeded a representation bound that its constructor normally
+    /// guarantees. This protects direct hostile construction.
+    InvalidTarget,
+}
+
+impl NarrowingFailure {
+    /// Whether `is` should report `false` rather than surface an execution
+    /// fault. Ambiguity and invalid target/configuration remain errors.
+    #[must_use]
+    pub fn is_mismatch(&self) -> bool {
+        matches!(
+            self,
+            Self::NoMatch { .. }
+                | Self::MissingDiscriminator { .. }
+                | Self::NonTextDiscriminator { .. }
+                | Self::UnknownDiscriminator { .. }
+                | Self::UnknownCase { .. }
+                | Self::CaseMismatch { .. }
+                | Self::CasePayload { .. }
+        )
+    }
+}
+
+impl fmt::Display for NarrowingFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoMatch { target } => write!(f, "the value does not conform to {target}"),
+            Self::AmbiguousUnion { branches } => {
+                write!(f, "the value matches multiple union branches {branches:?}")
+            }
+            Self::DiscriminatorRequired => {
+                f.write_str("an untagged value needs a declared discriminator for this union")
+            }
+            Self::MissingDiscriminator { field } => {
+                write!(f, "the value has no discriminator field `{field}`")
+            }
+            Self::NonTextDiscriminator { field } => {
+                write!(f, "the discriminator field `{field}` is not text")
+            }
+            Self::UnknownDiscriminator { value } => {
+                write!(f, "the discriminator value `{value}` maps to no case")
+            }
+            Self::UnknownCase { case } => {
+                write!(f, "the discriminator selects undeclared case `{case}`")
+            }
+            Self::CaseMismatch { expected, found } => {
+                write!(f, "case `{found}` cannot be narrowed to case `{expected}`")
+            }
+            Self::CasePayload { case, violation } => {
+                write!(f, "case `{case}` has an invalid payload: {violation}")
+            }
+            Self::InvalidTarget => f.write_str("the narrowing target is malformed"),
+        }
+    }
+}
+
+impl core::error::Error for NarrowingFailure {}
 
 // This key, rather than the source order of `DataType` variants, owns the
 // deterministic in-memory order used to canonicalize structural unions. B8
@@ -931,6 +1133,139 @@ impl DataType {
         self.violation("value", value).is_none()
     }
 
+    /// Explicitly narrows one materialized value to this logical type.
+    ///
+    /// Precise targets preserve the value. Structural unions wrap the unique
+    /// matching branch with its canonical index. Tagged unions preserve an
+    /// already tagged value or use the supplied boundary discriminator to tag
+    /// an untagged struct. No first-match rule exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed mismatch, ambiguity, or discriminator refusal.
+    pub fn narrow(
+        &self,
+        value: Value,
+        discriminator: Option<&Discriminator>,
+    ) -> Result<Value, NarrowingFailure> {
+        match (self, value) {
+            (Self::StructuralUnion(_), value @ Value::StructuralUnion { .. }) => {
+                if self.accepts(&value) {
+                    Ok(value)
+                } else {
+                    Err(NarrowingFailure::NoMatch {
+                        target: Box::new(self.clone()),
+                    })
+                }
+            }
+            (Self::StructuralUnion(union), value) => {
+                let mut matching = Vec::new();
+                for (index, branch) in union.branches().iter().enumerate() {
+                    if branch.accepts(&value) {
+                        let Ok(index) = u16::try_from(index) else {
+                            return Err(NarrowingFailure::InvalidTarget);
+                        };
+                        matching.push(index);
+                    }
+                }
+                match matching.as_slice() {
+                    [] => Err(NarrowingFailure::NoMatch {
+                        target: Box::new(self.clone()),
+                    }),
+                    [branch] => Ok(Value::StructuralUnion {
+                        branch: *branch,
+                        value: Box::new(value),
+                    }),
+                    _ => Err(NarrowingFailure::AmbiguousUnion { branches: matching }),
+                }
+            }
+            (Self::TaggedUnion(_), value @ Value::TaggedUnion(_)) => {
+                if self.accepts(&value) {
+                    Ok(value)
+                } else {
+                    Err(NarrowingFailure::NoMatch {
+                        target: Box::new(self.clone()),
+                    })
+                }
+            }
+            (Self::TaggedUnion(union), Value::Struct(payload)) => {
+                let discriminator = discriminator.ok_or(NarrowingFailure::DiscriminatorRequired)?;
+                let Some((_, discriminant)) = payload
+                    .iter()
+                    .find(|(name, _)| name == discriminator.field())
+                else {
+                    return Err(NarrowingFailure::MissingDiscriminator {
+                        field: discriminator.field().to_string(),
+                    });
+                };
+                let Value::Text(discriminant) = discriminant else {
+                    return Err(NarrowingFailure::NonTextDiscriminator {
+                        field: discriminator.field().to_string(),
+                    });
+                };
+                let case = discriminator.case_for(discriminant).ok_or_else(|| {
+                    NarrowingFailure::UnknownDiscriminator {
+                        value: discriminant.clone(),
+                    }
+                })?;
+                let selected = union
+                    .cases()
+                    .iter()
+                    .find(|candidate| candidate.name() == case)
+                    .ok_or_else(|| NarrowingFailure::UnknownCase {
+                        case: case.to_string(),
+                    })?;
+                let payload_value = Value::Struct(payload.clone());
+                if let Some(violation) =
+                    Self::Struct(selected.payload().clone()).violation("payload", &payload_value)
+                {
+                    return Err(NarrowingFailure::CasePayload {
+                        case: case.to_string(),
+                        violation: Box::new(violation),
+                    });
+                }
+                Ok(Value::TaggedUnion(Box::new(
+                    crate::value::TaggedUnionValue {
+                        case: case.to_string(),
+                        payload,
+                    },
+                )))
+            }
+            (Self::TaggedUnion(_), _) => Err(NarrowingFailure::NoMatch {
+                target: Box::new(self.clone()),
+            }),
+            (target, Value::StructuralUnion { value, .. }) if target.accepts(&value) => Ok(*value),
+            (target, value) => {
+                if target.accepts(&value) {
+                    Ok(value)
+                } else {
+                    Err(NarrowingFailure::NoMatch {
+                        target: Box::new(target.clone()),
+                    })
+                }
+            }
+        }
+    }
+
+    /// Tests the same narrowing rule used by [`Self::narrow`]. Ordinary
+    /// mismatch is `false`; ambiguity and invalid configuration stay typed
+    /// failures rather than pretending the predicate was meaningful.
+    ///
+    /// # Errors
+    ///
+    /// Returns a non-mismatch [`NarrowingFailure`].
+    pub fn is_instance(
+        &self,
+        value: &Value,
+        discriminator: Option<&Discriminator>,
+    ) -> Result<bool, NarrowingFailure> {
+        match self.narrow(value.clone(), discriminator) {
+            Ok(_) => Ok(true),
+            Err(error) if error.is_mismatch() => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     fn violation_at(
         &self,
         name: &str,
@@ -1098,6 +1433,63 @@ impl DataType {
                     );
                 }
                 None
+            }
+            (Self::Enum(enumeration), Value::Enum(symbol)) => {
+                if enumeration.symbols().contains(symbol) {
+                    None
+                } else {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::UnknownEnumSymbol(symbol.clone()),
+                    )
+                }
+            }
+            (
+                Self::StructuralUnion(union),
+                Value::StructuralUnion {
+                    branch,
+                    value: selected,
+                },
+            ) => {
+                let Some(branch_type) = union.branches().get(usize::from(*branch)) else {
+                    return refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::UnionBranchOutOfRange {
+                            branch: *branch,
+                            branches: union.branches().len(),
+                        },
+                    );
+                };
+                path.push(ValuePathSegment::UnionBranch(*branch));
+                let violation = branch_type.violation_at(name, selected, path);
+                path.pop();
+                violation
+            }
+            (Self::TaggedUnion(union), Value::TaggedUnion(tagged)) => {
+                let Some(selected) = union
+                    .cases()
+                    .iter()
+                    .find(|candidate| candidate.name() == tagged.case)
+                else {
+                    return refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::UnknownTaggedCase(tagged.case.clone()),
+                    );
+                };
+                Self::Struct(selected.payload().clone()).violation_at(
+                    name,
+                    &Value::Struct(tagged.payload.clone()),
+                    path,
+                )
             }
             _ => refusal(name, path, self, value, ConformanceReason::TypeMismatch),
         }
@@ -1269,6 +1661,8 @@ pub enum TypeError {
     DuplicateStructField(String),
     /// An enum has no symbols.
     EmptyEnum,
+    /// One enum symbol is empty.
+    EmptyEnumSymbol,
     /// One enum repeats a symbol.
     DuplicateEnumSymbol(String),
     /// One tagged-union discriminant is empty.
@@ -1339,6 +1733,7 @@ impl fmt::Display for TypeError {
                 write!(f, "struct field `{name}` appears twice")
             }
             Self::EmptyEnum => f.write_str("an enum must declare at least one symbol"),
+            Self::EmptyEnumSymbol => f.write_str("an enum symbol cannot be empty"),
             Self::DuplicateEnumSymbol(symbol) => {
                 write!(f, "enum symbol `{symbol}` appears twice")
             }
@@ -1457,6 +1852,17 @@ pub enum ConformanceReason {
     MissingField(String),
     /// A closed struct contains an undeclared field.
     UnexpectedField(String),
+    /// An enum value carries no declared symbol.
+    UnknownEnumSymbol(String),
+    /// A structural-union value points outside the declared branch table.
+    UnionBranchOutOfRange {
+        /// Carried branch index.
+        branch: u16,
+        /// Number of declared branches.
+        branches: usize,
+    },
+    /// A tagged-union value carries no declared case.
+    UnknownTaggedCase(String),
 }
 
 /// One type refusal, independent of the runtime boundary that renders it.
@@ -1482,6 +1888,8 @@ impl fmt::Display for ConformanceViolation {
                 ValuePathSegment::Field(name) => write!(f, ".{name}")?,
                 ValuePathSegment::Index(index) => write!(f, "[{index}]")?,
                 ValuePathSegment::MapValue(key) => write!(f, "[{key:?}]")?,
+                ValuePathSegment::UnionBranch(branch) => write!(f, "<branch:{branch}>")?,
+                ValuePathSegment::TaggedField { case, field } => write!(f, "<{case}>.{field}")?,
             }
         }
         match &self.reason {
@@ -1517,6 +1925,16 @@ impl fmt::Display for ConformanceViolation {
             }
             ConformanceReason::UnexpectedField(field) => {
                 write!(f, "` contains undeclared field `{field}`")
+            }
+            ConformanceReason::UnknownEnumSymbol(symbol) => {
+                write!(f, "` contains undeclared enum symbol `{symbol}`")
+            }
+            ConformanceReason::UnionBranchOutOfRange { branch, branches } => write!(
+                f,
+                "` selects union branch {branch}; the type declares {branches} branches"
+            ),
+            ConformanceReason::UnknownTaggedCase(case) => {
+                write!(f, "` contains undeclared tagged case `{case}`")
             }
         }
     }
@@ -1621,6 +2039,10 @@ mod tests {
             EnumType::new(alloc::vec![]),
             Err(TypeError::EmptyEnum)
         ));
+        assert!(matches!(
+            EnumType::new(alloc::vec![String::new()]),
+            Err(TypeError::EmptyEnumSymbol)
+        ));
         assert_eq!(TimeZone::named("UTC").expect("a UTC alias"), TimeZone::Utc);
         assert_eq!(
             TimeZone::named("Etc/UTC").expect("a UTC alias"),
@@ -1661,6 +2083,29 @@ mod tests {
             panic!("optional is a structural union");
         };
         assert_eq!(union.branches(), &[DataType::Null, DataType::Text]);
+    }
+
+    #[test]
+    fn narrowing_distinguishes_no_match_from_ambiguous_match() {
+        let union = DataType::structural_union(alloc::vec![DataType::Text, DataType::INT])
+            .expect("the branches are disjoint");
+        assert!(matches!(
+            union.narrow(Value::Bool(true), None),
+            Err(NarrowingFailure::NoMatch { .. })
+        ));
+
+        // A public constructor refuses this overlapping union. Keeping the
+        // runtime judge total over a hostile in-memory target proves that it
+        // still never falls back to first-match-wins.
+        let hostile = DataType::StructuralUnion(StructuralUnionType(alloc::vec![
+            DataType::INT,
+            DataType::LONG,
+        ]));
+        assert!(matches!(
+            hostile.narrow(Value::Int(7), None),
+            Err(NarrowingFailure::AmbiguousUnion { branches })
+                if branches == alloc::vec![0, 1]
+        ));
     }
 
     #[test]

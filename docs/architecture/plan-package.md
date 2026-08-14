@@ -35,6 +35,10 @@
 > carry canonical union discriminants and complete effective types, not
 > Avro branch indexes, Arrow dense/sparse layout, or unresolved compiler
 > variables.
+> M1.3 B3 follows the same line for expression trees: `is`/`as` are valid
+> in-memory `expr` nodes, but v6 validation returns
+> `ExpressionNotInFormat` before encoding. No provisional v6 expression tag
+> exists; B8 assigns the resolved target/discriminator form once in v7.
 > Format v5 (D-2026-08-10-9, landed 2026-08-10): the
 > three-zone metadata write targets, the travelling `app`/`ext`
 > schemas, the content-addressed asset table, expanded named types

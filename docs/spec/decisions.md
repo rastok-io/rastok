@@ -13,7 +13,7 @@ state and the admitted metadata subset. The intrinsic expression
 language consumes `DataType` and the one materialized `Value` domain; it
 does not define either. The former `cel::Type` authority has moved to
 core `datatype::DataType`, and materialized values now live only in core
-`value::Value`. The expression evaluator's `cel::EvalValue` is transient
+`value::Value`. The expression evaluator's `expr::EvalValue` is transient
 evaluation state: it may carry the lazy whole-payload witness, but it is
 never serialized, journaled, or accepted as an envelope value.
 The language is named **Rastok expressions**. Its compatible operator
@@ -174,6 +174,24 @@ no transitory `error_set`/kind-list architecture becomes normative or a
 published package format. If schedule pressure appears, later M1 breadth
 is reduced before this foundation.
 
+**B3 implementation checkpoint (2026-08-14).** The code boundary is now
+`expr`; the old `cel` module/API no longer exists. Signatures and trees consume
+core `DataType`/`Value`, and the evaluator-only carrier cannot cross a
+materialized boundary. `is`/`as` share one typed narrowing judge: structural
+union selection is exactly-one and exposes only its selected value to later
+expression operators while retaining the branch index in materialized data;
+tagged selection preserves the name, external discriminators are explicit,
+and mismatch, ambiguity and invalid
+configuration remain distinct. Positive tests narrow only the right side of
+`&&`, true ternary branch and guarded handler body. The v6 validator refuses
+these new AST forms with `ExpressionNotInFormat`; no private tag was added.
+The compatible expression subset is independently evaluated against
+exact-pinned, dev-only `cel-interpreter 0.10.0`; all divergences are recorded
+in `expressions.md`. The remaining v6 `decimal(...) -> variant` tree type is a
+named transport bridge, not the target type: B8 changes it to `number` when
+the one v7 type/expression registry lands. Legacy unchecked member access on
+`variant` remains isolated until the B9 evidence sweep.
+
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign
 literal spelling and `TAG_KW` partition in D-2026-08-12-1; the
@@ -182,7 +200,12 @@ spellings of D-2026-08-10-5/-6; the proposed `@mylang` guest sigil; the
 Process/error-set interpretation recorded in D-2026-08-12-1's capture
 amendments; and D-2026-08-11-1's reserved `bytes` codec and single
 `array<variant>` job reply (each decoded JSONL document is now an ordinary
-`variant` emission). Their still-compatible parser,
+`variant` emission). It also supersedes D-2026-08-13-1's claim that `cel`
+remains the module/type authority and its indefinite “Dyn until a future type
+slice” for `decimal`: the logical target is now `number`, with only the named
+v6 transport bridge above remaining until B8. The unreleased diagnostic
+spelling `E-CEL-EXPR` becomes `E-EXPR` in the same pre-public B3 migration.
+Their still-compatible parser,
 exact-number, capture-budget, attribute-contract and framing invariants
 survive.
 

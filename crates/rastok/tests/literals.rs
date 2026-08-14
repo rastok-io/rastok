@@ -96,7 +96,7 @@ fn base64_refusals_are_located() {
         assert!(
             bag.diagnostics()
                 .iter()
-                .any(|d| !d.spans().is_empty() && d.code().as_str() == "E-CEL-EXPR"),
+                .any(|d| !d.spans().is_empty() && d.code().as_str() == "E-EXPR"),
             "`{wrong}` refusal carries a span: {bag:?}"
         );
     }
@@ -190,7 +190,7 @@ fn mixing_struct_and_map_punctuation_refuses() {
 #[test]
 fn json_reads_every_form_directly() {
     use rastok::envelope::{Data, Value};
-    // Scalars are CEL's spellings — `json` takes documents only
+    // Scalars are the Rastok expression language's spellings — `json` takes documents only
     // (D-2026-08-13-1).
     assert_eq!(emitted("42"), Data::materialized(Value::Int(42)));
     assert_eq!(
@@ -278,7 +278,7 @@ fn json_refusals_are_located() {
 }
 
 #[test]
-fn a_json_document_and_its_cel_twin_are_different_programs() {
+fn a_json_document_and_its_expression_twin_are_different_programs() {
     // The static type is identity (D-2026-08-10-7): `json [1]` is a
     // variant, `[1]` a list — same numeric leaf, two programs.
     assert_ne!(hash_of("json [1]"), hash_of("[1]"));
@@ -664,7 +664,7 @@ fn a_non_meta_typed_app_write_refuses_or_converts() {
     assert!(
         bag.diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code().as_str() == "E-CEL-EXPR"),
+            .any(|diagnostic| diagnostic.code().as_str() == "E-EXPR"),
         "{bag:?}"
     );
 }
@@ -760,7 +760,7 @@ fn a_branch_alias_cannot_dodge_the_grid_either() {
 fn comments_are_trivia_in_every_expression_form() {
     // D-2026-08-13-1 (review round): a comment changes neither the
     // AST nor the hash, whatever the expression's shape — trivia has
-    // ONE authority, and CEL recognizes the host's comments.
+    // ONE authority, and Rastok expression recognizes the host's comments.
     // (Line comments in the ONE-LINE harness would comment out the
     // closing brace — correctly; they are proven on the multi-line
     // shapes below.)
@@ -1225,6 +1225,14 @@ fn broken_type_declarations_refuse_even_unused() {
             .iter()
             .find(|d| d.code().as_str() == code)
             .unwrap_or_else(|| panic!("`{what}`: {bag:?}"));
+        assert_eq!(
+            bag.diagnostics()
+                .iter()
+                .filter(|diagnostic| diagnostic.code().as_str() == code)
+                .count(),
+            1,
+            "`{what}` has one diagnostic authority: {bag:?}"
+        );
         assert!(
             hit.fields()
                 .iter()
@@ -1277,10 +1285,10 @@ fn map_keys_keep_their_string_semantics() {
         .unwrap_or_else(|| panic!("{bag:?}"));
     assert!(!hit.spans().is_empty(), "the second key is underlined");
     // Escapes decode by the ONE string rule: the RKG map spelling
-    // and the CEL map spelling are the same program.
+    // and the Rastok expression map spelling are the same program.
     let rkg = hash_of("{ \"a\\nb\": 1 }");
-    let cel = hash_of("({ \"a\\nb\": 1 })");
-    assert_eq!(rkg, cel, "one escape semantics, one hash");
+    let expr = hash_of("({ \"a\\nb\": 1 })");
+    assert_eq!(rkg, expr, "one escape semantics, one hash");
     // And the decoded key is REALLY the newline form: two escaped
     // twins collide as duplicates.
     let source = "graph g : App {\n  operator o {\n    on in { out = { \"a\\nb\": 1, \"a\\nb\": 2 } }\n  }\n  . -> o -> .\n}\n";

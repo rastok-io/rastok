@@ -1,6 +1,6 @@
 [package]
 name = "rastok-core"
-description = "The no_std-ready Rastok kernel: vocabulary, envelope, CEL, plan, journal, boundary, and the deterministic machine"
+description = "The no_std-ready Rastok kernel: vocabulary, envelope, expressions, plan, journal, boundary, and deterministic machine"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -21,6 +21,13 @@ blake3.workspace = true
 # (valid JSON both accept, integers within i64) the two parsers must
 # agree; Rastok's stricter refusals are asserted directly.
 serde_json = "1"
+
+# Differential oracle for the explicitly CEL-compatible expression core.
+# Dev-only and exact-pinned: Rastok owns its runtime semantics, while this
+# dependency detects accidental drift in the shared literals/operators subset.
+# Default regex/chrono features are unnecessary for that corpus. MIT licensed;
+# exit strategy is the versioned fixture table in docs/spec/expressions.md.
+cel-interpreter = { version = "=0.10.0", default-features = false }
 
 [lints]
 workspace = true

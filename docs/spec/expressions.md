@@ -1,8 +1,11 @@
 # Rastok expressions and tagged frontends
 
-> **Status: normative M1.3 target.** The current executable module is
-> still named `cel`; M1.3 migrates it to this contract and keeps named
-> refusals until the migration is complete.
+> **Status: normative M1.3 target; B3 core landed 2026-08-14.** The
+> executable module is `expr` and consumes core `DataType`/`Value`. Its
+> `is`/`as` trees execute and are type-checked in memory, while package v6
+> refuses them categorically until B8 assigns their single v7 wire form.
+> The two remaining compatibility bridges are named below rather than
+> presented as completed target behavior.
 
 Rastok has an intrinsic, pure expression language. Its syntax and much of
 its operator semantics are inspired by CEL, and the compatible core stays
@@ -30,6 +33,31 @@ Arrow-anchored logical types.
 Every divergence from the CEL-compatible core is named and tested. In
 particular, Rastok's comments, line-bounded strings, absence rules,
 narrowing and type domain are not described as upstream CEL behavior.
+
+### 1.1 Compatibility oracle and divergence ledger
+
+The differential harness pins dev-only `cel-interpreter = 0.10.0` with
+default features disabled. It compares independent parse/evaluation results
+for literals, integer/unsigned/double arithmetic, text concatenation,
+comparisons, short-circuit boolean logic, ternaries, list/map indexing and
+`size`. Rastok's ordinary unit and conformance tests remain the authority;
+the oracle detects accidental drift only in this named common subset.
+
+| Surface | Relationship to CEL | Rastok authority |
+|---|---|---|
+| literals/operators/ternary/list/map/`size` in the harness | differentially equal | pinned oracle test plus Rastok tests |
+| `//` comments and ordinary string escapes | compatible subset, with Rastok's line boundary made explicit | lexer and recovery tests |
+| `/* ... */` comments | Rastok extension | shared `trivia` recognizer |
+| `decimal(...)`, `is`, `as`, named types and union cases | Rastok extensions | `DataType`, `Value`, typed narrowing tests |
+| absence/optional access, macros/comprehensions and `in` | not admitted in this build | named compile-time refusals |
+| `variant`, structs, enums and structural/tagged unions | Rastok payload semantics, not CEL types | [`types.md`](types.md) |
+
+This is a test-only dependency: it adds 38 package entries to the lockfile,
+none to runtime or no_std builds. The repository previously had no
+independent expression evaluator, so self-tests alone could not provide the
+differential capability. The crate is exact-pinned and MIT licensed; the
+exit strategy is this versioned source corpus plus a replacement oracle
+adapter, with no production API or package-format consequence.
 
 ## 2. A tagged frontend is not an expression keyword
 
@@ -134,10 +162,33 @@ on exit where data is Exited {
 val customer = data as Customer
 ```
 
-The M1.3 implementation gate closes the exact flow-sensitive and runtime
-failure rules before either form becomes executable. Until then they
-remain named deferrals; `variant` does not permit unchecked structural
-access.
+The implemented minimum is deliberately small and deterministic:
+
+- `is T` returns false for an ordinary non-match, but ambiguity or malformed
+  discriminator configuration is a typed evaluation fault;
+- `as T` returns the narrowed value or the same typed `NarrowingFailure`;
+- structural unions require exactly one conforming branch and record its
+  canonical branch index;
+- after a successful narrowing, expression operators consume the selected
+  structural value; the branch index remains present in the materialized
+  `Value`, journal and identity and is never discarded at those boundaries;
+- tagged unions preserve their case name; an untagged variant needs an
+  explicitly resolved discriminator before it can become one;
+- a positive `is` fact narrows the right side of `&&`, the true branch of a
+  ternary, and the body of a guarded handler. No negation/disjunction
+  inference is invented.
+
+Named aliases are expanded before entering the tree, so alias spelling is
+not identity. The v6 plan gate returns `ExpressionNotInFormat` for `is` or
+`as`; the compiler adapts that to a named v7-transport deferral rather than
+writing a private v6 tag.
+
+Two migration constraints remain explicit. First, current v6 programs still
+permit legacy unchecked member/index access on `variant`; B9 removes that
+door after B4 has migrated JSON/frontends and the corpus can narrow first.
+Second, `decimal(...)` already produces the one exact Rastok decimal value,
+but its v6 expression-tree result type remains `variant`; B8 changes that
+single compatibility bridge to canonical `number` when v7 can transport it.
 
 ## 6. Future `@` annotations
 

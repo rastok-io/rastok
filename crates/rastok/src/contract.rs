@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::cel;
+use crate::expr;
 
 /// How a connector type name resolves against the registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,18 +147,18 @@ pub enum Presence {
     Defaulted(DefaultValue),
 }
 
-/// A contract default — a closed-choice word or a closed, constant
-/// CEL expression (text, lists, durations are already CEL; there is
-/// no second literal algebra).
+/// A contract default — a closed-choice word or a closed, constant Rastok
+/// expression (text, lists and durations are already expressions; there is no
+/// second literal algebra).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DefaultValue {
     /// A word of the attribute's `Choice` domain.
     Choice(&'static str),
-    /// A constant CEL source, compiled through the SAME chain as
+    /// A constant Rastok expression source, compiled through the SAME chain as
     /// author expressions. It must not read `data`, `meta`, node
     /// state, application `val`s, `env()` or `secret()` — a standard
     /// contract introduces no invisible dependency.
-    CelExpression(&'static str),
+    Expression(&'static str),
 }
 
 /// The value domain of a contract attribute.
@@ -181,9 +181,9 @@ pub enum ValueDomain {
     /// [`byte_size`], the ONE parser the contract and the adapter
     /// share: what validates is what executes.
     ByteSize,
-    /// A CEL path over runtime data (`correlate = data.id`) — not a
+    /// A Rastok expression path over runtime data (`correlate = data.id`) — not a
     /// boot-phase constant. Deferred-only.
-    CelPath,
+    ExprPath,
     /// A typed struct value. Deferred-only.
     Struct,
     /// A typed map value. Deferred-only.
@@ -207,7 +207,7 @@ impl ValueDomain {
     #[must_use]
     pub fn admits(&self, value: &crate::value::Value) -> bool {
         match self {
-            Self::Choice(_) | Self::CelPath | Self::Struct | Self::Map => false,
+            Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => false,
             Self::Text => matches!(value, crate::value::Value::Text(_)),
             Self::TextList => match value {
                 crate::value::Value::Array(items) => items
@@ -373,7 +373,7 @@ fn expressible_name(text: &str) -> bool {
         && !matches!(text, "true" | "false" | "null" | "nothing")
 }
 
-/// Judges one default against its spec — compiling a CEL default
+/// Judges one default against its spec — compiling a Rastok expression default
 /// through the real chain (closed signature, no consts: a standard
 /// contract reads nothing).
 fn validate_default(spec: &AttributeSpec) -> Result<(), SheetDefect> {
@@ -388,14 +388,14 @@ fn validate_default(spec: &AttributeSpec) -> Result<(), SheetDefect> {
                 reason: format!("`{word}` is not a word of the attribute's domain"),
             }),
         },
-        DefaultValue::CelExpression(source) => {
-            let tree = cel::compile(source, &cel::Signature::new()).map_err(|_| {
+        DefaultValue::Expression(source) => {
+            let tree = expr::compile(source, &expr::Signature::new()).map_err(|_| {
                 SheetDefect::InvalidDefault {
                     attribute: spec.name,
-                    reason: format!("`{source}` does not compile as closed CEL"),
+                    reason: format!("`{source}` does not compile as closed Rastok expression"),
                 }
             })?;
-            let value = cel::const_eval(&tree, &BTreeMap::new()).map_err(|error| {
+            let value = expr::const_eval(&tree, &BTreeMap::new()).map_err(|error| {
                 SheetDefect::InvalidDefault {
                     attribute: spec.name,
                     reason: format!("`{source}` is not constant: {}", error.message),
