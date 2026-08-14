@@ -9,6 +9,7 @@
 //!
 //! [`delivery-semantics.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/delivery-semantics.md
 
+use crate::datatype::DataType;
 use crate::envelope::{self, Envelope};
 use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
@@ -165,11 +166,9 @@ impl RequestCodec {
     /// this through [`connector_out_pin`] — the ONE effective-pin
     /// authority.
     #[must_use]
-    pub fn reply_type(self) -> Option<crate::cel::Type> {
+    pub fn reply_type(self) -> Option<DataType> {
         match self {
-            Self::Jsonl => Some(crate::cel::Type::List(alloc::boxed::Box::new(
-                crate::cel::Type::Dyn,
-            ))),
+            Self::Jsonl => Some(DataType::Array(alloc::boxed::Box::new(DataType::Variant))),
             Self::Lines => None,
         }
     }
@@ -183,11 +182,7 @@ impl RequestCodec {
 /// to the `Process` contract's `out`; any other sheet derives
 /// nothing until it lands with its own rules.
 #[must_use]
-pub fn effective_pin(
-    contract: &str,
-    port: &str,
-    codec_word: Option<&str>,
-) -> Option<crate::cel::Type> {
+pub fn effective_pin(contract: &str, port: &str, codec_word: Option<&str>) -> Option<DataType> {
     if contract != "Process" || port != "out" {
         return None;
     }
@@ -197,7 +192,7 @@ pub fn effective_pin(
 /// [`effective_pin`]'s plan-side adapter: the connector spec's
 /// `out` pin.
 #[must_use]
-pub fn connector_out_pin(spec: &crate::plan::ConnectorSpec) -> Option<crate::cel::Type> {
+pub fn connector_out_pin(spec: &crate::plan::ConnectorSpec) -> Option<DataType> {
     let word = match spec.attribute("codec") {
         Some(crate::plan::AttrSetting::Word(word)) => Some(word.as_str()),
         _ => None,

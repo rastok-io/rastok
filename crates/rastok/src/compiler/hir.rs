@@ -10,6 +10,7 @@
 //! stages; nothing here is hashed with positions in it.
 
 use crate::cel;
+use crate::datatype::DataType;
 use crate::node;
 
 /// The checked unit: the single `: App` graph of the deployed unit,
@@ -24,10 +25,10 @@ pub struct Hir {
     /// The sealed `meta.app` schema — the graph's writes, unified
     /// (D-2026-08-10-1). DERIVED from the writes: the hash never
     /// seals it twice.
-    pub app_schema: Vec<(String, crate::cel::Type)>,
+    pub app_schema: Vec<(String, DataType)>,
     /// The `meta.ext` vocabulary: the sheets' fields only — the
     /// standard `content_type` is implicit, never carried.
-    pub ext_schema: Vec<(String, crate::cel::Type)>,
+    pub ext_schema: Vec<(String, DataType)>,
     /// The build-time assets the checker resolved (D-2026-08-10-5).
     pub assets: Vec<crate::plan::AssetBlob>,
 }
@@ -162,8 +163,8 @@ pub enum AttrValue {
 pub struct Var {
     /// The cell name.
     pub name: String,
-    /// The cell's CEL-facing type.
-    pub ty: cel::Type,
+    /// The cell's logical data type.
+    pub ty: DataType,
     /// The initial value, when declared; identity material — the
     /// recovery fold reads defaults.
     pub init: Option<Const>,

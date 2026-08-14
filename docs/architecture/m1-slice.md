@@ -228,11 +228,12 @@ step touches `vm.rs` once.
    `Process.err` is exact stderr while `Process.exit` carries the tagged
    terminal outcome of each invocation. This generalizes the original
    typed-error deliverable into `ProcessExit`; partition `stop` remains a
-   distinct lifecycle implemented by the following `per` slice. The existing
-   `cel::Type`/`cel::Value`,
-   `error_set`, `TypedError` and success/failure-only reply split are
-   removed in the same v7 landing, not promoted as an intermediate
-   model. Ordered gates and evidence are in the dedicated
+   distinct lifecycle implemented by the following `per` slice. Core
+   `datatype::DataType` already owns the executable type subset without an
+   identity move; the remaining `cel::Value`, `error_set`, `TypedError` and
+   success/failure-only reply split are removed by the ordered M1.3 gates,
+   not promoted as an intermediate model. Ordered gates and evidence are in
+   the dedicated
    [M1.3 backlog](m1.3-type-system-backlog.md).
 4. **`per` — the partition surface** — keyed nodes and graphs on the
    flat two-concept model; scheduler keys over the proven multiport

@@ -380,7 +380,8 @@ fn typed_ports_travel_in_the_package() {
         gauge
             .ports
             .iter()
-            .any(|decl| decl.port.name() == "evt" && decl.ty == Some(rastok::cel::Type::Text)),
+            .any(|decl| decl.port.name() == "evt"
+                && decl.ty == Some(rastok::datatype::DataType::Text)),
         "the pinned input travels: {:?}",
         gauge.ports
     );
@@ -390,7 +391,8 @@ fn typed_ports_travel_in_the_package() {
             .plan()
             .boundary
             .iter()
-            .any(|decl| decl.port.name() == "feed" && decl.ty == Some(rastok::cel::Type::Text)),
+            .any(|decl| decl.port.name() == "feed"
+                && decl.ty == Some(rastok::datatype::DataType::Text)),
         "the pinned boundary input travels: {:?}",
         compilation.plan.plan().boundary
     );
@@ -1443,13 +1445,13 @@ fn the_validator_refuses_mismatched_edge_pins() {
         .iter_mut()
         .find(|decl| decl.port.name() == "evt")
         .expect("the pinned input");
-    evt.ty = Some(rastok::cel::Type::Int);
+    evt.ty = Some(rastok::datatype::DataType::Int);
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::MismatchedEdgePins { port, expected, found }
             if port.name() == "evt"
-                && expected == rastok::cel::Type::Int
-                && found == rastok::cel::Type::Text
+                && expected == rastok::datatype::DataType::Int
+                && found == rastok::datatype::DataType::Text
     ));
     // Boundary target: the gauge fixture wires `meter.score : int`
     // into `.measure : int` — retune the boundary side to text.
@@ -1469,7 +1471,7 @@ fn the_validator_refuses_mismatched_edge_pins() {
         .iter_mut()
         .find(|decl| decl.port.name() == "measure")
         .expect("the pinned output");
-    measure.ty = Some(rastok::cel::Type::Text);
+    measure.ty = Some(rastok::datatype::DataType::Text);
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::MismatchedEdgePins { port, .. } if port.name() == "measure"
@@ -1494,12 +1496,12 @@ fn a_named_constant_answers_like_its_literal() {
     );
 }
 
-// ===== round five — Dyn coherence, synthesized errors, the relay =====
+// ===== round five — variant coherence, synthesized errors, the relay =====
 
 #[test]
 fn a_variant_pin_is_inference_territory_everywhere() {
-    // `variant` resolves to Dyn — an explicit "anything". A pinned
-    // Dyn admits every emission, and only two PRECISE pins can make
+    // `variant` is explicit "anything". A pinned variant admits every
+    // emission, and only two PRECISE pins can make
     // an edge disagree: checker, validator, and runtime share the
     // rule.
     let flexible = "graph g : App {\n  operator o {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  . -> o\n  o.flexible -> .\n}\n";
@@ -1524,11 +1526,11 @@ fn a_variant_pin_is_inference_territory_everywhere() {
     .expect("int -> variant is inference territory");
 
     // The same rule holds for a raw plan re-earning the type after
-    // the trip — a Dyn/Int pinned edge is never a mismatch.
+    // the trip — a variant/Int pinned edge is never a mismatch.
     let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
     let (decoded, _) = rastok::plan::decode(&bytes).expect("the package opens");
     rastok::plan::ValidatedExecutionPlan::try_new(decoded.into_inner())
-        .expect("the validator applies the same Dyn rule");
+        .expect("the validator applies the same variant rule");
 }
 
 #[test]
@@ -2565,8 +2567,8 @@ fn struct_equality_is_by_name_like_the_seal() {
     );
     // The CEL operator agrees too.
     let signature = rastok::cel::Signature::new()
-        .with("a", rastok::cel::Type::Dyn)
-        .with("b", rastok::cel::Type::Dyn);
+        .with("a", rastok::datatype::DataType::Variant)
+        .with("b", rastok::datatype::DataType::Variant);
     let tree = rastok::cel::compile("a == b", &signature).expect("a valid expression");
     let mut env = std::collections::BTreeMap::new();
     env.insert(
@@ -2666,7 +2668,7 @@ fn the_conformance_judgement_is_matchable() {
     assert!(matches!(
         error,
         VmError::IngressPinViolation { violation, .. }
-            if violation.expected == rastok::cel::Type::Int
+            if violation.expected == rastok::datatype::DataType::Int
                 && violation.found == ValueKind::Text
                 && violation.reason == ConformanceReason::TypeMismatch
     ));

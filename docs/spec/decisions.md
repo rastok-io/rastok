@@ -11,8 +11,9 @@
 canonical [`DataType`](types.md) tree. It types envelope data, ports,
 state and the admitted metadata subset. The intrinsic expression
 language consumes `DataType` and the one materialized `Value` domain; it
-does not define either. The current `cel::Type` and parallel
-`cel::Value` domains are implementation scaffolding to remove in M1.3.
+does not define either. The former `cel::Type` authority has moved to
+core `datatype::DataType`; the still-parallel `cel::Value` domain is
+implementation scaffolding to remove in M1.3.
 The language is named **Rastok expressions**. Its compatible operator
 core remains differentially checked against cel-spec, with every
 Rastok-owned divergence named, but “CEL” is no longer the specification

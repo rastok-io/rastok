@@ -15,6 +15,7 @@ use crate::compiler::hir::{
     AttrValue, Direction, EdgeTarget, EmitValue, Hir, Node as HirNode, NodeRole,
     Statement as HirStatement,
 };
+use crate::datatype::DataType;
 use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
@@ -428,25 +429,25 @@ impl Writer<'_> {
         });
     }
 
-    /// Stable domain tags for the CEL type vocabulary — never a Rust
+    /// Stable domain tags for the logical data-type vocabulary — never a Rust
     /// `Debug` rendering, which renames could silently change.
-    fn ty(&mut self, ty: &cel::Type) {
+    fn ty(&mut self, ty: &DataType) {
         match ty {
-            cel::Type::Bool => self.tag(1),
-            cel::Type::Int => self.tag(2),
-            cel::Type::Uint => self.tag(3),
-            cel::Type::Double => self.tag(4),
-            cel::Type::Text => self.tag(5),
-            cel::Type::Bytes => self.tag(6),
-            cel::Type::Duration => self.tag(7),
-            cel::Type::Timestamp => self.tag(8),
-            cel::Type::Null => self.tag(9),
-            cel::Type::Dyn => self.tag(10),
-            cel::Type::List(element) => {
+            DataType::Bool => self.tag(1),
+            DataType::Int => self.tag(2),
+            DataType::Uint => self.tag(3),
+            DataType::Double => self.tag(4),
+            DataType::Text => self.tag(5),
+            DataType::Bytes => self.tag(6),
+            DataType::Duration => self.tag(7),
+            DataType::Timestamp => self.tag(8),
+            DataType::Null => self.tag(9),
+            DataType::Variant => self.tag(10),
+            DataType::Array(element) => {
                 self.tag(11);
                 self.ty(element);
             }
-            cel::Type::Map(values) => {
+            DataType::Map(values) => {
                 self.tag(12);
                 self.ty(values);
             }

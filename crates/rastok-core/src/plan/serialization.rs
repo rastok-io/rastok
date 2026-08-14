@@ -20,6 +20,7 @@ use alloc::{format, vec};
 
 use crate::canonical_cbor::{self, Value as Cbor};
 use crate::cel;
+use crate::datatype::DataType;
 use crate::envelope::WriteTarget;
 use crate::identity::encoding::cel_tagged;
 use crate::node;
@@ -239,7 +240,7 @@ fn plan_tree(plan: &ExecutionPlan) -> Cbor {
     Cbor::Map(pairs)
 }
 
-fn schema_tree(schema: &[(String, cel::Type)]) -> Cbor {
+fn schema_tree(schema: &[(String, DataType)]) -> Cbor {
     Cbor::Array(
         schema
             .iter()
@@ -425,20 +426,20 @@ fn tree_tree(tree: &cel::Tree) -> Cbor {
     Cbor::Array(vec![type_tree(&tree.ty), expr_tree(&tree.root)])
 }
 
-fn type_tree(ty: &cel::Type) -> Cbor {
+fn type_tree(ty: &DataType) -> Cbor {
     match ty {
-        cel::Type::Bool => Cbor::Uint(1),
-        cel::Type::Int => Cbor::Uint(2),
-        cel::Type::Uint => Cbor::Uint(3),
-        cel::Type::Double => Cbor::Uint(4),
-        cel::Type::Text => Cbor::Uint(5),
-        cel::Type::Bytes => Cbor::Uint(6),
-        cel::Type::Duration => Cbor::Uint(7),
-        cel::Type::Timestamp => Cbor::Uint(8),
-        cel::Type::Null => Cbor::Uint(9),
-        cel::Type::Dyn => Cbor::Uint(10),
-        cel::Type::List(inner) => Cbor::Array(vec![Cbor::Uint(11), type_tree(inner)]),
-        cel::Type::Map(inner) => Cbor::Array(vec![Cbor::Uint(12), type_tree(inner)]),
+        DataType::Bool => Cbor::Uint(1),
+        DataType::Int => Cbor::Uint(2),
+        DataType::Uint => Cbor::Uint(3),
+        DataType::Double => Cbor::Uint(4),
+        DataType::Text => Cbor::Uint(5),
+        DataType::Bytes => Cbor::Uint(6),
+        DataType::Duration => Cbor::Uint(7),
+        DataType::Timestamp => Cbor::Uint(8),
+        DataType::Null => Cbor::Uint(9),
+        DataType::Variant => Cbor::Uint(10),
+        DataType::Array(inner) => Cbor::Array(vec![Cbor::Uint(11), type_tree(inner)]),
+        DataType::Map(inner) => Cbor::Array(vec![Cbor::Uint(12), type_tree(inner)]),
     }
 }
 
@@ -524,7 +525,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     enum Item<'a> {
         Expr(&'a cel::Expr, usize),
         Val(&'a cel::Value, usize),
-        Ty(&'a cel::Type, usize),
+        Ty(&'a DataType, usize),
     }
     /// A `tree_tree`: its type and expression roots sit at `level`.
     fn tree<'a>(tree: &'a cel::Tree, level: usize, stack: &mut Vec<Item<'a>>) {
@@ -703,7 +704,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 }
             }
             Item::Ty(ty, level) => match ty {
-                cel::Type::List(inner) | cel::Type::Map(inner) => {
+                DataType::Array(inner) | DataType::Map(inner) => {
                     max = max.max(level + 1);
                     stack.push(Item::Ty(inner, level + 1));
                 }
@@ -788,7 +789,7 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
     })
 }
 
-fn schema_from(tree: &Cbor) -> Result<Vec<(String, cel::Type)>, DecodeError> {
+fn schema_from(tree: &Cbor) -> Result<Vec<(String, DataType)>, DecodeError> {
     array_of(tree, "zone schema")?
         .iter()
         .map(|entry| match array_of(entry, "schema field")? {
@@ -1040,28 +1041,26 @@ fn tree_from(tree: &Cbor) -> Result<cel::Tree, DecodeError> {
     }
 }
 
-fn type_from(tree: &Cbor) -> Result<cel::Type, DecodeError> {
+fn type_from(tree: &Cbor) -> Result<DataType, DecodeError> {
     match tree {
-        Cbor::Uint(1) => Ok(cel::Type::Bool),
-        Cbor::Uint(2) => Ok(cel::Type::Int),
-        Cbor::Uint(3) => Ok(cel::Type::Uint),
-        Cbor::Uint(4) => Ok(cel::Type::Double),
-        Cbor::Uint(5) => Ok(cel::Type::Text),
-        Cbor::Uint(6) => Ok(cel::Type::Bytes),
-        Cbor::Uint(7) => Ok(cel::Type::Duration),
-        Cbor::Uint(8) => Ok(cel::Type::Timestamp),
-        Cbor::Uint(9) => Ok(cel::Type::Null),
-        Cbor::Uint(10) => Ok(cel::Type::Dyn),
+        Cbor::Uint(1) => Ok(DataType::Bool),
+        Cbor::Uint(2) => Ok(DataType::Int),
+        Cbor::Uint(3) => Ok(DataType::Uint),
+        Cbor::Uint(4) => Ok(DataType::Double),
+        Cbor::Uint(5) => Ok(DataType::Text),
+        Cbor::Uint(6) => Ok(DataType::Bytes),
+        Cbor::Uint(7) => Ok(DataType::Duration),
+        Cbor::Uint(8) => Ok(DataType::Timestamp),
+        Cbor::Uint(9) => Ok(DataType::Null),
+        Cbor::Uint(10) => Ok(DataType::Variant),
         Cbor::Array(parts) => match parts.as_slice() {
             [Cbor::Uint(11), inner] => {
-                Ok(cel::Type::List(alloc::boxed::Box::new(type_from(inner)?)))
+                Ok(DataType::Array(alloc::boxed::Box::new(type_from(inner)?)))
             }
-            [Cbor::Uint(12), inner] => {
-                Ok(cel::Type::Map(alloc::boxed::Box::new(type_from(inner)?)))
-            }
-            _ => Err(err("cel type")),
+            [Cbor::Uint(12), inner] => Ok(DataType::Map(alloc::boxed::Box::new(type_from(inner)?))),
+            _ => Err(err("data type")),
         },
-        _ => Err(err("cel type")),
+        _ => Err(err("data type")),
     }
 }
 
@@ -1327,7 +1326,7 @@ mod tests {
 
     fn tree(root: cel::Expr) -> cel::Tree {
         cel::Tree {
-            ty: cel::Type::Dyn,
+            ty: DataType::Variant,
             root,
         }
     }
@@ -1378,14 +1377,14 @@ mod tests {
                         PortDecl {
                             port: port("typed"),
                             direction: node::Direction::Input,
-                            ty: Some(cel::Type::Map(Box::new(cel::Type::List(Box::new(
-                                cel::Type::Text,
+                            ty: Some(DataType::Map(Box::new(DataType::Array(Box::new(
+                                DataType::Text,
                             ))))),
                         },
                     ],
                     vars: vec![VarCell {
                         name: text("seen"),
-                        ty: cel::Type::Map(Box::new(cel::Type::List(Box::new(cel::Type::Int)))),
+                        ty: DataType::Map(Box::new(DataType::Array(Box::new(DataType::Int)))),
                         init: Some(map_value.clone()),
                     }],
                 },
@@ -1409,7 +1408,7 @@ mod tests {
                 PortDecl {
                     port: port("entry"),
                     direction: node::Direction::Input,
-                    ty: Some(cel::Type::List(Box::new(cel::Type::Int))),
+                    ty: Some(DataType::Array(Box::new(DataType::Int))),
                 },
                 PortDecl::untyped(port("feed"), node::Direction::Output),
             ],
@@ -1483,8 +1482,8 @@ mod tests {
                     },
                 ],
             }],
-            app_schema: vec![(text("m.dotted"), cel::Type::Dyn)],
-            ext_schema: vec![(text("content_type"), cel::Type::Text)],
+            app_schema: vec![(text("m.dotted"), DataType::Variant)],
+            ext_schema: vec![(text("content_type"), DataType::Text)],
             assets: vec![],
         }
     }
@@ -1517,6 +1516,34 @@ mod tests {
     }
 
     #[test]
+    fn data_type_ownership_does_not_move_the_v6_wire_ids() {
+        let cases = [
+            (DataType::Bool, Cbor::Uint(1)),
+            (DataType::Int, Cbor::Uint(2)),
+            (DataType::Uint, Cbor::Uint(3)),
+            (DataType::Double, Cbor::Uint(4)),
+            (DataType::Text, Cbor::Uint(5)),
+            (DataType::Bytes, Cbor::Uint(6)),
+            (DataType::Duration, Cbor::Uint(7)),
+            (DataType::Timestamp, Cbor::Uint(8)),
+            (DataType::Null, Cbor::Uint(9)),
+            (DataType::Variant, Cbor::Uint(10)),
+            (
+                DataType::Array(Box::new(DataType::Int)),
+                Cbor::Array(vec![Cbor::Uint(11), Cbor::Uint(2)]),
+            ),
+            (
+                DataType::Map(Box::new(DataType::Text)),
+                Cbor::Array(vec![Cbor::Uint(12), Cbor::Uint(5)]),
+            ),
+        ];
+        for (ty, wire) in cases {
+            assert_eq!(type_tree(&ty), wire);
+            assert_eq!(type_from(&wire).unwrap(), ty);
+        }
+    }
+
+    #[test]
     fn the_level_walker_matches_the_builders() {
         let mut nested_binary = cel::Expr::Literal(cel::Value::Int(1));
         let mut nested_maplit = cel::Expr::Literal(cel::Value::Int(1));
@@ -1529,10 +1556,10 @@ mod tests {
             nested_maplit = cel::Expr::MapLit(vec![(text("k"), nested_maplit)]);
         }
         let mut nested_value = cel::Value::Int(1);
-        let mut nested_type = cel::Type::Int;
+        let mut nested_type = DataType::Int;
         for _ in 0..60 {
             nested_value = cel::Value::List(vec![nested_value]);
-            nested_type = cel::Type::Map(Box::new(nested_type));
+            nested_type = DataType::Map(Box::new(nested_type));
         }
         let mut deep_type_plan = one_step_plan(cel::Expr::Literal(cel::Value::Null));
         deep_type_plan.handlers[0].body = vec![Step::Let {

@@ -6,6 +6,7 @@ use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 
 use crate::cel;
+use crate::datatype::DataType;
 use crate::node;
 use crate::plan::{Emission, EndpointRef, ExecutionPlan, Node, NodeKind, Slot, Step};
 
@@ -216,9 +217,9 @@ pub enum PlanValidationError {
         /// The target port.
         port: node::Port,
         /// The target's pin.
-        expected: cel::Type,
+        expected: DataType,
         /// The source's pin.
-        found: cel::Type,
+        found: DataType,
     },
     /// A collection the plan documents as canonically ordered is not.
     NonCanonicalOrder {
@@ -491,24 +492,24 @@ fn meta_target_known(
 }
 /// One zone schema, held whole (D-2026-08-10-1): SORTED and unique
 /// by field, flat keys prefix-free, every type inside the metadata
-/// leaf rule (`scalar | array<scalar>` | Dyn), and the standard
+/// leaf rule (`scalar | array<scalar>` | `variant`), and the standard
 /// `content_type` pinned to text.
 fn schema_well_formed(
     zone: &'static str,
-    schema: &[(alloc::string::String, cel::Type)],
+    schema: &[(alloc::string::String, DataType)],
 ) -> Result<(), PlanValidationError> {
-    fn leaf_scalar(ty: &cel::Type) -> bool {
+    fn leaf_scalar(ty: &DataType) -> bool {
         // EXACTLY the checker's static list and `meta_conforms`'s
         // vocabulary — a schema no value can satisfy must not
         // validate (uint has no leaf representation).
         matches!(
             ty,
-            cel::Type::Bool
-                | cel::Type::Int
-                | cel::Type::Double
-                | cel::Type::Text
-                | cel::Type::Bytes
-                | cel::Type::Dyn
+            DataType::Bool
+                | DataType::Int
+                | DataType::Double
+                | DataType::Text
+                | DataType::Bytes
+                | DataType::Variant
         )
     }
     for (index, (field, ty)) in schema.iter().enumerate() {
@@ -520,7 +521,7 @@ fn schema_well_formed(
                 field: field.clone(),
             });
         }
-        let leaf_ok = leaf_scalar(ty) || matches!(ty, cel::Type::List(inner) if leaf_scalar(inner));
+        let leaf_ok = leaf_scalar(ty) || matches!(ty, DataType::Array(inner) if leaf_scalar(inner));
         if !leaf_ok {
             return Err(PlanValidationError::MetaSchemaType {
                 zone,
@@ -951,7 +952,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // Two PINNED edge ends must agree — the same rule the checker
     // holds the surface to; endpoint slots are proven above, so the
     // lookups dereference safely.
-    let pin_of = |endpoint: &EndpointRef| -> Option<cel::Type> {
+    let pin_of = |endpoint: &EndpointRef| -> Option<DataType> {
         let decl_ty = match endpoint.node {
             Some(slot) => {
                 let node = &plan.nodes[slot.index()];
@@ -982,7 +983,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         // A `variant` pin admits anything — the same rule the
         // checker and the runtime judge apply; only two PRECISE
         // pins can disagree.
-        decl_ty.filter(|ty| !matches!(ty, cel::Type::Dyn))
+        decl_ty.filter(|ty| !matches!(ty, DataType::Variant))
     };
     for edge in &plan.edges {
         if let Some(to) = &edge.to

@@ -1,9 +1,9 @@
-//! Isolated CEL compilation and evaluation domain.
+//! Rastok expression compilation and evaluation, over core data types.
 //!
-//! This module depends on nothing else in Rastok: the compiler hands
-//! it expression text and a [`Signature`], the runtime adapts state
-//! and envelopes onto [`Bindings`]. Diagnostics and errors are native
-//! types; callers adapt them.
+//! The compiler hands this module expression text and a [`Signature`]; the
+//! runtime adapts state and envelopes onto [`Bindings`].  Logical types are
+//! owned by [`crate::datatype`], not by the expression engine. Diagnostics
+//! and errors are native types; callers adapt them.
 //!
 //! The admitted subset covers literals, paths, member and index
 //! access, arithmetic, comparisons, logic with short-circuit, the
@@ -23,40 +23,12 @@ use alloc::{format, vec};
 use core::fmt;
 use core::ops::Range;
 
+use crate::datatype::DataType;
+
 /// Names refused explicitly: admitted by full CEL, outside this build.
 const UNSUPPORTED_FUNCTIONS: &[&str] = &["has", "exists", "exists_one", "all", "map", "filter"];
 
-/// The CEL type domain of this subset. `Dyn` is gradual: operations
-/// on it defer their type discipline to evaluation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type {
-    /// Boolean.
-    Bool,
-    /// 64-bit signed integer.
-    Int,
-    /// 64-bit unsigned integer (CEL's `uint`).
-    Uint,
-    /// IEEE-754 double.
-    Double,
-    /// UTF-8 text.
-    Text,
-    /// Opaque bytes.
-    Bytes,
-    /// Protobuf-style duration, nanosecond resolution.
-    Duration,
-    /// UTC instant, nanosecond resolution.
-    Timestamp,
-    /// The null type.
-    Null,
-    /// Gradually-typed value; operations check at evaluation.
-    Dyn,
-    /// Homogeneous list.
-    List(Box<Type>),
-    /// Text-keyed map with sorted-key iteration.
-    Map(Box<Type>),
-}
-
-/// A CEL runtime value, mirroring [`Type`].
+/// An expression runtime value, mirroring the executable [`DataType`] subset.
 ///
 /// Equality is STRUCTURAL and agrees with the canonical bytes: the
 /// `Double` arm compares canonicalized bits (all NaNs are one value,
@@ -195,7 +167,7 @@ fn struct_fields_eq(
 /// signature never offers `now`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Signature {
-    names: BTreeMap<String, Type>,
+    names: BTreeMap<String, DataType>,
 }
 
 impl Signature {
@@ -207,14 +179,14 @@ impl Signature {
 
     /// Declares a visible name, dotted or bare.
     #[must_use]
-    pub fn with(mut self, name: impl Into<String>, ty: Type) -> Self {
+    pub fn with(mut self, name: impl Into<String>, ty: DataType) -> Self {
         self.names.insert(name.into(), ty);
         self
     }
 
     /// The type of an exact name, if declared.
     #[must_use]
-    pub fn get(&self, name: &str) -> Option<&Type> {
+    pub fn get(&self, name: &str) -> Option<&DataType> {
         self.names.get(name)
     }
 }
@@ -306,7 +278,7 @@ pub struct Tree {
     /// The expression.
     pub root: Expr,
     /// The expression's static type.
-    pub ty: Type,
+    pub ty: DataType,
 }
 
 /// One expression node.
@@ -1243,7 +1215,7 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 
 // ===== type checking =====
 
-fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnostic> {
+fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Diagnostic> {
     let whole = 0..text.len();
     let fail = |message: String| Diagnostic {
         kind: DiagnosticKind::General,
@@ -1253,15 +1225,15 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
     match expr {
         Expr::Literal(value) => Ok(literal_type(value)),
         // Compiler-constructed only — CEL text never spells one.
-        Expr::Asset(_) => Ok(Type::Bytes),
+        Expr::Asset(_) => Ok(DataType::Bytes),
         Expr::Path(segments) => {
             let dotted = segments.join(".");
             if let Some(ty) = signature.get(&dotted) {
                 return Ok(ty.clone());
             }
             match signature.get(&segments[0]) {
-                Some(Type::Dyn) => Ok(Type::Dyn),
-                Some(Type::Map(values)) if segments.len() > 1 => Ok((**values).clone()),
+                Some(DataType::Variant) => Ok(DataType::Variant),
+                Some(DataType::Map(values)) if segments.len() > 1 => Ok((**values).clone()),
                 Some(other) if segments.len() == 1 => Ok(other.clone()),
                 Some(_) => Err(fail(format!("`{dotted}` does not resolve to a member"))),
                 None => Err(fail(format!("`{}` is not a visible name", segments[0]))),
@@ -1270,9 +1242,9 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
         Expr::Unary { op, expr } => {
             let inner = check(expr, signature, text)?;
             match (op, &inner) {
-                (_, Type::Dyn) => Ok(Type::Dyn),
-                (UnaryOp::Not, Type::Bool) => Ok(Type::Bool),
-                (UnaryOp::Neg, Type::Int | Type::Double | Type::Duration) => Ok(inner),
+                (_, DataType::Variant) => Ok(DataType::Variant),
+                (UnaryOp::Not, DataType::Bool) => Ok(DataType::Bool),
+                (UnaryOp::Neg, DataType::Int | DataType::Double | DataType::Duration) => Ok(inner),
                 _ => Err(fail(format!("operator does not accept a {inner:?}"))),
             }
         }
@@ -1291,7 +1263,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
             otherwise,
         } => {
             let cond_ty = check(cond, signature, text)?;
-            if !matches!(cond_ty, Type::Bool | Type::Dyn) {
+            if !matches!(cond_ty, DataType::Bool | DataType::Variant) {
                 return Err(fail(String::from("the condition must be a bool")));
             }
             let then_ty = check(then, signature, text)?;
@@ -1302,16 +1274,16 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
             let base_ty = check(base, signature, text)?;
             let index_ty = check(index, signature, text)?;
             match base_ty {
-                Type::Dyn => Ok(Type::Dyn),
-                Type::List(element) => {
-                    if matches!(index_ty, Type::Int | Type::Uint | Type::Dyn) {
+                DataType::Variant => Ok(DataType::Variant),
+                DataType::Array(element) => {
+                    if matches!(index_ty, DataType::Int | DataType::Uint | DataType::Variant) {
                         Ok(*element)
                     } else {
                         Err(fail(String::from("a list index must be an integer")))
                     }
                 }
-                Type::Map(values) => {
-                    if matches!(index_ty, Type::Text | Type::Dyn) {
+                DataType::Map(values) => {
+                    if matches!(index_ty, DataType::Text | DataType::Variant) {
                         Ok(*values)
                     } else {
                         Err(fail(String::from("a map key must be text")))
@@ -1326,16 +1298,16 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
                     return Err(fail(String::from("this function takes one argument")));
                 }
                 let arg = check(&args[0], signature, text)?;
-                if !matches!(arg, Type::Text | Type::Dyn) {
+                if !matches!(arg, DataType::Text | DataType::Variant) {
                     return Err(fail(String::from("the argument must be text")));
                 }
                 Ok(match function {
-                    Function::Duration => Type::Duration,
+                    Function::Duration => DataType::Duration,
                     // A dynamic decimal conforms to no precise M0
                     // type — `variant`, narrowed before use
                     // (D-2026-08-10-7).
-                    Function::Decimal => Type::Dyn,
-                    _ => Type::Timestamp,
+                    Function::Decimal => DataType::Variant,
+                    _ => DataType::Timestamp,
                 })
             }
             Function::Size => {
@@ -1344,15 +1316,17 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
                 }
                 let arg = check(&args[0], signature, text)?;
                 match arg {
-                    Type::Text | Type::Bytes | Type::List(_) | Type::Map(_) | Type::Dyn => {
-                        Ok(Type::Int)
-                    }
+                    DataType::Text
+                    | DataType::Bytes
+                    | DataType::Array(_)
+                    | DataType::Map(_)
+                    | DataType::Variant => Ok(DataType::Int),
                     other => Err(fail(format!("`size` does not accept a {other:?}"))),
                 }
             }
         },
         Expr::List(items) => {
-            let mut element = Type::Dyn;
+            let mut element = DataType::Variant;
             for (index, item) in items.iter().enumerate() {
                 let ty = check(item, signature, text)?;
                 if index == 0 {
@@ -1361,10 +1335,10 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
                     element = join_types(&element, &ty);
                 }
             }
-            Ok(Type::List(Box::new(element)))
+            Ok(DataType::Array(Box::new(element)))
         }
         Expr::MapLit(entries) => {
-            let mut values = Type::Dyn;
+            let mut values = DataType::Variant;
             for (index, (_, value)) in entries.iter().enumerate() {
                 let ty = check(value, signature, text)?;
                 if index == 0 {
@@ -1373,85 +1347,85 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<Type, Diagnos
                     values = join_types(&values, &ty);
                 }
             }
-            Ok(Type::Map(Box::new(values)))
+            Ok(DataType::Map(Box::new(values)))
         }
     }
 }
 
-fn literal_type(value: &Value) -> Type {
+fn literal_type(value: &Value) -> DataType {
     match value {
-        Value::Bool(_) => Type::Bool,
-        Value::Int(_) => Type::Int,
-        Value::Uint(_) => Type::Uint,
-        Value::Double(_) => Type::Double,
-        Value::Text(_) => Type::Text,
-        Value::Bytes(_) => Type::Bytes,
-        Value::Duration(_) => Type::Duration,
-        Value::Timestamp(_) => Type::Timestamp,
-        Value::Null => Type::Null,
-        Value::List(_) => Type::List(Box::new(Type::Dyn)),
-        Value::Map(_) => Type::Map(Box::new(Type::Dyn)),
+        Value::Bool(_) => DataType::Bool,
+        Value::Int(_) => DataType::Int,
+        Value::Uint(_) => DataType::Uint,
+        Value::Double(_) => DataType::Double,
+        Value::Text(_) => DataType::Text,
+        Value::Bytes(_) => DataType::Bytes,
+        Value::Duration(_) => DataType::Duration,
+        Value::Timestamp(_) => DataType::Timestamp,
+        Value::Null => DataType::Null,
+        Value::List(_) => DataType::Array(Box::new(DataType::Variant)),
+        Value::Map(_) => DataType::Map(Box::new(DataType::Variant)),
         // No struct type exists in the annotation subset; the value
         // carries its own witness and types as dynamic.
-        Value::Struct(_) => Type::Dyn,
-        // The dynamic decimal types as Dyn until narrowing exists.
-        Value::Decimal { .. } => Type::Dyn,
+        Value::Struct(_) => DataType::Variant,
+        // The dynamic decimal types as `variant` until narrowing exists.
+        Value::Decimal { .. } => DataType::Variant,
         // A literal is never a witness; total anyway.
-        Value::Payload => Type::Dyn,
+        Value::Payload => DataType::Variant,
     }
 }
 
-fn join_types(left: &Type, right: &Type) -> Type {
+fn join_types(left: &DataType, right: &DataType) -> DataType {
     if left == right {
         left.clone()
     } else {
-        Type::Dyn
+        DataType::Variant
     }
 }
 
-fn binary_type(op: BinaryOp, lhs: &Type, rhs: &Type) -> Option<Type> {
+fn binary_type(op: BinaryOp, lhs: &DataType, rhs: &DataType) -> Option<DataType> {
     use BinaryOp::{Add, And, Div, Eq, Ge, Gt, Le, Lt, Mul, Ne, Or, Rem, Sub};
-    if matches!(lhs, Type::Dyn) || matches!(rhs, Type::Dyn) {
+    if matches!(lhs, DataType::Variant) || matches!(rhs, DataType::Variant) {
         return Some(match op {
-            Eq | Ne | Lt | Le | Gt | Ge | And | Or => Type::Bool,
-            _ => Type::Dyn,
+            Eq | Ne | Lt | Le | Gt | Ge | And | Or => DataType::Bool,
+            _ => DataType::Variant,
         });
     }
     match op {
-        And | Or => (lhs == &Type::Bool && rhs == &Type::Bool).then_some(Type::Bool),
-        Eq | Ne => Some(Type::Bool),
+        And | Or => (lhs == &DataType::Bool && rhs == &DataType::Bool).then_some(DataType::Bool),
+        Eq | Ne => Some(DataType::Bool),
         Lt | Le | Gt | Ge => {
             let comparable = matches!(
                 lhs,
-                Type::Int
-                    | Type::Uint
-                    | Type::Double
-                    | Type::Text
-                    | Type::Duration
-                    | Type::Timestamp
+                DataType::Int
+                    | DataType::Uint
+                    | DataType::Double
+                    | DataType::Text
+                    | DataType::Duration
+                    | DataType::Timestamp
             );
-            (comparable && lhs == rhs).then_some(Type::Bool)
+            (comparable && lhs == rhs).then_some(DataType::Bool)
         }
         Add => match (lhs, rhs) {
-            (Type::Text, Type::Text) => Some(Type::Text),
-            (Type::Duration, Type::Duration) => Some(Type::Duration),
-            (Type::Timestamp, Type::Duration) | (Type::Duration, Type::Timestamp) => {
-                Some(Type::Timestamp)
-            }
+            (DataType::Text, DataType::Text) => Some(DataType::Text),
+            (DataType::Duration, DataType::Duration) => Some(DataType::Duration),
+            (DataType::Timestamp, DataType::Duration)
+            | (DataType::Duration, DataType::Timestamp) => Some(DataType::Timestamp),
             _ => numeric(lhs, rhs),
         },
         Sub => match (lhs, rhs) {
-            (Type::Duration, Type::Duration) => Some(Type::Duration),
-            (Type::Timestamp, Type::Duration) => Some(Type::Timestamp),
-            (Type::Timestamp, Type::Timestamp) => Some(Type::Duration),
+            (DataType::Duration, DataType::Duration) => Some(DataType::Duration),
+            (DataType::Timestamp, DataType::Duration) => Some(DataType::Timestamp),
+            (DataType::Timestamp, DataType::Timestamp) => Some(DataType::Duration),
             _ => numeric(lhs, rhs),
         },
         Mul | Div | Rem => numeric(lhs, rhs),
     }
 }
 
-fn numeric(lhs: &Type, rhs: &Type) -> Option<Type> {
-    (lhs == rhs && matches!(lhs, Type::Int | Type::Uint | Type::Double)).then(|| lhs.clone())
+fn numeric(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
+    (lhs == rhs && matches!(lhs, DataType::Int | DataType::Uint | DataType::Double))
+        .then(|| lhs.clone())
 }
 
 // ===== evaluation =====
@@ -2052,10 +2026,10 @@ mod tests {
     #[test]
     fn paths_resolve_through_bindings() {
         let signature = Signature::new()
-            .with("data", Type::Dyn)
-            .with("session.key", Type::Text);
+            .with("data", DataType::Variant)
+            .with("session.key", DataType::Text);
         let tree = compile_ok("data.text != \"\" && session.key == \"s-1\"", &signature);
-        assert_eq!(tree.ty, Type::Bool);
+        assert_eq!(tree.ty, DataType::Bool);
         let mut data = BTreeMap::new();
         data.insert(String::from("text"), Value::Text(String::from("hello")));
         let mut bindings = BTreeMap::new();
@@ -2073,7 +2047,7 @@ mod tests {
         assert!(diagnostics[0].message.contains("not a visible name"));
         let typed = compile(
             "session.key + 1",
-            &Signature::new().with("session.key", Type::Text),
+            &Signature::new().with("session.key", DataType::Text),
         );
         assert!(typed.is_err(), "text + int must not type-check");
     }
@@ -2149,8 +2123,8 @@ mod tests {
             ("1 in [1]", "outside this build's subset"),
         ];
         let signature = Signature::new()
-            .with("data", Type::Dyn)
-            .with("items", Type::Dyn);
+            .with("data", DataType::Variant)
+            .with("items", DataType::Variant);
         for (text, needle) in cases {
             let diagnostics = compile(text, &signature).unwrap_err();
             assert!(
@@ -2199,7 +2173,10 @@ mod tests {
 
     #[test]
     fn const_eval_reduces_initializers() {
-        let tree = compile_ok("retries * 2", &Signature::new().with("retries", Type::Int));
+        let tree = compile_ok(
+            "retries * 2",
+            &Signature::new().with("retries", DataType::Int),
+        );
         let mut consts = BTreeMap::new();
         consts.insert(String::from("retries"), Value::Int(3));
         assert_eq!(const_eval(&tree, &consts).unwrap(), Value::Int(6));

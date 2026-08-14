@@ -668,7 +668,7 @@ fn a_non_meta_typed_app_write_refuses_or_converts() {
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("array<scalar> is legal meta");
-    // …and a Dyn-typed content_type that turns out non-text faults
+    // …and a variant-typed content_type that turns out non-text faults
     // TYPED at the runtime write, never a silent int.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
     use rastok::envelope::{Data, Namespace, Scalar, Value};
@@ -680,7 +680,7 @@ fn a_non_meta_typed_app_write_refuses_or_converts() {
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("Dyn passes the static gate");
+    .expect("variant passes the static gate");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -986,7 +986,7 @@ fn the_review_round_three_matrix_holds() {
             .any(|d| d.code().as_str() == "E-META-ZONE"),
         "{bag:?}"
     );
-    // A Dyn write is judged against the SEALED schema at run: x is
+    // A variant write is judged against the SEALED schema at run: x is
     // int (the other writer), the text faults typed.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
     use rastok::envelope::Namespace;
@@ -998,7 +998,7 @@ fn the_review_round_three_matrix_holds() {
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("Dyn passes the static gate");
+    .expect("variant passes the static gate");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -1117,7 +1117,7 @@ fn the_validator_only_admits_executable_schemas() {
     .expect("valid")
     .plan
     .into_inner();
-    plan.app_schema = vec![(String::from("n"), rastok::cel::Type::Uint)];
+    plan.app_schema = vec![(String::from("n"), rastok::datatype::DataType::Uint)];
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::MetaSchemaType { .. }
@@ -1131,7 +1131,10 @@ fn the_validator_only_admits_executable_schemas() {
     .expect("valid")
     .plan
     .into_inner();
-    plan.ext_schema = vec![(String::from("content_type.foo"), rastok::cel::Type::Text)];
+    plan.ext_schema = vec![(
+        String::from("content_type.foo"),
+        rastok::datatype::DataType::Text,
+    )];
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::MetaPrefixCollision { .. }
@@ -1145,7 +1148,7 @@ fn the_validator_only_admits_executable_schemas() {
         .expect("valid")
         .plan
         .into_inner();
-        plan.app_schema = vec![(String::from(bad), rastok::cel::Type::Text)];
+        plan.app_schema = vec![(String::from(bad), rastok::datatype::DataType::Text)];
         assert!(
             matches!(
                 ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -1158,7 +1161,7 @@ fn the_validator_only_admits_executable_schemas() {
 
 #[test]
 fn a_decimal_meta_value_round_trips_through_a_copy() {
-    // Admitted under Dyn at the ingress, an exact decimal must
+    // Admitted under variant at the ingress, an exact decimal must
     // survive an explicit handler copy — one physical vocabulary.
     use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};

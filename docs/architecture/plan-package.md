@@ -216,8 +216,8 @@ target     := [1, [seg (text)*]]                  — data path (empty = whole d
 
 tree       := [type, expr]
 type       := uint: 1 bool · 2 int · 3 uint · 4 double · 5 text · 6 bytes ·
-              7 duration · 8 timestamp · 9 null · 10 dyn
-            | [11, type]                          — list of
+              7 duration · 8 timestamp · 9 null · 10 variant
+            | [11, type]                          — array of
             | [12, type]                          — map of
 expr       := [1, tagged_value]                   — literal
             | [2, [seg (text)*]]                  — path

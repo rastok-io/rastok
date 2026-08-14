@@ -191,34 +191,34 @@ only — the lab never enters it.
 
 Two compiler rules with consequences elsewhere:
 
-1. **The current CEL chain is isolable** (§3.2): the checker hands it a
+1. **The current expression chain is isolable** (§3.2): the checker hands it a
    *signature*, never an envelope or node.
 2. **Desugaring is provable.** Because identity hashes the desugared
    HIR, "sugared and long forms hash identically" is a free, mechanical
    test for every sugar in the table.
 
-### 3.2 The CEL chain (`cel`)
+### 3.2 The expression chain (module `cel` during M1.3)
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`cel`** | the scalar expression language: compile, evaluate, const-evaluate over canonical typed trees | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → `Value`; (`Tree`, boot constants) → constant | [grammar.md](../spec/grammar.md) CEL positions; [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M0 subset |
+| **`cel`** | the current expression compiler/evaluator over core `DataType`; its parallel value domain remains to migrate | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → value; (`Tree`, boot constants) → constant | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 migration in progress |
 
 `cel` never sees an envelope, node, or partition, and owns its own
 `cel::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
 The *signature* — the typed names visible at one expression position —
 is the entire interface, which keeps the chain independently
-conformance-testable against the upstream CEL specification. Its value
-domain is CEL's (`cel::Type` includes `uint` because CEL has one);
-`envelope::Value` is Rastok's data domain — two deliberate domains,
-bridged in exactly one place: the `Bindings` adapter the runtime
-implements. Inside the kernel it shares only foundational utilities:
-the canonical nesting/double rules, the exact number reader, and the
+conformance-testable against the compatible upstream CEL subset. Its
+signatures and trees consume core `datatype::DataType`; it no longer owns
+a type enum. Its remaining `cel::Value` and `envelope::Value` domains are
+temporary parallel representations, bridged by the runtime while the B1
+value migration lands. Inside the kernel the chain also shares foundational
+utilities: canonical nesting/double rules, the exact number reader, and the
 single comment recognizer.
 
-This is current implementation state, not the M1.3 authority. M1.3
-replaces both domains with core `DataType`/`Value`, renames this consumer
-boundary to `expr`, and retains differential cel-spec evidence only for
-the explicitly compatible operator subset.
+This is current implementation state, not the completed M1.3 authority.
+M1.3 removes the remaining parallel value domain, renames this consumer
+boundary to `expr`, and retains differential cel-spec evidence only for the
+explicitly compatible operator subset.
 
 ### 3.3 The executable plan (`plan`)
 

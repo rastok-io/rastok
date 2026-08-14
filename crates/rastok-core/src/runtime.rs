@@ -15,6 +15,7 @@ pub mod vm;
 
 use crate::boundary::{BoundaryEvent, CallOutcome};
 use crate::cel;
+use crate::datatype::DataType;
 use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue};
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
@@ -957,7 +958,7 @@ fn emitted_content(
                     }
                     envelope::WriteTarget::App(field) => {
                         // The travelling schema judges the VALUE — a
-                        // Dyn expression cannot smuggle a text into
+                        // A `variant` expression cannot smuggle text into
                         // a sealed `int` leaf (D-2026-08-10-1).
                         let converted = to_meta_value(&value)?;
                         if let Some((_, ty)) =
@@ -974,12 +975,12 @@ fn emitted_content(
                         // Explicit writes come LAST in the atomic
                         // order — they win over the derivation. The
                         // standard field keeps its implicit `text`
-                        // contract even through a Dyn expression;
+                        // contract even through a `variant` expression;
                         // sheet fields answer to their declared
                         // types.
                         let converted = to_meta_value(&value)?;
                         let ty = if field == "content_type" {
-                            Some(cel::Type::Text)
+                            Some(DataType::Text)
                         } else {
                             plan.ext_schema
                                 .iter()
@@ -1071,7 +1072,7 @@ pub(crate) fn value_well_formed(value: &envelope::Value) -> Result<(), Fault> {
 pub(crate) fn crossing_pins_hold(
     plan: &crate::plan::ExecutionPlan,
     from: &crate::plan::EndpointRef,
-    own_pin: Option<&cel::Type>,
+    own_pin: Option<&DataType>,
     value: &cel::Value,
 ) -> Result<(), PinViolation> {
     if let Some(pinned) = own_pin
@@ -1201,7 +1202,7 @@ pub struct ConformanceViolation {
     /// The declaring name (a cell or a port).
     pub name: String,
     /// The declared type.
-    pub expected: cel::Type,
+    pub expected: DataType,
     /// The kind of value that stood there.
     pub found: ValueKind,
     /// The semantic reason.
@@ -1226,11 +1227,11 @@ impl fmt::Display for ConformanceViolation {
 }
 
 /// Judges a runtime value against a declared cell type; `None` means
-/// it conforms. `Dyn` admits anything — the dynamic escape is chosen
+/// it conforms. `variant` admits anything — the dynamic escape is chosen
 /// in the declaration, not discovered at the write.
 pub(crate) fn conformance_fault(
     name: &str,
-    declared: &cel::Type,
+    declared: &DataType,
     value: &cel::Value,
 ) -> Option<ConformanceViolation> {
     let mismatch = || {
@@ -1242,18 +1243,18 @@ pub(crate) fn conformance_fault(
         })
     };
     match (declared, value) {
-        (cel::Type::Dyn, _) => None,
+        (DataType::Variant, _) => None,
         // A dynamic decimal conforms to no precise M0 type — it is
         // narrowed before use (D-2026-08-10-7).
         (_, cel::Value::Decimal { .. }) => mismatch(),
         // Judged values are resolved first; an unmaterialized
         // witness meeting a precise judge is a mismatch, total.
         (_, cel::Value::Payload) => mismatch(),
-        (cel::Type::Int, cel::Value::Int(candidate)) => {
+        (DataType::Int, cel::Value::Int(candidate)) => {
             if i32::try_from(*candidate).is_err() {
                 Some(ConformanceViolation {
                     name: String::from(name),
-                    expected: cel::Type::Int,
+                    expected: DataType::Int,
                     found: ValueKind::Number,
                     reason: ConformanceReason::IntegerOutOfRange { value: *candidate },
                 })
@@ -1261,16 +1262,16 @@ pub(crate) fn conformance_fault(
                 None
             }
         }
-        (cel::Type::Bool, cel::Value::Bool(_))
-        | (cel::Type::Text, cel::Value::Text(_))
-        | (cel::Type::Bytes, cel::Value::Bytes(_))
-        | (cel::Type::Double, cel::Value::Double(_))
-        | (cel::Type::Duration, cel::Value::Duration(_))
-        | (cel::Type::Timestamp, cel::Value::Timestamp(_)) => None,
+        (DataType::Bool, cel::Value::Bool(_))
+        | (DataType::Text, cel::Value::Text(_))
+        | (DataType::Bytes, cel::Value::Bytes(_))
+        | (DataType::Double, cel::Value::Double(_))
+        | (DataType::Duration, cel::Value::Duration(_))
+        | (DataType::Timestamp, cel::Value::Timestamp(_)) => None,
         // Composite judges are structural: every element must hold
         // its element type. `array<variant>` — the jsonl reply pin —
         // admits any element, `null` included.
-        (cel::Type::List(inner), cel::Value::List(items)) => items
+        (DataType::Array(inner), cel::Value::List(items)) => items
             .iter()
             .find_map(|item| conformance_fault(name, inner, item))
             .map(|violation| ConformanceViolation {
@@ -1279,7 +1280,7 @@ pub(crate) fn conformance_fault(
                 found: ValueKind::List,
                 reason: violation.reason,
             }),
-        (cel::Type::Map(inner), cel::Value::Map(entries)) => entries
+        (DataType::Map(inner), cel::Value::Map(entries)) => entries
             .values()
             .find_map(|item| conformance_fault(name, inner, item))
             .map(|violation| ConformanceViolation {
@@ -1288,7 +1289,7 @@ pub(crate) fn conformance_fault(
                 found: ValueKind::Map,
                 reason: violation.reason,
             }),
-        (cel::Type::Null, cel::Value::Null) => None,
+        (DataType::Null, cel::Value::Null) => None,
         (_, cel::Value::Bool(_)) => mismatch(),
         (_, cel::Value::Int(_) | cel::Value::Uint(_)) => mismatch(),
         (_, cel::Value::Double(_)) => mismatch(),
@@ -1697,18 +1698,28 @@ pub fn to_envelope_value(value: &cel::Value) -> Result<envelope::Value, Fault> {
 /// Converts a CEL value into a writable-metadata leaf.
 /// The ONE conformance rule between a metadata value and a schema
 /// type (D-2026-08-10-1) — used at runtime zone writes, at the VM
-/// ingress, and mirrored by the checker's static list. `Dyn` admits
+/// ingress, and mirrored by the checker's static list. `variant` admits
 /// every representable leaf.
 #[must_use]
-pub fn meta_conforms(value: &MetaValue, ty: &cel::Type) -> bool {
+pub fn meta_conforms(value: &MetaValue, ty: &DataType) -> bool {
     match ty {
-        cel::Type::Dyn => true,
-        cel::Type::Bool => matches!(value, MetaValue::Scalar(envelope::Scalar::Bool(_))),
-        cel::Type::Int => matches!(value, MetaValue::Scalar(envelope::Scalar::Int(_))),
-        cel::Type::Double => matches!(value, MetaValue::Scalar(envelope::Scalar::Double(_))),
-        cel::Type::Text => matches!(value, MetaValue::Scalar(envelope::Scalar::Text(_))),
-        cel::Type::Bytes => matches!(value, MetaValue::Scalar(envelope::Scalar::Bytes(_))),
-        cel::Type::List(inner) => match value {
+        DataType::Variant => true,
+        DataType::Bool => {
+            matches!(value, MetaValue::Scalar(envelope::Scalar::Bool(_)))
+        }
+        DataType::Int => {
+            matches!(value, MetaValue::Scalar(envelope::Scalar::Int(_)))
+        }
+        DataType::Double => {
+            matches!(value, MetaValue::Scalar(envelope::Scalar::Double(_)))
+        }
+        DataType::Text => {
+            matches!(value, MetaValue::Scalar(envelope::Scalar::Text(_)))
+        }
+        DataType::Bytes => {
+            matches!(value, MetaValue::Scalar(envelope::Scalar::Bytes(_)))
+        }
+        DataType::Array(inner) => match value {
             MetaValue::Array(items) => items
                 .iter()
                 .all(|scalar| meta_conforms(&MetaValue::Scalar(scalar.clone()), inner)),

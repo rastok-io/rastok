@@ -18,6 +18,7 @@ use crate::compiler::syntax::{
     SyntaxTree, TopDecl, Trigger as SynTrigger, TypeRef, ValDecl, Value as SynValue, VarDecl,
 };
 use crate::contract;
+use crate::datatype::DataType;
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 use crate::node;
 use std::collections::BTreeMap;
@@ -329,7 +330,7 @@ pub fn check(
             .collect();
         remap_graph_assets(&mut checked_app, &remap);
     }
-    let app_schema: Vec<(String, cel::Type)> = checker
+    let app_schema: Vec<(String, DataType)> = checker
         .app_schema
         .iter()
         .map(|(field, ty)| (field.clone(), ty.clone()))
@@ -337,10 +338,10 @@ pub fn check(
     // The standard `content_type` is IMPLICIT — known to every
     // consumer, never serialized (D-2026-08-10-4); the schema
     // carries the sheets' fields only.
-    let ext_schema: Vec<(String, cel::Type)> = checker
+    let ext_schema: Vec<(String, DataType)> = checker
         .ext_fields
         .iter()
-        .map(|field| (field.clone(), cel::Type::Dyn))
+        .map(|field| (field.clone(), DataType::Variant))
         .collect();
     Some(Hir {
         app: checked_app,
@@ -360,12 +361,12 @@ struct Checker<'bag, 'registry> {
     /// The graph's `meta.app` writes — the INFERENCE source: field,
     /// written type, and site (D-2026-08-10-1). Lab writes never
     /// land here.
-    app_writes: Vec<(String, cel::Type, Span)>,
+    app_writes: Vec<(String, DataType, Span)>,
     /// Every `meta.*` read compiled anywhere in the unit, verified
     /// against the sealed schema once inference closes.
     meta_reads: Vec<(Vec<String>, Span)>,
     /// The sealed production schema — graph writes only.
-    app_schema: BTreeMap<String, cel::Type>,
+    app_schema: BTreeMap<String, DataType>,
     /// Whether the checker is inside the Lab surface: lab writes
     /// never extend the production schema.
     in_lab: bool,
@@ -989,11 +990,11 @@ impl Checker<'_, '_> {
                         None => None,
                         Some(expr) => {
                             let signature = cel::Signature::new()
-                                .with("data", cel::Type::Dyn)
-                                .with("meta", cel::Type::Dyn);
+                                .with("data", DataType::Variant)
+                                .with("meta", DataType::Variant);
                             match self.cel(expr, &signature) {
                                 Some(tree) => {
-                                    if !matches!(tree.ty, cel::Type::Bool | cel::Type::Dyn) {
+                                    if !matches!(tree.ty, DataType::Bool | DataType::Variant) {
                                         self.bag.push(
                                             Diagnostic::new(
                                                 E_CEL_EXPR,
@@ -2056,7 +2057,7 @@ impl Checker<'_, '_> {
         node: &mut Node,
         name: &crate::compiler::syntax::Name,
         direction: Direction,
-        pinned: Option<cel::Type>,
+        pinned: Option<DataType>,
         origin: &str,
     ) {
         let default_direction = match name.text.as_str() {
@@ -2186,7 +2187,7 @@ impl Checker<'_, '_> {
                     return None;
                 }
                 let init_ty = value_type(&constant.value);
-                if init_ty != ty && init_ty != cel::Type::Dyn && ty != cel::Type::Dyn {
+                if init_ty != ty && init_ty != DataType::Variant && ty != DataType::Variant {
                     self.bag.push(
                         Diagnostic::new(
                             E_CEL_EXPR,
@@ -2311,14 +2312,14 @@ impl Checker<'_, '_> {
     /// type and whether it carries the 32-bit `int` bound. `long` and
     /// `float` defer explicitly: the CEL domain does not represent
     /// them distinctly yet, and a silent merge would corrupt identity.
-    fn state_type(&mut self, ty: &TypeRef) -> Option<(cel::Type, bool)> {
+    fn state_type(&mut self, ty: &TypeRef) -> Option<(DataType, bool)> {
         if ty.optional || ty.alternatives.len() != 1 {
             self.deferred("an optional or union state type", ty.span);
             return None;
         }
         let mapped = match &ty.alternatives[0] {
-            BaseType::Scalar(ScalarType::Bool) => (cel::Type::Bool, false),
-            BaseType::Scalar(ScalarType::Int) => (cel::Type::Int, true),
+            BaseType::Scalar(ScalarType::Bool) => (DataType::Bool, false),
+            BaseType::Scalar(ScalarType::Int) => (DataType::Int, true),
             BaseType::Scalar(ScalarType::Long) => {
                 self.deferred("the long state type", ty.span);
                 return None;
@@ -2327,12 +2328,12 @@ impl Checker<'_, '_> {
                 self.deferred("the float state type", ty.span);
                 return None;
             }
-            BaseType::Scalar(ScalarType::Double) => (cel::Type::Double, false),
-            BaseType::Scalar(ScalarType::Text) => (cel::Type::Text, false),
-            BaseType::Scalar(ScalarType::Bytes) => (cel::Type::Bytes, false),
-            BaseType::Scalar(ScalarType::Duration) => (cel::Type::Duration, false),
-            BaseType::Scalar(ScalarType::Timestamp) => (cel::Type::Timestamp, false),
-            BaseType::Variant => (cel::Type::Dyn, false),
+            BaseType::Scalar(ScalarType::Double) => (DataType::Double, false),
+            BaseType::Scalar(ScalarType::Text) => (DataType::Text, false),
+            BaseType::Scalar(ScalarType::Bytes) => (DataType::Bytes, false),
+            BaseType::Scalar(ScalarType::Duration) => (DataType::Duration, false),
+            BaseType::Scalar(ScalarType::Timestamp) => (DataType::Timestamp, false),
+            BaseType::Variant => (DataType::Variant, false),
             BaseType::Named(name) => {
                 // A named type is SUGAR (D-2026-08-10-8): expand and
                 // resolve structurally — renaming an alias is never
@@ -2458,18 +2459,18 @@ impl Checker<'_, '_> {
                 .iter()
                 .find(|decl| &decl.port == port)
                 .and_then(|decl| decl.ty.clone())
-                .unwrap_or(cel::Type::Dyn),
+                .unwrap_or(DataType::Variant),
         };
         let mut signature = node_signature
             .clone()
             .with("data", data_type.clone())
-            .with("meta", cel::Type::Dyn);
+            .with("meta", DataType::Variant);
         let mut guard = None;
         for clause in &decl.guards {
             match clause {
                 crate::compiler::syntax::Guard::Where(expr) if guard.is_none() => {
                     let tree = self.cel(expr, &signature)?;
-                    if !matches!(tree.ty, cel::Type::Bool | cel::Type::Dyn) {
+                    if !matches!(tree.ty, DataType::Bool | DataType::Variant) {
                         self.bag.push(
                             Diagnostic::new(
                                 E_CEL_EXPR,
@@ -2535,8 +2536,8 @@ impl Checker<'_, '_> {
                             SynValue::Cel(expr) => {
                                 if let Some(tree) = self.cel(expr, &signature) {
                                     if tree.ty != var.ty
-                                        && tree.ty != cel::Type::Dyn
-                                        && var.ty != cel::Type::Dyn
+                                        && tree.ty != DataType::Variant
+                                        && var.ty != DataType::Variant
                                     {
                                         self.bag.push(
                                             Diagnostic::new(
@@ -3272,11 +3273,12 @@ impl Checker<'_, '_> {
             // The parser already spoke for its recovery form.
             SynValue::Error(_) => None,
             SynValue::Cel(expr) => self.cel(expr, signature),
-            SynValue::Json { value, .. } => Some(literal_tree(value.clone(), cel::Type::Dyn)),
+            SynValue::Json { value, .. } => Some(literal_tree(value.clone(), DataType::Variant)),
             SynValue::BracedMap(entries) => self.map_value_tree(entries, signature, at),
-            SynValue::Braced(body) if body.entries.is_empty() => {
-                Some(literal_tree(cel::Value::Struct(Vec::new()), cel::Type::Dyn))
-            }
+            SynValue::Braced(body) if body.entries.is_empty() => Some(literal_tree(
+                cel::Value::Struct(Vec::new()),
+                DataType::Variant,
+            )),
             SynValue::Braced(_) => {
                 self.deferred("a struct inside a map entry", at);
                 None
@@ -3292,10 +3294,10 @@ impl Checker<'_, '_> {
                     match call {
                         TagCall::Text => self
                             .verbatim_body(tagged)
-                            .map(|value| literal_tree(value, cel::Type::Text)),
+                            .map(|value| literal_tree(value, DataType::Text)),
                         TagCall::Base64 { content_type: None } => {
                             let bytes = self.base64_body(tagged)?;
-                            Some(literal_tree(cel::Value::Bytes(bytes), cel::Type::Bytes))
+                            Some(literal_tree(cel::Value::Bytes(bytes), DataType::Bytes))
                         }
                         TagCall::Asset {
                             path,
@@ -3304,7 +3306,7 @@ impl Checker<'_, '_> {
                             let index = self.asset_resolve(&path, tagged.tag.span)?;
                             Some(cel::Tree {
                                 root: cel::Expr::Asset(index),
-                                ty: cel::Type::Bytes,
+                                ty: DataType::Bytes,
                             })
                         }
                         TagCall::Base64 { .. } | TagCall::Asset { .. } => {
@@ -3341,7 +3343,7 @@ impl Checker<'_, '_> {
         signature: &cel::Signature,
         at: Span,
     ) -> Option<cel::Tree> {
-        let mut pairs: Vec<(String, cel::Expr, cel::Type)> = Vec::new();
+        let mut pairs: Vec<(String, cel::Expr, DataType)> = Vec::new();
         for entry in entries {
             // ONE string semantics: the key decodes through CEL —
             // `"a\nb"` here and `{"a\nb": 1}` inside a CEL span are
@@ -3369,12 +3371,12 @@ impl Checker<'_, '_> {
         // CEL's own MapLit inference (join over the value types) —
         // `{ "k": 1 }` here and inside a CEL span are ONE program,
         // one type, one hash.
-        let mut values = cel::Type::Dyn;
+        let mut values = DataType::Variant;
         for (index, (_, _, ty)) in pairs.iter().enumerate() {
             if index == 0 {
                 values = ty.clone();
             } else if values != *ty {
-                values = cel::Type::Dyn;
+                values = DataType::Variant;
             }
         }
         Some(cel::Tree {
@@ -3384,7 +3386,7 @@ impl Checker<'_, '_> {
                     .map(|(key, root, _)| (key, root))
                     .collect(),
             ),
-            ty: cel::Type::Map(Box::new(values)),
+            ty: DataType::Map(Box::new(values)),
         })
     }
 
@@ -3476,11 +3478,12 @@ impl Checker<'_, '_> {
     }
 
     /// Seals the production `app` schema from the GRAPH's writes:
-    /// types unify (Dyn is inference territory), a conflict refuses
-    /// naming both sites, and the flat keys must be prefix-free
+    /// types unify (the pre-B2 checker still treats `variant` as inference
+    /// territory here), a conflict refuses naming both sites, and the flat
+    /// keys must be prefix-free
     /// (D-2026-08-10-1).
     fn seal_app_schema(&mut self) {
-        let mut sites: BTreeMap<String, (cel::Type, Span)> = BTreeMap::new();
+        let mut sites: BTreeMap<String, (DataType, Span)> = BTreeMap::new();
         for (field, ty, span) in core::mem::take(&mut self.app_writes) {
             match sites.get(&field) {
                 None => {
@@ -3488,8 +3491,8 @@ impl Checker<'_, '_> {
                 }
                 Some((known, first)) => {
                     let unified = match (known, &ty) {
-                        (cel::Type::Dyn, other) => Some(other.clone()),
-                        (other, cel::Type::Dyn) => Some(other.clone()),
+                        (DataType::Variant, other) => Some(other.clone()),
+                        (other, DataType::Variant) => Some(other.clone()),
                         (a, b) if a == b => Some(a.clone()),
                         _ => None,
                     };
@@ -3644,17 +3647,20 @@ impl Checker<'_, '_> {
             SynValue::StrLit { .. } => unreachable!("StrLit lives in tag arguments"),
             SynValue::Json { value, .. } => {
                 // Always `variant` — the literal is a DOCUMENT
-                // (D-2026-08-13-1), exact numbers included; its Dyn
+                // (D-2026-08-13-1), exact numbers included; its `variant`
                 // type is what distinguishes `json [1]` from `[1]`
                 // in the hash (D-2026-08-10-7: the tree seals type
                 // and root).
-                Some(EmitValue::Data(literal_tree(value.clone(), cel::Type::Dyn)))
+                Some(EmitValue::Data(literal_tree(
+                    value.clone(),
+                    DataType::Variant,
+                )))
             }
             SynValue::Cel(expr) => {
                 let tree = self.cel(expr, signature)?;
                 if matches!(
                     tree.ty,
-                    cel::Type::Duration | cel::Type::Timestamp | cel::Type::Null
+                    DataType::Duration | DataType::Timestamp | DataType::Null
                 ) {
                     self.deferred("a duration, timestamp, or null emission", expr.span);
                     return None;
@@ -3677,10 +3683,10 @@ impl Checker<'_, '_> {
                     match call {
                         TagCall::Text => self
                             .verbatim_body(tagged)
-                            .map(|value| EmitValue::Data(literal_tree(value, cel::Type::Text))),
+                            .map(|value| EmitValue::Data(literal_tree(value, DataType::Text))),
                         TagCall::Base64 { content_type } => {
                             let bytes = self.base64_body(tagged)?;
-                            let data = literal_tree(cel::Value::Bytes(bytes), cel::Type::Bytes);
+                            let data = literal_tree(cel::Value::Bytes(bytes), DataType::Bytes);
                             Some(match content_type {
                                 Some(content_type) => EmitValue::FreshData(vec![
                                     FieldWrite {
@@ -3693,7 +3699,7 @@ impl Checker<'_, '_> {
                                         )),
                                         value: literal_tree(
                                             cel::Value::Text(content_type),
-                                            cel::Type::Text,
+                                            DataType::Text,
                                         ),
                                     },
                                 ]),
@@ -3704,7 +3710,7 @@ impl Checker<'_, '_> {
                             let index = self.asset_resolve(&path, tagged.tag.span)?;
                             let data = cel::Tree {
                                 root: cel::Expr::Asset(index),
-                                ty: cel::Type::Bytes,
+                                ty: DataType::Bytes,
                             };
                             Some(match content_type {
                                 Some(content_type) => EmitValue::FreshData(vec![
@@ -3718,7 +3724,7 @@ impl Checker<'_, '_> {
                                         )),
                                         value: literal_tree(
                                             cel::Value::Text(content_type),
-                                            cel::Type::Text,
+                                            DataType::Text,
                                         ),
                                     },
                                 ]),
@@ -3876,7 +3882,7 @@ impl Checker<'_, '_> {
                         SynValue::Cel(expr) => {
                             if let Some(tree) = self.cel(expr, signature) {
                                 if matches!(&target, crate::envelope::WriteTarget::Ext(field) if field == "content_type")
-                                    && !matches!(tree.ty, cel::Type::Text | cel::Type::Dyn)
+                                    && !matches!(tree.ty, DataType::Text | DataType::Variant)
                                 {
                                     self.bag.push(
                                         Diagnostic::new(
@@ -3957,7 +3963,7 @@ impl Checker<'_, '_> {
                                             target: crate::envelope::WriteTarget::Data(
                                                 path.clone(),
                                             ),
-                                            value: literal_tree(value, cel::Type::Text),
+                                            value: literal_tree(value, DataType::Text),
                                         });
                                     }
                                 }
@@ -3981,7 +3987,7 @@ impl Checker<'_, '_> {
                                             ),
                                             value: literal_tree(
                                                 cel::Value::Bytes(bytes),
-                                                cel::Type::Bytes,
+                                                DataType::Bytes,
                                             ),
                                         });
                                         if let Some(ct) = content_type {
@@ -3991,7 +3997,7 @@ impl Checker<'_, '_> {
                                                 ),
                                                 value: literal_tree(
                                                     cel::Value::Text(ct),
-                                                    cel::Type::Text,
+                                                    DataType::Text,
                                                 ),
                                             });
                                         }
@@ -4021,7 +4027,7 @@ impl Checker<'_, '_> {
                                             ),
                                             value: cel::Tree {
                                                 root: cel::Expr::Asset(index),
-                                                ty: cel::Type::Bytes,
+                                                ty: DataType::Bytes,
                                             },
                                         });
                                         if let Some(ct) = content_type {
@@ -4031,7 +4037,7 @@ impl Checker<'_, '_> {
                                                 ),
                                                 value: literal_tree(
                                                     cel::Value::Text(ct),
-                                                    cel::Type::Text,
+                                                    DataType::Text,
                                                 ),
                                             });
                                         }
@@ -4056,7 +4062,7 @@ impl Checker<'_, '_> {
                         {
                             writes.push(FieldWrite {
                                 target,
-                                value: literal_tree(value.clone(), cel::Type::Dyn),
+                                value: literal_tree(value.clone(), DataType::Variant),
                             });
                         }
                         SynValue::Error(_) => {}
@@ -4134,7 +4140,7 @@ impl Checker<'_, '_> {
                                     target: crate::envelope::WriteTarget::Data(path),
                                     value: cel::Tree {
                                         root: cel::Expr::Literal(cel::Value::Struct(Vec::new())),
-                                        ty: cel::Type::Dyn,
+                                        ty: DataType::Variant,
                                     },
                                 });
                             } else {
@@ -4144,7 +4150,7 @@ impl Checker<'_, '_> {
                         SynValue::Json { value, .. } => {
                             writes.push(FieldWrite {
                                 target: crate::envelope::WriteTarget::Data(path),
-                                value: literal_tree(value.clone(), cel::Type::Dyn),
+                                value: literal_tree(value.clone(), DataType::Variant),
                             });
                         }
                         SynValue::BracedMap(entries) => {
@@ -4295,7 +4301,7 @@ impl Checker<'_, '_> {
     /// the data it produces, statically, under the SAME construction
     /// model the runtime executes:
     ///
-    /// - `Data` holds its CEL type to the pin, and the physical
+    /// - `Data` holds its logical type to the pin, and the physical
     ///   32-bit bound of `int` wherever the value is constant at
     ///   check — exactly the var-initializer rule; the runtime holds
     ///   the rest at emission construction.
@@ -4314,7 +4320,7 @@ impl Checker<'_, '_> {
     /// passes. Pushes `E-PORT-TYPE` and answers false on a breach.
     fn port_conforms(
         &mut self,
-        pinned: &cel::Type,
+        pinned: &DataType,
         value: &EmitValue,
         origin: BuildOrigin<'_>,
         consts: &BTreeMap<String, cel::Value>,
@@ -4324,7 +4330,7 @@ impl Checker<'_, '_> {
         let inherited_shape = || match origin {
             // A handler's Patch starts from the envelope it received,
             // whose data carries the activation port's pin.
-            BuildOrigin::Handler(ty) if !matches!(ty, cel::Type::Dyn) => {
+            BuildOrigin::Handler(ty) if !matches!(ty, DataType::Variant) => {
                 DataShape::Known(ty.clone(), None)
             }
             BuildOrigin::Handler(_) => DataShape::Unknown,
@@ -4344,8 +4350,8 @@ impl Checker<'_, '_> {
         let found: Option<String> = match &shape {
             DataShape::Unknown => None,
             DataShape::Known(ty, tree) => {
-                if !matches!(pinned, cel::Type::Dyn)
-                    && !matches!(ty, cel::Type::Dyn)
+                if !matches!(pinned, DataType::Variant)
+                    && !matches!(ty, DataType::Variant)
                     && ty != pinned
                 {
                     Some(match value {
@@ -4362,7 +4368,7 @@ impl Checker<'_, '_> {
             // composite one — a record is not an array<variant>
             // (the jsonl reply pin, D-2026-08-11-1) nor a map.
             DataShape::Struct => {
-                (!matches!(pinned, cel::Type::Dyn)).then(|| String::from("a built struct"))
+                (!matches!(pinned, DataType::Variant)).then(|| String::from("a built struct"))
             }
         };
         let Some(found) = found else {
@@ -4403,11 +4409,11 @@ impl Checker<'_, '_> {
     /// VISIBLE constants included, so a `val` alias of a literal
     /// answers exactly like the literal.
     fn constant_breach(
-        pinned: &cel::Type,
+        pinned: &DataType,
         tree: &cel::Tree,
         consts: &BTreeMap<String, cel::Value>,
     ) -> Option<String> {
-        if *pinned == cel::Type::Int
+        if *pinned == DataType::Int
             && let Ok(cel::Value::Int(value)) = cel::const_eval(tree, consts)
             && i32::try_from(value).is_err()
         {
@@ -4573,7 +4579,7 @@ impl Checker<'_, '_> {
 enum BuildOrigin<'a> {
     /// A handler emission: `Identity`/`Patch` start from the received
     /// envelope, whose data carries the activation port's pin.
-    Handler(&'a cel::Type),
+    Handler(&'a DataType),
     /// A scenario injection: the draft is born as an empty map.
     Draft,
 }
@@ -4586,7 +4592,7 @@ enum BuildOrigin<'a> {
 /// physically distinct from a CEL map (canonical tags 17 vs 18).
 enum DataShape<'a> {
     Unknown,
-    Known(cel::Type, Option<&'a cel::Tree>),
+    Known(DataType, Option<&'a cel::Tree>),
     Struct,
 }
 
@@ -4595,7 +4601,7 @@ enum DataShape<'a> {
 /// face of `rastok_core::boundary::connector_out_pin`, so the edge
 /// audit, the mock-reply judge, the plan validator, and the machine
 /// all speak the ONE derivation (D-2026-08-11-1, amended).
-fn node_port_pin(node: &Node, port: &node::Port) -> Option<cel::Type> {
+fn node_port_pin(node: &Node, port: &node::Port) -> Option<DataType> {
     node.ports
         .iter()
         .find(|decl| decl.port == *port)
@@ -4628,11 +4634,11 @@ fn node_port_pin(node: &Node, port: &node::Port) -> Option<cel::Type> {
 /// a node's table entry (the connector's effective out pin
 /// included), or a declared boundary port — the implicit trio and
 /// unannotated ports answer `None` (inference territory).
-fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<cel::Type> {
-    let precise = |ty: cel::Type| match ty {
-        // A `variant` pin is an explicit "anything" — inference
-        // territory by declaration, never a conflict.
-        cel::Type::Dyn => None,
+fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<DataType> {
+    let precise = |ty: DataType| match ty {
+        // A `variant` pin is an explicit "anything". The pre-B2 edge
+        // solver also treats it as inference territory, never a conflict.
+        DataType::Variant => None,
         other => Some(other),
     };
     match &endpoint.node {
@@ -4761,31 +4767,31 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
 
 /// The ONE static admissibility rule for metadata leaves
 /// (D-2026-08-10-1): `scalar | array<scalar>` — a statically known
-/// type outside it refuses at CHECK; `Dyn` passes and the runtime's
+/// type outside it refuses at CHECK; `variant` passes and the runtime's
 /// `to_meta_value` guards it (defense in depth, same rule).
-fn meta_type_refusal(ty: &cel::Type) -> Option<&'static str> {
+fn meta_type_refusal(ty: &DataType) -> Option<&'static str> {
     match ty {
-        cel::Type::Bool
-        | cel::Type::Int
-        | cel::Type::Double
-        | cel::Type::Text
-        | cel::Type::Bytes
-        | cel::Type::Dyn => None,
-        cel::Type::Uint => {
+        DataType::Bool
+        | DataType::Int
+        | DataType::Double
+        | DataType::Text
+        | DataType::Bytes
+        | DataType::Variant => None,
+        DataType::Uint => {
             Some("the uint domain stays in expressions — a metadata leaf takes `int`")
         }
-        cel::Type::List(inner) => match &**inner {
-            cel::Type::Bool
-            | cel::Type::Int
-            | cel::Type::Double
-            | cel::Type::Text
-            | cel::Type::Bytes
-            | cel::Type::Dyn => None,
+        DataType::Array(inner) => match &**inner {
+            DataType::Bool
+            | DataType::Int
+            | DataType::Double
+            | DataType::Text
+            | DataType::Bytes
+            | DataType::Variant => None,
             _ => Some(
                 "a metadata leaf is `scalar | array<scalar>` — uint and nested composites stay out",
             ),
         },
-        cel::Type::Duration | cel::Type::Timestamp => Some(
+        DataType::Duration | DataType::Timestamp => Some(
             "a duration or timestamp metadata leaf is outside this build's physical form — carry it in `data` for now",
         ),
         _ => Some("a metadata leaf is `scalar | array<scalar>` — composites belong in `data`"),
@@ -4801,7 +4807,7 @@ fn key_path(key: &crate::compiler::syntax::LValue) -> String {
 }
 
 /// A literal expression tree — the compiler's own constants.
-fn literal_tree(value: cel::Value, ty: cel::Type) -> cel::Tree {
+fn literal_tree(value: cel::Value, ty: DataType) -> cel::Tree {
     cel::Tree {
         root: cel::Expr::Literal(value),
         ty,
@@ -4887,24 +4893,24 @@ fn decode_base64(raw: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn value_type(value: &cel::Value) -> cel::Type {
+fn value_type(value: &cel::Value) -> DataType {
     match value {
-        cel::Value::Struct(_) => cel::Type::Dyn,
-        cel::Value::Decimal { .. } => cel::Type::Dyn,
+        cel::Value::Struct(_) => DataType::Variant,
+        cel::Value::Decimal { .. } => DataType::Variant,
         // A checker value is a constant; the runtime witness never
         // appears here — total anyway.
-        cel::Value::Payload => cel::Type::Dyn,
-        cel::Value::Bool(_) => cel::Type::Bool,
-        cel::Value::Int(_) => cel::Type::Int,
-        cel::Value::Uint(_) => cel::Type::Uint,
-        cel::Value::Double(_) => cel::Type::Double,
-        cel::Value::Text(_) => cel::Type::Text,
-        cel::Value::Bytes(_) => cel::Type::Bytes,
-        cel::Value::Duration(_) => cel::Type::Duration,
-        cel::Value::Timestamp(_) => cel::Type::Timestamp,
-        cel::Value::Null => cel::Type::Null,
-        cel::Value::List(_) => cel::Type::List(Box::new(cel::Type::Dyn)),
-        cel::Value::Map(_) => cel::Type::Map(Box::new(cel::Type::Dyn)),
+        cel::Value::Payload => DataType::Variant,
+        cel::Value::Bool(_) => DataType::Bool,
+        cel::Value::Int(_) => DataType::Int,
+        cel::Value::Uint(_) => DataType::Uint,
+        cel::Value::Double(_) => DataType::Double,
+        cel::Value::Text(_) => DataType::Text,
+        cel::Value::Bytes(_) => DataType::Bytes,
+        cel::Value::Duration(_) => DataType::Duration,
+        cel::Value::Timestamp(_) => DataType::Timestamp,
+        cel::Value::Null => DataType::Null,
+        cel::Value::List(_) => DataType::Array(Box::new(DataType::Variant)),
+        cel::Value::Map(_) => DataType::Map(Box::new(DataType::Variant)),
     }
 }
 
@@ -4991,7 +4997,7 @@ graph m0_probe : App {
         assert_eq!(command.value, cel::Value::Text(String::from("cat")));
         let shout = &hir.app.nodes[1];
         assert_eq!(shout.category(), node::Kind::Operator);
-        assert_eq!(shout.vars[0].ty, cel::Type::Int);
+        assert_eq!(shout.vars[0].ty, DataType::Int);
         let handler = &shout.handlers[0];
         assert_eq!(
             handler.activation,

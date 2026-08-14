@@ -21,6 +21,7 @@ use crate::boundary::{
     BoundaryEvent, CallOutcome, CallRef, DatedPayload, Dispatcher, InboundSubmission, Intent,
     Partner, Response,
 };
+use crate::datatype::DataType;
 use crate::envelope::{Data, Envelope, Id};
 use crate::journal::{ConsumedPosition, Journal, ids};
 use crate::node;
@@ -346,7 +347,7 @@ impl<'plan> Vm<'plan> {
             // standard field is implicitly `text`, sheet fields
             // answer to their declared types.
             let ty = if field == "content_type" {
-                Some(crate::cel::Type::Text)
+                Some(DataType::Text)
             } else {
                 self.plan
                     .plan()

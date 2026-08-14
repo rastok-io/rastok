@@ -13,6 +13,7 @@ pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
 pub use validation::{PlanValidationError, ValidatedExecutionPlan};
 
 use crate::cel;
+use crate::datatype::DataType;
 use crate::node;
 use alloc::format;
 use alloc::string::String;
@@ -53,7 +54,7 @@ pub struct PortDecl {
     /// The declared direction.
     pub direction: node::Direction,
     /// The pinned type, when annotated.
-    pub ty: Option<cel::Type>,
+    pub ty: Option<DataType>,
 }
 
 impl PortDecl {
@@ -95,12 +96,12 @@ pub struct ExecutionPlan {
     /// writes, travelling so the validator answers without a
     /// Registry (D-2026-08-10-1): flat dotted field, unified type.
     /// Sorted by field; prefix-free.
-    pub app_schema: Vec<(alloc::string::String, cel::Type)>,
+    pub app_schema: Vec<(alloc::string::String, DataType)>,
     /// The resolved `meta.ext` vocabulary — the instantiated
     /// sheets' fields ONLY: the standard `content_type` is IMPLICIT
     /// (`text`), known to every consumer and never serialized
     /// (D-2026-08-10-4).
-    pub ext_schema: Vec<(alloc::string::String, cel::Type)>,
+    pub ext_schema: Vec<(alloc::string::String, DataType)>,
     /// The build-time asset table (D-2026-08-10-5): content-addressed,
     /// DEDUPLICATED by digest; `cel::Expr::Asset` indexes it. Sorted
     /// by digest — one content, one order, one identity.
@@ -213,8 +214,8 @@ pub enum AttrSetting {
 pub struct VarCell {
     /// The cell name.
     pub name: String,
-    /// The cell's CEL-facing type.
-    pub ty: cel::Type,
+    /// The cell's logical data type.
+    pub ty: DataType,
     /// The boot-time default, when declared.
     pub init: Option<cel::Value>,
 }
