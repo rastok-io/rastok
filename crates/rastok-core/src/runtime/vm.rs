@@ -386,7 +386,7 @@ impl<'plan> Vm<'plan> {
                 |refused| VmError::IngressPinViolation {
                     ingress: submission.port.clone(),
                     rejected_at: refused.at,
-                    violation: Box::new(refused.violation),
+                    violation: refused.violation,
                 },
             )?;
         }

@@ -1439,12 +1439,12 @@ fn the_validator_refuses_mismatched_edge_pins() {
         .iter_mut()
         .find(|decl| decl.port.name() == "evt")
         .expect("the pinned input");
-    evt.ty = Some(rastok::datatype::DataType::Int);
+    evt.ty = Some(rastok::datatype::DataType::INT);
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::MismatchedEdgePins { port, expected, found }
             if port.name() == "evt"
-                && expected == rastok::datatype::DataType::Int
+                && expected == rastok::datatype::DataType::INT
                 && found == rastok::datatype::DataType::Text
     ));
     // Boundary target: the gauge fixture wires `meter.score : int`
@@ -2661,7 +2661,7 @@ fn the_conformance_judgement_is_matchable() {
     assert!(matches!(
         error,
         VmError::IngressPinViolation { violation, .. }
-            if violation.expected == rastok::datatype::DataType::Int
+            if violation.expected == rastok::datatype::DataType::INT
                 && violation.found == ValueKind::Text
                 && violation.reason == ConformanceReason::TypeMismatch
     ));
@@ -2671,6 +2671,10 @@ fn the_conformance_judgement_is_matchable() {
     assert!(matches!(
         error,
         VmError::IngressPinViolation { violation, .. }
-            if matches!(violation.reason, ConformanceReason::IntegerOutOfRange { value } if value == 1 << 40)
+            if matches!(
+                violation.reason,
+                ConformanceReason::SignedIntegerOutOfRange { value, bits: 32 }
+                    if value == 1 << 40
+            )
     ));
 }

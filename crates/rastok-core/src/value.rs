@@ -168,6 +168,20 @@ pub enum ValueDefect {
     DuplicateStructField(String),
 }
 
+impl fmt::Display for ValueDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DecimalOutOfDomain { unscaled, scale } => write!(
+                f,
+                "decimal({unscaled}, scale {scale}) is outside the decimal128 domain"
+            ),
+            Self::DuplicateStructField(name) => {
+                write!(f, "a struct whose field `{name}` appears twice")
+            }
+        }
+    }
+}
+
 /// A malformed materialized value and the path to its first defect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueError {
@@ -187,15 +201,7 @@ impl fmt::Display for ValueError {
                 ValuePathSegment::MapValue(key) => write!(f, "[{key:?}]")?,
             }
         }
-        match &self.defect {
-            ValueDefect::DecimalOutOfDomain { unscaled, scale } => write!(
-                f,
-                " contains decimal({unscaled}, scale {scale}) outside the decimal128 domain"
-            ),
-            ValueDefect::DuplicateStructField(name) => {
-                write!(f, " contains a struct whose field `{name}` appears twice")
-            }
-        }
+        write!(f, " contains {}", self.defect)
     }
 }
 

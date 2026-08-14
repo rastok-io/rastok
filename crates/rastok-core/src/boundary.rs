@@ -158,17 +158,17 @@ impl RequestCodec {
         }
     }
 
-    /// The type a job-mode reply crosses the `out` pin with — the
-    /// contract rule `Process(job, jsonl).out = array<variant>`
-    /// (D-2026-08-11-1). `lines` stays untyped: the frozen referee
-    /// corpus mocks structured replies over it, and its honest
-    /// typing belongs to the connector-sheet items. Callers reach
-    /// this through [`connector_out_pin`] — the ONE effective-pin
-    /// authority.
+    /// The v6 type a job-mode reply crosses the `out` pin with. It preserves
+    /// D-2026-08-11-1's historical `array<variant>` package contract while
+    /// M1.3 is built behind the v6 gate. B5/B7 replace it with the resolved
+    /// per-frame `variant` port and ordinary repeated emissions; no new code
+    /// should treat this aggregate as the target model. `lines` stays
+    /// untyped in the same legacy table. Callers reach this through
+    /// [`connector_out_pin`] — the one effective-pin authority in v6.
     #[must_use]
     pub fn reply_type(self) -> Option<DataType> {
         match self {
-            Self::Jsonl => Some(DataType::Array(alloc::boxed::Box::new(DataType::Variant))),
+            Self::Jsonl => Some(DataType::array(DataType::Variant)),
             Self::Lines => None,
         }
     }

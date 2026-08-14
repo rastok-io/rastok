@@ -1302,7 +1302,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
     match expr {
         Expr::Literal(value) => Ok(literal_type(value)),
         // Compiler-constructed only — CEL text never spells one.
-        Expr::Asset(_) => Ok(DataType::Bytes),
+        Expr::Asset(_) => Ok(DataType::BYTES),
         Expr::Path(segments) => {
             let dotted = segments.join(".");
             if let Some(ty) = signature.get(&dotted) {
@@ -1310,7 +1310,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             }
             match signature.get(&segments[0]) {
                 Some(DataType::Variant) => Ok(DataType::Variant),
-                Some(DataType::Map(values)) if segments.len() > 1 => Ok((**values).clone()),
+                Some(DataType::Map(map)) if segments.len() > 1 => Ok(map.value().clone()),
                 Some(other) if segments.len() == 1 => Ok(other.clone()),
                 Some(_) => Err(fail(format!("`{dotted}` does not resolve to a member"))),
                 None => Err(fail(format!("`{}` is not a visible name", segments[0]))),
@@ -1321,7 +1321,13 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             match (op, &inner) {
                 (_, DataType::Variant) => Ok(DataType::Variant),
                 (UnaryOp::Not, DataType::Bool) => Ok(DataType::Bool),
-                (UnaryOp::Neg, DataType::Int | DataType::Double | DataType::Duration) => Ok(inner),
+                (UnaryOp::Neg, ty)
+                    if ty == &DataType::INT
+                        || ty == &DataType::DOUBLE
+                        || ty == &DataType::DURATION =>
+                {
+                    Ok(inner)
+                }
                 _ => Err(fail(format!("operator does not accept a {inner:?}"))),
             }
         }
@@ -1352,16 +1358,16 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             let index_ty = check(index, signature, text)?;
             match base_ty {
                 DataType::Variant => Ok(DataType::Variant),
-                DataType::Array(element) => {
-                    if matches!(index_ty, DataType::Int | DataType::Uint | DataType::Variant) {
-                        Ok(*element)
+                DataType::Array(array) => {
+                    if matches!(index_ty, DataType::INT | DataType::UINT | DataType::Variant) {
+                        Ok(array.element().clone())
                     } else {
                         Err(fail(String::from("a list index must be an integer")))
                     }
                 }
-                DataType::Map(values) => {
+                DataType::Map(map) => {
                     if matches!(index_ty, DataType::Text | DataType::Variant) {
-                        Ok(*values)
+                        Ok(map.value().clone())
                     } else {
                         Err(fail(String::from("a map key must be text")))
                     }
@@ -1379,12 +1385,12 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                     return Err(fail(String::from("the argument must be text")));
                 }
                 Ok(match function {
-                    Function::Duration => DataType::Duration,
+                    Function::Duration => DataType::DURATION,
                     // A dynamic decimal conforms to no precise M0
                     // type — `variant`, narrowed before use
                     // (D-2026-08-10-7).
                     Function::Decimal => DataType::Variant,
-                    _ => DataType::Timestamp,
+                    _ => DataType::TIMESTAMP,
                 })
             }
             Function::Size => {
@@ -1394,10 +1400,10 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                 let arg = check(&args[0], signature, text)?;
                 match arg {
                     DataType::Text
-                    | DataType::Bytes
+                    | DataType::BYTES
                     | DataType::Array(_)
                     | DataType::Map(_)
-                    | DataType::Variant => Ok(DataType::Int),
+                    | DataType::Variant => Ok(DataType::INT),
                     other => Err(fail(format!("`size` does not accept a {other:?}"))),
                 }
             }
@@ -1412,7 +1418,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                     element = join_types(&element, &ty);
                 }
             }
-            Ok(DataType::Array(Box::new(element)))
+            Ok(DataType::array(element))
         }
         Expr::MapLit(entries) => {
             let mut values = DataType::Variant;
@@ -1424,7 +1430,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                     values = join_types(&values, &ty);
                 }
             }
-            Ok(DataType::Map(Box::new(values)))
+            Ok(DataType::text_map(values))
         }
     }
 }
@@ -1432,16 +1438,16 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
 fn literal_type(value: &Value) -> DataType {
     match value {
         Value::Bool(_) => DataType::Bool,
-        Value::Int(_) => DataType::Int,
-        Value::Uint(_) => DataType::Uint,
-        Value::Double(_) => DataType::Double,
+        Value::Int(_) => DataType::INT,
+        Value::Uint(_) => DataType::UINT,
+        Value::Double(_) => DataType::DOUBLE,
         Value::Text(_) => DataType::Text,
-        Value::Bytes(_) => DataType::Bytes,
-        Value::Duration(_) => DataType::Duration,
-        Value::Timestamp(_) => DataType::Timestamp,
+        Value::Bytes(_) => DataType::BYTES,
+        Value::Duration(_) => DataType::DURATION,
+        Value::Timestamp(_) => DataType::TIMESTAMP,
         Value::Null => DataType::Null,
-        Value::Array(_) => DataType::Array(Box::new(DataType::Variant)),
-        Value::Map(_) => DataType::Map(Box::new(DataType::Variant)),
+        Value::Array(_) => DataType::array(DataType::Variant),
+        Value::Map(_) => DataType::text_map(DataType::Variant),
         // No struct type exists in the annotation subset; the value
         // carries its own witness and types as dynamic.
         Value::Struct(_) => DataType::Variant,
@@ -1470,36 +1476,35 @@ fn binary_type(op: BinaryOp, lhs: &DataType, rhs: &DataType) -> Option<DataType>
         And | Or => (lhs == &DataType::Bool && rhs == &DataType::Bool).then_some(DataType::Bool),
         Eq | Ne => Some(DataType::Bool),
         Lt | Le | Gt | Ge => {
-            let comparable = matches!(
-                lhs,
-                DataType::Int
-                    | DataType::Uint
-                    | DataType::Double
-                    | DataType::Text
-                    | DataType::Duration
-                    | DataType::Timestamp
-            );
+            let comparable = lhs == &DataType::INT
+                || lhs == &DataType::UINT
+                || lhs == &DataType::DOUBLE
+                || lhs == &DataType::Text
+                || lhs == &DataType::DURATION
+                || lhs == &DataType::TIMESTAMP;
             (comparable && lhs == rhs).then_some(DataType::Bool)
         }
-        Add => match (lhs, rhs) {
-            (DataType::Text, DataType::Text) => Some(DataType::Text),
-            (DataType::Duration, DataType::Duration) => Some(DataType::Duration),
-            (DataType::Timestamp, DataType::Duration)
-            | (DataType::Duration, DataType::Timestamp) => Some(DataType::Timestamp),
-            _ => numeric(lhs, rhs),
-        },
-        Sub => match (lhs, rhs) {
-            (DataType::Duration, DataType::Duration) => Some(DataType::Duration),
-            (DataType::Timestamp, DataType::Duration) => Some(DataType::Timestamp),
-            (DataType::Timestamp, DataType::Timestamp) => Some(DataType::Duration),
-            _ => numeric(lhs, rhs),
-        },
+        Add if lhs == &DataType::Text && rhs == &DataType::Text => Some(DataType::Text),
+        Add if lhs == &DataType::DURATION && rhs == &DataType::DURATION => Some(DataType::DURATION),
+        Add if (lhs == &DataType::TIMESTAMP && rhs == &DataType::DURATION)
+            || (lhs == &DataType::DURATION && rhs == &DataType::TIMESTAMP) =>
+        {
+            Some(DataType::TIMESTAMP)
+        }
+        Sub if lhs == &DataType::DURATION && rhs == &DataType::DURATION => Some(DataType::DURATION),
+        Sub if lhs == &DataType::TIMESTAMP && rhs == &DataType::DURATION => {
+            Some(DataType::TIMESTAMP)
+        }
+        Sub if lhs == &DataType::TIMESTAMP && rhs == &DataType::TIMESTAMP => {
+            Some(DataType::DURATION)
+        }
+        Add | Sub => numeric(lhs, rhs),
         Mul | Div | Rem => numeric(lhs, rhs),
     }
 }
 
 fn numeric(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
-    (lhs == rhs && matches!(lhs, DataType::Int | DataType::Uint | DataType::Double))
+    (lhs == rhs && (lhs == &DataType::INT || lhs == &DataType::UINT || lhs == &DataType::DOUBLE))
         .then(|| lhs.clone())
 }
 
@@ -2281,7 +2286,7 @@ mod tests {
     fn const_eval_reduces_initializers() {
         let tree = compile_ok(
             "retries * 2",
-            &Signature::new().with("retries", DataType::Int),
+            &Signature::new().with("retries", DataType::INT),
         );
         let mut consts = BTreeMap::new();
         consts.insert(String::from("retries"), Value::Int(3));

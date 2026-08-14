@@ -1102,7 +1102,7 @@ fn the_validator_only_admits_executable_schemas() {
     .expect("valid")
     .plan
     .into_inner();
-    plan.app_schema = vec![(String::from("n"), rastok::datatype::DataType::Uint)];
+    plan.app_schema = vec![(String::from("n"), rastok::datatype::DataType::UINT)];
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::MetaSchemaType { .. }

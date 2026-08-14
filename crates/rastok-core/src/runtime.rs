@@ -1003,7 +1003,7 @@ pub struct PinViolation {
     pub at: crate::plan::EndpointRef,
     /// The conformance judgement — SEMANTIC: expected type, found
     /// kind, and the reason; text is `Display`'s business.
-    pub violation: ConformanceViolation,
+    pub violation: Box<ConformanceViolation>,
 }
 
 impl PinViolation {
@@ -1032,7 +1032,7 @@ pub(crate) fn crossing_pins_hold(
     {
         return Err(PinViolation {
             at: from.clone(),
-            violation,
+            violation: Box::new(violation),
         });
     }
     for edge in plan.edges.iter().filter(|edge| edge.from == *from) {
@@ -1054,7 +1054,7 @@ pub(crate) fn crossing_pins_hold(
         {
             return Err(PinViolation {
                 at: to.clone(),
-                violation,
+                violation: Box::new(violation),
             });
         }
     }
@@ -1432,8 +1432,8 @@ mod metadata_conformance_tests {
     fn metadata_uses_the_core_value_and_type_authorities() {
         let largest_int = MetaValue::Scalar(Scalar::Int(i64::from(i32::MAX)));
         let oversized_int = MetaValue::Scalar(Scalar::Int(i64::from(i32::MAX) + 1));
-        assert!(meta_conforms(&largest_int, &DataType::Int));
-        assert!(!meta_conforms(&oversized_int, &DataType::Int));
+        assert!(meta_conforms(&largest_int, &DataType::INT));
+        assert!(!meta_conforms(&oversized_int, &DataType::INT));
 
         let malformed_decimal = MetaValue::Scalar(Scalar::Decimal {
             unscaled: 1,

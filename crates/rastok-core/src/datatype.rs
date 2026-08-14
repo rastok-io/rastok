@@ -1,75 +1,861 @@
 //! Logical payload types owned by the Rastok core.
 //!
 //! Expression engines, ports, state, metadata and codecs consume this
-//! vocabulary; none of them defines a parallel type system.  This is the
-//! executable subset admitted before the M1.3 categorical type-registry
-//! landing.  New logical families extend this authority rather than being
-//! added to an expression-specific enum.
+//! vocabulary; none of them defines a parallel type system. Every
+//! parameterized or composite case is valid by construction. Global tree
+//! budgets are checked before a type enters a resolved plan.
 
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::value::{Value, ValueKind, ValuePathSegment};
+use crate::value::{Value, ValueDefect, ValueKind, ValuePathSegment};
 
 /// Significant-digit budget of the canonical decimal128 value domain.
 pub const DECIMAL_MAX_DIGITS: u32 = 38;
-/// Largest carried decimal scale in the canonical decimal128 value domain.
+/// Largest carried scale of a schema-less exact decimal value.
 pub const DECIMAL_MAX_SCALE: i32 = 6144;
-/// Smallest carried decimal scale in the canonical decimal128 value domain.
+/// Smallest carried scale of a schema-less exact decimal value.
 pub const DECIMAL_MIN_SCALE: i32 = -6143;
+/// Largest decimal scale admitted by a fixed `decimal(p,s)` type.
+pub const DECIMAL_TYPE_MAX_SCALE: i32 = 38;
+/// Smallest decimal scale admitted by a fixed `decimal(p,s)` type.
+pub const DECIMAL_TYPE_MIN_SCALE: i32 = -38;
+/// Largest fixed byte or array length in the v1 type algebra.
+pub const MAX_FIXED_LENGTH: u32 = 0x7fff_ffff;
+/// Maximum resolved type-tree nesting.
+pub const MAX_TYPE_NESTING: usize = 128;
+/// Maximum nodes in one expanded resolved type tree.
+pub const MAX_TYPE_NODES: usize = 4096;
+/// Maximum fields, symbols, branches or cases in one composite.
+pub const MAX_TYPE_MEMBERS: usize = 256;
 
-/// Whether an exact coefficient and scale inhabit Rastok's decimal128 value
-/// domain. Origin-specific rules such as JSON minimal scale remain at the
-/// constructor that owns that origin.
+/// Whether an exact coefficient and scale inhabit Rastok's schema-less
+/// decimal128 value domain. Origin-specific rules such as JSON minimal scale
+/// remain at the constructor that owns that origin.
 #[must_use]
 pub fn decimal_in_domain(unscaled: i128, scale: i32) -> bool {
     (DECIMAL_MIN_SCALE..=DECIMAL_MAX_SCALE).contains(&scale)
-        && unscaled.unsigned_abs() < 10_u128.pow(DECIMAL_MAX_DIGITS)
+        && decimal_digits(unscaled) <= DECIMAL_MAX_DIGITS
 }
 
-/// The currently executable subset of Rastok's logical [`DataType`] tree.
+fn decimal_digits(value: i128) -> u32 {
+    let magnitude = value.unsigned_abs();
+    if magnitude == 0 {
+        1
+    } else {
+        magnitude.ilog10() + 1
+    }
+}
+
+/// Width of a signed or unsigned integer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IntegerWidth {
+    /// 8 bits.
+    Bits8,
+    /// 16 bits.
+    Bits16,
+    /// 32 bits.
+    Bits32,
+    /// 64 bits.
+    Bits64,
+}
+
+impl IntegerWidth {
+    /// Numeric bit count.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        match self {
+            Self::Bits8 => 8,
+            Self::Bits16 => 16,
+            Self::Bits32 => 32,
+            Self::Bits64 => 64,
+        }
+    }
+
+    fn signed_accepts(self, value: i64) -> bool {
+        match self {
+            Self::Bits8 => i8::try_from(value).is_ok(),
+            Self::Bits16 => i16::try_from(value).is_ok(),
+            Self::Bits32 => i32::try_from(value).is_ok(),
+            Self::Bits64 => true,
+        }
+    }
+
+    fn unsigned_accepts(self, value: u64) -> bool {
+        match self {
+            Self::Bits8 => u8::try_from(value).is_ok(),
+            Self::Bits16 => u16::try_from(value).is_ok(),
+            Self::Bits32 => u32::try_from(value).is_ok(),
+            Self::Bits64 => true,
+        }
+    }
+}
+
+/// Signedness and width of an integer type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IntegerType {
+    /// Signed two's-complement integer.
+    Signed(IntegerWidth),
+    /// Unsigned integer.
+    Unsigned(IntegerWidth),
+}
+
+/// IEEE-754 binary floating-point width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FloatType {
+    /// binary16.
+    Binary16,
+    /// binary32.
+    Binary32,
+    /// binary64.
+    Binary64,
+}
+
+impl FloatType {
+    /// Numeric bit count.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        match self {
+            Self::Binary16 => 16,
+            Self::Binary32 => 32,
+            Self::Binary64 => 64,
+        }
+    }
+}
+
+/// A fixed decimal128 logical type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DecimalType {
+    precision: u8,
+    scale: i8,
+}
+
+impl DecimalType {
+    /// Builds `decimal(precision, scale)` within the v1 decimal128 profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns a parameter-specific refusal when precision or scale is out of
+    /// the canonical domain.
+    pub fn new(precision: u32, scale: i32) -> Result<Self, TypeError> {
+        if !(1..=DECIMAL_MAX_DIGITS).contains(&precision) {
+            return Err(TypeError::DecimalPrecision { precision });
+        }
+        if !(DECIMAL_TYPE_MIN_SCALE..=DECIMAL_TYPE_MAX_SCALE).contains(&scale) {
+            return Err(TypeError::DecimalScale { scale });
+        }
+        Ok(Self {
+            precision: u8::try_from(precision)
+                .map_err(|_| TypeError::DecimalPrecision { precision })?,
+            scale: i8::try_from(scale).map_err(|_| TypeError::DecimalScale { scale })?,
+        })
+    }
+
+    /// Declared precision.
+    #[must_use]
+    pub const fn precision(self) -> u8 {
+        self.precision
+    }
+
+    /// Declared signed scale.
+    #[must_use]
+    pub const fn scale(self) -> i8 {
+        self.scale
+    }
+}
+
+/// Variable or fixed binary logical type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BinaryType {
+    /// Variable-size bytes.
+    Variable,
+    /// Exactly this many bytes.
+    Fixed(ByteLength),
+}
+
+/// Valid fixed-binary length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ByteLength(u32);
+
+impl ByteLength {
+    /// Builds a non-zero fixed-binary length under the v1 bound.
+    ///
+    /// # Errors
+    ///
+    /// Zero and values beyond [`MAX_FIXED_LENGTH`] refuse.
+    pub fn new(length: u32) -> Result<Self, TypeError> {
+        if length == 0 || length > MAX_FIXED_LENGTH {
+            return Err(TypeError::ByteLength { length });
+        }
+        Ok(Self(length))
+    }
+
+    /// Number of bytes.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Unit used by time, timestamps and durations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TimeUnit {
+    /// Seconds.
+    Second,
+    /// Milliseconds.
+    Millisecond,
+    /// Microseconds.
+    Microsecond,
+    /// Nanoseconds.
+    Nanosecond,
+}
+
+/// Unit used by dates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DateUnit {
+    /// Days since the Unix epoch.
+    Day,
+    /// Milliseconds since the Unix epoch.
+    Millisecond,
+}
+
+/// Unit used by intervals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IntervalUnit {
+    /// Year/month pair.
+    YearMonth,
+    /// Day/time pair.
+    DayTime,
+    /// Month/day/nanosecond triple.
+    MonthDayNano,
+}
+
+/// Timestamp timezone semantics.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TimeZone {
+    /// UTC, with all accepted UTC aliases normalized to this case.
+    Utc,
+    /// A non-empty named timezone.
+    Named(NamedTimeZone),
+}
+
+impl TimeZone {
+    /// Builds a timezone from source spelling, normalizing UTC aliases.
+    ///
+    /// # Errors
+    ///
+    /// An empty timezone name refuses.
+    pub fn named(name: impl Into<String>) -> Result<Self, TypeError> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(TypeError::EmptyTimeZone);
+        }
+        if matches!(name.as_str(), "UTC" | "Etc/UTC" | "+00:00" | "utc") {
+            Ok(Self::Utc)
+        } else {
+            Ok(Self::Named(NamedTimeZone(name)))
+        }
+    }
+}
+
+/// Canonical non-UTC timezone name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NamedTimeZone(String);
+
+impl NamedTimeZone {
+    /// Canonical text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Arrow-anchored temporal type parameters.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TemporalType {
+    /// Calendar date.
+    Date(DateUnit),
+    /// Time of day.
+    Time(TimeUnit),
+    /// Instant with UTC or a named timezone.
+    Timestamp {
+        /// Resolution.
+        unit: TimeUnit,
+        /// Timezone semantics.
+        zone: TimeZone,
+    },
+    /// Timezone-naive timestamp.
+    TimestampNtz(TimeUnit),
+    /// Elapsed duration.
+    Duration(TimeUnit),
+    /// Calendar interval.
+    Interval(IntervalUnit),
+}
+
+/// One field in a closed struct type.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeField {
+    name: String,
+    ty: DataType,
+}
+
+impl TypeField {
+    /// Builds a field. Empty names are admitted because external schemas may
+    /// name such properties even though source identifiers cannot.
+    #[must_use]
+    pub fn new(name: impl Into<String>, ty: DataType) -> Self {
+        Self {
+            name: name.into(),
+            ty,
+        }
+    }
+
+    /// Semantic field name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Resolved field type.
+    #[must_use]
+    pub const fn ty(&self) -> &DataType {
+        &self.ty
+    }
+}
+
+/// Closed, canonical struct type.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StructType(Vec<TypeField>);
+
+impl StructType {
+    /// Sorts fields by UTF-8 name bytes and rejects duplicate names or the
+    /// per-struct member budget.
+    ///
+    /// # Errors
+    ///
+    /// A duplicate name or oversized field table refuses.
+    pub fn new(mut fields: Vec<TypeField>) -> Result<Self, TypeError> {
+        member_budget("struct fields", fields.len())?;
+        fields.sort_by(|a, b| a.name.cmp(&b.name));
+        if let Some(name) = duplicate_adjacent(fields.iter().map(|field| field.name.as_str())) {
+            return Err(TypeError::DuplicateStructField(name.to_string()));
+        }
+        Ok(Self(fields))
+    }
+
+    /// Canonically sorted fields.
+    #[must_use]
+    pub fn fields(&self) -> &[TypeField] {
+        &self.0
+    }
+}
+
+/// Homogeneous keyed collection type.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MapType {
+    key: Box<DataType>,
+    value: Box<DataType>,
+}
+
+impl MapType {
+    /// Builds a map whose key has a total canonical encoding.
+    ///
+    /// # Errors
+    ///
+    /// Key types outside the v1 canonical-key domain refuse.
+    pub fn new(key: DataType, value: DataType) -> Result<Self, TypeError> {
+        if !key.is_map_key() {
+            return Err(TypeError::InvalidMapKey(Box::new(key)));
+        }
+        Ok(Self {
+            key: Box::new(key),
+            value: Box::new(value),
+        })
+    }
+
+    /// Key type.
+    #[must_use]
+    pub const fn key(&self) -> &DataType {
+        &self.key
+    }
+
+    /// Value type.
+    #[must_use]
+    pub const fn value(&self) -> &DataType {
+        &self.value
+    }
+}
+
+/// Homogeneous ordered collection type.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArrayType {
+    element: Box<DataType>,
+    length: Option<ArrayLength>,
+}
+
+impl ArrayType {
+    /// Variable-length array.
+    #[must_use]
+    pub fn variable(element: DataType) -> Self {
+        Self {
+            element: Box::new(element),
+            length: None,
+        }
+    }
+
+    /// Fixed-length array.
+    ///
+    /// # Errors
+    ///
+    /// Values beyond [`MAX_FIXED_LENGTH`] refuse; zero is valid.
+    pub fn fixed(element: DataType, length: u32) -> Result<Self, TypeError> {
+        Ok(Self {
+            element: Box::new(element),
+            length: Some(ArrayLength::new(length)?),
+        })
+    }
+
+    /// Element type.
+    #[must_use]
+    pub const fn element(&self) -> &DataType {
+        &self.element
+    }
+
+    /// Exact length, or `None` for a variable array.
+    #[must_use]
+    pub const fn length(&self) -> Option<ArrayLength> {
+        self.length
+    }
+}
+
+/// Valid fixed-array length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArrayLength(u32);
+
+impl ArrayLength {
+    /// Builds an exact array length; zero is valid.
+    ///
+    /// # Errors
+    ///
+    /// Values beyond [`MAX_FIXED_LENGTH`] refuse.
+    pub fn new(length: u32) -> Result<Self, TypeError> {
+        if length > MAX_FIXED_LENGTH {
+            return Err(TypeError::ArrayLength { length });
+        }
+        Ok(Self(length))
+    }
+
+    /// Number of elements.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// Closed set of enum symbols.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EnumType(Vec<String>);
+
+impl EnumType {
+    /// Sorts symbols canonically and rejects duplicates, emptiness, or the
+    /// per-enum budget.
+    ///
+    /// # Errors
+    ///
+    /// The returned variant names the violated enum invariant.
+    pub fn new(mut symbols: Vec<String>) -> Result<Self, TypeError> {
+        member_budget("enum symbols", symbols.len())?;
+        if symbols.is_empty() {
+            return Err(TypeError::EmptyEnum);
+        }
+        symbols.sort();
+        if let Some(symbol) = duplicate_adjacent(symbols.iter().map(String::as_str)) {
+            return Err(TypeError::DuplicateEnumSymbol(symbol.to_string()));
+        }
+        Ok(Self(symbols))
+    }
+
+    /// Canonically sorted symbols.
+    #[must_use]
+    pub fn symbols(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// Pairwise-disjoint, canonically sorted structural union.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StructuralUnionType(Vec<DataType>);
+
+impl StructuralUnionType {
+    /// Canonically sorted branches.
+    #[must_use]
+    pub fn branches(&self) -> &[DataType] {
+        &self.0
+    }
+}
+
+/// One named tagged-union case with a closed struct payload.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TaggedCase {
+    name: String,
+    payload: StructType,
+}
+
+impl TaggedCase {
+    /// Builds a named case.
+    ///
+    /// # Errors
+    ///
+    /// An empty discriminant refuses.
+    pub fn new(name: impl Into<String>, payload: StructType) -> Result<Self, TypeError> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(TypeError::EmptyTaggedCase);
+        }
+        Ok(Self { name, payload })
+    }
+
+    /// Semantic discriminant.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Closed payload shape.
+    #[must_use]
+    pub const fn payload(&self) -> &StructType {
+        &self.payload
+    }
+}
+
+/// Closed tagged union with name-stable cases.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TaggedUnionType(Vec<TaggedCase>);
+
+impl TaggedUnionType {
+    /// Sorts cases by name and rejects duplicates, emptiness, or the member
+    /// budget.
+    ///
+    /// # Errors
+    ///
+    /// The returned variant names the violated tagged-union invariant.
+    pub fn new(mut cases: Vec<TaggedCase>) -> Result<Self, TypeError> {
+        member_budget("tagged-union cases", cases.len())?;
+        if cases.is_empty() {
+            return Err(TypeError::EmptyTaggedUnion);
+        }
+        cases.sort_by(|a, b| a.name.cmp(&b.name));
+        if let Some(name) = duplicate_adjacent(cases.iter().map(|case| case.name.as_str())) {
+            return Err(TypeError::DuplicateTaggedCase(name.to_string()));
+        }
+        Ok(Self(cases))
+    }
+
+    /// Canonically sorted cases.
+    #[must_use]
+    pub fn cases(&self) -> &[TaggedCase] {
+        &self.0
+    }
+}
+
+/// Canonical Rastok logical type.
 ///
-/// `Variant` is the explicit dynamic value type; the type algebra deliberately
-/// contains no inference-hole or recovery variant.  Some pre-M1.3 compiler
-/// paths still collapse an unresolved constraint into `Variant`; the B2
-/// migration removes those callers without adding such a case here.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The enum contains no inference or recovery case. `Variant` is the one
+/// explicit dynamic type. Source aliases such as `int` and `double` resolve
+/// before entering this tree.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DataType {
+    /// Null.
+    Null,
     /// Boolean.
     Bool,
-    /// The currently admitted signed-integer domain.
-    Int,
-    /// The currently admitted unsigned-integer domain.
-    Uint,
-    /// IEEE-754 binary64.
-    Double,
+    /// Fixed-width signed or unsigned integer.
+    Integer(IntegerType),
+    /// Fixed-width IEEE-754 binary float.
+    Float(FloatType),
+    /// Fixed decimal128 type.
+    Decimal(DecimalType),
+    /// Exact integer-or-decimal dynamic numeric domain.
+    Number,
     /// UTF-8 text.
     Text,
-    /// Opaque bytes.
-    Bytes,
-    /// Nanosecond-resolution duration.
-    Duration,
-    /// UTC instant at nanosecond resolution.
-    Timestamp,
-    /// The null type.
-    Null,
-    /// The explicitly dynamic, self-describing value type.
+    /// Variable or fixed bytes.
+    Bytes(BinaryType),
+    /// Arrow-anchored temporal family.
+    Temporal(TemporalType),
+    /// UUID bytes with UUID semantics.
+    Uuid,
+    /// Closed named-field record.
+    Struct(StructType),
+    /// Homogeneous map.
+    Map(MapType),
+    /// Homogeneous ordered array.
+    Array(ArrayType),
+    /// Closed set of unit symbols.
+    Enum(EnumType),
+    /// Pairwise-disjoint structural union.
+    StructuralUnion(StructuralUnionType),
+    /// Name-discriminated union.
+    TaggedUnion(TaggedUnionType),
+    /// Explicitly dynamic self-describing tree.
     Variant,
-    /// Homogeneous ordered values.
-    Array(Box<DataType>),
-    /// Text-keyed homogeneous values in the current executable subset.
-    Map(Box<DataType>),
+}
+
+// This key, rather than the source order of `DataType` variants, owns the
+// deterministic in-memory order used to canonicalize structural unions. B8
+// will assign the package bytes to this already-explicit logical order.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum TypeOrderKey<'a> {
+    Null,
+    Bool,
+    Integer(&'a IntegerType),
+    Float(&'a FloatType),
+    Decimal(&'a DecimalType),
+    Number,
+    Text,
+    Bytes(&'a BinaryType),
+    Temporal(&'a TemporalType),
+    Uuid,
+    Struct(&'a StructType),
+    Map(&'a MapType),
+    Array(&'a ArrayType),
+    Enum(&'a EnumType),
+    StructuralUnion(&'a StructuralUnionType),
+    TaggedUnion(&'a TaggedUnionType),
+    Variant,
+}
+
+impl PartialOrd for DataType {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DataType {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.order_key().cmp(&other.order_key())
+    }
 }
 
 impl DataType {
+    /// Friendly source alias `int = int32` used by the current executable
+    /// subset.
+    pub const INT: Self = Self::Integer(IntegerType::Signed(IntegerWidth::Bits32));
+    /// Friendly source alias `long = int64`.
+    pub const LONG: Self = Self::Integer(IntegerType::Signed(IntegerWidth::Bits64));
+    /// Friendly source alias `uint = uint64`.
+    pub const UINT: Self = Self::Integer(IntegerType::Unsigned(IntegerWidth::Bits64));
+    /// Friendly source alias `float = float32`.
+    pub const FLOAT: Self = Self::Float(FloatType::Binary32);
+    /// Friendly source alias `double = float64`.
+    pub const DOUBLE: Self = Self::Float(FloatType::Binary64);
+    /// Variable opaque bytes.
+    pub const BYTES: Self = Self::Bytes(BinaryType::Variable);
+    /// Nanosecond duration, the friendly default.
+    pub const DURATION: Self = Self::Temporal(TemporalType::Duration(TimeUnit::Nanosecond));
+    /// Nanosecond UTC timestamp, the friendly default.
+    pub const TIMESTAMP: Self = Self::Temporal(TemporalType::Timestamp {
+        unit: TimeUnit::Nanosecond,
+        zone: TimeZone::Utc,
+    });
+
+    fn order_key(&self) -> TypeOrderKey<'_> {
+        match self {
+            Self::Null => TypeOrderKey::Null,
+            Self::Bool => TypeOrderKey::Bool,
+            Self::Integer(integer) => TypeOrderKey::Integer(integer),
+            Self::Float(float) => TypeOrderKey::Float(float),
+            Self::Decimal(decimal) => TypeOrderKey::Decimal(decimal),
+            Self::Number => TypeOrderKey::Number,
+            Self::Text => TypeOrderKey::Text,
+            Self::Bytes(binary) => TypeOrderKey::Bytes(binary),
+            Self::Temporal(temporal) => TypeOrderKey::Temporal(temporal),
+            Self::Uuid => TypeOrderKey::Uuid,
+            Self::Struct(structure) => TypeOrderKey::Struct(structure),
+            Self::Map(map) => TypeOrderKey::Map(map),
+            Self::Array(array) => TypeOrderKey::Array(array),
+            Self::Enum(enumeration) => TypeOrderKey::Enum(enumeration),
+            Self::StructuralUnion(union) => TypeOrderKey::StructuralUnion(union),
+            Self::TaggedUnion(union) => TypeOrderKey::TaggedUnion(union),
+            Self::Variant => TypeOrderKey::Variant,
+        }
+    }
+
+    /// Variable homogeneous array.
+    #[must_use]
+    pub fn array(element: DataType) -> Self {
+        Self::Array(ArrayType::variable(element))
+    }
+
+    /// Text-keyed homogeneous map, the JSON/Avro-friendly common case.
+    #[must_use]
+    pub fn text_map(value: DataType) -> Self {
+        Self::Map(MapType {
+            key: Box::new(Self::Text),
+            value: Box::new(value),
+        })
+    }
+
+    /// Builds a structural union, flattening nested structural unions and
+    /// sorting branches by the canonical type order.
+    ///
+    /// # Errors
+    ///
+    /// Fewer than two branches, duplicate/overlapping branches, member
+    /// overflow, or a global type budget violation refuses.
+    pub fn structural_union(branches: Vec<DataType>) -> Result<Self, TypeError> {
+        let mut flat = Vec::new();
+        for branch in branches {
+            match branch {
+                Self::StructuralUnion(union) => flat.extend(union.0),
+                other => flat.push(other),
+            }
+        }
+        member_budget("structural-union branches", flat.len())?;
+        if flat.len() < 2 {
+            return Err(TypeError::TooFewUnionBranches { count: flat.len() });
+        }
+        flat.sort();
+        for pair in flat.windows(2) {
+            if pair[0] == pair[1] {
+                return Err(TypeError::DuplicateUnionBranch(Box::new(pair[0].clone())));
+            }
+        }
+        for left in 0..flat.len() {
+            for right in left + 1..flat.len() {
+                if flat[left].overlaps(&flat[right]) {
+                    return Err(TypeError::OverlappingUnionBranches {
+                        left: Box::new(flat[left].clone()),
+                        right: Box::new(flat[right].clone()),
+                    });
+                }
+            }
+        }
+        let ty = Self::StructuralUnion(StructuralUnionType(flat));
+        ty.validate()?;
+        Ok(ty)
+    }
+
+    /// Builds `T?` as the same structural union as `T | null`.
+    ///
+    /// # Errors
+    ///
+    /// An already-nullable or otherwise overlapping union refuses.
+    pub fn optional(self) -> Result<Self, TypeError> {
+        Self::structural_union(alloc::vec![self, Self::Null])
+    }
+
+    /// Verifies global type budgets. Local parameter/order/uniqueness
+    /// invariants are already held by the wrapper constructors.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first exceeded global budget.
+    pub fn validate(&self) -> Result<(), TypeError> {
+        let mut stack = alloc::vec![(self, 1_usize)];
+        let mut nodes = 0_usize;
+        while let Some((ty, depth)) = stack.pop() {
+            nodes = nodes.saturating_add(1);
+            if nodes > MAX_TYPE_NODES {
+                return Err(TypeError::NodeBudget {
+                    nodes,
+                    budget: MAX_TYPE_NODES,
+                });
+            }
+            if depth > MAX_TYPE_NESTING {
+                return Err(TypeError::NestingBudget {
+                    depth,
+                    budget: MAX_TYPE_NESTING,
+                });
+            }
+            match ty {
+                Self::Struct(structure) => {
+                    stack.extend(
+                        structure
+                            .fields()
+                            .iter()
+                            .map(|field| (field.ty(), depth + 1)),
+                    );
+                }
+                Self::Map(map) => {
+                    stack.push((map.key(), depth + 1));
+                    stack.push((map.value(), depth + 1));
+                }
+                Self::Array(array) => stack.push((array.element(), depth + 1)),
+                Self::StructuralUnion(union) => {
+                    stack.extend(union.branches().iter().map(|branch| (branch, depth + 1)));
+                }
+                Self::TaggedUnion(union) => {
+                    for case in union.cases() {
+                        let payload_depth = depth + 1;
+                        nodes = nodes.saturating_add(1);
+                        if nodes > MAX_TYPE_NODES {
+                            return Err(TypeError::NodeBudget {
+                                nodes,
+                                budget: MAX_TYPE_NODES,
+                            });
+                        }
+                        if payload_depth > MAX_TYPE_NESTING {
+                            return Err(TypeError::NestingBudget {
+                                depth: payload_depth,
+                                budget: MAX_TYPE_NESTING,
+                            });
+                        }
+                        stack.extend(
+                            case.payload()
+                                .fields()
+                                .iter()
+                                .map(|field| (field.ty(), payload_depth + 1)),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether v6 can transport this type without changing its published
+    /// registry. B8 removes this gate when the categorical v7 package lands.
+    #[must_use]
+    pub fn is_v6_wire_type(&self) -> bool {
+        match self {
+            Self::Bool
+            | Self::Integer(IntegerType::Signed(IntegerWidth::Bits32))
+            | Self::Integer(IntegerType::Unsigned(IntegerWidth::Bits64))
+            | Self::Float(FloatType::Binary64)
+            | Self::Text
+            | Self::Bytes(BinaryType::Variable)
+            | Self::Temporal(TemporalType::Duration(TimeUnit::Nanosecond))
+            | Self::Temporal(TemporalType::Timestamp {
+                unit: TimeUnit::Nanosecond,
+                zone: TimeZone::Utc,
+            })
+            | Self::Null
+            | Self::Variant => true,
+            Self::Array(array) => array.length().is_none() && array.element().is_v6_wire_type(),
+            Self::Map(map) => map.key() == &Self::Text && map.value().is_v6_wire_type(),
+            _ => false,
+        }
+    }
+
     /// Judges one materialized value against this logical type.
     ///
     /// `None` is conformance. A refusal carries the precise nested path and
     /// preserves the semantic reason for callers that render it differently.
     #[must_use]
     pub fn violation(&self, name: &str, value: &Value) -> Option<ConformanceViolation> {
+        if let Err(error) = value.validate() {
+            return Some(ConformanceViolation {
+                name: String::from(name),
+                path: error.path,
+                expected: self.clone(),
+                found: ValueKind::of(value),
+                reason: ConformanceReason::MalformedValue(error.defect),
+            });
+        }
         self.violation_at(name, value, &mut Vec::new())
     }
 
@@ -87,37 +873,114 @@ impl DataType {
     ) -> Option<ConformanceViolation> {
         match (self, value) {
             (Self::Variant, _) => None,
-            // A dynamic decimal conforms to no precise type in the current
-            // executable subset. B1's decimal type makes this an ordinary
-            // parameterized judgement rather than weakening it to double.
-            (_, Value::Decimal { .. }) => {
-                refusal(name, path, self, value, ConformanceReason::TypeMismatch)
-            }
-            (Self::Int, Value::Int(candidate)) => {
-                if i32::try_from(*candidate).is_err() {
+            (Self::Integer(IntegerType::Signed(width)), Value::Int(candidate)) => {
+                if width.signed_accepts(*candidate) {
+                    None
+                } else {
                     refusal(
                         name,
                         path,
                         self,
                         value,
-                        ConformanceReason::IntegerOutOfRange { value: *candidate },
+                        ConformanceReason::SignedIntegerOutOfRange {
+                            value: *candidate,
+                            bits: width.bits(),
+                        },
+                    )
+                }
+            }
+            (Self::Integer(IntegerType::Unsigned(width)), Value::Uint(candidate)) => {
+                if width.unsigned_accepts(*candidate) {
+                    None
+                } else {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::UnsignedIntegerOutOfRange {
+                            value: *candidate,
+                            bits: width.bits(),
+                        },
+                    )
+                }
+            }
+            (Self::Float(FloatType::Binary64), Value::Double(_)) => None,
+            (Self::Decimal(decimal), Value::Decimal { unscaled, scale }) => {
+                if *scale != i32::from(decimal.scale()) {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::DecimalScale {
+                            expected: decimal.scale(),
+                            found: *scale,
+                        },
+                    )
+                } else if decimal_digits(*unscaled) > u32::from(decimal.precision()) {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::DecimalPrecision {
+                            precision: decimal.precision(),
+                            digits: decimal_digits(*unscaled),
+                        },
                     )
                 } else {
                     None
                 }
             }
+            (Self::Number, Value::Int(_) | Value::Uint(_) | Value::Decimal { .. }) => None,
             (Self::Bool, Value::Bool(_))
-            | (Self::Uint, Value::Uint(_))
             | (Self::Text, Value::Text(_))
-            | (Self::Bytes, Value::Bytes(_))
-            | (Self::Double, Value::Double(_))
-            | (Self::Duration, Value::Duration(_))
-            | (Self::Timestamp, Value::Timestamp(_))
+            | (Self::Temporal(TemporalType::Duration(TimeUnit::Nanosecond)), Value::Duration(_))
+            | (
+                Self::Temporal(TemporalType::Timestamp {
+                    unit: TimeUnit::Nanosecond,
+                    zone: TimeZone::Utc,
+                }),
+                Value::Timestamp(_),
+            )
             | (Self::Null, Value::Null) => None,
-            (Self::Array(inner), Value::Array(items)) => {
+            (Self::Bytes(binary), Value::Bytes(bytes)) => match binary {
+                BinaryType::Variable => None,
+                BinaryType::Fixed(length)
+                    if usize::try_from(length.get()).ok() == Some(bytes.len()) =>
+                {
+                    None
+                }
+                BinaryType::Fixed(length) => refusal(
+                    name,
+                    path,
+                    self,
+                    value,
+                    ConformanceReason::Length {
+                        expected: length.get(),
+                        found: bytes.len(),
+                    },
+                ),
+            },
+            (Self::Array(array), Value::Array(items)) => {
+                if let Some(length) = array.length()
+                    && usize::try_from(length.get()).ok() != Some(items.len())
+                {
+                    return refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::Length {
+                            expected: length.get(),
+                            found: items.len(),
+                        },
+                    );
+                }
                 for (index, item) in items.iter().enumerate() {
                     path.push(ValuePathSegment::Index(index));
-                    let violation = inner.violation_at(name, item, path);
+                    let violation = array.element().violation_at(name, item, path);
                     path.pop();
                     if violation.is_some() {
                         return violation;
@@ -125,19 +988,150 @@ impl DataType {
                 }
                 None
             }
-            (Self::Map(inner), Value::Map(entries)) => {
+            (Self::Map(map), Value::Map(entries)) if map.key() == &Self::Text => {
                 for (key, item) in entries {
                     path.push(ValuePathSegment::MapValue(key.clone()));
-                    let violation = inner.violation_at(name, item, path);
+                    let violation = map.value().violation_at(name, item, path);
                     path.pop();
                     if violation.is_some() {
                         return violation;
                     }
+                }
+                None
+            }
+            (Self::Struct(structure), Value::Struct(fields)) => {
+                for expected in structure.fields() {
+                    let Some((_, field_value)) =
+                        fields.iter().find(|(name, _)| name == expected.name())
+                    else {
+                        return refusal(
+                            name,
+                            path,
+                            self,
+                            value,
+                            ConformanceReason::MissingField(expected.name().to_string()),
+                        );
+                    };
+                    path.push(ValuePathSegment::Field(expected.name().to_string()));
+                    let violation = expected.ty().violation_at(name, field_value, path);
+                    path.pop();
+                    if violation.is_some() {
+                        return violation;
+                    }
+                }
+                if let Some((unexpected, _)) = fields
+                    .iter()
+                    .find(|(field, _)| !structure.fields().iter().any(|item| item.name() == field))
+                {
+                    return refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::UnexpectedField(unexpected.clone()),
+                    );
                 }
                 None
             }
             _ => refusal(name, path, self, value, ConformanceReason::TypeMismatch),
         }
+    }
+
+    fn is_map_key(&self) -> bool {
+        matches!(
+            self,
+            Self::Bool
+                | Self::Integer(_)
+                | Self::Decimal(_)
+                | Self::Text
+                | Self::Bytes(_)
+                | Self::Temporal(TemporalType::Date(_))
+                | Self::Temporal(TemporalType::Time(_))
+                | Self::Temporal(TemporalType::Timestamp { .. })
+                | Self::Temporal(TemporalType::TimestampNtz(_))
+                | Self::Temporal(TemporalType::Duration(_))
+                | Self::Uuid
+                | Self::Enum(_)
+        )
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        if self == other || matches!(self, Self::Variant) || matches!(other, Self::Variant) {
+            return true;
+        }
+        match (self, other) {
+            (Self::StructuralUnion(union), right) => {
+                union.branches().iter().any(|left| left.overlaps(right))
+            }
+            (left, Self::StructuralUnion(union)) => {
+                union.branches().iter().any(|right| left.overlaps(right))
+            }
+            (Self::Integer(_), Self::Integer(_))
+            | (Self::Number, Self::Integer(_) | Self::Decimal(_))
+            | (Self::Integer(_) | Self::Decimal(_), Self::Number) => true,
+            (Self::Decimal(left), Self::Decimal(right)) => left.scale() == right.scale(),
+            (Self::Bytes(BinaryType::Variable), Self::Bytes(_))
+            | (Self::Bytes(_), Self::Bytes(BinaryType::Variable)) => true,
+            (Self::Bytes(BinaryType::Fixed(left)), Self::Bytes(BinaryType::Fixed(right))) => {
+                left == right
+            }
+            (Self::Array(left), Self::Array(right)) => arrays_overlap(left, right),
+            // The empty map inhabits every map type.
+            (Self::Map(_), Self::Map(_)) => true,
+            (Self::Struct(left), Self::Struct(right)) => {
+                left.fields().len() == right.fields().len()
+                    && left
+                        .fields()
+                        .iter()
+                        .zip(right.fields())
+                        .all(|(a, b)| a.name() == b.name() && a.ty().overlaps(b.ty()))
+            }
+            (Self::Enum(left), Self::Enum(right)) => left
+                .symbols()
+                .iter()
+                .any(|symbol| right.symbols().contains(symbol)),
+            (Self::TaggedUnion(left), Self::TaggedUnion(right)) => left.cases().iter().any(|a| {
+                right.cases().iter().any(|b| {
+                    a.name() == b.name()
+                        && Self::Struct(a.payload().clone())
+                            .overlaps(&Self::Struct(b.payload().clone()))
+                })
+            }),
+            _ => false,
+        }
+    }
+}
+
+fn arrays_overlap(left: &ArrayType, right: &ArrayType) -> bool {
+    match (left.length(), right.length()) {
+        (Some(a), Some(b)) if a != b => false,
+        (Some(a), Some(_)) if a.get() == 0 => true,
+        (None, None) => true,
+        (None, Some(length)) | (Some(length), None) if length.get() == 0 => true,
+        _ => left.element().overlaps(right.element()),
+    }
+}
+
+fn duplicate_adjacent<'a>(mut names: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut previous = names.next()?;
+    for name in names {
+        if name == previous {
+            return Some(name);
+        }
+        previous = name;
+    }
+    None
+}
+
+fn member_budget(kind: &'static str, count: usize) -> Result<(), TypeError> {
+    if count > MAX_TYPE_MEMBERS {
+        Err(TypeError::MemberBudget {
+            kind,
+            count,
+            budget: MAX_TYPE_MEMBERS,
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -157,16 +1151,223 @@ fn refusal(
     })
 }
 
+/// A malformed or non-canonical logical type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeError {
+    /// Decimal precision is outside `1..=38`.
+    DecimalPrecision {
+        /// Rejected precision.
+        precision: u32,
+    },
+    /// Fixed decimal scale is outside `-38..=38`.
+    DecimalScale {
+        /// Rejected scale.
+        scale: i32,
+    },
+    /// Fixed-binary length is zero or above the v1 bound.
+    ByteLength {
+        /// Rejected length.
+        length: u32,
+    },
+    /// Fixed-array length is above the v1 bound.
+    ArrayLength {
+        /// Rejected length.
+        length: u32,
+    },
+    /// A named timezone is empty.
+    EmptyTimeZone,
+    /// One struct repeats a field name.
+    DuplicateStructField(String),
+    /// An enum has no symbols.
+    EmptyEnum,
+    /// One enum repeats a symbol.
+    DuplicateEnumSymbol(String),
+    /// One tagged-union discriminant is empty.
+    EmptyTaggedCase,
+    /// A tagged union has no cases.
+    EmptyTaggedUnion,
+    /// One tagged union repeats a case name.
+    DuplicateTaggedCase(String),
+    /// A map key has no admitted total canonical ordering.
+    InvalidMapKey(Box<DataType>),
+    /// A structural union has fewer than two branches.
+    TooFewUnionBranches {
+        /// Supplied branch count after flattening.
+        count: usize,
+    },
+    /// One structural-union branch is duplicated.
+    DuplicateUnionBranch(Box<DataType>),
+    /// Two structural-union branches accept at least one common value.
+    OverlappingUnionBranches {
+        /// First branch.
+        left: Box<DataType>,
+        /// Second branch.
+        right: Box<DataType>,
+    },
+    /// One composite exceeds its member budget.
+    MemberBudget {
+        /// Composite member category.
+        kind: &'static str,
+        /// Observed count.
+        count: usize,
+        /// Admitted count.
+        budget: usize,
+    },
+    /// The expanded tree exceeds its node budget.
+    NodeBudget {
+        /// Observed nodes at refusal.
+        nodes: usize,
+        /// Admitted nodes.
+        budget: usize,
+    },
+    /// The expanded tree exceeds its nesting budget.
+    NestingBudget {
+        /// Observed depth.
+        depth: usize,
+        /// Admitted depth.
+        budget: usize,
+    },
+}
+
+impl fmt::Display for TypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DecimalPrecision { precision } => {
+                write!(f, "decimal precision {precision} is outside 1..=38")
+            }
+            Self::DecimalScale { scale } => {
+                write!(f, "decimal scale {scale} is outside -38..=38")
+            }
+            Self::ByteLength { length } => write!(
+                f,
+                "fixed bytes length {length} is outside 1..={MAX_FIXED_LENGTH}"
+            ),
+            Self::ArrayLength { length } => {
+                write!(f, "fixed array length {length} is above {MAX_FIXED_LENGTH}")
+            }
+            Self::EmptyTimeZone => f.write_str("a named timezone cannot be empty"),
+            Self::DuplicateStructField(name) => {
+                write!(f, "struct field `{name}` appears twice")
+            }
+            Self::EmptyEnum => f.write_str("an enum must declare at least one symbol"),
+            Self::DuplicateEnumSymbol(symbol) => {
+                write!(f, "enum symbol `{symbol}` appears twice")
+            }
+            Self::EmptyTaggedCase => f.write_str("a tagged-union case name cannot be empty"),
+            Self::EmptyTaggedUnion => f.write_str("a tagged union must declare at least one case"),
+            Self::DuplicateTaggedCase(name) => {
+                write!(f, "tagged-union case `{name}` appears twice")
+            }
+            Self::InvalidMapKey(ty) => write!(f, "{ty} is not a canonical map-key type"),
+            Self::TooFewUnionBranches { count } => {
+                write!(
+                    f,
+                    "a structural union needs at least two branches, found {count}"
+                )
+            }
+            Self::DuplicateUnionBranch(ty) => {
+                write!(f, "structural-union branch `{ty}` appears twice")
+            }
+            Self::OverlappingUnionBranches { left, right } => {
+                write!(
+                    f,
+                    "structural-union branches `{left}` and `{right}` overlap"
+                )
+            }
+            Self::MemberBudget {
+                kind,
+                count,
+                budget,
+            } => write!(f, "{kind} count {count} exceeds budget {budget}"),
+            Self::NodeBudget { nodes, budget } => {
+                write!(f, "type node count {nodes} exceeds budget {budget}")
+            }
+            Self::NestingBudget { depth, budget } => {
+                write!(f, "type nesting {depth} exceeds budget {budget}")
+            }
+        }
+    }
+}
+
+impl core::error::Error for TypeError {}
+
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null => f.write_str("null"),
+            Self::Bool => f.write_str("bool"),
+            Self::Integer(IntegerType::Signed(width)) => write!(f, "int{}", width.bits()),
+            Self::Integer(IntegerType::Unsigned(width)) => write!(f, "uint{}", width.bits()),
+            Self::Float(width) => write!(f, "float{}", width.bits()),
+            Self::Decimal(decimal) => {
+                write!(f, "decimal({},{})", decimal.precision(), decimal.scale())
+            }
+            Self::Number => f.write_str("number"),
+            Self::Text => f.write_str("text"),
+            Self::Bytes(BinaryType::Variable) => f.write_str("bytes"),
+            Self::Bytes(BinaryType::Fixed(length)) => write!(f, "bytes({})", length.get()),
+            Self::Temporal(temporal) => write!(f, "{temporal:?}"),
+            Self::Uuid => f.write_str("uuid"),
+            Self::Struct(_) => f.write_str("struct"),
+            Self::Map(map) => write!(f, "map<{},{}>", map.key(), map.value()),
+            Self::Array(array) => match array.length() {
+                Some(length) => write!(f, "array<{},{}>", array.element(), length.get()),
+                None => write!(f, "array<{}>", array.element()),
+            },
+            Self::Enum(_) => f.write_str("enum"),
+            Self::StructuralUnion(_) => f.write_str("structural union"),
+            Self::TaggedUnion(_) => f.write_str("tagged union"),
+            Self::Variant => f.write_str("variant"),
+        }
+    }
+}
+
 /// Why a materialized value failed its logical type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConformanceReason {
+    /// The value violates the canonical value algebra before type judgement.
+    MalformedValue(ValueDefect),
     /// The value category cannot inhabit the declared type.
     TypeMismatch,
-    /// A signed integer lies outside the current `int` range.
-    IntegerOutOfRange {
-        /// The offending value.
+    /// A signed integer lies outside the declared width.
+    SignedIntegerOutOfRange {
+        /// Offending value.
         value: i64,
+        /// Declared width.
+        bits: u8,
     },
+    /// An unsigned integer lies outside the declared width.
+    UnsignedIntegerOutOfRange {
+        /// Offending value.
+        value: u64,
+        /// Declared width.
+        bits: u8,
+    },
+    /// A fixed binary or array has the wrong length.
+    Length {
+        /// Declared length.
+        expected: u32,
+        /// Observed length.
+        found: usize,
+    },
+    /// Decimal value scale differs from the declared scale.
+    DecimalScale {
+        /// Declared scale.
+        expected: i8,
+        /// Carried scale.
+        found: i32,
+    },
+    /// Decimal coefficient exceeds the declared precision.
+    DecimalPrecision {
+        /// Declared precision.
+        precision: u8,
+        /// Coefficient digits.
+        digits: u32,
+    },
+    /// A closed struct lacks a declared field.
+    MissingField(String),
+    /// A closed struct contains an undeclared field.
+    UnexpectedField(String),
 }
 
 /// One type refusal, independent of the runtime boundary that renders it.
@@ -195,13 +1396,38 @@ impl fmt::Display for ConformanceViolation {
             }
         }
         match &self.reason {
+            ConformanceReason::MalformedValue(defect) => {
+                write!(f, "` is not a valid materialized value: {defect}")
+            }
             ConformanceReason::TypeMismatch => write!(
                 f,
-                "` is declared {:?}; a {} cannot enter it",
+                "` is declared {}; a {} cannot enter it",
                 self.expected, self.found
             ),
-            ConformanceReason::IntegerOutOfRange { value } => {
-                write!(f, "` is an int; {value} leaves the 32-bit range")
+            ConformanceReason::SignedIntegerOutOfRange { value, bits } => {
+                write!(f, "` is an int{bits}; {value} leaves that range")
+            }
+            ConformanceReason::UnsignedIntegerOutOfRange { value, bits } => {
+                write!(f, "` is a uint{bits}; {value} leaves that range")
+            }
+            ConformanceReason::Length { expected, found } => {
+                write!(f, "` has length {found}; the type requires {expected}")
+            }
+            ConformanceReason::DecimalScale { expected, found } => {
+                write!(
+                    f,
+                    "` carries decimal scale {found}; the type requires {expected}"
+                )
+            }
+            ConformanceReason::DecimalPrecision { precision, digits } => write!(
+                f,
+                "` carries {digits} decimal digits; precision is {precision}"
+            ),
+            ConformanceReason::MissingField(field) => {
+                write!(f, "` is missing declared field `{field}`")
+            }
+            ConformanceReason::UnexpectedField(field) => {
+                write!(f, "` contains undeclared field `{field}`")
             }
         }
     }
@@ -213,7 +1439,6 @@ impl core::error::Error for ConformanceViolation {}
 mod tests {
     use super::*;
     use alloc::collections::BTreeMap;
-    use alloc::string::ToString;
 
     #[test]
     fn conformance_reports_the_exact_nested_path() {
@@ -221,7 +1446,7 @@ mod tests {
             String::from("items"),
             Value::Array(alloc::vec![Value::Int(7), Value::Text(String::from("no"))]),
         )]));
-        let ty = DataType::Map(Box::new(DataType::Array(Box::new(DataType::Int))));
+        let ty = DataType::text_map(DataType::array(DataType::INT));
         let violation = ty
             .violation("payload", &value)
             .expect("the text does not conform");
@@ -232,27 +1457,202 @@ mod tests {
                 ValuePathSegment::Index(1),
             ]
         );
-        assert_eq!(violation.expected, DataType::Int);
+        assert_eq!(violation.expected, DataType::INT);
         assert_eq!(violation.found, ValueKind::Text);
         assert_eq!(
             violation.to_string(),
-            "`payload[\"items\"][1]` is declared Int; a text cannot enter it"
+            "`payload[\"items\"][1]` is declared int32; a text cannot enter it"
         );
     }
 
     #[test]
-    fn decimal_budget_is_not_owned_by_a_codec() {
+    fn decimal_value_and_type_budgets_are_distinct() {
         assert!(decimal_in_domain(10_i128.pow(DECIMAL_MAX_DIGITS - 1), 0));
         assert!(!decimal_in_domain(10_i128.pow(DECIMAL_MAX_DIGITS), 0));
         assert!(decimal_in_domain(1, DECIMAL_MIN_SCALE));
         assert!(decimal_in_domain(1, DECIMAL_MAX_SCALE));
-        assert!(!decimal_in_domain(1, DECIMAL_MIN_SCALE - 1));
-        assert!(!decimal_in_domain(1, DECIMAL_MAX_SCALE + 1));
+        assert!(DecimalType::new(38, -38).is_ok());
+        assert!(DecimalType::new(38, 38).is_ok());
+        assert!(DecimalType::new(38, 39).is_err());
     }
 
     #[test]
-    fn uint_has_one_type_and_value_conformance_rule() {
-        assert!(DataType::Uint.accepts(&Value::Uint(u64::MAX)));
-        assert!(!DataType::Uint.accepts(&Value::Int(1)));
+    fn composites_are_canonical_at_construction() {
+        let structure = StructType::new(alloc::vec![
+            TypeField::new("z", DataType::Text),
+            TypeField::new("a", DataType::INT),
+        ])
+        .expect("unique fields");
+        assert_eq!(structure.fields()[0].name(), "a");
+
+        let enumeration = EnumType::new(alloc::vec![String::from("z"), String::from("a")])
+            .expect("unique symbols");
+        assert_eq!(
+            enumeration.symbols(),
+            &[String::from("a"), String::from("z")]
+        );
+
+        let first = TaggedCase::new(
+            "z",
+            StructType::new(alloc::vec![]).expect("the unit payload is a closed struct"),
+        )
+        .expect("a named case");
+        let second = TaggedCase::new("a", structure).expect("a named case");
+        let tagged = TaggedUnionType::new(alloc::vec![first, second]).expect("unique cases");
+        assert_eq!(tagged.cases()[0].name(), "a");
+        assert_eq!(tagged.cases()[0].payload().fields()[0].name(), "a");
+    }
+
+    #[test]
+    fn parameterized_types_reject_invalid_states_at_construction() {
+        assert!(matches!(
+            DecimalType::new(0, 0),
+            Err(TypeError::DecimalPrecision { precision: 0 })
+        ));
+        assert!(matches!(
+            DecimalType::new(38, 39),
+            Err(TypeError::DecimalScale { scale: 39 })
+        ));
+        assert!(matches!(
+            ByteLength::new(0),
+            Err(TypeError::ByteLength { length: 0 })
+        ));
+        assert!(matches!(
+            MapType::new(DataType::FLOAT, DataType::Text),
+            Err(TypeError::InvalidMapKey(_))
+        ));
+        assert!(matches!(
+            StructType::new(alloc::vec![
+                TypeField::new("same", DataType::Text),
+                TypeField::new("same", DataType::INT),
+            ]),
+            Err(TypeError::DuplicateStructField(name)) if name == "same"
+        ));
+        assert!(matches!(
+            EnumType::new(alloc::vec![]),
+            Err(TypeError::EmptyEnum)
+        ));
+        assert_eq!(TimeZone::named("UTC").expect("a UTC alias"), TimeZone::Utc);
+        assert_eq!(
+            TimeZone::named("Etc/UTC").expect("a UTC alias"),
+            TimeZone::Utc
+        );
+        assert_eq!(
+            TimeZone::named("+00:00").expect("a UTC alias"),
+            TimeZone::Utc
+        );
+        assert!(matches!(TimeZone::named(""), Err(TypeError::EmptyTimeZone)));
+
+        let unit = StructType::new(alloc::vec![]).expect("a unit payload");
+        assert!(matches!(
+            TaggedUnionType::new(alloc::vec![]),
+            Err(TypeError::EmptyTaggedUnion)
+        ));
+        assert!(matches!(
+            TaggedUnionType::new(alloc::vec![
+                TaggedCase::new("same", unit.clone()).expect("a named case"),
+                TaggedCase::new("same", unit).expect("a named case"),
+            ]),
+            Err(TypeError::DuplicateTaggedCase(name)) if name == "same"
+        ));
+    }
+
+    #[test]
+    fn structural_unions_refuse_ambiguous_branches() {
+        let overlap = DataType::structural_union(alloc::vec![DataType::INT, DataType::LONG]);
+        assert!(matches!(
+            overlap,
+            Err(TypeError::OverlappingUnionBranches { .. })
+        ));
+
+        let optional = DataType::Text
+            .optional()
+            .expect("text and null are disjoint");
+        let DataType::StructuralUnion(union) = optional else {
+            panic!("optional is a structural union");
+        };
+        assert_eq!(union.branches(), &[DataType::Null, DataType::Text]);
+    }
+
+    #[test]
+    fn v6_subset_is_named_without_weakening_the_new_algebra() {
+        assert!(DataType::INT.is_v6_wire_type());
+        assert!(DataType::array(DataType::Text).is_v6_wire_type());
+        assert!(!DataType::LONG.is_v6_wire_type());
+        assert!(
+            !DataType::Bytes(BinaryType::Fixed(
+                ByteLength::new(16).expect("valid length")
+            ))
+            .is_v6_wire_type()
+        );
+    }
+
+    #[test]
+    fn global_type_budgets_are_checked_iteratively() {
+        let mut at_limit = DataType::Text;
+        for _ in 1..MAX_TYPE_NESTING {
+            at_limit = DataType::array(at_limit);
+        }
+        assert!(at_limit.validate().is_ok());
+
+        let beyond = DataType::array(at_limit);
+        assert!(matches!(
+            beyond.validate(),
+            Err(TypeError::NestingBudget {
+                depth,
+                budget: MAX_TYPE_NESTING,
+            }) if depth == MAX_TYPE_NESTING + 1
+        ));
+
+        let payload = StructType::new(alloc::vec![]).expect("a unit payload");
+        let case = TaggedCase::new("done", payload).expect("a named case");
+        let mut tagged = DataType::TaggedUnion(
+            TaggedUnionType::new(alloc::vec![case]).expect("one case is sufficient"),
+        );
+        for _ in 1..MAX_TYPE_NESTING {
+            tagged = DataType::array(tagged);
+        }
+        assert!(matches!(
+            tagged.validate(),
+            Err(TypeError::NestingBudget {
+                depth,
+                budget: MAX_TYPE_NESTING,
+            }) if depth == MAX_TYPE_NESTING + 1
+        ));
+
+        let child_fields = (0..16)
+            .map(|index| TypeField::new(alloc::format!("f{index}"), DataType::Text))
+            .collect();
+        let child =
+            DataType::Struct(StructType::new(child_fields).expect("sixteen unique child fields"));
+        let root_fields = (0..MAX_TYPE_MEMBERS)
+            .map(|index| TypeField::new(alloc::format!("f{index}"), child.clone()))
+            .collect();
+        let too_wide = DataType::Struct(
+            StructType::new(root_fields).expect("the root stays within its member budget"),
+        );
+        assert!(matches!(
+            too_wide.validate(),
+            Err(TypeError::NodeBudget {
+                nodes,
+                budget: MAX_TYPE_NODES,
+            }) if nodes == MAX_TYPE_NODES + 1
+        ));
+    }
+
+    #[test]
+    fn conformance_never_admits_a_malformed_value_even_through_variant() {
+        let malformed = Value::Struct(alloc::vec![
+            (String::from("same"), Value::Int(1)),
+            (String::from("same"), Value::Int(2)),
+        ]);
+        let violation = DataType::Variant
+            .violation("payload", &malformed)
+            .expect("value validity precedes dynamic type admission");
+        assert!(matches!(
+            violation.reason,
+            ConformanceReason::MalformedValue(ValueDefect::DuplicateStructField(name))
+                if name == "same"
+        ));
     }
 }

@@ -15,7 +15,10 @@ use crate::compiler::hir::{
     AttrValue, Direction, EdgeTarget, EmitValue, Hir, Node as HirNode, NodeRole,
     Statement as HirStatement,
 };
-use crate::datatype::DataType;
+use crate::datatype::{
+    BinaryType, DataType, DateUnit, FloatType, IntegerType, IntegerWidth, IntervalUnit,
+    TemporalType, TimeUnit, TimeZone,
+};
 use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
@@ -416,12 +419,20 @@ impl Writer<'_> {
 
     fn count(&mut self, count: usize) {
         let count = u32::try_from(count).unwrap_or_else(|_| unreachable!("canonical counts fit"));
-        self.hasher.update(&count.to_le_bytes());
+        self.u32(count);
     }
 
     fn str(&mut self, text: &str) {
         self.count(text.len());
         self.hasher.update(text.as_bytes());
+    }
+
+    fn i32(&mut self, value: i32) {
+        self.hasher.update(&value.to_le_bytes());
+    }
+
+    fn u32(&mut self, value: u32) {
+        self.hasher.update(&value.to_le_bytes());
     }
 
     fn direction(&mut self, direction: Direction) {
@@ -434,26 +445,190 @@ impl Writer<'_> {
     /// Stable domain tags for the logical data-type vocabulary — never a Rust
     /// `Debug` rendering, which renames could silently change.
     fn ty(&mut self, ty: &DataType) {
+        // Preserve every pre-M1.3 hash exactly. The parameterized forms below
+        // extend the HIR domain; these legacy aliases keep their historical
+        // one-byte spelling until the categorical identity move in B8.
+        if ty == &DataType::INT {
+            self.tag(2);
+            return;
+        }
+        if ty == &DataType::UINT {
+            self.tag(3);
+            return;
+        }
+        if ty == &DataType::DOUBLE {
+            self.tag(4);
+            return;
+        }
+        if ty == &DataType::BYTES {
+            self.tag(6);
+            return;
+        }
+        if ty == &DataType::DURATION {
+            self.tag(7);
+            return;
+        }
+        if ty == &DataType::TIMESTAMP {
+            self.tag(8);
+            return;
+        }
+        if let DataType::Array(array) = ty
+            && array.length().is_none()
+        {
+            self.tag(11);
+            self.ty(array.element());
+            return;
+        }
+        if let DataType::Map(map) = ty
+            && map.key() == &DataType::Text
+        {
+            self.tag(12);
+            self.ty(map.value());
+            return;
+        }
+
         match ty {
             DataType::Bool => self.tag(1),
-            DataType::Int => self.tag(2),
-            DataType::Uint => self.tag(3),
-            DataType::Double => self.tag(4),
             DataType::Text => self.tag(5),
-            DataType::Bytes => self.tag(6),
-            DataType::Duration => self.tag(7),
-            DataType::Timestamp => self.tag(8),
             DataType::Null => self.tag(9),
             DataType::Variant => self.tag(10),
-            DataType::Array(element) => {
-                self.tag(11);
-                self.ty(element);
+            DataType::Integer(integer) => {
+                self.tag(13);
+                let (signedness, width) = match integer {
+                    IntegerType::Signed(width) => (1, *width),
+                    IntegerType::Unsigned(width) => (2, *width),
+                };
+                self.tag(signedness);
+                self.tag(match width {
+                    IntegerWidth::Bits8 => 8,
+                    IntegerWidth::Bits16 => 16,
+                    IntegerWidth::Bits32 => 32,
+                    IntegerWidth::Bits64 => 64,
+                });
             }
-            DataType::Map(values) => {
-                self.tag(12);
-                self.ty(values);
+            DataType::Float(float) => {
+                self.tag(14);
+                self.tag(match float {
+                    FloatType::Binary16 => 16,
+                    FloatType::Binary32 => 32,
+                    FloatType::Binary64 => 64,
+                });
+            }
+            DataType::Decimal(decimal) => {
+                self.tag(15);
+                self.tag(decimal.precision());
+                self.i32(i32::from(decimal.scale()));
+            }
+            DataType::Number => self.tag(16),
+            DataType::Bytes(BinaryType::Variable) => self.tag(6),
+            DataType::Bytes(BinaryType::Fixed(length)) => {
+                self.tag(17);
+                self.u32(length.get());
+            }
+            DataType::Temporal(temporal) => {
+                self.tag(18);
+                match temporal {
+                    TemporalType::Date(unit) => {
+                        self.tag(1);
+                        self.tag(match unit {
+                            DateUnit::Day => 1,
+                            DateUnit::Millisecond => 2,
+                        });
+                    }
+                    TemporalType::Time(unit) => {
+                        self.tag(2);
+                        self.time_unit(*unit);
+                    }
+                    TemporalType::Timestamp { unit, zone } => {
+                        self.tag(3);
+                        self.time_unit(*unit);
+                        match zone {
+                            TimeZone::Utc => self.tag(1),
+                            TimeZone::Named(name) => {
+                                self.tag(2);
+                                self.str(name.as_str());
+                            }
+                        }
+                    }
+                    TemporalType::TimestampNtz(unit) => {
+                        self.tag(4);
+                        self.time_unit(*unit);
+                    }
+                    TemporalType::Duration(unit) => {
+                        self.tag(5);
+                        self.time_unit(*unit);
+                    }
+                    TemporalType::Interval(unit) => {
+                        self.tag(6);
+                        self.tag(match unit {
+                            IntervalUnit::YearMonth => 1,
+                            IntervalUnit::DayTime => 2,
+                            IntervalUnit::MonthDayNano => 3,
+                        });
+                    }
+                }
+            }
+            DataType::Uuid => self.tag(19),
+            DataType::Struct(structure) => {
+                self.tag(20);
+                self.count(structure.fields().len());
+                for field in structure.fields() {
+                    self.str(field.name());
+                    self.ty(field.ty());
+                }
+            }
+            DataType::Map(map) => {
+                self.tag(21);
+                self.ty(map.key());
+                self.ty(map.value());
+            }
+            DataType::Array(array) => {
+                self.tag(22);
+                self.ty(array.element());
+                match array.length() {
+                    None => self.tag(0),
+                    Some(length) => {
+                        self.tag(1);
+                        self.u32(length.get());
+                    }
+                }
+            }
+            DataType::Enum(enumeration) => {
+                self.tag(23);
+                self.count(enumeration.symbols().len());
+                for symbol in enumeration.symbols() {
+                    self.str(symbol);
+                }
+            }
+            DataType::StructuralUnion(union) => {
+                self.tag(24);
+                self.count(union.branches().len());
+                for branch in union.branches() {
+                    self.ty(branch);
+                }
+            }
+            DataType::TaggedUnion(union) => {
+                self.tag(25);
+                self.count(union.cases().len());
+                for case in union.cases() {
+                    self.str(case.name());
+                    self.count(case.payload().fields().len());
+                    for field in case.payload().fields() {
+                        self.str(field.name());
+                        self.ty(field.ty());
+                    }
+                }
             }
         }
+    }
+
+    fn time_unit(&mut self, unit: TimeUnit) {
+        self.tag(match unit {
+            TimeUnit::Second => 1,
+            TimeUnit::Millisecond => 2,
+            TimeUnit::Microsecond => 3,
+            TimeUnit::Nanosecond => 4,
+        });
     }
 
     fn node(&mut self, node: &HirNode) {

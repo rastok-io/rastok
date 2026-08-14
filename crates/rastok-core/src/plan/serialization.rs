@@ -430,17 +430,27 @@ fn tree_tree(tree: &cel::Tree) -> Cbor {
 fn type_tree(ty: &DataType) -> Cbor {
     match ty {
         DataType::Bool => Cbor::Uint(1),
-        DataType::Int => Cbor::Uint(2),
-        DataType::Uint => Cbor::Uint(3),
-        DataType::Double => Cbor::Uint(4),
+        ty if ty == &DataType::INT => Cbor::Uint(2),
+        ty if ty == &DataType::UINT => Cbor::Uint(3),
+        ty if ty == &DataType::DOUBLE => Cbor::Uint(4),
         DataType::Text => Cbor::Uint(5),
-        DataType::Bytes => Cbor::Uint(6),
-        DataType::Duration => Cbor::Uint(7),
-        DataType::Timestamp => Cbor::Uint(8),
+        ty if ty == &DataType::BYTES => Cbor::Uint(6),
+        ty if ty == &DataType::DURATION => Cbor::Uint(7),
+        ty if ty == &DataType::TIMESTAMP => Cbor::Uint(8),
         DataType::Null => Cbor::Uint(9),
         DataType::Variant => Cbor::Uint(10),
-        DataType::Array(inner) => Cbor::Array(vec![Cbor::Uint(11), type_tree(inner)]),
-        DataType::Map(inner) => Cbor::Array(vec![Cbor::Uint(12), type_tree(inner)]),
+        DataType::Array(array) if array.length().is_none() => {
+            Cbor::Array(vec![Cbor::Uint(11), type_tree(array.element())])
+        }
+        DataType::Map(map) if map.key() == &DataType::Text => {
+            Cbor::Array(vec![Cbor::Uint(12), type_tree(map.value())])
+        }
+        // A ValidatedExecutionPlan proves that every type belongs to the v6
+        // registry before this private encoder is reached. Keeping this arm
+        // total avoids a production panic if a future caller violates that
+        // proof; tag zero has never been a data-type spelling and the reader
+        // rejects it.
+        _ => Cbor::Array(vec![Cbor::Uint(0)]),
     }
 }
 
@@ -705,9 +715,13 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 }
             }
             Item::Ty(ty, level) => match ty {
-                DataType::Array(inner) | DataType::Map(inner) => {
+                DataType::Array(array) => {
                     max = max.max(level + 1);
-                    stack.push(Item::Ty(inner, level + 1));
+                    stack.push(Item::Ty(array.element(), level + 1));
+                }
+                DataType::Map(map) => {
+                    max = max.max(level + 1);
+                    stack.push(Item::Ty(map.value(), level + 1));
                 }
                 _ => max = max.max(level),
             },
@@ -1045,20 +1059,18 @@ fn tree_from(tree: &Cbor) -> Result<cel::Tree, DecodeError> {
 fn type_from(tree: &Cbor) -> Result<DataType, DecodeError> {
     match tree {
         Cbor::Uint(1) => Ok(DataType::Bool),
-        Cbor::Uint(2) => Ok(DataType::Int),
-        Cbor::Uint(3) => Ok(DataType::Uint),
-        Cbor::Uint(4) => Ok(DataType::Double),
+        Cbor::Uint(2) => Ok(DataType::INT),
+        Cbor::Uint(3) => Ok(DataType::UINT),
+        Cbor::Uint(4) => Ok(DataType::DOUBLE),
         Cbor::Uint(5) => Ok(DataType::Text),
-        Cbor::Uint(6) => Ok(DataType::Bytes),
-        Cbor::Uint(7) => Ok(DataType::Duration),
-        Cbor::Uint(8) => Ok(DataType::Timestamp),
+        Cbor::Uint(6) => Ok(DataType::BYTES),
+        Cbor::Uint(7) => Ok(DataType::DURATION),
+        Cbor::Uint(8) => Ok(DataType::TIMESTAMP),
         Cbor::Uint(9) => Ok(DataType::Null),
         Cbor::Uint(10) => Ok(DataType::Variant),
         Cbor::Array(parts) => match parts.as_slice() {
-            [Cbor::Uint(11), inner] => {
-                Ok(DataType::Array(alloc::boxed::Box::new(type_from(inner)?)))
-            }
-            [Cbor::Uint(12), inner] => Ok(DataType::Map(alloc::boxed::Box::new(type_from(inner)?))),
+            [Cbor::Uint(11), inner] => Ok(DataType::array(type_from(inner)?)),
+            [Cbor::Uint(12), inner] => Ok(DataType::text_map(type_from(inner)?)),
             _ => Err(err("data type")),
         },
         _ => Err(err("data type")),
@@ -1378,14 +1390,12 @@ mod tests {
                         PortDecl {
                             port: port("typed"),
                             direction: node::Direction::Input,
-                            ty: Some(DataType::Map(Box::new(DataType::Array(Box::new(
-                                DataType::Text,
-                            ))))),
+                            ty: Some(DataType::text_map(DataType::array(DataType::Text))),
                         },
                     ],
                     vars: vec![VarCell {
                         name: text("seen"),
-                        ty: DataType::Map(Box::new(DataType::Array(Box::new(DataType::Int)))),
+                        ty: DataType::text_map(DataType::array(DataType::INT)),
                         init: Some(map_value.clone()),
                     }],
                 },
@@ -1409,7 +1419,7 @@ mod tests {
                 PortDecl {
                     port: port("entry"),
                     direction: node::Direction::Input,
-                    ty: Some(DataType::Array(Box::new(DataType::Int))),
+                    ty: Some(DataType::array(DataType::INT)),
                 },
                 PortDecl::untyped(port("feed"), node::Direction::Output),
             ],
@@ -1520,21 +1530,21 @@ mod tests {
     fn data_type_ownership_does_not_move_the_v6_wire_ids() {
         let cases = [
             (DataType::Bool, Cbor::Uint(1)),
-            (DataType::Int, Cbor::Uint(2)),
-            (DataType::Uint, Cbor::Uint(3)),
-            (DataType::Double, Cbor::Uint(4)),
+            (DataType::INT, Cbor::Uint(2)),
+            (DataType::UINT, Cbor::Uint(3)),
+            (DataType::DOUBLE, Cbor::Uint(4)),
             (DataType::Text, Cbor::Uint(5)),
-            (DataType::Bytes, Cbor::Uint(6)),
-            (DataType::Duration, Cbor::Uint(7)),
-            (DataType::Timestamp, Cbor::Uint(8)),
+            (DataType::BYTES, Cbor::Uint(6)),
+            (DataType::DURATION, Cbor::Uint(7)),
+            (DataType::TIMESTAMP, Cbor::Uint(8)),
             (DataType::Null, Cbor::Uint(9)),
             (DataType::Variant, Cbor::Uint(10)),
             (
-                DataType::Array(Box::new(DataType::Int)),
+                DataType::array(DataType::INT),
                 Cbor::Array(vec![Cbor::Uint(11), Cbor::Uint(2)]),
             ),
             (
-                DataType::Map(Box::new(DataType::Text)),
+                DataType::text_map(DataType::Text),
                 Cbor::Array(vec![Cbor::Uint(12), Cbor::Uint(5)]),
             ),
         ];
@@ -1557,10 +1567,10 @@ mod tests {
             nested_maplit = cel::Expr::MapLit(vec![(text("k"), nested_maplit)]);
         }
         let mut nested_value = Value::Int(1);
-        let mut nested_type = DataType::Int;
+        let mut nested_type = DataType::INT;
         for _ in 0..60 {
             nested_value = Value::Array(vec![nested_value]);
-            nested_type = DataType::Map(Box::new(nested_type));
+            nested_type = DataType::text_map(nested_type);
         }
         let mut deep_type_plan = one_step_plan(cel::Expr::Literal(Value::Null));
         deep_type_plan.handlers[0].body = vec![Step::Let {

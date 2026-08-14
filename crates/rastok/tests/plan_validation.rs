@@ -11,6 +11,7 @@ use rastok::canonical_cbor::MAX_NESTING;
 use rastok::cel;
 use rastok::compiler::compile;
 use rastok::contract::Registry;
+use rastok::datatype::DataType;
 use rastok::node::{Direction, Port};
 use rastok::plan::{
     self, Edge, EndpointRef, ExecutionPlan, PlanValidationError, Slot, Step, ValidatedExecutionPlan,
@@ -834,6 +835,50 @@ fn what_the_type_accepts_the_format_reads_back() {
     let (decoded, declared) = plan::decode(&bytes).expect("the boundary case reads back");
     assert_eq!(decoded, deepest, "the deepest accepted plan round-trips");
     assert_eq!(declared, hash);
+}
+
+#[test]
+fn valid_m13_types_cannot_leak_into_a_v6_package() {
+    let mut plan = raw_probe();
+    let relay = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the operator");
+    relay.vars[0].ty = DataType::LONG;
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::DataTypeNotInFormat {
+            location: String::from("state `relay.seen`"),
+            ty: DataType::LONG,
+            format: plan::FORMAT_VERSION,
+        }
+    );
+}
+
+#[test]
+fn expression_result_types_share_the_v6_package_gate() {
+    let mut plan = raw_probe();
+    let expression = plan
+        .handlers
+        .iter_mut()
+        .flat_map(|handler| handler.body.iter_mut())
+        .find_map(|step| match step {
+            Step::SetVar { expr, .. } => Some(expr),
+            _ => None,
+        })
+        .expect("the probe state write");
+    expression.ty = DataType::LONG;
+
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(plan),
+        Err(PlanValidationError::DataTypeNotInFormat {
+            location,
+            ty: DataType::LONG,
+            format: plan::FORMAT_VERSION,
+        }) if location.contains("state expression")
+    ));
 }
 
 fn shell_path() -> rastok::node::Path {

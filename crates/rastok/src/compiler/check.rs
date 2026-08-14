@@ -2321,7 +2321,7 @@ impl Checker<'_, '_> {
         }
         let mapped = match &ty.alternatives[0] {
             BaseType::Scalar(ScalarType::Bool) => (DataType::Bool, false),
-            BaseType::Scalar(ScalarType::Int) => (DataType::Int, true),
+            BaseType::Scalar(ScalarType::Int) => (DataType::INT, true),
             BaseType::Scalar(ScalarType::Long) => {
                 self.deferred("the long state type", ty.span);
                 return None;
@@ -2330,11 +2330,11 @@ impl Checker<'_, '_> {
                 self.deferred("the float state type", ty.span);
                 return None;
             }
-            BaseType::Scalar(ScalarType::Double) => (DataType::Double, false),
+            BaseType::Scalar(ScalarType::Double) => (DataType::DOUBLE, false),
             BaseType::Scalar(ScalarType::Text) => (DataType::Text, false),
-            BaseType::Scalar(ScalarType::Bytes) => (DataType::Bytes, false),
-            BaseType::Scalar(ScalarType::Duration) => (DataType::Duration, false),
-            BaseType::Scalar(ScalarType::Timestamp) => (DataType::Timestamp, false),
+            BaseType::Scalar(ScalarType::Bytes) => (DataType::BYTES, false),
+            BaseType::Scalar(ScalarType::Duration) => (DataType::DURATION, false),
+            BaseType::Scalar(ScalarType::Timestamp) => (DataType::TIMESTAMP, false),
             BaseType::Variant => (DataType::Variant, false),
             BaseType::Named(name) => {
                 // A named type is SUGAR (D-2026-08-10-8): expand and
@@ -3301,7 +3301,7 @@ impl Checker<'_, '_> {
                             let bytes = self.base64_body(tagged)?;
                             Some(literal_tree(
                                 crate::value::Value::Bytes(bytes),
-                                DataType::Bytes,
+                                DataType::BYTES,
                             ))
                         }
                         TagCall::Asset {
@@ -3311,7 +3311,7 @@ impl Checker<'_, '_> {
                             let index = self.asset_resolve(&path, tagged.tag.span)?;
                             Some(cel::Tree {
                                 root: cel::Expr::Asset(index),
-                                ty: DataType::Bytes,
+                                ty: DataType::BYTES,
                             })
                         }
                         TagCall::Base64 { .. } | TagCall::Asset { .. } => {
@@ -3391,7 +3391,7 @@ impl Checker<'_, '_> {
                     .map(|(key, root, _)| (key, root))
                     .collect(),
             ),
-            ty: DataType::Map(Box::new(values)),
+            ty: DataType::text_map(values),
         })
     }
 
@@ -3665,7 +3665,7 @@ impl Checker<'_, '_> {
                 let tree = self.cel(expr, signature)?;
                 if matches!(
                     tree.ty,
-                    DataType::Duration | DataType::Timestamp | DataType::Null
+                    DataType::DURATION | DataType::TIMESTAMP | DataType::Null
                 ) {
                     self.deferred("a duration, timestamp, or null emission", expr.span);
                     return None;
@@ -3692,7 +3692,7 @@ impl Checker<'_, '_> {
                         TagCall::Base64 { content_type } => {
                             let bytes = self.base64_body(tagged)?;
                             let data =
-                                literal_tree(crate::value::Value::Bytes(bytes), DataType::Bytes);
+                                literal_tree(crate::value::Value::Bytes(bytes), DataType::BYTES);
                             Some(match content_type {
                                 Some(content_type) => EmitValue::FreshData(vec![
                                     FieldWrite {
@@ -3716,7 +3716,7 @@ impl Checker<'_, '_> {
                             let index = self.asset_resolve(&path, tagged.tag.span)?;
                             let data = cel::Tree {
                                 root: cel::Expr::Asset(index),
-                                ty: DataType::Bytes,
+                                ty: DataType::BYTES,
                             };
                             Some(match content_type {
                                 Some(content_type) => EmitValue::FreshData(vec![
@@ -3993,7 +3993,7 @@ impl Checker<'_, '_> {
                                             ),
                                             value: literal_tree(
                                                 crate::value::Value::Bytes(bytes),
-                                                DataType::Bytes,
+                                                DataType::BYTES,
                                             ),
                                         });
                                         if let Some(ct) = content_type {
@@ -4033,7 +4033,7 @@ impl Checker<'_, '_> {
                                             ),
                                             value: cel::Tree {
                                                 root: cel::Expr::Asset(index),
-                                                ty: DataType::Bytes,
+                                                ty: DataType::BYTES,
                                             },
                                         });
                                         if let Some(ct) = content_type {
@@ -4421,7 +4421,7 @@ impl Checker<'_, '_> {
         tree: &cel::Tree,
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<String> {
-        if *pinned == DataType::Int
+        if *pinned == DataType::INT
             && let Ok(crate::value::Value::Int(value)) = cel::const_eval(tree, consts)
             && i32::try_from(value).is_err()
         {
@@ -4778,31 +4778,32 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
 /// type outside it refuses at CHECK; `variant` passes and the runtime's
 /// `to_meta_value` guards it (defense in depth, same rule).
 fn meta_type_refusal(ty: &DataType) -> Option<&'static str> {
-    match ty {
-        DataType::Bool
-        | DataType::Int
-        | DataType::Double
-        | DataType::Text
-        | DataType::Bytes
-        | DataType::Variant => None,
-        DataType::Uint => {
-            Some("the uint domain stays in expressions — a metadata leaf takes `int`")
-        }
-        DataType::Array(inner) => match &**inner {
-            DataType::Bool
-            | DataType::Int
-            | DataType::Double
-            | DataType::Text
-            | DataType::Bytes
-            | DataType::Variant => None,
-            _ => Some(
+    let leaf_scalar = |candidate: &DataType| {
+        matches!(
+            candidate,
+            DataType::Bool | DataType::Text | DataType::Variant
+        ) || candidate == &DataType::INT
+            || candidate == &DataType::DOUBLE
+            || candidate == &DataType::BYTES
+    };
+    if leaf_scalar(ty) {
+        None
+    } else if ty == &DataType::UINT {
+        Some("the uint domain stays in expressions — a metadata leaf takes `int`")
+    } else if let DataType::Array(array) = ty {
+        if leaf_scalar(array.element()) {
+            None
+        } else {
+            Some(
                 "a metadata leaf is `scalar | array<scalar>` — uint and nested composites stay out",
-            ),
-        },
-        DataType::Duration | DataType::Timestamp => Some(
+            )
+        }
+    } else if ty == &DataType::DURATION || ty == &DataType::TIMESTAMP {
+        Some(
             "a duration or timestamp metadata leaf is outside this build's physical form — carry it in `data` for now",
-        ),
-        _ => Some("a metadata leaf is `scalar | array<scalar>` — composites belong in `data`"),
+        )
+    } else {
+        Some("a metadata leaf is `scalar | array<scalar>` — composites belong in `data`")
     }
 }
 
@@ -4906,16 +4907,16 @@ fn value_type(value: &crate::value::Value) -> DataType {
         crate::value::Value::Struct(_) => DataType::Variant,
         crate::value::Value::Decimal { .. } => DataType::Variant,
         crate::value::Value::Bool(_) => DataType::Bool,
-        crate::value::Value::Int(_) => DataType::Int,
-        crate::value::Value::Uint(_) => DataType::Uint,
-        crate::value::Value::Double(_) => DataType::Double,
+        crate::value::Value::Int(_) => DataType::INT,
+        crate::value::Value::Uint(_) => DataType::UINT,
+        crate::value::Value::Double(_) => DataType::DOUBLE,
         crate::value::Value::Text(_) => DataType::Text,
-        crate::value::Value::Bytes(_) => DataType::Bytes,
-        crate::value::Value::Duration(_) => DataType::Duration,
-        crate::value::Value::Timestamp(_) => DataType::Timestamp,
+        crate::value::Value::Bytes(_) => DataType::BYTES,
+        crate::value::Value::Duration(_) => DataType::DURATION,
+        crate::value::Value::Timestamp(_) => DataType::TIMESTAMP,
         crate::value::Value::Null => DataType::Null,
-        crate::value::Value::Array(_) => DataType::Array(Box::new(DataType::Variant)),
-        crate::value::Value::Map(_) => DataType::Map(Box::new(DataType::Variant)),
+        crate::value::Value::Array(_) => DataType::array(DataType::Variant),
+        crate::value::Value::Map(_) => DataType::text_map(DataType::Variant),
     }
 }
 
@@ -5005,7 +5006,7 @@ graph m0_probe : App {
         );
         let shout = &hir.app.nodes[1];
         assert_eq!(shout.category(), node::Kind::Operator);
-        assert_eq!(shout.vars[0].ty, DataType::Int);
+        assert_eq!(shout.vars[0].ty, DataType::INT);
         let handler = &shout.handlers[0];
         assert_eq!(
             handler.activation,

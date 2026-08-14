@@ -3,10 +3,11 @@
 //! order the plan documents, held once, at a boundary, by a type.
 
 use alloc::collections::BTreeSet;
+use alloc::format;
 use alloc::string::{String, ToString};
 
 use crate::cel;
-use crate::datatype::DataType;
+use crate::datatype::{DataType, TypeError};
 use crate::node;
 use crate::plan::{Emission, EndpointRef, ExecutionPlan, Node, NodeKind, Slot, Step};
 
@@ -221,6 +222,25 @@ pub enum PlanValidationError {
         /// The source's pin.
         found: DataType,
     },
+    /// A logical type violates the canonical algebra's global budgets. Local
+    /// parameter and uniqueness invariants are already held by constructors;
+    /// this catches oversized expanded trees before any recursive consumer.
+    InvalidDataType {
+        /// Where the type occurs in the plan.
+        location: String,
+        /// The violated type invariant.
+        reason: TypeError,
+    },
+    /// The logical type is valid in the M1.3 algebra but has no spelling in
+    /// the currently published plan-package registry.
+    DataTypeNotInFormat {
+        /// Where the type occurs in the plan.
+        location: String,
+        /// The valid but not-yet-transportable type.
+        ty: DataType,
+        /// Published format that cannot carry it.
+        format: u32,
+    },
     /// A collection the plan documents as canonically ordered is not.
     NonCanonicalOrder {
         /// Which collection broke the order.
@@ -371,6 +391,17 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: `{port}` is pinned to {expected:?}, its source to {found:?}"
             ),
+            Self::InvalidDataType { location, reason } => {
+                write!(f, "invalid plan: type at {location} is invalid: {reason}")
+            }
+            Self::DataTypeNotInFormat {
+                location,
+                ty,
+                format,
+            } => write!(
+                f,
+                "invalid plan: type `{ty}` at {location} has no plan-package v{format} encoding"
+            ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
             }
@@ -502,15 +533,10 @@ fn schema_well_formed(
         // EXACTLY the checker's static list and `meta_conforms`'s
         // vocabulary — a schema no value can satisfy must not
         // validate (uint has no leaf representation).
-        matches!(
-            ty,
-            DataType::Bool
-                | DataType::Int
-                | DataType::Double
-                | DataType::Text
-                | DataType::Bytes
-                | DataType::Variant
-        )
+        matches!(ty, DataType::Bool | DataType::Text | DataType::Variant)
+            || ty == &DataType::INT
+            || ty == &DataType::DOUBLE
+            || ty == &DataType::BYTES
     }
     for (index, (field, ty)) in schema.iter().enumerate() {
         // The dotted-key FORM first: the nested projection splits on
@@ -521,7 +547,8 @@ fn schema_well_formed(
                 field: field.clone(),
             });
         }
-        let leaf_ok = leaf_scalar(ty) || matches!(ty, DataType::Array(inner) if leaf_scalar(inner));
+        let leaf_ok = leaf_scalar(ty)
+            || matches!(ty, DataType::Array(array) if array.length().is_none() && leaf_scalar(array.element()));
         if !leaf_ok {
             return Err(PlanValidationError::MetaSchemaType {
                 zone,
@@ -663,7 +690,83 @@ fn assets_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     Ok(())
 }
 
+fn data_type_at(ty: &DataType, location: String) -> Result<(), PlanValidationError> {
+    ty.validate()
+        .map_err(|reason| PlanValidationError::InvalidDataType {
+            location: location.clone(),
+            reason,
+        })?;
+    if ty.is_v6_wire_type() {
+        Ok(())
+    } else {
+        Err(PlanValidationError::DataTypeNotInFormat {
+            location,
+            ty: ty.clone(),
+            format: super::serialization::FORMAT_VERSION,
+        })
+    }
+}
+
+fn tree_type_at(tree: &cel::Tree, location: String) -> Result<(), PlanValidationError> {
+    data_type_at(&tree.ty, location)
+}
+
+/// Holds the package boundary while B1 grows the canonical algebra ahead of
+/// B8's categorical wire bump. Every type-bearing plan position passes this
+/// one audit before the infallible v6 encoder can observe the plan.
+fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    for (field, ty) in &plan.app_schema {
+        data_type_at(ty, format!("meta.app.{field}"))?;
+    }
+    for (field, ty) in &plan.ext_schema {
+        data_type_at(ty, format!("meta.ext.{field}"))?;
+    }
+    for decl in &plan.boundary {
+        if let Some(ty) = &decl.ty {
+            data_type_at(ty, format!("boundary port `{}`", decl.port))?;
+        }
+    }
+    for node in &plan.nodes {
+        for decl in &node.ports {
+            if let Some(ty) = &decl.ty {
+                data_type_at(ty, format!("port `{}.{}`", node.path, decl.port))?;
+            }
+        }
+        for var in &node.vars {
+            data_type_at(&var.ty, format!("state `{}.{}`", node.path, var.name))?;
+        }
+    }
+    for (handler_index, handler) in plan.handlers.iter().enumerate() {
+        if let Some(guard) = &handler.guard {
+            tree_type_at(guard, format!("handler {handler_index} guard"))?;
+        }
+        for (step_index, step) in handler.body.iter().enumerate() {
+            let location = |role: &str| format!("handler {handler_index} step {step_index} {role}");
+            match step {
+                Step::Let { expr, .. } => tree_type_at(expr, location("let expression"))?,
+                Step::SetVar { expr, .. } => tree_type_at(expr, location("state expression"))?,
+                Step::Emit { value, .. } => match value {
+                    Emission::Identity | Emission::Nothing => {}
+                    Emission::Data(tree) => tree_type_at(tree, location("data emission"))?,
+                    Emission::Patch(fields) | Emission::Replace(fields) => {
+                        for (field_index, field) in fields.iter().enumerate() {
+                            tree_type_at(
+                                &field.expr,
+                                format!(
+                                    "handler {handler_index} step {step_index} field {field_index}"
+                                ),
+                            )?;
+                        }
+                    }
+                },
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    data_types_well_formed(plan)?;
     schema_well_formed("app", &plan.app_schema)?;
     schema_well_formed("ext", &plan.ext_schema)?;
     assets_well_formed(plan)?;
