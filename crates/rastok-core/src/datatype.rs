@@ -11,7 +11,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::value::{Value, ValueDefect, ValueKind, ValuePathSegment};
+use crate::value::{Value, ValueDefect, ValueKind, ValuePathSegment, map_key_label};
 
 /// Significant-digit budget of the canonical decimal128 value domain.
 pub const DECIMAL_MAX_DIGITS: u32 = 38;
@@ -231,6 +231,8 @@ pub enum IntervalUnit {
     DayTime,
     /// Month/day/nanosecond triple.
     MonthDayNano,
+    /// Unsigned month/day/millisecond triple used by Avro `duration`.
+    MonthDayMillisUnsigned,
 }
 
 /// Timestamp timezone semantics.
@@ -273,7 +275,7 @@ impl NamedTimeZone {
     }
 }
 
-/// Arrow-anchored temporal type parameters.
+/// Canonical temporal parameters for the supported Arrow and Avro profiles.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TemporalType {
     /// Calendar date.
@@ -587,7 +589,7 @@ pub enum DataType {
     Text,
     /// Variable or fixed bytes.
     Bytes(BinaryType),
-    /// Arrow-anchored temporal family.
+    /// Canonical temporal family.
     Temporal(TemporalType),
     /// UUID bytes with UUID semantics.
     Uuid,
@@ -1306,7 +1308,19 @@ impl DataType {
                     )
                 }
             }
-            (Self::Float(FloatType::Binary64), Value::Double(_)) => None,
+            (Self::Float(width), Value::Double(candidate)) => {
+                if float_accepts(*width, *candidate) {
+                    None
+                } else {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::FloatNotRepresentable { bits: width.bits() },
+                    )
+                }
+            }
             (Self::Decimal(decimal), Value::Decimal { unscaled, scale }) => {
                 if *scale != i32::from(decimal.scale()) {
                     refusal(
@@ -1337,15 +1351,75 @@ impl DataType {
             (Self::Number, Value::Int(_) | Value::Uint(_) | Value::Decimal { .. }) => None,
             (Self::Bool, Value::Bool(_))
             | (Self::Text, Value::Text(_))
-            | (Self::Temporal(TemporalType::Duration(TimeUnit::Nanosecond)), Value::Duration(_))
-            | (
-                Self::Temporal(TemporalType::Timestamp {
-                    unit: TimeUnit::Nanosecond,
-                    zone: TimeZone::Utc,
-                }),
-                Value::Timestamp(_),
-            )
             | (Self::Null, Value::Null) => None,
+            (Self::Temporal(TemporalType::Date(unit)), Value::Date(days)) => {
+                if date_accepts(*unit, *days) {
+                    None
+                } else {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::DateOutOfRange { unit: *unit },
+                    )
+                }
+            }
+            (Self::Temporal(TemporalType::Time(unit)), Value::Time(nanoseconds)) => {
+                if time_accepts(*unit, *nanoseconds) {
+                    None
+                } else {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::TemporalPrecision { unit: *unit },
+                    )
+                }
+            }
+            (
+                Self::Temporal(TemporalType::Timestamp { unit, .. }),
+                Value::Timestamp(nanoseconds),
+            )
+            | (
+                Self::Temporal(TemporalType::TimestampNtz(unit)),
+                Value::TimestampNtz(nanoseconds),
+            )
+            | (Self::Temporal(TemporalType::Duration(unit)), Value::Duration(nanoseconds)) => {
+                if time_unit_accepts(*unit, *nanoseconds) {
+                    None
+                } else {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::TemporalPrecision { unit: *unit },
+                    )
+                }
+            }
+            (
+                Self::Temporal(TemporalType::Interval(unit)),
+                Value::Interval {
+                    months,
+                    days,
+                    nanoseconds,
+                },
+            ) => {
+                if interval_accepts(*unit, *months, *days, *nanoseconds) {
+                    None
+                } else {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::IntervalShape { unit: *unit },
+                    )
+                }
+            }
+            (Self::Uuid, Value::Uuid(_)) => None,
             (Self::Bytes(binary), Value::Bytes(bytes)) => match binary {
                 BinaryType::Variable => None,
                 BinaryType::Fixed(length)
@@ -1392,6 +1466,24 @@ impl DataType {
             (Self::Map(map), Value::Map(entries)) if map.key() == &Self::Text => {
                 for (key, item) in entries {
                     path.push(ValuePathSegment::MapValue(key.clone()));
+                    let violation = map.value().violation_at(name, item, path);
+                    path.pop();
+                    if violation.is_some() {
+                        return violation;
+                    }
+                }
+                None
+            }
+            (Self::Map(map), Value::KeyedMap(entries)) if map.key() != &Self::Text => {
+                for (key, item) in entries {
+                    let label = map_key_label(key);
+                    path.push(ValuePathSegment::MapKey(label.clone()));
+                    let violation = map.key().violation_at(name, key, path);
+                    path.pop();
+                    if violation.is_some() {
+                        return violation;
+                    }
+                    path.push(ValuePathSegment::MapValue(label));
                     let violation = map.value().violation_at(name, item, path);
                     path.pop();
                     if violation.is_some() {
@@ -1527,7 +1619,26 @@ impl DataType {
             (Self::Integer(_), Self::Integer(_))
             | (Self::Number, Self::Integer(_) | Self::Decimal(_))
             | (Self::Integer(_) | Self::Decimal(_), Self::Number) => true,
+            (Self::Float(_), Self::Float(_)) => true,
             (Self::Decimal(left), Self::Decimal(right)) => left.scale() == right.scale(),
+            (Self::Temporal(TemporalType::Date(_)), Self::Temporal(TemporalType::Date(_)))
+            | (Self::Temporal(TemporalType::Time(_)), Self::Temporal(TemporalType::Time(_)))
+            | (
+                Self::Temporal(TemporalType::Timestamp { .. }),
+                Self::Temporal(TemporalType::Timestamp { .. }),
+            )
+            | (
+                Self::Temporal(TemporalType::TimestampNtz(_)),
+                Self::Temporal(TemporalType::TimestampNtz(_)),
+            )
+            | (
+                Self::Temporal(TemporalType::Duration(_)),
+                Self::Temporal(TemporalType::Duration(_)),
+            )
+            | (
+                Self::Temporal(TemporalType::Interval(_)),
+                Self::Temporal(TemporalType::Interval(_)),
+            ) => true,
             (Self::Bytes(BinaryType::Variable), Self::Bytes(_))
             | (Self::Bytes(_), Self::Bytes(BinaryType::Variable)) => true,
             (Self::Bytes(BinaryType::Fixed(left)), Self::Bytes(BinaryType::Fixed(right))) => {
@@ -1556,6 +1667,116 @@ impl DataType {
                 })
             }),
             _ => false,
+        }
+    }
+}
+
+const NANOS_PER_MILLISECOND: i64 = 1_000_000;
+const NANOS_PER_MICROSECOND: i64 = 1_000;
+const NANOS_PER_SECOND: i64 = 1_000_000_000;
+const NANOS_PER_DAY: i64 = 86_400 * NANOS_PER_SECOND;
+const MILLIS_PER_DAY: i64 = 86_400_000;
+
+fn float_accepts(width: FloatType, value: f64) -> bool {
+    if value.is_nan() {
+        return true;
+    }
+    match width {
+        FloatType::Binary64 => true,
+        FloatType::Binary32 => f64::from(value as f32).to_bits() == value.to_bits(),
+        FloatType::Binary16 => binary16_accepts(value),
+    }
+}
+
+fn binary16_accepts(value: f64) -> bool {
+    if value.is_infinite() || value == 0.0 {
+        return true;
+    }
+    let bits = value.abs().to_bits();
+    let encoded_exponent = ((bits >> 52) & 0x7ff) as i32;
+    if encoded_exponent == 0 || encoded_exponent == 0x7ff {
+        return false;
+    }
+    let exponent = encoded_exponent - 1023;
+    if !(-24..=15).contains(&exponent) {
+        return false;
+    }
+    let significand = (1_u64 << 52) | (bits & ((1_u64 << 52) - 1));
+    let discarded = if exponent >= -14 {
+        42
+    } else {
+        let Ok(discarded) = u32::try_from(52 - (exponent + 24)) else {
+            return false;
+        };
+        discarded
+    };
+    significand & ((1_u64 << discarded) - 1) == 0
+}
+
+fn time_unit_nanoseconds(unit: TimeUnit) -> i64 {
+    match unit {
+        TimeUnit::Second => NANOS_PER_SECOND,
+        TimeUnit::Millisecond => NANOS_PER_MILLISECOND,
+        TimeUnit::Microsecond => NANOS_PER_MICROSECOND,
+        TimeUnit::Nanosecond => 1,
+    }
+}
+
+fn time_unit_name(unit: TimeUnit) -> &'static str {
+    match unit {
+        TimeUnit::Second => "second",
+        TimeUnit::Millisecond => "millisecond",
+        TimeUnit::Microsecond => "microsecond",
+        TimeUnit::Nanosecond => "nanosecond",
+    }
+}
+
+fn date_unit_name(unit: DateUnit) -> &'static str {
+    match unit {
+        DateUnit::Day => "day",
+        DateUnit::Millisecond => "millisecond",
+    }
+}
+
+fn interval_unit_name(unit: IntervalUnit) -> &'static str {
+    match unit {
+        IntervalUnit::YearMonth => "year_month",
+        IntervalUnit::DayTime => "day_time",
+        IntervalUnit::MonthDayNano => "month_day_nano",
+        IntervalUnit::MonthDayMillisUnsigned => "month_day_millis_unsigned",
+    }
+}
+
+fn time_unit_accepts(unit: TimeUnit, nanoseconds: i64) -> bool {
+    nanoseconds % time_unit_nanoseconds(unit) == 0
+}
+
+fn date_accepts(unit: DateUnit, days: i64) -> bool {
+    match unit {
+        DateUnit::Day => i32::try_from(days).is_ok(),
+        DateUnit::Millisecond => days.checked_mul(MILLIS_PER_DAY).is_some(),
+    }
+}
+
+fn time_accepts(unit: TimeUnit, nanoseconds: i64) -> bool {
+    (0..NANOS_PER_DAY).contains(&nanoseconds) && time_unit_accepts(unit, nanoseconds)
+}
+
+fn interval_accepts(unit: IntervalUnit, months: i64, days: i64, nanoseconds: i64) -> bool {
+    match unit {
+        IntervalUnit::YearMonth => i32::try_from(months).is_ok() && days == 0 && nanoseconds == 0,
+        IntervalUnit::DayTime => {
+            months == 0
+                && i32::try_from(days).is_ok()
+                && nanoseconds % NANOS_PER_MILLISECOND == 0
+                && i32::try_from(nanoseconds / NANOS_PER_MILLISECOND).is_ok()
+        }
+        IntervalUnit::MonthDayNano => i32::try_from(months).is_ok() && i32::try_from(days).is_ok(),
+        IntervalUnit::MonthDayMillisUnsigned => {
+            u32::try_from(months).is_ok()
+                && u32::try_from(days).is_ok()
+                && nanoseconds % NANOS_PER_MILLISECOND == 0
+                && u32::try_from(nanoseconds / NANOS_PER_MILLISECOND).is_ok()
         }
     }
 }
@@ -1827,6 +2048,27 @@ pub enum ConformanceReason {
         /// Declared width.
         bits: u8,
     },
+    /// A floating value cannot be represented exactly at the declared width.
+    FloatNotRepresentable {
+        /// Declared IEEE-754 width.
+        bits: u8,
+    },
+    /// A canonical date lies outside the storage domain of its declared unit.
+    DateOutOfRange {
+        /// Declared date unit.
+        unit: DateUnit,
+    },
+    /// A canonical temporal value is not aligned to its declared unit, or a
+    /// time-of-day lies outside one day.
+    TemporalPrecision {
+        /// Declared temporal unit.
+        unit: TimeUnit,
+    },
+    /// Interval components do not inhabit the declared interval family.
+    IntervalShape {
+        /// Declared interval family.
+        unit: IntervalUnit,
+    },
     /// A fixed binary or array has the wrong length.
     Length {
         /// Declared length.
@@ -1887,6 +2129,7 @@ impl fmt::Display for ConformanceViolation {
             match segment {
                 ValuePathSegment::Field(name) => write!(f, ".{name}")?,
                 ValuePathSegment::Index(index) => write!(f, "[{index}]")?,
+                ValuePathSegment::MapKey(key) => write!(f, "<key:{key}>")?,
                 ValuePathSegment::MapValue(key) => write!(f, "[{key:?}]")?,
                 ValuePathSegment::UnionBranch(branch) => write!(f, "<branch:{branch}>")?,
                 ValuePathSegment::TaggedField { case, field } => write!(f, "<{case}>.{field}")?,
@@ -1907,6 +2150,27 @@ impl fmt::Display for ConformanceViolation {
             ConformanceReason::UnsignedIntegerOutOfRange { value, bits } => {
                 write!(f, "` is a uint{bits}; {value} leaves that range")
             }
+            ConformanceReason::FloatNotRepresentable { bits } => {
+                write!(
+                    f,
+                    "` is a float{bits}; the value is not exactly representable"
+                )
+            }
+            ConformanceReason::DateOutOfRange { unit } => write!(
+                f,
+                "` does not fit the {} date representation",
+                date_unit_name(*unit)
+            ),
+            ConformanceReason::TemporalPrecision { unit } => write!(
+                f,
+                "` is not a valid value at {} resolution",
+                time_unit_name(*unit)
+            ),
+            ConformanceReason::IntervalShape { unit } => write!(
+                f,
+                "` does not have the component shape required by {}",
+                interval_unit_name(*unit)
+            ),
             ConformanceReason::Length { expected, found } => {
                 write!(f, "` has length {found}; the type requires {expected}")
             }
@@ -1981,6 +2245,274 @@ mod tests {
         assert!(DecimalType::new(38, -38).is_ok());
         assert!(DecimalType::new(38, 38).is_ok());
         assert!(DecimalType::new(38, 39).is_err());
+    }
+
+    #[test]
+    fn floating_carrier_preserves_every_arrow_width_exactly() {
+        let half = DataType::Float(FloatType::Binary16);
+        assert!(half.accepts(&Value::Double(65_504.0)));
+        assert!(!half.accepts(&Value::Double(65_520.0)));
+        assert!(half.accepts(&Value::Double(2_f64.powi(-24))));
+        assert!(!half.accepts(&Value::Double(2_f64.powi(-25))));
+        assert!(half.accepts(&Value::Double(-0.0)));
+        assert!(half.accepts(&Value::Double(f64::NAN)));
+
+        let single = DataType::Float(FloatType::Binary32);
+        assert!(single.accepts(&Value::Double(f64::from(0.1_f32))));
+        assert!(!single.accepts(&Value::Double(0.1_f64)));
+        assert!(DataType::DOUBLE.accepts(&Value::Double(0.1_f64)));
+    }
+
+    #[test]
+    fn temporal_carriers_are_canonical_and_types_hold_the_parameters() {
+        let date32 = DataType::Temporal(TemporalType::Date(DateUnit::Day));
+        assert!(date32.accepts(&Value::Date(i64::from(i32::MAX))));
+        assert!(!date32.accepts(&Value::Date(i64::from(i32::MAX) + 1)));
+
+        let date64 = DataType::Temporal(TemporalType::Date(DateUnit::Millisecond));
+        let largest_date64 = i64::MAX / MILLIS_PER_DAY;
+        assert!(date64.accepts(&Value::Date(largest_date64)));
+        assert!(!date64.accepts(&Value::Date(largest_date64 + 1)));
+
+        let time_millis = DataType::Temporal(TemporalType::Time(TimeUnit::Millisecond));
+        assert!(time_millis.accepts(&Value::Time(1_000_000)));
+        assert!(!time_millis.accepts(&Value::Time(1)));
+        assert!(!time_millis.accepts(&Value::Time(NANOS_PER_DAY)));
+
+        let timestamp_seconds = DataType::Temporal(TemporalType::Timestamp {
+            unit: TimeUnit::Second,
+            zone: TimeZone::named("Europe/Paris").expect("a named timezone"),
+        });
+        assert!(timestamp_seconds.accepts(&Value::Timestamp(NANOS_PER_SECOND)));
+        assert!(!timestamp_seconds.accepts(&Value::Timestamp(1)));
+
+        let local_micros = DataType::Temporal(TemporalType::TimestampNtz(TimeUnit::Microsecond));
+        assert!(local_micros.accepts(&Value::TimestampNtz(1_000)));
+        assert!(!local_micros.accepts(&Value::TimestampNtz(1)));
+
+        let duration_millis = DataType::Temporal(TemporalType::Duration(TimeUnit::Millisecond));
+        assert!(duration_millis.accepts(&Value::Duration(-1_000_000)));
+        assert!(!duration_millis.accepts(&Value::Duration(-1)));
+
+        let year_month = DataType::Temporal(TemporalType::Interval(IntervalUnit::YearMonth));
+        assert!(year_month.accepts(&Value::Interval {
+            months: 15,
+            days: 0,
+            nanoseconds: 0,
+        }));
+        assert!(!year_month.accepts(&Value::Interval {
+            months: 15,
+            days: 1,
+            nanoseconds: 0,
+        }));
+
+        let day_time = DataType::Temporal(TemporalType::Interval(IntervalUnit::DayTime));
+        assert!(day_time.accepts(&Value::Interval {
+            months: 0,
+            days: 2,
+            nanoseconds: 3_000_000,
+        }));
+        assert!(!day_time.accepts(&Value::Interval {
+            months: 1,
+            days: 2,
+            nanoseconds: 3_000_000,
+        }));
+
+        let month_day_nano = DataType::Temporal(TemporalType::Interval(IntervalUnit::MonthDayNano));
+        assert!(month_day_nano.accepts(&Value::Interval {
+            months: -1,
+            days: 2,
+            nanoseconds: -3,
+        }));
+        assert!(!month_day_nano.accepts(&Value::Interval {
+            months: i64::from(i32::MAX) + 1,
+            days: 0,
+            nanoseconds: 0,
+        }));
+
+        let avro_duration =
+            DataType::Temporal(TemporalType::Interval(IntervalUnit::MonthDayMillisUnsigned));
+        assert!(avro_duration.accepts(&Value::Interval {
+            months: i64::from(u32::MAX),
+            days: i64::from(u32::MAX),
+            nanoseconds: i64::from(u32::MAX) * NANOS_PER_MILLISECOND,
+        }));
+        assert!(!avro_duration.accepts(&Value::Interval {
+            months: -1,
+            days: 0,
+            nanoseconds: 0,
+        }));
+        assert!(DataType::Uuid.accepts(&Value::Uuid([0xA5; 16])));
+    }
+
+    #[test]
+    fn non_text_maps_have_one_canonical_materialized_form() {
+        let ty = DataType::Map(
+            MapType::new(DataType::INT, DataType::Text).expect("int is a canonical map key"),
+        );
+        let value = Value::KeyedMap(alloc::vec![
+            (Value::Int(2), Value::Text(String::from("b"))),
+            (Value::Int(1), Value::Text(String::from("a"))),
+        ]);
+        assert!(ty.accepts(&value));
+
+        let wrong_key = Value::KeyedMap(alloc::vec![(
+            Value::Uint(1),
+            Value::Text(String::from("wrong signedness")),
+        )]);
+        let violation = ty
+            .violation("payload", &wrong_key)
+            .expect("the key type is checked recursively");
+        assert!(matches!(
+            violation.path.as_slice(),
+            [ValuePathSegment::MapKey(_)]
+        ));
+        assert_eq!(violation.expected, DataType::INT);
+
+        let text_in_the_non_text_form =
+            Value::KeyedMap(alloc::vec![
+                (Value::Text(String::from("k")), Value::Int(1),)
+            ]);
+        assert!(matches!(
+            text_in_the_non_text_form.validate(),
+            Err(crate::value::ValueError {
+                defect: ValueDefect::NonCanonicalMapKey(ValueKind::Text),
+                ..
+            })
+        ));
+
+        let duplicate = Value::KeyedMap(alloc::vec![
+            (Value::Int(1), Value::Bool(true)),
+            (Value::Int(1), Value::Bool(false)),
+        ]);
+        assert!(matches!(
+            duplicate.validate(),
+            Err(crate::value::ValueError {
+                defect: ValueDefect::DuplicateMapKey(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn strict_json_avro_and_arrow_profiles_have_materialized_representatives() {
+        let fixed_four = DataType::Bytes(BinaryType::Fixed(
+            ByteLength::new(4).expect("a valid fixed binary length"),
+        ));
+        let fixed_pair = DataType::Array(
+            ArrayType::fixed(DataType::Text, 2).expect("a valid fixed array length"),
+        );
+        let status = DataType::Enum(
+            EnumType::new(alloc::vec![String::from("done"), String::from("pending")])
+                .expect("a closed enum"),
+        );
+        let record = DataType::Struct(
+            StructType::new(alloc::vec![
+                TypeField::new("id", DataType::Uuid),
+                TypeField::new("status", status.clone()),
+            ])
+            .expect("a closed record"),
+        );
+        let tagged = DataType::TaggedUnion(
+            TaggedUnionType::new(alloc::vec![
+                TaggedCase::new(
+                    "failed",
+                    StructType::new(alloc::vec![TypeField::new("code", DataType::INT)])
+                        .expect("a closed payload"),
+                )
+                .expect("a named case"),
+                TaggedCase::new(
+                    "ok",
+                    StructType::new(alloc::vec![]).expect("a unit payload"),
+                )
+                .expect("a named case"),
+            ])
+            .expect("stable union cases"),
+        );
+
+        let representatives = alloc::vec![
+            (
+                "json exact number",
+                DataType::Number,
+                Value::Decimal {
+                    unscaled: 125,
+                    scale: 2
+                }
+            ),
+            (
+                "json text map",
+                DataType::text_map(DataType::Bool),
+                Value::Map(BTreeMap::from([(String::from("ready"), Value::Bool(true))])),
+            ),
+            (
+                "avro float",
+                DataType::FLOAT,
+                Value::Double(f64::from(1.25_f32))
+            ),
+            (
+                "avro fixed",
+                fixed_four,
+                Value::Bytes(alloc::vec![0, 1, 2, 3])
+            ),
+            (
+                "avro enum",
+                status.clone(),
+                Value::Enum(String::from("done"))
+            ),
+            (
+                "avro duration",
+                DataType::Temporal(TemporalType::Interval(IntervalUnit::MonthDayMillisUnsigned,)),
+                Value::Interval {
+                    months: 3,
+                    days: 2,
+                    nanoseconds: 1_000_000,
+                },
+            ),
+            (
+                "avro record",
+                record,
+                Value::Struct(alloc::vec![
+                    (String::from("status"), Value::Enum(String::from("pending"))),
+                    (String::from("id"), Value::Uuid([7; 16])),
+                ]),
+            ),
+            (
+                "arrow half",
+                DataType::Float(FloatType::Binary16),
+                Value::Double(1.5),
+            ),
+            (
+                "arrow fixed-size list",
+                fixed_pair,
+                Value::Array(alloc::vec![
+                    Value::Text(String::from("a")),
+                    Value::Text(String::from("b")),
+                ]),
+            ),
+            (
+                "arrow non-text map",
+                DataType::Map(
+                    MapType::new(DataType::Uuid, DataType::LONG).expect("uuid is a canonical key"),
+                ),
+                Value::KeyedMap(alloc::vec![(Value::Uuid([9; 16]), Value::Int(42))]),
+            ),
+            (
+                "avro/arrow tagged union",
+                tagged,
+                Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+                    case: String::from("failed"),
+                    payload: alloc::vec![(String::from("code"), Value::Int(5))],
+                })),
+            ),
+        ];
+
+        for (profile_row, ty, value) in representatives {
+            assert!(
+                ty.accepts(&value),
+                "{profile_row} must be represented exactly: {:?}",
+                ty.violation("payload", &value)
+            );
+        }
     }
 
     #[test]
@@ -2073,6 +2605,30 @@ mod tests {
         let overlap = DataType::structural_union(alloc::vec![DataType::INT, DataType::LONG]);
         assert!(matches!(
             overlap,
+            Err(TypeError::OverlappingUnionBranches { .. })
+        ));
+
+        let float_overlap = DataType::structural_union(alloc::vec![
+            DataType::Float(FloatType::Binary16),
+            DataType::Float(FloatType::Binary32),
+        ]);
+        assert!(matches!(
+            float_overlap,
+            Err(TypeError::OverlappingUnionBranches { .. })
+        ));
+
+        let temporal_overlap = DataType::structural_union(alloc::vec![
+            DataType::Temporal(TemporalType::Timestamp {
+                unit: TimeUnit::Second,
+                zone: TimeZone::Utc,
+            }),
+            DataType::Temporal(TemporalType::Timestamp {
+                unit: TimeUnit::Nanosecond,
+                zone: TimeZone::Utc,
+            }),
+        ]);
+        assert!(matches!(
+            temporal_overlap,
             Err(TypeError::OverlappingUnionBranches { .. })
         ));
 

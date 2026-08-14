@@ -708,6 +708,14 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                             stack.push(Item::Val(entry, level + 3));
                         }
                     }
+                    Value::KeyedMap(entries) => {
+                        for (key, value) in entries {
+                            // pair array at +2; both key and value are tagged
+                            // values whose own payload starts at +3.
+                            stack.push(Item::Val(key, level + 3));
+                            stack.push(Item::Val(value, level + 3));
+                        }
+                    }
                     Value::Struct(fields) => {
                         for (_, value) in fields {
                             // pair array at +2, its BARE field text

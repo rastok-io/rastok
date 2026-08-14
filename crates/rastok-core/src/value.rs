@@ -1,8 +1,10 @@
 //! Materialized logical values owned by the Rastok core.
 //!
-//! This is the executable subset of the M1.3 value algebra.  Envelopes,
-//! expressions, state, codecs and ports share this representation; lazy
-//! evaluation markers do not belong here and can never be serialized.
+//! Envelopes, expressions, state, codecs and ports share this representation;
+//! lazy evaluation markers do not belong here and can never be serialized.
+//! A value carries data, not its surrounding schema: widths, temporal units,
+//! timezones and collection constraints remain in
+//! [`DataType`](crate::datatype::DataType).
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -16,11 +18,12 @@ use core::fmt;
 pub enum Value {
     /// Boolean.
     Bool(bool),
-    /// 64-bit signed integer in the current executable subset.
+    /// Canonical signed-integer carrier; the resolved type constrains width.
     Int(i64),
-    /// 64-bit unsigned integer in the current executable subset.
+    /// Canonical unsigned-integer carrier; the resolved type constrains width.
     Uint(u64),
-    /// IEEE-754 binary64.
+    /// Canonical binary-float carrier. Binary16/32 values promote here exactly;
+    /// the resolved type constrains their original width.
     Double(f64),
     /// UTF-8 text.
     Text(String),
@@ -30,12 +33,37 @@ pub enum Value {
     Duration(i64),
     /// UTC instant in nanoseconds since the Unix epoch.
     Timestamp(i64),
+    /// Calendar date as whole days since the Unix epoch.
+    Date(i64),
+    /// Time of day as nanoseconds since midnight.
+    Time(i64),
+    /// Timezone-naive timestamp as nanoseconds since the Unix epoch.
+    TimestampNtz(i64),
+    /// Calendar interval in the common month/day/nanosecond value domain.
+    /// The surrounding interval type constrains which components may be set.
+    Interval {
+        /// Whole calendar months.
+        months: i64,
+        /// Whole calendar days.
+        days: i64,
+        /// Remaining nanoseconds.
+        nanoseconds: i64,
+    },
+    /// UUID bytes in network order.
+    Uuid([u8; 16]),
     /// The null value.
     Null,
-    /// Homogeneous ordered values.
+    /// Ordered values. A resolved array type enforces homogeneity; a dynamic
+    /// `variant` array may contain different value kinds.
     Array(Vec<Value>),
-    /// Text-keyed values in the current executable subset.
+    /// Text-keyed values. This is the canonical representation of
+    /// `map<text, V>`, including JSON and Avro objects. The resolved map type,
+    /// when present, enforces one value type.
     Map(BTreeMap<String, Value>),
+    /// Values keyed by a non-text canonical scalar or enum. The resolved map
+    /// type enforces homogeneous key and value types. Entry order is
+    /// presentation; equality and identity sort keys by canonical value bytes.
+    KeyedMap(Vec<(Value, Value)>),
     /// Named fields in declaration order. Field order is presentation.
     Struct(Vec<(String, Value)>),
     /// An exact decimal: `unscaled × 10^(−scale)`.
@@ -92,9 +120,26 @@ impl PartialEq for Value {
             (Self::Bytes(a), Self::Bytes(b)) => a == b,
             (Self::Duration(a), Self::Duration(b)) => a == b,
             (Self::Timestamp(a), Self::Timestamp(b)) => a == b,
+            (Self::Date(a), Self::Date(b)) => a == b,
+            (Self::Time(a), Self::Time(b)) => a == b,
+            (Self::TimestampNtz(a), Self::TimestampNtz(b)) => a == b,
+            (
+                Self::Interval {
+                    months: a_months,
+                    days: a_days,
+                    nanoseconds: a_nanoseconds,
+                },
+                Self::Interval {
+                    months: b_months,
+                    days: b_days,
+                    nanoseconds: b_nanoseconds,
+                },
+            ) => a_months == b_months && a_days == b_days && a_nanoseconds == b_nanoseconds,
+            (Self::Uuid(a), Self::Uuid(b)) => a == b,
             (Self::Null, Self::Null) => true,
             (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
+            (Self::KeyedMap(a), Self::KeyedMap(b)) => map_entries_eq(a, b),
             (Self::Struct(a), Self::Struct(b)) => struct_fields_eq(a, b, Value::eq),
             (
                 Self::Decimal { unscaled, scale },
@@ -182,6 +227,36 @@ impl Value {
                 }
                 Ok(())
             }
+            Self::KeyedMap(entries) => {
+                let mut keys = BTreeSet::new();
+                for (key, value) in entries {
+                    if !is_non_text_map_key(key) {
+                        return Err(ValueError {
+                            path: path.clone(),
+                            defect: ValueDefect::NonCanonicalMapKey(ValueKind::of(key)),
+                        });
+                    }
+                    // Only scalar/enum keys reach canonicalization. Rejecting
+                    // composites first avoids recursively encoding hostile
+                    // data merely to render an error path.
+                    let label = map_key_label(key);
+                    path.push(ValuePathSegment::MapKey(label.clone()));
+                    let result = key.validate_at(path);
+                    path.pop();
+                    result?;
+                    if !keys.insert(canonical_value_bytes(key)) {
+                        return Err(ValueError {
+                            path: path.clone(),
+                            defect: ValueDefect::DuplicateMapKey(label),
+                        });
+                    }
+                    path.push(ValuePathSegment::MapValue(label));
+                    let result = value.validate_at(path);
+                    path.pop();
+                    result?;
+                }
+                Ok(())
+            }
             Self::StructuralUnion { branch, value } => {
                 path.push(ValuePathSegment::UnionBranch(*branch));
                 let result = value.validate_at(path);
@@ -229,7 +304,9 @@ pub enum ValuePathSegment {
     Field(String),
     /// An array index.
     Index(usize),
-    /// A value under a text map key.
+    /// A map key, named by its canonical bytes.
+    MapKey(String),
+    /// A value under a map key, named by the key's canonical bytes.
     MapValue(String),
     /// Value carried by one structural-union branch.
     UnionBranch(u16),
@@ -254,6 +331,11 @@ pub enum ValueDefect {
     },
     /// Two fields of one struct carry the same semantic name.
     DuplicateStructField(String),
+    /// Two map keys have the same canonical value.
+    DuplicateMapKey(String),
+    /// A non-text keyed map used a key outside the canonical scalar/enum
+    /// domain, or used text instead of the unique text-map representation.
+    NonCanonicalMapKey(ValueKind),
     /// An enum value cannot carry an empty symbol.
     EmptyEnumSymbol,
     /// A tagged value cannot carry an empty case name.
@@ -269,6 +351,15 @@ impl fmt::Display for ValueDefect {
             ),
             Self::DuplicateStructField(name) => {
                 write!(f, "a struct whose field `{name}` appears twice")
+            }
+            Self::DuplicateMapKey(key) => {
+                write!(f, "a map whose canonical key `{key}` appears twice")
+            }
+            Self::NonCanonicalMapKey(ValueKind::Text) => {
+                f.write_str("a keyed map whose text key must use the text-map representation")
+            }
+            Self::NonCanonicalMapKey(kind) => {
+                write!(f, "a keyed map whose {kind} key is not canonical")
             }
             Self::EmptyEnumSymbol => f.write_str("an enum whose symbol is empty"),
             Self::EmptyTaggedCase => f.write_str("a tagged union whose case name is empty"),
@@ -292,6 +383,7 @@ impl fmt::Display for ValueError {
             match segment {
                 ValuePathSegment::Field(name) => write!(f, ".{name}")?,
                 ValuePathSegment::Index(index) => write!(f, "[{index}]")?,
+                ValuePathSegment::MapKey(key) => write!(f, "<key:{key}>")?,
                 ValuePathSegment::MapValue(key) => write!(f, "[{key:?}]")?,
                 ValuePathSegment::UnionBranch(branch) => write!(f, "<branch:{branch}>")?,
                 ValuePathSegment::TaggedField { case, field } => write!(f, "<{case}>.{field}")?,
@@ -320,6 +412,16 @@ pub enum ValueKind {
     Duration,
     /// A timestamp.
     Timestamp,
+    /// A calendar date.
+    Date,
+    /// A time of day.
+    Time,
+    /// A timezone-naive timestamp.
+    TimestampNtz,
+    /// A calendar interval.
+    Interval,
+    /// A UUID.
+    Uuid,
     /// The null value.
     Null,
     /// An array.
@@ -350,9 +452,15 @@ impl ValueKind {
             Value::Bytes(_) => Self::Bytes,
             Value::Duration(_) => Self::Duration,
             Value::Timestamp(_) => Self::Timestamp,
+            Value::Date(_) => Self::Date,
+            Value::Time(_) => Self::Time,
+            Value::TimestampNtz(_) => Self::TimestampNtz,
+            Value::Interval { .. } => Self::Interval,
+            Value::Uuid(_) => Self::Uuid,
             Value::Null => Self::Null,
             Value::Array(_) => Self::Array,
             Value::Map(_) => Self::Map,
+            Value::KeyedMap(_) => Self::Map,
             Value::Struct(_) => Self::Struct,
             Value::Decimal { .. } => Self::Decimal,
             Value::Enum(_) => Self::Enum,
@@ -372,6 +480,11 @@ impl fmt::Display for ValueKind {
             Self::Bytes => "bytes",
             Self::Duration => "duration",
             Self::Timestamp => "timestamp",
+            Self::Date => "date",
+            Self::Time => "time",
+            Self::TimestampNtz => "timestamp_ntz",
+            Self::Interval => "interval",
+            Self::Uuid => "uuid",
             Self::Null => "null",
             Self::Array => "array",
             Self::Map => "map",
@@ -404,6 +517,57 @@ fn struct_fields_eq(
         .into_iter()
         .zip(sorted(b))
         .all(|(x, y)| x.0 == y.0 && values(&x.1, &y.1))
+}
+
+/// Canonical bytes used only to compare and name materialized map keys. The
+/// v6 plan gate still refuses every value family that its published registry
+/// cannot transport; B8 owns the eventual v7 type table.
+pub(crate) fn canonical_value_bytes(value: &Value) -> Vec<u8> {
+    crate::canonical_cbor::encode(&crate::identity::encoding::value_tagged(value))
+}
+
+pub(crate) fn map_key_label(value: &Value) -> String {
+    use core::fmt::Write as _;
+
+    let bytes = canonical_value_bytes(value);
+    let mut label = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(label, "{byte:02x}");
+    }
+    label
+}
+
+fn map_entries_eq(a: &[(Value, Value)], b: &[(Value, Value)]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    fn sorted(entries: &[(Value, Value)]) -> Vec<(&Value, &Value)> {
+        let mut refs: Vec<_> = entries.iter().map(|(key, value)| (key, value)).collect();
+        refs.sort_by_cached_key(|(key, _)| canonical_value_bytes(key));
+        refs
+    }
+    sorted(a)
+        .into_iter()
+        .zip(sorted(b))
+        .all(|((a_key, a_value), (b_key, b_value))| a_key == b_key && a_value == b_value)
+}
+
+fn is_non_text_map_key(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Bool(_)
+            | Value::Int(_)
+            | Value::Uint(_)
+            | Value::Bytes(_)
+            | Value::Duration(_)
+            | Value::Timestamp(_)
+            | Value::Date(_)
+            | Value::Time(_)
+            | Value::TimestampNtz(_)
+            | Value::Uuid(_)
+            | Value::Decimal { .. }
+            | Value::Enum(_)
+    )
 }
 
 #[cfg(test)]
@@ -443,5 +607,37 @@ mod tests {
             error.to_string(),
             "value[0] contains a struct whose field `amount` appears twice"
         );
+    }
+
+    #[test]
+    fn keyed_map_order_is_presentation_not_value_identity() {
+        let ascending = Value::KeyedMap(alloc::vec![
+            (Value::Int(1), Value::Text(String::from("a"))),
+            (Value::Int(2), Value::Text(String::from("b"))),
+        ]);
+        let descending = Value::KeyedMap(alloc::vec![
+            (Value::Int(2), Value::Text(String::from("b"))),
+            (Value::Int(1), Value::Text(String::from("a"))),
+        ]);
+        assert_eq!(ascending, descending);
+        assert_eq!(
+            canonical_value_bytes(&ascending),
+            canonical_value_bytes(&descending)
+        );
+    }
+
+    #[test]
+    fn keyed_maps_reject_non_key_values_before_type_judgement() {
+        let malformed = Value::KeyedMap(alloc::vec![(
+            Value::Array(alloc::vec![Value::Int(1)]),
+            Value::Bool(true),
+        )]);
+        assert!(matches!(
+            malformed.validate(),
+            Err(ValueError {
+                defect: ValueDefect::NonCanonicalMapKey(ValueKind::Array),
+                ..
+            })
+        ));
     }
 }

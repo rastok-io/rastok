@@ -1102,6 +1102,16 @@ fn intrinsic_value_type(value: &crate::value::Value) -> Option<DataType> {
         crate::value::Value::Bytes(_) => DataType::BYTES,
         crate::value::Value::Duration(_) => DataType::DURATION,
         crate::value::Value::Timestamp(_) => DataType::TIMESTAMP,
+        // These carriers deliberately omit the surrounding unit, timezone,
+        // interval shape or map-key type. A port/schema constraint can recover
+        // that information; a context-free expression literal cannot invent
+        // it. None of these cases is source-constructible in v6.
+        crate::value::Value::Uuid(_) => DataType::Uuid,
+        crate::value::Value::Date(_)
+        | crate::value::Value::Time(_)
+        | crate::value::Value::TimestampNtz(_)
+        | crate::value::Value::Interval { .. }
+        | crate::value::Value::KeyedMap(_) => DataType::Variant,
         crate::value::Value::Null => DataType::Null,
         crate::value::Value::Decimal { .. } => DataType::Variant,
         crate::value::Value::Array(items) => {

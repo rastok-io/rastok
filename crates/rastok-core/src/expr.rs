@@ -52,12 +52,31 @@ pub enum EvalValue {
     Duration(i64),
     /// UTC instant in nanoseconds since the Unix epoch.
     Timestamp(i64),
+    /// Calendar date as days since the Unix epoch.
+    Date(i64),
+    /// Time of day as nanoseconds since midnight.
+    Time(i64),
+    /// Timezone-naive timestamp as nanoseconds since the Unix epoch.
+    TimestampNtz(i64),
+    /// Calendar interval in canonical components.
+    Interval {
+        /// Whole months.
+        months: i64,
+        /// Whole days.
+        days: i64,
+        /// Remaining nanoseconds.
+        nanoseconds: i64,
+    },
+    /// UUID bytes in network order.
+    Uuid([u8; 16]),
     /// The null value.
     Null,
-    /// Homogeneous list.
+    /// Ordered list; its resolved type, when static, enforces homogeneity.
     List(Vec<EvalValue>),
     /// Text-keyed map; `BTreeMap` keeps iteration sorted by key.
     Map(BTreeMap<String, EvalValue>),
+    /// Map whose canonical key type is not text.
+    KeyedMap(Vec<(EvalValue, EvalValue)>),
     /// Named fields in declaration order — the LOGICAL twin of
     /// [`Value::Struct`] (canonical tag 17, where a map is
     /// 18): the witness that lets a struct cross the expression evaluator —
@@ -125,9 +144,26 @@ impl PartialEq for EvalValue {
             (Self::Bytes(a), Self::Bytes(b)) => a == b,
             (Self::Duration(a), Self::Duration(b)) => a == b,
             (Self::Timestamp(a), Self::Timestamp(b)) => a == b,
+            (Self::Date(a), Self::Date(b)) => a == b,
+            (Self::Time(a), Self::Time(b)) => a == b,
+            (Self::TimestampNtz(a), Self::TimestampNtz(b)) => a == b,
+            (
+                Self::Interval {
+                    months: a_months,
+                    days: a_days,
+                    nanoseconds: a_nanoseconds,
+                },
+                Self::Interval {
+                    months: b_months,
+                    days: b_days,
+                    nanoseconds: b_nanoseconds,
+                },
+            ) => a_months == b_months && a_days == b_days && a_nanoseconds == b_nanoseconds,
+            (Self::Uuid(a), Self::Uuid(b)) => a == b,
             (Self::Null, Self::Null) => true,
             (Self::List(a), Self::List(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
+            (Self::KeyedMap(a), Self::KeyedMap(b)) => keyed_map_eq(a, b),
             // Fields compare in SORTED order — by name, like the
             // canonical seal, so order is presentation. Sorting
             // (stable) instead of name-lookup keeps `Eq`'s contract
@@ -183,12 +219,31 @@ impl From<Value> for EvalValue {
             Value::Bytes(value) => Self::Bytes(value),
             Value::Duration(value) => Self::Duration(value),
             Value::Timestamp(value) => Self::Timestamp(value),
+            Value::Date(value) => Self::Date(value),
+            Value::Time(value) => Self::Time(value),
+            Value::TimestampNtz(value) => Self::TimestampNtz(value),
+            Value::Interval {
+                months,
+                days,
+                nanoseconds,
+            } => Self::Interval {
+                months,
+                days,
+                nanoseconds,
+            },
+            Value::Uuid(value) => Self::Uuid(value),
             Value::Null => Self::Null,
             Value::Array(items) => Self::List(items.into_iter().map(Self::from).collect()),
             Value::Map(entries) => Self::Map(
                 entries
                     .into_iter()
                     .map(|(key, value)| (key, Self::from(value)))
+                    .collect(),
+            ),
+            Value::KeyedMap(entries) => Self::KeyedMap(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (Self::from(key), Self::from(value)))
                     .collect(),
             ),
             Value::Struct(fields) => Self::Struct(
@@ -231,6 +286,19 @@ impl EvalValue {
             Self::Bytes(value) => Value::Bytes(value),
             Self::Duration(value) => Value::Duration(value),
             Self::Timestamp(value) => Value::Timestamp(value),
+            Self::Date(value) => Value::Date(value),
+            Self::Time(value) => Value::Time(value),
+            Self::TimestampNtz(value) => Value::TimestampNtz(value),
+            Self::Interval {
+                months,
+                days,
+                nanoseconds,
+            } => Value::Interval {
+                months,
+                days,
+                nanoseconds,
+            },
+            Self::Uuid(value) => Value::Uuid(value),
             Self::Null => Value::Null,
             Self::List(items) => Value::Array(
                 items
@@ -242,6 +310,12 @@ impl EvalValue {
                 entries
                     .into_iter()
                     .map(|(key, value)| Ok((key, value.into_value()?)))
+                    .collect::<Result<_, Error>>()?,
+            ),
+            Self::KeyedMap(entries) => Value::KeyedMap(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| Ok((key.into_value()?, value.into_value()?)))
                     .collect::<Result<_, Error>>()?,
             ),
             Self::Struct(fields) => Value::Struct(
@@ -297,6 +371,57 @@ fn struct_fields_eq(
         .into_iter()
         .zip(sorted(b))
         .all(|(x, y)| x.0 == y.0 && values(&x.1, &y.1))
+}
+
+fn keyed_map_eq(a: &[(EvalValue, EvalValue)], b: &[(EvalValue, EvalValue)]) -> bool {
+    keyed_map_eq_by(a, b, EvalValue::eq)
+}
+
+fn keyed_map_eq_by(
+    a: &[(EvalValue, EvalValue)],
+    b: &[(EvalValue, EvalValue)],
+    values: impl Fn(&EvalValue, &EvalValue) -> bool + Copy,
+) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    fn canonical(entries: &[(EvalValue, EvalValue)]) -> Option<BTreeMap<Vec<u8>, &EvalValue>> {
+        let mut keyed = BTreeMap::new();
+        for (key, value) in entries {
+            let key = key.clone().into_value().ok()?;
+            if keyed
+                .insert(crate::value::canonical_value_bytes(&key), value)
+                .is_some()
+            {
+                return None;
+            }
+        }
+        Some(keyed)
+    }
+    if let (Some(a), Some(b)) = (canonical(a), canonical(b)) {
+        return a
+            .into_iter()
+            .zip(b)
+            .all(|((a_key, a_value), (b_key, b_value))| {
+                a_key == b_key && values(a_value, b_value)
+            });
+    }
+
+    // `Payload` is the only evaluator witness without a core value and cannot
+    // inhabit a materialized map key. Keep `Eq` total even for that transient,
+    // malformed state instead of assigning it a fake canonical byte string.
+    let mut matched = alloc::vec![false; b.len()];
+    a.iter().all(|(a_key, a_value)| {
+        let found = b.iter().enumerate().position(|(index, (b_key, b_value))| {
+            !matched[index] && a_key == b_key && values(a_value, b_value)
+        });
+        if let Some(index) = found {
+            matched[index] = true;
+            true
+        } else {
+            false
+        }
+    })
 }
 
 /// Names and types visible to an expression. Keys may be dotted
@@ -1872,13 +1997,21 @@ fn literal_type(value: &Value) -> DataType {
         Value::Null => DataType::Null,
         Value::Array(_) => DataType::array(DataType::Variant),
         Value::Map(_) => DataType::text_map(DataType::Variant),
+        Value::KeyedMap(_) => DataType::Variant,
         // No struct type exists in the annotation subset; the value
         // carries its own witness and types as dynamic.
         Value::Struct(_) => DataType::Variant,
         // The exact value already belongs to Rastok's decimal domain. Its
         // v6 tree type remains `variant` until B8 can transport `number`.
         Value::Decimal { .. } => DataType::Variant,
-        Value::Enum(_) | Value::StructuralUnion { .. } | Value::TaggedUnion(_) => DataType::Variant,
+        Value::Uuid(_) => DataType::Uuid,
+        Value::Date(_)
+        | Value::Time(_)
+        | Value::TimestampNtz(_)
+        | Value::Interval { .. }
+        | Value::Enum(_)
+        | Value::StructuralUnion { .. }
+        | Value::TaggedUnion(_) => DataType::Variant,
     }
 }
 
@@ -1971,6 +2104,17 @@ fn concrete_deep(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue,
             }
             EvalValue::Map(deep)
         }
+        EvalValue::KeyedMap(entries) => EvalValue::KeyedMap(
+            entries
+                .into_iter()
+                .map(|(key, value)| {
+                    Ok((
+                        concrete_deep(key, bindings)?,
+                        concrete_deep(value, bindings)?,
+                    ))
+                })
+                .collect::<Result<_, Error>>()?,
+        ),
         EvalValue::Struct(fields) => EvalValue::Struct(
             fields
                 .into_iter()
@@ -2082,6 +2226,11 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                 (EvalValue::Map(mut map), EvalValue::Text(key)) => map
                     .remove(&key)
                     .ok_or_else(|| fault(format!("no such key `{key}`"))),
+                (EvalValue::KeyedMap(entries), key) => entries
+                    .into_iter()
+                    .find(|(candidate, _)| values_equal(candidate, &key))
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| fault(String::from("no such canonical map key"))),
                 (base, index) => Err(fault(format!("cannot index {base:?} with {index:?}"))),
             }
         }
@@ -2119,6 +2268,9 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                     Ok(EvalValue::Int(items.len() as i64))
                 }
                 (Function::Size, [EvalValue::Map(map)]) => Ok(EvalValue::Int(map.len() as i64)),
+                (Function::Size, [EvalValue::KeyedMap(map)]) => {
+                    Ok(EvalValue::Int(map.len() as i64))
+                }
                 (Function::Size, [EvalValue::Struct(fields)]) => {
                     Ok(EvalValue::Int(fields.len() as i64))
                 }
@@ -2262,6 +2414,22 @@ fn values_equal(lhs: &EvalValue, rhs: &EvalValue) -> bool {
         (EvalValue::Bytes(a), EvalValue::Bytes(b)) => a == b,
         (EvalValue::Duration(a), EvalValue::Duration(b)) => a == b,
         (EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a == b,
+        (EvalValue::Date(a), EvalValue::Date(b)) => a == b,
+        (EvalValue::Time(a), EvalValue::Time(b)) => a == b,
+        (EvalValue::TimestampNtz(a), EvalValue::TimestampNtz(b)) => a == b,
+        (
+            EvalValue::Interval {
+                months: a_months,
+                days: a_days,
+                nanoseconds: a_nanoseconds,
+            },
+            EvalValue::Interval {
+                months: b_months,
+                days: b_days,
+                nanoseconds: b_nanoseconds,
+            },
+        ) => a_months == b_months && a_days == b_days && a_nanoseconds == b_nanoseconds,
+        (EvalValue::Uuid(a), EvalValue::Uuid(b)) => a == b,
         (EvalValue::Null, EvalValue::Null) => true,
         (EvalValue::List(a), EvalValue::List(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_equal(x, y))
@@ -2278,6 +2446,7 @@ fn values_equal(lhs: &EvalValue, rhs: &EvalValue) -> bool {
                     .zip(b)
                     .all(|((ka, va), (kb, vb))| ka == kb && values_equal(va, vb))
         }
+        (EvalValue::KeyedMap(a), EvalValue::KeyedMap(b)) => keyed_map_eq_by(a, b, values_equal),
         (EvalValue::Enum(a), EvalValue::Enum(b)) => a == b,
         (
             EvalValue::StructuralUnion {
@@ -2579,6 +2748,20 @@ mod tests {
         ]);
         assert_eq!(ab, ba, "order is presentation");
         assert!(values_equal(&ab, &ba));
+    }
+
+    #[test]
+    fn keyed_map_equality_stays_total_before_payload_resolution() {
+        let unresolved = EvalValue::KeyedMap(alloc::vec![
+            (EvalValue::Payload, EvalValue::Text(String::from("payload"))),
+            (EvalValue::Int(1), EvalValue::Text(String::from("one"))),
+        ]);
+        let reordered = EvalValue::KeyedMap(alloc::vec![
+            (EvalValue::Int(1), EvalValue::Text(String::from("one"))),
+            (EvalValue::Payload, EvalValue::Text(String::from("payload"))),
+        ]);
+        assert_eq!(unresolved, reordered);
+        assert!(values_equal(&unresolved, &reordered));
     }
 
     fn compile_ok(text: &str, signature: &Signature) -> Tree {

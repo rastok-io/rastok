@@ -29,6 +29,22 @@ pub fn value_tagged(value: &Value) -> Cbor {
         Value::Bytes(v) => Cbor::Array(vec![Cbor::Uint(7), Cbor::Bytes(v.clone())]),
         Value::Duration(v) => Cbor::Array(vec![Cbor::Uint(16), int_cbor(*v)]),
         Value::Timestamp(v) => Cbor::Array(vec![Cbor::Uint(12), int_cbor(*v)]),
+        Value::Date(v) => Cbor::Array(vec![Cbor::Uint(11), int_cbor(*v)]),
+        Value::Time(v) => Cbor::Array(vec![Cbor::Uint(14), int_cbor(*v)]),
+        Value::TimestampNtz(v) => Cbor::Array(vec![Cbor::Uint(13), int_cbor(*v)]),
+        Value::Interval {
+            months,
+            days,
+            nanoseconds,
+        } => Cbor::Array(vec![
+            Cbor::Uint(24),
+            Cbor::Array(vec![
+                int_cbor(*months),
+                int_cbor(*days),
+                int_cbor(*nanoseconds),
+            ]),
+        ]),
+        Value::Uuid(v) => Cbor::Array(vec![Cbor::Uint(15), Cbor::Bytes(v.to_vec())]),
         Value::Struct(fields) => {
             // Canonical sorted pairs — construction order is not
             // identity material.
@@ -54,6 +70,23 @@ pub fn value_tagged(value: &Value) -> Cbor {
                 .iter()
                 .map(|(key, value)| {
                     let tagged_key = Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(key.clone())]);
+                    (
+                        encode(&tagged_key),
+                        Cbor::Array(vec![tagged_key, value_tagged(value)]),
+                    )
+                })
+                .collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            Cbor::Array(vec![
+                Cbor::Uint(18),
+                Cbor::Array(pairs.into_iter().map(|(_, pair)| pair).collect()),
+            ])
+        }
+        Value::KeyedMap(entries) => {
+            let mut pairs: Vec<(Vec<u8>, Cbor)> = entries
+                .iter()
+                .map(|(key, value)| {
+                    let tagged_key = value_tagged(key);
                     (
                         encode(&tagged_key),
                         Cbor::Array(vec![tagged_key, value_tagged(value)]),
@@ -221,5 +254,29 @@ mod tests {
             tagged_body[1],
             Cbor::Array(ref payload) if payload.first() == Some(&Cbor::Uint(17))
         ));
+    }
+
+    #[test]
+    fn every_completed_scalar_family_has_one_canonical_value_tag() {
+        let values = [
+            (crate::value::Value::Date(0), 11),
+            (crate::value::Value::TimestampNtz(0), 13),
+            (crate::value::Value::Time(0), 14),
+            (crate::value::Value::Uuid([0; 16]), 15),
+            (
+                crate::value::Value::Interval {
+                    months: 1,
+                    days: 2,
+                    nanoseconds: 3,
+                },
+                24,
+            ),
+        ];
+        for (value, expected_tag) in values {
+            let Cbor::Array(tagged) = value_tagged(&value) else {
+                panic!("a tagged value");
+            };
+            assert_eq!(tagged.first(), Some(&Cbor::Uint(expected_tag)));
+        }
     }
 }

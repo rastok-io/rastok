@@ -6,12 +6,12 @@
 > the implementation is being brought to this model, not the other way
 > around.
 >
-> **Implementation checkpoint (B3, 2026-08-14).** The no_std core owns the
-> complete `DataType` algebra and the currently executable materialized
-> `Value` cases; the `expr` engine consumes those authorities. Deterministic
-> `is`/`as` narrowing for precise, structural-union and tagged-union targets
-> is executable in memory. B1 still tracks the remaining value families, and
-> package v6 refuses the new expression forms categorically; B8 publishes
+> **Implementation checkpoint (B3 + B1 completion, 2026-08-14).** The no_std
+> core owns the complete `DataType` and materialized `Value` algebras for the
+> strict JSON Schema, Avro and Arrow profiles; the `expr` engine consumes those
+> authorities. Deterministic `is`/`as` narrowing for precise,
+> structural-union and tagged-union targets is executable in memory. Package
+> v6 categorically refuses the new families and expression forms; B8 publishes
 > their sole v7 encoding.
 
 Rastok owns the logical type system of envelope payloads. The expression
@@ -82,7 +82,7 @@ The canonical scalar constructors and source aliases are exact:
 | `timestamp(unit, zone)` | the four time units; `zone = utc | named(text)` | `timestamp`, `timestamp(unit, "zone")` |
 | `timestamp_ntz(unit)` | the four time units; deliberately no zone | `timestamp_ntz`, `timestamp_ntz(unit)` |
 | `duration(unit)` | the four time units; default nanosecond | `duration`, `duration(unit)` |
-| `interval(unit)` | `year_month | day_time | month_day_nano` | `interval(unit)` |
+| `interval(unit)` | Arrow: `year_month | day_time | month_day_nano`; Avro: `month_day_millis_unsigned` | `interval(unit)` |
 
 `timestamp` with no arguments is `timestamp(nanosecond, utc)`. A named
 timezone is identity material; the spellings `UTC`, `Etc/UTC` and
@@ -91,17 +91,42 @@ not UTC by omission: it is `timestamp_ntz`. Offset widths for variable
 text/binary and Arrow dense/sparse, dictionary or run-end layouts are
 representation facts and do not create logical types.
 
-The materialized value keeps every distinction needed when no surrounding
-schema is available: integer signedness/width, float width and canonical
-bits, decimal carried scale, temporal unit/timezone, enum symbol and union
-discriminant. A decimal value does not repeat precision; conformance checks
-its coefficient against the declared precision and requires its carried
-scale to equal the declared scale. A schema-less exact-number value may use
-the wider decimal128 exponent domain (`-6143..=6144`) already fixed by the
-value registry; narrowing it to `decimal(p,s)` still requires the declared
-`s` in `-38..=38`. `number` and `variant` are types, not wrapper values:
-their values retain the concrete canonical scalar or tree cases they
-contain.
+`Value` carries the canonical data, not a second copy of its surrounding
+`DataType`. The resolved port/state/schema selected through `graph_version`
+owns constraints such as integer and float width, fixed collection length,
+decimal precision, temporal unit and timestamp timezone. An envelope does not
+repeat that tree merely because its payload is materialized.
+
+The materialized carriers are consequently smaller than the type algebra:
+
+- signed integers use one `i64` carrier and unsigned integers one `u64`
+  carrier; the declared width is checked by `DataType`;
+- binary16 and binary32 values are promoted exactly into the binary64
+  carrier. Conformance to a narrower float requires an exact round trip;
+  canonical NaN and signed zero remain value distinctions;
+- variable/fixed bytes share one byte sequence, and variable/fixed arrays
+  share one sequence. The declared length and element homogeneity remain in
+  the type; a `variant` array may remain dynamically heterogeneous;
+- a date is canonical whole days; time, timestamps and durations are
+  canonical nanoseconds; an interval carries its month/day/nanosecond
+  components. Unit, timezone and external physical width remain type
+  parameters. The V1 value bound is the published i64 nanosecond domain;
+  an external value outside it refuses instead of overflowing;
+- UUID carries exactly 16 network-order bytes;
+- `map<text,V>` uses the unique text-keyed form; other admitted key types use
+  canonical tagged key values. Two canonically equal keys refuse;
+- enum symbols and both union discriminants remain in the value because they
+  select semantic data, not merely a schema constraint.
+
+A decimal value carries scale because scale is part of its exact canonical
+value, but does not repeat precision; conformance checks its coefficient
+against the declared precision and requires its carried scale to equal the
+declared scale. A schema-less exact-number value may use the wider decimal128
+exponent domain (`-6143..=6144`) already fixed by the value registry;
+narrowing it to `decimal(p,s)` still requires the declared `s` in
+`-38..=38`. `number` and `variant` are types, not wrapper values: their values
+retain the concrete canonical scalar or tree cases they contain, but do not
+remember constraints discarded by an explicit conversion to `variant`.
 
 `number` is a closed exact-numeric scalar, not a floating-point escape
 hatch: it preserves whether its value is an integer or a bounded exact
@@ -150,6 +175,8 @@ The resolved tree admits no source-order aliases:
   integer, text, bytes/fixed bytes, decimal, date/time/timestamp/duration,
   uuid or enum. Float, `number`, null, interval, variant and every composite
   key refuse by path;
+- text-keyed maps and non-text keyed maps have one materialized spelling each;
+  the latter are order-insensitive and sort by canonical tagged key bytes;
 - structural-union branches are flattened, unique, pairwise disjoint and
   sorted by their canonical type bytes. Optional `T?` resolves to that same
   union with `null`; source branch order is not identity;

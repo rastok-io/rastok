@@ -230,13 +230,14 @@ step touches `vm.rs` once.
    terminal outcome of each invocation. This generalizes the original
    typed-error deliverable into `ProcessExit`; partition `stop` remains a
    distinct lifecycle implemented by the following `per` slice. Core
-   `datatype::DataType` already owns the executable type subset without an
-   identity move. Core `value::Value` now also owns the executable
-   materialized-value subset; `expr::EvalValue` is only the transient carrier
-   of the lazy payload witness. Core `Value::validate` and
-   `DataType::violation` now provide the single structural-validation and
-   recursive-conformance doors used by plans, metadata, state, ingress and
-   emissions; JSON no longer owns the decimal128 domain. B2 now resolves every
+   `datatype::DataType` and core `value::Value` now own the complete strict
+   JSON Schema/Avro/Arrow logical and materialized domains without a v6
+   identity move; resolved type parameters are not copied into envelopes.
+   `expr::EvalValue` is only the transient carrier of the lazy payload witness.
+   Core `Value::validate` and `DataType::violation` provide the single
+   structural-validation and recursive-conformance doors used by plans,
+   metadata, state, ingress and emissions; JSON no longer owns the decimal128
+   domain. B2 now resolves every
    used or declared port into a total `Declared`/`Inferred` table on
    `ValidatedExecutionPlan`; v6 decoders re-derive it, and no unresolved hole
    becomes `variant`. B3 has renamed the consumer to `expr`, added typed

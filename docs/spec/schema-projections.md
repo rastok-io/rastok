@@ -17,6 +17,16 @@ The no-std core sees only `DataType`. An adapter reports a path plus one of the
 loss reasons below; it never falls back to `bytes` or `variant` when a schema
 was supplied.
 
+The core materialized carriers cover every logical family in this profile.
+They normalize widths and representation parameters rather than copying the
+schema into each value: narrower floats promote exactly to binary64, fixed
+collections use their ordinary byte/array carrier, temporal counts normalize
+to the canonical units in [`types.md`](types.md), and non-text maps carry
+canonical typed keys. `DataType::violation` checks the omitted width, length,
+unit, timezone and key constraints recursively. The B1 conformance matrix
+exercises representative JSON, Avro and Arrow values; parsing and reverse
+projection of the external schema documents themselves remain boundary work.
+
 The external authorities for this profile are the
 [JSON Schema 2020-12 Core](https://json-schema.org/draft/2020-12/json-schema-core)
 and [Validation](https://json-schema.org/draft/2020-12/json-schema-validation)
@@ -108,7 +118,7 @@ adapter returns `UnsupportedTarget` rather than lying with plain `number`,
 | enum | Rastok enum; Avro symbol ordinal remains codec data |
 | decimal logical type | decimal128 when `1..=38` precision and Avro's `0 <= scale <= precision` hold |
 | date/time/timestamp/local-timestamp logical types | matching date/time/timestamp/timestamp-ntz constructor |
-| duration logical type | `interval(month_day_nano)`; Avro's milliseconds are scaled exactly to nanoseconds |
+| duration logical type | `interval(month_day_millis_unsigned)`; the three Avro `u32` components remain an exact type constraint and milliseconds normalize exactly to value nanoseconds |
 | UUID logical type | `uuid` |
 | union | structural when projected branches are pairwise disjoint; otherwise tagged |
 
@@ -122,6 +132,12 @@ nominal.
 Unknown logical types, recursive records, decimal256-sized precision and
 unions that cannot obtain unique stable case names refuse. Avro's container
 codec, sync markers and block order are representation facts.
+
+The Avro duration form is deliberately distinct from Arrow
+`month_day_nano`: Avro uses unsigned 32-bit months/days/milliseconds, whereas
+Arrow uses signed 32-bit months/days plus signed 64-bit nanoseconds. Treating
+them as one interval type would widen both reverse projections and is
+therefore forbidden.
 
 ## 4. Apache Arrow
 

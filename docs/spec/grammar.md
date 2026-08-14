@@ -1517,6 +1517,7 @@ date_unit         ::= "day" | "millisecond"
 time_unit         ::= "second" | "millisecond" | "microsecond" | "nanosecond"
 timezone          ::= "utc" | STRING                                 // UTC aliases normalize during resolution
 interval_unit     ::= "year_month" | "day_time" | "month_day_nano"
+                    | "month_day_millis_unsigned"
 SIGNED_INT        ::= "-"? INT
 field_decl        ::= field_name ":" type_ref
                     | ".."                                            // open record (row polymorphism)

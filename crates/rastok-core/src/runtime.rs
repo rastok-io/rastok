@@ -1203,6 +1203,14 @@ pub fn resolve_payload(value: expr::EvalValue, slot: &DataSlot<'_>) -> Result<Va
             }
             Value::Map(deep)
         }
+        expr::EvalValue::KeyedMap(entries) => Value::KeyedMap(
+            entries
+                .into_iter()
+                .map(|(key, value)| {
+                    Ok((resolve_payload(key, slot)?, resolve_payload(value, slot)?))
+                })
+                .collect::<Result<_, Fault>>()?,
+        ),
         expr::EvalValue::Struct(fields) => Value::Struct(
             fields
                 .into_iter()

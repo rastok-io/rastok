@@ -5240,6 +5240,15 @@ fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError
         crate::value::Value::Bytes(_) => DataType::BYTES,
         crate::value::Value::Duration(_) => DataType::DURATION,
         crate::value::Value::Timestamp(_) => DataType::TIMESTAMP,
+        // The materialized carrier does not repeat temporal parameters or a
+        // keyed map's schema. These cases acquire their precise type from a
+        // port/schema constraint; none is a source literal in v6.
+        crate::value::Value::Uuid(_) => DataType::Uuid,
+        crate::value::Value::Date(_)
+        | crate::value::Value::Time(_)
+        | crate::value::Value::TimestampNtz(_)
+        | crate::value::Value::Interval { .. }
+        | crate::value::Value::KeyedMap(_) => DataType::Variant,
         crate::value::Value::Null => DataType::Null,
         crate::value::Value::Array(items) => {
             let mut element = None;

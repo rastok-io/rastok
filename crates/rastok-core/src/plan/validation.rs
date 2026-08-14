@@ -1328,6 +1328,12 @@ fn value_shape_expressible(value: &crate::value::Value) -> Result<(), PlanValida
             }
         }
         crate::value::Value::Struct(_)
+        | crate::value::Value::Date(_)
+        | crate::value::Value::Time(_)
+        | crate::value::Value::TimestampNtz(_)
+        | crate::value::Value::Interval { .. }
+        | crate::value::Value::Uuid(_)
+        | crate::value::Value::KeyedMap(_)
         | crate::value::Value::Enum(_)
         | crate::value::Value::StructuralUnion { .. }
         | crate::value::Value::TaggedUnion(_) => Err(PlanValidationError::UnrepresentableConstant),
@@ -1398,5 +1404,34 @@ fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
             form: "as",
             format: crate::plan::serialization::FORMAT_VERSION,
         }),
+    }
+}
+
+#[cfg(test)]
+mod value_format_tests {
+    use super::*;
+    use crate::value::Value;
+
+    #[test]
+    fn v6_refuses_every_value_family_owned_by_the_v7_registry() {
+        let values = alloc::vec![
+            Value::Date(0),
+            Value::Time(0),
+            Value::TimestampNtz(0),
+            Value::Interval {
+                months: 0,
+                days: 0,
+                nanoseconds: 0,
+            },
+            Value::Uuid([0; 16]),
+            Value::KeyedMap(alloc::vec![(Value::Int(1), Value::Bool(true))]),
+        ];
+        for value in values {
+            assert_eq!(
+                value_expressible(&value),
+                Err(PlanValidationError::UnrepresentableConstant),
+                "v6 unexpectedly admitted {value:?}"
+            );
+        }
     }
 }

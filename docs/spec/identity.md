@@ -257,8 +257,8 @@ cannot diverge on bytes for the same journal :
   | 9 | null | CBOR null |
   | 10 | decimal | `[unscaled (bytes, big-endian two's-complement, MINIMAL — no redundant sign byte ; zero = a single `0x00`), scale (INT, signed)]` ; ONE seal rule — the value seals at the scale it CARRIES — fed by three disjoint origins : a TYPED `decimal(p, s)` carries its **DECLARED scale** — never re-minimized, so `decimal(p,2)` value `1` is always `[100, 2]` ; a DOCUMENT-origin dynamic (a `variant` number, tag-6 reader rule) carries its **MINIMAL scale** (trailing zeros stripped) ; a `decimal("…")` CONSTRUCTOR dynamic carries its **DECLARED scale** (D-2026-08-13-1 — `decimal("1.50")` seals `[150, 2]`). The DYNAMIC origins stay disjoint from the integer domain by the WRITTEN-SCALE FOLD — both collapse a scale-≤-0 value representable in i64 to the integer tags, so no dynamic decimal ever hides an integer ; a TYPED decimal needs no fold, its declared type carrying the context. Budget, exact : `unscaled` in the signed 128-bit range with at most 38 significant decimal digits, `scale` ∈ [−6143, +6144] (the IEEE decimal128 exponent domain, Arrow-anchored) ; outside either bound → refusal, never a narrowing (D-2026-08-10-7) |
   | 11 | date | CBOR integer — days since 1970-01-01 |
-  | 12 | timestamp | CBOR integer — **i64** NANOSECONDS since epoch, UTC (Arrow-anchored ; range ≈ 1677–2262 ; out of range = TYPE ERROR, never a bignum ; same bound as `duration`) |
-  | 13 | timestamp_ntz | CBOR integer — **i64** NANOSECONDS, no zone (same bound) |
+  | 12 | timestamp | CBOR integer — **i64** NANOSECONDS since epoch (Arrow-anchored ; range ≈ 1677–2262 ; out of range = TYPE ERROR, never a bignum ; timezone semantics live in the resolved `DataType`) |
+  | 13 | timestamp_ntz | CBOR integer — **i64** NANOSECONDS in the timezone-naive timeline (same bound) |
   | 14 | time | CBOR integer — **i64** NANOSECONDS since midnight |
   | 15 | uuid | CBOR byte string (16) |
   | 16 | duration | CBOR integer — NANOSECONDS (`duration("1ns")` is exact ; i64 ns ≈ ±292 y) |
@@ -269,6 +269,7 @@ cannot diverge on bytes for the same journal :
   | 21 | union | `[branch_index (uint), tagged_value]` — the branch's 0-based position in the union's declared order. **Branches MUST be pairwise disjoint : overlapping/identical branches (`int \| int`, `int \| long`, `number \| long`) are a compile error `E-UNION-OVERLAP`, so a value maps to exactly one `branch_index`** |
   | 22 | variant | the dynamic tree, encoded as the `tagged_value` of its resolved concrete tag |
   | 23 | uint | CBOR unsigned integer (u64 range) — the Rastok `uint` domain (originally introduced by the CEL-compatible evaluator) ; appended 2026-08-07 (see errata E-2026-08-07-1) : it previously borrowed tag 3, making `long 2^31` and `uint 2^31` seal identically |
+  | 24 | interval (**reserved for v7; v6 refuses**) | `[months (int), days (int), nanoseconds (int)]` ; the resolved interval `DataType` fixes the admitted component shape (`year_month`, `day_time`, `month_day_nano`, or Avro's unsigned month/day/millisecond profile) |
 
   The v6 row for tag 21 describes its only executable union form:
   structural `[branch_index, tagged_value]`. The M1.3 logical value algebra
@@ -277,6 +278,16 @@ cannot diverge on bytes for the same journal :
   from the unsigned structural selector. No validated v6 plan can carry that
   form. B8 freezes both selector forms as part of the one v7 registry rather
   than retroactively extending v6.
+
+  The materialized carrier does not duplicate its resolved type parameters.
+  Integer/float width, fixed length, decimal precision, temporal unit and
+  timestamp timezone come from the plan/schema selected by the record's
+  `graph_version`; the value carries only the canonical data and semantic
+  discriminants. B8 therefore seals a typed value from `(resolved DataType,
+  Value)` while storing that schema context once in the retained plan/manifest,
+  not as a full type tree in every envelope. The old v6 `value_tagged` rows stay
+  byte-stable for its admitted subset; tags and type constructors unavailable
+  to v6 are categorically refused by its validator.
 
   (Sort keys — struct by `field` UTF-8 ; map by the key's canonical
   `tagged_value` bytes. All temporal logical types share the Arrow

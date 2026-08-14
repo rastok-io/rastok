@@ -805,10 +805,18 @@ fn write_into(
         Value::Decimal { unscaled, scale } => {
             write_decimal(*unscaled, *scale, out)?;
         }
-        Value::Duration(_) | Value::Timestamp(_) => {
+        Value::Duration(_)
+        | Value::Timestamp(_)
+        | Value::Date(_)
+        | Value::Time(_)
+        | Value::TimestampNtz(_)
+        | Value::Interval { .. }
+        | Value::Uuid(_) => {
             return Err(JsonError {
                 offset: 0,
-                message: String::from("duration and timestamp require an explicit JSON projection"),
+                message: String::from(
+                    "temporal and UUID values require an explicit JSON projection",
+                ),
             });
         }
         Value::Array(items) => {
@@ -850,6 +858,12 @@ fn write_into(
                 write_into(value, out, depth + 1)?;
             }
             out.push('}');
+        }
+        Value::KeyedMap(_) => {
+            return Err(JsonError {
+                offset: 0,
+                message: String::from("a non-text map has no standard JSON object projection"),
+            });
         }
         Value::Enum(symbol) => write_string(symbol, out),
         Value::StructuralUnion { value, .. } => write_into(value, out, depth + 1)?,
@@ -1002,6 +1016,9 @@ mod writer_tests {
         assert!(write_value(&Value::Bytes(vec![1])).is_err());
         assert!(write_value(&Value::Double(f64::NAN)).is_err());
         assert!(write_value(&Value::Double(f64::INFINITY)).is_err());
+        assert!(write_value(&Value::Date(0)).is_err());
+        assert!(write_value(&Value::Uuid([0; 16])).is_err());
+        assert!(write_value(&Value::KeyedMap(vec![(Value::Int(1), Value::Bool(true))])).is_err());
     }
 
     #[test]

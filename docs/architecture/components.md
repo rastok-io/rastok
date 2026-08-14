@@ -1,8 +1,8 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated through the landed M1.3 B3 expression core on
-> 2026-08-14. The M0 deviations remain recorded in
+> of the build; updated through the landed M1.3 B1 value completion and B3
+> expression core on 2026-08-14. The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
 > evidence lives in [`m1-slice.md`](m1-slice.md). The specified M1.3
 > replacement of the type/value and boundary seams is tracked in
@@ -217,9 +217,10 @@ to a core value rejects any unresolved witness. Inside the kernel the chain
 also shares foundational utilities: canonical nesting/double rules, the exact
 number reader, and the single comment recognizer.
 
-Core also owns the executable judges: `Value::validate` rejects malformed
-materialized values independently of where they entered, while
-`DataType::violation` reports recursive conformance failures with their nested
+Core also owns the complete strict-profile value judges: `Value::validate`
+rejects malformed materialized values independently of where they entered,
+while `DataType::violation` reports recursive conformance failures — including
+float widths, temporal shapes, UUID and canonical-key maps — with their nested
 path. The plan gate, metadata/state doors, VM ingress and emission gate consume
 those same operations; JSON retains only its origin-specific number and
 document rules.
@@ -529,15 +530,16 @@ The chronological detail and commit evidence remain in
   metamodel; defaults are injected before identity, and the parser is a
   forward lexeme-stream parser. The lexer owns cursor/lookahead and
   delegates expression, JSON, verbatim, and guest regions without rewind.
-- **M1.3 foundation:** one executable `DataType`/`Value` ownership,
-  validation and recursive conformance authority serves plans, state,
-  metadata, expressions and VM doors. B2 adds a total effective port table,
+- **M1.3 foundation:** one complete strict-profile `DataType`/`Value`
+  ownership, validation and recursive conformance authority serves plans,
+  state, metadata, expressions and VM doors. B2 adds a total effective port table,
   with declared/inferred origin, and makes unresolved/conflicting constraints
   typed refusals without a package-format move. B3 renames the consumer to
   `expr`, adds deterministic typed narrowing, and keeps its new AST behind the
   v7 package gate.
 - **Next:** M1.3 lands tagged frontends, uniform connector port contracts,
-  JSON/Avro/Arrow projections, multi-output boundary completion and v7.
+  external JSON/Avro/Arrow schema adapters, multi-output boundary completion
+  and v7.
   `per`, joins, new adapters,
   Loop, counters, and `--watch` remain guarded in the order recorded by
   the slice.

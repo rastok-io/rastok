@@ -572,6 +572,7 @@ impl Writer<'_> {
                             IntervalUnit::YearMonth => 1,
                             IntervalUnit::DayTime => 2,
                             IntervalUnit::MonthDayNano => 3,
+                            IntervalUnit::MonthDayMillisUnsigned => 4,
                         });
                     }
                 }
@@ -980,6 +981,32 @@ impl Writer<'_> {
                 self.tag(8);
                 self.hasher.update(&nanos.to_le_bytes());
             }
+            crate::value::Value::Date(days) => {
+                self.tag(17);
+                self.hasher.update(&days.to_le_bytes());
+            }
+            crate::value::Value::Time(nanos) => {
+                self.tag(18);
+                self.hasher.update(&nanos.to_le_bytes());
+            }
+            crate::value::Value::TimestampNtz(nanos) => {
+                self.tag(19);
+                self.hasher.update(&nanos.to_le_bytes());
+            }
+            crate::value::Value::Interval {
+                months,
+                days,
+                nanoseconds,
+            } => {
+                self.tag(20);
+                self.hasher.update(&months.to_le_bytes());
+                self.hasher.update(&days.to_le_bytes());
+                self.hasher.update(&nanoseconds.to_le_bytes());
+            }
+            crate::value::Value::Uuid(bytes) => {
+                self.tag(21);
+                self.hasher.update(bytes);
+            }
             crate::value::Value::Null => self.tag(9),
             crate::value::Value::Array(items) => {
                 self.tag(10);
@@ -993,6 +1020,18 @@ impl Writer<'_> {
                 self.count(map.len());
                 for (key, item) in map {
                     self.str(key);
+                    self.value(item);
+                }
+            }
+            crate::value::Value::KeyedMap(entries) => {
+                self.tag(22);
+                let mut sorted: Vec<_> = entries.iter().collect();
+                sorted.sort_by_cached_key(|(key, _)| {
+                    crate::canonical_cbor::encode(&crate::identity::encoding::value_tagged(key))
+                });
+                self.count(sorted.len());
+                for (key, item) in sorted {
+                    self.value(key);
                     self.value(item);
                 }
             }

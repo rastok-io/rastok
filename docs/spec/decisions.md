@@ -192,6 +192,17 @@ named transport bridge, not the target type: B8 changes it to `number` when
 the one v7 type/expression registry lands. Legacy unchecked member access on
 `variant` remains isolated until the B9 evidence sweep.
 
+**B1 completion checkpoint (2026-08-14).** A materialized `Value` carries
+canonical data, not a duplicate `DataType` tree. Integer/float width, fixed
+length, decimal precision, temporal unit and timezone are resolved from the
+port/schema selected by `graph_version`; enum symbols and union selectors stay
+in the value because they select semantic data. The core value/conformance
+matrix now covers every family in the strict JSON Schema, Avro and Arrow
+profiles, including exact binary16/32 promotion, UUID, all temporal shapes,
+canonical non-text map keys and Avro's unsigned month/day/millisecond interval
+without conflating it with Arrow's signed intervals. V6 refuses those new
+constant forms; B8 alone publishes their typed v7 seal.
+
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign
 literal spelling and `TAG_KW` partition in D-2026-08-12-1; the

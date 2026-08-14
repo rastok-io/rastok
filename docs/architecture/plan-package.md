@@ -27,10 +27,10 @@
 > on target). The v5 entry below stays as history.
 > **M1.3 target:** D-2026-08-14-1 transports the complete canonical
 > `DataType` registry and resolved port tables in one categorical format v7
-> landing. Core type/value ownership and B2's total effective table already
-> govern execution: v6 transports source pins and deterministically re-solves
-> them at validation/decode. v7 is not current until its full wire validator and sabotage
-> matrix land; the ordered work is in
+> landing. B1's complete strict-profile type/value domain and B2's total
+> effective table already govern execution: v6 transports source pins and
+> deterministically re-solves them at validation/decode. v7 is not current
+> until its full wire validator and sabotage matrix land; the ordered work is in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). It will
 > carry canonical union discriminants and complete effective types, not
 > Avro branch indexes, Arrow dense/sparse layout, or unresolved compiler
