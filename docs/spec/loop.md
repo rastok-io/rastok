@@ -81,7 +81,7 @@ connector pay : HttpClient + Loop {
 
   on out where meta.ext.status < 500
   on out where meta.ext.status >= 500 { }
-  on status where data is ConnectFailed || data is TimeoutExpired { }
+  on exit where data is ConnectFailed || data is TimeoutExpired { }
 }
 ```
 
@@ -93,7 +93,7 @@ connector pay : HttpClient + Loop {
 
 Each application must produce at most one continuation envelope. A Loop
 whose iterating path emits none or more than one is rejected statically when
-possible and emits a typed Loop status case otherwise.
+possible and emits a typed Loop exit case otherwise.
 
 ## 2. The `Loop.variant` measure
 
@@ -199,16 +199,16 @@ Loop has three exit paths:
 |---|---|
 | `until` becomes true on a normal Graph or Operator iteration | current envelope leaves on `out` |
 | a Connector completion reaches a body-less outcome handler | the original typed completion outputs leave unchanged |
-| the measure exhausts or violates its invariant | `LoopExhausted` or `LoopVariantViolation` leaves on the Loop's typed `status` output |
+| the measure exhausts or violates its invariant | `LoopExhausted` or `LoopVariantViolation` leaves on the qualified typed `Loop.exit` output |
 
 An `on <output> where <predicate> { ... }` handler with a body is an
 iterating case. `<output>` is an ordinary typed port selected by the
-author (`status` for Process); no port name and no common `transient`
+author (`exit` for Process); no port name and no common `transient`
 field has privileged meaning. The Loop judges the boundary completion as
-one unit so simultaneous `out`/`err`/`status` facts cannot be split by
+one unit so simultaneous `out`/`err`/`exit` facts cannot be split by
 scheduler order. If an iterating case requests another call after the
 measure is exhausted, the Loop emits
-`LoopExhausted { calls, last_outcome }` on its declared status output.
+`LoopExhausted { calls, last_outcome }` on its declared `Loop.exit` output.
 
 An unmatched outcome follows the ordinary resolved sink/wiring policy;
 Loop never turns technical exhaustion into a business outcome.
@@ -277,7 +277,7 @@ connector reserve : HttpClient + Saga + Loop {
 
   on out where meta.ext.status < 500
   on out where meta.ext.status >= 500 { }
-  on status where data is ConnectFailed || data is TimeoutExpired { }
+  on exit where data is ConnectFailed || data is TimeoutExpired { }
   on compensate { /* inverse request */ }
 }
 ```

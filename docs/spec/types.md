@@ -75,7 +75,7 @@ it does not make unrelated fields dynamically typed.
   `T` and `null`.
 - A **tagged union** has named cases with optional payloads. The case name
   is semantic data and remains visible at runtime; it is the form used
-  for protocol and lifecycle outcomes such as `ProcessStatus`.
+  for protocol and lifecycle outcomes such as `ProcessExit`.
 - `variant` is the sole explicitly dynamic type: a self-describing tree,
   notably produced by JSON and jq. It must be narrowed before typed
   structural use.
@@ -158,8 +158,42 @@ declared or inferred; it never represents “no effective type” with an
 
 Every Node has typed input and output ports under this one mechanism.
 `in`, `out` and `err` are conventional default names, not another port
-category. A contract may add any number of outputs (`status`, `rejected`,
-`audit`, ...), all judged by the same conformance relation.
+category. Connector contracts conventionally use `exit` for the terminal
+outcome of one admitted invocation. A contract may add any number of other
+outputs (`rejected`, `audit`, ...), all judged by the same conformance
+relation.
+
+The `exit` convention preserves the original typed-error requirement while
+removing its special channel: terminal error codes are tagged-union cases on
+`exit`, next to successful or neutral terminal cases. Diagnostic bytes remain
+ordinary values on `err`.
+
+### 3.1 Invocation exit is not partition stop
+
+The scopes are nested but distinct:
+
+```text
+Node definition
+  -> partition instance*                 ended by stop
+       -> Connector invocation*           ended by exit
+            -> out* + err* + one exit
+```
+
+A partition may run several invocations, including concurrent ones when its
+resolved concurrency policy permits it. Their outputs carry the call identity
+and partition-instance generation needed for causal correlation. `exit` is
+the terminal barrier for one invocation: no output for that call may follow
+it. `stop` begins closure of the containing partition instance. Closure must
+refuse new calls and settle every admitted obligation by draining or
+cancelling it under a bounded declared policy; it cannot substitute one
+partition event for the calls' individual `exit` values.
+
+Framing controls how bytes become values; publication controls when those
+values become visible. A line-framed stream may therefore emit many envelopes
+on `out` or `err`, whereas an on-exit policy may commit the ordered emissions
+with the terminal `exit`. A collector may aggregate them, but only under an
+explicit bound. These choices do not change the logical port types or the
+one-exit-per-invocation invariant.
 
 ## 4. Parametric Connector contracts
 
@@ -207,7 +241,7 @@ Tagged-union construction is a general value form, not an error-only
 syntax:
 
 ```rastok
-status = Exited { exit_code = 0, signal = null }
+exit = Exited { exit_code = 0, signal = null }
 ```
 
 The same constructor may target any compatible port, state cell or

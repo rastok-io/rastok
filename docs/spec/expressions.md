@@ -127,7 +127,7 @@ system defines. `is` tests a logical type or tagged-union case and makes
 the successful branch narrowable; `as` requests a checked conversion:
 
 ```rastok
-on status where data is Exited {
+on exit where data is Exited {
   out = data.exit_code
 }
 

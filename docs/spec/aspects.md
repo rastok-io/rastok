@@ -54,7 +54,7 @@ connector pay : HttpClient + Loop {
   Loop.backoff = { curve = exponential, initial = duration("200ms") }
   on out where meta.ext.status < 500
   on out where meta.ext.status >= 500 { }
-  on status where data is ConnectFailed || data is TimeoutExpired { }
+  on exit where data is ConnectFailed || data is TimeoutExpired { }
 }
 
 // A saga STEP is not annotated : participation = effect + being inside a `: Saga`
@@ -69,7 +69,7 @@ connector reserve : Postgres + Loop {
     until = value <= 0
   }
   Loop.backoff = { curve = exponential, initial = duration("200ms") }
-  on status where data is ConnectFailed { }
+  on exit where data is ConnectFailed { }
   on compensate {
     idempotency_key = meta.app.order_id + "/unreserve"    // its own operation
     query = "DELETE ..."
@@ -209,7 +209,7 @@ belong at the per-node level at all.
 | Rejected | Why not an aspect | Express via |
 |---|---|---|
 | **`Timeout`** | Fails **T2** (generic vocabulary — `timeout = …`) and **T4** (already an attribute of `Saga`, and `Loop` is bounded by its variant). | `Saga { timeout = … }` as an attribute. A node-wide timeout outside any aspect can be a `Timeout` attribute on the node itself, not a kind. |
-| **`Fallback`** | Fails **T4** — fully expressible with a typed outcome port and a `Router` on the alternate path. | handler on the selected status/case + alternate edge wiring. |
+| **`Fallback`** | Fails **T4** — fully expressible with a typed outcome port and a `Router` on the alternate path. | handler on the selected exit/case + alternate edge wiring. |
 | **`Audit`** | Fails **T3** — audit is observation, not orchestration. Fails **T4** — `durability = global` already provides provenance, and a manual audit tee is just an explicit emission. | `durability = global` + an emission on an `audit_out` port wired to a sink. |
 | **`Trace`** | Fails **T3** (observation) and **T5** — tracing is a runtime-wide concern, not a per-node opt-in. Activating it for some nodes and not others would create blind spans. | A runtime-wide configuration option (`runtime.tracing.enabled = true`), with `meta.sys.trace_*` populated automatically. |
 | **`Validate`** | Fails **T4** — already expressible via typed ports (`input X : SomeSchema`) and checked narrowing. | `input X : Schema` declarations + `as` cast, with its typed refusal routed through the containing contract's ordinary outcome port. |
@@ -335,7 +335,7 @@ graph outer : Saga {
       next = value - 1
       until = value <= 0
     }
-    on status where data is Completed
+    on exit where data is Completed
     ...
   }
   ...
@@ -343,7 +343,7 @@ graph outer : Saga {
 ```
 
 Outer is a saga ; inner is a loop nested inside it. A selected inner
-status may be wired to the outer aspect's `Saga.rollback` input. The
+exit may be wired to the outer aspect's `Saga.rollback` input. The
 inner's success is sealed (cannot be reopened by the
 outer's rollback — see [effects-and-sagas.md §4.4](effects-and-sagas.md#44-runtime-semantics-sealed-sub-sagas)).
 
@@ -374,7 +374,7 @@ contract. Once resolved, those ports use the same direction, effective
 `DataType`, wiring, emission and journal rules as every declared port;
 an aspect does not gain a private control channel. The qualified spelling
 keeps the aspect-owned input unambiguous inside its scope, for example
-`Saga.rollback`. A status exposed by that contract is likewise an
+`Saga.rollback`. An exit exposed by that contract is likewise an
 ordinary typed output, and a guarded edge must explicitly select the case
 that should reach `Saga.rollback`.
 

@@ -49,7 +49,7 @@ graph sim04 : App {
       idempotency_key = meta.app.booking_id + "/charge"
     }
     . -> reserve -> pay -> .
-    pay.status -> Saga.rollback when data is PaymentDeclined
+    pay.exit -> Saga.rollback when data is PaymentDeclined
   }
 
   bookings -> book_trip -> confirmed.in
@@ -71,7 +71,7 @@ lab sim04 {
         on in                            { out = { status = "held" } }
       }
       mock pay {
-        on in { status = PaymentDeclined }
+        on in { exit = PaymentDeclined }
       }
 
       bookings.out = {
@@ -80,7 +80,7 @@ lab sim04 {
       }
       crash after reserve.outbound_open#2        // the 2nd outbound open of reserve = the compensation's
       restart
-      expect "saga rolled back, loudly" book_trip.status where data is SagaRolledBack
+      expect "saga rolled back, loudly" book_trip.Saga.exit where data is SagaRolledBack
       //   (the window rule : restart is an ACTION step — the recovery deliveries,
       //    including the saga's terminal SagaRolledBack emission, are ITS window)
     }
@@ -100,8 +100,8 @@ t=0  E0 born (bookings) ; enters book_trip → saga instance created
      reserve : OUTBOUND open { key "bk_7/hold" } → mock replies "held"
                → OUTBOUND closed · TRANSACTION (reserve sealed)      → E1 on out
      pay     : E1 delivered ; OUTBOUND open { key "bk_7/charge" }
-               → mock replies status PaymentDeclined
-               → OUTBOUND closed · TRANSACTION : E2 on pay.status
+               → mock replies exit PaymentDeclined
+               → OUTBOUND closed · TRANSACTION : E2 on pay.exit
                   tagged case = PaymentDeclined, parent = E1
 
      the guarded edge selects E2 → Saga.rollback : the `: Saga` manager consumes it
@@ -132,7 +132,7 @@ restart :
        → RECALL with the byte-same key "bk_7/release" (digest d3 re-checked ✓)
        mock : "released" → OUTBOUND closed · TRANSACTION (compensation acked)
   ③ resume the fold : 1/1 compensations acked → rolled_back
-       the saga emits SagaRolledBack { saga_id } on book_trip.status —
+       the saga emits SagaRolledBack { saga_id } on book_trip.Saga.exit —
        an ordinary typed output observed through its resolved journal policy.
   ④ Saga.timeout : re-armed for the REMAINING budget
        (opened at committed_at = 0 ; 10min budget ; recovery at journal-time —
@@ -140,5 +140,5 @@ restart :
 ```
 
 The expectation reads the `restart` step's window (the recovery deliveries) at
-`book_trip.status` : **pass** — rolled back, exactly one hold, exactly one
+`book_trip.Saga.exit` : **pass** — rolled back, exactly one hold, exactly one
 release, zero charges kept.

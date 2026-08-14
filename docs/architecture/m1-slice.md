@@ -225,15 +225,20 @@ step touches `vm.rs` once.
    JSON Schema, Avro and Arrow; and `IDENT!` frontends (`json!`, `jq!`,
    `sql!`, …). Connector sheets become parametric typed port contracts.
    Boundary completion may carry several ordinary port outputs, so
-   `Process.err` is exact stderr while `Process.status` carries its
-   tagged lifecycle/outcome. The existing `cel::Type`/`cel::Value`,
+   `Process.err` is exact stderr while `Process.exit` carries the tagged
+   terminal outcome of each invocation. This generalizes the original
+   typed-error deliverable into `ProcessExit`; partition `stop` remains a
+   distinct lifecycle implemented by the following `per` slice. The existing
+   `cel::Type`/`cel::Value`,
    `error_set`, `TypedError` and success/failure-only reply split are
    removed in the same v7 landing, not promoted as an intermediate
    model. Ordered gates and evidence are in the dedicated
    [M1.3 backlog](m1.3-type-system-backlog.md).
 4. **`per` — the partition surface** — keyed nodes and graphs on the
    flat two-concept model; scheduler keys over the proven multiport
-   routing.
+   routing. This slice implements the `stop` side of the M1.3 scope
+   contract: stop admission, then boundedly drain or cancel every open
+   invocation without suppressing its individual `exit`.
 5. **Joins — `on (a, b)` bounded by `within …` / `last N`** —
    correlation windows and the static metadata merge of
    D-2026-08-10-2; the last language lift of the milestone. Here

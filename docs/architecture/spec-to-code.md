@@ -43,7 +43,7 @@ they are not promised crate names.
 
 | Slice | Normative responsibility | Intended owner boundary | Required evidence |
 |---|---|---|---|
-| M1.3 logical payload types and uniform ports | One canonical `DataType`/`Value`; complete effective port types; JSON/Avro/Arrow projections including unions; Rastok expressions as a consumer; `IDENT!` frontends; ordinary multi-output completion and Process `err`/`status` separation | core `datatype`/`value`/`expr`/envelope/plan vocabulary plus std compiler, contract, schema-projection and boundary adapters; exact module names are chosen only when the boundary lands | the ordered gates in [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md), one categorical v7 move, external-schema mapping matrices, differential CEL-compatible tests, package sabotage, Lab/real Process parity, no_std and spike |
+| M1.3 logical payload types and uniform ports | One canonical `DataType`/`Value`; complete effective port types; JSON/Avro/Arrow projections including unions; Rastok expressions as a consumer; `IDENT!` frontends; ordinary multi-output completion with Process `err` diagnostics and one typed `exit` per invocation | core `datatype`/`value`/`expr`/envelope/plan vocabulary plus std compiler, contract, schema-projection and boundary adapters; exact module names are chosen only when the boundary lands | the ordered gates in [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md), one categorical v7 move, external-schema mapping matrices, differential CEL-compatible tests, package sabotage, Lab/real Process parity, no_std and spike |
 
 The current `cel::Type`/`cel::Value`, `error_set`, `TypedError` and
 success/failure-only boundary reply remain implementation scaffolding

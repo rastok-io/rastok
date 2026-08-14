@@ -12,9 +12,9 @@
 |---|---|
 | `mode = respond` : the request stays open ; the graph's answer completes it | stdlib.md §3.1 |
 | Correlation **default = lineage** (`origin_id == R.id`), legal on join-free return paths | stdlib.md §3.1 (Correlator) |
-| `timeout` = the open-request budget; expiry → `RequestExpired` on `status`, 504, `l:timeout`, call-closed | stdlib.md §3.1 (outcome contract) |
+| `timeout` = the open-request budget; expiry → `RequestExpired` on `exit`, 504, `l:timeout`, call-closed | stdlib.md §3.1 (outcome contract) |
 | A late graph answer = **orphan**, discarded-and-journaled, never two HTTP responses | stdlib.md §3.1 |
-| Typed Connector outcomes use ordinary `status` ports with resolved journal policy | delivery-semantics.md §5 |
+| Typed Connector outcomes use ordinary `exit` ports with resolved journal policy | delivery-semantics.md §5 |
 | The pending-connection table is volatile ; response delivery is best-effort | HttpServer adapter obligation |
 | Mock `after <duration>` = dated emission, swept by `advance` | simulation-semantics.md §5.1 |
 | `expect nothing` / `count == N` windows | simulation-semantics.md §5.2 |
@@ -52,7 +52,7 @@ graph sim06 : App {
 
   api -> ask -> llm.in
   llm.out -> wrap -> api.in             // join-free return path → default lineage correlation LEGAL
-  // llm.status is an ordinary typed output; its unwired contract policy journals it.
+  // llm.exit is an ordinary typed output; its unwired contract policy journals it.
 }
 ```
 
@@ -85,7 +85,7 @@ lab sim06 {
       advance duration("2s")
 
       expect "answer reached the endpoint" api.in where data.answer == "42"
-      expect nothing api.status
+      expect nothing api.exit
     }
 
     scenario expired "the graph answers too late ; 504 first, the orphan is discarded" {
@@ -103,7 +103,7 @@ lab sim06 {
 
       advance duration("10s")
 
-      expect "504 path taken" api.status where data is RequestExpired
+      expect "504 path taken" api.exit where data is RequestExpired
       expect "the graph still answered" wrap.out count == 1 where data.answer == "too late"
       expect "exactly one completion attempt" api.in count == 1
       // the DISCARD of that one late delivery is asserted by the golden trace,
@@ -127,13 +127,13 @@ lab sim06 {
       api.out = { meta.ext.visitor = "v3"  data = { q = "rain coat" } }
 
       // the refusal is IMMEDIATE — zero virtual time has passed
-      expect "the third hit the bound" api.status where data is Overloaded
+      expect "the third hit the bound" api.exit where data is Overloaded
       expect nothing llm.in                     // a refusal at the door : v3 never entered the graph
 
       advance duration("5s")
 
       expect "both engaged clients served" api.in count == 2 where data.answer == "the linen one"
-      expect nothing api.status                 // no 504 : the bound protected the engaged
+      expect nothing api.exit                   // no 504 : the bound protected the engaged
     }
   }
 }
@@ -183,7 +183,7 @@ advance duration("2s")                        (target t = 2 ; window ②)
   no dated event ≤ 2 remains → t := 2. stable.
 
 expect "answer reached the endpoint" : E3 at api.in in window ② → PASS
-expect nothing api.status : zero exceptional status deliveries → PASS
+expect nothing api.exit : zero exceptional exit deliveries → PASS
 ```
 
 Lineage of the answer : `E3 → E2 → E1 → R0` — one unbroken origin chain,
@@ -202,10 +202,10 @@ advance duration("10s")                       (target t = 10 ; window ②)
   t=5  budget expiry fires (l:timeout — VM-owned dated event) :
          · the driver answers 504 on the open connection ; pending entry retired
          · THE REQUEST IS CLOSED (call-closed rule, stdlib §3.1)
-         · typed outcome on api.status :
-             X.id = H( "api" ‖ "l:timeout" ‖ R0'.id ‖ "status" ‖ 0 )
+         · typed outcome on api.exit :
+             X.id = H( "api" ‖ "l:timeout" ‖ R0'.id ‖ "exit" ‖ 0 )
              case = RequestExpired    parent = R0'   origin = R0'.id
-         · api.status has journal policy → X remains observable without a graph edge
+         · api.exit has journal policy → X remains observable without a graph edge
        stable at t=5.
   t=6  OUTBOUND closed (mock reply) → E2' on llm.out (the LLM call itself
        was within ITS 8s budget — dated #2 disarmed by closure)
@@ -217,7 +217,7 @@ advance duration("10s")                       (target t = 10 ; window ②)
        stable.
   t=8 disarmed ; nothing ≤ 10 remains → t := 10.
 
-expect "504 path taken"    : X at api.status, data is RequestExpired → PASS
+expect "504 path taken"    : X at api.exit, data is RequestExpired → PASS
 expect "the graph still answered" : E3' on wrap.out, count == 1 → PASS
 expect "exactly one completion attempt" : E3' at api.in, count == 1 → PASS
    (the delivery HAPPENED in the graph plane ; the discard is the driver's,
@@ -236,7 +236,7 @@ t=0  action 1 : R1 born (seq 0) — accepted : pending table {R1} (1/2)
        · REFUSED AT THE DOOR : the 503 leaves immediately (driver plane)
        · NO INBOUND record is written — the request was never accepted,
          so the acknowledgement discipline has nothing to promise
-       · root typed outcome X on api.status : case = Overloaded (no parent —
+       · root typed outcome X on api.exit : case = Overloaded (no parent —
          the same posture as MalformedRequest) → journal policy observes it
        stable → window ③
 
@@ -251,7 +251,7 @@ advance duration("5s")                                  (window ④)
 
 expect "both engaged clients served" : two deliveries at api.in,
   data.answer == "the linen one", count == 2 → PASS
-expect nothing api.status (window ④) : X was window ③ ; no 504 → PASS
+expect nothing api.exit (window ④) : X was window ③ ; no 504 → PASS
    — the bound protected the engaged : v1/v2 completed inside their
    budget, indifferent to the crush.
 ```

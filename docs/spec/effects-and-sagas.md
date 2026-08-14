@@ -11,7 +11,7 @@
 > **M1.3 amendment.** The former rule “an unwired `err` bubbles into the
 > nearest Saga” is superseded by the uniform-port model. A `Saga` aspect
 > contributes an ordinary typed input `Saga.rollback` and an ordinary typed
-> output `status: SagaStatus`. The graph explicitly routes the outcome cases
+> output `Saga.exit: SagaExit`. The graph explicitly routes the outcome cases
 > that should trigger compensation to `Saga.rollback`; no port name implies
 > failure and an unwired output never triggers rollback by accident.
 
@@ -201,7 +201,7 @@ connector reserve : Postgres + Loop {        // inside a `: Saga` graph
     until = value <= 0
   }
   Loop.backoff = { curve = exponential, initial = duration("200ms") }
-  on status where data is ConnectFailed { }  // explicit iterating outcome
+  on exit where data is ConnectFailed { }  // explicit iterating outcome
   on compensate {
     idempotency_key = meta.app.order_id + "/unreserve"   // its OWN operation
     query = "DELETE ..."
@@ -212,7 +212,7 @@ connector reserve : Postgres + Loop {        // inside a `: Saga` graph
 The Loop policy applies to **both** the forward call and the
 compensation handler — the same retry/backoff settings cover both
 directions. A contract does not attach a universal `transient` bit;
-the graph names the exact cases or status codes its policy repeats.
+the graph names the exact exit cases or protocol status codes its policy repeats.
 
 When two distinct policies are required, delegate the compensation to
 its own Loop-wrapped Connector — see [loop.md §7.1](loop.md#71-same-node-composition).
@@ -327,7 +327,7 @@ When an outer saga contains a nested inner saga :
   it. The sealed inner saga acts as a **local pivot** within the
   outer's flow.
 - Inner **rolls back** → rollback of the inner only. The outer receives the
-  inner saga's typed `status` case on the explicitly wired branch; it may
+  inner saga's typed `Saga.exit` case on the explicitly wired branch; it may
   handle it, route it to its own `Saga.rollback`, or carry on.
 - Outer **fails** → rollback of the outer's compensable steps. Already-**sealed**
   inner sagas are **not** retroactively rolled back (the inner has already
@@ -371,14 +371,14 @@ interpret that value: it preserves the triggering envelope as the causal
 rollback reason. For example:
 
 ```rastok
-pay.status -> Saga.rollback when data is PaymentDeclined
-settle.status -> Saga.rollback when data is LoopExhausted
+pay.exit -> Saga.rollback when data is PaymentDeclined
+settle.Loop.exit -> Saga.rollback when data is LoopExhausted
 ```
 
 The aspect's output type is an ordinary tagged union:
 
 ```rastok
-type SagaStatus = union {
+type SagaExit = union {
   SagaCommitted      { saga_id: uuid }
   SagaExpired        { saga_id: uuid }
   SagaRolledBack     { saga_id: uuid }
@@ -390,7 +390,7 @@ The exact case payloads are finalized with the Saga implementation slice;
 their port and union semantics are already fixed by M1.3.
 
 This is ordinary guarded edge routing. A business rejection can travel on
-another output, a handled status can be consumed elsewhere, and neither the
+another output, a handled exit can be consumed elsewhere, and neither the
 name `err` nor an unwired port has hidden Saga semantics.
 
 ```text
@@ -407,7 +407,7 @@ name `err` nor an unwired port has hidden Saga semantics.
    the rollback's cause for the first, then the previous compensation's ack —
    envelope.md §3.1). A `: Loop` on the target retries per its policy.
 3. All acked → rolled_back ; the saga emits
-   `SagaRolledBack { saga_id }` on its ordinary typed `status` output. The
+   `SagaRolledBack { saga_id }` on its ordinary typed `Saga.exit` output. The
    graph's resolved wiring policy decides whether to journal it, route it,
    or feed a selected case into an enclosing saga's `Saga.rollback`. A
    compensation exhausting its Loop → rollback_failed, emitting
@@ -495,8 +495,8 @@ provenance, and all of them queryable / alertable :
 | `open` | the saga is in flight | yes | observe |
 | `committed` | exited `: Saga` scope successfully | yes | nothing |
 | `rolling_back` | downstream failed, compensations in progress | yes | observe |
-| `rolled_back` | all compensations succeeded — the saga emits `SagaRolledBack { saga_id }` on `status` | yes | nothing |
-| `rollback_failed` | at least one compensation exhausted its `Loop` variant (`LoopExhausted`) — the saga emits `SagaRollbackFailed { saga_id, step }` on `status` | yes | **manual review required** |
+| `rolled_back` | all compensations succeeded — the saga emits `SagaRolledBack { saga_id }` on `Saga.exit` | yes | nothing |
+| `rollback_failed` | at least one compensation exhausted its `Loop` variant (`LoopExhausted`) — the saga emits `SagaRollbackFailed { saga_id, step }` on `Saga.exit` | yes | **manual review required** |
 
 The crucial point is `rollback_failed` : it is a **first-class terminal state**,
 durable, observable, alertable. The runtime never silently drops a failed
@@ -589,7 +589,7 @@ fixed by the normative contracts.
    mid-rollback resumes exactly where the records stop, compensations are
    idempotent on replay (same derived keys), `Saga.timeout` is re-armed from
    the creator record's `committed_at`. A `Process` step emits its terminal
-   case on `status`; only an explicit guarded edge from a selected case to
+   case on `exit`; only an explicit guarded edge from a selected case to
    `Saga.rollback` triggers compensation. Respawn stays the `restart`
    policy's business, orthogonal.
 

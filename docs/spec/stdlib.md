@@ -26,13 +26,13 @@ optional — a Connector whose contract leaves a case blank is not spec'd:
 |---|---|---|
 | 1 | **Role** | what it bridges (a protocol, a process, time) |
 | 2 | **Direction** | inbound source / outbound caller / both / sink |
-| 3 | **Ports** | `in`/`out`/`err` + extras, with types |
+| 3 | **Ports** | `in`/`out`/`err`/`exit` conventions + extras, with types |
 | 4 | **`effect`** | pre-declared by the trait, or per-instance (dev-declared) |
 | 5 | **`behavior`** | deterministic / probabilistic — §2; pre-declared or per-instance |
 | 6 | **Attributes** | the config surface (boot phase: `env()`/`secret()` legal); `timeout`/`on_timeout`/`restart` inherited where calls/instances exist |
 | 7 | **Correlator** | what "a call" is in its protocol (execution-model §6.1: the Connector matches) |
 | 8 | **Outcome coverage** | the finite typed cases each output may emit and the completion rule the future `rastok simulate --coverage` enumerates |
-| 9 | **Instances** | singleton / `per`-keyed (each with `run_id`) / per-call; the terminal envelope |
+| 9 | **Instances** | singleton / `per`-keyed (each with `run_id`) / per-call; partition stop policy and each call's terminal exit |
 | 10 | **Journal & sim** | which records it writes (INBOUND w/ `inbound_seq`; OUTBOUND open-closed); how it is mocked/injected |
 
 Case 8 deserves the emphasis: coverage must enumerate the cases a
@@ -42,6 +42,15 @@ as timeout or unknown outcome must appear in the resolved port type just
 like adapter-produced cases. A boundary completion is a separate control
 fact: it closes one obligation and may carry several typed port outputs.
 `--coverage` counts the cases and the completion paths.
+
+The lifecycle scopes do not collapse into one another. A static Connector
+Node may have several partition instances; each partition instance may admit
+several calls. `stop` closes the partition instance, while the conventional
+typed `exit` port closes one call. One partition can therefore observe many
+exits before it stops. Partition closure refuses new admissions and later
+drains or cancels every open call under a bounded policy; it never replaces
+their individual terminal exits. The call identity, not merely the partition
+key, correlates every `out`/`err` frame with its one `exit`.
 
 **Naming rule**: stdlib traits carry **no suffix** — the keyword already says
 it (`connector c: Clock`). Applies to all future traits too (`Postgres`,
@@ -102,12 +111,12 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Case | Contract |
 |---|---|
 | Role / Direction | HTTP endpoint; **inbound source** |
-| Ports | `out` (decoded requests); `in` (mode `respond`: the graph's answers); `err` |
+| Ports | `out` (decoded requests); `in` (mode `respond`: the graph's answers); `err`; `exit` (one terminal case per admitted request lifecycle) |
 | Populates | `meta.ext` : `content_type` (the request's full Content-Type), `request_id: text?`, `path: text`, `method: text` — written once at ingress; handlers may rewrite, never invent (D-2026-08-10-1) |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
 | Attributes | `path`, `mode = ack (default) \| respond`, `codec`, `auth`, `timeout` (respond: the open-request budget), **`correlate = <Rastok expression path on the response>`** (respond; default: lineage) |
 | Correlator | mode `respond`: **default = lineage** (`origin_id == R.id`) — valid on join-free return paths ONLY. **A return path crossing a root-mixing join ⇒ explicit `correlate` required (compile error otherwise)**: the join output inherits the TRIGGER's origin, creating a race. The author carries the token (`meta.app.request_id = meta.sys.id`) and attributes it through joins with the explicit-attribution rule; matching = correlate-value == the open request's root id. An orphan response (no open request — it already expired, the 504 went out) is **discarded-and-journaled** (the call-closed rule's cousin). |
-| Outcome cases | The resolved status/diagnostic output includes `MalformedRequest`, `AuthFailed`, `RequestExpired` and `Overloaded`; none is inferred from a port named `err`. Exact payloads land with the HttpServer slice. |
+| Outcome cases | The resolved `exit` union includes a successful terminal case plus `MalformedRequest`, `AuthFailed`, `RequestExpired` and `Overloaded`; none is inferred from a port named `err`. Exact case names and payloads land with the HttpServer slice. |
 | Instances | singleton |
 | Journal / sim | INBOUND records, `inbound_seq` atomic with the accept; fixture injects at `out` |
 
@@ -123,12 +132,12 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Case | Contract |
 |---|---|
 | Role / Direction | HTTP calls; **outbound caller** |
-| Ports | `in` (requests), `out` (all usable HTTP responses, including non-2xx bodies), `err` (raw transport diagnostics only when the adapter actually has bytes), `status` (typed outcomes with no usable HTTP response) |
+| Ports | `in` (requests), `out` (all usable HTTP responses, including non-2xx bodies), `err` (raw transport diagnostics only when the adapter actually has bytes), `exit` (one typed terminal outcome per call) |
 | Populates | `meta.ext` : `content_type` (the response's Content-Type), `status: int` — on the reply envelope |
 | effect / behavior | **per-instance, both mandatory** |
 | Attributes | `url`/`base_url`+`path`, `method`, `codec`, `auth`, `tls`, `timeout`, `on_timeout = bypass (default) \| kill`, `idempotency_key` (mandatory when `irreversible`) |
 | Correlator | protocol-native: HTTP request ↔ response |
-| Outcome cases | `ConnectFailed`, `TimeoutExpired`, `DecodeFailed` and recovery's `OutcomeUnknown` belong to `status`. A completed HTTP response — 2xx or otherwise — remains on `out`, with its code in `meta.ext.status`; retry policy explicitly selects response codes and/or status cases instead of inheriting a universal `transient` bit. Exact payloads land with the HttpClient slice. |
+| Outcome cases | Every call emits exactly one `exit`: a successful response completion or `ConnectFailed`, `TimeoutExpired`, `DecodeFailed`, or recovery's `OutcomeUnknown`. A completed HTTP response — 2xx or otherwise — also remains on `out`, with its code in `meta.ext.status`; retry policy explicitly selects response codes and/or exit cases instead of inheriting a universal `transient` bit. Exact case names and payloads land with the HttpClient slice. |
 | Instances | singleton (`per` legal, rarely useful) |
 | Journal / sim | OUTBOUND open (key, digest) / closed / discarded; mocked in scenarios |
 
@@ -137,12 +146,12 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Case | Contract |
 |---|---|
 | Role / Direction | child process over stdio; **both** (caller + source) |
-| Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← stderr bytes; `status` ← `ProcessStatus` |
+| Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
 | effect / behavior | **per-instance, both mandatory** |
 | Attributes | the normative table below (D-2026-08-12-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
 | Correlator | see modes below |
-| Outcome cases | `ProcessStatus` below; exactly one terminal status per job completion. stderr never carries lifecycle data. |
-| Unwired policy | `out = require_wire`; `err` and `status` default to the journal sink. Explicit edges consume them; `-> nothing` records intentional discard. |
+| Outcome cases | `ProcessExit` below; exactly one terminal exit per admitted job invocation. stderr never carries lifecycle data. |
+| Unwired policy | `out = require_wire`; `err` and `exit` default to the journal sink. Explicit edges consume them; `-> nothing` records intentional discard. |
 | Instances | see modes below |
 | Journal / sim | OUTBOUND records per call (job: per run); spontaneous emissions = INBOUND roots; mocked in scenarios |
 
@@ -172,11 +181,11 @@ one there refuses by NAME (« `restart` belongs to
 `Process(mode = service)` and is not applicable to
 `Process(mode = job)` ») — never a generic "forbidden".
 
-`ProcessStatus` is an ordinary tagged union on the ordinary `status`
+`ProcessExit` is an ordinary tagged union on the ordinary `exit`
 port:
 
 ```rastok
-type ProcessStatus = union {
+type ProcessExit = union {
   Exited         { exit_code: int32, signal: int32? }
   SpawnFailed    { message: text }
   TimeoutExpired
@@ -187,14 +196,22 @@ type ProcessStatus = union {
 ```
 
 For a job, one boundary completion carries exactly one terminal
-`ProcessStatus` and may also carry `out` and `err`. `err` contains only
-the stderr bytes observed for that run; on a normally collected child it
-is the complete stderr byte stream. It is absent when no stderr bytes
-were observed. A non-zero exit is still `Exited`, not an automatically
-classified failure. A graph narrows/tests the status case and decides
-whether to retry, alert, discard or continue. `run_id` and causal lineage
-remain runtime identity/provenance rather than fields invented inside
-stderr or every status payload.
+`ProcessExit` and zero or more ordered `out` and `err` emissions. `err`
+contains only stderr data observed for that run under its resolved framing;
+it never carries an invented lifecycle failure. A non-zero exit is still
+`Exited`, not an automatically classified failure. A graph narrows/tests
+the exit case and decides whether to retry, alert, discard or continue.
+`run_id`, call identity and causal lineage remain runtime
+identity/provenance rather than fields invented inside stderr or every exit
+payload.
+
+Framing and publication are orthogonal. The M1.3 job implementation keeps
+its bounded on-exit publication: all ordered frames and the one `exit` are
+committed as one completion, so a retry cannot expose a partial attempt. A
+line-framed stderr may consequently yield many `err` envelopes for one run;
+an explicit bounded collector may instead aggregate them. A future streaming
+profile may publish frames earlier, but must preserve call identity, emit no
+frame after that call's `exit`, and keep aggregation/backpressure bounded.
 
 **`mode = job` (default — the Unix one-shot; systemd `Type=oneshot`, k8s Job
 lineage)**: one envelope = one spawn. stdin = the request (codec-framed);
@@ -202,11 +219,11 @@ when stdout decodes successfully the completion carries `out`: `codec =
 lines` → `data = text` (the whole stdout as one text value); `codec =
 jsonl` → `data = array<variant>` (the decoded lines — possibly length
 1). The same completion independently carries `err` when stderr is
-non-empty and always carries one `status`. The CAPTURE is
+non-empty and always carries one `exit`. The CAPTURE is
 bounded: **`max_output = 8MiB` (default)** is the AGGREGATE budget
 across stdout and stderr (D-2026-08-12-1, review round) — the total
 is judged before any byte is stored, so neither stream ever loses
-bytes silently; crossing it → status
+bytes silently; crossing it → exit
 `OutputOverflow { limit, reason }` and the run is killed. `reason`
 distinguishes `budget` (the declared cap) from `capacity` (the
 host's capture allocation refused — judged chunk by chunk via
@@ -214,7 +231,7 @@ host's capture allocation refused — judged chunk by chunk via
 ordinary allocations). The payload carries NO stream and NO exact
 size: the two capture pumps have no total order, and the journal
 records no thread race. A pipe READ error is its own fact — the
-completion reports `CaptureFailed` (closed, empty status payload: the OS
+completion reports `CaptureFailed` (closed, empty exit payload: the OS
 detail and the failing stream would race between two pumps),
 truncated bytes never presented as the whole. Every observed exit emits
 `Exited { exit_code, signal }`, including exit ≠ 0. The **process boundary IS the correlation** — `correlate` is a
@@ -303,11 +320,11 @@ relative — vs calendar time — civil, absolute.)*
 | Case | Contract |
 |---|---|
 | Role / Direction | bounded, ordered, in-process value store; **append and snapshot read** |
-| Ports | `in: T` appends `data`; `read: struct { }` requests a snapshot; `out: array<T>` returns it; `status: MemoryStatus` |
+| Ports | `in: T` appends `data`; `read: struct { }` requests a snapshot; `out: array<T>` returns it; `exit: MemoryExit` terminates each admitted operation |
 | effect / behavior | `idempotent` / `deterministic` (pre-declared) |
 | Attributes | `cap = <n>` (default 10 000 — bounded **by construction**), `overflow = evict_oldest (default, evictions journaled) \| reject` |
-| Correlator | a delivery to `read` is one call and completes with an `out` snapshot plus its ordinary typed status facts |
-| Outcome cases | `CapacityExceeded` on `status` when `overflow = reject` |
+| Correlator | each delivery to `in` or `read` is one operation; a read also completes with an `out` snapshot, and every operation has exactly one ordinary typed exit |
+| Outcome cases | every admitted append or read emits exactly one `MemoryExit`: `Completed` (with an `out` snapshot for a read), or `CapacityExceeded` when `overflow = reject` |
 | Instances | one store per declared Node instance and therefore per partition key when the declaration uses `per` |
 | Journal / sim | content is Node state, recovered by folding appends and evictions at the Node's effective durability scope; reads and their snapshots are journaled and deterministic |
 
@@ -500,7 +517,7 @@ The surface reserves the following mapping:
 
 - **An exposed graph = an MCP tool**: typed input ports → `inputSchema`
   (the Arrow-anchored types project to JSON Schema); typed output ports and
-  tagged status cases → result/tool errors according to the export profile.
+  tagged exit cases → result/tool errors according to the export profile.
 - **`effect` → the existing MCP annotations**, derived (the max over the
   graph's Connectors): `idempotent` → `idempotentHint`, `irreversible` →
   `destructiveHint`, `none` → `readOnlyHint`.
@@ -529,14 +546,14 @@ The surface reserves the following mapping:
 
 - A correlated request/reply round-trip closes its OUTBOUND call.
 - An uncorrelated service notification becomes a spontaneous INBOUND root.
-- A protocol failure is returned as a correlated typed status/output case.
+- A protocol failure is returned as a correlated typed exit/output case.
 - A reply after `TimeoutExpired` is discarded-and-counted, never delivered.
-- Process death emits `Exited` on `status`; the restart policy may respawn the
+- Process death emits `Exited` on `instance.exit`; the restart policy may respawn the
   service and invoke its protocol-specific resume operation.
 
 A partner may persist per activity rather than per creation, so an empty
 session can legitimately be unresumable. The recovery recipe for such
-partners is **resume-or-start-fresh, routed on the typed status case** — graph-side
+partners is **resume-or-start-fresh, routed on the typed instance-exit case** — graph-side
 wiring, no new mechanism.
 
 

@@ -161,7 +161,7 @@ a record is canonicalized (its full `meta.sys`, per envelope.md §1) :
 | 5 | graph_version | uint (u64) | constant 1 in embedded/sim (§2) |
 | 6 | — | — | RETIRED (extend-only: never reused). Held `mime_type` until D-2026-08-10-4 moved the content type to `meta.ext.content_type`, sealed in key 9 like every ext field. |
 | 7 | tier2 | array | Tier-2 birth stamps (`saga_*`, `loop_*` — envelope.md §1.2), present only when born in scope ; the **sorted pair list** of the sub-form below — never `map` ; keys extend-only |
-| 8 | data | array | the tagged payload `[encoding_tag (uint), bytes]` (sub-form below) — opaque, zero-copy, compared as bytes and never re-encoded; an outcome/status payload is an ordinary envelope, no separate key |
+| 8 | data | array | the tagged payload `[encoding_tag (uint), bytes]` (sub-form below) — opaque, zero-copy, compared as bytes and never re-encoded; an outcome/exit payload is an ordinary envelope, no separate key |
 | 9 | app_meta | array | the causal writable metadata — a **canonical sorted list of triples `[zone (text), field (text), tagged_value]`**, sorted UTF-8 by `(zone, field)` ; `zone` ∈ {`app`, `ext`} (D-2026-08-10-1 — root customs died), `field` is the flat dotted key (`audit.origin`) ; sealed because a handler reads them ; omitted when empty |
 
 **Record — shared header** (key `10` ; virtual time is an annotation, below) :
@@ -219,6 +219,11 @@ delivery-semantics §4) — keys `40–46` :
 | 45 | closure | array | present iff status ∈ {closed, abandoned} ; EXACT byteshape fixed BY `status` (`[1,env]` response · `[2]` timeout · `[]` abandoned ; sub-forms below), so `status` and `closure` never disagree |
 | 47 | edge | text | the canonical edge of the causing delivery ; with key 40 (`emitting_id`) it reconstructs `delivery_ref` and hence `call_ref` (envelope.md §2) — the record stays autonomous |
 | 46 | edge_cursor | array | present only on an inter-shard delivery — the DURABLE LOGICAL cursor `[edge (text), source_partition (bytes), seq (uint)]` (seq never restarts on leader change ; the transport `leader_epoch` fence is separate and NOT sealed) ; a transport cursor, NOT an envelope id, outside every id domain |
+
+Key 44's `status` is the internal state of the current v6 WAL record, not a
+graph port and not a payload union. M1.3's conventional `exit` port therefore
+does not rename this concept by implication; format v7 separately replaces
+the one-envelope closure shape with its typed multi-output completion.
 
 **Normative sub-form encodings.** Every
 compound value in the tables above has a fixed shape and, where it is

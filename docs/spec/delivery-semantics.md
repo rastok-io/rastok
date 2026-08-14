@@ -222,7 +222,7 @@ At restart, `open` outbound records without closure = the set of unknowns :
 | emission delivered, **no** outbound record | the call never left → call now. Trivial. |
 | open + `effect = idempotent` | recall, blindly (safe by declaration) |
 | open + `idempotency_key` present | recall with the **byte-same key** (§4.3) |
-| open + `compensable`, **no key** | do NOT guess: emit **`OutcomeUnknown`** on the Connector contract's typed outcome port (normally `status`; trigger **`l:recover`**, parent = request) and close the record as `abandoned` — no eternal re-triage, no duplicate case. The graph/saga decides: verify, compensate, or park; a deliberate retry is a NEW call. |
+| open + `compensable`, **no key** | do NOT guess: emit **`OutcomeUnknown`** on the Connector contract's typed invocation-exit port (normally `exit`; trigger **`l:recover`**, parent = request) and close the record as `abandoned` — no eternal re-triage, no duplicate case. The graph/saga decides: verify, compensate, or park; a deliberate retry is a NEW call. |
 
 **The general principle: recovery rebuilds the dated-events
 queue by the same fold that rebuilds state.** Every dated obligation is
@@ -255,10 +255,10 @@ port carries an `UnwiredPolicy` in the validated plan:
   explicit `-> nothing` edge.
 
 The compiler desugars defaults from the node contract into this data; the
-VM never compares a port name with `"err"` or `"status"`. Ordinary
+VM never compares a port name with `"err"` or `"exit"`. Ordinary
 application outputs default to `require_wire`. Standard Connector tables
-state their diagnostic/status policy explicitly. Thus `err` remains a
-useful convention without becoming a second emission or typing mechanism.
+state their diagnostic/exit policy explicitly. Thus `err` and `exit` remain
+useful conventions without becoming second emission or typing mechanisms.
 The answer to “where did this output go?” is always in the resolved plan.
 
 Inputs keep their existing rule: a declared, required input that is

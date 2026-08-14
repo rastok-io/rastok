@@ -69,7 +69,7 @@ Operator — it declares its own keying with `per <partition>`. Here
 per-session paths are **graph-level `val`s** derived from `session.key` (Rastok expression) and
 referenced by name inside. A single-in/out graph just uses the default `in` /
 `out` ports — no declaration needed. A `Process` Connector's `in` / `out` /
-`err` ports *are* its stdin / stdout / stderr, while `status` carries its
+`err` ports *are* its stdin / stdout / stderr, while `exit` carries its
 tagged lifecycle outcome — likewise no declaration.
 
 ```rastok
@@ -99,7 +99,7 @@ graph sessions per session {   // declaration = instance
     protocol = "jsonrpc"
     effect = idempotent
     behavior = probabilistic
-    // in = stdin, out = stdout, err = stderr, status = lifecycle (Process defaults)
+    // in = stdin, out = stdout, err = stderr, exit = invocation terminal (Process defaults)
 
     init = {
       message = {
@@ -251,7 +251,7 @@ graph teams_outbound {
       until = value <= 0
     }
     Loop.backoff = { curve = exponential, initial = duration("200ms") }
-    on status where data is ConnectFailed { }    // explicit iterating outcome
+    on exit where data is ConnectFailed { }      // explicit iterating outcome
     rate_limit = "10/s per meta.app.session_key"
   }
 
@@ -617,7 +617,7 @@ the optional read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
 | Sub-graph instance | declaration = instance : `graph <name> per <partition> { max_instances = … ; … }`, wired by name (`compose` is not a declaration form) |
 | Operator port | **Implicit** : `on <name>` ⇒ input, `<name> = …` ⇒ output. Declare `input`/`output <name>[: T]` only to pin a type/schema or document. `in`/`out`/`err` are defaults. |
 | Public graph port | single-in/out → defaults `in`/`out` ; a multi-port graph declares its interface by name (`input admin`, …), optionally typed |
-| Connector port | never redeclared — the Connector contract + attributes resolve its complete typed port table (`in`/`out`/`err`/`status` for Process) |
+| Connector port | never redeclared — the Connector contract + attributes resolve its complete typed port table (`in`/`out`/`err`/`exit` for Process) |
 | Type | `variant`, scalar (`text`/`int`/`bytes`/…), `struct { … }`, `map<text, V>`, `array<T>`, `enum`, `union`, `T?` |
 | State field | `var <name>: <type> [= <default>]` |
 | Connector attribute | `<name> = <value>` |

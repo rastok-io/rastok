@@ -15,7 +15,7 @@
 | Edge = same envelope, same id | envelope.md §3 |
 | Mailbox drain to stable state between fixture steps | execution-model.md §8 |
 | Per-call `timeout`, armed at delivery, matched by the Connector's correlator | execution-model.md §6.1 |
-| Expiry = `TimeoutExpired` on typed `status`, trigger `l:timeout`, parent = request | execution-model.md §6.2 |
+| Expiry = `TimeoutExpired` on typed `exit`, trigger `l:timeout`, parent = request | execution-model.md §6.2 |
 | The call-closed rule : late response discarded-and-journaled | execution-model.md §6.3 |
 | `on_timeout = bypass` (default) : the instance lives | execution-model.md §6.4 |
 | `advance` = discrete sweep (dated events in date order, zero-time computation) | execution-model.md §8 |
@@ -65,7 +65,7 @@ graph sim01 : App {
   }
 
   operator triage {
-    input in : ProcessStatus             // reacts to selected status cases from codex
+    input in : ProcessExit               // reacts to selected exit cases from codex
     on in where data is TimeoutExpired {
       out = {
         data = { kind = "apology", text = "The agent timed out. Retrying soon." }
@@ -74,7 +74,7 @@ graph sim01 : App {
   }
 
   teams -> route -> codex.in
-  codex.status -> triage
+  codex.exit -> triage
   { codex.out ; triage.out } -> teams.in
 }
 ```
@@ -151,8 +151,8 @@ E1, `data.op == "turn/start"` → **pass**. (Zero virtual time consumed.)
 sweep :
   mailboxes empty ✓ → earliest dated event ≤ 30 ?  YES : t=10, call-timeout of E1
     t := 10 ; the supervision journals the decision and delivers :
-    E2 on codex.status :
-       id        = H( "codex" ‖ "l:timeout" ‖ E1.id ‖ "status" ‖ 0 )
+    E2 on codex.exit :
+       id        = H( "codex" ‖ "l:timeout" ‖ E1.id ‖ "exit" ‖ 0 )
        parent_id = E1.id      origin_id = E0.id     role = default
        tagged case = TimeoutExpired
     on_timeout = bypass → the codex instance LIVES (no terminal envelope, no restart)

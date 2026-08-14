@@ -70,7 +70,7 @@ connector codex : Process {        // type annotation with ":"
   protocol = "jsonrpc"
   effect   = idempotent
   behavior = probabilistic
-  // in / out / err / status = stdin / stdout / stderr / lifecycle (Process defaults)
+  // in / out / err / exit = stdin / stdout / stderr / invocation terminal (Process defaults)
 
   init = {                         // composite attribute : startup handshake
     message = { method = "initialize" }
@@ -213,7 +213,7 @@ HTTP and JSON-RPC are therefore not the same layer : HTTP is a transport/applica
 
 Example : a `Process` node for `codex app-server` owns one child process
 address, binds `stdin/stdout/stderr` to `in`/`out`/`err`, and exposes an
-additional typed `status` output. The compiler lowers those ports to
+additional typed invocation `exit` output. The compiler lowers those ports to
 runtime Reader/Writer halves that share one process handle and one
 correlator.
 
@@ -282,7 +282,7 @@ graph sessions per session {
     protocol = "jsonrpc"
     effect   = idempotent
     behavior = probabilistic
-    // in / out / err / status = stdin / stdout / stderr / lifecycle (Process defaults)
+    // in / out / err / exit = stdin / stdout / stderr / invocation terminal (Process defaults)
 
     init = {
       message = { method = "initialize" }
@@ -540,7 +540,7 @@ No `Reader`, `Writer`, or `Endpoint` suffix is needed in the DSL :
 |---|---|---|
 | `HttpServer` | server address/binding | inbound request on `out`, optional response on `in` (default ports) |
 | `HttpClient` | client address/binding | outbound POST, GET download, delivery/report output |
-| `Process` | typed stdio + lifecycle ports | default `in`/`out`/`err`/`status` = `stdin`/`stdout`/`stderr`/tagged lifecycle, one child-process lifecycle |
+| `Process` | typed stdio + lifecycle ports | default `in`/`out`/`err`/`exit` = `stdin`/`stdout`/`stderr`/tagged invocation terminal, one child-process lifecycle per job call |
 | `Jaq` | its transformer contract | pure `in -> out` envelope transform |
 | `Memory` | its fixed store contract | `in` appends; `read` requests a bounded snapshot on `out` |
 | `File` (deferred) | its future ports and configuration | read side, write side, or both |
@@ -561,7 +561,7 @@ document a node with no handler (e.g. a saga) or a graph's public
 interface. Direction is carried by the keyword, not the name. The names
 **`in` / `out` / `err`** are conventional default ports — pre-bound but
 typed by the same mechanism as every other port. A `Process` maps them
-exactly to stdin, decoded stdout and raw stderr; its ordinary `status`
+exactly to stdin, decoded stdout and raw stderr; its ordinary `exit`
 output carries the tagged lifecycle/outcome value. Conventions :
 
 - ports are named for their role, **no direction suffix** (`event`, `delta`, `flush`)
@@ -571,6 +571,8 @@ output carries the tagged lifecycle/outcome value. Conventions :
   instantiated contract plus codec resolves their effective types
 - `err` conventionally carries diagnostic bytes/data; it has no special
   grammar, type or transaction semantics
+- a Connector's `exit` conventionally carries the tagged terminal outcome of
+  one admitted invocation; it is still an ordinary typed output
 
 Every output is wired explicitly or sent to its resolved sink policy:
 
@@ -578,7 +580,7 @@ Every output is wired explicitly or sent to its resolved sink policy:
 client.out -> codex.in
 codex.out      -> client.in
 codex.err      -> logs.in
-codex.status   -> lifecycle.in
+codex.exit     -> lifecycle.in
 ```
 
 Multi-port nodes (`Router`, `Aggregator`, ...) expose additional named ports
@@ -827,7 +829,7 @@ Writing two arrows in opposite directions gives a compile error. Express the sam
 
 | Need | Pattern |
 |---|---|
-| Retry after a selected outcome | The `: Loop` aspect on the Connector, with an explicit handler/guard over the connector's typed outcome port (for Process, normally `status`) — see [loop.md](loop.md) |
+| Retry after a selected outcome | The `: Loop` aspect on the Connector, with an explicit handler/guard over the connector's typed outcome port (for Process, `exit`) — see [loop.md](loop.md) |
 | DLQ + replay | Failed → `Memory`; operations tooling reads a bounded snapshot, then injects selected values as roots of a new run |
 | Iterative refinement, fixed N | Static unfolding : `step -> step -> step` |
 | Iterative refinement, dynamic N | the bounded `: Loop` aspect |
@@ -1000,7 +1002,7 @@ When data is omitted from an envelope declaration, it defaults to `{}` (an empty
 `parquet`, `avro`, `protobuf`, `msgpack`, `xml`, `text`, `raw`, …) live
 on Connector attributes and are orthogonal to the in-graph value type:
 the codec is the fallible bytes↔value boundary; the type is what the
-parsed value is. Its failure is a declared typed output/status case, not
+parsed value is. Its failure is a declared typed exit case, not
 a privileged `err` mechanism. A Parquet source can produce
 `array<struct>` and an Avro source the same; JSON, Avro and Arrow unions
 all project into the union forms in [types.md](types.md).
@@ -1014,7 +1016,7 @@ The DSL has no `${…}` interpolation token.
   **`secret("path")`**. Using them in a guard/key/state position is a compile
   error — the language has explicit phases (boot → runtime → blocks).
 - **Runtime** : plain expression paths, no sigil — `session.key` (the partition
-  field), `meta.app.x`, `data.y`, `status is TimeoutExpired`, a
+  field), `meta.app.x`, `data.y`, `exit is TimeoutExpired`, a
   `val`/`var`/alias by name.
   String building is expression concatenation :
   `val cwd = "/workspace/" + session.key`.
@@ -1438,10 +1440,10 @@ var_decl          ::= "var" IDENT ":" type_ref ( "=" value )?        // mutable 
 handler_decl      ::= "on" trigger guard_clause* handler_body?
                     // handler_body is OPTIONAL :
                     // a BODY-LESS handler is the Loop BASE-CASE declaration
-                    // (`on status where data is Exited` — loop.md §3) ; compile rule :
+                    // (`on exit where data is Exited` — loop.md §3) ; compile rule :
                     // body-less handlers are legal ONLY on nodes carrying `: Loop`.
                     // The ITERATING case carries a body, possibly empty :
-                    // `on status where data is TimeoutExpired { }`.
+                    // `on exit where data is TimeoutExpired { }`.
 trigger           ::= "start"
                     | "stop"
                     | "compensate"                                   // compensation event on a `compensable` Connector — see effects-and-sagas.md

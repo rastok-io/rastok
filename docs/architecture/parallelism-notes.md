@@ -51,6 +51,15 @@ later:  shards + worker pool + processes/machines
 always: one mailbox = (node, key) ; one active transaction per mailbox
 ```
 
+That transaction serialization does **not** mean “one open Connector call per
+partition.” Starting an asynchronous invocation is one short mailbox
+transaction; after its intent and open obligation commit, the mailbox may
+admit another call when the resolved Connector capacity allows it. M1.3 gives
+each such invocation its own call identity and exactly one typed `exit`, so
+several Process jobs or sessions in one partition cannot mix their
+`out`/`err` frames. The later partition slice gives `stop` the separate job of
+closing admission and boundedly draining or cancelling those open calls.
+
 M0 deliberately stays below the model's capacity: the key is the
 singleton `""`, one deterministic worker, no executable `per`, no
 effective `max_instances`, no joins, no placement.

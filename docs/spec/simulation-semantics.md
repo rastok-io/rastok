@@ -146,7 +146,7 @@ mock bank {
   on in { out = { status = "charged", deduplicated = true } }   // §4 : a data record
 }
 // never answer  = { out = nothing }   → the Connector's `timeout` machinery works
-// typed outcome = { status = PaymentDeclined { reason = "policy" } }
+// typed outcome = { exit = PaymentDeclined { reason = "policy" } }
 
 // EXPECTATION = a guard head, read in the mirror
 expect ledger.in where data.status == "settled"
@@ -215,7 +215,7 @@ deliveries of that window**, without consuming it :
 ```rastok
 orders.out = { … }               // ACTION → window ①
 expect pay.in where …            // reads window ①
-expect nothing pay.status        // reads the SAME window ①
+expect nothing pay.exit          // reads the SAME window ①
 advance duration("30s")                      // ACTION → window ②
 expect ledger.in where …         // reads window ②
 ```
@@ -231,7 +231,7 @@ expect "charged exactly once" ledger.in count == 1 …       // optional label, 
 
 - **Every typed output is observable by port.** `app` remains the pre-bound
   identifier for the `: App` entry graph, so declared App boundary ports use
-  `app.<port>`; node outputs use their qualified node path (`pay.status`,
+  `app.<port>`; node outputs use their qualified node path (`pay.exit`,
   `process.err`, …). The Lab reads the resolved `UnwiredPolicy` exactly as
   production does. There is no synthetic root-error port.
 - **Black-box only** : expectations target ports ; internal state (`var`,

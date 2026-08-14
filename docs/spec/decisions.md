@@ -31,11 +31,20 @@ Operator/adapter.
 
 **All ports share one model.** A Node has typed input and output ports;
 `in`, `out` and `err` are conventional default names, not a second type
-or emission mechanism. Tagged-union construction is a general value
-form and every assignment to a port lowers through the ordinary emit
-path. The connector-level `error_set`, `TypedError`, failure-only
-`CallOutcome` branch and error-specific `err_value` grammar are temporary
-approximations to remove, not a model to extend.
+or emission mechanism. A Connector additionally uses `exit` by convention
+for the terminal outcome of one admitted invocation. It remains an ordinary
+typed output: the convention gives it lifecycle meaning, not another
+emission or conformance path. Tagged-union construction is a general value
+form and every assignment to a port lowers through the ordinary emit path.
+The connector-level `error_set`, `TypedError`, failure-only `CallOutcome`
+branch and error-specific `err_value` grammar are temporary approximations
+to remove, not a model to extend.
+
+This generalizes rather than abandons the original M1.3 typed-error goal.
+Its error codes become cases of the invocation's tagged `exit` union, beside
+non-error terminal cases. `err` remains diagnostic data actually observed at
+the boundary; an error case is never fabricated as stderr, and bytes on
+stderr never classify an invocation as failed by themselves.
 
 For `Process(job)`, the intended port contract is exact:
 
@@ -43,16 +52,47 @@ For `Process(job)`, the intended port contract is exact:
 in      -> stdin, framed by the selected request codec
 out     <- stdout, interpreted by the selected reply codec
 err     <- exact stderr bytes
-status  <- one tagged ProcessStatus lifecycle/outcome value
+exit    <- one tagged ProcessExit lifecycle/outcome value
 ```
 
 An observed non-zero exit is still `Exited { exit_code, signal }`; it is
 a fact, not an automatically classified application failure. Spawn,
 timeout, capture, output-budget/capacity and decode outcomes are cases of
-`status`, never invented stderr. One boundary completion is the control
-fact that closes an obligation and may carry several typed port outputs;
-the VM alone turns those drafts into envelopes and journal emissions.
-Call closure is therefore not inferred from the name `err` or `status`.
+`exit`, never invented stderr. Every admitted invocation creates one call
+obligation and completes as:
+
+```text
+out* + err* + exactly one exit
+```
+
+The terminal `exit` is a causal barrier for that invocation: no later `out`
+or `err` may belong to it. One boundary completion is the control fact that
+closes the obligation and may carry several ordered typed port outputs; the
+VM alone turns those drafts into envelopes and journal emissions. Call
+identity correlates every output, so two concurrent invocations in the same
+partition cannot mix their frames or buffers. Call closure is therefore not
+inferred from a port name, even though the resolved Connector contract names
+its terminal output `exit`.
+
+**`stop` and `exit` terminate different scopes.** A Node definition is
+static. At runtime it may have several partition instances in parallel, and
+one partition instance may admit several Connector invocations. `stop`
+requests the end of the partition instance; `exit` reports the observed end
+of one invocation. Many `exit` values may therefore precede one partition
+`stop`. Closing a partition must stop admission and either drain or cancel
+its open invocations according to an explicit bounded policy; it may not
+erase their obligations. Each admitted invocation still produces exactly
+one `exit` before the partition is reclaimed. M1.3 fixes and implements the
+invocation contract for `Process(job)`; the following `per`/partition slice
+implements the partition-closing policy without changing that port model.
+
+Framing and publication are separate decisions. A line framer may yield two
+hundred `err` envelopes for one invocation, while a bounded collector may
+publish them only at completion or aggregate them under an explicit policy.
+`Process(job)` defaults to an on-exit completion so retries cannot leak a
+partial attempt. A future streaming profile keeps the same invocation
+identity and terminal barrier. Aggregation is always bounded; overflow is an
+`exit` case rather than a truncated value presented as complete.
 
 **One marked frontend form.** A value region owned by a dedicated
 reader/compiler is introduced by:

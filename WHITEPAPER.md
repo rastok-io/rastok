@@ -479,9 +479,10 @@ graph sessions per session {          // declaration = instantiation; `per` = on
 
   in        -> codex.in { capacity = 1024, backpressure = block }
   codex.out -> out
-  codex.err    -> nothing             // abridged: production wires a byte log sink
-  codex.status -> nothing             // abridged: production wires lifecycle policy
-  // err is stderr; status carries Exited/TimeoutExpired/etc. Every
+  codex.err           -> nothing      // abridged: production wires a diagnostic sink
+  codex.exit          -> nothing      // terminal outcome of each correlated call
+  codex.instance.exit -> nothing      // terminal outcome of the resident child
+  // err is stderr; exit carries Exited/TimeoutExpired/etc. Every
   // boundary crossing is journaled, so
   // per-session cost is an aggregate over the journal, not a guess.
 }
@@ -796,7 +797,7 @@ non-reserved and typed by the same mechanism as every other port. A
 validated plan carries an effective type for all ports, whether inferred
 or explicitly pinned. For `Process`, the mapping is exact: `in` is stdin,
 `out` is stdout decoded by the selected codec, `err` is stderr bytes, and
-the additional `status` output carries the tagged `ProcessStatus`
+the additional `exit` output carries the tagged `ProcessExit`
 (`Exited`, `SpawnFailed`, `TimeoutExpired`, `DecodeFailed`, …). A
 non-zero exit is an `Exited` fact; graph policy decides what it means.
 
@@ -847,7 +848,7 @@ Three categories of section:
   holds state; `per` keys it to a partition.
 - **Active behavior** — the `on <trigger>` handlers (§2.3). Outputs are
   assigned explicitly; **atomic multi-emit** uses tuple assignment
-  `(out, status) = (e1, e2)`. A handler may emit nothing (pure state
+  `(out, exit) = (e1, e2)`. A handler may emit nothing (pure state
   update). There is no implicit yield.
 - **Connector boundary** — only on Connectors: flat attributes such
   as URL/path/command, **codec** (the bytes↔value boundary cast,
@@ -903,7 +904,7 @@ composition and lazy-eviction rules are normative in
 [grammar.md](docs/spec/grammar.md).
 
 **Uniform typed ports.** A transaction may emit on any declared output,
-including `err`, `status`, `expired` or application-specific names. Each
+including `err`, `exit`, `expired` or application-specific names. Each
 is checked by the same resolved `DataType`; tagged unions make finite
 outcome spaces enumerable without an `error_set` side channel. Port
 names do not close calls or classify failures. Genuine panics (bugs) are
@@ -1409,22 +1410,31 @@ Those arrival orders are recorded per hop in the journal — which is
 exactly what makes replay deterministic (envelope.md §2.0/§8). The
 Connector draws the boundary; the journal captures what crosses it.
 
-**Lifecycle-bound resources carry an implicit partition.** A Connector
-that owns a resource with a lifecycle — a `Process` child, a `WebSocket`
-connection, a database transaction — has an **implicit partition keyed by
-the resource instance** (a runtime handle, e.g. a per-spawn `run_id`),
-whose lifetime *is* the resource's. Composed under an explicit `per K`,
-this is simply a flat composite key `(K, run_id)` — never a hierarchy
-(§3). When the resource ends, the Connector emits its declared
-**terminal status case** on an ordinary typed output — `Exited {
-exit_code, signal }` on `Process.status`, the close case for a
-WebSocket, the final status for a transaction. `meta.sys` stays closed
-(its five fields never grow per Connector), while runtime identity and
-lineage remain in the journal/envelope spine. `out` stays the data stream
-and `Process.err` stays stderr; a graph reacting to termination wires
-`process.status -> …`. `restart = { … }` (a Connector attribute)
-spawns a fresh instance — a new `run_id`, a new partition instance — with
-no cascade to any enclosing partition.
+**Lifecycle-bound resources carry invocation scopes, not hidden
+partitions.** A static Connector Node may run in several explicit partition
+instances, and one partition instance may admit several calls or sessions —
+concurrently when its resolved policy permits. Every admitted invocation has
+its own causal call identity and ends with exactly one ordinary typed `exit`;
+it may first produce zero or more `out` and `err` envelopes. A `Process`
+child, WebSocket interaction or database operation is therefore a resource
+scope inside the partition, not an automatically invented partition key.
+
+`stop` and `exit` name the two distinct boundaries. `stop` closes the
+containing partition instance; `exit` reports the observed termination of
+one admitted invocation. Many exits may occur before one stop. Closing a
+partition stops admission and must drain or cancel every open invocation
+under a bounded policy; it cannot erase their terminal obligations. Call
+identity correlates frames even when several invocations share the same
+partition, and no `out` or `err` for a call may follow its `exit`.
+
+For a `Process`, `Exited { exit_code, signal }`, `TimeoutExpired`,
+`SpawnFailed` and the former typed error codes are cases of `ProcessExit`.
+`out` stays the data stream and `Process.err` stays stderr; a graph reacting
+to termination wires `process.exit -> …`. A resident service may qualify the
+two real scopes as `call.exit` and `instance.exit`; `restart = { … }` creates
+a fresh resource instance inside the same owning partition rather than
+silently creating a partition hierarchy. `meta.sys` stays closed while call,
+resource and partition-instance identities remain causal journal facts.
 
 ---
 
@@ -2719,9 +2729,11 @@ wins.
     pin or document constraints. Every validated port has one effective
     logical type. `in` / `out` / `err` are conventions, not categories;
     Connector contracts declare fixed or parametric port rules. For
-    Process, `err` is stderr and `status` carries the tagged outcome.
-    Boundary completion is a separate control fact and may carry several
-    port outputs atomically; panics are supervision, never envelopes.**
+    a Connector conventionally uses `exit` for each invocation's tagged
+    terminal outcome. For Process, `err` is stderr and `exit` carries
+    `ProcessExit`, including the original typed error cases. One completion
+    carries `out* + err* + exactly one exit`; `stop` independently closes the
+    owning partition instance. Panics are supervision, never envelopes.**
 17. **The `data` payload is statically typed by default; `variant` is
     the only dynamic type, narrowed before use. The type tree is
     scalar(parameters+logical) / struct / map / array / enum / union,
