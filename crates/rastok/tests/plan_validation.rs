@@ -160,6 +160,34 @@ graph g : App {
 }
 
 #[test]
+fn the_legacy_runtime_fault_has_a_resolved_producer_pin() {
+    let compilation = compile(
+        &[PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the probe resolves");
+    let relay = compilation
+        .plan
+        .plan()
+        .nodes
+        .iter()
+        .position(|node| node.path.to_string() == "relay")
+        .expect("the relay operator exists");
+    let slot = Slot::new(u32::try_from(relay).expect("the test plan is small"));
+    let err = compilation
+        .plan
+        .resolved_ports()
+        .node(slot)
+        .expect("the node row exists")
+        .iter()
+        .find(|port| port.port().name() == "err")
+        .expect("a VM-produced runtime fault has an effective pin");
+
+    assert_eq!(err.ty(), &DataType::text_map(DataType::Text));
+    assert_eq!(err.origin(), plan::TypeOrigin::Inferred);
+}
+
+#[test]
 fn an_unconstrained_raw_port_never_becomes_variant() {
     let mut raw = raw_probe();
     let relay = raw

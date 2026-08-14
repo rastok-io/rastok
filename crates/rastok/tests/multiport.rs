@@ -1537,11 +1537,11 @@ fn an_explicit_variant_is_dynamic_not_an_inference_hole() {
 }
 
 #[test]
-fn a_synthesized_runtime_fault_cannot_cross_a_pin() {
-    // `source.err -> sink.evt : int`: the operator faults, the
-    // machine synthesizes an error payload on err — and the final
-    // gate refuses it before ANY commit: no transaction in
-    // the journal, the scenario reports the machine fault.
+fn a_synthesized_runtime_fault_makes_an_incompatible_edge_untypable() {
+    // The VM is a real producer of source.err even though no source
+    // Step::Emit names it. The resolved table includes that two-text map,
+    // so `source.err -> sink.evt : int` refuses statically rather than
+    // waiting for a faulted transaction to discover the contradiction.
     let source = r#"
 graph g : App {
   operator source {
@@ -1558,40 +1558,25 @@ graph g : App {
   source -> .
   sink -> .
 }
-
-lab g {
-  simulation probing on app {
-    scenario s "a fault payload cannot enter an int pin" {
-      app.in = "text"
-      expect "nothing crosses" app.out count == 0
-    }
-  }
-}
 "#;
-    let compilation = compile(
+    let bag = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("a valid unit");
-    let runs = rastok::lab::run(
-        &compilation.plan,
-        rastok::plan::GraphVersion(1),
-        &compilation.labs[0],
-    );
-    let run = &runs[0];
+    .expect_err("a map producer cannot feed an int consumer");
     assert!(
-        run.report
-            .failures
-            .iter()
-            .any(|failure| failure.contains("cannot enter")),
-        "the machine fault surfaces: {:#?}",
-        run.report.failures
-    );
-    assert!(
-        run.records
-            .iter()
-            .all(|record| !matches!(record, rastok::journal::Record::Transaction(_))),
-        "NOTHING committed — the violating emission never reached the journal"
+        bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code().as_str() == "E-PORT-TYPE"
+                && diagnostic
+                    .fields()
+                    .iter()
+                    .any(|(key, value)| *key == "port" && value == "evt")
+                && diagnostic
+                    .fields()
+                    .iter()
+                    .any(|(key, value)| *key == "found" && value == "map<text,text>")
+        }),
+        "the contradiction names the real hidden producer: {bag:?}"
     );
 }
 

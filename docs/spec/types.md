@@ -123,10 +123,16 @@ value, but does not repeat precision; conformance checks its coefficient
 against the declared precision and requires its carried scale to equal the
 declared scale. A schema-less exact-number value may use the wider decimal128
 exponent domain (`-6143..=6144`) already fixed by the value registry;
-narrowing it to `decimal(p,s)` still requires the declared `s` in
-`-38..=38`. `number` and `variant` are types, not wrapper values: their values
-retain the concrete canonical scalar or tree cases they contain, but do not
-remember constraints discarded by an explicit conversion to `variant`.
+narrowing it to `decimal(p,s)` rescales it **exactly** to the declared `s` in
+`-38..=38`. Integers enter with scale zero. Increasing the scale pads the
+coefficient with zeros; decreasing it is legal only when every removed digit
+is zero. Coefficient overflow, an inexact scale reduction, or excess declared
+precision is `NoMatch`, never rounding. The narrowed value then carries the
+declared scale, irrespective of whether it came from a minimal-scale JSON
+number, `decimal("...")`, or an already typed decimal. `number` and `variant`
+are types, not wrapper values: their values retain the concrete canonical
+scalar or tree cases they contain, but do not remember constraints discarded
+by an explicit conversion to `variant`.
 
 `number` is a closed exact-numeric scalar, not a floating-point escape
 hatch: it preserves whether its value is an integer or a bounded exact
@@ -188,7 +194,12 @@ A structural-union value stores the selected canonical branch index as well
 as its value. Although disjointness lets Rastok verify the selection, keeping
 the discriminant preserves an Avro/Arrow choice at opaque and replay
 boundaries. A mismatching discriminant is malformed data, never recomputed
-as first-match-wins.
+as first-match-wins. The index is relative to that **exact resolved union**.
+Consequently, ordinary assignability between two structural-union types
+requires identical resolved unions; adding or removing a branch requires an
+explicit `as TargetUnion`, which unwraps the selected value and performs one
+exactly-one branch selection against the target's canonical order. This is a
+typed conversion, not a boundary repair of malformed data.
 
 Every type is checked against its budgets before admission into a resolved
 or validated form: nesting ≤ 128, expanded nodes ≤ 4096,
@@ -357,7 +368,16 @@ exit = Exited { exit_code = 0, signal = null }
 ```
 
 The same constructor may target any compatible port, state cell or
-field. `err = value` is consequently an ordinary port emission.
+field. A contextual write to a union performs its one legal wrapping at
+check/lowering time: for example, `out = 5` targeting `int32 | text` records
+the `int32` branch, and `signal = null` records the null branch of `int32?`.
+The checker refuses zero or several matching branches with `E-PORT-TYPE`.
+The VM and Connector adapters never infer, repair or re-index a union
+discriminant; their final conformance gate only verifies the already wrapped
+value. An already wrapped structural union may cross an ordinary edge only
+when source and target have the identical resolved union type; conversion to
+a different union is explicit `as`. `err = value` is consequently an ordinary
+port emission.
 
 ## 6. Schema evolution and explicit adapters
 

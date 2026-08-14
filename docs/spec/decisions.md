@@ -105,6 +105,30 @@ document, `bytes` → one bounded captured byte value). On-exit publication
 commits those ordered values atomically with `exit`; it does not silently
 fold them into an array or one text blob.
 
+When B5 introduces `err_codec` into the executable Process sheet, its
+default is materialized before hashing like every other contract default.
+That is one deliberate identity move for Process graphs; the implementation
+must inventory and re-bless the affected packages and goldens in that change,
+not let the move arrive accidentally with the B7 adapter rewrite.
+
+The removal of the temporary failure scaffold follows this explicit table;
+an implementation never maps by similar spelling:
+
+| Temporary Process fact | M1.3 completion fact |
+|---|---|
+| successful `CallOutcome::Success` | zero or more decoded `out` frames plus `Exited { exit_code = 0, signal = null }` |
+| `SpawnFailed { message }` | `exit = SpawnFailed { message }` |
+| `TimeoutExpired` | `exit = TimeoutExpired` |
+| `DecodeError { message }` | `exit = DecodeFailed { message, line = null }` (the new framer may supply the optional offending line) |
+| `CaptureFailed` | `exit = CaptureFailed` |
+| `OutputOverflow { limit, reason }` | `exit = OutputOverflow { limit, reason }` |
+| `ExecFailed { exit_code, stderr }` | the observed child status becomes ordinary `Exited { exit_code, signal }`; stderr is independently framed into `err*` and never remains in the exit payload |
+| declared `StderrLine` | no exit case; every observed stderr frame is ordinary data on `err` |
+
+In particular, a non-zero process code changes from an adapter-classified
+failure into an observed terminal fact. Retry or alert policy belongs to the
+graph after narrowing `exit`, not to the Process adapter.
+
 **One marked frontend form.** A value region owned by a dedicated
 reader/compiler is introduced by:
 
@@ -122,6 +146,12 @@ lookahead, without a keyword set or rewind. Built-ins and registered
 frontends use the same surface. The selected frontend still owns its
 framing; the sigil identifies the owner but cannot teach the host a
 guest's comments and strings.
+
+The name and bang are byte-adjacent; intervening trivia refuses. A frontend
+fills one complete host value and is not an intrinsic-expression atom, so a
+frontend result is bound before being combined with expression operators.
+Lexical maximal munch gives `!=` priority over the single bang:
+`json!=x` is `json != x`, not a frontend.
 
 Frontend names are consequently ordinary bindable identifiers. `json`
 is no longer reserved. `nothing` remains a host structural word.
@@ -202,6 +232,16 @@ profiles, including exact binary16/32 promotion, UUID, all temporal shapes,
 canonical non-text map keys and Avro's unsigned month/day/millisecond interval
 without conflating it with Arrow's signed intervals. V6 refuses those new
 constant forms; B8 alone publishes their typed v7 seal.
+
+**B3 narrowing closure (2026-08-15).** Narrowing an exact integer or decimal
+to `decimal(p,s)` rescales to the declared scale exactly: zeros may be padded,
+only zero digits may be removed, and overflow/precision loss refuses without
+rounding. A structural-union branch index belongs to its exact resolved
+union. Ordinary union-to-union assignability therefore requires identical
+types; explicit `as OtherUnion` performs a fresh exactly-one selection and
+records the target-relative index. Contextual construction or emission into
+a union is inserted once by check/lowering, while the VM and adapters only
+validate the already selected discriminant.
 
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign

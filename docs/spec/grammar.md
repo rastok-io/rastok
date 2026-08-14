@@ -1567,6 +1567,13 @@ value_after_ident ::= ε                                               // nothin
                     | "!" frontend_args? frontend_payload             // IDENT ! selects the frontend with one-token lookahead
                     | expr_continuation                               // anything else : expression beginning with the word
 
+// In the frontend branch, IDENT and `!` are byte-adjacent: whitespace or a
+// comment between them refuses. A tagged frontend fills this whole `value`
+// non-terminal and is not an atom inside `expr`; bind its result before
+// combining it with intrinsic operators. Maximal munch decides `!=` before
+// this production, so `json!=x` is the expression `json != x`, never a
+// frontend followed by `=`.
+
 frontend_args     ::= "(" ( value ( "," value )* ","? )? ")"
 frontend_payload  ::= FRONTEND_REGION                                 // one atomic region returned by the resolved frontend;
                                                                       // its contract chooses JSON, braced, STRING, or a future form

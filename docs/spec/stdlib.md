@@ -550,7 +550,6 @@ The surface reserves the following mapping:
 - **Additional Connector traits**: `Postgres`, `File`, `Kafka`, `S3`, … —
   same template, no suffixes. Their order follows executable use cases;
   runtime durability does not depend on an application Connector.
-- **`codec = bytes`** on Process (stream framing question).
 - **`seeded`** behavior value.
 - **HttpServer `respond` streaming** (SSE/chunked).
 - **The health-check protocol details**.

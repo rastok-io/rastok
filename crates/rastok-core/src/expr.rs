@@ -2700,6 +2700,101 @@ mod tests {
     use super::*;
 
     #[test]
+    fn evaluator_carriage_preserves_value_equality_for_every_family() {
+        let struct_a = Value::Struct(alloc::vec![
+            (String::from("a"), Value::Int(1)),
+            (String::from("b"), Value::Bool(true)),
+        ]);
+        let struct_b = Value::Struct(alloc::vec![
+            (String::from("b"), Value::Bool(true)),
+            (String::from("a"), Value::Int(1)),
+        ]);
+        let keyed_a = Value::KeyedMap(alloc::vec![
+            (Value::Int(2), Value::Text(String::from("b"))),
+            (Value::Int(1), Value::Text(String::from("a"))),
+        ]);
+        let keyed_b = Value::KeyedMap(alloc::vec![
+            (Value::Int(1), Value::Text(String::from("a"))),
+            (Value::Int(2), Value::Text(String::from("b"))),
+        ]);
+        let tagged_a = Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+            case: String::from("done"),
+            payload: alloc::vec![
+                (String::from("code"), Value::Int(0)),
+                (String::from("signal"), Value::Null),
+            ],
+        }));
+        let tagged_b = Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+            case: String::from("done"),
+            payload: alloc::vec![
+                (String::from("signal"), Value::Null),
+                (String::from("code"), Value::Int(0)),
+            ],
+        }));
+        let values = alloc::vec![
+            Value::Bool(true),
+            Value::Int(-7),
+            Value::Uint(7),
+            Value::Double(f64::NAN),
+            Value::Double(f64::NAN),
+            Value::Double(-0.0),
+            Value::Double(0.0),
+            Value::Text(String::from("text")),
+            Value::Bytes(alloc::vec![0, 1]),
+            Value::Duration(1),
+            Value::Timestamp(2),
+            Value::Date(3),
+            Value::Time(4),
+            Value::TimestampNtz(5),
+            Value::Interval {
+                months: 1,
+                days: 2,
+                nanoseconds: 3,
+            },
+            Value::Uuid([9; 16]),
+            Value::Null,
+            Value::Array(alloc::vec![Value::Int(1), Value::Int(2)]),
+            Value::Map(alloc::collections::BTreeMap::from([(
+                String::from("key"),
+                Value::Bool(true),
+            )])),
+            keyed_a,
+            keyed_b,
+            struct_a,
+            struct_b,
+            Value::Decimal {
+                unscaled: 150,
+                scale: 2,
+            },
+            Value::Enum(String::from("ready")),
+            Value::StructuralUnion {
+                branch: 1,
+                value: Box::new(Value::Text(String::from("selected"))),
+            },
+            tagged_a,
+            tagged_b,
+        ];
+
+        for value in &values {
+            assert_eq!(
+                EvalValue::from(value.clone())
+                    .into_value()
+                    .expect("a materialized value has no payload witness"),
+                value.clone()
+            );
+        }
+        for left in &values {
+            for right in &values {
+                assert_eq!(
+                    left == right,
+                    EvalValue::from(left.clone()) == EvalValue::from(right.clone()),
+                    "equality drifted for {left:?} and {right:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_payload_witness_never_becomes_a_materialized_value() {
         let nested = EvalValue::List(alloc::vec![EvalValue::Payload]);
         assert!(
@@ -3006,6 +3101,80 @@ mod tests {
             .expect("a fact about a dotted path types its descendants"),
             EvalValue::Bool(true)
         );
+    }
+
+    #[test]
+    fn decimal_narrowing_uses_the_declared_scale_in_expressions() {
+        let money = DataType::Decimal(
+            crate::datatype::DecimalType::new(10, 2).expect("a fixed decimal type"),
+        );
+        let signature = Signature::new()
+            .with("data", DataType::Variant)
+            .with_type("Money", money.clone());
+        let converted = compile_ok("data as Money", &signature);
+        let (document_decimal, consumed) =
+            crate::json::parse_value("5.50").expect("an exact JSON document number");
+        assert_eq!(consumed, 4);
+
+        for (source, expected) in [
+            (
+                EvalValue::Int(5),
+                EvalValue::Decimal {
+                    unscaled: 500,
+                    scale: 2,
+                },
+            ),
+            (
+                EvalValue::from(document_decimal),
+                EvalValue::Decimal {
+                    unscaled: 550,
+                    scale: 2,
+                },
+            ),
+            (
+                EvalValue::Decimal {
+                    unscaled: 550,
+                    scale: 2,
+                },
+                EvalValue::Decimal {
+                    unscaled: 550,
+                    scale: 2,
+                },
+            ),
+        ] {
+            assert_eq!(
+                eval(
+                    &converted,
+                    &BTreeMap::from([(String::from("data"), source)])
+                )
+                .expect("the exact value rescales without rounding"),
+                expected
+            );
+        }
+
+        let constructor = compile_ok("decimal(\"5.50\") as Money", &signature);
+        assert_eq!(
+            eval(&constructor, &BTreeMap::new())
+                .expect("the declared-scale constructor already matches Money"),
+            EvalValue::Decimal {
+                unscaled: 550,
+                scale: 2,
+            }
+        );
+
+        let inexact = BTreeMap::from([(
+            String::from("data"),
+            EvalValue::Decimal {
+                unscaled: 551,
+                scale: 3,
+            },
+        )]);
+        assert!(matches!(
+            eval(&converted, &inexact)
+                .expect_err("a non-zero discarded digit must refuse")
+                .kind,
+            ErrorKind::Narrowing(NarrowingFailure::NoMatch { .. })
+        ));
     }
 
     #[test]

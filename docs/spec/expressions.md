@@ -68,7 +68,8 @@ surface:
 tagged_value ::= IDENT "!" frontend_args? frontend_payload
 ```
 
-Canonical spelling keeps the bang adjacent to the name:
+The bang is lexically adjacent to the name; trivia between them is a syntax
+error, not an alternative spelling:
 
 ```rastok
 json! { "name": "Ada" }
@@ -83,6 +84,14 @@ After an identifier, the single `!` token selects the tagged-frontend
 production. The parser does not need a closed keyword list or a registry
 lookup to choose between a Rastok expression and a frontend. Built-in and
 application-registered frontends have exactly the same syntax.
+
+A tagged frontend occupies one complete host `value` position. It is not an
+expression atom: `val x = json! 2` is valid, while
+`val x = 1 + json! 2` refuses and must bind the frontend result first. This
+keeps the frontend's region/framer outside the intrinsic expression parser.
+Maximal munch remains lexical: `json!= x` is the ordinary expression
+`json != x`, because `!=` is one token; it is never read as `json!` followed
+by `=`.
 
 The registry is consulted only after that syntactic choice, to obtain the
 frontend's contract, framer/compiler and input/output type rules. The
@@ -169,6 +178,12 @@ The implemented minimum is deliberately small and deterministic:
 - `as T` returns the narrowed value or the same typed `NarrowingFailure`;
 - structural unions require exactly one conforming branch and record its
   canonical branch index;
+- a fixed decimal target rescales integer or exact-decimal carriers to its
+  declared scale without rounding; padding zeros is exact, removing non-zero
+  digits or exceeding precision is `NoMatch`;
+- an already wrapped structural union flows implicitly only to the identical
+  resolved union. Explicit `as OtherUnion` reselects the exactly-one target
+  branch and records its target-relative canonical index;
 - after a successful narrowing, expression operators consume the selected
   structural value; the branch index remains present in the materialized
   `Value`, journal and identity and is never discarded at those boundaries;

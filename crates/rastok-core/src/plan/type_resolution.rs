@@ -216,20 +216,33 @@ impl<'plan> Solver<'plan> {
                     self.declare(index, ty.clone())?;
                 }
             }
-            if let NodeKind::Connector(spec) = &planned.kind {
-                for (name, direction) in [
-                    ("in", node::Direction::Input),
-                    ("out", node::Direction::Output),
-                    ("err", node::Direction::Output),
-                ] {
-                    let Ok(port) = node::Port::new(name) else {
-                        continue;
-                    };
-                    let Some(ty) = crate::boundary::resolved_port_type(spec, &port) else {
-                        continue;
-                    };
-                    let index = self.ensure(Some(node_index), &port, direction);
-                    self.declare(index, ty)?;
+            match &planned.kind {
+                NodeKind::Connector(spec) => {
+                    for (name, direction) in [
+                        ("in", node::Direction::Input),
+                        ("out", node::Direction::Output),
+                        ("err", node::Direction::Output),
+                    ] {
+                        let Ok(port) = node::Port::new(name) else {
+                            continue;
+                        };
+                        let Some(ty) = crate::boundary::resolved_port_type(spec, &port) else {
+                            continue;
+                        };
+                        let index = self.ensure(Some(node_index), &port, direction);
+                        self.declare(index, ty)?;
+                    }
+                }
+                NodeKind::Operator => {
+                    // Until B6 replaces the legacy RuntimeFault emission with
+                    // an ordinary declared union, the VM can emit this exact
+                    // two-text map even when no source statement names `err`.
+                    // Seed that real producer so the resolved table remains
+                    // total at the pre-commit conformance gate.
+                    if let Ok(port) = node::Port::new("err") {
+                        let index = self.ensure(Some(node_index), &port, node::Direction::Output);
+                        let _ = self.produce(index, DataType::text_map(DataType::Text))?;
+                    }
                 }
             }
         }

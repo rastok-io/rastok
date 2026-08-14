@@ -50,6 +50,39 @@ fn decimal_digits(value: i128) -> u32 {
     }
 }
 
+fn narrow_decimal(target: DecimalType, value: Value) -> Option<Value> {
+    let (unscaled, source_scale) = match value {
+        Value::Int(value) => (i128::from(value), 0),
+        Value::Uint(value) => (i128::from(value), 0),
+        Value::Decimal { unscaled, scale } if decimal_in_domain(unscaled, scale) => {
+            (unscaled, scale)
+        }
+        _ => return None,
+    };
+    let target_scale = i32::from(target.scale());
+    let unscaled = rescale_decimal(unscaled, source_scale, target_scale)?;
+    if decimal_digits(unscaled) > u32::from(target.precision()) {
+        return None;
+    }
+    Some(Value::Decimal {
+        unscaled,
+        scale: target_scale,
+    })
+}
+
+fn rescale_decimal(unscaled: i128, source_scale: i32, target_scale: i32) -> Option<i128> {
+    if unscaled == 0 || source_scale == target_scale {
+        return Some(unscaled);
+    }
+    if source_scale < target_scale {
+        let places = u32::try_from(target_scale - source_scale).ok()?;
+        return unscaled.checked_mul(10_i128.checked_pow(places)?);
+    }
+    let places = u32::try_from(source_scale - target_scale).ok()?;
+    let divisor = 10_i128.checked_pow(places)?;
+    (unscaled % divisor == 0).then_some(unscaled / divisor)
+}
+
 /// Width of a signed or unsigned integer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IntegerWidth {
@@ -947,6 +980,11 @@ impl DataType {
                 .symbols()
                 .iter()
                 .all(|symbol| target.symbols().contains(symbol)),
+            // A structural-union discriminant is an index into this exact
+            // resolved union. Widening to another union cannot preserve that
+            // index, so it requires an explicit narrowing that reselects the
+            // target branch.
+            (Self::StructuralUnion(_), Self::StructuralUnion(_)) => false,
             (Self::StructuralUnion(source), target) => source
                 .branches()
                 .iter()
@@ -1137,10 +1175,13 @@ impl DataType {
 
     /// Explicitly narrows one materialized value to this logical type.
     ///
-    /// Precise targets preserve the value. Structural unions wrap the unique
-    /// matching branch with its canonical index. Tagged unions preserve an
-    /// already tagged value or use the supplied boundary discriminator to tag
-    /// an untagged struct. No first-match rule exists.
+    /// Precise targets preserve the value except that fixed decimals rescale
+    /// exact integer/decimal carriers to their declared scale. Structural
+    /// unions wrap the unique matching branch with its canonical index; an
+    /// explicit conversion between different unions reselects that index.
+    /// Tagged unions preserve an already tagged value or use the supplied
+    /// boundary discriminator to tag an untagged struct. No first-match rule
+    /// exists.
     ///
     /// # Errors
     ///
@@ -1151,14 +1192,13 @@ impl DataType {
         discriminator: Option<&Discriminator>,
     ) -> Result<Value, NarrowingFailure> {
         match (self, value) {
-            (Self::StructuralUnion(_), value @ Value::StructuralUnion { .. }) => {
-                if self.accepts(&value) {
-                    Ok(value)
-                } else {
-                    Err(NarrowingFailure::NoMatch {
-                        target: Box::new(self.clone()),
-                    })
-                }
+            (Self::StructuralUnion(_), value @ Value::StructuralUnion { .. })
+                if self.accepts(&value) =>
+            {
+                Ok(value)
+            }
+            (Self::StructuralUnion(_), Value::StructuralUnion { value, .. }) => {
+                self.narrow(*value, discriminator)
             }
             (Self::StructuralUnion(union), value) => {
                 let mut matching = Vec::new();
@@ -1179,6 +1219,15 @@ impl DataType {
                         value: Box::new(value),
                     }),
                     _ => Err(NarrowingFailure::AmbiguousUnion { branches: matching }),
+                }
+            }
+            (Self::Decimal(decimal), value) => {
+                if let Some(value) = narrow_decimal(*decimal, value) {
+                    Ok(value)
+                } else {
+                    Err(NarrowingFailure::NoMatch {
+                        target: Box::new(self.clone()),
+                    })
                 }
             }
             (Self::TaggedUnion(_), value @ Value::TaggedUnion(_)) => {
@@ -2662,6 +2711,142 @@ mod tests {
             Err(NarrowingFailure::AmbiguousUnion { branches })
                 if branches == alloc::vec![0, 1]
         ));
+    }
+
+    #[test]
+    fn decimal_narrowing_rescales_exact_values_to_the_declared_type() {
+        let integer_scale =
+            DataType::Decimal(DecimalType::new(10, 0).expect("a fixed decimal type"));
+        assert_eq!(
+            integer_scale.narrow(Value::Int(5), None),
+            Ok(Value::Decimal {
+                unscaled: 5,
+                scale: 0,
+            })
+        );
+
+        let decimal = DataType::Decimal(DecimalType::new(10, 2).expect("a fixed decimal type"));
+
+        assert_eq!(
+            decimal.narrow(Value::Int(5), None),
+            Ok(Value::Decimal {
+                unscaled: 500,
+                scale: 2,
+            })
+        );
+        assert_eq!(
+            decimal.narrow(
+                Value::Decimal {
+                    unscaled: 55,
+                    scale: 1,
+                },
+                None,
+            ),
+            Ok(Value::Decimal {
+                unscaled: 550,
+                scale: 2,
+            })
+        );
+        assert_eq!(
+            decimal.narrow(
+                Value::Decimal {
+                    unscaled: 550,
+                    scale: 2,
+                },
+                None,
+            ),
+            Ok(Value::Decimal {
+                unscaled: 550,
+                scale: 2,
+            })
+        );
+
+        let one_decimal_place =
+            DataType::Decimal(DecimalType::new(10, 1).expect("a fixed decimal type"));
+        assert_eq!(
+            one_decimal_place.narrow(
+                Value::Decimal {
+                    unscaled: 550,
+                    scale: 2,
+                },
+                None,
+            ),
+            Ok(Value::Decimal {
+                unscaled: 55,
+                scale: 1,
+            })
+        );
+        assert!(matches!(
+            one_decimal_place.narrow(
+                Value::Decimal {
+                    unscaled: 551,
+                    scale: 2,
+                },
+                None,
+            ),
+            Err(NarrowingFailure::NoMatch { .. })
+        ));
+
+        let hundreds = DataType::Decimal(DecimalType::new(10, -2).expect("a fixed decimal type"));
+        assert_eq!(
+            hundreds.narrow(Value::Int(500), None),
+            Ok(Value::Decimal {
+                unscaled: 5,
+                scale: -2,
+            })
+        );
+        assert!(matches!(
+            hundreds.narrow(Value::Int(5), None),
+            Err(NarrowingFailure::NoMatch { .. })
+        ));
+
+        let narrow_precision =
+            DataType::Decimal(DecimalType::new(3, 2).expect("a fixed decimal type"));
+        assert!(matches!(
+            narrow_precision.narrow(Value::Int(10), None),
+            Err(NarrowingFailure::NoMatch { .. })
+        ));
+        assert_eq!(
+            narrow_precision.narrow(
+                Value::Decimal {
+                    unscaled: 0,
+                    scale: DECIMAL_MAX_SCALE,
+                },
+                None,
+            ),
+            Ok(Value::Decimal {
+                unscaled: 0,
+                scale: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn structural_union_widening_requires_explicit_reselection() {
+        let source = DataType::structural_union(alloc::vec![DataType::INT, DataType::Text])
+            .expect("source branches are disjoint");
+        let target =
+            DataType::structural_union(alloc::vec![DataType::Bool, DataType::INT, DataType::Text,])
+                .expect("target branches are disjoint");
+
+        assert!(!source.is_assignable_to(&target));
+        let source_value = source
+            .narrow(Value::Int(7), None)
+            .expect("int selects the first source branch");
+        assert_eq!(
+            source_value,
+            Value::StructuralUnion {
+                branch: 0,
+                value: Box::new(Value::Int(7)),
+            }
+        );
+        assert_eq!(
+            target.narrow(source_value, None),
+            Ok(Value::StructuralUnion {
+                branch: 1,
+                value: Box::new(Value::Int(7)),
+            })
+        );
     }
 
     #[test]

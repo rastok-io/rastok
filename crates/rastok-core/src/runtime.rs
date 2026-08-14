@@ -1024,7 +1024,12 @@ pub(crate) fn crossing_pins_hold(
     from: &crate::plan::EndpointRef,
     value: &Value,
 ) -> Result<(), PinViolation> {
-    if let Some(pinned) = plan.resolved_ports().endpoint_type(from)
+    let from_type = plan.resolved_ports().endpoint_type(from);
+    debug_assert!(
+        from_type.is_some(),
+        "a validated emitting endpoint must have a resolved type: {from:?}"
+    );
+    if let Some(pinned) = from_type
         && let Some(violation) = pinned.violation(from.port.name(), value)
     {
         return Err(PinViolation {
@@ -1035,6 +1040,10 @@ pub(crate) fn crossing_pins_hold(
     for edge in plan.edges.iter().filter(|edge| edge.from == *from) {
         let Some(to) = &edge.to else { continue };
         let pinned = plan.resolved_ports().endpoint_type(to);
+        debug_assert!(
+            pinned.is_some(),
+            "a validated fan-out endpoint must have a resolved type: {to:?}"
+        );
         if let Some(pinned) = pinned
             && let Some(violation) = pinned.violation(to.port.name(), value)
         {

@@ -1188,6 +1188,16 @@ fn values_nest_recursively_across_struct_and_map() {
 }
 
 #[test]
+fn an_inline_enum_is_a_complete_field_type() {
+    let source = "type Capture = struct { reason: enum { budget, capacity } }\n\ngraph g : App {\n  input in: text\n  output out: text\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
+    compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an inline enum is already part of the source type grammar");
+}
+
+#[test]
 fn broken_type_declarations_refuse_even_unused() {
     for (source_ty, code, field_key, field_value, what) in [
         (
