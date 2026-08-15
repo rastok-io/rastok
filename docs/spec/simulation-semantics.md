@@ -240,6 +240,10 @@ expect "charged exactly once" ledger.in count == 1 …       // optional label, 
   narrowing. Pinning the port type gives the predicate that precise type.
   This is a check-time ergonomics rule, never a runtime fallback from an
   unresolved validated-plan port (the latter is categorically forbidden).
+- **Supervision is not a port observation.** A VM fault currently fails the
+  scenario; the scenario language has no positive `expect fault` form yet.
+  A future supervision slice may add one explicitly, but it must not recreate
+  a synthetic `err` producer or graph envelope.
 - **Black-box only** : expectations target ports ; internal state (`var`,
   partition fields) is not directly assertable — the golden trace (§6) sees
   everything anyway, and scenarios stay robust to internal refactorings.

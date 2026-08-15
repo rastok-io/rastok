@@ -1113,17 +1113,15 @@ impl Checker<'_, '_> {
                                 .nodes
                                 .iter()
                                 .filter_map(|node| {
-                                    if let Some(decl) = node.ports.iter().find(|decl| {
-                                        decl.port.name() == *port
-                                            && decl.direction == Direction::Output
-                                            && decl.unwired == crate::plan::UnwiredPolicy::RootSink
-                                    }) {
-                                        return Some(decl.ty.clone().unwrap_or(DataType::Variant));
-                                    }
-                                    (node.category() == node::Kind::Operator
-                                        && *port == "err"
-                                        && node.ports.iter().all(|decl| decl.port.name() != "err"))
-                                    .then(|| DataType::text_map(DataType::Text))
+                                    node.ports
+                                        .iter()
+                                        .find(|decl| {
+                                            decl.port.name() == *port
+                                                && decl.direction == Direction::Output
+                                                && decl.unwired
+                                                    == crate::plan::UnwiredPolicy::RootSink
+                                        })
+                                        .map(|decl| decl.ty.clone().unwrap_or(DataType::Variant))
                                 })
                                 .collect::<Vec<_>>();
                             if !root_types.is_empty() {
@@ -1228,8 +1226,6 @@ impl Checker<'_, '_> {
                                 node.ports.iter().find(|decl| decl.port.name() == *port)
                             {
                                 port_decl.ty.clone().unwrap_or(DataType::Variant)
-                            } else if node.category() == node::Kind::Operator && *port == "err" {
-                                DataType::text_map(DataType::Text)
                             } else if matches!(*port, "in" | "out") {
                                 DataType::Variant
                             } else {
@@ -6603,13 +6599,15 @@ graph g : App {
     }
 
     #[test]
-    fn a_misspelled_expectation_target_refuses() {
-        // The exact false-green shapes of the fifth review: a typo'd
-        // node port, a typo'd boundary port, a non-boolean predicate.
+    fn unknown_and_unproduced_expectation_targets_refuse() {
+        // A typo or an unproduced conventional name cannot create an
+        // observation target; predicates still owe a boolean.
         let base = "graph g : App {\n  operator relay {\n    on in { out = . }\n  }\n  . -> relay -> .\n}\n\nlab g {\n  simulation s on app {\n    scenario sc {\n      app.in = { text = \"x\" }\n      EXPECT\n    }\n  }\n}\n";
         let cases = [
             ("expect nothing relay.typo", E_PORT_UNKNOWN),
             ("expect nothing app.typo", E_PORT_UNKNOWN),
+            ("expect nothing relay.err", E_PORT_UNKNOWN),
+            ("expect nothing app.err", E_PORT_UNKNOWN),
             ("expect nothing app.out where 42", E_EXPR),
         ];
         for (expect, code) in cases {
