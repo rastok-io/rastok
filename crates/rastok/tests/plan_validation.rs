@@ -10,7 +10,7 @@
 use rastok::canonical_cbor::MAX_NESTING;
 use rastok::compiler::compile;
 use rastok::contract::Registry;
-use rastok::datatype::DataType;
+use rastok::datatype::{DataType, StructType, TaggedCase, TaggedUnionType};
 use rastok::expr;
 use rastok::node::{Direction, Port};
 use rastok::plan::{
@@ -1099,6 +1099,47 @@ fn narrowing_expressions_cannot_leak_into_a_v6_package() {
                 target: Box::new(target),
             }
         };
+
+        assert_eq!(
+            ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+            PlanValidationError::ExpressionNotInFormat {
+                form,
+                format: plan::FORMAT_VERSION,
+            }
+        );
+    }
+}
+
+#[test]
+fn constructed_values_cannot_leak_into_a_v6_package() {
+    let payload = StructType::new(Vec::new()).expect("the empty payload is closed");
+    let union = TaggedUnionType::new(vec![
+        TaggedCase::new("Done", payload).expect("the case is named"),
+    ])
+    .expect("one named case is a tagged union");
+
+    for (form, root) in [
+        ("a struct constructor", expr::Expr::Struct(Vec::new())),
+        (
+            "a tagged-union constructor",
+            expr::Expr::Tagged {
+                union: Box::new(union.clone()),
+                case: String::from("Done"),
+                fields: Vec::new(),
+            },
+        ),
+    ] {
+        let mut plan = raw_probe();
+        let expression = plan
+            .handlers
+            .iter_mut()
+            .flat_map(|handler| handler.body.iter_mut())
+            .find_map(|step| match step {
+                Step::SetVar { expr, .. } => Some(expr),
+                _ => None,
+            })
+            .expect("the probe state write");
+        expression.root = root;
 
         assert_eq!(
             ValidatedExecutionPlan::try_new(plan).unwrap_err(),

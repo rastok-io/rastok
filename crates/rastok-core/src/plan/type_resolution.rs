@@ -907,6 +907,44 @@ fn expression_requirement(expr: &expr::Expr, expected: &DataType) -> Option<Type
                 merge_optional_requirements(merged, expression_requirement(value, map.value()))
             })
         }
+        expr::Expr::Struct(fields) => {
+            let DataType::Struct(structure) = expected else {
+                return None;
+            };
+            fields.iter().fold(None, |merged, (name, value)| {
+                let expected = structure
+                    .fields()
+                    .iter()
+                    .find(|field| field.name() == name)
+                    .map(|field| field.ty());
+                merge_optional_requirements(
+                    merged,
+                    expected.and_then(|expected| expression_requirement(value, expected)),
+                )
+            })
+        }
+        expr::Expr::Tagged {
+            union,
+            case,
+            fields,
+        } => {
+            let payload = union
+                .cases()
+                .iter()
+                .find(|candidate| candidate.name() == case)?
+                .payload();
+            fields.iter().fold(None, |merged, (name, value)| {
+                let expected = payload
+                    .fields()
+                    .iter()
+                    .find(|field| field.name() == name)
+                    .map(|field| field.ty());
+                merge_optional_requirements(
+                    merged,
+                    expected.and_then(|expected| expression_requirement(value, expected)),
+                )
+            })
+        }
         // Narrowing inspects the input but does not infer that every value on
         // the source port inhabits the tested target.
         expr::Expr::Is { .. } | expr::Expr::As { .. } => None,
@@ -1012,6 +1050,21 @@ fn resolved_expression_type(expr: &expr::Expr, input: &DataType) -> Option<DataT
             }
             value.map(DataType::text_map)
         }
+        expr::Expr::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|(name, value)| {
+                    Some(crate::datatype::TypeField::new(
+                        name.clone(),
+                        resolved_expression_type(value, input)?,
+                    ))
+                })
+                .collect::<Option<alloc::vec::Vec<_>>>()?;
+            crate::datatype::StructType::new(fields)
+                .ok()
+                .map(DataType::Struct)
+        }
+        expr::Expr::Tagged { union, .. } => Some(DataType::TaggedUnion((**union).clone())),
         expr::Expr::Is { .. } => Some(DataType::Bool),
         expr::Expr::As { target, .. } => Some(narrow_target_type(target)),
     }
@@ -1069,6 +1122,21 @@ fn intrinsic_expression_type(expr: &expr::Expr) -> Option<DataType> {
             }
             Some(DataType::text_map(value.unwrap_or(DataType::Variant)))
         }
+        expr::Expr::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|(name, value)| {
+                    Some(crate::datatype::TypeField::new(
+                        name.clone(),
+                        intrinsic_expression_type(value)?,
+                    ))
+                })
+                .collect::<Option<alloc::vec::Vec<_>>>()?;
+            crate::datatype::StructType::new(fields)
+                .ok()
+                .map(DataType::Struct)
+        }
+        expr::Expr::Tagged { union, .. } => Some(DataType::TaggedUnion((**union).clone())),
         expr::Expr::Is { .. } => Some(DataType::Bool),
         expr::Expr::As { target, .. } => Some(narrow_target_type(target)),
         expr::Expr::Path(_) | expr::Expr::Ternary { .. } | expr::Expr::Index { .. } => None,
@@ -1201,6 +1269,9 @@ fn expression_reads_data(expr: &expr::Expr) -> bool {
             expr::Expr::Call { args, .. } | expr::Expr::List(args) => stack.extend(args),
             expr::Expr::MapLit(entries) => {
                 stack.extend(entries.iter().map(|(_, value)| value));
+            }
+            expr::Expr::Struct(fields) | expr::Expr::Tagged { fields, .. } => {
+                stack.extend(fields.iter().map(|(_, value)| value));
             }
         }
     }

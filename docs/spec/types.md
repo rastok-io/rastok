@@ -6,11 +6,13 @@
 > the implementation is being brought to this model, not the other way
 > around.
 >
-> **Implementation checkpoint (B3 + B1 completion, 2026-08-14).** The no_std
+> **Implementation checkpoint (B6 + B3 + B1 completion, 2026-08-15).** The no_std
 > core owns the complete `DataType` and materialized `Value` algebras for the
 > strict JSON Schema, Avro and Arrow profiles; the `expr` engine consumes those
 > authorities. Deterministic `is`/`as` narrowing for precise,
-> structural-union and tagged-union targets is executable in memory. Package
+> structural-union and tagged-union targets is executable in memory. Tagged
+> constructors and contextual structural-union wrapping are now checked and
+> executable in memory; `err` uses the same emission path as any port. Package
 > v6 categorically refuses the new families and expression forms; B8 publishes
 > their sole v7 encoding.
 
@@ -378,6 +380,15 @@ value. An already wrapped structural union may cross an ordinary edge only
 when source and target have the identical resolved union type; conversion to
 a different union is explicit `as`. `err = value` is consequently an ordinary
 port emission.
+
+`Case { ... }` occupies one complete host value position. The parser records
+the shape without consulting a type registry; the checker resolves the case
+from the typed destination or, without one, from exactly one named union in
+the compilation unit. Reusing a case name across unions is legal, but an
+untyped construction is then ambiguous and must acquire an explicit typed
+destination. Payload fields are closed, unique and canonicalized by name.
+This constructor does not revive old configuration initializers: an obsolete
+initializer with no genuine tagged-union context retains its migration.
 
 ## 6. Schema evolution and explicit adapters
 

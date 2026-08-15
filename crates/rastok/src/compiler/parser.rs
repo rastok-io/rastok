@@ -20,8 +20,8 @@ use crate::compiler::syntax::{
     GraphItem, Guard, HandlerDecl, IntLit, LValue, LabDecl, LifetimeValue, MockDecl, Name,
     OperatorDecl, OperatorItem, PartitionDecl, PartitionField, PerClause, PortDecl, PortDirection,
     PortRef, ScalarType, ScenarioDecl, ScenarioItem, SimulationDecl, Statement, StructBody,
-    StructEntry, SubBlock, SyntaxTree, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
-    WindowMode,
+    StructEntry, SubBlock, SyntaxTree, TaggedCaseDecl, TopDecl, Trigger, TypeRef, ValDecl, Value,
+    VarDecl, WindowMode,
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 
@@ -103,6 +103,13 @@ const DEAD_INITIALIZER_TAGS: &[&str] = &[
     "fibonacci",
     "on_crash",
 ];
+
+/// Whether a word belonged to the pre-contract structured-initializer
+/// surface. The checker keeps its migration diagnostic only when a genuine
+/// tagged-union target does not make the same shape meaningful.
+pub(crate) fn is_dead_initializer_tag(word: &str) -> bool {
+    DEAD_INITIALIZER_TAGS.contains(&word)
+}
 
 /// Parses one `.rkg` source into a syntax tree, accumulating
 /// diagnostics; the tree is returned even when faulty.
@@ -1326,9 +1333,9 @@ impl<'src> Parser<'src, '_> {
         Some(statements)
     }
 
-    /// An IDENT-led statement: an assignment or a typed-error
-    /// emission — a bare expression refuses (no implicit yield,
-    /// review rounds 7–8).
+    /// An IDENT-led assignment. Every output, including the conventional
+    /// `err`, uses this one production; a bare expression refuses (no
+    /// implicit yield, review rounds 7–8).
     fn assign_statement(&mut self, start: usize) -> Statement {
         let first = self.bump();
         let mut segments = vec![Name {
@@ -1349,19 +1356,6 @@ impl<'src> Parser<'src, '_> {
         match self.lexer.assignment_follows() {
             Some(crate::compiler::lexer::AssignmentHead::Plain) => {
                 self.bump();
-                if segments.len() == 1 && segments[0].text == "err" {
-                    return match self.name("an error kind") {
-                        Some(kind) => {
-                            let body = if self.peek().kind == TokenKind::LBrace {
-                                self.struct_body()
-                            } else {
-                                None
-                            };
-                            Statement::ErrEmit { kind, body }
-                        }
-                        None => Statement::Error(self.recover(start)),
-                    };
-                }
                 Statement::Assign {
                     target: LValue {
                         span: target_span,
@@ -1742,8 +1736,26 @@ impl<'src> Parser<'src, '_> {
                 span: ident.span,
             });
         }
-        if DEAD_INITIALIZER_TAGS.contains(&word) && self.lexer.tag_opener_on_line().is_some() {
-            return self.dead_initializer(&ident);
+        if let Some(opener) = self.lexer.tag_opener_on_line() {
+            // `IDENT {` is the one predictive tagged-constructor shape. The
+            // checker decides whether context names a genuine union case;
+            // obsolete initializer words retain their migration only when it
+            // does not. Parenthesized old initializers remain dead here.
+            if opener == crate::compiler::lexer::TagOpener::Brace {
+                return match self.struct_body() {
+                    Some(body) => Value::Tagged {
+                        case: Name {
+                            text: String::from(ident.text),
+                            span: ident.span,
+                        },
+                        body,
+                    },
+                    None => Value::Error(ident.span),
+                };
+            }
+            if is_dead_initializer_tag(word) {
+                return self.dead_initializer(&ident);
+            }
         }
         // An ordinary word: the expression continuation re-reads the
         // immutable prefix slice. Frontend NAMES have no special status here.
@@ -2167,6 +2179,45 @@ impl<'src> Parser<'src, '_> {
                 self.expect(TokenKind::RBrace, "`}`")?;
                 Some(BaseType::Enum(names))
             }
+            "union" => {
+                self.bump();
+                self.expect(TokenKind::LBrace, "`{`")?;
+                let mut cases = Vec::new();
+                loop {
+                    match self.peek().kind {
+                        TokenKind::RBrace | TokenKind::Eof => break,
+                        TokenKind::Comma => {
+                            self.bump();
+                        }
+                        _ => {
+                            let name = self.name("a tagged-union case")?;
+                            let mut fields = Vec::new();
+                            if self.eat(TokenKind::LBrace).is_some() {
+                                loop {
+                                    match self.peek().kind {
+                                        TokenKind::RBrace | TokenKind::Eof => break,
+                                        TokenKind::Comma => {
+                                            self.bump();
+                                        }
+                                        _ => {
+                                            let field = self.name("a case payload field")?;
+                                            self.expect(TokenKind::Colon, "`:`")?;
+                                            fields.push(crate::compiler::syntax::FieldDecl {
+                                                name: field,
+                                                ty: self.type_ref()?,
+                                            });
+                                        }
+                                    }
+                                }
+                                self.expect(TokenKind::RBrace, "`}`")?;
+                            }
+                            cases.push(TaggedCaseDecl { name, fields });
+                        }
+                    }
+                }
+                self.expect(TokenKind::RBrace, "`}`")?;
+                Some(BaseType::TaggedUnion(cases))
+            }
             _ => {
                 self.bump();
                 Some(BaseType::Named(Name {
@@ -2308,12 +2359,15 @@ mod tests {
             ("word alone", "data", "expr"),
             ("word + operator", "data + 1", "expr"),
             ("word + call parens", "size(data)", "expr"),
-            ("word + brace", "data { }", "expr"),
+            ("word + brace", "data { }", "tagged"),
             ("duration expression", "duration(\"5s\")", "expr"),
             ("asset expression", "asset(\"README.md\")", "expr"),
             ("decimal expression", "decimal(\"1.50\")", "expr"),
             ("dead tag + parens", "exponential(1, 2)", "error"),
-            ("dead tag + brace", "measure { x = 1 }", "error"),
+            // The parser cannot know whether a case is genuine. The checker
+            // resolves it against a destination type, or keeps the old
+            // migration diagnostic when no such case exists.
+            ("former tag + brace", "measure { x = 1 }", "tagged"),
             ("json object", "json! {\"a\": 1}", "frontend"),
             ("json array", "json! [1]", "frontend"),
             ("json scalar", "json! 1", "frontend"),
@@ -2332,6 +2386,7 @@ mod tests {
             let got = match &value {
                 Value::Expr(_) => "expr",
                 Value::Frontend(_) => "frontend",
+                Value::Tagged { .. } => "tagged",
                 Value::Error(_) => "error",
                 other => panic!("{label}: unexpected family {other:?}"),
             };
@@ -2511,34 +2566,34 @@ mod tests {
 
     #[test]
     fn a_dead_struct_body_keeps_the_sibling_and_the_closers() {
-        // Review round 4's blocker: the buffered `{` leaked — four
-        // voices, the sibling and both closers lost. One voice now,
-        // the region swallowed whole, everything after intact.
-        for (label, source) in [
+        // `IDENT {` is now the predictive tagged-constructor production. A
+        // former initializer without arguments therefore reaches the checker
+        // intact; its parenthesized predecessor remains a parse migration.
+        for (label, source, diagnostics, tagged) in [
             (
                 "no args",
                 "graph g : App {\n  operator o {\n    on in {\n      out = measure { x = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                0,
+                true,
             ),
             (
                 "with args",
                 "graph g : App {\n  operator o {\n    on in {\n      out = on_crash(\"x\") { y = 2 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
+                1,
+                false,
             ),
         ] {
             let (statements, bag) = handler_statements(source);
-            assert_eq!(bag.diagnostics().len(), 1, "{label}: one voice — {bag:?}");
-            assert_eq!(
-                bag.diagnostics()[0].code(),
-                E_PARSE_EXPECTED,
-                "{label}: the migration voice"
-            );
+            assert_eq!(bag.diagnostics().len(), diagnostics, "{label}: {bag:?}");
+            if diagnostics == 1 {
+                assert_eq!(bag.diagnostics()[0].code(), E_PARSE_EXPECTED, "{label}");
+            }
             assert_eq!(statements.len(), 2, "{label}: the sibling lives");
             let Statement::Assign { value, .. } = &statements[0] else {
                 panic!("{label}: first statement: {:?}", statements[0]);
             };
-            assert!(
-                matches!(value, Value::Error(_)),
-                "{label}: the recovery form"
-            );
+            assert_eq!(matches!(value, Value::Tagged { .. }), tagged, "{label}");
+            assert_eq!(matches!(value, Value::Error(_)), !tagged, "{label}");
             let Statement::Assign { value, .. } = &statements[1] else {
                 panic!("{label}: second statement: {:?}", statements[1]);
             };
@@ -2597,11 +2652,6 @@ mod tests {
                 "bad json form + line comment hiding `;` and `}`",
                 "graph g : App {\n  operator o {\n    on in {\n      out = json! foo // ; }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
                 E_JSON_VALUE,
-            ),
-            (
-                "dead struct body + comment hiding `}`",
-                "graph g : App {\n  operator o {\n    on in {\n      out = measure { /* } */ x = 1 }\n      out = data\n    }\n  }\n  . -> o -> .\n}\n",
-                E_PARSE_EXPECTED,
             ),
             (
                 "dead initializer + comment before its opener",
@@ -3412,11 +3462,11 @@ graph m0_probe : App {
         };
         assert_eq!(targets.len(), 2);
         assert_eq!(values.len(), 2);
-        let Statement::ErrEmit { kind, body } = &statements[2] else {
-            panic!("expected the typed-error emission");
+        let Statement::Assign { target, value, .. } = &statements[2] else {
+            panic!("expected an ordinary port assignment");
         };
-        assert_eq!(kind.text, "PaymentDeclined");
-        assert!(body.is_some());
+        assert_eq!(target.segments[0].text, "err");
+        assert!(matches!(value, Value::Tagged { case, .. } if case.text == "PaymentDeclined"));
         let Statement::Assign { value, .. } = &statements[3] else {
             panic!("expected the assignment: {:?}", statements[3]);
         };

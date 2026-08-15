@@ -463,13 +463,6 @@ pub enum Statement {
         /// The assigned value.
         value: Value,
     },
-    /// `err = Kind { … }` — the temporary pre-B6 tagged emission spelling.
-    ErrEmit {
-        /// The case name; B6 generalizes the constructor to every typed port.
-        kind: Name,
-        /// Optional typed fields.
-        body: Option<StructBody>,
-    },
     /// `(a, b) = …` — atomic multi-emit, tuple or broadcast.
     MultiEmit {
         /// The targets, in written order.
@@ -520,6 +513,15 @@ pub enum Value {
     Error(Span),
     /// `IDENT!` followed by the region owned by the registered frontend.
     Frontend(FrontendValue),
+    /// `Case { field = value, … }` — a contextually typed tagged-union
+    /// constructor. The parser records only the case spelling and payload;
+    /// the checker resolves the one compatible union and seals it into HIR.
+    Tagged {
+        /// Semantic case name.
+        case: Name,
+        /// Source payload fields.
+        body: StructBody,
+    },
 }
 
 /// One `"key": value` entry of a braced map.
@@ -687,8 +689,19 @@ pub enum BaseType {
     Table(Box<TypeRef>),
     /// `enum { A, B }`
     Enum(Vec<Name>),
+    /// `union { Case { field: T }, UnitCase }`
+    TaggedUnion(Vec<TaggedCaseDecl>),
     /// A named type, schema, or declared enum/union.
     Named(Name),
+}
+
+/// One named case of a source tagged union.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaggedCaseDecl {
+    /// Semantic case name.
+    pub name: Name,
+    /// Closed payload fields; an empty list is the unit case.
+    pub fields: Vec<FieldDecl>,
 }
 
 /// `type Name = <type_ref>` (D-2026-08-10-8).

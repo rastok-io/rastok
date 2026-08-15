@@ -39,6 +39,11 @@
 > in-memory `expr` nodes, but v6 validation returns
 > `ExpressionNotInFormat` before encoding. No provisional v6 expression tag
 > exists; B8 assigns the resolved target/discriminator form once in v7.
+> **M1.3 B6 follows that same categorical gate:** closed-struct and
+> tagged-union constructors, plus contextual union wrapping represented as
+> `as`, are valid checked in-memory expression nodes. V6 validation refuses
+> each constructor form by name; no private tag extends the table below.
+> B8 publishes the four new forms together with the complete v7 type registry.
 > **Private v6 B5 revision (2026-08-15):** v6 has never been published, so
 > B5 replaces its current canonical body rather than allocating a transitory
 > v7 before the categorical type registry lands. Connector spec key 5

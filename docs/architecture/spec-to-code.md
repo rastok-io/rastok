@@ -1,6 +1,6 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-14 through M1.2 and
+> Planning aid — non-normative. **Updated 2026-08-15 through M1.3 B6 and
 > the specified M1.3 target.** The table first preserves the M0 evidence;
 > the M1 extension below records which normative owners gained new
 > executable responsibility. Where implementation surfaced a semantic
@@ -43,6 +43,7 @@ they are not promised crate names.
 | M1.3 B3 expressions | The `expr` engine consumes core `DataType`/`Value`; evaluator-only witnesses cannot escape; `is`/`as` share one typed narrowing judge with deterministic structural/tagged union selection and conservative flow facts; v6 refuses the new AST until B8 | `expr::{Signature,Tree,NarrowTarget,ErrorKind}`, `datatype::{Discriminator,NarrowingFailure}`, compiler signature/guard bridge, plan v6 categorical gate | independent CEL-compatible oracle corpus, no-match/ambiguity/discriminator tests, handler-flow check, forged-v6 refusal, no_std |
 | M1.3 B4 tagged frontends | Byte-adjacent `IDENT!` alone selects one complete frontend value; the compiler Registry supplies framing and reader policy; JSON accepts every scalar/composite value; `asset` remains a build-bound ordinary expression call | `contract::{FrontendContract,FrontendReader}`, `stdlib::Registry`, `compiler::{lexer,parser,check,syntax}`, `expr`, `json` | custom registered frontend, scalar/exact JSON, adjacency and `!=` maximal-munch matrices, recovery boundaries, unchanged v6 package/hash witness |
 | M1.3 B5 uniform port contracts | One resolved Connector port table carries direction, logical type and unwired policy; Process owns `in/out/err/exit`, `codec = bytes`, independent defaulted `err_codec`, and the fixed migration target; no travelling error-kind list or VM port-name routing remains | `contract::{ConnectorContract,PortContract}`, `stdlib::PROCESS`, `compiler::{check,lower}`, `plan::{validation,serialization}`, `runtime`, `boundary` | sheet-defect matrix, fixed/same-as/profile-selected resolution, Registry-free forged-plan refusals, root-sink policy tests, deliberate hash/package pins |
+| M1.3 B6 tagged sums | `Case { ... }` constructs any context-compatible tagged union; structural-union destinations receive one explicit HIR wrapping; distinct unions require source `as`; `err` has no special syntax or HIR statement | `compiler::{parser,syntax,check,lower}`, `expr::{Expr::Struct,Expr::Tagged,Expr::As}`, `datatype::{TaggedUnionType,DataType::narrow}`, v6 plan categorical gate | exact/missing case fields, nested optional wrapping, implicit/explicit union conversion pair, ordinary `err` emission, forged constructed tree, unchanged old-program package/hash witness |
 
 ## M1.3 target (landing in ordered gates)
 

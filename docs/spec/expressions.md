@@ -1,7 +1,7 @@
 # Rastok expressions and tagged frontends
 
-> **Status: normative M1.3 target; B3 core landed 2026-08-14 and B4
-> frontends landed 2026-08-15.** The
+> **Status: normative M1.3 target; B3 core, B4 frontends and B6 host
+> constructors have landed.** The
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as` trees execute and are type-checked in memory, while package v6
 > refuses them categorically until B8 assigns their single v7 wire form.
@@ -199,6 +199,15 @@ Named aliases are expanded before entering the tree, so alias spelling is
 not identity. The v6 plan gate returns `ExpressionNotInFormat` for `is` or
 `as`; the compiler adapts that to a named v7-transport deferral rather than
 writing a private v6 tag.
+
+Closed structs and `Case { ... }` tagged values originate in the host `value`
+grammar, not in the intrinsic expression parser. After contextual checking
+they are ordinary `Expr::Struct`/`Expr::Tagged` tree nodes, so their fields use
+the same evaluator, constants and narrowing operations. Likewise, implicit
+construction into a structural union is stored as an explicit resolved
+`Expr::As`; the expression engine executes a decision already made by the
+checker. These constructor nodes share the v6 categorical refusal with
+`is`/`as` until B8 gives all of them their single v7 representation.
 
 Two migration constraints remain explicit. First, current v6 programs still
 permit legacy unchecked member/index access on `variant`; B9 removes that

@@ -248,7 +248,11 @@ step touches `vm.rs` once.
    connector port/error lists with one resolved `PortContract` table,
    materialized `Process.in/out/err/exit`, moved root-sink behavior into plan
    data, added `codec = bytes` and defaulted `err_codec = lines`, and removed
-   the travelling `error_set`. The active v6 `TypedError` and
+   the travelling `error_set`. B6 has made `Case { ... }` a general typed
+   value constructor, inserted structural-union wrapping once in checked HIR,
+   and removed the special `ErrEmit` syntax/HIR path: `err` now emits like
+   every other port. These constructor trees remain outside v6 and are
+   published only by B8. The active v6 `TypedError` and
    success/failure-only reply split remain isolated until B7 rather than being
    promoted as a model. Ordered gates and evidence are in
    the dedicated

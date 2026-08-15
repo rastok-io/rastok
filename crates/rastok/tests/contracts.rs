@@ -479,7 +479,7 @@ fn a_tagged_initializer_names_its_migration() {
     ));
     refusal_with(
         &source,
-        "E-PARSE-EXPECTED",
+        "E-CONTRACT-ATTR",
         "dead tagged-initializer spelling",
     );
 }
@@ -1114,11 +1114,10 @@ fn a_nested_block_entry_names_its_migration() {
 }
 
 #[test]
-fn the_recovery_form_is_silent_in_every_position() {
-    // The Value::Error arm matrix (D-2026-08-12-1, review round):
-    // var initializer, local val and state write — the parser's one
-    // voice, no wildcard second. Frontends have one generic argument
-    // grammar now, while `asset` is an ordinary expression call.
+fn an_obsolete_initializer_has_one_migration_voice_in_every_value_position() {
+    // B6 makes `IDENT { ... }` one real syntax production. When the name is
+    // an obsolete initializer rather than a genuine union case, CHECK owns
+    // the one migration voice in every value position.
     for (label, source) in [
         (
             "var initializer",
@@ -1137,8 +1136,8 @@ fn the_recovery_form_is_silent_in_every_position() {
         assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:?}");
         assert_eq!(
             bag.diagnostics()[0].code().as_str(),
-            "E-PARSE-EXPECTED",
-            "{label}: the parser's voice alone"
+            "E-CONTRACT-ATTR",
+            "{label}: the migration voice alone"
         );
     }
 }

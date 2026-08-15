@@ -19,8 +19,8 @@ use crate::compiler::syntax::{
 };
 use crate::contract;
 use crate::datatype::{
-    DataType, DateUnit, DecimalType, EnumType, MapType, StructType, TemporalType, TimeUnit,
-    TypeError, TypeField,
+    DataType, DateUnit, DecimalType, EnumType, MapType, StructType, TaggedCase, TaggedUnionType,
+    TemporalType, TimeUnit, TypeError, TypeField,
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 use crate::expr;
@@ -93,6 +93,7 @@ enum TypeRefusal {
     Cycle { name: String, span: Span },
     DuplicateField { name: String, span: Span },
     DuplicateSymbol { name: String, span: Span },
+    DuplicateCase { name: String, span: Span },
     DepthBudget { measured: usize },
     NodeBudget { measured: usize },
     WidthBudget { what: &'static str, measured: usize },
@@ -612,6 +613,30 @@ impl Checker<'_, '_> {
                 ),
                 None,
             ),
+            expr::Expr::Struct(fields) => (
+                expr::Expr::Struct(
+                    fields
+                        .into_iter()
+                        .map(|(name, value)| Some((name, bind_child(self, value)?)))
+                        .collect::<Option<Vec<_>>>()?,
+                ),
+                None,
+            ),
+            expr::Expr::Tagged {
+                union,
+                case,
+                fields,
+            } => (
+                expr::Expr::Tagged {
+                    union,
+                    case,
+                    fields: fields
+                        .into_iter()
+                        .map(|(name, value)| Some((name, bind_child(self, value)?)))
+                        .collect::<Option<Vec<_>>>()?,
+                },
+                None,
+            ),
             expr::Expr::Is { expr, target } => (
                 expr::Expr::Is {
                     expr: Box::new(bind_child(self, *expr)?),
@@ -638,6 +663,18 @@ impl Checker<'_, '_> {
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Const> {
         let tree = self.expr(expr, signature)?;
+        self.reduce_constant(tree, expr.span, consts)
+    }
+
+    /// Reduces a tree already built by the host value grammar. Tagged and
+    /// struct constructors share this door with intrinsic expressions, so a
+    /// constant position has one evaluation rule and one diagnostic shape.
+    fn reduce_constant(
+        &mut self,
+        tree: expr::Tree,
+        span: Span,
+        consts: &BTreeMap<String, crate::value::Value>,
+    ) -> Option<Const> {
         match expr::const_eval(&tree, consts) {
             Ok(value) => Some(Const { tree, value }),
             Err(error) => {
@@ -647,7 +684,7 @@ impl Checker<'_, '_> {
                         Phase::Check,
                         format!("this position requires a constant: {error}"),
                     )
-                    .with_span(expr.span)
+                    .with_span(span)
                     .with_field("detail", error.message),
                 );
                 None
@@ -949,7 +986,18 @@ impl Checker<'_, '_> {
                     // A draft is world-authored: it is built from
                     // constants, with no input to read.
                     let signature = expr::Signature::new();
-                    let Some(value) = self.emit_value(value, &signature, target.span) else {
+                    let expected = app
+                        .boundary
+                        .iter()
+                        .find(|decl| decl.port == port)
+                        .and_then(|decl| decl.ty.clone());
+                    let Some(value) = self.emit_value(
+                        value,
+                        &signature,
+                        expected.as_ref(),
+                        target.span,
+                        port.name(),
+                    ) else {
                         continue;
                     };
                     if matches!(value, EmitValue::Identity) {
@@ -978,11 +1026,7 @@ impl Checker<'_, '_> {
                     // A pinned input holds its injections to the
                     // contract — the SAME conformance notion as
                     // emissions, drafts having no input to inherit.
-                    if let Some(expected) = app
-                        .boundary
-                        .iter()
-                        .find(|decl| decl.port == port)
-                        .and_then(|decl| decl.ty.clone())
+                    if let Some(expected) = expected
                         && !self.port_conforms(
                             &expected,
                             &value,
@@ -1360,7 +1404,7 @@ impl Checker<'_, '_> {
                     if self.bindable(&val.name, &signature)
                         && let Some(value) = self.graph_val(val, &signature, &consts)
                     {
-                        let Some(ty) = self.inferred_value_type(&value.value, val.span) else {
+                        let Some(ty) = self.constant_binding_type(&value, val.span) else {
                             continue;
                         };
                         signature = signature.with(val.name.text.clone(), ty);
@@ -1644,18 +1688,18 @@ impl Checker<'_, '_> {
         signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Const> {
-        if val.ty.is_some() {
-            self.deferred("a typed val", val.span);
-        }
-        match &val.value {
-            // The parser already spoke for its recovery form.
-            SynValue::Error(_) => None,
-            SynValue::Expr(expr) => self.constant(expr, signature, consts),
-            _ => {
-                self.deferred("a non-expression val initializer", val.span);
-                None
-            }
-        }
+        let expected = match &val.ty {
+            Some(ty) => Some(self.resolve_type_ref(ty)?),
+            None => None,
+        };
+        let tree = self.typed_value_tree(
+            &val.value,
+            signature,
+            expected.as_ref(),
+            val.span,
+            &val.name.text,
+        )?;
+        self.reduce_constant(tree, val.span, consts)
     }
 
     fn operator(
@@ -2254,7 +2298,7 @@ impl Checker<'_, '_> {
                     if self.bindable(&val.name, &signature)
                         && let Some(value) = self.graph_val(val, &signature, &consts)
                     {
-                        let Some(ty) = self.inferred_value_type(&value.value, val.span) else {
+                        let Some(ty) = self.constant_binding_type(&value, val.span) else {
                             continue;
                         };
                         signature = signature.with(val.name.text.clone(), ty);
@@ -2487,8 +2531,7 @@ impl Checker<'_, '_> {
                 }
                 let name = &target.segments[0];
                 let is_state = node.vars.iter().any(|var| var.name == name.text)
-                    || node.vals.iter().any(|val| val.name == name.text)
-                    || name.text == "err";
+                    || node.vals.iter().any(|val| val.name == name.text);
                 if !is_state {
                     self.add_port(node, name, Direction::Output, None, "an emission target");
                 }
@@ -2508,8 +2551,12 @@ impl Checker<'_, '_> {
         let (ty, int_bounded) = self.state_type(&decl.ty)?;
         let init = match &decl.value {
             None => None,
-            Some(SynValue::Expr(expr)) => {
-                let constant = self.constant(expr, signature, consts)?;
+            // The parser already spoke for its recovery form.
+            Some(SynValue::Error(_)) => return None,
+            Some(value) => {
+                let tree =
+                    self.typed_value_tree(value, signature, Some(&ty), decl.span, &decl.name.text)?;
+                let constant = self.reduce_constant(tree, decl.span, consts)?;
                 if int_bounded
                     && let crate::value::Value::Int(value) = constant.value
                     && i32::try_from(value).is_err()
@@ -2520,7 +2567,7 @@ impl Checker<'_, '_> {
                             Phase::Check,
                             format!("`{value}` does not fit `int` (32-bit)"),
                         )
-                        .with_span(expr.span)
+                        .with_span(decl.span)
                         .with_field("detail", "out of the 32-bit int range"),
                     );
                     return None;
@@ -2541,18 +2588,12 @@ impl Checker<'_, '_> {
                                 decl.name.text
                             ),
                         )
-                        .with_span(expr.span)
+                        .with_span(decl.span)
                         .with_field("detail", format!("{init_ty} does not fit {ty}")),
                     );
                     return None;
                 }
                 Some(constant)
-            }
-            // The parser already spoke for its recovery form.
-            Some(SynValue::Error(_)) => return None,
-            Some(_) => {
-                self.deferred("a non-expression var initializer", decl.span);
-                return None;
             }
         };
         Some(Var {
@@ -2681,6 +2722,21 @@ impl Checker<'_, '_> {
                 self.type_constructor_refusal(span, error);
                 None
             }
+        }
+    }
+
+    /// Host constructors already carry the exact resolved composite type in
+    /// their tree. Historical expression literals keep their value-driven
+    /// inference (notably the empty-collection hole) until B8 removes the v6
+    /// bridge.
+    fn constant_binding_type(&mut self, value: &Const, span: Span) -> Option<DataType> {
+        if matches!(
+            value.tree.ty,
+            DataType::Struct(_) | DataType::StructuralUnion(_) | DataType::TaggedUnion(_)
+        ) {
+            Some(value.tree.ty.clone())
+        } else {
+            self.inferred_value_type(&value.value, span)
         }
     }
 
@@ -2817,6 +2873,40 @@ impl Checker<'_, '_> {
                     }
                 }
             }
+            BaseType::TaggedUnion(cases) => {
+                let mut resolved_cases = Vec::with_capacity(cases.len());
+                for case in cases {
+                    let mut fields = Vec::with_capacity(case.fields.len());
+                    for field in &case.fields {
+                        fields.push(TypeField::new(
+                            field.name.text.clone(),
+                            self.resolve_type_ref(&field.ty)?,
+                        ));
+                    }
+                    let payload = match StructType::new(fields) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            self.type_constructor_refusal(span, error);
+                            return None;
+                        }
+                    };
+                    let case = match TaggedCase::new(case.name.text.clone(), payload) {
+                        Ok(case) => case,
+                        Err(error) => {
+                            self.type_constructor_refusal(span, error);
+                            return None;
+                        }
+                    };
+                    resolved_cases.push(case);
+                }
+                match TaggedUnionType::new(resolved_cases) {
+                    Ok(union) => DataType::TaggedUnion(union),
+                    Err(error) => {
+                        self.type_constructor_refusal(span, error);
+                        return None;
+                    }
+                }
+            }
             BaseType::Named(name) => {
                 let Some(aliased) = self.type_decls.get(&name.text).cloned() else {
                     self.bag.push(
@@ -2884,6 +2974,12 @@ impl Checker<'_, '_> {
                 Some(AttrValue::Word(expr.text.clone()))
             }
             SynValue::Expr(expr) => self.constant(expr, signature, consts).map(AttrValue::Const),
+            SynValue::Tagged { case, .. }
+                if crate::compiler::parser::is_dead_initializer_tag(&case.text) =>
+            {
+                self.dead_initializer_migration(case);
+                None
+            }
             _ => {
                 self.deferred("this attribute value form", span);
                 None
@@ -2995,13 +3091,22 @@ impl Checker<'_, '_> {
         let mut statements = Vec::new();
         for statement in body {
             match statement {
-                SynStatement::Val(val) => match &val.value {
-                    // The parser already spoke for its recovery form.
-                    SynValue::Error(_) => {}
-                    SynValue::Expr(expr) => {
-                        if self.bindable(&val.name, &signature)
-                            && let Some(tree) = self.expr(expr, &signature)
-                        {
+                SynStatement::Val(val) => {
+                    if self.bindable(&val.name, &signature) {
+                        let expected = match &val.ty {
+                            Some(ty) => self.resolve_type_ref(ty),
+                            None => None,
+                        };
+                        if val.ty.is_some() && expected.is_none() {
+                            continue;
+                        }
+                        if let Some(tree) = self.typed_value_tree(
+                            &val.value,
+                            &signature,
+                            expected.as_ref(),
+                            val.span,
+                            &val.name.text,
+                        ) {
                             signature = signature.with(val.name.text.clone(), tree.ty.clone());
                             statements.push(Statement::Let {
                                 name: val.name.text.clone(),
@@ -3009,8 +3114,7 @@ impl Checker<'_, '_> {
                             });
                         }
                     }
-                    _ => self.deferred("a non-expression local val", val.span),
-                },
+                }
                 SynStatement::Assign { target, ty, value } => {
                     if ty.is_some() {
                         self.deferred("a typed assignment", target.span);
@@ -3029,36 +3133,41 @@ impl Checker<'_, '_> {
                             // The parser already spoke for its
                             // recovery form.
                             SynValue::Error(_) => {}
-                            SynValue::Expr(expr) => {
-                                if let Some(tree) = self.expr(expr, &signature) {
-                                    let unresolved_input = declared_data_type.is_none()
-                                        && tree.ty == DataType::Variant
-                                        && expression_reads_data(&tree.root);
-                                    if !unresolved_input && !tree.ty.is_assignable_to(&var.ty) {
-                                        self.bag.push(
-                                            Diagnostic::new(
-                                                E_EXPR,
-                                                Phase::Check,
-                                                format!(
-                                                    "`{}` is a {:?}, this value is a {:?}",
-                                                    name.text, var.ty, tree.ty
-                                                ),
-                                            )
-                                            .with_span(expr.span)
-                                            .with_field(
-                                                "detail",
-                                                format!("{:?} does not fit {:?}", tree.ty, var.ty),
-                                            ),
-                                        );
-                                        continue;
+                            _ => {
+                                let tree = if let SynValue::Expr(source) = value {
+                                    let raw = self.expr(source, &signature);
+                                    match raw {
+                                        Some(tree)
+                                            if declared_data_type.is_none()
+                                                && tree.ty == DataType::Variant
+                                                && expression_reads_data(&tree.root) =>
+                                        {
+                                            Some(tree)
+                                        }
+                                        Some(tree) => self.contextualize_tree(
+                                            tree,
+                                            &var.ty,
+                                            target.span,
+                                            &name.text,
+                                        ),
+                                        None => None,
                                     }
+                                } else {
+                                    self.typed_value_tree(
+                                        value,
+                                        &signature,
+                                        Some(&var.ty),
+                                        target.span,
+                                        &name.text,
+                                    )
+                                };
+                                if let Some(tree) = tree {
                                     statements.push(Statement::SetVar {
                                         name: name.text.clone(),
                                         value: tree,
                                     });
                                 }
                             }
-                            _ => self.deferred("a non-expression state write", target.span),
                         }
                         continue;
                     }
@@ -3089,11 +3198,18 @@ impl Checker<'_, '_> {
                     let Ok(port) = node::Port::new(name.text.clone()) else {
                         continue;
                     };
-                    if let Some(emit) = self.emit_value(value, &signature, name.span) {
+                    let expected = node_port_pin(node, &port);
+                    if let Some(emit) = self.emit_value(
+                        value,
+                        &signature,
+                        expected.as_ref(),
+                        name.span,
+                        port.name(),
+                    ) {
                         // A pinned output holds its emissions to the
                         // contract — ONE conformance notion, every
                         // EmitValue form.
-                        if let Some(expected) = node_port_pin(node, &port)
+                        if let Some(expected) = expected
                             && !self.port_conforms(
                                 &expected,
                                 &emit,
@@ -3107,9 +3223,6 @@ impl Checker<'_, '_> {
                         }
                         statements.push(Statement::Emit { port, value: emit });
                     }
-                }
-                SynStatement::ErrEmit { kind, .. } => {
-                    self.deferred("a typed-error emission", kind.span);
                 }
                 SynStatement::MultiEmit { targets, .. } => {
                     let span = targets.first().map_or(decl.span, |target| target.span);
@@ -3383,6 +3496,14 @@ impl Checker<'_, '_> {
                 .with_span(span)
                 .with_field("name", decl.name.text.clone())
                 .with_field("field", name),
+                TypeRefusal::DuplicateCase { name, span } => Diagnostic::new(
+                    E_TYPE_DUP,
+                    Phase::Check,
+                    format!("the tagged-union case `{name}` is declared twice"),
+                )
+                .with_span(span)
+                .with_field("name", decl.name.text.clone())
+                .with_field("field", name),
                 TypeRefusal::DepthBudget { measured } => Diagnostic::new(
                     E_TYPE_BUDGET,
                     Phase::Check,
@@ -3537,6 +3658,49 @@ impl Checker<'_, '_> {
                         }
                     }
                 }
+                BaseType::TaggedUnion(cases) => {
+                    if cases.len() > MAX_FIELDS {
+                        return Err(TypeRefusal::WidthBudget {
+                            what: "tagged-union cases",
+                            measured: cases.len(),
+                        });
+                    }
+                    for (case_index, case) in cases.iter().enumerate() {
+                        if cases[..case_index]
+                            .iter()
+                            .any(|earlier| earlier.name.text == case.name.text)
+                        {
+                            return Err(TypeRefusal::DuplicateCase {
+                                name: case.name.text.clone(),
+                                span: case.name.span,
+                            });
+                        }
+                        if case.fields.len() > MAX_FIELDS {
+                            return Err(TypeRefusal::WidthBudget {
+                                what: "tagged-case fields",
+                                measured: case.fields.len(),
+                            });
+                        }
+                        // A tagged case owns one closed-struct payload node,
+                        // including a unit case's empty payload.
+                        *nodes += 1;
+                        if *nodes > MAX_NODES {
+                            return Err(TypeRefusal::NodeBudget { measured: *nodes });
+                        }
+                        for (field_index, field) in case.fields.iter().enumerate() {
+                            if case.fields[..field_index]
+                                .iter()
+                                .any(|earlier| earlier.name.text == field.name.text)
+                            {
+                                return Err(TypeRefusal::DuplicateField {
+                                    name: field.name.text.clone(),
+                                    span: field.name.span,
+                                });
+                            }
+                            self.walk_type(&field.ty, nodes, depth + 2, stack)?;
+                        }
+                    }
+                }
                 BaseType::Map(keys, values) => {
                     self.walk_type(keys, nodes, depth + 1, stack)?;
                     self.walk_type(values, nodes, depth + 1, stack)?;
@@ -3649,6 +3813,411 @@ impl Checker<'_, '_> {
         )
     }
 
+    /// Applies the one implicit conversion allowed by typed construction:
+    /// selecting and recording the unique branch of the destination
+    /// structural union. The conversion is explicit in HIR as `As`; the VM
+    /// evaluates it but never guesses or repairs a branch.
+    fn contextualize_tree(
+        &mut self,
+        tree: expr::Tree,
+        expected: &DataType,
+        span: Span,
+        place: &str,
+    ) -> Option<expr::Tree> {
+        if tree.ty == *expected {
+            return Some(tree);
+        }
+        if let DataType::StructuralUnion(target) = expected {
+            if matches!(tree.ty, DataType::StructuralUnion(_)) {
+                self.port_type_refusal(
+                    span,
+                    place,
+                    expected,
+                    &tree.ty,
+                    "a conversion between different structural unions requires an explicit `as`",
+                );
+                return None;
+            }
+            let matches = target
+                .branches()
+                .iter()
+                .filter(|branch| tree.ty.is_assignable_to(branch))
+                .count();
+            if matches == 1 {
+                return Some(expr::Tree {
+                    root: expr::Expr::As {
+                        expr: Box::new(tree.root),
+                        target: Box::new(expr::NarrowTarget::Type(Box::new(
+                            expr::NarrowType::new(expected.clone()),
+                        ))),
+                    },
+                    ty: expected.clone(),
+                });
+            }
+            let detail = if matches == 0 {
+                "the value matches no branch of the destination union"
+            } else {
+                "the value matches several branches of the destination union"
+            };
+            self.port_type_refusal(span, place, expected, &tree.ty, detail);
+            return None;
+        }
+        if tree.ty.is_assignable_to(expected) {
+            return Some(tree);
+        }
+        self.port_type_refusal(
+            span,
+            place,
+            expected,
+            &tree.ty,
+            "the value is not assignable to the declared type",
+        );
+        None
+    }
+
+    fn port_type_refusal(
+        &mut self,
+        span: Span,
+        place: &str,
+        expected: &DataType,
+        found: &DataType,
+        detail: &str,
+    ) {
+        self.bag.push(
+            Diagnostic::new(
+                E_PORT_TYPE,
+                Phase::Check,
+                format!("`{place}` requires {expected}; this value is {found}: {detail}"),
+            )
+            .with_span(span)
+            .with_field("port", place.to_string())
+            .with_field("expected", expected.to_string())
+            .with_field("found", found.to_string()),
+        );
+    }
+
+    /// Compiles one host value under an optional logical expectation. This is
+    /// the single contextual-construction door used by ports, state and case
+    /// fields; ordinary expression parsing remains context-free.
+    fn typed_value_tree(
+        &mut self,
+        value: &SynValue,
+        signature: &expr::Signature,
+        expected: Option<&DataType>,
+        span: Span,
+        place: &str,
+    ) -> Option<expr::Tree> {
+        let tree = match value {
+            SynValue::Tagged { case, body } => {
+                return self.tagged_value_tree(case, body, signature, expected, span, place);
+            }
+            SynValue::Braced(body) => {
+                self.struct_value_tree(body, signature, expected, span, place)?
+            }
+            _ => self.nested_value_tree(value, signature, span)?,
+        };
+        match expected {
+            Some(expected) => self.contextualize_tree(tree, expected, span, place),
+            None => Some(tree),
+        }
+    }
+
+    fn tagged_value_tree(
+        &mut self,
+        name: &crate::compiler::syntax::Name,
+        body: &StructBody,
+        signature: &expr::Signature,
+        expected: Option<&DataType>,
+        span: Span,
+        place: &str,
+    ) -> Option<expr::Tree> {
+        let mut candidates = Vec::new();
+        let mut collect = |ty: &DataType| match ty {
+            DataType::TaggedUnion(union)
+                if union.cases().iter().any(|case| case.name() == name.text) =>
+            {
+                if !candidates.contains(union) {
+                    candidates.push(union.clone());
+                }
+            }
+            DataType::StructuralUnion(union) => {
+                for branch in union.branches() {
+                    if let DataType::TaggedUnion(tagged) = branch
+                        && tagged.cases().iter().any(|case| case.name() == name.text)
+                        && !candidates.contains(tagged)
+                    {
+                        candidates.push(tagged.clone());
+                    }
+                }
+            }
+            _ => {}
+        };
+        match expected {
+            Some(expected) => collect(expected),
+            None => {
+                for ty in self.resolved_types.values() {
+                    collect(ty);
+                }
+            }
+        }
+        let [union] = candidates.as_slice() else {
+            if crate::compiler::parser::is_dead_initializer_tag(&name.text) {
+                self.dead_initializer_migration(name);
+            } else {
+                let detail = if candidates.is_empty() {
+                    "no compatible tagged union declares this case"
+                } else {
+                    "the case name belongs to more than one compatible tagged union"
+                };
+                let target = expected.cloned().unwrap_or(DataType::Variant);
+                self.port_type_refusal(span, place, &target, &DataType::Variant, detail);
+            }
+            return None;
+        };
+        let Some(selected) = union.cases().iter().find(|case| case.name() == name.text) else {
+            self.port_type_refusal(
+                span,
+                place,
+                expected.unwrap_or(&DataType::Variant),
+                &DataType::Variant,
+                "the selected tagged union does not declare this case",
+            );
+            return None;
+        };
+        let fields = self.closed_struct_fields(
+            body,
+            selected.payload(),
+            signature,
+            span,
+            &format!("{}::{name}", place, name = name.text),
+        )?;
+        let tree = expr::Tree {
+            root: expr::Expr::Tagged {
+                union: Box::new(union.clone()),
+                case: name.text.clone(),
+                fields,
+            },
+            ty: DataType::TaggedUnion(union.clone()),
+        };
+        match expected {
+            Some(expected) => self.contextualize_tree(tree, expected, span, place),
+            None => Some(tree),
+        }
+    }
+
+    fn struct_value_tree(
+        &mut self,
+        body: &StructBody,
+        signature: &expr::Signature,
+        expected: Option<&DataType>,
+        span: Span,
+        place: &str,
+    ) -> Option<expr::Tree> {
+        let expected_struct = match expected {
+            Some(DataType::Struct(structure)) => Some(structure.clone()),
+            Some(DataType::StructuralUnion(union)) => {
+                let Some(source_names) = source_field_names(body) else {
+                    self.port_type_refusal(
+                        span,
+                        place,
+                        expected.unwrap_or(&DataType::Variant),
+                        &DataType::Variant,
+                        "a union record constructor contains only unqualified `field = value` entries",
+                    );
+                    return None;
+                };
+                let matching: Vec<_> = union
+                    .branches()
+                    .iter()
+                    .filter_map(|branch| match branch {
+                        DataType::Struct(structure)
+                            if structure
+                                .fields()
+                                .iter()
+                                .map(TypeField::name)
+                                .eq(source_names.iter().map(String::as_str)) =>
+                        {
+                            Some(structure.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                match matching.as_slice() {
+                    [structure] => Some(structure.clone()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let (fields, ty) = if let Some(structure) = &expected_struct {
+            (
+                self.closed_struct_fields(body, structure, signature, span, place)?,
+                DataType::Struct(structure.clone()),
+            )
+        } else {
+            let mut fields = Vec::new();
+            for entry in &body.entries {
+                let StructEntry::Field { key, value } = entry else {
+                    self.port_type_refusal(
+                        span,
+                        place,
+                        expected.unwrap_or(&DataType::Variant),
+                        &DataType::Variant,
+                        "a value struct contains only `field = value` entries",
+                    );
+                    return None;
+                };
+                let [name] = key.segments.as_slice() else {
+                    self.port_type_refusal(
+                        key.span,
+                        place,
+                        expected.unwrap_or(&DataType::Variant),
+                        &DataType::Variant,
+                        "a closed value struct uses one field segment per entry",
+                    );
+                    return None;
+                };
+                let tree = self.typed_value_tree(value, signature, None, key.span, &name.text)?;
+                fields.push((name.text.clone(), tree.root, tree.ty));
+            }
+            fields.sort_by(|a, b| a.0.cmp(&b.0));
+            if fields.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+                self.port_type_refusal(
+                    span,
+                    place,
+                    expected.unwrap_or(&DataType::Variant),
+                    &DataType::Variant,
+                    "a struct field is written more than once",
+                );
+                return None;
+            }
+            let typed = fields
+                .iter()
+                .map(|(name, _, ty)| TypeField::new(name.clone(), ty.clone()))
+                .collect();
+            let ty = match StructType::new(typed) {
+                Ok(structure) => DataType::Struct(structure),
+                Err(error) => {
+                    self.type_constructor_refusal(span, error);
+                    return None;
+                }
+            };
+            (
+                fields
+                    .into_iter()
+                    .map(|(name, value, _)| (name, value))
+                    .collect(),
+                ty,
+            )
+        };
+        let tree = expr::Tree {
+            root: expr::Expr::Struct(fields),
+            ty,
+        };
+        match expected {
+            Some(expected) => self.contextualize_tree(tree, expected, span, place),
+            None => Some(tree),
+        }
+    }
+
+    fn closed_struct_fields(
+        &mut self,
+        body: &StructBody,
+        expected: &StructType,
+        signature: &expr::Signature,
+        span: Span,
+        place: &str,
+    ) -> Option<Vec<(String, expr::Expr)>> {
+        let mut source = BTreeMap::new();
+        for entry in &body.entries {
+            let StructEntry::Field { key, value } = entry else {
+                self.port_type_refusal(
+                    span,
+                    place,
+                    &DataType::Struct(expected.clone()),
+                    &DataType::Variant,
+                    "a constructor payload contains only `field = value` entries",
+                );
+                return None;
+            };
+            let [name] = key.segments.as_slice() else {
+                self.port_type_refusal(
+                    key.span,
+                    place,
+                    &DataType::Struct(expected.clone()),
+                    &DataType::Variant,
+                    "a constructor field is one unqualified name",
+                );
+                return None;
+            };
+            if source
+                .insert(name.text.clone(), (value, key.span))
+                .is_some()
+            {
+                self.port_type_refusal(
+                    key.span,
+                    place,
+                    &DataType::Struct(expected.clone()),
+                    &DataType::Variant,
+                    "a constructor field is written more than once",
+                );
+                return None;
+            }
+        }
+        let expected_names: std::collections::BTreeSet<_> =
+            expected.fields().iter().map(TypeField::name).collect();
+        let source_names: std::collections::BTreeSet<_> =
+            source.keys().map(String::as_str).collect();
+        if expected_names != source_names {
+            self.port_type_refusal(
+                span,
+                place,
+                &DataType::Struct(expected.clone()),
+                &DataType::Variant,
+                "the constructor fields must exactly match the closed payload",
+            );
+            return None;
+        }
+        let mut fields = Vec::with_capacity(expected.fields().len());
+        for field in expected.fields() {
+            let Some((value, field_span)) = source.remove(field.name()) else {
+                self.port_type_refusal(
+                    span,
+                    place,
+                    &DataType::Struct(expected.clone()),
+                    &DataType::Variant,
+                    "the constructor fields must exactly match the closed payload",
+                );
+                return None;
+            };
+            let tree = self.typed_value_tree(
+                value,
+                signature,
+                Some(field.ty()),
+                field_span,
+                field.name(),
+            )?;
+            fields.push((field.name().to_string(), tree.root));
+        }
+        Some(fields)
+    }
+
+    fn dead_initializer_migration(&mut self, name: &crate::compiler::syntax::Name) {
+        self.bag.push(
+            Diagnostic::new(
+                E_CONTRACT_ATTR,
+                Phase::Check,
+                format!(
+                    "`{tag} {{ … }}` is a dead tagged-initializer spelling; write a braced struct (`name = {{ … }}`) — a former discriminant becomes a field",
+                    tag = name.text
+                ),
+            )
+            .with_span(name.span)
+            .with_field("attribute", name.text.clone())
+            .with_field("detail", "dead tagged-initializer spelling"),
+        );
+    }
+
     /// THE nested-value lowering, shared by struct fields and map entries:
     /// expression, frontend, recursive maps and the EMPTY struct.
     /// A content-typed byte form refuses with the dedicated rule —
@@ -3739,7 +4308,16 @@ impl Checker<'_, '_> {
                 );
                 return None;
             }
-            let tree = self.nested_value_tree(&entry.value, signature, at)?;
+            let tree = match &entry.value {
+                // A named case is the one B6 addition to an untyped map
+                // value. Other nested forms retain their established v6
+                // behavior; in particular a non-empty struct still names its
+                // deferral instead of silently acquiring a v7-only type.
+                SynValue::Tagged { .. } => {
+                    self.typed_value_tree(&entry.value, signature, None, at, "map value")?
+                }
+                _ => self.nested_value_tree(&entry.value, signature, at)?,
+            };
             pairs.push((key, tree.root, tree.ty));
         }
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -3855,6 +4433,11 @@ impl Checker<'_, '_> {
             }
             expr::Expr::MapLit(pairs) => {
                 for (_, value) in pairs {
+                    self.collect_meta_reads(value, span);
+                }
+            }
+            expr::Expr::Struct(fields) | expr::Expr::Tagged { fields, .. } => {
+                for (_, value) in fields {
                     self.collect_meta_reads(value, span);
                 }
             }
@@ -4024,16 +4607,36 @@ impl Checker<'_, '_> {
         &mut self,
         value: &SynValue,
         signature: &expr::Signature,
+        expected: Option<&DataType>,
         at: Span,
+        port_name: &str,
     ) -> Option<EmitValue> {
         match value {
             // The parser already spoke for its recovery form.
             SynValue::Error(_) => None,
             SynValue::Identity(_) => Some(EmitValue::Identity),
+            SynValue::Braced(body)
+                if matches!(
+                    expected,
+                    Some(DataType::Struct(_) | DataType::StructuralUnion(_))
+                ) =>
+            {
+                self.typed_value_tree(value, signature, expected, at, port_name)
+                    .map(EmitValue::Data)
+            }
             SynValue::Braced(body) => self.braced(body, signature, at),
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
+            SynValue::Tagged { .. } => self
+                .typed_value_tree(value, signature, expected, at, port_name)
+                .map(EmitValue::Data),
             SynValue::Expr(expr) => {
                 let (tree, content_type) = self.payload_expr(expr, signature)?;
+                let tree = match expected {
+                    Some(expected) => {
+                        self.contextualize_tree(tree, expected, expr.span, port_name)?
+                    }
+                    None => tree,
+                };
                 if matches!(
                     tree.ty,
                     DataType::DURATION | DataType::TIMESTAMP | DataType::Null
@@ -4062,8 +4665,12 @@ impl Checker<'_, '_> {
                 // `{ "k": v }` and `{:}` are executable emissions:
                 // the entries compile into the existing MapLit form,
                 // nested maps and json literals included.
-                self.map_value_tree(entries, signature, at)
-                    .map(EmitValue::Data)
+                let tree = self.map_value_tree(entries, signature, at)?;
+                let tree = match expected {
+                    Some(expected) => self.contextualize_tree(tree, expected, at, port_name)?,
+                    None => tree,
+                };
+                Some(EmitValue::Data(tree))
             }
             SynValue::Frontend(frontend) => {
                 let call = self.frontend_data(frontend)?;
@@ -4081,6 +4688,10 @@ impl Checker<'_, '_> {
                         ),
                         content_type,
                     ),
+                };
+                let tree = match expected {
+                    Some(expected) => self.contextualize_tree(tree, expected, at, port_name)?,
+                    None => tree,
                 };
                 Some(match content_type {
                     Some(content_type) => EmitValue::FreshData(vec![
@@ -4378,6 +4989,22 @@ impl Checker<'_, '_> {
                                 });
                             }
                         }
+                        SynValue::Tagged { .. }
+                            if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
+                        {
+                            if let Some(tree) = self.typed_value_tree(
+                                value,
+                                signature,
+                                None,
+                                key.span,
+                                &key_path(key),
+                            ) {
+                                writes.push(FieldWrite {
+                                    target,
+                                    value: tree,
+                                });
+                            }
+                        }
                         SynValue::Error(_) => {}
                         _ => self.deferred("a nested envelope builder", key.span),
                     }
@@ -4477,6 +5104,20 @@ impl Checker<'_, '_> {
                                 &SynValue::Frontend(frontend.clone()),
                                 signature,
                                 key.span,
+                            ) {
+                                writes.push(FieldWrite {
+                                    target: crate::envelope::WriteTarget::Data(path),
+                                    value: tree,
+                                });
+                            }
+                        }
+                        SynValue::Tagged { .. } => {
+                            if let Some(tree) = self.typed_value_tree(
+                                value,
+                                signature,
+                                None,
+                                key.span,
+                                &key_path(key),
                             ) {
                                 writes.push(FieldWrite {
                                     target: crate::envelope::WriteTarget::Data(path),
@@ -5011,6 +5652,11 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
                     expr(value, remap);
                 }
             }
+            expr::Expr::Struct(fields) | expr::Expr::Tagged { fields, .. } => {
+                for (_, value) in fields {
+                    expr(value, remap);
+                }
+            }
         }
     }
     fn emit(value: &mut EmitValue, remap: &[u32]) {
@@ -5087,6 +5733,24 @@ fn key_path(key: &crate::compiler::syntax::LValue) -> String {
         .map(|segment| segment.text.as_str())
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// Canonical flat field-name set when a braced value can be judged as one
+/// closed struct. Detailed refusals stay at the construction door.
+fn source_field_names(body: &StructBody) -> Option<Vec<String>> {
+    let mut names = Vec::with_capacity(body.entries.len());
+    for entry in &body.entries {
+        let StructEntry::Field { key, .. } = entry else {
+            return None;
+        };
+        let [name] = key.segments.as_slice() else {
+            return None;
+        };
+        names.push(name.text.clone());
+    }
+    names.sort();
+    names.dedup();
+    Some(names)
 }
 
 /// A literal expression tree — the compiler's own constants.
@@ -5244,6 +5908,9 @@ fn expression_reads_data(expr: &expr::Expr) -> bool {
             expr::Expr::Call { args, .. } | expr::Expr::List(args) => stack.extend(args),
             expr::Expr::MapLit(entries) => {
                 stack.extend(entries.iter().map(|(_, value)| value));
+            }
+            expr::Expr::Struct(fields) | expr::Expr::Tagged { fields, .. } => {
+                stack.extend(fields.iter().map(|(_, value)| value));
             }
         }
     }
@@ -5452,6 +6119,148 @@ graph m0_probe : App {
             .find(|diagnostic| diagnostic.code() == E_META_SYS_READONLY)
             .expect("the meta.sys refusal");
         assert!(diagnostic.message().contains("read-only"));
+    }
+
+    #[test]
+    fn a_tagged_constructor_and_its_optional_field_are_wrapped_at_check() {
+        let source = r#"
+type ProcessExit = union {
+  Exited { exit_code: int, signal: int? },
+  SpawnFailed { message: text }
+}
+graph g : App {
+  operator o {
+    input in: int
+    output exit: ProcessExit
+    on in {
+      exit = Exited { exit_code = 0, signal = null }
+    }
+  }
+}
+"#;
+        let hir = check_clean(source);
+        let Statement::Emit { port, value } = &hir.app.nodes[0].handlers[0].body[0] else {
+            panic!("expected an emission");
+        };
+        assert_eq!(port.name(), "exit");
+        let EmitValue::Data(tree) = value else {
+            panic!("expected constructed data");
+        };
+        let expr::Expr::Tagged {
+            case,
+            fields,
+            union,
+            ..
+        } = &tree.root
+        else {
+            panic!("expected a tagged constructor");
+        };
+        assert_eq!(case, "Exited");
+        assert_eq!(union.cases()[0].name(), "Exited");
+        assert!(matches!(
+            &fields[1],
+            (name, expr::Expr::As { .. }) if name == "signal"
+        ));
+    }
+
+    #[test]
+    fn a_structural_union_is_selected_once_in_the_checked_tree() {
+        let source = r#"
+graph g : App {
+  operator o {
+    input in: int
+    output out: int | text
+    on in { out = 5 }
+  }
+}
+"#;
+        let hir = check_clean(source);
+        let Statement::Emit {
+            value: EmitValue::Data(tree),
+            ..
+        } = &hir.app.nodes[0].handlers[0].body[0]
+        else {
+            panic!("expected a data emission");
+        };
+        assert!(matches!(tree.root, expr::Expr::As { .. }));
+        assert!(matches!(tree.ty, DataType::StructuralUnion(_)));
+    }
+
+    #[test]
+    fn different_structural_unions_require_an_explicit_as() {
+        let implicit = r#"
+type Small = int | text
+type Wide = int | text | bool
+graph g : App {
+  operator o {
+    input in: Small
+    output out: Wide
+    on in { out = data }
+  }
+}
+"#;
+        let (_, bag) = check_source(implicit);
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == E_PORT_TYPE
+                && diagnostic.message().contains("requires an explicit `as`")
+        }));
+
+        let explicit = implicit.replace("out = data", "out = data as Wide");
+        let hir = check_clean(&explicit);
+        let Statement::Emit {
+            value: EmitValue::Data(tree),
+            ..
+        } = &hir.app.nodes[0].handlers[0].body[0]
+        else {
+            panic!("expected a data emission");
+        };
+        assert!(matches!(tree.root, expr::Expr::As { .. }));
+    }
+
+    #[test]
+    fn err_is_an_ordinary_inferred_output_port() {
+        let source = r#"
+type Failure = union { Broken { message: text } }
+graph g : App {
+  operator o {
+    on in { err = Broken { message = "no" } }
+  }
+}
+"#;
+        let hir = check_clean(source);
+        let err = hir.app.nodes[0]
+            .ports
+            .iter()
+            .find(|port| port.port.name() == "err")
+            .expect("err is materialized like every other emitted port");
+        assert_eq!(err.direction, Direction::Output);
+        assert_eq!(err.unwired, crate::plan::UnwiredPolicy::RootSink);
+        assert!(matches!(
+            &hir.app.nodes[0].handlers[0].body[0],
+            Statement::Emit { port, value: EmitValue::Data(expr::Tree { root: expr::Expr::Tagged { .. }, .. }) }
+                if port.name() == "err"
+        ));
+    }
+
+    #[test]
+    fn a_bad_tagged_constructor_refuses_at_the_typed_destination() {
+        let source = r#"
+type Exit = union { Exited { code: int } }
+graph g : App {
+  operator o {
+    output exit: Exit
+    on in { exit = Exited { message = "wrong" } }
+  }
+}
+"#;
+        let (_, bag) = check_source(source);
+        assert_eq!(
+            diagnostic_codes(&bag)
+                .into_iter()
+                .filter(|code| *code == E_PORT_TYPE)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -5846,9 +6655,9 @@ graph g : App {
         let diagnostic = bag
             .diagnostics()
             .iter()
-            .find(|diagnostic| diagnostic.code() == E_EXPR)
+            .find(|diagnostic| diagnostic.code() == E_PORT_TYPE)
             .expect("the type mismatch");
-        assert!(diagnostic.message().contains("declared int32"));
+        assert!(diagnostic.message().contains("requires int32"));
     }
 
     #[test]

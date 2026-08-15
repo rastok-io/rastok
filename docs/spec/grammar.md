@@ -1568,7 +1568,13 @@ value             ::= braced_value                                    // { … }
 value_after_ident ::= ε                                               // nothing significant on the line and the line ends the
                                                                       //   value : the word ALONE is the expression (span exact)
                     | "!" frontend_args? frontend_payload             // IDENT ! selects the frontend with one-token lookahead
+                    | "{" struct_body "}"                             // tagged-union constructor; CHECK resolves IDENT as one case
                     | expr_continuation                               // anything else : expression beginning with the word
+
+// IDENT { ... } is parsed without a type-name table. It becomes a genuine
+// tagged-union value only when CHECK resolves exactly one compatible case.
+// Otherwise a former initializer spelling retains its migration diagnostic;
+// this does not revive declaration/configuration sub_block.
 
 // In the frontend branch, IDENT and `!` are byte-adjacent: whitespace or a
 // comment between them refuses. A tagged frontend fills this whole `value`
@@ -1877,6 +1883,7 @@ parser never needs to peek further than one token.
 | `attr_entry` | `lvalue` (IDENT, dotted ok) — next is `=` | dotted attribute |
 | `attr_entry` | IDENT — next is `{` | DEAD form → migration refusal (`name = { … }`) |
 | `value` | IDENT — next token is `!` | `value_after_ident`: tagged frontend; the Registry resolves the name only after the grammar branch is chosen |
+| `value` | IDENT — next token is `{` | `value_after_ident`: tagged-union constructor shape; the checker resolves the case from its typed destination or one unambiguous named union |
 | `value` | IDENT — any other follower | Rastok expression / bare word, judged by the expression checker or contract |
 | `value` | `{` — then `}` / `:` / STRING / IDENT | `braced_value` : empty struct / empty map / map_entries / struct_entries |
 | `value` | `.` (envelope position) | identity — exact re-emission |

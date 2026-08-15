@@ -758,6 +758,9 @@ fn asset_indexes_bound(plan: &ExecutionPlan, expr: &expr::Expr) -> Result<(), Pl
         expr::Expr::MapLit(pairs) => pairs
             .iter()
             .try_for_each(|(_, value)| asset_indexes_bound(plan, value)),
+        expr::Expr::Struct(fields) | expr::Expr::Tagged { fields, .. } => fields
+            .iter()
+            .try_for_each(|(_, value)| asset_indexes_bound(plan, value)),
     }
 }
 
@@ -1476,6 +1479,14 @@ fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
                 .map(|(_, value)| value)
                 .try_for_each(expr_canonical)
         }
+        expr::Expr::Struct(_) => Err(PlanValidationError::ExpressionNotInFormat {
+            form: "a struct constructor",
+            format: crate::plan::serialization::FORMAT_VERSION,
+        }),
+        expr::Expr::Tagged { .. } => Err(PlanValidationError::ExpressionNotInFormat {
+            form: "a tagged-union constructor",
+            format: crate::plan::serialization::FORMAT_VERSION,
+        }),
         expr::Expr::Is { .. } => Err(PlanValidationError::ExpressionNotInFormat {
             form: "is",
             format: crate::plan::serialization::FORMAT_VERSION,

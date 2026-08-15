@@ -519,7 +519,10 @@ fn expr_tree(expr: &expr::Expr) -> Cbor {
         // A validated v6 plan categorically refuses these B3 forms. Tag zero
         // is intentionally unreadable and only keeps this private encoder
         // total if a future caller violates that proof.
-        expr::Expr::Is { .. } | expr::Expr::As { .. } => Cbor::Array(vec![Cbor::Uint(0)]),
+        expr::Expr::Struct(_)
+        | expr::Expr::Tagged { .. }
+        | expr::Expr::Is { .. }
+        | expr::Expr::As { .. } => Cbor::Array(vec![Cbor::Uint(0)]),
     }
 }
 
@@ -680,6 +683,15 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                             // at +3.
                             max = max.max(level + 3);
                             stack.push(Item::Expr(value, level + 3));
+                        }
+                    }
+                    expr::Expr::Struct(fields) | expr::Expr::Tagged { fields, .. } => {
+                        for (_, value) in fields {
+                            // v7 assigns the exact container shape; this
+                            // conservative depth keeps the preflight total
+                            // even if its categorical validation gate is
+                            // accidentally bypassed.
+                            stack.push(Item::Expr(value, level + 2));
                         }
                     }
                 }

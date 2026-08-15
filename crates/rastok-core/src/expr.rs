@@ -23,7 +23,9 @@ use alloc::{format, vec};
 use core::fmt;
 use core::ops::Range;
 
-use crate::datatype::{DataType, Discriminator, NarrowingFailure};
+use crate::datatype::{
+    DataType, Discriminator, NarrowingFailure, StructType, TaggedUnionType, TypeField,
+};
 use crate::value::Value;
 
 /// Names refused explicitly: admitted by full CEL, outside this build.
@@ -786,6 +788,20 @@ pub enum Expr {
     List(Vec<Expr>),
     /// Map literal with text keys.
     MapLit(Vec<(String, Expr)>),
+    /// A closed struct constructed by the host value grammar. Fields are
+    /// canonicalized by UTF-8 name before this node enters HIR.
+    Struct(Vec<(String, Expr)>),
+    /// A named case of one resolved tagged union. Carrying the union here
+    /// makes a forged tree independently checkable; evaluation uses only the
+    /// case and payload after validation.
+    Tagged {
+        /// The exact resolved union whose case is constructed.
+        union: Box<TaggedUnionType>,
+        /// Semantic case name.
+        case: String,
+        /// Closed payload fields in canonical name order.
+        fields: Vec<(String, Expr)>,
+    },
     /// Checked type or tagged-case predicate.
     Is {
         /// Tested expression.
@@ -1720,6 +1736,11 @@ fn structural_depth(root: &Expr) -> usize {
                     stack.push((value, depth + 1));
                 }
             }
+            Expr::Struct(fields) | Expr::Tagged { fields, .. } => {
+                for (_, value) in fields {
+                    stack.push((value, depth + 1));
+                }
+            }
         }
     }
     max
@@ -1757,6 +1778,9 @@ fn dismantle(root: Expr) {
             Expr::Call { args, .. } => stack.extend(args),
             Expr::List(items) => stack.extend(items),
             Expr::MapLit(pairs) => stack.extend(pairs.into_iter().map(|(_, value)| value)),
+            Expr::Struct(fields) | Expr::Tagged { fields, .. } => {
+                stack.extend(fields.into_iter().map(|(_, value)| value));
+            }
         }
     }
 }
@@ -1960,6 +1984,53 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                 }
             }
             Ok(DataType::text_map(values))
+        }
+        Expr::Struct(fields) => {
+            let mut typed = Vec::with_capacity(fields.len());
+            for (name, value) in fields {
+                typed.push(TypeField::new(name.clone(), check(value, signature, text)?));
+            }
+            StructType::new(typed)
+                .map(DataType::Struct)
+                .map_err(|error| fail(error.to_string()))
+        }
+        Expr::Tagged {
+            union,
+            case,
+            fields,
+        } => {
+            let Some(selected) = union
+                .cases()
+                .iter()
+                .find(|candidate| candidate.name() == case)
+            else {
+                return Err(fail(format!(
+                    "case `{case}` does not belong to this tagged union"
+                )));
+            };
+            if fields.len() != selected.payload().fields().len() {
+                return Err(fail(format!(
+                    "case `{case}` requires {} fields, found {}",
+                    selected.payload().fields().len(),
+                    fields.len()
+                )));
+            }
+            for ((name, value), expected) in fields.iter().zip(selected.payload().fields()) {
+                if name != expected.name() {
+                    return Err(fail(format!(
+                        "case `{case}` requires field `{}`, found `{name}`",
+                        expected.name()
+                    )));
+                }
+                let found = check(value, signature, text)?;
+                if !found.is_assignable_to(expected.ty()) {
+                    return Err(fail(format!(
+                        "case `{case}` field `{name}` requires {}, found {found}",
+                        expected.ty()
+                    )));
+                }
+            }
+            Ok(DataType::TaggedUnion((**union).clone()))
         }
         Expr::Is { expr, target } => {
             let source = check(expr, signature, text)?;
@@ -2323,6 +2394,23 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                 map.insert(key.clone(), eval_expr(value, bindings)?);
             }
             Ok(EvalValue::Map(map))
+        }
+        Expr::Struct(fields) => {
+            let mut values = Vec::with_capacity(fields.len());
+            for (name, value) in fields {
+                values.push((name.clone(), eval_expr(value, bindings)?));
+            }
+            Ok(EvalValue::Struct(values))
+        }
+        Expr::Tagged { case, fields, .. } => {
+            let mut payload = Vec::with_capacity(fields.len());
+            for (name, value) in fields {
+                payload.push((name.clone(), eval_expr(value, bindings)?));
+            }
+            Ok(EvalValue::TaggedUnion {
+                case: case.clone(),
+                payload,
+            })
         }
         Expr::Is { expr, target } => {
             let value = concrete_deep(eval_expr(expr, bindings)?, bindings)?.into_value()?;
@@ -3530,5 +3618,45 @@ mod tests {
         consts.insert(String::from("retries"), Value::Int(3));
         assert_eq!(const_eval(&tree, &consts).unwrap(), Value::Int(6));
         assert!(const_eval(&tree, &BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn host_constructed_tagged_values_are_checked_and_evaluated() {
+        let payload = StructType::new(alloc::vec![TypeField::new("code", DataType::INT)])
+            .expect("a closed payload");
+        let union = TaggedUnionType::new(alloc::vec![
+            crate::datatype::TaggedCase::new("Exited", payload).expect("a named case"),
+        ])
+        .expect("a tagged union");
+        let root = Expr::Tagged {
+            union: Box::new(union.clone()),
+            case: String::from("Exited"),
+            fields: alloc::vec![(String::from("code"), Expr::Literal(Value::Int(0)))],
+        };
+        assert_eq!(
+            check(&root, &Signature::new(), "host constructor").expect("the tree is valid"),
+            DataType::TaggedUnion(union.clone())
+        );
+        let tree = Tree {
+            root: root.clone(),
+            ty: DataType::TaggedUnion(union),
+        };
+        assert_eq!(
+            const_eval(&tree, &BTreeMap::new()).expect("the constructor is constant"),
+            Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+                case: String::from("Exited"),
+                payload: alloc::vec![(String::from("code"), Value::Int(0))],
+            }))
+        );
+
+        let Expr::Tagged { union, case, .. } = root else {
+            unreachable!("constructed above")
+        };
+        let forged = Expr::Tagged {
+            union,
+            case,
+            fields: alloc::vec![(String::from("message"), Expr::Literal(Value::Int(0)))],
+        };
+        assert!(check(&forged, &Signature::new(), "forged").is_err());
     }
 }

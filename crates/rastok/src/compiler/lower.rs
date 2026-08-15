@@ -335,6 +335,24 @@ fn substitute(
                 .map(|(key, value)| (key.clone(), substitute(value, consts)))
                 .collect(),
         ),
+        expr::Expr::Struct(fields) => expr::Expr::Struct(
+            fields
+                .iter()
+                .map(|(name, value)| (name.clone(), substitute(value, consts)))
+                .collect(),
+        ),
+        expr::Expr::Tagged {
+            union,
+            case,
+            fields,
+        } => expr::Expr::Tagged {
+            union: union.clone(),
+            case: case.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, value)| (name.clone(), substitute(value, consts)))
+                .collect(),
+        },
         expr::Expr::Is { expr, target } => expr::Expr::Is {
             expr: recurse(expr),
             target: target.clone(),
@@ -878,6 +896,32 @@ impl Writer<'_> {
                     self.expr(value);
                 }
             }
+            expr::Expr::Struct(fields) => {
+                self.tag(12);
+                let mut sorted: Vec<_> = fields.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                self.count(sorted.len());
+                for (name, value) in sorted {
+                    self.str(name);
+                    self.expr(value);
+                }
+            }
+            expr::Expr::Tagged {
+                union,
+                case,
+                fields,
+            } => {
+                self.tag(13);
+                self.ty(&DataType::TaggedUnion((**union).clone()));
+                self.str(case);
+                let mut sorted: Vec<_> = fields.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(&b.0));
+                self.count(sorted.len());
+                for (name, value) in sorted {
+                    self.str(name);
+                    self.expr(value);
+                }
+            }
             expr::Expr::Is { expr, target } => {
                 self.tag(10);
                 self.expr(expr);
@@ -1014,11 +1058,9 @@ impl Writer<'_> {
                 }
             }
             crate::value::Value::Struct(fields) => {
-                // Reached by exactly one literal — the EMPTY record
-                // (`parent = {}`; Rastok expression itself cannot construct a
-                // struct). Hashed totally anyway: a distinct tag,
-                // fields sorted by name — the same canonical reading
-                // the seal registry gives structs.
+                // A literal or reduced host constructor reaches this form.
+                // Structs are semantically unordered, so identity uses the
+                // same canonical field-name order as the value registry.
                 self.tag(12);
                 let mut sorted: Vec<_> = fields.iter().collect();
                 sorted.sort_by(|a, b| a.0.cmp(&b.0));

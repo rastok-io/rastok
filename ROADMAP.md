@@ -68,9 +68,10 @@ The repository opens publicly with this milestone (15 October 2026).
   B1's complete strict-profile type/value domain, B2's total validated
   port-type resolution, B3's Rastok-owned expression consumer/narrowing
   core, B4's one `name!` frontend surface, and B5's uniform resolved
-  Connector port contracts are landed. The remaining ordered gates add
-  tagged construction, multi-output completion and the one categorical v7
-  publication.
+  Connector port contracts are landed. B6 has added general tagged-value
+  construction, one contextual union-wrapping door and ordinary `err`
+  emission. The remaining ordered gates add multi-output completion and the
+  one categorical v7 publication, then close projection and corpus evidence.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

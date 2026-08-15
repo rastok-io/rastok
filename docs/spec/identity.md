@@ -73,6 +73,15 @@ which changes transport bytes but not program meaning. These are pre-public v6
 checkpoints; v7 later seals the full tagged types without renumbering their
 logical registry.
 
+**B6 construction checkpoint (2026-08-15).** A checked `Case { ... }` hashes
+as its resolved name-stable tagged-union constructor and a contextual
+structural-union write hashes as the explicit resolved `as` node inserted by
+the checker. `err` contributes no error-specific statement tag: it is the same
+ordered port emission as `out`, `exit` or an application-named output. These
+nodes have no v6 package spelling and are categorically refused until B8;
+therefore no previously valid v6 program, semantic hash or golden moves at
+B6.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a

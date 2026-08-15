@@ -291,6 +291,35 @@ The unreleased v6 reader refuses prior bodies at validation or canonical
 re-encoding rather than migrating them. B8 still owns the single published v7
 type/expression registry.
 
+**B6 implementation checkpoint (2026-08-15).** `IDENT { ... }` in a host
+value position is the predictive tagged-constructor production. The parser
+records the case and closed body without guessing a type; the checker resolves
+exactly one compatible tagged union from the destination or the unit's named
+types. Missing, extra, repeated or incompatible fields refuse at that door.
+An obsolete D-2026-08-12-1 initializer name that resolves to no genuine case
+keeps its migration diagnostic; declaration/configuration sub-blocks remain
+dead forms. Thus the old rule is superseded only where type context makes the
+same shape semantic data.
+
+Contextual construction into a structural union is represented explicitly in
+the checked expression tree as the same typed `As` operation used by explicit
+narrowing. Exactly one branch must accept the source type; no match or several
+matches refuse `E-PORT-TYPE`. Nested case fields use the same door, so an
+optional `null` is wrapped before the tagged payload is materialized. A value
+already carrying a different structural-union type never takes that implicit
+door: source-written `as Target` must reselect the target-relative index.
+Runtime evaluation executes the resolved node and the ordinary conformance
+gate verifies the result; neither runtime nor an adapter selects, repairs or
+reindexes it.
+
+The syntax and HIR `ErrEmit`/`err_value` split are removed. `err = value` is an
+ordinary assignment to an ordinary output and lowers through
+`Statement::Emit`, exactly like `out`, `exit` or an application-named port.
+Only its resolved `RootSink` policy is conventional. Struct/tagged constructor
+and contextual `As` nodes remain categorically outside v6 package format; B8
+publishes them once with the complete v7 expression/type registry. Existing
+v6 programs, packages, hashes and goldens therefore do not move in B6.
+
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign
 literal spelling and `TAG_KW` partition in D-2026-08-12-1; the
