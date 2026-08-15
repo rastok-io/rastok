@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.3 B8, 2026-08-15)
+title Rastok — bird's-eye module overview (M1.3 B9, 2026-08-15)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -120,6 +120,15 @@ package "json — exact JSON document reader and writer" as P_JSON {
   JsonError : positioned typed read/write refusal
   class "parse_value / write_value" as JSON_API <<mod>>
   JSON_API : one house codec shared by literals and jsonl
+}
+
+package "schema_projection — strict external schema boundary" as P_SCHEMA {
+  enum LossReason <<enum>>
+  LossReason : stable refusal category
+  class ProjectionError <<struct>>
+  ProjectionError : path, reason, and detail
+  class "json_schema / avro / arrow" as SCHEMA_API <<mod>>
+  SCHEMA_API : exact logical projection and reverse capability check
 }
 
 package "trivia — one lexical comment fact" as P_TRIVIA {
@@ -374,6 +383,8 @@ P_EXPR ..> P_CBOR : canonical doubles / nesting budget
 P_EXPR ..> P_JSON : exact number reader
 P_EXPR ..> P_TRIVIA : shares comment facts
 P_JSON ..> P_DATA : produces core values
+P_SCHEMA ..> P_DATA : projects logical types
+P_SCHEMA ..> P_JSON : parses JSON schemas
 P_IDENT ..> P_CBOR : emits tagged trees
 P_IDENT ..> P_ENV : tags envelope scalars
 P_IDENT ..> P_DATA : tags core values

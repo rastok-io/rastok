@@ -681,6 +681,7 @@ graph m0_probe : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     var count : int = 0
     on in where data.text != "" {
       count = count + 1
@@ -785,12 +786,12 @@ lab m0_probe {
 
     #[test]
     fn a_faulting_predicate_fails_the_expectation_loudly() {
-        // `data.echoed` faults on the failure envelope of the mute
-        // scenario? No — build it directly: a predicate reading a
-        // field the delivery does not carry must fail, not shrug.
+        // Build an explicit failed narrowing: dynamic structure cannot be
+        // inspected without a type, and a failed `as` is the runtime fault
+        // this expectation is meant to surface.
         let source = PROBE_WITH_LAB.replace(
             "expect \"the echo came back\" app.out count == 1 where data == \"salut\"",
-            "expect \"the echo came back\" app.out count == 1 where data.missing_field == true",
+            "expect \"the echo came back\" app.out count == 1 where data as bool",
         );
         let compilation = compile(
             &[source.as_str()],
@@ -830,6 +831,7 @@ lab m0_probe {
         let source = r#"
 graph m0_probe : App {
   operator wide {
+    input in: struct { text: text }
     var count : int = 2147483647
     on in where data.text != "" {
       count = count + 1
@@ -844,7 +846,7 @@ lab m0_probe {
     scenario overflow {
       app.in = { text = "x" }
       expect nothing app.out
-      expect "the overflow is typed" app.err where data.kind == "RuntimeFault"
+      expect "the overflow is typed" app.err where data["kind"] == "RuntimeFault"
     }
   }
 }
@@ -873,6 +875,7 @@ graph m0_probe : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 

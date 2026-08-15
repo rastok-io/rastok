@@ -31,6 +31,7 @@ effect = idempotent ; behavior = deterministic
   }
 
   operator shout {
+input in: struct { text: text }
 var count : int = 0
 on in where data.text != "" {
   count = count + 1
@@ -300,7 +301,7 @@ graph g : App {
   input in: variant
   operator pick {
 on in {
-  out = data.missing
+  out = data as text
 }
   }
   . -> pick -> .
@@ -434,6 +435,7 @@ timeout = duration("5s")
   }
 
   operator shout {
+input in: struct { text: text }
 var count : int = 0
 on in where data.text != "" {
   count = count + 1
@@ -586,6 +588,7 @@ timeout = duration("100ms")
   }
 
   operator shout {
+input in: struct { text: text }
 on in { out = data.text }
   }
 

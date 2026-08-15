@@ -26,6 +26,7 @@ graph happy : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in where data.text != "" {
       out = data.text
     }
@@ -45,6 +46,7 @@ graph failing : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -61,6 +63,7 @@ graph missing : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -78,6 +81,7 @@ graph garbling : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -97,6 +101,7 @@ graph flooding : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -115,6 +120,7 @@ graph mute : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -137,10 +143,12 @@ graph pair : App {
   }
 
   operator ra {
+    input in: struct { a: text, b: text }
     on in { out = data.a }
   }
 
   operator rb {
+    input in: struct { a: text, b: text }
     on in { out = data.b }
   }
 

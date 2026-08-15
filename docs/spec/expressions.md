@@ -1,11 +1,11 @@
 # Rastok expressions and tagged frontends
 
-> **Status: normative M1.3 target; B8 transport has landed.** The
+> **Status: normative and executable through M1.3 B9.** The
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as`, closed-struct and tagged-constructor trees execute, are
 > type-checked, and travel in package v7 with their resolved targets. The
 > `IDENT!` frontend surface and full JSON-value reader described below are
-> executable now. Legacy unchecked `variant` access remains a B9 closure item.
+> executable. A `variant` must be narrowed before member or index access.
 
 Rastok has an intrinsic, pure expression language. Its syntax and much of
 its operator semantics are inspired by CEL, and the compatible core stays
@@ -207,9 +207,12 @@ construction into a structural union is stored as an explicit resolved
 checker. V7 gives these constructor nodes and `is`/`as` one canonical
 representation.
 
-One migration constraint remains explicit: current programs still permit
-legacy unchecked member/index access on `variant`; B9 removes that door now
-that JSON/frontends and the corpus can narrow first. `decimal(...)` already
+Member and index access on `variant` refuse at expression check. A positive
+`is` fact or explicit `as` must first expose a precise struct, map, array or
+union branch; no runtime lookup restores the old dynamic shortcut. The
+`meta` root is not an exception for payloads: its temporary expression
+binding is checked afterwards against the sealed `sys`/`app`/`ext` metadata
+grid, which is a distinct statically validated namespace. `decimal(...)`
 produces the one exact Rastok decimal value and its transported result type is
 canonical `number`.
 

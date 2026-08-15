@@ -45,7 +45,10 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE MOVE 2026-08-15 (M1.3 B8): format v7 seals the complete
 // resolved type registry and total effective port table; the raw exit bridge
 // disappears without changing the connector's runtime contract.
-const JSONL_HASH: &str = "18dda78c625678f05297c1a2cb739a5e645981603613d170cf4d6bb2a1a104e6";
+// DELIBERATE FIXTURE MIGRATION 2026-08-15 (M1.3 B9): each jsonl frame
+// remains `variant` at the connector, then the sift explicitly narrows it to
+// the declared JSON-object map before indexing. Dynamic indexing is gone.
+const JSONL_HASH: &str = "9e66e62cbe17c17d6394e3692ed074e3416782ac3a3ea569a53af9edea54c29b";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

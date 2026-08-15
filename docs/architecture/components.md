@@ -1,7 +1,7 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated through the landed M1.3 B8 package registry on
+> of the build; updated through the landed M1.3 B9 closure on
 > 2026-08-15. The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
 > evidence lives in [`m1-slice.md`](m1-slice.md). The specified M1.3
@@ -71,7 +71,7 @@ canonical record projection ─▶ golden compare
 | canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
 | `plan::ValidatedExecutionPlan` | `compiler` (lower, then validate) or `plan::decode` | `runtime`, `lab`, `plan::encode` | the only executable/package boundary: an immutable `ExecutionPlan` whose tables, `expr::Tree`s, slots, contracts, and structural budgets have already passed the plan gate |
 | `boundary::Intent` (open OUTBOUND) | `runtime` | dispatcher → `boundary::Partner` impls | journaled before any handler runs, carrying the canonical call fields — emitting id, connector path, request digest, optional idempotency key ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
-| `boundary::Response` | `connectors` or the lab's mock partner | `runtime` (as an input event) | returns with the internal `CallRef`, correlated by the *connector's own protocol correlator* — never by the business key; a partner only ever answers: it never decides a timeout and never mints `OutcomeUnknown` |
+| `boundary::Completion` | `connectors` or the lab's mock partner | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallRef` — never by the business key; a partner only answers and never decides a timeout or mints journal records |
 | `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | adapters and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `diagnostics::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
 | golden projection | `golden::Trace` (project, seal, diff) | evidence compare | deterministic bytes: same scope, same bytes ([simulation-semantics.md §6](../spec/simulation-semantics.md)) |
@@ -96,6 +96,8 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 │                     #   syntax, hir (graph + lab), check, lower
 ├── contract.rs       # compiler contracts: node attributes plus tagged frontend
 │                     #   framing/readers, all admitted through Registry
+├── schema_projection/# strict JSON Schema, Avro and Arrow boundary adapters;
+│                     #   path-specific loss and physical union mappings
 ├── stdlib.rs         # the standard CATALOGUE instancing those contracts (PROCESS,
 │                     #   declared connector names, built-in/deferred frontends)
 ├── golden.rs         # Trace, Divergence — projection, seal, named diff
@@ -538,9 +540,9 @@ The chronological detail and commit evidence remain in
   `IDENT!`, restores scalar JSON and keeps frontend framing out of the host
   grammar. B5-B7 land uniform Connector ports, tagged construction and
   multi-output completion. B8 publishes the complete v7 registry and total
-  effective port table.
-- **Next:** M1.3 closes external JSON/Avro/Arrow schema adapters and removes
-  historical v6 scaffolding in B9.
-  `per`, joins, new adapters,
+  effective port table. B9 implements strict JSON Schema/Avro/Arrow
+  projections, removes historical v6 type/expression scaffolding, and closes
+  unchecked `variant` structural access.
+- **Next:** `per`, joins, new adapters,
   Loop, counters, and `--watch` remain guarded in the order recorded by
   the slice.

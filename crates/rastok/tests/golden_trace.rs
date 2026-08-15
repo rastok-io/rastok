@@ -30,6 +30,7 @@ graph m0_probe : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     var count : int = 0
     on in where data.text != "" {
       count = count + 1

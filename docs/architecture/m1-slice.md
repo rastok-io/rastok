@@ -6,11 +6,11 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-15): items 1 and 2 are landed, as are
+**Current checkpoint (2026-08-15): items 1, 2 and the replacement item 3 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 The current transport is plan-package v7; valid-program identity for
-the spike is `514d4ab7…` after B8's deliberate complete-type publication.
-Item 3 has been replaced before public
+the spike remains `514d4ab7…` after B9 closed without changing that program.
+The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md).**
 
@@ -257,8 +257,9 @@ step touches `vm.rs` once.
    `Process(job)` frames `out*`/`err*` before a final typed `exit`. B8 now
    transports the complete canonical type/value/expression registry, exact
    `ProcessExit`, static `number`, and the mandatory total resolved-port
-   table. B9 closes external projection adapters and removes the historical
-   v6 scaffolding. Ordered gates and evidence are in
+   table. B9 has closed the strict external projection adapters, removed the
+   historical v6 type/expression scaffolding, and made narrowing mandatory
+   before structural access to `variant`. Ordered gates and evidence are in
    the dedicated
    [M1.3 backlog](m1.3-type-system-backlog.md).
 4. **`per` — the partition surface** — keyed nodes and graphs on the

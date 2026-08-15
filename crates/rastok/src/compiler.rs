@@ -139,36 +139,6 @@ pub fn compile_with_assets(
             bag.push(type_resolution_diagnostic(&error));
             return Err(bag);
         }
-        Err(PlanValidationError::DataTypeNotInFormat {
-            location,
-            ty,
-            format,
-        }) => {
-            bag.push(
-                Diagnostic::new(
-                    check::E_CHECK_DEFERRED,
-                    Phase::Check,
-                    format!(
-                        "`{location}` resolves to {ty}, which this build cannot yet transport in plan-package v{format}"
-                    ),
-                )
-                .with_field("construct", "plan-package v7 type transport"),
-            );
-            return Err(bag);
-        }
-        Err(PlanValidationError::ExpressionNotInFormat { form, format }) => {
-            bag.push(
-                Diagnostic::new(
-                    check::E_CHECK_DEFERRED,
-                    Phase::Check,
-                    format!(
-                        "the `{form}` expression is valid but plan-package v{format} cannot transport it"
-                    ),
-                )
-                .with_field("construct", "plan-package v7 expression transport"),
-            );
-            return Err(bag);
-        }
         Err(error) => {
             bag.push(internal_plan_diagnostic(&error));
             return Err(bag);

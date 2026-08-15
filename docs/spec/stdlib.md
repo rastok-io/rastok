@@ -1,7 +1,7 @@
 # Standard library contracts
 
-> **Status: Normative M1.3 target — under review.** B5 removed the
-> travelling private-v6 `error_set` and made the complete resolved port table the
+> **Status: normative and executable through M1.3 B9.** B5 removed the
+> former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
 > B8 removed the last raw-plan bridge: package v7 carries exact

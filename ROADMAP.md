@@ -74,9 +74,12 @@ The repository opens publicly with this milestone (15 October 2026).
   completions: `Process(job)` now publishes unit-framed `out*`, independently
   framed stderr on `err*`, and exactly one typed `exit`. B8 has published the
   categorical v7 type/value/expression registry and mandatory total resolved
-  port table, removing the last Process/decimal transport bridges. The
-  remaining B9 gate closes projection adapters, deletes private-v6
-  scaffolding, and completes the cross-layer corpus evidence.
+  port table, removing the last Process/decimal transport bridges. B9 has
+  closed M1.3: strict JSON Schema, Avro and Arrow projections either preserve
+  the complete logical type or refuse by path and reason; `variant` requires
+  explicit narrowing before structural inspection; the obsolete v6
+  type/expression scaffolding is gone; and the cross-layer corpus, three
+  no-std targets and emulated Cortex-M33 proof are green.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

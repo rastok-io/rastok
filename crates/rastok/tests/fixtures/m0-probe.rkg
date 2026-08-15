@@ -8,6 +8,7 @@ graph m0_probe : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in where data.text != "" {
       out = data.text
     }

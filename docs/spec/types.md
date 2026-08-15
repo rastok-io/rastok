@@ -1,12 +1,10 @@
 # Rastok logical data types
 
-> **Status: normative M1.3 target.** Until the M1.3 gate closes, a
-> construct that the executable subset cannot represent continues to
-> refuse by name. This document is nevertheless the semantic authority:
-> the implementation is being brought to this model, not the other way
-> around.
+> **Status: normative and executable through M1.3 B9.** A construct outside
+> the admitted profiles continues to refuse by name and path; it never falls
+> back to a weaker payload type.
 >
-> **Implementation checkpoint (B8, 2026-08-15).** The no_std
+> **Implementation checkpoint (B9, 2026-08-15).** The no_std
 > core owns the complete `DataType` and materialized `Value` algebras for the
 > strict JSON Schema, Avro and Arrow profiles; the `expr` engine consumes those
 > authorities. Deterministic `is`/`as` narrowing for precise,
@@ -14,8 +12,10 @@
 > constructors and contextual structural-union wrapping are checked,
 > executable and transported; `err` uses the same emission path as any port.
 > Package v7 publishes the complete type/value/expression registry and the
-> total effective port table. V6 is categorically refused rather than
-> migrated.
+> total effective port table. Standard-layer projection adapters implement the
+> exact external profiles, including physical union-selector mappings and
+> path-specific loss refusals. Unchecked structural access through `variant`
+> is closed. V6 is categorically refused rather than migrated.
 
 Rastok owns the logical type system of envelope payloads. The expression
 language, Connectors, codecs, guest frontends, state and metadata consume

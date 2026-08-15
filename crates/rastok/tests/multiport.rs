@@ -836,6 +836,8 @@ fn the_escape_gives_reserved_names_as_plain_fields() {
     // reserved names are ordinary fields (D-2026-08-09-1). Mocks
     // share this resolver with handler emissions and injections.
     let source = r#"
+type ReservedPayload = struct { data: int, meta: struct { flag: bool } }
+
 graph g : App {
   input in: variant
   operator o {
@@ -855,8 +857,8 @@ lab g {
   simulation probing on app {
     scenario s "reserved names are plain fields inside the escape" {
       app.in = {v = 1}
-      expect "field named data" app.out count == 1 where data.data == 7
-      expect "field named meta" app.out count == 1 where data.meta.flag == true
+      expect "field named data" app.out count == 1 where data is ReservedPayload && data.data == 7
+      expect "field named meta" app.out count == 1 where data is ReservedPayload && data.meta.flag == true
     }
   }
 }
@@ -1150,6 +1152,8 @@ fn an_injection_holds_the_empty_record_too() {
     // value. A variant boundary is intentional here: the test is about
     // preserving an empty nested record, not inferring its schema.
     let source = r#"
+type HollowPayload = struct { hollow: struct { } }
+
 graph g : App {
   input in: variant
   output out: variant
@@ -1163,7 +1167,7 @@ lab g {
   simulation probing on app {
     scenario s "empty records survive an injection" {
       app.in = { hollow = {} }
-      expect "the empty record is a field" app.out count == 1 where size(data.hollow) == 0
+      expect "the empty record is a field" app.out count == 1 where data is HollowPayload
     }
   }
 }
@@ -1637,7 +1641,7 @@ fn a_synthesized_runtime_fault_makes_an_incompatible_edge_untypable() {
     let source = r#"
 graph g : App {
   operator source {
-    on in { out = data.missing }
+    on in { out = data as text }
   }
 
   operator sink {
@@ -2342,24 +2346,24 @@ fn short_circuits_never_demand_the_data() {
         vm.drain(&mut journal).expect("no forced materialization");
         (vm.outputs().to_vec(), vm.errors().len())
     };
-    // `false && data.x == 1`: the right side never evaluates —
+    // `false && (data as bool)`: the right side never evaluates —
     // filtered, no decode, no fault.
     let (outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in where false && data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where false && (data as bool) { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!((outputs.len(), errors), (0, 0), "filtered without a fault");
-    // `true || data.x == 1`: the identity ships the bytes whole.
+    // `true || (data as bool)`: the identity ships the bytes whole.
     let (outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true || data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true || (data as bool) { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0, "the right side never ran");
     assert!(matches!(
         outputs[0].envelope.data(),
         Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_slice() == b"\x01\x02"
     ));
-    // `false ? data.x : 1`: the untaken arm never demands.
+    // `false ? size(data) : 1`: the untaken arm never demands.
     let (outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = false ? data.x : 1 }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = false ? size(data) : 1 }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!(errors, 0, "the untaken arm never ran");
     assert_eq!(
@@ -2368,7 +2372,7 @@ fn short_circuits_never_demand_the_data() {
     );
     // The control: a taken read still faults, typed.
     let (outputs, errors) = run(
-        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true && data.x == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
+        "graph g : App {\n  input in: variant\n  operator o {\n    on in where true && (data as bool) { out = . }\n  }\n  . -> o -> .\n}\n",
     );
     assert_eq!((outputs.len(), errors), (0, 1), "a real read still faults");
 }

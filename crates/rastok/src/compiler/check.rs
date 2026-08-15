@@ -6098,6 +6098,7 @@ graph m0_probe : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     var count : int = 0
     on in where data.text != "" {
       count = count + 1
@@ -6674,7 +6675,7 @@ graph g : App {
 
     #[test]
     fn duplicate_mocks_refuse_at_both_levels() {
-        let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  operator o {\n    on in { out = data.text }\n  }\n  . -> o -> shell -> .\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
+        let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  operator o {\n    input in: struct { text: text }\n    on in { out = data.text }\n  }\n  . -> o -> shell -> .\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
         let simulation_level = base.replace(
             "BODY",
             "    mock shell { on in { out = . } }\n    mock shell { on in { out = . } }\n",

@@ -940,6 +940,7 @@ graph real : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in where data.text != "" {
       out = data.text
     }
@@ -1163,6 +1164,7 @@ graph failing : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -1191,6 +1193,7 @@ graph missing : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -1219,6 +1222,7 @@ graph mute : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -1260,6 +1264,7 @@ graph orphaning : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -1297,6 +1302,7 @@ graph wedge : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -1329,6 +1335,7 @@ graph flood : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -1357,6 +1364,7 @@ graph capped : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 
@@ -1387,6 +1395,7 @@ graph hoarse : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in { out = data.text }
   }
 

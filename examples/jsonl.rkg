@@ -1,3 +1,5 @@
+type Reply = map<text, variant>
+
 graph relay : App {
   connector shell : Process {
     mode = job ; command = "cat"
@@ -7,7 +9,7 @@ graph relay : App {
   }
 
   operator sift {
-    on in where data["status"] == "ok" { out = data["value"] }
+    on in where data is Reply && data["status"] == "ok" { out = data["value"] }
   }
 
   . -> shell

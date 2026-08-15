@@ -1125,31 +1125,6 @@ impl DataType {
         Ok(())
     }
 
-    /// Whether the retired private-v6 draft could transport this type.
-    /// No executable or package path consults this historical subset; B9
-    /// removes it with the remaining migration scaffolding.
-    #[must_use]
-    pub fn is_v6_wire_type(&self) -> bool {
-        match self {
-            Self::Bool
-            | Self::Integer(IntegerType::Signed(IntegerWidth::Bits32))
-            | Self::Integer(IntegerType::Unsigned(IntegerWidth::Bits64))
-            | Self::Float(FloatType::Binary64)
-            | Self::Text
-            | Self::Bytes(BinaryType::Variable)
-            | Self::Temporal(TemporalType::Duration(TimeUnit::Nanosecond))
-            | Self::Temporal(TemporalType::Timestamp {
-                unit: TimeUnit::Nanosecond,
-                zone: TimeZone::Utc,
-            })
-            | Self::Null
-            | Self::Variant => true,
-            Self::Array(array) => array.length().is_none() && array.element().is_v6_wire_type(),
-            Self::Map(map) => map.key() == &Self::Text && map.value().is_v6_wire_type(),
-            _ => false,
-        }
-    }
-
     /// Judges one materialized value against this logical type.
     ///
     /// `None` is conformance. A refusal carries the precise nested path and
@@ -2873,19 +2848,6 @@ mod tests {
         );
         assert!(narrow.is_assignable_to(&wide));
         assert!(!wide.is_assignable_to(&narrow));
-    }
-
-    #[test]
-    fn retired_v6_subset_is_named_without_weakening_the_new_algebra() {
-        assert!(DataType::INT.is_v6_wire_type());
-        assert!(DataType::array(DataType::Text).is_v6_wire_type());
-        assert!(!DataType::LONG.is_v6_wire_type());
-        assert!(
-            !DataType::Bytes(BinaryType::Fixed(
-                ByteLength::new(16).expect("valid length")
-            ))
-            .is_v6_wire_type()
-        );
     }
 
     #[test]

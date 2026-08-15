@@ -212,14 +212,15 @@ expression operators while retaining the branch index in materialized data;
 tagged selection preserves the name, external discriminators are explicit,
 and mismatch, ambiguity and invalid
 configuration remain distinct. Positive tests narrow only the right side of
-`&&`, true ternary branch and guarded handler body. The private v6 validator
-refused these new AST forms with `ExpressionNotInFormat`; no private tag was added.
+`&&`, true ternary branch and guarded handler body. At this checkpoint the
+private v6 validator refused these new AST forms with
+`ExpressionNotInFormat`; no private tag was added.
 The compatible expression subset is independently evaluated against
 exact-pinned, dev-only `cel-interpreter 0.10.0`; all divergences are recorded
 in `expressions.md`. B8 subsequently removed the private-v6
 `decimal(...) -> variant` bridge: the v7 tree type is canonical `number`.
-Legacy unchecked member access on
-`variant` remains isolated until the B9 evidence sweep.
+B9 subsequently removed unchecked member/index access on `variant` and the
+historical format-refusal scaffold itself.
 
 **B1 completion checkpoint (2026-08-14).** A materialized `Value` carries
 canonical data, not a duplicate `DataType` tree. Integer/float width, fixed
@@ -371,6 +372,46 @@ logical identity. This is a deliberate pre-public identity move: echo/spike
 probe `77d326e3… -> fa5abd79…`; the connector-free gauge remains
 `0d3ad43d…`. Package goldens and the embedded measurement are re-blessed only
 for this categorical publication.
+
+**B9 implementation checkpoint (2026-08-15).** External schema projection is
+one strict standard-layer boundary, `rastok::schema_projection`, over the
+core `DataType`. JSON Schema 2020-12, Avro 1.12 and Arrow V1 adapters either
+produce an exact logical type or return a stable loss reason at the offending
+path. Reverse projection obeys the same rule. Avro branch indexes and Arrow
+type codes are returned as explicit adapter mappings; declaration/layout
+order never enters logical identity.
+
+“A bounded integer range fits a width” is not sufficient for an exact
+projection: `0..10` becoming `uint8` would admit values the source forbids.
+The executable JSON Schema profile therefore accepts only inclusive bounds
+equal to one complete canonical signed/unsigned width. Likewise, a JSON
+Schema property that may be missing cannot become an always-present struct
+field or `T?` (missing is not null); without an explicit boundary fill policy
+it refuses as `LossyProjection`. A homogeneous map likewise cannot preserve
+the claim that one particular key is required. Avro `fixed` decimal storage
+must have enough signed bits for its declared precision. Avro union
+uniqueness follows the underlying schema type, so logical annotations cannot
+disguise duplicate physical branches; valid boolean JSON Schemas remain
+outside the strict V1 profile rather than being misreported as malformed.
+These clarify the no-weakening rule and supersede the looser wording
+previously present in the projection table.
+
+Unchecked member/index access through payload `variant` is removed. A
+program must establish a precise type through `is` or `as`; the checker then
+applies the same `DataType` conformance used by packages and runtime pins.
+The metadata root remains governed by its separate sealed field grid, not by
+dynamic payload lookup. The retired `is_v6_wire_type`,
+`DataTypeNotInFormat` and `ExpressionNotInFormat` scaffolding is deleted. A
+lowering defect that leaves `asset()` unbound now refuses exactly as
+`UnboundAssetCall`.
+
+B9 changes no registry number, package format or echo/spike identity
+(`514d4ab7…` remains). Two executable fixtures move because they now state
+the schema they inspect: the compiler probe `fa5abd79… -> d9b1c956…` pins its
+closed operator input, and the JSONL fixture `18dda78c… -> 9e66e62c…`
+narrows each unit `variant` frame to its declared JSON-object map before
+indexing. The JSONL package golden is re-blessed for that source-semantic
+change; its causal trace is unchanged.
 
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign

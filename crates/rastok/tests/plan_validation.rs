@@ -60,6 +60,7 @@ fn a_declared_port_extends_the_conventional_ports() {
     let source = r#"
 graph probe : App {
   operator o {
+    input in: struct { anchor: text }
     output extra: text
 
     on in where data.anchor == "" {
@@ -87,6 +88,7 @@ graph g : App {
   input in
 
   operator o {
+    input in: struct { anchor: text }
     on in where data.anchor == "" {
       out = data
     }
@@ -966,6 +968,20 @@ fn a_duplicated_map_literal_key_refuses() {
         PlanValidationError::DuplicateMapKey {
             key: String::from("a"),
         }
+    );
+}
+
+#[test]
+fn an_unbound_asset_call_has_its_own_plan_refusal() {
+    let plan = with_setvar_root(expr::Expr::Call {
+        function: expr::Function::Asset,
+        args: vec![expr::Expr::Literal(rastok::value::Value::Text(
+            String::from("assets/logo.png"),
+        ))],
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::UnboundAssetCall
     );
 }
 

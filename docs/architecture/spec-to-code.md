@@ -1,7 +1,7 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-15 through M1.3 B8 and
-> the specified M1.3 target.** The table first preserves the M0 evidence;
+> Planning aid — non-normative. **Updated 2026-08-15 through the closed M1.3
+> B9 foundation.** The table first preserves the M0 evidence;
 > the M1 extension below records which normative owners gained new
 > executable responsibility. Where implementation surfaced a semantic
 > ambiguity, it stopped at the boundary as required: the errata live in
@@ -46,12 +46,13 @@ they are not promised crate names.
 | M1.3 B6 tagged sums | `Case { ... }` constructs any context-compatible tagged union; structural-union destinations receive one explicit HIR wrapping; distinct unions require source `as`; `err` has no special syntax or HIR statement | `compiler::{parser,syntax,check,lower}`, `expr::{Expr::Struct,Expr::Tagged,Expr::As}`, `datatype::{TaggedUnionType,DataType::narrow}`, v7 plan gate | exact/missing case fields, nested optional wrapping, implicit/explicit union conversion pair, ordinary `err` emission, v7 constructed-tree round trip |
 | M1.3 B7 boundary completion | One correlated Partner completion carries ordered ordinary port drafts and one final typed `exit`; the VM alone mints envelopes and commits the completion transaction. `Process(job)` frames stdout/stderr independently and reports every observed status as `ProcessExit`. | `boundary::{Completion,PortOutput,CompletionGate,ProcessExit}`, `journal::Closure`, `runtime::{TransactionExecutor,vm}`, `connectors::Process`, `lab::MockPartner`, `golden` | malformed/multiple/non-final exit refusals, real and mocked multi-output jobs, lines/jsonl/bytes framing, stderr/non-zero independence, timeout/spawn/decode/capture/overflow exits, correlation/conformance battery, updated causal goldens |
 | M1.3 B8 package registry | One categorical v7 publication carries complete canonical types, every allocated materialized value, resolved narrowing/constructor trees and the total effective port table; v6 refuses and no external layout code becomes identity | `plan::{serialization,validation,type_resolution}`, `datatype`, `identity::encoding`, compiler hashing | discriminant registry pins, malformed-family and lying-table sabotage, semantic round trips, deliberate hashes/goldens, no_std builds on Cortex-M33, Cortex-M3 and RV32IMAC, plus the emulated Cortex-M33 spike |
+| M1.3 B9 closure | Strict JSON Schema, Avro and Arrow profiles project/reverse exactly or refuse by path and reason; physical union selectors stay outside logical identity; `variant` structure requires narrowing; retired v6 subset/refusal scaffolding is absent | `schema_projection::{json_schema,avro,arrow}`, `expr`, `plan::validation`, compiler fixtures | projection matrices and selector preservation, exact `UnboundAssetCall`, narrowing negatives, cross-layer Process/Lab/JSONL/opaque-data corpus, all portability gates |
 
-## M1.3 target (landing in ordered gates)
+## M1.3 foundation (landed in ordered gates)
 
 | Slice | Normative responsibility | Intended owner boundary | Required evidence |
 |---|---|---|---|
-| M1.3 logical payload types and uniform ports | One canonical `DataType`/`Value`; complete effective port types; JSON/Avro/Arrow projections including unions; Rastok expressions as a consumer; `IDENT!` frontends; ordinary multi-output completion with Process `err` diagnostics and one typed `exit` per invocation | core `datatype` (type authority landed), then `value`/`expr`/envelope/plan vocabulary plus std compiler, contract, schema-projection and boundary adapters | the ordered gates in [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md), one categorical v7 move, external-schema mapping matrices, differential CEL-compatible tests, package sabotage, Lab/real Process parity, no_std and spike |
+| M1.3 logical payload types and uniform ports | One canonical `DataType`/`Value`; complete effective port types; JSON/Avro/Arrow projections including unions; Rastok expressions as a consumer; `IDENT!` frontends; ordinary multi-output completion with Process `err` diagnostics and one typed `exit` per invocation | core `datatype`, `value`, `expr`, envelope/plan vocabulary plus std compiler, contract, schema-projection and boundary adapters | the closed ordered gates in [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md), one categorical v7 move, external-schema mapping matrices, differential CEL-compatible tests, package sabotage, Lab/real Process parity, no_std and spike |
 
 Core `datatype::DataType` and `value::Value` now own the executable type and
 materialized-value domain under the complete v7 registry.
@@ -66,6 +67,8 @@ and are independently re-derived on decode. The travelling
 removes `TypedError` and the success/failure-only boundary reply. B8 removed
 the last representational bridges: raw packages carry exact `ProcessExit` and
 `decimal()` carries `number`.
+B9 adds the strict external adapters, removes the last v6 subset/refusal
+scaffolding, and closes unchecked structural access through `variant`.
 
 ## Keeping the map honest
 

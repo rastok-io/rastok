@@ -279,25 +279,9 @@ pub enum PlanValidationError {
         /// The violated type invariant.
         reason: TypeError,
     },
-    /// Historical private-format refusal retained until B9. Format v7 has a
-    /// spelling for every valid [`DataType`].
-    DataTypeNotInFormat {
-        /// Where the type occurs in the plan.
-        location: String,
-        /// The valid but not-yet-transportable type.
-        ty: DataType,
-        /// Published format that cannot carry it.
-        format: u32,
-    },
-    /// Historical private-format refusal retained until B9. Its sole current
-    /// use names an `asset()` call that lowering failed to bind, not a missing
-    /// v7 expression spelling.
-    ExpressionNotInFormat {
-        /// Expression form requiring the later registry.
-        form: &'static str,
-        /// Published format that cannot carry it.
-        format: u32,
-    },
+    /// Lowering left an `asset()` call in an executable expression instead of
+    /// binding it to the plan's content-addressed asset table.
+    UnboundAssetCall,
     /// A collection the plan documents as canonically ordered is not.
     NonCanonicalOrder {
         /// Which collection broke the order.
@@ -491,17 +475,9 @@ impl core::fmt::Display for PlanValidationError {
             Self::InvalidDataType { location, reason } => {
                 write!(f, "invalid plan: type at {location} is invalid: {reason}")
             }
-            Self::DataTypeNotInFormat {
-                location,
-                ty,
-                format,
-            } => write!(
+            Self::UnboundAssetCall => write!(
                 f,
-                "invalid plan: type `{ty}` at {location} has no plan-package v{format} encoding"
-            ),
-            Self::ExpressionNotInFormat { form, format } => write!(
-                f,
-                "invalid plan: expression form `{form}` has no plan-package v{format} encoding"
+                "invalid plan: an asset() call was not bound to the plan asset table"
             ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
@@ -1438,10 +1414,7 @@ fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
         expr::Expr::Call {
             function: expr::Function::Asset,
             ..
-        } => Err(PlanValidationError::ExpressionNotInFormat {
-            form: "an unbound asset() call",
-            format: crate::plan::FORMAT_VERSION,
-        }),
+        } => Err(PlanValidationError::UnboundAssetCall),
         expr::Expr::Call { args, .. } => args.iter().try_for_each(expr_canonical),
         expr::Expr::List(items) => items.iter().try_for_each(expr_canonical),
         expr::Expr::MapLit(pairs) => {

@@ -212,6 +212,8 @@ fn the_request_digest_is_canonical_across_spellings() {
 /// The one sift graph BOTH worlds run: each jsonl line is one `variant`
 /// delivery — in the Lab against a mock, and against a real `cat`.
 const SIFT_GRAPH: &str = r#"
+type Reply = map<text, variant>
+
 graph g : App {
   connector shell : Process {
     mode = job ; command = "cat"
@@ -221,7 +223,7 @@ graph g : App {
   }
 
   operator sift {
-    on in where data["status"] == "ok" { out = data["value"] }
+    on in where data is Reply && data["status"] == "ok" { out = data["value"] }
   }
 
   . -> shell
@@ -290,15 +292,16 @@ fn the_same_sift_graph_runs_against_a_real_child() {
 }
 
 #[test]
-fn a_record_mock_reply_is_one_jsonl_variant_not_a_batch() {
-    // B7 removes the batch carrier: one record is one variant emission.
+fn a_json_object_mock_reply_is_one_jsonl_variant_not_a_batch() {
+    // B7 removes the batch carrier: one JSON object is one map-shaped
+    // variant emission, exactly as it is at the real connector boundary.
     let source = format!(
         r#"{SIFT_GRAPH}
 lab g {{
   simulation probing on app {{
     mock shell {{
       on in {{
-        out = {{ status = "ok", value = 7 }}
+        out = {{ "status": "ok", "value": 7 }}
         exit = Exited {{ exit_code = 0, signal = null }}
       }}
     }}
@@ -315,7 +318,7 @@ lab g {{
         &[source.as_str()],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("one record inhabits the jsonl variant pin");
+    .expect("one JSON object inhabits the jsonl variant pin");
     let runs = rastok::lab::run(
         &compilation.plan,
         rastok::plan::GraphVersion(1),

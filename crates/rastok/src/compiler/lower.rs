@@ -1135,6 +1135,7 @@ graph m0_probe : App {
   }
 
   operator shout {
+    input in: struct { text: text }
     on in where data.text != "" {
       out = data.text
     }
@@ -1240,6 +1241,7 @@ graph m0_probe : App {
 // a comment that must not enter the identity
 graph m0_probe : App {
   operator shout {
+    input in: struct { text: text }
     on in where data.text != "" {
       out = data.text
     }
@@ -1332,6 +1334,9 @@ graph m0_probe : App {
         // types and the total effective port table. The former Process.exit
         // and decimal transport bridges are gone; wide integer literals keep
         // their honest int64 type.
+        // DELIBERATE FIXTURE MIGRATION 2026-08-15 (M1.3 B9): the first
+        // structural inspection now names the operator's closed input type;
+        // `variant` can no longer be inspected without `is`/`as` narrowing.
         let hash = compile(
             &[M0_PROBE],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1340,14 +1345,14 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "fa5abd79b5a1eb09969c985bdf8c4320e2c9188df4dfe8bccaa2d892dceda45e"
+            "d9b1c9562a4ec2dfea611e2c267c2b30660db10e0f44e728ffbd78d18e734898"
         );
     }
 
     #[test]
     fn boundary_ports_are_identity_material() {
-        let bare = "graph g : App {\n  operator o { on in where data.anchor == \"\" { out = . } }\n  . -> o -> .\n}\n";
-        let with_port = "graph g : App {\n  input feed: text\n  operator o { on in where data.anchor == \"\" { out = . } }\n  . -> o -> .\n}\n";
+        let bare = "graph g : App {\n  operator o { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  . -> o -> .\n}\n";
+        let with_port = "graph g : App {\n  input feed: text\n  operator o { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  . -> o -> .\n}\n";
         let bare_hash = compile(
             &[bare],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1375,8 +1380,8 @@ graph m0_probe : App {
 
     #[test]
     fn the_plan_and_the_hash_share_one_edge_order() {
-        let forward = "graph g : App {\n  operator a { on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
-        let reordered = "graph g : App {\n  operator a { on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
+        let forward = "graph g : App {\n  operator a { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
+        let reordered = "graph g : App {\n  operator a { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
         let one = compile(
             &[forward],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1416,7 +1421,7 @@ graph m0_probe : App {
         // Map literals: one canonical form for hash, plan, and eval.
         let with_map = |map: &str| {
             format!(
-                "graph g : App {{\n  operator o {{\n    on in where data.anchor == \"\" && size({map}) > 0 {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    input in: struct {{ anchor: text }}\n    on in where data.anchor == \"\" && size({map}) > 0 {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
             )
         };
         let forward = compile(
@@ -1451,7 +1456,7 @@ graph m0_probe : App {
     fn constants_reach_both_the_hash_and_the_plan() {
         let with_val = |n: &str| {
             format!(
-                "graph g : App {{\n  operator o {{\n    val threshold = {n}\n    on in where data.n > threshold {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  operator o {{\n    input in: struct {{ n: int }}\n    val threshold = {n}\n    on in where data.n > threshold {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
             )
         };
         let five = compile(

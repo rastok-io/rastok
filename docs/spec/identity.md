@@ -262,11 +262,11 @@ delivery-semantics §4) — keys `40–46` :
 | 47 | edge | text | the canonical edge of the causing delivery ; with key 40 (`emitting_id`) it reconstructs `delivery_ref` and hence `call_ref` (envelope.md §2) — the record stays autonomous |
 | 46 | edge_cursor | array | present only on an inter-shard delivery — the DURABLE LOGICAL cursor `[edge (text), source_partition (bytes), seq (uint)]` (seq never restarts on leader change ; the transport `leader_epoch` fence is separate and NOT sealed) ; a transport cursor, NOT an envelope id, outside every id domain |
 
-Key 44's `status` is the internal state of the current v6 WAL record, not a
+Key 44's `status` is the internal state of the OUTBOUND WAL record, not a
 graph port and not a payload union. M1.3's conventional `exit` port therefore
-does not rename this concept by implication. B7 changed the private v6 closure
-payload to an ordered multi-output completion; B8 changed only the package's
-logical type transport to v7.
+does not rename this concept by implication. B7 changed the closure payload to
+an ordered multi-output completion; B8 changed only the plan package's logical
+type transport to v7.
 
 **Normative sub-form encodings.** Every
 compound value in the tables above has a fixed shape and, where it is

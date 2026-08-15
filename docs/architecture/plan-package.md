@@ -31,6 +31,12 @@
 > migrated silently. Avro branch indexes, Arrow type codes and dense/sparse
 > layout remain adapter projection facts mapped explicitly to canonical union
 > discriminants, never logical type identity.
+> **B9 closure (2026-08-15):** no format change. Strict JSON Schema, Avro and
+> Arrow projection happens outside the package and produces only canonical
+> `DataType` plus adapter-owned physical selector mappings. The historical v6
+> type/expression subset predicates and format refusals are deleted; an
+> unbound `asset()` call has its own invariant error. External schemas cannot
+> smuggle an alternate type registry into v7.
 > **Historical private v6 B5 revision (2026-08-15):** v6 was never published, so
 > B5 replaces its current canonical body rather than allocating a transitory
 > v7 before the categorical type registry lands. Connector spec key 5

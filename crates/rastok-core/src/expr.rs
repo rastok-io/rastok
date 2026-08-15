@@ -1821,10 +1821,18 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             };
             for segment in &segments[consumed..] {
                 current = match current {
-                    // Dynamic structural access remains admitted during the
-                    // M1.3 migration; B9 removes it once every producer has a
-                    // resolved schema. `is`/`as` never rely on this fallback.
-                    DataType::Variant => DataType::Variant,
+                    // Metadata paths are checked against their own sealed
+                    // sys/app/ext grid after expression collection. The
+                    // temporary `meta: variant` binding is not a payload
+                    // escape hatch; ordinary dynamic data must narrow first.
+                    DataType::Variant if segments.first().is_some_and(|root| root == "meta") => {
+                        DataType::Variant
+                    }
+                    DataType::Variant => {
+                        return Err(fail(format!(
+                            "`{dotted}` reaches variant; narrow it with `is` or `as` before member access"
+                        )));
+                    }
                     DataType::Map(map) if map.key() == &DataType::Text => map.value().clone(),
                     DataType::Struct(structure) => structure
                         .fields()
@@ -1896,7 +1904,9 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             let base_ty = check(base, signature, text)?;
             let index_ty = check(index, signature, text)?;
             match base_ty {
-                DataType::Variant => Ok(DataType::Variant),
+                DataType::Variant => Err(fail(String::from(
+                    "variant must be narrowed with `is` or `as` before indexing",
+                ))),
                 DataType::Array(array) => {
                     if matches!(index_ty, DataType::Integer(_) | DataType::Variant) {
                         Ok(array.element().clone())
@@ -3161,12 +3171,13 @@ mod tests {
     #[test]
     fn paths_resolve_through_bindings() {
         let signature = Signature::new()
-            .with("data", DataType::Variant)
+            .with("data", customer_type())
             .with("session.key", DataType::Text);
-        let tree = compile_ok("data.text != \"\" && session.key == \"s-1\"", &signature);
+        let tree = compile_ok("data.name != \"\" && session.key == \"s-1\"", &signature);
         assert_eq!(tree.ty, DataType::Bool);
         let mut data = BTreeMap::new();
-        data.insert(String::from("text"), EvalValue::Text(String::from("hello")));
+        data.insert(String::from("id"), EvalValue::Int(7));
+        data.insert(String::from("name"), EvalValue::Text(String::from("hello")));
         let mut bindings = BTreeMap::new();
         bindings.insert(String::from("data"), EvalValue::Map(data));
         bindings.insert(
@@ -3230,9 +3241,19 @@ mod tests {
             ErrorKind::Narrowing(NarrowingFailure::NoMatch { .. })
         ));
 
+        let nested_data = DataType::Struct(
+            crate::datatype::StructType::new(alloc::vec![crate::datatype::TypeField::new(
+                "customer",
+                DataType::Variant,
+            )])
+            .expect("one field"),
+        );
+        let nested_signature = Signature::new()
+            .with("data", nested_data)
+            .with_type("Customer", customer.clone());
         let nested = compile_ok(
             "data.customer is Customer && data.customer.id > 0",
-            &signature,
+            &nested_signature,
         );
         let nested_value = EvalValue::Struct(alloc::vec![(String::from("customer"), value,)]);
         assert_eq!(
@@ -3242,6 +3263,26 @@ mod tests {
             )
             .expect("a fact about a dotted path types its descendants"),
             EvalValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn variant_structure_requires_explicit_narrowing() {
+        let signature = Signature::new()
+            .with("data", DataType::Variant)
+            .with_type("Customer", customer_type());
+        for source in ["data.name", "data['name']"] {
+            let diagnostics = compile(source, &signature)
+                .expect_err("dynamic structure cannot be inspected without a type");
+            assert_eq!(diagnostics.len(), 1, "{source}: {diagnostics:?}");
+            assert!(
+                diagnostics[0].message.contains("narrow"),
+                "{source}: {diagnostics:?}"
+            );
+        }
+        assert!(
+            compile("data is Customer && data.name != ''", &signature).is_ok(),
+            "a positive type fact makes the member statically visible"
         );
     }
 
@@ -3583,8 +3624,8 @@ mod tests {
             ("1 in [1]", "outside this build's subset"),
         ];
         let signature = Signature::new()
-            .with("data", DataType::Variant)
-            .with("items", DataType::Variant);
+            .with("data", customer_type())
+            .with("items", DataType::array(DataType::INT));
         for (text, needle) in cases {
             let diagnostics = compile(text, &signature).unwrap_err();
             assert!(

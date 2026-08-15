@@ -76,7 +76,7 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (882-byte v7 package, complete type/value/expression registry + total resolved-port proof + canonicity re-encode; re-measured 2026-08-15 after M1.3 B8) | 14 717 | 736 k | 4.91 ms |
+| `plan::decode` (882-byte v7 package, complete type/value/expression registry + total resolved-port proof + canonicity re-encode; re-measured at B9 on 2026-08-15: same package/hash, one tick below B8) | 14 716 | 736 k | 4.91 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
 | relay transaction (avg of 32; re-measured 2026-08-15 — deterministic under this QEMU icount run) | 2 323 (min 2 257 / max 2 613) | **116 k** | **0.77 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.8 | 4.5 k | 30 µs |
@@ -92,7 +92,7 @@ Notes the numbers carry:
 - The relay transaction meets its criterion with a **1.29× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 14 717 across the
+- Package decode grew from v1's 1 468 ticks to 14 716 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
   nesting budget, the domain-order audits) and the canonicity
