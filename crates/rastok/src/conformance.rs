@@ -8,8 +8,8 @@
 //!
 //! A new connector brings three things: its contract sheet, an
 //! adapter, and a [`Profile`] — a minimal probe unit, one happy
-//! input, one provocation per provocable declared error kind, and a
-//! stated reason for every kind the harness cannot reach.
+//! input, one provocation per provocable terminal case, and a stated
+//! reason for every terminal case the harness cannot reach.
 //!
 //! **What the battery holds executable today, stated exactly** —
 //! the M0 subset of the ten contract cases, not yet all ten:
@@ -18,8 +18,8 @@
 //! correlator, the instance model, or the terminal envelope — those
 //! widen with the sheet model); the silence discipline and, when the
 //! profile opts in, response-to-request correlation under two
-//! interleaved calls (case 7); the error-set discipline under the
-//! outcome gate with per-kind provocations (case 8); journal-before-
+//! interleaved calls (case 7); the typed-completion discipline with
+//! per-case provocations (case 8); journal-before-
 //! effect and close-once observed on the record, the scheduler-minted
 //! timeout, and the no-late-causal-fact rule after a cancel
 //! (case 10). Single-instance only (case 9 is M0's singleton).
@@ -47,12 +47,12 @@ pub trait AdapterFactory {
     fn make<'plan>(&mut self, plan: &'plan ValidatedExecutionPlan) -> Box<dyn Partner + 'plan>;
 }
 
-/// One way to force one declared error kind out of the adapter.
+/// One way to force one declared terminal case out of the adapter.
 #[derive(Debug, Clone)]
 pub struct Provocation {
-    /// The declared kind this provocation must produce.
-    pub kind: &'static str,
-    /// A probe unit whose run ends with that kind at the root sink.
+    /// The declared `exit` case this provocation must produce.
+    pub exit_case: &'static str,
+    /// A probe unit whose run ends with that case at the root sink.
     pub source: String,
     /// The submission line driving it.
     pub input: &'static str,
@@ -67,9 +67,9 @@ pub struct Profile {
     pub source: String,
     /// The happy submission line.
     pub input: &'static str,
-    /// One provocation per provocable declared kind.
+    /// One provocation per provocable declared terminal case.
     pub provocations: Vec<Provocation>,
-    /// Declared kinds this adapter cannot be provoked into, each
+    /// Declared terminal cases this adapter cannot be provoked into, each
     /// with its reason — stated, never silent.
     pub unprovable: Vec<(&'static str, &'static str)>,
     /// A probe whose partner stays mute under a declared budget, for
@@ -105,10 +105,10 @@ pub struct InterleaveProbe {
 /// unprovable, and every discipline violation found.
 #[derive(Debug, Clone, Default)]
 pub struct Report {
-    /// Error kinds proven by a provocation or the mute battery.
-    pub proven_kinds: Vec<&'static str>,
-    /// Declared kinds not proven here, with the stated reason.
-    pub unproven_kinds: Vec<(&'static str, &'static str)>,
+    /// Terminal cases proven by a provocation or the mute battery.
+    pub proven_cases: Vec<&'static str>,
+    /// Declared terminal cases not proven here, with the stated reason.
+    pub unproven_cases: Vec<(&'static str, &'static str)>,
     /// Every violation, in discovery order. Empty means conformant.
     pub violations: Vec<String>,
 }
@@ -163,8 +163,8 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
 
     // The happy path through the real machine: journal-before-effect
     // and close-once are observed on the record, not trusted (case
-    // 10), and the outcome gate holds every private-v6 reply to the
-    // fixed ProcessExit migration target (case 8). Correlation (case 7) is
+    // 10), and the completion gate holds every reply to the fixed
+    // ProcessExit target (case 8). Correlation (case 7) is
     // implied by arrival: only a response bearing an open call's
     // reference can settle.
     {
@@ -180,27 +180,30 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
                         "the happy path ended with {} error(s) at the root sink",
                         vm.errors().len()
                     ));
-                } else if exit_cases.iter().any(|case| case == "Exited")
-                    && !report.proven_kinds.contains(&"Exited")
-                {
-                    // The private pre-B7 success reply is the executable
-                    // witness for the target successful terminal case.
-                    report.proven_kinds.push("Exited");
+                } else {
+                    match root_exit_case(&vm).as_deref() {
+                        Some("Exited") if exit_cases.iter().any(|case| case == "Exited") => {
+                            report.proven_cases.push("Exited");
+                        }
+                        Some(case) => report.violations.push(format!(
+                            "the happy path terminated as `{case}`, expected `Exited`"
+                        )),
+                        None => report
+                            .violations
+                            .push("the happy path produced no root `exit` fact".into()),
+                    }
                 }
             }
         }
     }
 
     // Case 8, the provable half: every provocation must produce its
-    // declared kind at the root sink.
+    // declared terminal case at the root sink.
     for provocation in &profile.provocations {
         match run_provocation(provocation, registry, factory) {
             Ok(()) => {
-                if let Some(case) =
-                    crate::boundary::legacy_process_failure_exit_case(provocation.kind)
-                    && !report.proven_kinds.contains(&case)
-                {
-                    report.proven_kinds.push(case);
+                if !report.proven_cases.contains(&provocation.exit_case) {
+                    report.proven_cases.push(provocation.exit_case);
                 }
             }
             Err(violation) => report.violations.push(violation),
@@ -213,9 +216,9 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
         match mute_battery(mute_source, registry, factory) {
             Ok(()) => {
                 if exit_cases.iter().any(|case| case == "TimeoutExpired")
-                    && !report.proven_kinds.contains(&"TimeoutExpired")
+                    && !report.proven_cases.contains(&"TimeoutExpired")
                 {
-                    report.proven_kinds.push("TimeoutExpired");
+                    report.proven_cases.push("TimeoutExpired");
                 }
             }
             Err(violation) => report.violations.push(violation),
@@ -230,31 +233,24 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
         report.violations.push(violation);
     }
 
-    // No silent gap: declared kinds are proven or stated unprovable.
-    // `OutcomeUnknown` alone is exempt — only the recovery fold
-    // mints it, which needs a crash outside this harness's reach;
-    // the fold carries its own tests.
+    // No silent gap: declared terminal cases are proven or stated
+    // unprovable.
     for (kind, reason) in &profile.unprovable {
-        if let Some(case) = crate::boundary::legacy_process_failure_exit_case(kind)
-            && !report
-                .unproven_kinds
-                .iter()
-                .any(|(known, _)| *known == case)
-            && !report.proven_kinds.contains(&case)
+        if !report.unproven_cases.iter().any(|(known, _)| known == kind)
+            && !report.proven_cases.contains(kind)
         {
-            report.unproven_kinds.push((case, reason));
+            report.unproven_cases.push((kind, reason));
         }
     }
     for kind in &exit_cases {
-        let covered = report.proven_kinds.iter().any(|known| *known == kind)
+        let covered = report.proven_cases.iter().any(|known| *known == kind)
             || report
-                .unproven_kinds
+                .unproven_cases
                 .iter()
-                .any(|(known, _)| *known == kind)
-            || kind == "OutcomeUnknown";
+                .any(|(known, _)| *known == kind);
         if !covered {
             report.violations.push(format!(
-                "declared kind `{kind}` is neither provoked nor declared unprovable"
+                "declared terminal case `{kind}` is neither provoked nor declared unprovable"
             ));
         }
     }
@@ -273,7 +269,7 @@ pub fn assert_conformant(report: &Report, accepted_unproven: &[&str]) {
         report.violations
     );
     let unproven: Vec<&str> = report
-        .unproven_kinds
+        .unproven_cases
         .iter()
         .map(|(kind, _)| *kind)
         .collect();
@@ -420,8 +416,8 @@ fn drive(
             .map_err(|error| format!("the boundary round faulted: {error}"))?;
         if let Some((_, reason)) = report.rejected.first() {
             return Err(format!(
-                "the outcome gate refused a reply: {reason} — the adapter \
-                 produced an outcome outside its declared contract"
+                "the completion gate refused a reply: {reason} — the adapter \
+                 produced a completion outside its declared contract"
             ));
         }
         vm.drain(journal)
@@ -491,7 +487,7 @@ fn run_provocation(
     let compilation = compile(&[provocation.source.as_str()], registry).map_err(|bag| {
         format!(
             "the `{}` provocation does not compile: {:?}",
-            provocation.kind,
+            provocation.exit_case,
             bag.diagnostics()
         )
     })?;
@@ -499,26 +495,35 @@ fn run_provocation(
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut partner = factory.make(&compilation.plan);
     drive(&mut vm, &mut journal, partner.as_mut(), provocation.input)
-        .map_err(|violation| format!("the `{}` provocation: {violation}", provocation.kind))?;
-    let Some(first) = vm.errors().first() else {
-        return Err(format!(
-            "the `{}` provocation produced no error at the root sink",
-            provocation.kind
-        ));
-    };
-    let Data::Materialized(Value::Map(payload)) = first.data() else {
-        return Err(format!(
-            "the `{}` provocation: the error payload is not the typed map",
-            provocation.kind
-        ));
-    };
-    match payload.get("kind") {
-        Some(Value::Text(kind)) if kind == provocation.kind => Ok(()),
-        other => Err(format!(
-            "the `{}` provocation produced kind {other:?}",
-            provocation.kind
+        .map_err(|violation| format!("the `{}` provocation: {violation}", provocation.exit_case))?;
+    match root_exit_case(&vm) {
+        Some(case) if case == provocation.exit_case => Ok(()),
+        Some(case) => Err(format!(
+            "the `{}` provocation terminated as `{case}`",
+            provocation.exit_case
+        )),
+        None => Err(format!(
+            "the `{}` provocation produced no root `exit` fact",
+            provocation.exit_case
         )),
     }
+}
+
+fn root_exit_case(vm: &Vm<'_>) -> Option<String> {
+    let mut cases = vm.observations().iter().filter_map(|observed| {
+        if observed.node.is_some() || observed.port.name() != "exit" {
+            return None;
+        }
+        let Data::Materialized(Value::TaggedUnion(tagged)) = observed.envelope.data() else {
+            return None;
+        };
+        Some(tagged.case.clone())
+    });
+    let case = cases.next()?;
+    if cases.next().is_some() {
+        return None;
+    }
+    Some(case)
 }
 
 /// The mute battery: under a declared budget and a silent partner,
@@ -547,6 +552,9 @@ fn mute_battery(
     if !timed_out {
         return Err("the mute call never closed with the machine's Timeout fact".into());
     }
+    if root_exit_case(&vm).as_deref() != Some("TimeoutExpired") {
+        return Err("the scheduler did not publish `TimeoutExpired` on `exit`".into());
+    }
     // The partner was cancelled at the closure; later rounds must
     // add nothing causal — no settled event, no new record.
     let sealed_records = journal.records().len();
@@ -569,8 +577,8 @@ fn mute_battery(
 /// calls with distinct request bytes (the machine serializes calls
 /// per connector, so simultaneity needs two connectors served by
 /// the one adapter); for an echoing partner, each
-/// `Closed(Response(Success))` must carry exactly its own intent's
-/// prepared bytes. An adapter that swaps two concurrent responses —
+/// response completion's `out` draft must carry exactly its own intent's
+/// prepared bytes, with its own terminal `exit`. An adapter that swaps two concurrent responses —
 /// correct call references, wrong payloads — is caught here and
 /// nowhere else, and the journal must show both opens before the
 /// first closure, or the battery never actually interleaved.
@@ -644,18 +652,27 @@ fn interleave_battery(
             requests.insert(outbound.intent.prepared.bytes().to_vec());
             continue;
         }
-        let OutboundStatus::Closed(Closure::Response(outcome)) = &outbound.status else {
+        let OutboundStatus::Closed(Closure::Response(completion)) = &outbound.status else {
             continue;
         };
         any_close_seen = true;
         closed += 1;
-        let crate::boundary::CallOutcome::Success(data) = outcome else {
+        let Some(data) = completion
+            .outputs()
+            .iter()
+            .find(|output| output.port.name() == "out")
+            .map(|output| &output.data)
+        else {
             return Err(format!(
-                "interleave call {} closed with a failure; the probe expects echoes",
+                "interleave call {} completed without an out frame; the probe expects echoes",
                 outbound.intent.call_ref
             ));
         };
-        let request = String::from_utf8_lossy(outbound.intent.prepared.bytes()).into_owned();
+        let framed_request = String::from_utf8_lossy(outbound.intent.prepared.bytes());
+        let request = framed_request
+            .strip_suffix('\n')
+            .unwrap_or(&framed_request)
+            .to_owned();
         let response = match data {
             Data::Materialized(Value::Text(text)) => text.clone(),
             other => format!("{other:?}"),

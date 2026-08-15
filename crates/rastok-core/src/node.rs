@@ -112,6 +112,38 @@ impl Port {
         Ok(Self { name })
     }
 
+    /// Conventional connector output carrying primary result data.
+    ///
+    /// This is only an infallible spelling of the ordinary name `out`; it
+    /// grants the port no special routing or completion semantics.
+    #[must_use]
+    pub fn conventional_out() -> Self {
+        Self {
+            name: String::from("out"),
+        }
+    }
+
+    /// Conventional connector output carrying diagnostic data.
+    ///
+    /// This is only an infallible spelling of the ordinary name `err`.
+    #[must_use]
+    pub fn conventional_err() -> Self {
+        Self {
+            name: String::from("err"),
+        }
+    }
+
+    /// Conventional connector output carrying the terminal invocation fact.
+    ///
+    /// Closure remains a control fact; this constructor only names the
+    /// ordinary `exit` data port.
+    #[must_use]
+    pub fn conventional_exit() -> Self {
+        Self {
+            name: String::from("exit"),
+        }
+    }
+
     /// The port name.
     #[must_use]
     pub fn name(&self) -> &str {

@@ -26,9 +26,8 @@ pub enum PortDataType {
     Bytes,
     /// Explicit dynamic payload tree.
     Variant,
-    /// Temporary v6 `Process(codec = jsonl)` reply aggregation.
-    /// B7 replaces this carrier with repeated unit `variant` emissions.
-    VariantArray,
+    /// Canonical terminal union of one Process invocation.
+    ProcessExit,
 }
 
 impl PortDataType {
@@ -37,9 +36,7 @@ impl PortDataType {
             Self::Text => Ok(crate::datatype::DataType::Text),
             Self::Bytes => Ok(crate::datatype::DataType::BYTES),
             Self::Variant => Ok(crate::datatype::DataType::Variant),
-            Self::VariantArray => Ok(crate::datatype::DataType::array(
-                crate::datatype::DataType::Variant,
-            )),
+            Self::ProcessExit => crate::boundary::process_exit_type(),
         }
     }
 }

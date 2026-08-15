@@ -13,7 +13,7 @@
 
 pub mod vm;
 
-use crate::boundary::{BoundaryEvent, CallOutcome};
+use crate::boundary::Completion;
 use crate::datatype::DataType;
 use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue, Scalar};
 use crate::expr;
@@ -639,9 +639,10 @@ impl<'plan> TransactionExecutor<'plan> {
         timers
     }
 
-    /// The typed-error transaction for a faulted handler: the input
-    /// is consumed causally and the fault leaves on `err` as a typed
-    /// payload — a machine never swallows an envelope. Crate-private:
+    /// The ordinary `err` emission for a faulted operator handler: the input
+    /// is consumed causally and the fixed `RuntimeFault` payload leaves on
+    /// the operator's resolved port — a machine never swallows an envelope.
+    /// Crate-private:
     /// it indexes the slot unchecked, which is the VM's invariant to
     /// hold (its slots come from the plan) — the verified public
     /// door is [`Self::fire`].
@@ -652,24 +653,9 @@ impl<'plan> TransactionExecutor<'plan> {
         delivery: &Delivery,
         fault: &Fault,
     ) -> TransactionOutcome {
-        self.typed_error_transaction(slot, delivery, "RuntimeFault", &fault.to_string())
-    }
-
-    /// A transaction consuming `delivery` with a typed error on
-    /// `err` — the shape every non-happy consumption shares.
-    /// Crate-private for the same reason as
-    /// [`Self::fault_transaction`].
-    #[must_use]
-    pub(crate) fn typed_error_transaction(
-        &self,
-        slot: Slot,
-        delivery: &Delivery,
-        kind: &str,
-        message: &str,
-    ) -> TransactionOutcome {
         let node = &self.plan.nodes[slot.index()];
         let trigger = node::Trigger::Port(delivery.port.clone());
-        let err = node::Port::new("err").unwrap_or_else(|_| unreachable!("`err` is a valid port"));
+        let err = node::Port::conventional_err();
         let id = ids::emission_id(
             &node.path,
             &trigger,
@@ -681,11 +667,11 @@ impl<'plan> TransactionExecutor<'plan> {
         let mut payload = BTreeMap::new();
         payload.insert(
             String::from("kind"),
-            envelope::Value::Text(String::from(kind)),
+            envelope::Value::Text(String::from("RuntimeFault")),
         );
         payload.insert(
             String::from("message"),
-            envelope::Value::Text(String::from(message)),
+            envelope::Value::Text(fault.to_string()),
         );
         TransactionOutcome {
             record: TransactionRecord {
@@ -713,78 +699,63 @@ impl<'plan> TransactionExecutor<'plan> {
         }
     }
 
-    /// The connector's outcome transaction for a settled call: one
-    /// emission of the outcome envelope on the settled port, trigger
-    /// `p:in`, parented on the request — exactly the reference
-    /// trace's shape. The dispatcher routed; this builds.
+    /// The connector's completion transaction for a settled call: every
+    /// ordered draft, including the terminal `exit`, becomes an ordinary
+    /// emission in one atomic record. The dispatcher correlates; only this
+    /// VM boundary mints envelopes and identities.
     ///
     /// # Errors
     ///
     /// [`Fault::MissingHandler`]-free by construction; faults only if
     /// the request spine is unavailable.
-    pub fn connector_outcome(
+    pub fn connector_completion(
         &self,
-        event: &BoundaryEvent,
+        connector_path: &node::Path,
+        emitting_id: envelope::Id,
+        completion: &Completion,
         trigger: &node::Trigger,
         request_meta: &Meta,
         consumed: ConsumedPosition,
     ) -> TransactionOutcome {
         let request_sys = request_meta.sys();
-        let id = ids::emission_id(
-            &event.connector_path,
-            trigger,
-            event.emitting_id,
-            &event.port,
-            0,
-        );
-        let sys = MetaSys::emission(id, request_sys, self.graph_version.0);
-        let data = match &event.outcome {
-            CallOutcome::Success(data) => data.clone(),
-            CallOutcome::Failure(error) => {
-                // The kind survives into the graph: err handlers test
-                // `err.kind`, so a failure envelope carries it beside
-                // the payload.
-                let mut payload = BTreeMap::new();
-                payload.insert(
-                    String::from("kind"),
-                    envelope::Value::Text(error.kind.clone()),
+        let mut next_index: BTreeMap<node::Port, u32> = BTreeMap::new();
+        let emissions = completion
+            .outputs()
+            .iter()
+            .map(|output| {
+                let index = next_index.entry(output.port.clone()).or_default();
+                let emission_index = *index;
+                *index = index.saturating_add(1);
+                let id = ids::emission_id(
+                    connector_path,
+                    trigger,
+                    emitting_id,
+                    &output.port,
+                    emission_index,
                 );
-                if let Data::Encoded {
-                    encoding: envelope::Encoding::Raw,
-                    bytes,
-                    ..
-                } = &error.data
-                {
-                    payload.insert(
-                        String::from("detail"),
-                        envelope::Value::Bytes(bytes.clone()),
-                    );
-                } else if let Data::Materialized(value) = &error.data {
-                    payload.insert(String::from("detail"), value.clone());
+                let sys = MetaSys::emission(id, request_sys, self.graph_version.0);
+                // Uniform propagation (D-2026-08-10-2): every completion
+                // output inherits the REQUEST zones. Each payload came from
+                // the world, so stale content_type is struck.
+                let envelope = Envelope::new(
+                    inherit_zones(Meta::new(sys), request_meta),
+                    output.data.clone(),
+                );
+                Emission {
+                    port: output.port.clone(),
+                    index: emission_index,
+                    envelope,
                 }
-                Data::materialized(envelope::Value::Map(payload))
-            }
-        };
-        // Uniform propagation (D-2026-08-10-2): the outcome inherits
-        // the REQUEST's zones — an app token explicitly kept before
-        // the call survives the reply. The reply's payload is always
-        // fresh (the world answered), so the carried content_type is
-        // struck; minting one, and folding connector-written meta
-        // fields over these zones so they win, is the sheets'
-        // `Populates` business (nothing writes meta in v1).
-        let envelope = Envelope::new(inherit_zones(Meta::new(sys), request_meta), data);
+            })
+            .collect();
         TransactionOutcome {
             record: TransactionRecord {
-                node_path: event.connector_path.clone(),
+                node_path: connector_path.clone(),
                 trigger: trigger.clone(),
                 consumed: vec![consumed],
                 state_delta: vec![],
                 timers: vec![],
-                emissions: vec![Emission {
-                    port: event.port.clone(),
-                    index: 0,
-                    envelope,
-                }],
+                emissions,
             },
         }
     }
@@ -810,7 +781,7 @@ impl<'plan> TransactionExecutor<'plan> {
 /// content-type hint survive, per the "no structural read, no
 /// transcode" rule.
 pub(crate) struct Built {
-    /// The payload outcome.
+    /// The built payload.
     pub(crate) data: BuiltData,
     /// The outgoing application zone.
     pub(crate) app: envelope::Namespace,
@@ -829,7 +800,7 @@ pub(crate) enum BuiltData {
 
 /// Folds the input envelope's zones onto a fresh emission meta —
 /// the uniform-propagation rule (D-2026-08-10-2) for envelopes the
-/// MACHINE mints (connector outcomes, typed errors): `app` carries
+/// MACHINE mints (connector completions and operator faults): `app` carries
 /// whole, `ext` carries minus `content_type` (the minted payload is
 /// always fresh). Builder emissions spell the same rule through
 /// [`Built`].

@@ -82,6 +82,17 @@ nodes have no v6 package spelling and are categorically refused until B8;
 therefore no previously valid v6 program, semantic hash or golden moves at
 B6.
 
+**B7 completion checkpoint (2026-08-15).** A Process invocation now publishes
+unit-framed `out*`, independently framed `err*`, then one exact terminal
+`exit`, all in one ordered completion transaction. The resolved Process port
+types and effective `err_codec` therefore move Process identity deliberately:
+echo/spike `e322906a…`, JSONL `87d13844…`, and compiler probe `77d326e3…`.
+Their package and causal-trace goldens are re-blessed because both the plan
+contract and closed-call/output record shapes changed. The connector-free
+gauge hash remains `0d3ad43d…`, proving the move is scoped. The raw v6 package
+still represents `Process.exit` as `variant`; B8 replaces that transport bridge
+with the exact tagged union in v7.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -239,14 +250,15 @@ delivery-semantics §4) — keys `40–46` :
 | 42 | call_key | bytes | the `idempotency_key` (E-COMPENSATE-KEY) ; omitted only for `compensable` without key |
 | 43 | request_digest | bytes(32) | the boundary integrity seal (delivery-semantics §4.2) |
 | 44 | status | uint | the SEALED causal states : `1 = open · 2 = closed · 4 = abandoned` ; value `3` is reserved — `discarded` (a late reply after closure) is a NON-causal observability record, never a sealed status |
-| 45 | closure | array | present iff status ∈ {closed, abandoned} ; EXACT byteshape fixed BY `status` (`[1,env]` response · `[2]` timeout · `[]` abandoned ; sub-forms below), so `status` and `closure` never disagree |
+| 45 | closure | array | present iff status ∈ {closed, abandoned} ; EXACT byteshape fixed BY `status` (`[1,outputs]` response · `[2]` timeout · `[]` abandoned ; sub-forms below), so `status` and `closure` never disagree |
 | 47 | edge | text | the canonical edge of the causing delivery ; with key 40 (`emitting_id`) it reconstructs `delivery_ref` and hence `call_ref` (envelope.md §2) — the record stays autonomous |
 | 46 | edge_cursor | array | present only on an inter-shard delivery — the DURABLE LOGICAL cursor `[edge (text), source_partition (bytes), seq (uint)]` (seq never restarts on leader change ; the transport `leader_epoch` fence is separate and NOT sealed) ; a transport cursor, NOT an envelope id, outside every id domain |
 
 Key 44's `status` is the internal state of the current v6 WAL record, not a
 graph port and not a payload union. M1.3's conventional `exit` port therefore
-does not rename this concept by implication; format v7 separately replaces
-the one-envelope closure shape with its typed multi-output completion.
+does not rename this concept by implication. B7 changed the private v6 closure
+payload to an ordered multi-output completion; B8 changes only the package's
+logical type transport to v7.
 
 **Normative sub-form encodings.** Every
 compound value in the tables above has a fixed shape and, where it is
@@ -343,9 +355,12 @@ cannot diverge on bytes for the same journal :
   present **iff `status ∈ {closed, abandoned}`**, and its byteshape is
   fixed :
   - `status = 1 open` → key 45 **absent**.
-  - `status = 2 closed`, `outcome = response` → `[1, envelope]` (a
-    2-element array : the partner's reply, success OR a typed-err reply).
-  - `status = 2 closed`, `outcome = timeout` → `[2]` (a **1-element**
+  - `status = 2 closed`, `closure = response` → `[1, outputs]` (a
+    2-element array). `outputs` is an ordered array of
+    `[port_text, data_form]` drafts. It contains exactly one `exit`, last;
+    no draft has an envelope id yet because the VM mints every envelope in
+    the following atomic connector TRANSACTION.
+  - `status = 2 closed`, `closure = timeout` → `[2]` (a **1-element**
     array — no second element, never `[2, null]` ; `l:timeout` emits
     `TimeoutExpired` as its own TRANSACTION).
   - `status = 4 abandoned` → `[]` (the **empty** array — present but
@@ -356,10 +371,10 @@ cannot diverge on bytes for the same journal :
     delivery-semantics §4 / execution-model §6.3, **graph-invisible**) is
     **NOT a sealed OUTBOUND status** : it is a separate
     NON-CAUSAL observability record, never part of the seal. Its payload
-    (the late reply, possibly a typed outcome) is a diagnostic
+    (the late completion) is a diagnostic
     annotation, so two runs seal identically regardless of a discarded
     late reply. The correlator (runtime) decides it; the adapter never
-    returns it as a normal outcome.
+    returns it as a normal completion.
 - **`consumed` / `join_inputs` / `emissions`** — the fixed tuples and
   imposed array orders stated in their rows above.
 

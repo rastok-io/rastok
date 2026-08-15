@@ -9,7 +9,8 @@
 **Current checkpoint (2026-08-15): items 1 and 2 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 The current transport is plan-package v6; valid-program identity for
-the spike is `a7511135…` after B5's deliberate contract-identity move.
+the spike is `e322906a…` after B7's deliberate Process framing/completion
+move.
 Item 3 has been replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md).**
@@ -252,9 +253,11 @@ step touches `vm.rs` once.
    value constructor, inserted structural-union wrapping once in checked HIR,
    and removed the special `ErrEmit` syntax/HIR path: `err` now emits like
    every other port. These constructor trees remain outside v6 and are
-   published only by B8. The active v6 `TypedError` and
-   success/failure-only reply split remain isolated until B7 rather than being
-   promoted as a model. Ordered gates and evidence are in
+   published only by B8. B7 has removed `TypedError` and the
+   success/failure-only reply split: the Partner returns one ordered
+   completion, the VM commits all its ordinary port outputs atomically, and
+   `Process(job)` frames `out*`/`err*` before a final typed `exit`. Ordered
+   gates and evidence are in
    the dedicated
    [M1.3 backlog](m1.3-type-system-backlog.md).
 4. **`per` — the partition surface** — keyed nodes and graphs on the

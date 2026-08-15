@@ -157,16 +157,16 @@ impl RequestCodec {
 
 /// Effective logical type of one currently executable Connector port.
 ///
-/// B5's compiler sheet owns the source-facing rule. This core mirror lets a
+/// The compiler sheet owns the source-facing rule. This core mirror lets a
 /// package validator prove the same current-v6 table without a compiler
-/// Registry. The JSONL output remains the historical `array<variant>` until
-/// B7 changes Process to repeated ordinary emissions.
+/// Registry. B7 uses unit output types; only `Process.exit` remains an
+/// explicit v6 `variant` bridge until B8 publishes its tagged union.
 #[must_use]
 pub fn legacy_v6_process_port_type(
     contract: &str,
     port: &str,
     codec_word: Option<&str>,
-    _err_codec_word: Option<&str>,
+    err_codec_word: Option<&str>,
 ) -> Option<DataType> {
     if contract != "Process" {
         return None;
@@ -175,8 +175,16 @@ pub fn legacy_v6_process_port_type(
         ("in" | "out", Some("lines")) => Some(DataType::Text),
         ("in" | "out", Some("bytes")) => Some(DataType::BYTES),
         ("in", Some("jsonl")) => Some(DataType::Variant),
-        ("out", Some("jsonl")) => Some(DataType::array(DataType::Variant)),
-        ("err" | "exit", Some("lines" | "jsonl" | "bytes")) => Some(DataType::Variant),
+        ("out", Some("jsonl")) => Some(DataType::Variant),
+        ("err", Some("lines" | "jsonl" | "bytes")) => match err_codec_word {
+            Some("lines") => Some(DataType::Text),
+            Some("bytes") => Some(DataType::BYTES),
+            _ => None,
+        },
+        // The runtime validates the exact ProcessExit union in B7. The raw
+        // v6 plan keeps the variant carrier until B8 publishes v7's type
+        // registry in one categorical move.
+        ("exit", Some("lines" | "jsonl" | "bytes")) => Some(DataType::Variant),
         _ => None,
     }
 }
@@ -235,23 +243,119 @@ pub fn process_exit_type() -> Result<DataType, TypeError> {
     ])?))
 }
 
-/// B5's explicit migration table from the private success/failure seam to
-/// the target `ProcessExit` cases. B7 consumes this table while replacing the
-/// seam; until then the plan-backed gate uses it instead of a travelling
-/// `error_set`.
-#[must_use]
-pub fn legacy_process_failure_exit_case(kind: &str) -> Option<&'static str> {
-    match kind {
-        "SpawnFailed" => Some("SpawnFailed"),
-        "TimeoutExpired" => Some("TimeoutExpired"),
-        "DecodeError" => Some("DecodeFailed"),
-        "CaptureFailed" => Some("CaptureFailed"),
-        "OutputOverflow" => Some("OutputOverflow"),
-        "ExecFailed" => Some("Exited"),
-        // Stderr is ordinary data on `err`; it is deliberately not an exit
-        // case and the Process job adapter never emits this legacy kind.
-        "StderrLine" => None,
-        _ => None,
+/// The semantic terminal facts emitted by `Process`.
+///
+/// This Rust enum is an adapter-side construction aid, not a second logical
+/// type. [`ProcessExit::into_value`] is the sole projection into the ordinary
+/// canonical [`crate::value::Value::TaggedUnion`] carried by the `exit` port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessExit {
+    /// The child status was observed; non-zero is data, not an automatic
+    /// failure classification. `exit_code = -1` denotes a signal-only status.
+    Exited {
+        /// Portable process exit code, or `-1` when only a signal exists.
+        exit_code: i32,
+        /// Unix signal when available.
+        signal: Option<i32>,
+    },
+    /// The OS refused to create the child.
+    SpawnFailed {
+        /// Boundary diagnostic.
+        message: String,
+    },
+    /// The scheduler's call budget won the close race.
+    TimeoutExpired,
+    /// Captured stdout or stderr did not inhabit its selected framing.
+    DecodeFailed {
+        /// Framing or decoding diagnostic.
+        message: String,
+        /// Offending JSONL line when one exists.
+        line: Option<String>,
+    },
+    /// A pipe or status capture could not be completed.
+    CaptureFailed,
+    /// The aggregate capture bound or representable host capacity was hit.
+    OutputOverflow {
+        /// Declared aggregate byte limit.
+        limit: u64,
+        /// Why the bounded capture stopped.
+        reason: OutputOverflowReason,
+    },
+}
+
+/// Why a bounded Process capture stopped.
+///
+/// Keeping this closed beside [`ProcessExit`] prevents an adapter from
+/// constructing an enum value outside the logical `ProcessExit` contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputOverflowReason {
+    /// The declared aggregate byte budget was crossed.
+    Budget,
+    /// The host refused capture capacity.
+    Capacity,
+}
+
+impl OutputOverflowReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Budget => "budget",
+            Self::Capacity => "capacity",
+        }
+    }
+}
+
+impl ProcessExit {
+    /// Projects the adapter fact into the ordinary canonical tagged value.
+    #[must_use]
+    pub fn into_value(self) -> crate::value::Value {
+        use crate::value::{TaggedUnionValue, Value};
+
+        let optional_int = |value: Option<i32>| Value::StructuralUnion {
+            branch: u16::from(value.is_some()),
+            value: alloc::boxed::Box::new(
+                value.map_or(Value::Null, |value| Value::Int(i64::from(value))),
+            ),
+        };
+        let optional_text = |value: Option<String>| Value::StructuralUnion {
+            branch: u16::from(value.is_some()),
+            value: alloc::boxed::Box::new(value.map_or(Value::Null, Value::Text)),
+        };
+        let (case, payload) = match self {
+            Self::Exited { exit_code, signal } => (
+                "Exited",
+                alloc::vec![
+                    (String::from("exit_code"), Value::Int(i64::from(exit_code))),
+                    (String::from("signal"), optional_int(signal)),
+                ],
+            ),
+            Self::SpawnFailed { message } => (
+                "SpawnFailed",
+                alloc::vec![(String::from("message"), Value::Text(message))],
+            ),
+            Self::TimeoutExpired => ("TimeoutExpired", Vec::new()),
+            Self::DecodeFailed { message, line } => (
+                "DecodeFailed",
+                alloc::vec![
+                    (String::from("line"), optional_text(line)),
+                    (String::from("message"), Value::Text(message)),
+                ],
+            ),
+            Self::CaptureFailed => ("CaptureFailed", Vec::new()),
+            Self::OutputOverflow { limit, reason } => (
+                "OutputOverflow",
+                alloc::vec![
+                    (String::from("limit"), Value::Uint(limit)),
+                    (
+                        String::from("reason"),
+                        Value::Enum(String::from(reason.as_str()))
+                    ),
+                ],
+            ),
+        };
+        Value::TaggedUnion(alloc::boxed::Box::new(TaggedUnionValue {
+            case: String::from(case),
+            payload,
+        }))
     }
 }
 
@@ -387,6 +491,126 @@ impl Intent {
     }
 }
 
+/// One ordinary output proposed by an external partner.
+///
+/// This is deliberately not a journal [`crate::journal::Emission`]: the
+/// partner states a port and payload, while the VM alone mints envelopes,
+/// identities and the atomic transaction record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortOutput {
+    /// Ordinary connector output port.
+    pub port: node::Port,
+    /// Payload representation returned by the partner.
+    pub data: envelope::Data,
+}
+
+/// One admitted invocation's ordered boundary completion.
+///
+/// Construction seals the terminal barrier: exactly one conventional
+/// `exit` output exists and it is last. Consequently neither a partner nor a
+/// mock can represent an output that follows the invocation's terminal fact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Completion {
+    outputs: Vec<PortOutput>,
+}
+
+impl Completion {
+    /// Builds one completion after proving its terminal barrier.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a missing, repeated, or non-terminal `exit` output.
+    pub fn try_new(outputs: Vec<PortOutput>) -> Result<Self, CompletionError> {
+        let exit_count = outputs
+            .iter()
+            .filter(|output| output.port.name() == "exit")
+            .count();
+        match exit_count {
+            0 => return Err(CompletionError::MissingExit),
+            1 => {}
+            count => return Err(CompletionError::MultipleExits(count)),
+        }
+        if outputs
+            .last()
+            .is_none_or(|output| output.port.name() != "exit")
+        {
+            return Err(CompletionError::OutputAfterExit);
+        }
+        Ok(Self { outputs })
+    }
+
+    /// Outputs in publication order, including the terminal `exit` last.
+    #[must_use]
+    pub fn outputs(&self) -> &[PortOutput] {
+        &self.outputs
+    }
+
+    /// Gives the ordered drafts to the VM after the close race is won.
+    #[must_use]
+    pub fn into_outputs(self) -> Vec<PortOutput> {
+        self.outputs
+    }
+
+    /// Builds the bounded on-exit completion of one `Process(job)`.
+    ///
+    /// Separating the two frame vectors in this API makes the fixed ordering
+    /// (`out*`, then `err*`, then terminal `exit`) structural and prevents an
+    /// adapter from accidentally placing lifecycle data on stderr.
+    #[must_use]
+    pub fn process(out: Vec<envelope::Data>, err: Vec<envelope::Data>, exit: ProcessExit) -> Self {
+        let mut outputs = Vec::with_capacity(out.len().saturating_add(err.len()).saturating_add(1));
+        outputs.extend(out.into_iter().map(|data| PortOutput {
+            port: node::Port::conventional_out(),
+            data,
+        }));
+        outputs.extend(err.into_iter().map(|data| PortOutput {
+            port: node::Port::conventional_err(),
+            data,
+        }));
+        outputs.push(PortOutput {
+            port: node::Port::conventional_exit(),
+            data: envelope::Data::materialized(exit.into_value()),
+        });
+        Self { outputs }
+    }
+
+    /// Builds a completion containing only its terminal Process fact.
+    #[must_use]
+    pub fn process_exit(exit: ProcessExit) -> Self {
+        Self::process(Vec::new(), Vec::new(), exit)
+    }
+}
+
+/// A malformed invocation completion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionError {
+    /// No terminal fact was supplied.
+    MissingExit,
+    /// More than one terminal fact was supplied.
+    MultipleExits(usize),
+    /// The sole terminal fact was not the final output.
+    OutputAfterExit,
+}
+
+impl fmt::Display for CompletionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingExit => f.write_str("a completion requires exactly one `exit` output"),
+            Self::MultipleExits(count) => {
+                write!(
+                    f,
+                    "a completion carries {count} `exit` outputs; exactly one is required"
+                )
+            }
+            Self::OutputAfterExit => {
+                f.write_str("the terminal `exit` must be the completion's final output")
+            }
+        }
+    }
+}
+
+impl core::error::Error for CompletionError {}
+
 /// Protocol-correlated partner answer. A partner answers or stays
 /// silent — never a timeout: timeouts are the scheduler's.
 #[derive(Debug, Clone, PartialEq)]
@@ -394,56 +618,35 @@ pub struct Response {
     /// The call this answers, correlated by the connector's own
     /// protocol.
     pub call_ref: CallRef,
-    /// What the partner reports — success or a typed failure.
-    pub outcome: CallOutcome,
+    /// Ordered ordinary outputs plus the terminal invocation fact.
+    pub completion: Completion,
 }
 
-/// What the private pre-B7 Process seam produced.
-///
-/// B7 replaces this success/failure split with a completion carrying ordinary
-/// port drafts plus one terminal `exit` draft.
-#[derive(Debug, Clone, PartialEq)]
-pub enum CallOutcome {
-    /// The reply payload, bound for the connector's `out` port.
-    Success(envelope::Data),
-    /// A legacy Process failure fact, temporarily bound for `err`.
-    Failure(TypedError),
-}
-
-/// One legacy Process failure fact retained only until B7.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypedError {
-    /// The temporary fact name, checked through the fixed migration table.
-    pub kind: String,
-    /// The typed payload of the error.
-    pub data: envelope::Data,
-}
-
-/// Judges a partner's outcome against the calling connector's resolved
+/// Judges a partner's completion against the calling connector's resolved
 /// contract before it may become a causal fact. The dispatcher only asks.
-pub trait OutcomeGate {
+pub trait CompletionGate {
     /// `Ok` to admit; `Err(reason)` to refuse the closure.
     ///
     /// # Errors
     ///
     /// The refusal reason, surfaced with the rejected response.
-    fn admit(&self, connector: &node::Path, outcome: &CallOutcome) -> Result<(), String>;
+    fn admit(&self, connector: &node::Path, completion: &Completion) -> Result<(), String>;
 }
 
-/// The gate that admits everything — for worlds whose outcomes are
+/// The gate that admits everything — for worlds whose completions are
 /// validated elsewhere, and for tests of the dispatch mechanics.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OpenGate;
 
-impl OutcomeGate for OpenGate {
-    fn admit(&self, _: &node::Path, _: &CallOutcome) -> Result<(), String> {
+impl CompletionGate for OpenGate {
+    fn admit(&self, _: &node::Path, _: &Completion) -> Result<(), String> {
         Ok(())
     }
 }
 
 /// One routable boundary fact for the VM: which connector, which
 /// port, which cause. The VM owns what follows — the connector's
-/// transaction builds the outcome envelope under the emission recipe;
+/// transaction builds every output envelope under the emission recipe;
 /// the dispatcher never mints envelopes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoundaryEvent {
@@ -453,10 +656,8 @@ pub struct BoundaryEvent {
     pub connector_path: node::Path,
     /// The request envelope's id — the transaction's parent.
     pub emitting_id: envelope::Id,
-    /// `out` for a success, `err` for a typed failure.
-    pub port: node::Port,
-    /// What the call produced.
-    pub outcome: CallOutcome,
+    /// What the call produced, in publication order with `exit` last.
+    pub completion: Completion,
 }
 
 /// How a submission's sequence number is chosen.
@@ -598,7 +799,7 @@ pub struct PumpBatch {
     /// Answers correlating with no journaled call — correlation
     /// faults to surface.
     pub uncorrelated: Vec<Response>,
-    /// Answers the outcome gate refused, with the reason. The call
+    /// Answers the completion gate refused, with the reason. The call
     /// stays OPEN — an invalid reply never becomes a causal fact,
     /// and the timeout machinery can still settle the call honestly.
     pub rejected: Vec<(Response, String)>,
@@ -635,7 +836,7 @@ impl core::error::Error for DispatchError {}
 /// record always exists before the partner hears — and settles
 /// closures through the journal's close-once race into routable
 /// [`BoundaryEvent`]s. The VM owns everything after: the connector's
-/// transaction builds the outcome envelope; the dispatcher never
+/// transaction builds the output envelopes; the dispatcher never
 /// mints one. Mocks replace the partner, never this bookkeeping.
 ///
 /// Restart discipline: re-calling a partner is a recovery decision
@@ -682,7 +883,7 @@ impl Dispatcher {
         &mut self,
         journal: &mut dyn Journal,
         partner: &mut dyn Partner,
-        gate: &dyn OutcomeGate,
+        gate: &dyn CompletionGate,
     ) -> Result<PumpBatch, DispatchError> {
         // Start phase: every open call not yet started.
         for intent in journal.open_calls() {
@@ -714,29 +915,22 @@ impl Dispatcher {
             // Validation BEFORE the causal fact: a reply the contract
             // refuses must never close the call — journaled garbage
             // would leave an unclosable obligation.
-            if let Err(reason) = gate.admit(&intent.connector_path, &response.outcome) {
+            if let Err(reason) = gate.admit(&intent.connector_path, &response.completion) {
                 batch.rejected.push((response, reason));
                 continue;
             }
-            let closure = Closure::Response(response.outcome.clone());
+            let closure = Closure::Response(response.completion.clone());
             match journal
                 .close_outbound(&response.call_ref, closure)
                 .map_err(DispatchError::Journal)?
             {
                 CloseVerdict::Won => {
-                    let port_name = match &response.outcome {
-                        CallOutcome::Success(_) => "out",
-                        CallOutcome::Failure(_) => "err",
-                    };
-                    let port = node::Port::new(port_name)
-                        .unwrap_or_else(|_| unreachable!("default port names are valid"));
                     self.started.remove(&response.call_ref);
                     batch.events.push(BoundaryEvent {
                         call_ref: response.call_ref,
                         connector_path: intent.connector_path.clone(),
                         emitting_id: intent.emitting_id,
-                        port,
-                        outcome: response.outcome,
+                        completion: response.completion,
                     });
                 }
                 CloseVerdict::AlreadyClosed => batch.discarded.push(response),
@@ -889,12 +1083,26 @@ mod tests {
         partner.replies = vec![
             Response {
                 call_ref: intent.call_ref,
-                outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"SALUT")),
+                completion: Completion::process(
+                    vec![Data::encoded(Encoding::Raw, *b"SALUT")],
+                    vec![],
+                    ProcessExit::Exited {
+                        exit_code: 0,
+                        signal: None,
+                    },
+                ),
             },
             // A duplicate answer for the same call: the race loser.
             Response {
                 call_ref: intent.call_ref,
-                outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"LATE")),
+                completion: Completion::process(
+                    vec![Data::encoded(Encoding::Raw, *b"LATE")],
+                    vec![],
+                    ProcessExit::Exited {
+                        exit_code: 0,
+                        signal: None,
+                    },
+                ),
             },
         ];
         let batch = dispatcher
@@ -906,16 +1114,23 @@ mod tests {
         let event = &batch.events[0];
         assert_eq!(event.connector_path.to_string(), "echo");
         assert_eq!(event.emitting_id, intent.emitting_id);
-        assert_eq!(event.port.name(), "out");
-        assert!(matches!(&event.outcome, CallOutcome::Success(_)));
+        assert_eq!(event.completion.outputs()[0].port.name(), "out");
+        assert_eq!(
+            event
+                .completion
+                .outputs()
+                .last()
+                .map(|output| output.port.name()),
+            Some("exit")
+        );
         // The dispatcher minted no envelope: the journal's closure
-        // fact carries the raw outcome, and the connector's own
-        // transaction will build the envelope.
+        // fact carries the raw completion, and the connector's own
+        // transaction will build the envelopes.
         assert!(journal.open_calls().is_empty());
     }
 
     #[test]
-    fn a_typed_failure_routes_to_err() {
+    fn a_completion_keeps_stderr_separate_from_its_exit() {
         let (mut journal, intent) = seeded_journal();
         let mut partner = Scripted::default();
         let mut dispatcher = Dispatcher::new();
@@ -924,19 +1139,23 @@ mod tests {
             .unwrap();
         partner.replies = vec![Response {
             call_ref: intent.call_ref,
-            outcome: CallOutcome::Failure(TypedError {
-                kind: String::from("ExecFailed"),
-                data: Data::encoded(Encoding::Raw, *b"exit 1"),
-            }),
+            completion: Completion::process(
+                vec![],
+                vec![Data::encoded(Encoding::Raw, *b"diagnostic")],
+                ProcessExit::Exited {
+                    exit_code: 1,
+                    signal: None,
+                },
+            ),
         }];
         let batch = dispatcher
             .pump(&mut journal, &mut partner, &OpenGate)
             .unwrap();
         assert_eq!(batch.events.len(), 1);
-        assert_eq!(batch.events[0].port.name(), "err");
-        assert!(
-            matches!(&batch.events[0].outcome, CallOutcome::Failure(error) if error.kind == "ExecFailed")
-        );
+        let outputs = batch.events[0].completion.outputs();
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].port.name(), "err");
+        assert_eq!(outputs[1].port.name(), "exit");
     }
 
     #[test]
@@ -949,12 +1168,71 @@ mod tests {
                 ids::delivery_ref("x.out>ghost.in", envelope::Id::from_bytes([9; 16])),
                 &[0; 32],
             ),
-            outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"?")),
+            completion: Completion::process_exit(ProcessExit::Exited {
+                exit_code: 0,
+                signal: None,
+            }),
         }];
         let batch = dispatcher
             .pump(&mut journal, &mut partner, &OpenGate)
             .unwrap();
         assert!(batch.events.is_empty());
         assert_eq!(batch.uncorrelated.len(), 1, "correlation faults surface");
+    }
+
+    #[test]
+    fn completion_construction_seals_the_terminal_barrier() {
+        let out = PortOutput {
+            port: node::Port::conventional_out(),
+            data: Data::materialized(crate::value::Value::Int(1)),
+        };
+        let exit = PortOutput {
+            port: node::Port::conventional_exit(),
+            data: Data::materialized(ProcessExit::TimeoutExpired.into_value()),
+        };
+        assert_eq!(
+            Completion::try_new(vec![out.clone()]),
+            Err(CompletionError::MissingExit)
+        );
+        assert_eq!(
+            Completion::try_new(vec![exit.clone(), out]),
+            Err(CompletionError::OutputAfterExit)
+        );
+        assert_eq!(
+            Completion::try_new(vec![exit.clone(), exit]),
+            Err(CompletionError::MultipleExits(2))
+        );
+    }
+
+    #[test]
+    fn every_process_exit_projection_inhabits_the_one_union() {
+        let exits = [
+            ProcessExit::Exited {
+                exit_code: -1,
+                signal: Some(9),
+            },
+            ProcessExit::SpawnFailed {
+                message: String::from("no executable"),
+            },
+            ProcessExit::TimeoutExpired,
+            ProcessExit::DecodeFailed {
+                message: String::from("bad line"),
+                line: Some(String::from("{")),
+            },
+            ProcessExit::CaptureFailed,
+            ProcessExit::OutputOverflow {
+                limit: 42,
+                reason: OutputOverflowReason::Budget,
+            },
+            ProcessExit::OutputOverflow {
+                limit: 42,
+                reason: OutputOverflowReason::Capacity,
+            },
+        ];
+        let ty = process_exit_type().expect("the standard ProcessExit type is valid");
+        for exit in exits {
+            let value = exit.into_value();
+            assert!(ty.accepts(&value), "{value:?} must inhabit ProcessExit");
+        }
     }
 }

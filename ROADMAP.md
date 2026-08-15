@@ -70,8 +70,11 @@ The repository opens publicly with this milestone (15 October 2026).
   core, B4's one `name!` frontend surface, and B5's uniform resolved
   Connector port contracts are landed. B6 has added general tagged-value
   construction, one contextual union-wrapping door and ordinary `err`
-  emission. The remaining ordered gates add multi-output completion and the
-  one categorical v7 publication, then close projection and corpus evidence.
+  emission. B7 has replaced the success/failure seam with atomic ordered
+  completions: `Process(job)` now publishes unit-framed `out*`, independently
+  framed stderr on `err*`, and exactly one typed `exit`. The remaining ordered
+  gates publish the one categorical v7 format, then close projection and
+  corpus evidence.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

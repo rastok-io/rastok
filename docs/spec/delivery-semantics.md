@@ -141,7 +141,8 @@ instant where **the truth exists nowhere** :
    ② delivery to the Connector (cursor — §2)
    ③ the Connector calls the world  ────────►  💳
    ④ the response returns           ◄────────
-   ⑤ the Connector's transaction commits (response journaled, out emitted)
+   ⑤ the Connector's completion transaction commits
+      (closure journaled; ordered out/err/exit envelopes emitted atomically)
 
    💥 crash between ③ and ⑤ : was the request received ? executed ?
       Nobody knows (two-generals — undecidable, not a bug).
@@ -156,7 +157,7 @@ closure (the call-closed rule, execution-model §6.3) :
 ```
    outbound record :
      open       { call, idempotency_key, request digest, t }     ← BEFORE the call
-     closed     (response)  XOR  (timeout — the l:timeout event)
+     closed     (response completion)  XOR  (timeout — the l:timeout event)
                 XOR  (abandoned — written when the §4.4 triage resolves by
                       OutcomeUnknown : the call is closed-as-unknown)
      discarded  (late response after closure — observability-visible, graph-invisible)
@@ -165,6 +166,11 @@ closure (the call-closed rule, execution-model §6.3) :
 One call = exactly one closure. The recall rows of §4.4 need no new closure
 kind — a recall is *the same call* re-attempted, and its reply (or timeout)
 closes it through the normal rule.
+
+A response closure seals the ordered `(port, data)` drafts that won the race;
+they have no envelope identities yet. The following Connector transaction
+mints and commits every output envelope together. The final draft is the
+invocation's unique typed `exit` barrier.
 
 The request **digest** is the boundary's integrity seal : a retry must
 re-derive a byte-identical request, or the graph changed under the call —

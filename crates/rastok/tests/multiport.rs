@@ -1484,7 +1484,10 @@ graph g : App {
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = {v = 1} }
+      on in {
+        out = {v = 1}
+        exit = Exited { exit_code = 0, signal = null }
+      }
     }
 
     scenario s "a structured reply cannot land on an int input" {
@@ -1696,7 +1699,10 @@ graph g : App {
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = . }
+      on in {
+        out = .
+        exit = Exited { exit_code = 0, signal = null }
+      }
     }
 
     scenario s "a decode-error payload cannot enter an int pin" {
@@ -1836,7 +1842,10 @@ graph g : App {
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = "reply" }
+      on in {
+        out = "reply"
+        exit = Exited { exit_code = 0, signal = null }
+      }
     }
 
     scenario s "sugar everywhere" {
@@ -2028,9 +2037,8 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
 
 #[test]
 fn a_mock_relay_keeps_the_struct_witness() {
-    // A mock is checked against the same connector pin as a real
-    // adapter. JSONL replies are arrays of variants, not arbitrary
-    // values invented by the Lab.
+    // A mock is checked against the same connector pin as a real adapter.
+    // Each JSONL line is one variant emission, never a batch carrier.
     let source = r#"
 graph g : App {
   input in: variant
@@ -2050,7 +2058,10 @@ graph g : App {
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = [{"v": 1}] }
+      on in {
+        out = {"v": 1}
+        exit = Exited { exit_code = 0, signal = null }
+      }
     }
 
     scenario s "the mock reply follows the jsonl pin" {

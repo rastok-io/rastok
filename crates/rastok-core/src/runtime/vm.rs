@@ -18,8 +18,8 @@
 //! the commit, nothing can fail.
 
 use crate::boundary::{
-    BoundaryEvent, CallOutcome, CallRef, DatedPayload, Dispatcher, InboundSubmission, Intent,
-    Partner, Response,
+    BoundaryEvent, CallRef, Completion, DatedPayload, Dispatcher, InboundSubmission, Intent,
+    Partner, ProcessExit, Response,
 };
 use crate::datatype::DataType;
 use crate::envelope::{Data, Envelope, Id};
@@ -30,22 +30,17 @@ use crate::runtime::{Delivery, Fault, Key, Mailboxes, PartitionState, Transactio
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
-
-/// The machine-produced timeout kind — ONE spelling, shared with
-/// every adapter binding that must declare it (D-2026-08-12-1,
-/// review round).
-pub const TIMEOUT_EXPIRED: &str = "TimeoutExpired";
 
 /// A machine fault; the step that raised it committed nothing, and
 /// the work that triggered it stays reserved — a retry sees it again.
 /// A machine-integrity refusal — never a business error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmError {
-    /// A transaction fault the machine cannot convert into a typed
-    /// error — a plan/configuration integrity breach.
+    /// A transaction fault the machine cannot represent as the operator's
+    /// ordinary `RuntimeFault` output — a plan/configuration integrity breach.
     Fault(Fault),
     /// The journal refused an operation.
     Journal(crate::journal::Error),
@@ -124,7 +119,7 @@ impl core::error::Error for VmError {}
 /// the caller decides what to surface.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PumpReport {
-    /// Closures that settled into pending outcome transactions.
+    /// Closures that settled into pending completion transactions.
     pub settled: usize,
     /// Late answers to already-closed calls — observations, not
     /// causal facts.
@@ -136,7 +131,7 @@ pub struct PumpReport {
     pub rejected: Vec<(Response, String)>,
 }
 
-/// One held request: the delivery whose cursor the outcome
+/// One held request: the delivery whose cursor the completion
 /// transaction will consume. A budget obligation resolves against
 /// its reference — the canonical edge and the envelope id, both on
 /// the delivery itself.
@@ -145,39 +140,88 @@ struct PendingCall {
     delivery: Delivery,
 }
 
-/// The plan-backed outcome gate for the private pre-B7 reply seam.
+/// The plan-backed gate for one atomic boundary completion.
 ///
-/// B5 removed the travelling `error_set`; the explicit migration table maps
-/// each legacy Process fact to its target `ProcessExit` case. Timeout-minted
-/// failures never pass here — the machine, not a partner, makes those.
+/// The v6 raw plan still transports `Process.exit` through its explicit
+/// `variant` bridge until B8. This gate nevertheless judges the exact
+/// `ProcessExit` union now, so no malformed terminal fact can become causal.
 struct PlanGate<'plan> {
-    plan: &'plan crate::plan::ExecutionPlan,
+    plan: &'plan ValidatedExecutionPlan,
 }
 
-impl crate::boundary::OutcomeGate for PlanGate<'_> {
-    fn admit(
-        &self,
-        connector: &node::Path,
-        outcome: &crate::boundary::CallOutcome,
-    ) -> Result<(), String> {
-        let CallOutcome::Failure(error) = outcome else {
-            return Ok(());
-        };
-        let process = self
+impl crate::boundary::CompletionGate for PlanGate<'_> {
+    fn admit(&self, connector: &node::Path, completion: &Completion) -> Result<(), String> {
+        let Some((index, planned)) = self
             .plan
+            .plan()
             .nodes
             .iter()
-            .find(|node| &node.path == connector)
-            .and_then(crate::plan::Node::connector)
-            .is_some_and(|spec| spec.contract == "Process");
-        if process && crate::boundary::legacy_process_failure_exit_case(&error.kind).is_some() {
-            Ok(())
-        } else {
-            Err(format!(
-                "`{}` has no ProcessExit migration case for `{connector}`",
-                error.kind
-            ))
+            .enumerate()
+            .find(|(_, node)| &node.path == connector)
+        else {
+            return Err(format!("`{connector}` is absent from the validated plan"));
+        };
+        let Some(spec) = planned.connector() else {
+            return Err(format!("`{connector}` is not a connector"));
+        };
+        if spec.contract != "Process" {
+            return Err(format!(
+                "the active Partner does not serve `{}` completions",
+                spec.contract
+            ));
         }
+        let slot =
+            Slot::new(u32::try_from(index).map_err(|_| {
+                format!("the slot of `{connector}` is not representable by the plan")
+            })?);
+        let exact_exit = crate::boundary::process_exit_type()
+            .map_err(|error| format!("the ProcessExit contract is invalid: {error}"))?;
+        for output in completion.outputs() {
+            let resolved = self
+                .plan
+                .resolved_ports()
+                .node(slot)
+                .and_then(|ports| ports.iter().find(|port| port.port() == &output.port))
+                .ok_or_else(|| {
+                    format!(
+                        "`{connector}` has no resolved port `{}`",
+                        output.port.name()
+                    )
+                })?;
+            if resolved.direction() != node::Direction::Output {
+                return Err(format!(
+                    "`{connector}.{}` is not an output port",
+                    output.port.name()
+                ));
+            }
+            let expected = if output.port.name() == "exit" {
+                &exact_exit
+            } else {
+                resolved.ty()
+            };
+            if output.port.name() == "exit" && !matches!(&output.data, Data::Materialized(_)) {
+                return Err(format!(
+                    "`{connector}.exit` must carry a materialized terminal union"
+                ));
+            }
+            if let Data::Materialized(value) = &output.data
+                && let Some(violation) = expected.violation(output.port.name(), value)
+            {
+                return Err(format!(
+                    "`{connector}.{}` refuses the completion value: {violation}",
+                    output.port.name()
+                ));
+            }
+            if let Data::Materialized(value) = &output.data {
+                let from = EndpointRef {
+                    node: Some(slot),
+                    port: output.port.clone(),
+                };
+                crate::runtime::crossing_pins_hold(self.plan, &from, value)
+                    .map_err(|refused| refused.into_fault().to_string())?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -208,7 +252,7 @@ pub struct Observed {
     pub envelope: Envelope,
 }
 
-/// One won closure and the trigger its outcome transaction fires
+/// One won closure and the trigger its completion transaction fires
 /// under: `p:in` for a partner answer, `l:timeout` for an expired
 /// budget.
 #[derive(Debug, Clone, PartialEq)]
@@ -271,10 +315,10 @@ pub struct Vm<'plan> {
     state: PartitionState,
     dispatcher: Dispatcher,
     /// Requests delivered to a connector, held until their call
-    /// settles: the outcome transaction consumes this cursor, and the
+    /// settles: the completion transaction consumes this cursor, and the
     /// connector's mailbox stays claimed the whole time.
     pending: BTreeMap<CallRef, PendingCall>,
-    /// Won closures awaiting their outcome transaction — replayable:
+    /// Won closures awaiting their completion transaction — replayable:
     /// an entry leaves this queue only when its transaction commits.
     settled: VecDeque<SettledEntry>,
     /// The machine's virtual date, in nanoseconds; only
@@ -444,9 +488,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         partner: &mut dyn Partner,
     ) -> Result<PumpReport, VmError> {
-        let gate = PlanGate {
-            plan: self.plan.plan(),
-        };
+        let gate = PlanGate { plan: self.plan };
         let batch = self
             .dispatcher
             .pump(journal, partner, &gate)
@@ -546,12 +588,7 @@ impl<'plan> Vm<'plan> {
                     call_ref,
                     connector_path: intent.connector_path,
                     emitting_id: intent.emitting_id,
-                    port: node::Port::new("err")
-                        .unwrap_or_else(|_| unreachable!("`err` is a valid port")),
-                    outcome: CallOutcome::Failure(crate::boundary::TypedError {
-                        kind: String::from(TIMEOUT_EXPIRED),
-                        data: Data::materialized(crate::envelope::Value::Map(BTreeMap::new())),
-                    }),
+                    completion: Completion::process_exit(ProcessExit::TimeoutExpired),
                 },
                 trigger: node::Trigger::Lifecycle(node::Lifecycle::Timeout),
             });
@@ -560,7 +597,7 @@ impl<'plan> Vm<'plan> {
         // Still queued: the queue time consumed the whole budget.
         // The call-closed rule applies even to a call that expires
         // before it started (execution-model §8): the call OPENS and
-        // CLOSES with a Timeout fact, and the outcome transaction
+        // CLOSES with a Timeout fact, and the completion transaction
         // fires under `l:timeout` — the same causality as any expiry.
         // Journal facts come first; the mailbox is touched only after
         // they hold, so a refusal loses nothing.
@@ -625,11 +662,22 @@ impl<'plan> Vm<'plan> {
                         return Ok(());
                     };
                     let executor = TransactionExecutor::new(self.plan, self.graph_version);
-                    executor.typed_error_transaction(
-                        slot,
-                        queued,
-                        "DecodeError",
-                        "the request cannot be framed",
+                    let trigger = node::Trigger::Port(queued.port.clone());
+                    let connector_path = &self.plan.nodes[slot.index()].path;
+                    let completion = Completion::process_exit(ProcessExit::DecodeFailed {
+                        message: String::from("the request cannot be framed"),
+                        line: None,
+                    });
+                    executor.connector_completion(
+                        connector_path,
+                        queued.envelope.meta().sys().id(),
+                        &completion,
+                        &trigger,
+                        queued.envelope.meta(),
+                        ConsumedPosition {
+                            edge: queued.edge.clone(),
+                            seq: queued.seq,
+                        },
                     )
                 };
                 self.validate_and_reserve_emissions(slot, &outcome.record)?;
@@ -672,12 +720,7 @@ impl<'plan> Vm<'plan> {
                         call_ref,
                         connector_path,
                         emitting_id,
-                        port: node::Port::new("err")
-                            .unwrap_or_else(|_| unreachable!("`err` is a valid port")),
-                        outcome: CallOutcome::Failure(crate::boundary::TypedError {
-                            kind: String::from(TIMEOUT_EXPIRED),
-                            data: Data::materialized(crate::envelope::Value::Map(BTreeMap::new())),
-                        }),
+                        completion: Completion::process_exit(ProcessExit::TimeoutExpired),
                     },
                     trigger: node::Trigger::Lifecycle(node::Lifecycle::Timeout),
                 });
@@ -699,10 +742,11 @@ impl<'plan> Vm<'plan> {
         &self.outputs
     }
 
-    /// Legacy pre-B7 envelope-only view of the root sink. Any output whose
-    /// resolved policy is `RootSink` surfaces here; its port remains present
-    /// in the transaction and [`Self::observations`]. B7 replaces the
-    /// failure-only convenience surface together with `CallOutcome`.
+    /// Legacy envelope-only view of the conventional `err` root sink.
+    ///
+    /// `exit` is an independent ordinary port and remains visible, with its
+    /// name, through [`Self::observations`]; terminal facts are never folded
+    /// into this stderr-shaped compatibility view.
     #[must_use]
     pub fn errors(&self) -> &[Envelope] {
         &self.errors
@@ -729,7 +773,7 @@ impl<'plan> Vm<'plan> {
         !self.pending.is_empty()
     }
 
-    /// One won closure becomes the connector's outcome transaction.
+    /// One won closure becomes the connector's completion transaction.
     /// The event leaves the queue only after its commit; every
     /// integrity check happens before.
     fn settle_next(&mut self, journal: &mut dyn Journal) -> Result<(), VmError> {
@@ -743,39 +787,25 @@ impl<'plan> Vm<'plan> {
             return Err(VmError::MissingPending(event.call_ref));
         };
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
-        // A materialized partner answer crosses the connector's
-        // fan-out like any content: every destination pin is judged
-        // BEFORE the outcome commits, and a breach leaves as the
-        // typed error the machine already speaks — never a silent
-        // crossing.
-        if let CallOutcome::Success(Data::Materialized(value)) = &event.outcome {
-            let out = node::Port::new("out").unwrap_or_else(|_| unreachable!("a valid port"));
+        // The dispatcher gate checked every materialized draft before the
+        // closure became causal. This is the typed belt for machine-minted
+        // completions (timeouts) and for any future in-memory caller.
+        for output in event.completion.outputs() {
+            let Data::Materialized(value) = &output.data else {
+                continue;
+            };
             let from = EndpointRef {
                 node: Some(slot),
-                port: out,
+                port: output.port.clone(),
             };
-            if let Err(fault) = crate::runtime::crossing_pins_hold(self.plan, &from, value)
+            crate::runtime::crossing_pins_hold(self.plan, &from, value)
                 .map_err(crate::runtime::PinViolation::into_fault)
-            {
-                let outcome = executor.typed_error_transaction(
-                    slot,
-                    request,
-                    "RuntimeFault",
-                    &alloc::string::ToString::to_string(&fault),
-                );
-                self.validate_and_reserve_emissions(slot, &outcome.record)?;
-                journal
-                    .commit(outcome.record.clone())
-                    .map_err(VmError::Journal)?;
-                self.settled.pop_front();
-                self.pending.remove(&event.call_ref);
-                self.scheduler.mailboxes.release(slot, "");
-                self.route_emissions(slot, &outcome.record);
-                return Ok(());
-            }
+                .map_err(VmError::Fault)?;
         }
-        let outcome = executor.connector_outcome(
-            &event,
+        let outcome = executor.connector_completion(
+            &event.connector_path,
+            event.emitting_id,
+            &event.completion,
             &trigger,
             request.envelope.meta(),
             ConsumedPosition {
@@ -851,8 +881,8 @@ impl<'plan> Vm<'plan> {
         // The machine prepares ONCE, in the boundary vocabulary: the
         // sealed digest and the bytes the partner will receive are
         // one value carried by the intent — nobody recomputes. An
-        // unframeable request is a typed decode error before any
-        // open fact exists.
+        // unframeable request completes on `exit` before any open
+        // fact exists: stderr is not a lifecycle channel.
         let prepared = match crate::boundary::prepare_request(
             crate::boundary::RequestCodec::of(spec),
             delivery.envelope.data(),
@@ -860,8 +890,21 @@ impl<'plan> Vm<'plan> {
             Ok(prepared) => prepared,
             Err(message) => {
                 let executor = TransactionExecutor::new(self.plan, self.graph_version);
-                let outcome =
-                    executor.typed_error_transaction(slot, delivery, "DecodeError", &message);
+                let completion = Completion::process_exit(ProcessExit::DecodeFailed {
+                    message,
+                    line: None,
+                });
+                let outcome = executor.connector_completion(
+                    &planned.path,
+                    emitting_id,
+                    &completion,
+                    &node::Trigger::Port(delivery.port.clone()),
+                    delivery.envelope.meta(),
+                    ConsumedPosition {
+                        edge: delivery.edge.clone(),
+                        seq: delivery.seq,
+                    },
+                );
                 self.validate_and_reserve_emissions(slot, &outcome.record)?;
                 journal
                     .commit(outcome.record.clone())
@@ -918,13 +961,12 @@ impl<'plan> Vm<'plan> {
     /// The FINAL gate every commit candidate passes — validation
     /// and reservation, in that order, both named by this function.
     ///
-    /// Pin conformance runs at TWO levels, deliberately: the
-    /// RECOVERABLE level at construction (an operator's or a
-    /// partner's value breach converts into a typed error on `err`)
-    /// and THIS final, non-recursive level — a synthesized error
-    /// that itself violates its wiring cannot become another typed
-    /// error on the same wiring, so it surfaces as the machine
-    /// fault it is and NOTHING commits.
+    /// Pin conformance runs at TWO levels, deliberately: the recoverable
+    /// construction level converts an operator value fault into its ordinary
+    /// `RuntimeFault` output, while [`CompletionGate`] refuses an invalid
+    /// partner draft before closure. THIS final, non-recursive level catches
+    /// a violated plan/runtime invariant; it cannot manufacture another
+    /// emission on the same bad wiring, so NOTHING commits.
     fn validate_and_reserve_emissions(
         &self,
         slot: Slot,
@@ -1012,7 +1054,9 @@ impl<'plan> Vm<'plan> {
             // The resolved port policy, never its spelling, decides whether
             // an unclaimed output reaches the root sink.
             if claimed == 0 && root_sink {
-                self.errors.push(emission.envelope.clone());
+                if emission.port.name() == "err" {
+                    self.errors.push(emission.envelope.clone());
+                }
                 self.observed.push(Observed {
                     node: None,
                     port: emission.port.clone(),

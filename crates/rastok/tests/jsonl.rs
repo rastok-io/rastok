@@ -1,6 +1,6 @@
 //! The jsonl codec on `Process`, job mode (M1 item 2,
 //! D-2026-08-11-1): one canonical JSON line out, decoded lines back
-//! as `array<variant>`, exact numbers surviving the round trip, and
+//! as repeated `variant` emissions, exact numbers surviving the round trip, and
 //! every refusal typed with the offending line.
 
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -15,7 +15,14 @@ use rastok::plan::GraphVersion;
 use rastok::runtime::vm::Vm;
 
 /// Injects, drains, and pumps a REAL child process to quiescence.
-fn drive(source: &str, data: Value) -> (Vec<rastok::runtime::vm::BoundaryOutput>, Vec<Value>) {
+fn drive(
+    source: &str,
+    data: Value,
+) -> (
+    Vec<rastok::runtime::vm::BoundaryOutput>,
+    Vec<Value>,
+    Vec<Value>,
+) {
     let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -57,7 +64,25 @@ fn drive(source: &str, data: Value) -> (Vec<rastok::runtime::vm::BoundaryOutput>
             Data::Encoded { bytes, .. } => Value::Text(String::from_utf8_lossy(bytes).into_owned()),
         })
         .collect();
-    (vm.outputs().to_vec(), errors)
+    let exits = vm
+        .observations()
+        .iter()
+        .filter(|observed| observed.node.is_none() && observed.port.name() == "exit")
+        .map(|observed| match observed.envelope.data() {
+            Data::Materialized(value) => value.clone(),
+            Data::Encoded { .. } => panic!("Process.exit is materialized"),
+        })
+        .collect();
+    (vm.outputs().to_vec(), errors, exits)
+}
+
+fn assert_exit<'a>(exits: &'a [Value], expected: &str) -> &'a [(String, Value)] {
+    assert_eq!(exits.len(), 1, "one terminal fact per Process invocation");
+    let Value::TaggedUnion(tagged) = &exits[0] else {
+        panic!("Process.exit carries ProcessExit");
+    };
+    assert_eq!(tagged.case, expected);
+    &tagged.payload
 }
 
 const CAT_JSONL: &str = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
@@ -65,7 +90,7 @@ const CAT_JSONL: &str = "graph g : App {\n  connector shell : Process {\n    mod
 #[test]
 fn a_structured_value_round_trips_through_a_real_process() {
     // `cat` echoes the canonical line back: the reply is the decoded
-    // array of ONE variant, numbers exact — the decimal survives.
+    // one variant emission, numbers exact — the decimal survives.
     let request = Value::Struct(vec![
         (
             String::from("price"),
@@ -76,17 +101,10 @@ fn a_structured_value_round_trips_through_a_real_process() {
         ),
         (String::from("n"), Value::Int(42)),
     ]);
-    let (outputs, errors) = drive(CAT_JSONL, request);
+    let (outputs, errors, exits) = drive(CAT_JSONL, request);
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(outputs.len(), 1);
-    let Data::Materialized(Value::Array(items)) = outputs[0].envelope.data() else {
-        panic!(
-            "a jsonl job replies array<variant>: {:?}",
-            outputs[0].envelope.data()
-        );
-    };
-    assert_eq!(items.len(), 1, "one line, one variant");
-    let Value::Map(fields) = &items[0] else {
+    let Data::Materialized(Value::Map(fields)) = outputs[0].envelope.data() else {
         panic!("the JSON model reads objects as maps");
     };
     assert_eq!(fields.get("n"), Some(&Value::Int(42)));
@@ -98,74 +116,76 @@ fn a_structured_value_round_trips_through_a_real_process() {
         }),
         "the exact decimal survives the wire"
     );
+    assert_exit(&exits, "Exited");
 }
 
 #[test]
 fn multiple_lines_decode_to_multiple_variants() {
-    // A process emitting several JSON lines: each is one variant of
-    // the reply array, in order.
+    // A process emitting several JSON lines: each is one ordinary `out`
+    // emission, in order.
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"1\\n{\\\"a\\\":2}\\n[3]\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Int(1));
+    let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
-    let Data::Materialized(Value::Array(items)) = outputs[0].envelope.data() else {
-        panic!("array<variant>");
-    };
+    let items: Vec<&Value> = outputs
+        .iter()
+        .map(|output| match output.envelope.data() {
+            Data::Materialized(value) => value,
+            Data::Encoded { .. } => panic!("jsonl materializes its frames"),
+        })
+        .collect();
     assert_eq!(items.len(), 3);
-    assert_eq!(items[0], Value::Int(1));
-    assert!(matches!(&items[1], Value::Map(fields) if fields.get("a") == Some(&Value::Int(2))));
-    assert_eq!(items[2], Value::Array(vec![Value::Int(3)]));
+    assert_eq!(items[0], &Value::Int(1));
+    assert!(matches!(items[1], Value::Map(fields) if fields.get("a") == Some(&Value::Int(2))));
+    assert_eq!(items[2], &Value::Array(vec![Value::Int(3)]));
+    assert_exit(&exits, "Exited");
 }
 
 #[test]
 fn an_unparseable_line_is_a_typed_decode_error() {
-    // `echo not-json` answers garbage: the reply is a DecodeError
+    // `echo not-json` answers garbage: the terminal fact is DecodeFailed
     // carrying the offending line — never a silent skip.
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"echo\"\n    args = [\"not json\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Int(1));
+    let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(outputs.len(), 0, "nothing crosses on out");
-    assert_eq!(errors.len(), 1, "the typed error leaves on err");
-    let Value::Map(fields) = &errors[0] else {
-        panic!("a typed error payload");
-    };
-    assert_eq!(
-        fields.get("kind"),
-        Some(&Value::Text(String::from("DecodeError")))
-    );
-    let Some(Value::Map(detail)) = fields.get("detail") else {
-        panic!("the offending line rides the payload: {fields:?}");
-    };
-    let Some(Value::Text(message)) = detail.get("message") else {
+    assert!(errors.is_empty(), "stderr is independent of decoding");
+    let detail = assert_exit(&exits, "DecodeFailed");
+    let Some((_, Value::Text(message))) = detail.iter().find(|(name, _)| name == "message") else {
         panic!("a message field: {detail:?}");
     };
-    assert!(message.contains("not json"), "the line is named: {message}");
+    assert!(
+        message.contains("does not parse"),
+        "the refusal is named: {message}"
+    );
+    assert_eq!(
+        detail.iter().find(|(name, _)| name == "line"),
+        Some(&(
+            String::from("line"),
+            Value::StructuralUnion {
+                branch: 1,
+                value: Box::new(Value::Text(String::from("not json"))),
+            }
+        )),
+        "the offending line remains structured data"
+    );
 }
 
 #[test]
 fn an_unserializable_request_refuses_before_any_spawn() {
     // Bytes have no JSON form: the request refuses TYPED before any
     // open fact — no child ever spawns.
-    let (outputs, errors) = drive(CAT_JSONL, Value::Bytes(vec![1, 2]));
+    let (outputs, errors, exits) = drive(CAT_JSONL, Value::Bytes(vec![1, 2]));
     assert_eq!(outputs.len(), 0);
-    assert_eq!(errors.len(), 1, "DecodeError on err");
-    let Value::Map(fields) = &errors[0] else {
-        panic!("typed");
-    };
-    assert_eq!(
-        fields.get("kind"),
-        Some(&Value::Text(String::from("DecodeError")))
-    );
+    assert!(errors.is_empty());
+    assert_exit(&exits, "DecodeFailed");
 }
 
 #[test]
-fn empty_stdout_is_the_empty_array() {
+fn empty_stdout_emits_no_out_frame() {
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"true\"\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Int(1));
+    let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new());
-    assert_eq!(
-        outputs[0].envelope.data(),
-        &Data::materialized(Value::Array(Vec::new())),
-        "no lines, the empty array"
-    );
+    assert!(outputs.is_empty(), "no line means no out envelope");
+    assert_exit(&exits, "Exited");
 }
 
 #[test]
@@ -189,9 +209,8 @@ fn the_request_digest_is_canonical_across_spellings() {
     );
 }
 
-/// The one sift graph BOTH worlds run: a jsonl reply is
-/// `array<variant>`, so the graph reads `data[0]` — in the Lab
-/// against a mock, and against a real `cat` echoing the line back.
+/// The one sift graph BOTH worlds run: each jsonl line is one `variant`
+/// delivery — in the Lab against a mock, and against a real `cat`.
 const SIFT_GRAPH: &str = r#"
 graph g : App {
   connector shell : Process {
@@ -202,7 +221,7 @@ graph g : App {
   }
 
   operator sift {
-    on in where data[0]["status"] == "ok" { out = data[0]["value"] }
+    on in where data["status"] == "ok" { out = data["value"] }
   }
 
   . -> shell
@@ -214,15 +233,18 @@ graph g : App {
 #[test]
 fn a_mocked_jsonl_graph_runs_in_the_lab() {
     // The Lab replaces the process — but the mock must speak the
-    // WIRE's shape (`array<variant>`, D-2026-08-11-1): the reply is
+    // WIRE's unit shape (`variant`): the reply is
     // written as the real decode would deliver it, and the graph
-    // reads `data[0]` the same way in both worlds.
+    // read the same way in both worlds.
     let source = format!(
         r#"{SIFT_GRAPH}
 lab g {{
   simulation probing on app {{
     mock shell {{
-      on in {{ out = [{{"status": "ok", "value": 7}}] }}
+      on in {{
+        out = {{"status": "ok", "value": 7}}
+        exit = Exited {{ exit_code = 0, signal = null }}
+      }}
     }}
 
     scenario s "a structured reply routes by its fields" {{
@@ -251,12 +273,12 @@ lab g {{
 #[test]
 fn the_same_sift_graph_runs_against_a_real_child() {
     // `cat` echoes the canonical line; the decode delivers
-    // `[{"status": "ok", "value": 7}]` and the SAME graph the mock
+    // `{"status": "ok", "value": 7}` and the SAME graph the mock
     // satisfied sifts the real reply — mock and world, one shape.
     let mut fields = std::collections::BTreeMap::new();
     fields.insert(String::from("status"), Value::Text(String::from("ok")));
     fields.insert(String::from("value"), Value::Int(7));
-    let (outputs, errors) = drive(SIFT_GRAPH, Value::Map(fields));
+    let (outputs, errors, exits) = drive(SIFT_GRAPH, Value::Map(fields));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(outputs.len(), 1);
     assert_eq!(
@@ -264,19 +286,21 @@ fn the_same_sift_graph_runs_against_a_real_child() {
         &Data::materialized(Value::Int(7)),
         "the sifted value crossed both worlds identically"
     );
+    assert_exit(&exits, "Exited");
 }
 
 #[test]
-fn a_record_mock_reply_on_jsonl_refuses_at_check() {
-    // A mock answering a bare record over a jsonl connector is the
-    // false green the contract pin closes: the real world would
-    // deliver an array, so the checker refuses the reply's shape.
+fn a_record_mock_reply_is_one_jsonl_variant_not_a_batch() {
+    // B7 removes the batch carrier: one record is one variant emission.
     let source = format!(
         r#"{SIFT_GRAPH}
 lab g {{
   simulation probing on app {{
     mock shell {{
-      on in {{ out = {{ status = "ok", value = 7 }} }}
+      on in {{
+        out = {{ status = "ok", value = 7 }}
+        exit = Exited {{ exit_code = 0, signal = null }}
+      }}
     }}
 
     scenario s "never runs" {{
@@ -287,32 +311,33 @@ lab g {{
 }}
 "#
     );
-    let bag = compile(
+    let compilation = compile(
         &[source.as_str()],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect_err("the shape must refuse");
-    assert!(
-        bag.diagnostics()
-            .iter()
-            .any(|d| d.code().as_str() == "E-PORT-TYPE"),
-        "the contract pin speaks: {bag:?}"
+    .expect("one record inhabits the jsonl variant pin");
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
     );
+    assert!(runs[0].report.passed(), "{:#?}", runs[0].report.failures);
 }
 
 #[test]
 fn a_null_line_is_the_null_value() {
     // `null` is a JSON value like any other (D-2026-08-11-1): a
     // line carrying it decodes to the null element, never a
-    // DecodeError.
+    // DecodeFailed.
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"printf\"\n    args = [\"null\\n\"]\n    codec = jsonl\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  . -> shell -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Int(1));
+    let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(
         outputs[0].envelope.data(),
-        &Data::materialized(Value::Array(vec![Value::Null])),
-        "null rides the array"
+        &Data::materialized(Value::Null),
+        "null rides its own frame"
     );
+    assert_exit(&exits, "Exited");
 }
 
 #[test]
@@ -321,7 +346,7 @@ fn json_null_is_an_executable_value() {
     // `null` emission stays deferred with the null static type —
     // but null inside a document must EXECUTE, not merely compile.
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = json! [null] }\n  }\n  . -> o -> .\n}\n";
-    let (outputs, errors) = drive(source, Value::Int(1));
+    let (outputs, errors, _) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(
         outputs[0].envelope.data(),
@@ -358,13 +383,14 @@ graph g : App {
   probe -> .
 }
 "#;
-    let (outputs, errors) = drive(source, Value::Int(1));
+    let (outputs, errors, exits) = drive(source, Value::Int(1));
     assert_eq!(errors, Vec::<Value>::new(), "no fault");
     assert_eq!(outputs.len(), 1, "the token survived the call");
     assert_eq!(
         outputs[0].envelope.data(),
         &Data::materialized(Value::Text(String::from("tok")))
     );
+    assert_exit(&exits, "Exited");
 }
 
 #[test]
@@ -397,7 +423,10 @@ graph g : App {
 lab g {
   simulation probing on app {
     mock shell {
-      on in { out = [1] }
+      on in {
+        out = 1
+        exit = Exited { exit_code = 0, signal = null }
+      }
     }
 
     scenario s "the token survives the mock" {

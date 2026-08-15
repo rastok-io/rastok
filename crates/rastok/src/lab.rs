@@ -8,7 +8,7 @@
 //! test double.
 
 use crate::boundary::{
-    CallOutcome, Draft, InboundSubmission, IngressAuthority, Intent, Partner, Response,
+    Completion, Draft, InboundSubmission, IngressAuthority, Intent, Partner, PortOutput, Response,
     SubmissionSequence,
 };
 use crate::compiler::hir::{
@@ -207,7 +207,7 @@ fn check_expectation(expectation: &Expectation, window: &[Observed]) -> Option<S
     let deliveries: Vec<&Observed> = window
         .iter()
         .filter(|observed| match &expectation.target {
-            ExpectTarget::RootErr => observed.node.is_none() && observed.port.name() == "err",
+            ExpectTarget::RootSink(port) => observed.node.is_none() && observed.port == *port,
             ExpectTarget::Boundary(port) => observed.node.is_none() && observed.port == *port,
             ExpectTarget::Node { path, port } => {
                 observed.node.as_ref() == Some(path) && observed.port == *port
@@ -356,7 +356,7 @@ struct MockPartner<'lab> {
 }
 
 impl MockPartner<'_> {
-    fn answer(&mut self, intent: &Intent, request: &Envelope) -> Option<CallOutcome> {
+    fn answer(&mut self, intent: &Intent, request: &Envelope) -> Option<Completion> {
         let Some(mock) = self.mocks.get(&intent.connector_path) else {
             self.faults.push(format!(
                 "an uncovered call reached `{}` (digest {:02x?}…); mock it or script silence",
@@ -434,8 +434,9 @@ impl MockPartner<'_> {
         request: &Envelope,
         mut env: BTreeMap<String, expr::EvalValue>,
         slot: &runtime::DataSlot<'_>,
-    ) -> Option<CallOutcome> {
+    ) -> Option<Completion> {
         use crate::compiler::hir::Statement;
+        let mut outputs = Vec::new();
         for statement in &handler.body {
             match statement {
                 Statement::Let { name, value } => match self.lazy_eval(value, &env, slot) {
@@ -451,19 +452,32 @@ impl MockPartner<'_> {
                     // The checker refuses vars on a mock's synthetic
                     // node; nothing reaches here.
                 }
-                Statement::Emit { value, .. } => {
-                    return match self.mock_data(value, request, &env, slot) {
-                        Ok(Some(data)) => Some(CallOutcome::Success(data)),
-                        Ok(None) => None,
+                Statement::Emit { port, value } => {
+                    match self.mock_data(value, request, &env, slot) {
+                        Ok(Some(data)) => outputs.push(PortOutput {
+                            port: port.clone(),
+                            data,
+                        }),
+                        Ok(None) => {}
                         Err(message) => {
                             self.faults.push(message);
-                            None
+                            return None;
                         }
-                    };
+                    }
                 }
             }
         }
-        None
+        if outputs.is_empty() {
+            return None;
+        }
+        match Completion::try_new(outputs) {
+            Ok(completion) => Some(completion),
+            Err(error) => {
+                self.faults
+                    .push(format!("the mock completion is invalid: {error}"));
+                None
+            }
+        }
     }
 
     /// One lazily-bound evaluation; an unreadable request keeps its
@@ -546,10 +560,10 @@ impl MockPartner<'_> {
 
 impl Partner for MockPartner<'_> {
     fn start(&mut self, intent: &Intent, request: &Envelope) {
-        if let Some(outcome) = self.answer(intent, request) {
+        if let Some(completion) = self.answer(intent, request) {
             self.pending.push(Response {
                 call_ref: intent.call_ref,
-                outcome,
+                completion,
             });
         }
     }
@@ -568,7 +582,7 @@ mod tests {
     /// Drives the scripted partner directly with an OPAQUE request:
     /// the branch and statement structure decides the demand, so a
     /// pre-scan of every handler would fail both cases below.
-    fn opaque_answer(mock_body: &str) -> (Option<CallOutcome>, Vec<String>) {
+    fn opaque_answer(mock_body: &str) -> (Option<Completion>, Vec<String>) {
         let source = format!(
             "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }}\n  . -> echo -> .\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
         );
@@ -614,11 +628,11 @@ mod tests {
         // `data`. The losing branch's text must not force the opaque
         // request to decode.
         let (outcome, faults) = opaque_answer(
-            "      on in where meta.sys.graph_version == 1 { out = \"ok\" }\n      on in where data == \"x\" { out = . }",
+            "      on in where meta.sys.graph_version == 1 {\n        out = \"ok\"\n        exit = Exited { exit_code = 0, signal = null }\n      }\n      on in where data == \"x\" {\n        out = .\n        exit = Exited { exit_code = 0, signal = null }\n      }",
         );
         assert!(faults.is_empty(), "no forced decode: {faults:?}");
         assert!(
-            matches!(outcome, Some(CallOutcome::Success(_))),
+            outcome.is_some_and(|completion| completion.outputs().len() == 2),
             "the meta-only branch answered"
         );
     }
@@ -629,33 +643,30 @@ mod tests {
         // `val copy = data; out = copy` both ship the opaque
         // request's REPRESENTATION, exactly like the machine.
         for body in [
-            "      on in { out = data }",
-            "      on in {\n        val copy = data\n        out = copy\n      }",
+            "      on in {\n        out = data\n        exit = Exited { exit_code = 0, signal = null }\n      }",
+            "      on in {\n        val copy = data\n        out = copy\n        exit = Exited { exit_code = 0, signal = null }\n      }",
         ] {
             let (outcome, faults) = opaque_answer(body);
             assert!(faults.is_empty(), "`{body}`: no forced decode: {faults:?}");
             assert!(
-                matches!(
-                    outcome,
-                    Some(CallOutcome::Success(Data::Encoded { ref bytes, .. }))
-                        if bytes.as_slice() == b"\x01\x02"
-                ),
+                outcome.is_some_and(|completion| matches!(
+                    &completion.outputs()[0].data,
+                    Data::Encoded { bytes, .. } if bytes.as_slice() == b"\x01\x02"
+                )),
                 "`{body}` must relay the representation"
             );
         }
     }
 
     #[test]
-    fn a_statement_past_the_reply_never_demands_the_request() {
-        // The reply returns at the first emission; a later statement
-        // reading `data` is never reached — and never pre-read.
-        let (outcome, faults) =
-            opaque_answer("      on in {\n        out = .\n        val forced = data\n      }");
-        assert!(faults.is_empty(), "nothing past the reply ran: {faults:?}");
-        assert!(
-            matches!(outcome, Some(CallOutcome::Success(Data::Encoded { .. }))),
-            "the identity reply ships the bytes whole"
+    fn a_mock_evaluates_the_whole_atomic_completion() {
+        // An emission no longer returns from a mock branch: all drafts are
+        // built before one atomic completion is handed to the dispatcher.
+        let (outcome, faults) = opaque_answer(
+            "      on in {\n        out = .\n        val forced = size(data)\n        exit = Exited { exit_code = 0, signal = null }\n      }",
         );
+        assert!(outcome.is_none());
+        assert_eq!(faults.len(), 1, "the later demand is evaluated once");
     }
 
     /// The M0 probe and its lab, in one unit — the graph under test
@@ -685,8 +696,12 @@ lab m0_probe {
     mock echo {
       on in where data == "salut" {
         out = "salut"
+        exit = Exited { exit_code = 0, signal = null }
       }
-      on in { out = . }
+      on in {
+        out = .
+        exit = Exited { exit_code = 0, signal = null }
+      }
     }
 
     scenario roundtrip "one message through a scripted world" {
@@ -702,7 +717,7 @@ lab m0_probe {
       app.in = { text = "salut" }
       expect nothing app.out
       advance duration("5s")
-      expect "the budget expired" app.err where data.kind == "TimeoutExpired"
+      expect "the budget expired" app.exit where data is TimeoutExpired
     }
 
     scenario filtered "an empty text never reaches the world" {

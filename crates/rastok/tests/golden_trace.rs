@@ -8,7 +8,7 @@
 //! decision, never a reflex.
 
 use rastok::boundary::{
-    CallOutcome, Draft, InboundSubmission, IngressAuthority, Intent, Partner, Response,
+    Completion, Draft, InboundSubmission, IngressAuthority, Intent, Partner, ProcessExit, Response,
     SubmissionSequence,
 };
 use rastok::compiler::compile;
@@ -51,7 +51,14 @@ impl Partner for EchoWorld {
     fn start(&mut self, intent: &Intent, _request: &Envelope) {
         self.answers.push(Response {
             call_ref: intent.call_ref,
-            outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"salut")),
+            completion: Completion::process(
+                vec![Data::encoded(Encoding::Raw, *b"salut")],
+                vec![],
+                ProcessExit::Exited {
+                    exit_code: 0,
+                    signal: None,
+                },
+            ),
         });
     }
 

@@ -52,6 +52,15 @@
 > migrated: validation or canonical re-encoding refuses it. The semantic
 > moves and affected goldens are recorded under D-2026-08-14-1. B8 remains the
 > one published v7 boundary.
+> **Private v6 B7 revision (2026-08-15):** Process framing now produces unit
+> outputs (`lines -> text`, `jsonl -> variant`, `bytes -> bytes`), while
+> stderr follows the independently resolved `err_codec`. The in-memory
+> completion gate requires exact `ProcessExit`; only the raw v6 plan row keeps
+> `exit: variant` because the v6 type grammar cannot transport tagged unions.
+> This is one named representation bridge, not the execution contract. The
+> plan remains structurally v6, but effective Process port meaning changes its
+> canonical body and semantic identity; B8 removes the bridge in the single v7
+> type/expression publication.
 > Format v5 (D-2026-08-10-9, landed 2026-08-10): the
 > three-zone metadata write targets, the travelling `app`/`ext`
 > schemas, the content-addressed asset table, expanded named types

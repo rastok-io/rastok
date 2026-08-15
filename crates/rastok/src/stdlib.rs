@@ -61,7 +61,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                     },
                     PortTypeChoice {
                         word: "jsonl",
-                        ty: PortDataType::VariantArray,
+                        ty: PortDataType::Variant,
                     },
                     PortTypeChoice {
                         word: "bytes",
@@ -74,17 +74,27 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             name: "err",
             direction: Direction::Output,
             unwired: UnwiredPolicy::RootSink,
-            // The v6 Partner still sends typed failures through `err`.
-            // B7 replaces this carrier with independently framed stderr.
-            ty: PortTypeRule::Fixed(PortDataType::Variant),
+            ty: PortTypeRule::AttributeSelected {
+                attribute: "err_codec",
+                choices: &[
+                    PortTypeChoice {
+                        word: "lines",
+                        ty: PortDataType::Text,
+                    },
+                    PortTypeChoice {
+                        word: "bytes",
+                        ty: PortDataType::Bytes,
+                    },
+                ],
+            },
         },
         PortContract {
             name: "exit",
             direction: Direction::Output,
             unwired: UnwiredPolicy::RootSink,
-            // The name and sink policy are executable now. B7 constructs
-            // ProcessExit values; B8 publishes the tagged-union wire type.
-            ty: PortTypeRule::Fixed(PortDataType::Variant),
+            // The compiler/checker sees the exact union now. Lowering keeps
+            // only the explicit v6 carrier until B8 publishes the v7 table.
+            ty: PortTypeRule::Fixed(PortDataType::ProcessExit),
         },
     ],
     common: &[
@@ -340,13 +350,12 @@ mod tests {
             ]))
             .expect("the effective Process sheet resolves");
         assert_eq!(ports.len(), 4);
-        assert!(ports.iter().any(|port| {
-            port.port.name() == "exit" && port.ty == Some(crate::datatype::DataType::Variant)
-        }));
-        assert!(matches!(
-            crate::boundary::process_exit_type().expect("the target type is valid"),
-            crate::datatype::DataType::TaggedUnion(_)
-        ));
+        let process_exit = crate::boundary::process_exit_type().expect("the target type is valid");
+        assert!(
+            ports
+                .iter()
+                .any(|port| port.port.name() == "exit" && port.ty.as_ref() == Some(&process_exit))
+        );
     }
 
     #[test]

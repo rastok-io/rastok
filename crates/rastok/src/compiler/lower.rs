@@ -699,6 +699,10 @@ impl Writer<'_> {
         }
         let mut ports: Vec<_> = node.ports.iter().collect();
         ports.sort_by_key(|decl| (decl.port.name(), decl.direction));
+        let process = matches!(
+            &node.role,
+            NodeRole::Connector { trait_name, .. } if trait_name == "Process"
+        );
         self.count(ports.len());
         for decl in ports {
             self.str(decl.port.name());
@@ -712,6 +716,12 @@ impl Writer<'_> {
             // boundary and the var initializers.
             match &decl.ty {
                 None => self.tag(0),
+                Some(_ty) if process && decl.port.name() == "exit" => {
+                    // The v6 identity remains on the explicit variant bridge;
+                    // B8 moves it once with the published tagged-union table.
+                    self.tag(1);
+                    self.ty(&DataType::Variant);
+                }
                 Some(ty) => {
                     self.tag(1);
                     self.ty(ty);
@@ -1094,9 +1104,10 @@ impl Writer<'_> {
     }
 }
 
-/// Adds the one runtime-produced Operator port that has no source emission.
-/// Connector rows already come resolved from their contract without a second
-/// lowering interpretation.
+/// Materializes fixed runtime capability and adapts the one exact type that
+/// v6 cannot yet transport. An untyped Operator `err` receives the derived
+/// RuntimeFault row because the VM is a real producer even when no source
+/// emission names that port.
 fn executable_ports(node: &HirNode) -> Vec<crate::plan::PortDecl> {
     let mut ports = node.ports.clone();
     match &node.role {
@@ -1106,11 +1117,19 @@ fn executable_ports(node: &HirNode) -> Vec<crate::plan::PortDecl> {
                 if err.ty.is_none() {
                     err.ty = Some(DataType::text_map(DataType::Text));
                 }
-            } else if let Ok(err) = node::Port::new("err") {
+            } else {
                 ports.push(crate::plan::PortDecl::root_sink(
-                    err,
+                    node::Port::conventional_err(),
                     Some(DataType::text_map(DataType::Text)),
                 ));
+            }
+        }
+        NodeRole::Connector { trait_name, .. } if trait_name == "Process" => {
+            // B7 checks and executes the exact ProcessExit union. The v6 plan
+            // registry cannot transport tagged unions; B8 removes this one
+            // explicit bridge while publishing v7 categorically.
+            if let Some(exit) = ports.iter_mut().find(|port| port.port.name() == "exit") {
+                exit.ty = Some(DataType::Variant);
             }
         }
         NodeRole::Connector { .. } => {}
@@ -1325,6 +1344,11 @@ graph m0_probe : App {
         // Connector port rows and their routing policies replace the
         // travelling error_set. The Process sheet also materializes
         // `err_codec = lines` before hashing.
+        // DELIBERATE MOVE 2026-08-15 (M1.3 B7): jsonl replies are unit
+        // emissions, stderr has its resolved framing, and every Process
+        // invocation terminates on the explicit `exit` port. The v6 hash
+        // seals that executable bridge while B8 owns the categorical v7
+        // type registry.
         let hash = compile(
             &[M0_PROBE],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1333,7 +1357,7 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "f068bcd1d7b2f0756fceb59b160e8e033bbb7791f39840c4456643fadca97a1a"
+            "77d326e3420851d43486fc81e472146c8f7a849fd187d4d5af9fb7630d3ae250"
         );
     }
 

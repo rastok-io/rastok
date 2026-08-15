@@ -137,7 +137,7 @@ Three consequences worth writing down now:
   atomizes Kafka-in/state/Kafka-out; the moment a processor calls an
   external API, exactly-once stops covering the effect. Rastok's
   journal extends through it: OUTBOUND open before the effect, the
-  gated closure, the outcome transaction — the journal is not a
+  gated completion closure, the completion transaction — the journal is not a
   state changelog but a causal WAL that includes external calls,
   timers, and timeouts. In one line: Rastok ≈ Kafka Streams keyed
   state + virtual actors + a causal journal + connectors with an

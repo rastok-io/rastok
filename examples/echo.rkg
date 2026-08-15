@@ -22,7 +22,10 @@ graph echo : App {
 lab echo {
   simulation smoke on app {
     mock shell {
-      on in { out = . }
+      on in {
+        out = .
+        exit = Exited { exit_code = 0, signal = null }
+      }
     }
 
     scenario roundtrip "a line echoes back" {
@@ -43,7 +46,7 @@ lab echo {
       }
       app.in = "salut"
       advance duration("5s")
-      expect "the typed timeout" app.err where data.kind == "TimeoutExpired"
+      expect "the typed timeout" app.exit where data is TimeoutExpired
     }
   }
 }

@@ -39,7 +39,10 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE MOVE 2026-08-15 (M1.3 B5): the complete resolved
 // Process port contract replaces that set, carries routing policy,
 // and injects `err_codec = lines` before hashing.
-const JSONL_HASH: &str = "4eacb55c2ced016d61196a4c259c66e17cde33e846954780b53e76241ff85697";
+// DELIBERATE MOVE 2026-08-15 (M1.3 B7): jsonl stdout is a sequence of
+// unit `variant` emissions and each invocation adds one typed terminal
+// `exit`; the completion closure seals both ordered drafts.
+const JSONL_HASH: &str = "87d13844117ce1e379b686a1036d9c054cf2c3aa274433989122ed47c96660d2";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

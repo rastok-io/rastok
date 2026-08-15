@@ -10,10 +10,9 @@
 //! behind the same trait, which is the point: a simulation exercises
 //! exactly the machinery a run does, minus this file.
 
-use crate::boundary::{CallOutcome, Intent, Partner, Response, TypedError};
+use crate::boundary::{Completion, Intent, OutputOverflowReason, Partner, ProcessExit, Response};
 use crate::envelope::{Data, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
-use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -31,6 +30,7 @@ struct ProcessSettings {
     command: String,
     args: Vec<String>,
     codec: crate::boundary::RequestCodec,
+    err_codec: crate::boundary::RequestCodec,
     max_output: u64,
 }
 
@@ -52,13 +52,6 @@ pub enum ProcessSettingsError {
     ArgNotText(String),
     /// A codec word outside the dispatch domain.
     UnknownCodec(String),
-    /// A contract-valid framing whose B7 adapter path is not active yet.
-    FramingDeferred {
-        /// Selecting attribute.
-        attribute: &'static str,
-        /// Selected word.
-        word: String,
-    },
     /// `max_output` is not a declared byte size.
     NotASize(String),
     /// A budget this host's `Vec` cannot even EXPRESS
@@ -98,10 +91,6 @@ impl core::fmt::Display for ProcessSettingsError {
             Self::UnknownCodec(word) => {
                 write!(f, "`{word}` is outside the Process framing domains")
             }
-            Self::FramingDeferred { attribute, word } => write!(
-                f,
-                "`{attribute} = {word}` is a valid Process contract choice; its adapter framing lands in M1.3 B7"
-            ),
             Self::NotASize(text) => write!(f, "max_output `{text}` is not a size"),
             Self::HostCapacity(size) => write!(
                 f,
@@ -112,12 +101,10 @@ impl core::fmt::Display for ProcessSettingsError {
     }
 }
 
-/// Every failure the private pre-B7 adapter can hand the machine, with its
-/// payload shape sealed beside its kind. A new emission site cannot exist
-/// without a variant, `into_outcome` is the only `TypedError` builder, and
-/// tests prove every variant has an explicit target `ProcessExit` case. This
-/// prevents a real response from being rejected after the dispatcher consumed
-/// it and stranding the open call.
+/// Every terminal Process fact that is not an observed child status.
+///
+/// The projection is the ordinary `ProcessExit` union. stderr is deliberately
+/// absent: it is framed independently and emitted only on `err`.
 #[derive(Debug, Clone, PartialEq)]
 enum ProcessFailure {
     /// The OS refused a launch — or an intent reached an unbound
@@ -125,18 +112,16 @@ enum ProcessFailure {
     SpawnFailed { message: String },
     /// The reply's CONTENT is invalid: JSON, UTF-8, framing — the
     /// offending detail rides the payload.
-    DecodeError { message: String },
+    DecodeFailed {
+        message: String,
+        line: Option<String>,
+    },
     /// A pipe READ failed mid-run: the capture is incomplete for an
     /// I/O reason, not a content one. The payload is CLOSED and
     /// empty — the OS detail is scheduling-adjacent telemetry, and
     /// two racing pump failures must not journal their order
     /// (D-2026-08-12-1, review round).
-    CaptureFailed {},
-    /// The run ended without a clean success. ONE shape
-    /// (D-2026-08-12-1, review round): a wait/OS bookkeeping fault
-    /// reports `exit_code = -1` with the fault in `stderr` — the
-    /// spec's `{ exit_code, stderr }`, never a second form.
-    ExecFailed { exit_code: i64, stderr: String },
+    CaptureFailed,
     /// The AGGREGATE capture budget or the host's capture capacity
     /// was crossed. No `stream`, no exact `size`: the two pump
     /// threads have no total order, so naming the crossing stream
@@ -145,27 +130,8 @@ enum ProcessFailure {
     /// budget.
     OutputOverflow {
         limit: u64,
-        reason: CaptureOverflowReason,
+        reason: OutputOverflowReason,
     },
-}
-
-/// Why a capture stopped — a CLOSED domain, rendered to text only
-/// at the envelope frontier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CaptureOverflowReason {
-    /// The declared aggregate budget was crossed.
-    Budget,
-    /// The host's capture allocation refused (`try_reserve`).
-    Capacity,
-}
-
-impl CaptureOverflowReason {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Budget => "budget",
-            Self::Capacity => "capacity",
-        }
-    }
 }
 
 /// One drain's bound AND the pump channel's capacity — shared, so a
@@ -173,77 +139,15 @@ impl CaptureOverflowReason {
 /// control.
 const CHANNEL_CAPACITY: usize = 64;
 
-/// The machine-produced kinds a bound Process world can emit beside
-/// the adapter's own — required at binding for the same
-/// stranded-call reason. The spelling is the machine's own constant:
-/// one authority across the crates.
-#[cfg(test)]
-const MACHINE_EMITS: &[&str] = &[crate::runtime::vm::TIMEOUT_EXPIRED];
-
-/// Seals variant ↔ canonical name ↔ binding list in ONE declaration:
-/// `kind()` is generated as an exhaustive match, so a new variant
-/// cannot exist without a name here — and `KINDS` is derived from
-/// the same list, never a parallel one.
-macro_rules! process_failure_names {
-    ($(($variant:ident, $name:literal)),+ $(,)?) => {
-        impl ProcessFailure {
-            /// Every kind the ADAPTER emits — derived from the one
-            /// declaration below.
-            #[cfg(test)]
-            const KINDS: &'static [&'static str] = &[$($name),+];
-
-            /// The canonical kind — EXHAUSTIVE: a new variant fails
-            /// to compile here until it joins the declaration.
-            const fn kind(&self) -> &'static str {
-                match self {
-                    $(Self::$variant { .. } => $name),+
-                }
-            }
-        }
-    };
-}
-
-process_failure_names!(
-    (SpawnFailed, "SpawnFailed"),
-    (DecodeError, "DecodeError"),
-    (CaptureFailed, "CaptureFailed"),
-    (ExecFailed, "ExecFailed"),
-    (OutputOverflow, "OutputOverflow"),
-);
-
 impl ProcessFailure {
-    fn into_outcome(self) -> CallOutcome {
-        let kind = self.kind();
-        let payload = match self {
-            Self::CaptureFailed {} => BTreeMap::new(),
-            Self::SpawnFailed { message } | Self::DecodeError { message } => {
-                let mut payload = BTreeMap::new();
-                payload.insert(String::from("message"), Value::Text(message));
-                payload
-            }
-            Self::ExecFailed { exit_code, stderr } => {
-                let mut payload = BTreeMap::new();
-                payload.insert(String::from("exit_code"), Value::Int(exit_code));
-                payload.insert(String::from("stderr"), Value::Text(stderr));
-                payload
-            }
-            Self::OutputOverflow { limit, reason } => {
-                let mut payload = BTreeMap::new();
-                payload.insert(
-                    String::from("limit"),
-                    Value::Int(i64::try_from(limit).unwrap_or(i64::MAX)),
-                );
-                payload.insert(
-                    String::from("reason"),
-                    Value::Text(String::from(reason.as_str())),
-                );
-                payload
-            }
+    fn into_completion(self) -> Completion {
+        let exit = match self {
+            Self::SpawnFailed { message } => ProcessExit::SpawnFailed { message },
+            Self::DecodeFailed { message, line } => ProcessExit::DecodeFailed { message, line },
+            Self::CaptureFailed => ProcessExit::CaptureFailed,
+            Self::OutputOverflow { limit, reason } => ProcessExit::OutputOverflow { limit, reason },
         };
-        CallOutcome::Failure(TypedError {
-            kind: String::from(kind),
-            data: Data::materialized(Value::Map(payload)),
-        })
+        Completion::process_exit(exit)
     }
 }
 
@@ -292,25 +196,21 @@ impl ProcessSettings {
                 crate::boundary::RequestCodec::Jsonl
             }
             Some(AttrSetting::Word(word)) if word == "bytes" => {
-                return Err(E::FramingDeferred {
-                    attribute: "codec",
-                    word: word.clone(),
-                });
+                crate::boundary::RequestCodec::Bytes
             }
             Some(AttrSetting::Word(word)) => return Err(E::UnknownCodec(word.clone())),
             _ => return Err(E::Unresolved("codec")),
         };
-        match spec.attribute("err_codec") {
-            Some(AttrSetting::Word(word)) if word == "lines" => {}
+        let err_codec = match spec.attribute("err_codec") {
+            Some(AttrSetting::Word(word)) if word == "lines" => {
+                crate::boundary::RequestCodec::Lines
+            }
             Some(AttrSetting::Word(word)) if word == "bytes" => {
-                return Err(E::FramingDeferred {
-                    attribute: "err_codec",
-                    word: word.clone(),
-                });
+                crate::boundary::RequestCodec::Bytes
             }
             Some(AttrSetting::Word(word)) => return Err(E::UnknownCodec(word.clone())),
             _ => return Err(E::Unresolved("err_codec")),
-        }
+        };
         let max_output = match spec.attribute("max_output") {
             Some(AttrSetting::Value(crate::value::Value::Text(text))) => {
                 match crate::contract::byte_size(text) {
@@ -345,6 +245,7 @@ impl ProcessSettings {
             command: command.clone(),
             args,
             codec,
+            err_codec,
             max_output,
         })
     }
@@ -362,9 +263,8 @@ impl ProcessSettings {
 /// inherits the pipes can never hang this process: readers are never
 /// joined, only drained.
 ///
-/// Job-mode stderr still travels inside the private `ExecFailed` fact on
-/// failure and is dropped on success. B7 replaces both behaviors with the
-/// independently framed ordinary `err` output.
+/// Job-mode stdout and stderr are framed independently onto ordinary `out`
+/// and `err` emissions; every completion ends with one typed `exit` fact.
 #[derive(Debug)]
 pub struct Process<'plan> {
     /// The borrow anchoring this world to its VALIDATED plan for
@@ -440,6 +340,7 @@ impl std::error::Error for ProcessBindError {}
 struct Run {
     call_ref: crate::boundary::CallRef,
     codec: crate::boundary::RequestCodec,
+    err_codec: crate::boundary::RequestCodec,
     child: std::process::Child,
     chunks: std::sync::mpsc::Receiver<Chunk>,
     capture: Capture,
@@ -469,7 +370,7 @@ struct Capture {
     /// host's capture capacity spoke. No stream, no byte-count —
     /// the two pumps have no total order, and the journal must not
     /// record a thread race (D-2026-08-12-1, review round).
-    overflow: Option<CaptureOverflowReason>,
+    overflow: Option<OutputOverflowReason>,
     /// A pipe read failed: the capture is incomplete and the reply
     /// refuses as the typed CaptureFailed — truncated bytes are
     /// never presented as the whole.
@@ -526,7 +427,7 @@ impl Capture {
         if self.observed_out.saturating_add(self.observed_err) > self.max_output {
             // Deterministic in the totals — outranks Capacity in
             // every order.
-            self.overflow = Some(CaptureOverflowReason::Budget);
+            self.overflow = Some(OutputOverflowReason::Budget);
         }
         if self.overflow.is_some() {
             return;
@@ -537,7 +438,7 @@ impl Capture {
             &mut self.stderr
         };
         if self.capacity_refused || buffer.try_reserve(bytes.len()).is_err() {
-            self.overflow = Some(CaptureOverflowReason::Capacity);
+            self.overflow = Some(OutputOverflowReason::Capacity);
         } else {
             buffer.extend_from_slice(&bytes);
         }
@@ -554,7 +455,7 @@ impl Capture {
             });
         }
         if self.read_failure {
-            return Some(ProcessFailure::CaptureFailed {});
+            return Some(ProcessFailure::CaptureFailed);
         }
         None
     }
@@ -656,7 +557,7 @@ impl<'plan> Process<'plan> {
         })
     }
 
-    fn launch(&mut self, intent: &Intent, request: &Envelope) -> Result<Run, CallOutcome> {
+    fn launch(&mut self, intent: &Intent, request: &Envelope) -> Result<Run, Completion> {
         // Settings were resolved ONCE at binding; an unknown path
         // here is an integrity breach of the intent, not a config
         // fault.
@@ -666,7 +567,7 @@ impl<'plan> Process<'plan> {
                           contract this specialized adapter does not carry)"
                     .to_string(),
             }
-            .into_outcome());
+            .into_completion());
         };
         // The machine prepared and sealed the bytes; the adapter
         // TRANSPORTS them — recomputing would reopen the gap between
@@ -689,7 +590,7 @@ impl<'plan> Process<'plan> {
                 return Err(ProcessFailure::SpawnFailed {
                     message: error.to_string(),
                 }
-                .into_outcome());
+                .into_completion());
             }
         };
         // Detached pipe pumps: chunks flow through the channel; the
@@ -726,6 +627,7 @@ impl<'plan> Process<'plan> {
         Ok(Run {
             call_ref: intent.call_ref,
             codec: settings.codec,
+            err_codec: settings.err_codec,
             child,
             chunks,
             capture: Capture::new(settings.max_output),
@@ -815,71 +717,97 @@ impl Run {
     /// The reply of a finished run.
     fn settle(mut self, status: std::process::ExitStatus) -> Response {
         self.collect();
-        let outcome = if let Some(failure) = self.capture.verdict() {
-            failure.into_outcome()
-        } else if !status.success() {
-            ProcessFailure::ExecFailed {
-                // Killed by a signal: no exit code exists.
-                exit_code: status.code().map_or(-1, i64::from),
-                stderr: String::from_utf8_lossy(&self.capture.stderr).into_owned(),
-            }
-            .into_outcome()
+        let completion = if let Some(failure) = self.capture.verdict() {
+            failure.into_completion()
         } else {
             let stdout = std::mem::take(&mut self.capture.stdout);
-            match self.codec {
-                // ProcessSettings keeps this adapter mode behind the B7
-                // bind-time deferral. Keeping its physical branch exact
-                // prevents any future opening from decoding bytes as text.
-                crate::boundary::RequestCodec::Bytes => {
-                    CallOutcome::Success(Data::materialized(Value::Bytes(stdout)))
+            let stderr = std::mem::take(&mut self.capture.stderr);
+            match (
+                frame_channel(stdout, self.codec, "stdout"),
+                frame_channel(stderr, self.err_codec, "stderr"),
+            ) {
+                (Ok(out), Ok(err)) => {
+                    let (exit_code, signal) = process_status(status);
+                    Completion::process(out, err, ProcessExit::Exited { exit_code, signal })
                 }
-                crate::boundary::RequestCodec::Lines => match String::from_utf8(stdout) {
-                    Ok(text) => {
-                        // `codec = lines`, job mode: the whole stdout,
-                        // one text blob.
-                        CallOutcome::Success(Data::materialized(Value::Text(text)))
-                    }
-                    Err(_) => ProcessFailure::DecodeError {
-                        message: "stdout is not valid UTF-8".to_string(),
-                    }
-                    .into_outcome(),
-                },
-                crate::boundary::RequestCodec::Jsonl => match String::from_utf8(stdout) {
-                    Ok(text) => {
-                        // `codec = jsonl`, job mode: the decoded lines,
-                        // `data = array<variant>` (D-2026-08-11-1). The
-                        // house reader owns the numbers; an unparseable
-                        // line — an interior empty one included — is a
-                        // typed DecodeError carrying the offending line.
-                        match decode_jsonl(&text) {
-                            Ok(items) => {
-                                CallOutcome::Success(Data::materialized(Value::Array(items)))
-                            }
-                            Err(message) => ProcessFailure::DecodeError { message }.into_outcome(),
-                        }
-                    }
-                    Err(_) => ProcessFailure::DecodeError {
-                        message: "stdout is not valid UTF-8".to_string(),
-                    }
-                    .into_outcome(),
-                },
+                (Err(failure), _) | (_, Err(failure)) => failure.into_completion(),
             }
         };
         Response {
             call_ref: self.call_ref,
-            outcome,
+            completion,
         }
     }
 }
 
-/// Decodes a complete jsonl stdout into its line values
+/// Portable view of an observed child status. A signal-only Unix status uses
+/// `exit_code = -1`; the signal remains independently available for policy.
+fn process_status(status: std::process::ExitStatus) -> (i32, Option<i32>) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        (status.code().unwrap_or(-1), status.signal())
+    }
+    #[cfg(not(unix))]
+    {
+        (status.code().unwrap_or(-1), None)
+    }
+}
+
+/// Frames one fully captured physical channel into ordinary unit payloads.
+/// No caller publishes until both channels and the terminal fact are ready.
+fn frame_channel(
+    bytes: Vec<u8>,
+    codec: crate::boundary::RequestCodec,
+    channel: &'static str,
+) -> Result<Vec<Data>, ProcessFailure> {
+    match codec {
+        crate::boundary::RequestCodec::Bytes => Ok((!bytes.is_empty())
+            .then(|| Data::materialized(Value::Bytes(bytes)))
+            .into_iter()
+            .collect()),
+        crate::boundary::RequestCodec::Lines => {
+            let text = String::from_utf8(bytes).map_err(|_| ProcessFailure::DecodeFailed {
+                message: format!("{channel} is not valid UTF-8"),
+                line: None,
+            })?;
+            Ok(decode_lines(&text)
+                .into_iter()
+                .map(|line| Data::materialized(Value::Text(line)))
+                .collect())
+        }
+        crate::boundary::RequestCodec::Jsonl => {
+            let text = String::from_utf8(bytes).map_err(|_| ProcessFailure::DecodeFailed {
+                message: format!("{channel} is not valid UTF-8"),
+                line: None,
+            })?;
+            decode_jsonl(&text).map(|items| items.into_iter().map(Data::materialized).collect())
+        }
+    }
+}
+
+/// Exact line framing: newline terminators are removed, empty lines are
+/// values, a final non-empty unterminated line is accepted, and an empty
+/// channel emits nothing.
+fn decode_lines(text: &str) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    text.strip_suffix('\n')
+        .unwrap_or(text)
+        .split('\n')
+        .map(String::from)
+        .collect()
+}
+
+/// Decodes one complete JSONL channel into its unit line values
 /// (D-2026-08-11-1): each `\n`-framed line through the house
 /// reader — exact numbers, duplicate keys refused; the trailing
 /// newline's empty tail is framing; an interior empty or trailing
 /// garbage line refuses with the offending line in the message.
-fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, String> {
+fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, ProcessFailure> {
     let mut items = Vec::new();
-    // EMPTY stdout is the empty array; a lone `\n` is one empty
+    // An empty channel emits no values; a lone `\n` is one empty
     // line and refuses below — the framing is judged before the
     // terminator is stripped, so no invalid line is silently lost.
     if stdout.is_empty() {
@@ -887,8 +815,11 @@ fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, String> {
     }
     let body = stdout.strip_suffix('\n').unwrap_or(stdout);
     for line in body.split('\n') {
-        let (value, consumed) = rastok_core::json::parse_value(line)
-            .map_err(|error| format!("line `{line}` does not parse: {}", error.message))?;
+        let (value, consumed) =
+            rastok_core::json::parse_value(line).map_err(|error| ProcessFailure::DecodeFailed {
+                message: format!("line does not parse: {}", error.message),
+                line: Some(String::from(line)),
+            })?;
         // JSON's own whitespace alphabet, exactly (space, tab, CR —
         // LF cannot appear inside a line): a non-breaking space is
         // trailing content, not padding.
@@ -898,9 +829,10 @@ fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, String> {
         {
             items.push(value);
         } else {
-            return Err(format!(
-                "line `{line}` carries trailing content after its JSON value"
-            ));
+            return Err(ProcessFailure::DecodeFailed {
+                message: String::from("line carries trailing content after its JSON value"),
+                line: Some(String::from(line)),
+            });
         }
     }
     Ok(items)
@@ -910,9 +842,9 @@ impl Partner for Process<'_> {
     fn start(&mut self, intent: &Intent, request: &Envelope) {
         match self.launch(intent, request) {
             Ok(run) => self.runs.push(run),
-            Err(outcome) => self.answers.push(Response {
+            Err(completion) => self.answers.push(Response {
                 call_ref: intent.call_ref,
-                outcome,
+                completion,
             }),
         }
     }
@@ -926,14 +858,14 @@ impl Partner for Process<'_> {
                 // the whole process group dies now, and the answer
                 // is the matching typed refusal.
                 kill_group(&mut run.child);
-                let outcome = run
+                let completion = run
                     .capture
                     .verdict()
-                    .unwrap_or(ProcessFailure::CaptureFailed {})
-                    .into_outcome();
+                    .unwrap_or(ProcessFailure::CaptureFailed)
+                    .into_completion();
                 answers.push(Response {
                     call_ref: run.call_ref,
-                    outcome,
+                    completion,
                 });
                 continue;
             }
@@ -941,19 +873,15 @@ impl Partner for Process<'_> {
                 match run.child.try_wait() {
                     Ok(Some(status)) => run.exit = Some(status),
                     Ok(None) => {}
-                    Err(error) => {
+                    Err(_error) => {
                         let call_ref = run.call_ref;
                         kill_group(&mut run.child);
                         answers.push(Response {
                             call_ref,
-                            // ONE ExecFailed shape: a wait/OS
-                            // bookkeeping fault reports exit_code -1
-                            // with the fault in stderr.
-                            outcome: ProcessFailure::ExecFailed {
-                                exit_code: -1,
-                                stderr: format!("wait failed: {error}"),
-                            }
-                            .into_outcome(),
+                            // No child status was observed, and inventing one
+                            // would make policy nondeterministic. The closed
+                            // capture failure case terminates the invocation.
+                            completion: ProcessFailure::CaptureFailed.into_completion(),
                         });
                         continue;
                     }
@@ -1001,7 +929,7 @@ mod tests {
     use crate::envelope::Namespace;
     use crate::journal::{MemJournal, OutboundStatus, Record};
     use crate::plan::GraphVersion;
-    use crate::runtime::vm::Vm;
+    use crate::runtime::vm::{Observed, Vm};
 
     const CAT_PROBE: &str = r#"
 graph real : App {
@@ -1021,26 +949,33 @@ graph real : App {
 }
 "#;
 
-    fn submission(text: &str) -> InboundSubmission {
+    fn submission_data(data: Data) -> InboundSubmission {
         InboundSubmission {
             authority: IngressAuthority::single(crate::node::Path::new(["cli"]).unwrap()),
             port: crate::node::Port::new("in").unwrap(),
             draft: Draft {
-                data: Data::materialized(Value::Struct(vec![(
-                    String::from("text"),
-                    Value::Text(String::from(text)),
-                )])),
+                data,
                 ext: Namespace::new(),
             },
             sequence: SubmissionSequence::Next,
         }
     }
 
+    fn submission(text: &str) -> InboundSubmission {
+        submission_data(Data::materialized(Value::Struct(vec![(
+            String::from("text"),
+            Value::Text(String::from(text)),
+        )])))
+    }
+
     /// Drives one submission to stability against real children: the
     /// wall clock maps onto the virtual clock in small steps, so
     /// declared budgets expire for real and the scheduler — never
     /// the adapter — mints the timeouts.
-    fn run(source: &str, text: &str) -> (MemJournal, Vec<Envelope>, Vec<Envelope>) {
+    fn run_submission(
+        source: &str,
+        submission: InboundSubmission,
+    ) -> (MemJournal, Vec<Envelope>, Vec<Envelope>, Vec<Observed>) {
         let compilation = compile(
             &[source],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1049,7 +984,7 @@ graph real : App {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
         let mut world = Process::try_new(&compilation.plan).expect("the plan binds");
-        vm.inject(&mut journal, submission(text)).unwrap();
+        vm.inject(&mut journal, submission).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             vm.drain(&mut journal).unwrap();
@@ -1075,20 +1010,47 @@ graph real : App {
                 .map(|output| output.envelope.clone())
                 .collect(),
             vm.errors().to_vec(),
+            vm.observations().to_vec(),
         )
+    }
+
+    fn run(source: &str, text: &str) -> (MemJournal, Vec<Envelope>, Vec<Envelope>, Vec<Observed>) {
+        run_submission(source, submission(text))
+    }
+
+    fn root_values<'a>(observed: &'a [Observed], port: &str) -> Vec<&'a Value> {
+        observed
+            .iter()
+            .filter(|item| item.node.is_none() && item.port.name() == port)
+            .map(|item| match item.envelope.data() {
+                Data::Materialized(value) => value,
+                Data::Encoded { .. } => panic!("a Process test root value is materialized"),
+            })
+            .collect()
+    }
+
+    fn one_exit<'a>(observed: &'a [Observed], case: &str) -> &'a [(String, Value)] {
+        let values = root_values(observed, "exit");
+        assert_eq!(values.len(), 1, "one terminal fact per invocation");
+        let Value::TaggedUnion(tagged) = values[0] else {
+            panic!("Process.exit carries ProcessExit");
+        };
+        assert_eq!(tagged.case, case);
+        &tagged.payload
     }
 
     #[test]
     fn the_world_actually_answers() {
-        let (journal, outputs, errors) = run(CAT_PROBE, "salut");
+        let (journal, outputs, errors, observed) = run(CAT_PROBE, "salut");
         assert!(errors.is_empty());
         assert_eq!(outputs.len(), 1);
-        // `cat` echoed the framed line; the reply is the whole
-        // stdout, one text blob.
+        // `lines` publishes one envelope per line without its delimiter.
         assert_eq!(
             outputs[0].data(),
-            &Data::materialized(Value::Text(String::from("salut\n")))
+            &Data::materialized(Value::Text(String::from("salut")))
         );
+        let exit = one_exit(&observed, "Exited");
+        assert_eq!(exit[0], (String::from("exit_code"), Value::Int(0)));
         // The same normative sequence as the scripted world — the
         // adapter changed, the machine did not.
         let closed = journal.records().iter().any(|record| {
@@ -1101,15 +1063,96 @@ graph real : App {
     }
 
     #[test]
+    fn bytes_framing_preserves_non_text_stdin_and_stdout() {
+        let source = r#"
+graph binary : App {
+  connector echo : Process {
+    mode = job ; command = "cat"
+    codec = bytes
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> echo -> .
+}
+"#;
+        let bytes = vec![0, 0xff, b'\n'];
+        let (_, outputs, errors, observed) = run_submission(
+            source,
+            submission_data(Data::materialized(Value::Bytes(bytes.clone()))),
+        );
+        assert!(errors.is_empty());
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].data(), &Data::materialized(Value::Bytes(bytes)));
+        one_exit(&observed, "Exited");
+    }
+
+    #[test]
+    fn lines_framing_publishes_one_value_per_line() {
+        let source = r#"
+graph lines : App {
+  connector child : Process {
+    mode = job ; command = "printf"
+    args = ["first\nsecond\n"]
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> child -> .
+}
+"#;
+        let (_, outputs, errors, observed) = run_submission(
+            source,
+            submission_data(Data::materialized(Value::Text(String::from("unused")))),
+        );
+        assert!(errors.is_empty());
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(
+            outputs[0].data(),
+            &Data::materialized(Value::Text(String::from("first")))
+        );
+        assert_eq!(
+            outputs[1].data(),
+            &Data::materialized(Value::Text(String::from("second")))
+        );
+        one_exit(&observed, "Exited");
+    }
+
+    #[test]
+    fn stderr_bytes_framing_is_independent_of_the_data_codec() {
+        let source = r#"
+graph binary_err : App {
+  connector child : Process {
+    mode = job ; command = "sh"
+    args = ["-c", "printf raw >&2"]
+    codec = lines
+    err_codec = bytes
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> child
+  child.out -> nothing
+}
+"#;
+        let (_, outputs, errors, observed) = run_submission(
+            source,
+            submission_data(Data::materialized(Value::Text(String::from("unused")))),
+        );
+        assert!(outputs.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].data(),
+            &Data::materialized(Value::Bytes(b"raw".to_vec()))
+        );
+        one_exit(&observed, "Exited");
+    }
+
+    #[test]
     fn two_real_runs_journal_identically() {
-        let (once, first, _) = run(CAT_PROBE, "salut");
-        let (twice, second, _) = run(CAT_PROBE, "salut");
+        let (once, first, _, _) = run(CAT_PROBE, "salut");
+        let (twice, second, _, _) = run(CAT_PROBE, "salut");
         assert_eq!(once.records(), twice.records());
         assert_eq!(first, second);
     }
 
     #[test]
-    fn a_nonzero_exit_is_a_typed_exec_failure() {
+    fn stderr_and_a_nonzero_exit_are_independent_typed_ports() {
         let source = r#"
 graph failing : App {
   connector boom : Process {
@@ -1126,24 +1169,15 @@ graph failing : App {
   . -> shout -> boom -> .
 }
 "#;
-        let (_, outputs, errors) = run(source, "salut");
+        let (_, outputs, errors, observed) = run(source, "salut");
         assert!(outputs.is_empty());
         assert_eq!(errors.len(), 1);
-        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
-            panic!("expected the typed error payload");
-        };
         assert_eq!(
-            payload.get("kind"),
-            Some(&Value::Text(String::from("ExecFailed")))
+            errors[0].data(),
+            &Data::materialized(Value::Text(String::from("broken")))
         );
-        let Some(Value::Map(detail)) = payload.get("detail") else {
-            panic!("expected the ExecFailed detail");
-        };
-        assert_eq!(detail.get("exit_code"), Some(&Value::Int(3)));
-        assert_eq!(
-            detail.get("stderr"),
-            Some(&Value::Text(String::from("broken\n")))
-        );
+        let exit = one_exit(&observed, "Exited");
+        assert_eq!(exit[0], (String::from("exit_code"), Value::Int(3)));
     }
 
     #[test]
@@ -1163,16 +1197,10 @@ graph missing : App {
   . -> shout -> ghost -> .
 }
 "#;
-        let (_, outputs, errors) = run(source, "salut");
+        let (_, outputs, errors, observed) = run(source, "salut");
         assert!(outputs.is_empty());
-        assert_eq!(errors.len(), 1);
-        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
-            panic!("expected the typed error payload");
-        };
-        assert_eq!(
-            payload.get("kind"),
-            Some(&Value::Text(String::from("SpawnFailed")))
-        );
+        assert!(errors.is_empty());
+        one_exit(&observed, "SpawnFailed");
     }
 
     #[test]
@@ -1198,16 +1226,10 @@ graph mute : App {
 }
 "#;
         let started = std::time::Instant::now();
-        let (journal, outputs, errors) = run(source, "salut");
+        let (journal, outputs, errors, observed) = run(source, "salut");
         assert!(outputs.is_empty());
-        assert_eq!(errors.len(), 1);
-        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
-            panic!("expected the typed error payload");
-        };
-        assert_eq!(
-            payload.get("kind"),
-            Some(&Value::Text(String::from("TimeoutExpired")))
-        );
+        assert!(errors.is_empty());
+        one_exit(&observed, "TimeoutExpired");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
             "the budget actually fired"
@@ -1245,12 +1267,13 @@ graph orphaning : App {
 }
 "#;
         let started = std::time::Instant::now();
-        let (_, outputs, errors) = run(source, "salut");
+        let (_, outputs, errors, observed) = run(source, "salut");
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(
             outputs[0].data(),
-            &Data::materialized(Value::Text(String::from("done\n")))
+            &Data::materialized(Value::Text(String::from("done")))
         );
+        one_exit(&observed, "Exited");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
             "the group died at the leader's exit; nothing waited on the descendant"
@@ -1281,15 +1304,10 @@ graph wedge : App {
 }
 "#;
         let started = std::time::Instant::now();
-        let (_, outputs, errors) = run(source, "salut");
+        let (_, outputs, errors, observed) = run(source, "salut");
         assert!(outputs.is_empty());
-        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
-            panic!("expected the typed error payload");
-        };
-        assert_eq!(
-            payload.get("kind"),
-            Some(&Value::Text(String::from("OutputOverflow")))
-        );
+        assert!(errors.is_empty());
+        one_exit(&observed, "OutputOverflow");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(10),
             "the cap is a hard guarantee, not a hope"
@@ -1317,12 +1335,13 @@ graph flood : App {
   . -> shout -> noisy -> .
 }
 "#;
-        let (_, outputs, errors) = run(source, "salut");
-        assert!(errors.is_empty(), "{errors:?}");
+        let (_, outputs, errors, observed) = run(source, "salut");
+        assert_eq!(errors.len(), 1, "stderr is ordinary output");
         assert_eq!(
             outputs[0].data(),
-            &Data::materialized(Value::Text(String::from("done\n")))
+            &Data::materialized(Value::Text(String::from("done")))
         );
+        one_exit(&observed, "Exited");
     }
 
     #[test]
@@ -1344,15 +1363,10 @@ graph capped : App {
   . -> shout -> wide -> .
 }
 "#;
-        let (_, outputs, errors) = run(source, "salut");
+        let (_, outputs, errors, observed) = run(source, "salut");
         assert!(outputs.is_empty());
-        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
-            panic!("expected the typed error payload");
-        };
-        assert_eq!(
-            payload.get("kind"),
-            Some(&Value::Text(String::from("OutputOverflow")))
-        );
+        assert!(errors.is_empty());
+        one_exit(&observed, "OutputOverflow");
     }
 
     #[test]
@@ -1379,27 +1393,22 @@ graph hoarse : App {
   . -> shout -> noisy -> .
 }
 "#;
-        let (_, outputs, errors) = run(source, "salut");
+        let (_, outputs, errors, observed) = run(source, "salut");
         assert!(outputs.is_empty(), "{outputs:?}");
-        let Data::Materialized(Value::Map(payload)) = errors[0].data() else {
-            panic!("expected the typed error payload");
-        };
-        assert_eq!(
-            payload.get("kind"),
-            Some(&Value::Text(String::from("OutputOverflow")))
-        );
-        let Some(Value::Map(detail)) = payload.get("detail") else {
-            panic!("the payload rides detail: {payload:?}");
-        };
+        assert!(errors.is_empty());
+        let detail = one_exit(&observed, "OutputOverflow");
         // No `stream`, no byte-count: the two pumps have no total
         // order, and the journal must not record a thread race —
         // the payload carries the declared limit and the reason.
-        assert_eq!(detail.get("stream"), None, "{detail:?}");
-        assert_eq!(detail.get("limit"), Some(&Value::Int(50)));
-        assert_eq!(
-            detail.get("reason"),
-            Some(&Value::Text(String::from("budget")))
+        assert!(!detail.iter().any(|(name, _)| name == "stream"));
+        assert!(
+            detail
+                .iter()
+                .any(|(name, value)| name == "limit" && *value == Value::Uint(50))
         );
+        assert!(detail.iter().any(|(name, value)| {
+            name == "reason" && *value == Value::Enum(String::from("budget"))
+        }));
     }
 
     #[test]
@@ -1506,7 +1515,7 @@ graph unframeable : App {
                     capture.verdict(),
                     Some(ProcessFailure::OutputOverflow {
                         limit: 50,
-                        reason: CaptureOverflowReason::Budget,
+                        reason: OutputOverflowReason::Budget,
                     })
                 ),
                 "priority decides, never arrival order"
@@ -1517,7 +1526,7 @@ graph unframeable : App {
         capture.absorb(Chunk::ReadFailed);
         assert!(matches!(
             capture.verdict(),
-            Some(ProcessFailure::CaptureFailed {})
+            Some(ProcessFailure::CaptureFailed)
         ));
         // Under budget, no verdict.
         let mut capture = Capture::new(50);
@@ -1532,7 +1541,7 @@ graph unframeable : App {
         assert!(matches!(
             capture.verdict(),
             Some(ProcessFailure::OutputOverflow {
-                reason: CaptureOverflowReason::Capacity,
+                reason: OutputOverflowReason::Capacity,
                 ..
             })
         ));
@@ -1541,7 +1550,7 @@ graph unframeable : App {
             matches!(
                 capture.verdict(),
                 Some(ProcessFailure::OutputOverflow {
-                    reason: CaptureOverflowReason::Budget,
+                    reason: OutputOverflowReason::Budget,
                     ..
                 })
             ),
@@ -1554,36 +1563,36 @@ graph unframeable : App {
         assert!(matches!(
             capture.verdict(),
             Some(ProcessFailure::OutputOverflow {
-                reason: CaptureOverflowReason::Budget,
+                reason: OutputOverflowReason::Budget,
                 ..
             })
         ));
     }
 
     #[test]
-    fn every_adapter_kind_is_in_the_binding_list() {
-        // Variant, canonical name and binding list come from ONE
-        // declaration (`process_failure_names!` — `kind()` is an
-        // exhaustive match, so a new variant cannot compile without
-        // joining it); here the declared list meets the sheet.
-        assert_eq!(
+    fn every_adapter_terminal_inhabits_process_exit() {
+        let ty = crate::boundary::process_exit_type().expect("ProcessExit is canonical");
+        let failures = [
             ProcessFailure::SpawnFailed {
-                message: String::new()
-            }
-            .kind(),
-            "SpawnFailed"
-        );
-        let exit = crate::boundary::process_exit_type().expect("ProcessExit is canonical");
-        let crate::datatype::DataType::TaggedUnion(exit) = exit else {
-            panic!("ProcessExit is tagged");
-        };
-        for kind in ProcessFailure::KINDS.iter().chain(MACHINE_EMITS) {
-            let case = crate::boundary::legacy_process_failure_exit_case(kind)
-                .expect("every emitted legacy fact has an explicit B7 mapping");
-            assert!(
-                exit.cases().iter().any(|declared| declared.name() == case),
-                "`{kind}` maps to declared ProcessExit case `{case}`"
-            );
+                message: String::new(),
+            },
+            ProcessFailure::DecodeFailed {
+                message: String::new(),
+                line: None,
+            },
+            ProcessFailure::CaptureFailed,
+            ProcessFailure::OutputOverflow {
+                limit: 50,
+                reason: OutputOverflowReason::Budget,
+            },
+        ];
+        for failure in failures {
+            let completion = failure.into_completion();
+            assert_eq!(completion.outputs().len(), 1);
+            let Data::Materialized(value) = &completion.outputs()[0].data else {
+                panic!("ProcessExit is materialized");
+            };
+            assert!(ty.accepts(value), "{value:?} must inhabit {ty}");
         }
     }
 

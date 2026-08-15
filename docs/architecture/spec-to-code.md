@@ -1,6 +1,6 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-15 through M1.3 B6 and
+> Planning aid — non-normative. **Updated 2026-08-15 through M1.3 B7 and
 > the specified M1.3 target.** The table first preserves the M0 evidence;
 > the M1 extension below records which normative owners gained new
 > executable responsibility. Where implementation surfaced a semantic
@@ -34,7 +34,7 @@ they are not promised crate names.
 |---|---|---|---|
 | M1.1 multiport | Named boundary ingress, resolved node/boundary port tables, optional pinned types, and one conformance judgment at every emission | `compiler::{check,lower}`, `plan::{PortDecl,ValidatedExecutionPlan}`, `runtime`, `boundary` | checker negatives, package round trips, runtime pin refusals, gauge identity witness |
 | Metadata/literals/IDL reform | Exactly three metadata zones; inferred `app`, sheet-declared `ext`; brace punctuation; text/base64/JSON/assets; structural type aliases | `compiler::{lexer,parser,check,lower}`, `envelope`, `json`, `plan` | schema/path diagnostics, literal boundaries, exact-decimal and asset tests, package/golden pins |
-| M1.2 `jsonl` (current v6) | One canonical JSON line on request, legacy `array<variant>` job replies, exact decoding failures, resolved codec-selected ports; M1.3 replaces the wrapper with ordinary `variant` frame emissions | `boundary::{prepare_jsonl,legacy_v6_process_port_type}`, `contract::PortContract`, `json`, `connectors::Process`, checker and plan validator | real-child round trips, malformed-line refusals, golden request digest |
+| M1.2 `jsonl` (historical landing) | One canonical JSON line on request, exact decoding failures and codec-selected ports; its original `array<variant>` reply wrapper is superseded by B7 unit `variant` frames | `boundary::{prepare_jsonl,legacy_v6_process_port_type}`, `contract::PortContract`, `json`, `connectors::Process`, checker and plan validator | real-child round trips, malformed-line refusals, golden request digest; B7 framing matrix |
 | Contract interlude | One compiler-layer node contract authority: attribute domains, `Required`/`Optional`/`Defaulted`, profiles, pre-hash default injection; adapter binding before VM/journal | `contract`, `stdlib`, `compiler::check`, `connectors::Process::try_new` | sheet validation, identity equivalence, forged/stripped plan refusals, adapter conformance |
 | Parser interlude | Forward lexeme stream with lexer-owned cursor/lookahead; structural `nothing`; no implicit yield; semantic region delegation; bounded structural recovery | `compiler::{lexer,parser,syntax}`, `trivia`, `expr`, `json` | success/rejection/diagnostic-location matrices, sibling-preservation regressions, unchanged valid-program hash |
 | Plan package v6 | The VM accepts only `ValidatedExecutionPlan`; shared bounded canonical CBOR; v5 body plus decimal call id 4 under a v6 envelope | `plan::{serialization,validation}`, `canonical_cbor`, `identity::encoding` | canonical round trip, typed corruptions, `no_std` decode and emulated Cortex-M33 spike |
@@ -44,6 +44,7 @@ they are not promised crate names.
 | M1.3 B4 tagged frontends | Byte-adjacent `IDENT!` alone selects one complete frontend value; the compiler Registry supplies framing and reader policy; JSON accepts every scalar/composite value; `asset` remains a build-bound ordinary expression call | `contract::{FrontendContract,FrontendReader}`, `stdlib::Registry`, `compiler::{lexer,parser,check,syntax}`, `expr`, `json` | custom registered frontend, scalar/exact JSON, adjacency and `!=` maximal-munch matrices, recovery boundaries, unchanged v6 package/hash witness |
 | M1.3 B5 uniform port contracts | One resolved Connector port table carries direction, logical type and unwired policy; Process owns `in/out/err/exit`, `codec = bytes`, independent defaulted `err_codec`, and the fixed migration target; no travelling error-kind list or VM port-name routing remains | `contract::{ConnectorContract,PortContract}`, `stdlib::PROCESS`, `compiler::{check,lower}`, `plan::{validation,serialization}`, `runtime`, `boundary` | sheet-defect matrix, fixed/same-as/profile-selected resolution, Registry-free forged-plan refusals, root-sink policy tests, deliberate hash/package pins |
 | M1.3 B6 tagged sums | `Case { ... }` constructs any context-compatible tagged union; structural-union destinations receive one explicit HIR wrapping; distinct unions require source `as`; `err` has no special syntax or HIR statement | `compiler::{parser,syntax,check,lower}`, `expr::{Expr::Struct,Expr::Tagged,Expr::As}`, `datatype::{TaggedUnionType,DataType::narrow}`, v6 plan categorical gate | exact/missing case fields, nested optional wrapping, implicit/explicit union conversion pair, ordinary `err` emission, forged constructed tree, unchanged old-program package/hash witness |
+| M1.3 B7 boundary completion | One correlated Partner completion carries ordered ordinary port drafts and one final typed `exit`; the VM alone mints envelopes and commits the completion transaction. `Process(job)` frames stdout/stderr independently and reports every observed status as `ProcessExit`. | `boundary::{Completion,PortOutput,CompletionGate,ProcessExit}`, `journal::Closure`, `runtime::{TransactionExecutor,vm}`, `connectors::Process`, `lab::MockPartner`, `golden` | malformed/multiple/non-final exit refusals, real and mocked multi-output jobs, lines/jsonl/bytes framing, stderr/non-zero independence, timeout/spawn/decode/capture/overflow exits, correlation/conformance battery, updated causal goldens |
 
 ## M1.3 target (landing in ordered gates)
 
@@ -60,10 +61,12 @@ The expression-only `expr::EvalValue` may additionally carry the lazy payload
 witness, but cannot cross into plans, envelopes, or journals. Effective port
 types now resolve completely in the validated v6 plan and are re-derived on
 decode; B8 changes their transport, not the execution invariant. The travelling
-`error_set` and compiler-side Process pin bridge are gone in B5. `TypedError`
-and the success/failure-only boundary reply are now the isolated pre-B7 seam;
-the active v6 `err/exit: variant` rows state that bridge honestly. They are not
-the target model and must not acquire new normative responsibilities.
+`error_set` and compiler-side Process pin bridge are gone in B5. B7 also
+removes `TypedError` and the success/failure-only boundary reply. The sole
+remaining v6 bridge is representational: raw packages carry `Process.exit` as
+`variant`, while the compiler, completion gate and runtime already judge the
+exact `ProcessExit` union. B8 removes that bridge by publishing the complete
+v7 type registry.
 
 ## Keeping the map honest
 

@@ -859,12 +859,34 @@ impl Checker<'_, '_> {
             let mut handlers = Vec::new();
             for handler in &decl.handlers {
                 if let Some(checked) = self.handler(handler, &signature, node, &BTreeMap::new()) {
-                    if checked
+                    let emitted: Vec<_> = checked
                         .body
                         .iter()
-                        .any(|statement| matches!(statement, Statement::Emit { port, .. } if port.name() == "err"))
+                        .filter_map(|statement| match statement {
+                            Statement::Emit { port, value }
+                                if !matches!(value, EmitValue::Nothing) =>
+                            {
+                                Some(port)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    // A body with no actual output is the written silence and
+                    // intentionally leaves the call open. Any answer is one
+                    // whole completion: exactly one exit, last.
+                    if !emitted.is_empty()
+                        && (emitted.iter().filter(|port| port.name() == "exit").count() != 1
+                            || emitted.last().is_none_or(|port| port.name() != "exit"))
                     {
-                        self.deferred("a mock err reply", handler.span);
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_CONTRACT_REQUIRED,
+                                Phase::Check,
+                                "a mock answer requires exactly one final `exit` emission",
+                            )
+                            .with_span(handler.span)
+                            .with_field("port", "exit"),
+                        );
                         continue;
                     }
                     // A reply carries data only: its envelope is
@@ -1085,28 +1107,73 @@ impl Checker<'_, '_> {
                         .iter()
                         .map(|segment| segment.text.as_str())
                         .collect();
-                    let target = match segments.as_slice() {
-                        ["app", "err"] => ExpectTarget::RootErr,
+                    let (target, observed_type) = match segments.as_slice() {
                         ["app", port] => {
-                            // A boundary observation watches what
-                            // LEAVES the App: `out` plus the declared
-                            // boundary OUTPUTS. An input is an
-                            // ingress, never a destination — the
-                            // machine logs nothing there, so an
-                            // expectation on one (like a typo) would
-                            // be a false green by construction.
-                            let direction = match *port {
-                                "out" => Some(Direction::Output),
-                                "in" => Some(Direction::Input),
-                                _ => app
+                            let mut root_types = app
+                                .nodes
+                                .iter()
+                                .filter_map(|node| {
+                                    if let Some(decl) = node.ports.iter().find(|decl| {
+                                        decl.port.name() == *port
+                                            && decl.direction == Direction::Output
+                                            && decl.unwired == crate::plan::UnwiredPolicy::RootSink
+                                    }) {
+                                        return Some(decl.ty.clone().unwrap_or(DataType::Variant));
+                                    }
+                                    (node.category() == node::Kind::Operator
+                                        && *port == "err"
+                                        && node.ports.iter().all(|decl| decl.port.name() != "err"))
+                                    .then(|| DataType::text_map(DataType::Text))
+                                })
+                                .collect::<Vec<_>>();
+                            if !root_types.is_empty() {
+                                // Root-sink and App-boundary observations share
+                                // the same `app.<port>` window in the Lab. If
+                                // both can speak the name, type the predicate
+                                // against their common type or `variant` —
+                                // never pretend one producer is invisible.
+                                if let Some(boundary_type) = app
                                     .boundary
                                     .iter()
-                                    .find(|decl| decl.port.name() == *port)
-                                    .map(|decl| decl.direction),
-                            };
-                            match direction {
-                                None => {
-                                    self.bag.push(
+                                    .find(|decl| {
+                                        decl.port.name() == *port
+                                            && decl.direction == Direction::Output
+                                    })
+                                    .map(|decl| decl.ty.clone().unwrap_or(DataType::Variant))
+                                {
+                                    root_types.push(boundary_type);
+                                }
+                                let observed_type = root_types
+                                    .first()
+                                    .cloned()
+                                    .filter(|first| {
+                                        root_types.iter().all(|candidate| candidate == first)
+                                    })
+                                    .unwrap_or(DataType::Variant);
+                                let Ok(port) = node::Port::new((*port).to_string()) else {
+                                    continue;
+                                };
+                                (ExpectTarget::RootSink(port), observed_type)
+                            } else {
+                                // A boundary observation watches what
+                                // LEAVES the App: `out` plus the declared
+                                // boundary OUTPUTS. An input is an
+                                // ingress, never a destination — the
+                                // machine logs nothing there, so an
+                                // expectation on one (like a typo) would
+                                // be a false green by construction.
+                                let direction = match *port {
+                                    "out" => Some(Direction::Output),
+                                    "in" => Some(Direction::Input),
+                                    _ => app
+                                        .boundary
+                                        .iter()
+                                        .find(|decl| decl.port.name() == *port)
+                                        .map(|decl| decl.direction),
+                                };
+                                match direction {
+                                    None => {
+                                        self.bag.push(
                                         Diagnostic::new(
                                             E_PORT_UNKNOWN,
                                             Phase::Check,
@@ -1117,22 +1184,29 @@ impl Checker<'_, '_> {
                                         .with_span(expect.target.span)
                                         .with_field("port", (*port).to_string()),
                                     );
-                                    continue;
+                                        continue;
+                                    }
+                                    Some(Direction::Input) => {
+                                        self.wrong_direction(
+                                            expect.target.span,
+                                            port,
+                                            Direction::Input,
+                                            "an expectation watches what leaves the App",
+                                        );
+                                        continue;
+                                    }
+                                    Some(Direction::Output) => {}
                                 }
-                                Some(Direction::Input) => {
-                                    self.wrong_direction(
-                                        expect.target.span,
-                                        port,
-                                        Direction::Input,
-                                        "an expectation watches what leaves the App",
-                                    );
-                                    continue;
+                                let observed_type = app
+                                    .boundary
+                                    .iter()
+                                    .find(|decl| decl.port.name() == *port)
+                                    .and_then(|decl| decl.ty.clone())
+                                    .unwrap_or(DataType::Variant);
+                                match node::Port::new((*port).to_string()) {
+                                    Ok(port) => (ExpectTarget::Boundary(port), observed_type),
+                                    Err(_) => continue,
                                 }
-                                Some(Direction::Output) => {}
-                            }
-                            match node::Port::new((*port).to_string()) {
-                                Ok(port) => ExpectTarget::Boundary(port),
-                                Err(_) => continue,
                             }
                         }
                         [name, port] => {
@@ -1150,9 +1224,15 @@ impl Checker<'_, '_> {
                                 );
                                 continue;
                             };
-                            let known = matches!(*port, "in" | "out" | "err")
-                                || node.ports.iter().any(|decl| decl.port.name() == *port);
-                            if !known {
+                            let observed_type = if let Some(port_decl) =
+                                node.ports.iter().find(|decl| decl.port.name() == *port)
+                            {
+                                port_decl.ty.clone().unwrap_or(DataType::Variant)
+                            } else if node.category() == node::Kind::Operator && *port == "err" {
+                                DataType::text_map(DataType::Text)
+                            } else if matches!(*port, "in" | "out") {
+                                DataType::Variant
+                            } else {
                                 self.bag.push(
                                     Diagnostic::new(
                                         E_PORT_UNKNOWN,
@@ -1163,12 +1243,15 @@ impl Checker<'_, '_> {
                                     .with_field("port", (*port).to_string()),
                                 );
                                 continue;
-                            }
+                            };
                             match node::Port::new((*port).to_string()) {
-                                Ok(port) => ExpectTarget::Node {
-                                    path: node.path.clone(),
-                                    port,
-                                },
+                                Ok(port) => (
+                                    ExpectTarget::Node {
+                                        path: node.path.clone(),
+                                        port,
+                                    },
+                                    observed_type,
+                                ),
                                 Err(_) => continue,
                             }
                         }
@@ -1225,7 +1308,7 @@ impl Checker<'_, '_> {
                         None => None,
                         Some(expr) => {
                             let signature = expr::Signature::new()
-                                .with("data", DataType::Variant)
+                                .with("data", observed_type.clone())
                                 .with("meta", DataType::Variant);
                             match self.expr(expr, &signature) {
                                 Some(tree) => {
@@ -5180,13 +5263,13 @@ impl Checker<'_, '_> {
                         E_PORT_TYPE,
                         Phase::Check,
                         format!(
-                            "this edge connects {source_ty:?} to {target_ty:?}; pinned ends must agree"
+                            "this edge connects {source_ty} to {target_ty}; pinned ends must agree"
                         ),
                     )
                     .with_span(decl.span)
                     .with_field("port", target.port.name().to_string())
-                    .with_field("expected", format!("{target_ty:?}"))
-                    .with_field("found", format!("{source_ty:?}")),
+                    .with_field("expected", target_ty.to_string())
+                    .with_field("found", source_ty.to_string()),
                 );
                 return None;
             }
@@ -5476,12 +5559,11 @@ impl Checker<'_, '_> {
                 return None;
             }
         };
-        // A connector's non-default port is transported (the resolved
-        // table travels in the plan) but not yet EXECUTABLE: the
-        // Partner seam, the mocks, and the dispatcher still speak
-        // in/out/err. Accept-then-execute-differently is worse than
-        // refusal — it defers by name until the connector items land.
-        if target.connector_trait().is_some() && !matches!(port_name, "in" | "out" | "err") {
+        // B7 makes the conventional terminal output executable beside the
+        // ordinary in/out/err ports. Further contract-specific ports remain
+        // transported-but-deferred until their adapter slice exists.
+        if target.connector_trait().is_some() && !matches!(port_name, "in" | "out" | "err" | "exit")
+        {
             self.deferred("a connector edge beyond the default trio", reference.span);
             return None;
         }

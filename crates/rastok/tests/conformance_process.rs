@@ -7,7 +7,7 @@
 //! test turns the harness against a lying adapter to prove the
 //! battery itself bites.
 
-use rastok::boundary::{CallOutcome, Intent, Partner, Response, TypedError};
+use rastok::boundary::{Completion, Intent, Partner, PortOutput, ProcessExit, Response};
 use rastok::conformance::{
     AdapterFactory, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
 };
@@ -164,22 +164,22 @@ fn process_profile() -> Profile {
         input: "salut",
         provocations: vec![
             Provocation {
-                kind: "ExecFailed",
+                exit_case: "Exited",
                 source: EXEC_FAILED.into(),
                 input: "salut",
             },
             Provocation {
-                kind: "SpawnFailed",
+                exit_case: "SpawnFailed",
                 source: SPAWN_FAILED.into(),
                 input: "salut",
             },
             Provocation {
-                kind: "DecodeError",
+                exit_case: "DecodeFailed",
                 source: DECODE_ERROR.into(),
                 input: "salut",
             },
             Provocation {
-                kind: "OutputOverflow",
+                exit_case: "OutputOverflow",
                 source: OUTPUT_OVERFLOW.into(),
                 input: "salut",
             },
@@ -207,7 +207,7 @@ fn process_passes_the_whole_battery() {
     );
     assert_conformant(&report, &["CaptureFailed"]);
     assert_eq!(
-        report.proven_kinds,
+        report.proven_cases,
         vec![
             "Exited",
             "SpawnFailed",
@@ -218,8 +218,8 @@ fn process_passes_the_whole_battery() {
     );
 }
 
-/// Answers every started call with an error kind no contract
-/// declares — the outcome gate must refuse it, and the harness must
+/// Answers every started call with a terminal case no contract
+/// declares — the completion gate must refuse it, and the harness must
 /// call that a violation.
 struct Liar {
     pending: Vec<Response>,
@@ -229,10 +229,16 @@ impl Partner for Liar {
     fn start(&mut self, intent: &Intent, _request: &Envelope) {
         self.pending.push(Response {
             call_ref: intent.call_ref,
-            outcome: CallOutcome::Failure(TypedError {
-                kind: String::from("Gremlin"),
-                data: Data::materialized(Value::Map(std::collections::BTreeMap::new())),
-            }),
+            completion: Completion::try_new(vec![PortOutput {
+                port: rastok::node::Port::conventional_exit(),
+                data: Data::materialized(Value::TaggedUnion(Box::new(
+                    rastok::value::TaggedUnionValue {
+                        case: String::from("Gremlin"),
+                        payload: vec![],
+                    },
+                ))),
+            }])
+            .expect("the structural terminal barrier holds"),
         });
     }
 
@@ -252,7 +258,7 @@ impl AdapterFactory for LiarFactory {
 }
 
 #[test]
-fn an_undeclared_kind_fails_the_battery() {
+fn a_malformed_terminal_case_fails_the_battery() {
     let profile = Profile {
         contract: &PROCESS,
         source: HAPPY.into(),
@@ -272,7 +278,7 @@ fn an_undeclared_kind_fails_the_battery() {
         report
             .violations
             .iter()
-            .any(|violation| violation.contains("the outcome gate refused a reply")),
+            .any(|violation| violation.contains("the completion gate refused a reply")),
         "the gate violation is named: {:#?}",
         report.violations
     );
@@ -290,16 +296,23 @@ impl Partner for Swapper {
         let echoed = String::from_utf8_lossy(intent.prepared.bytes()).into_owned();
         self.pending.push(Response {
             call_ref: intent.call_ref,
-            outcome: CallOutcome::Success(Data::materialized(Value::Text(echoed))),
+            completion: Completion::process(
+                vec![Data::materialized(Value::Text(echoed))],
+                vec![],
+                ProcessExit::Exited {
+                    exit_code: 0,
+                    signal: None,
+                },
+            ),
         });
     }
 
     fn events(&mut self) -> Vec<Response> {
         let mut batch = std::mem::take(&mut self.pending);
         if batch.len() >= 2 {
-            let crossed = batch[0].outcome.clone();
-            batch[0].outcome = batch[1].outcome.clone();
-            batch[1].outcome = crossed;
+            let crossed = batch[0].completion.clone();
+            batch[0].completion = batch[1].completion.clone();
+            batch[1].completion = crossed;
         }
         batch
     }

@@ -283,11 +283,7 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
     use rastok::datatype::DataType;
     for (codec, input, output) in [
         ("lines", DataType::Text, DataType::Text),
-        (
-            "jsonl",
-            DataType::Variant,
-            DataType::array(DataType::Variant),
-        ),
+        ("jsonl", DataType::Variant, DataType::Variant),
         ("bytes", DataType::BYTES, DataType::BYTES),
     ] {
         let ports = rastok::stdlib::PROCESS
@@ -305,8 +301,11 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
         };
         assert_eq!(ty("in"), input);
         assert_eq!(ty("out"), output);
-        assert_eq!(ty("err"), DataType::Variant);
-        assert_eq!(ty("exit"), DataType::Variant);
+        assert_eq!(ty("err"), DataType::Text);
+        assert_eq!(
+            ty("exit"),
+            rastok::boundary::process_exit_type().expect("ProcessExit is canonical")
+        );
     }
 }
 
@@ -591,7 +590,7 @@ fn codec_stays_required() {
 }
 
 #[test]
-fn bytes_framing_is_contract_valid_and_binds_as_the_named_b7_deferral() {
+fn bytes_framing_is_contract_valid_and_binds_in_b7() {
     for (attribute, body) in [
         (
             "codec",
@@ -602,13 +601,8 @@ fn bytes_framing_is_contract_valid_and_binds_as_the_named_b7_deferral() {
     ] {
         let compilation = compile_one(&process_graph(&body))
             .unwrap_or_else(|bag| panic!("`{attribute} = bytes` is on the sheet: {bag:?}"));
-        let message = rastok::connectors::Process::try_new(&compilation.plan)
-            .expect_err("B7 owns the physical adapter framing")
-            .to_string();
-        assert!(
-            message.contains(&format!("{attribute} = bytes")) && message.contains("M1.3 B7"),
-            "{message}"
-        );
+        rastok::connectors::Process::try_new(&compilation.plan)
+            .unwrap_or_else(|error| panic!("`{attribute} = bytes` binds in B7: {error}"));
     }
 }
 

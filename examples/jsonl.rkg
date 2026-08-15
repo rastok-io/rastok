@@ -7,7 +7,7 @@ graph relay : App {
   }
 
   operator sift {
-    on in where data[0]["status"] == "ok" { out = data[0]["value"] }
+    on in where data["status"] == "ok" { out = data["value"] }
   }
 
   . -> shell
@@ -18,7 +18,10 @@ graph relay : App {
 lab relay {
   simulation golden on app {
     mock shell {
-      on in { out = [{"status": "ok", "value": 7}] }
+      on in {
+        out = {"status": "ok", "value": 7}
+        exit = Exited { exit_code = 0, signal = null }
+      }
     }
 
     scenario roundtrip "a struct request opens one canonical line; the mock answers the wire's shape" {

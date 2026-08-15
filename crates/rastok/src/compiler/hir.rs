@@ -376,8 +376,9 @@ pub enum Cmp {
 /// Where an expectation looks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectTarget {
-    /// `app.err` — the root error sink.
-    RootErr,
+    /// `app.<port>` — an ordinary output whose resolved unwired policy is
+    /// `RootSink`.
+    RootSink(node::Port),
     /// `app.<port>` — envelopes leaving the App boundary.
     Boundary(node::Port),
     /// `<node>.<port>` — deliveries reaching a node port.

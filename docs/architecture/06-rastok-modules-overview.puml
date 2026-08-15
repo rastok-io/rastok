@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.3 foundation, 2026-08-14)
+title Rastok — bird's-eye module overview (M1.3 B7, 2026-08-15)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -214,8 +214,8 @@ package "boundary — contracts with the external world" as P_BND {
   Ingress : supplies inbound submissions under backpressure
   interface Partner <<trait>>
   Partner : starts calls, answers or stays silent, cancels on demand
-  interface OutcomeGate <<trait>>
-  OutcomeGate : admits an outcome before it may close a call
+  interface CompletionGate <<trait>>
+  CompletionGate : admits every typed port draft before call closure
   interface Clock <<trait>>
   Clock : supplies one due event at a time (current driver uses target advance)
   interface Supervisor <<trait>>
@@ -237,13 +237,17 @@ package "boundary — contracts with the external world" as P_BND {
   class PreparedRequest <<struct>>
   PreparedRequest : exact request bytes sealed with their digest
   enum RequestCodec <<enum>>
-  RequestCodec : Process lines or jsonl request framing
-  class "prepare_request / effective_pin" as BND_PREP <<mod>>
-  BND_PREP : pure framing and connector-output type authority
+  RequestCodec : Process lines, jsonl, or bytes framing
+  class "prepare_request / process_exit_type" as BND_PREP <<mod>>
+  BND_PREP : pure framing and Process port-type authority
+  class PortOutput <<struct>>
+  PortOutput : one ordinary typed output draft
+  class Completion <<struct>>
+  Completion : ordered drafts ending in exactly one exit
+  enum ProcessExit <<enum>>
+  ProcessExit : exact terminal union for one Process invocation
   class Response <<struct>>
-  Response : protocol-correlated partner answer
-  enum CallOutcome <<enum>>
-  CallOutcome : success data or typed failure
+  Response : protocol-correlated atomic completion
   enum DatedPayload <<enum>>
   DatedPayload : a delivery budget, referenced by (edge, envelope id)
 }
@@ -266,7 +270,7 @@ package "runtime — deterministic execution machinery" as P_RT {
   class Observed <<struct>>
   Observed : one logged delivery — the observation surface
   enum Fault <<enum>>
-  Fault : evaluation faults a machine converts to typed errors
+  Fault : evaluation faults emitted on an ordinary resolved err port
   interface GuestExecutor <<trait>>
   GuestExecutor : pure deterministic guest execution contract
   class BootBindings <<struct>> <<next>>
@@ -283,7 +287,7 @@ package "journal — durable causal history and recovery model" as P_J {
   enum CloseVerdict <<enum>>
   CloseVerdict : won or already-closed result
   enum Closure <<enum>>
-  Closure : partner response or machine timeout
+  Closure : partner completion or machine timeout
   class MemJournal <<struct>>
   MemJournal : current in-memory journal implementation
   enum Record <<enum>>
@@ -309,7 +313,7 @@ package "golden — canonical projection, seal, and diff" as P_GOLD {
 
 package "connectors — concrete external-effect adapters" as P_CONN {
   class Process <<struct>>
-  Process : pre-bound asynchronous child-process adapter with group kill
+  Process : pre-bound async process adapter; out*, err*, then typed exit
   class ProcessBindError <<struct>>
   ProcessBindError : refuses an unserved or unresolved plan before VM boot
   class "HttpServer, HttpClient, Clock,\nCalendar, Memory, File" as CATALOGUE <<guarded>>

@@ -422,9 +422,12 @@ fn record_tree(record: &Record) -> Cbor {
             pairs.insert(43, Cbor::Bytes(outbound.intent.request_digest().to_vec()));
             let (status, closure) = match &outbound.status {
                 OutboundStatus::Open => (1, None),
-                OutboundStatus::Closed(Closure::Response(outcome)) => (
+                OutboundStatus::Closed(Closure::Response(completion)) => (
                     2,
-                    Some(Cbor::Array(vec![Cbor::Uint(1), reply_spine(outcome)])),
+                    Some(Cbor::Array(vec![
+                        Cbor::Uint(1),
+                        completion_spine(completion),
+                    ])),
                 ),
                 OutboundStatus::Closed(Closure::Timeout) => {
                     (2, Some(Cbor::Array(vec![Cbor::Uint(2)])))
@@ -512,34 +515,22 @@ fn data_form(data: &Data) -> Cbor {
     }
 }
 
-/// A closure reply is raw world material — no minted identity yet
-/// (the connector's transaction mints the outcome envelope). This
-/// build seals it as a data-only spine; the full reply spine joins
-/// when closures carry envelopes.
-fn reply_spine(outcome: &crate::boundary::CallOutcome) -> Cbor {
-    use crate::boundary::CallOutcome;
-    match outcome {
-        CallOutcome::Success(data) => Cbor::Map(BTreeMap::from([(8, data_form(data))])),
-        CallOutcome::Failure(error) => {
-            let wrapper = Cbor::Array(vec![
-                Cbor::Uint(17),
+/// A completion is raw world material — no envelope identity exists yet.
+/// The VM later mints every output in one TRANSACTION; this closure spine
+/// seals only the ordered `(port, data)` drafts that won the close race.
+fn completion_spine(completion: &crate::boundary::Completion) -> Cbor {
+    Cbor::Array(
+        completion
+            .outputs()
+            .iter()
+            .map(|output| {
                 Cbor::Array(vec![
-                    Cbor::Array(vec![
-                        Cbor::Text(String::from("detail")),
-                        data_form(&error.data),
-                    ]),
-                    Cbor::Array(vec![
-                        Cbor::Text(String::from("kind")),
-                        Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(error.kind.clone())]),
-                    ]),
-                ]),
-            ]);
-            Cbor::Map(BTreeMap::from([(
-                8,
-                Cbor::Array(vec![Cbor::Uint(1), Cbor::Bytes(encode(&wrapper))]),
-            )]))
-        }
-    }
+                    Cbor::Text(output.port.name().to_string()),
+                    data_form(&output.data),
+                ])
+            })
+            .collect(),
+    )
 }
 
 // ----- the deterministic CBOR encoder (RFC 8949 §4.2) -----

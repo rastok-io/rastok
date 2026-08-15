@@ -15,7 +15,7 @@ use rastok::plan::GraphVersion;
 use rastok::runtime::vm::{Vm, VmError};
 
 use rastok::boundary::{
-    CallOutcome, Draft, IngressAuthority, Response, SubmissionSequence, TypedError,
+    Completion, Draft, IngressAuthority, PortOutput, ProcessExit, Response, SubmissionSequence,
 };
 use rastok::compiler::compile;
 use rastok::contract::Registry;
@@ -60,13 +60,24 @@ impl Partner for EchoWorld {
             .drain(..)
             .map(|intent| Response {
                 call_ref: intent.call_ref,
-                outcome: if self.fail_next {
-                    CallOutcome::Failure(TypedError {
-                        kind: String::from("ExecFailed"),
-                        data: Data::encoded(Encoding::Raw, *b"exit 1"),
-                    })
+                completion: if self.fail_next {
+                    Completion::process(
+                        vec![],
+                        vec![Data::materialized(Value::Text(String::from("exit 1")))],
+                        ProcessExit::Exited {
+                            exit_code: 1,
+                            signal: None,
+                        },
+                    )
                 } else {
-                    CallOutcome::Success(Data::encoded(Encoding::Raw, *b"salut"))
+                    Completion::process(
+                        vec![Data::encoded(Encoding::Raw, *b"salut")],
+                        vec![],
+                        ProcessExit::Exited {
+                            exit_code: 0,
+                            signal: None,
+                        },
+                    )
                 },
             })
             .collect()
@@ -98,6 +109,21 @@ fn text_submission(text: &str) -> InboundSubmission {
     }
 }
 
+fn root_exit_cases<'a>(vm: &'a Vm<'_>) -> Vec<&'a str> {
+    vm.observations()
+        .iter()
+        .filter_map(|observed| {
+            if observed.node.is_some() || observed.port.name() != "exit" {
+                return None;
+            }
+            let Data::Materialized(Value::TaggedUnion(tagged)) = observed.envelope.data() else {
+                return None;
+            };
+            Some(tagged.case.as_str())
+        })
+        .collect()
+}
+
 fn run_probe() -> (MemJournal, Vec<rastok::runtime::vm::BoundaryOutput>) {
     let compilation = compile(
         &[M0_PROBE],
@@ -120,7 +146,7 @@ fn the_m0_probe_runs_end_to_end() {
     let (journal, outputs) = run_probe();
     // The whole mechanical chain, in causal order: birth, the
     // operator's transaction, the call's open and closure facts,
-    // the connector's outcome transaction.
+    // the connector's completion transaction.
     let kinds: Vec<&str> = journal
         .records()
         .iter()
@@ -172,7 +198,7 @@ fn two_runs_produce_identical_journals() {
 }
 
 #[test]
-fn a_typed_failure_leaves_by_the_err_edge_or_stops() {
+fn stderr_and_terminal_status_leave_on_independent_ports() {
     let compilation = compile(
         &[M0_PROBE],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -188,28 +214,25 @@ fn a_typed_failure_leaves_by_the_err_edge_or_stops() {
     vm.drain(&mut journal).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     vm.drain(&mut journal).unwrap();
-    // The failure became the connector's err emission; no edge
-    // routes err in the probe, so it bubbles to the root error
-    // sink instead of vanishing — with its kind intact.
+    // stderr is ordinary data on `err`; the non-zero child status is an
+    // independent, typed `Exited` terminal fact.
     assert!(vm.outputs().is_empty());
     let last = journal.records().last().unwrap();
     let Record::Transaction(transaction) = last else {
-        panic!("expected the outcome transaction");
+        panic!("expected the completion transaction");
     };
     assert_eq!(transaction.emissions[0].port.name(), "err");
+    assert_eq!(transaction.emissions[1].port.name(), "exit");
     assert_eq!(vm.errors().len(), 1);
-    let Data::Materialized(Value::Map(payload)) = vm.errors()[0].data() else {
-        panic!("expected the typed error payload");
-    };
     assert_eq!(
-        payload.get("kind"),
-        Some(&Value::Text(String::from("ExecFailed"))),
-        "the error kind survives into the graph"
+        vm.errors()[0].data(),
+        &Data::materialized(Value::Text(String::from("exit 1")))
     );
+    assert_eq!(root_exit_cases(&vm), ["Exited"]);
 }
 
 #[test]
-fn an_invented_error_kind_is_refused_loudly() {
+fn malformed_terminal_facts_are_refused_loudly() {
     let compilation = compile(
         &[M0_PROBE],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -221,21 +244,38 @@ fn an_invented_error_kind_is_refused_loudly() {
     vm.drain(&mut journal).unwrap();
     let open = journal.open_calls();
     let mut world = ScriptedWorld {
-        answers: vec![Response {
-            call_ref: open[0].call_ref,
-            outcome: CallOutcome::Failure(TypedError {
-                kind: String::from("MadeUp"),
-                data: Data::encoded(Encoding::Raw, *b""),
-            }),
-        }],
+        answers: vec![
+            Response {
+                call_ref: open[0].call_ref,
+                completion: Completion::try_new(vec![PortOutput {
+                    port: node::Port::conventional_exit(),
+                    data: Data::materialized(Value::TaggedUnion(Box::new(
+                        rastok::value::TaggedUnionValue {
+                            case: String::from("MadeUp"),
+                            payload: vec![],
+                        },
+                    ))),
+                }])
+                .unwrap(),
+            },
+            Response {
+                call_ref: open[0].call_ref,
+                completion: Completion::try_new(vec![PortOutput {
+                    port: node::Port::conventional_exit(),
+                    data: Data::encoded(rastok::envelope::Encoding::Raw, b"not a union"),
+                }])
+                .unwrap(),
+            },
+        ],
     };
     let report = vm.pump(&mut journal, &mut world).unwrap();
     // Refused BEFORE the causal fact: the reply is rejected with
     // its reason, and the call stays open — the timeout machinery
     // can still settle it honestly.
     assert_eq!(report.settled, 0);
-    assert_eq!(report.rejected.len(), 1);
+    assert_eq!(report.rejected.len(), 2);
     assert!(report.rejected[0].1.contains("MadeUp"));
+    assert!(report.rejected[1].1.contains("materialized"));
     assert_eq!(journal.open_calls().len(), 1, "no garbage closure");
     vm.drain(&mut journal).unwrap();
     assert!(!vm.is_stable(), "the obligation is still open");
@@ -254,7 +294,7 @@ impl Partner for ScriptedWorld {
 }
 
 #[test]
-fn a_value_fault_becomes_a_typed_error_not_a_lost_envelope() {
+fn a_value_fault_becomes_a_typed_runtime_fault_not_a_lost_envelope() {
     let source = r#"
 graph g : App {
   input in: variant
@@ -422,8 +462,8 @@ fn a_silent_partner_expires_into_a_typed_timeout() {
         .unwrap();
     assert!(vm.is_stable(), "the expiry released the machine");
     assert_eq!(vm.now(), 5_000_000_000);
-    // The closure is a Timeout fact and the outcome transaction
-    // fired under l:timeout, a TimeoutExpired on err.
+    // The closure is a Timeout fact and the completion transaction
+    // fired under l:timeout, with TimeoutExpired on `exit`.
     let last = journal.records().last().unwrap();
     let Record::Transaction(transaction) = last else {
         panic!("expected the timeout transaction");
@@ -432,15 +472,9 @@ fn a_silent_partner_expires_into_a_typed_timeout() {
         transaction.trigger,
         node::Trigger::Lifecycle(node::Lifecycle::Timeout)
     );
-    assert_eq!(transaction.emissions[0].port.name(), "err");
-    assert_eq!(vm.errors().len(), 1);
-    let Data::Materialized(Value::Map(payload)) = vm.errors()[0].data() else {
-        panic!("expected the typed error payload");
-    };
-    assert_eq!(
-        payload.get("kind"),
-        Some(&Value::Text(String::from("TimeoutExpired")))
-    );
+    assert_eq!(transaction.emissions[0].port.name(), "exit");
+    assert!(vm.errors().is_empty());
+    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
     // The claim lifted: a second submission opens a second call.
     vm.inject(&mut journal, submission("encore")).unwrap();
     vm.drain(&mut journal).unwrap();
@@ -470,7 +504,11 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
     // Nobody answers; both budgets expire at the same sweep.
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable());
-    assert_eq!(vm.errors().len(), 2, "both requests expired, typed");
+    assert_eq!(
+        root_exit_cases(&vm),
+        ["TimeoutExpired", "TimeoutExpired"],
+        "both requests expired exactly once"
+    );
     let statuses: Vec<&OutboundStatus> = journal
         .records()
         .iter()
@@ -498,7 +536,7 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
         2,
         "both closed by the machine's Timeout fact"
     );
-    // Both outcome transactions fired under the timeout
+    // Both completion transactions fired under the timeout
     // lifecycle, never a port trigger.
     let timeout_transactions = journal
         .records()
@@ -591,7 +629,7 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
     vm.inject(&mut journal, submission("salut")).unwrap();
     vm.drain(&mut journal).unwrap();
     // The partner answers first; the expiry then loses the race —
-    // one closure fact, one outcome transaction, no duplicate.
+    // one closure fact, one completion transaction, no duplicate.
     vm.pump(&mut journal, &mut world).unwrap();
     vm.drain(&mut journal).unwrap();
     vm.advance(&mut journal, &mut EchoWorld::default(), 5_000_000_000)
@@ -631,7 +669,14 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
     let mut late = ScriptedWorld {
         answers: vec![Response {
             call_ref,
-            outcome: CallOutcome::Success(Data::encoded(Encoding::Raw, *b"tard")),
+            completion: Completion::process(
+                vec![Data::encoded(Encoding::Raw, *b"tard")],
+                vec![],
+                ProcessExit::Exited {
+                    exit_code: 0,
+                    signal: None,
+                },
+            ),
         }],
     };
     let report = vm.pump(&mut journal, &mut late).unwrap();
@@ -667,11 +712,7 @@ fn a_refused_expiry_stays_armed_and_replays() {
     journal.refuse_closes = false;
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable());
-    assert_eq!(
-        vm.errors().len(),
-        1,
-        "exactly one typed timeout — no duplicate fact"
-    );
+    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
 }
 
 #[test]
@@ -694,7 +735,11 @@ fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
     journal.refuse_opens = false;
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable());
-    assert_eq!(vm.errors().len(), 2, "both expired exactly once");
+    assert_eq!(
+        root_exit_cases(&vm),
+        ["TimeoutExpired", "TimeoutExpired"],
+        "both expired exactly once"
+    );
 }
 
 #[test]
@@ -724,22 +769,13 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
         "the open and closure facts may commit, but the refused transaction may not"
     );
     // Heal and replay: the delivery was never removed, the timer
-    // never acked — exactly one typed error results.
+    // never acked — exactly one typed terminal fact results.
     journal.refuse_commits = false;
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     vm.drain(&mut journal).unwrap();
     assert!(vm.is_stable());
-    assert_eq!(vm.errors().len(), 1, "one typed error, no duplicate");
-    let Data::Materialized(rastok::envelope::Value::Map(payload)) = vm.errors()[0].data() else {
-        panic!("expected the typed error payload");
-    };
-    assert_eq!(
-        payload.get("kind"),
-        Some(&rastok::envelope::Value::Text(String::from(
-            "TimeoutExpired"
-        ))),
-        "the kind survived the replay"
-    );
+    assert!(vm.errors().is_empty());
+    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
     let terminal_transactions: Vec<_> = journal
         .inner
         .records()

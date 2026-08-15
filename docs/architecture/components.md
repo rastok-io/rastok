@@ -279,7 +279,7 @@ single-stepping and future journal-relative inspection structural.
 | **Mailboxes** | per-key FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered per-key delivery | [execution-model.md §2–3](../spec/execution-model.md) | M0 |
 | **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
-| **Legacy failure routing** | connector- and machine-produced failures currently take a dedicated success/failure seam; M1.3 replaces it with ordinary typed port outputs and a separate completion control fact | current typed outcomes → routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md) | current scaffold; removed by M1.3 |
+| **Boundary completion** | one correlated completion closes an invocation and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically | completion drafts → one transaction of routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md) | M1.3 B7 |
 | **`GuestExecutor`** | the existing runtime seam future guest engines implement: `run(&[u8], value, budget)` — pure, deterministic, budgeted, inside the node transaction; the bytes become a typed/versioned `GuestProgram` only when that slice lands | opaque program bytes → value or typed error | [stdlib.md §5](../spec/stdlib.md) | seam only; no engine/program type yet |
 | **`BootBindings`** | future `env()` / `secret()` resolution at boot; a missing or ill-typed binding will be a typed refusal, never a default; `Secret<T>` remains a design requirement, not a current type | plan + deployment profile → bound constants | [grammar.md](../spec/grammar.md) initializer positions | guarded / later |
 
@@ -295,7 +295,7 @@ remain host seams rather than objects the M1 VM consumes directly.
 | Interface | Owns | Real side | Lab side | Spec | Status |
 |---|---|---|---|---|---|
 | **`Ingress`** | birth of inbound **drafts** — payload, birth metadata, `IngressAuthority` (opaque), and a sequence request `Next \| Explicit(seq)` (a fixture can replay a production slice with explicit sequences); bounded, backpressure translated outward. It never births an envelope: a root envelope **cannot pre-exist its sequence** — the root id derives from `inbound_seq` and `origin_id = id` — so only the journal's accepting transaction mints it | future listener adapters | scenario injection through `Vm::inject` (no `Fixture` type) | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) fixtures | boundary vocabulary + VM entry; no ingress adapter yet |
-| **`Partner`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef`; correlation is the **connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a partner deduplicates on the idempotency key only *when it cooperates*; `cancel(call_ref)` withdraws in-flight work when the machine closes a call (default: nothing) | `connectors::Process` | the lab's mock partner | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M0 (Process only) |
+| **`Partner`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef` and one ordered `Completion`; correlation is the **connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a partner deduplicates on the idempotency key only *when it cooperates*; `cancel(call_ref)` withdraws in-flight work when the machine closes a call (default: nothing) | `connectors::Process` | the lab's mock partner | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M1.3 B7 (Process only) |
 | **`Clock`** | the only source of time. As built, M0 consumes no trait impl: `Vm::advance(journal, partner, target)` IS the virtual clock — the driver (a lab step, the CLI's wall-mapping loop) chooses targets, due budgets fire in expiry order, and same-instant expiries all fire before the machine drains | declared trait; `advance` targets in M0 | `advance` calls | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (target-driven) |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | not built; fault steps remain guarded | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | declared seam; current wiring boots only |
 
@@ -303,8 +303,8 @@ The **`Dispatcher`** (owned here) is the loop between the journal and
 the partners: it takes OUTBOUND records the VM opened, drives the
 selected `Partner` implementation, and settles answers through
 `journal::close_outbound(call_ref, …) → Won | AlreadyClosed`. Before
-any closure, the **`OutcomeGate`** judges the private pre-B7 reply against
-the fixed `ProcessExit` migration table — a refused reply never becomes
+any closure, the **`CompletionGate`** judges every output against the resolved
+port contract and the final value against exact `ProcessExit` — a refused reply never becomes
 a causal fact: it returns in `PumpBatch::rejected` with its reason,
 and the call stays open, honestly settleable by the timeout. Only a
 `Won` closure becomes an input event for the VM; `AlreadyClosed`
@@ -503,7 +503,7 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `expr` (compile) |
 | Plan | `compiler` (canonicalize, lower), `plan::Manifest` |
 | Step | `runtime` (Scheduler, Mailboxes, TransactionExecutor, EmissionBuffer, error routing) |
-| Handle | `boundary::Dispatcher` + `boundary::Partner` behind the OutcomeGate; `connectors::Process` (App) or the lab mock (Lab) |
+| Handle | `boundary::Dispatcher` + `boundary::Partner` behind `CompletionGate`; `connectors::Process` (App) or the lab mock (Lab) |
 | Record | `journal` (semantic operations, id derivation) |
 | Compare | `golden` projection, seal, and diff; `lab`-returned records; `main --golden/--bless` |
 

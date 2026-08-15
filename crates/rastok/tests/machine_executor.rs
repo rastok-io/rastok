@@ -7,7 +7,7 @@
 // correct report is a panic.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use rastok::boundary::{BoundaryEvent, CallOutcome};
+use rastok::boundary::{Completion, ProcessExit};
 use rastok::envelope::{Data, Envelope, Meta, MetaSys};
 use rastok::journal::ConsumedPosition;
 use rastok::journal::ids;
@@ -18,7 +18,6 @@ use rastok::runtime::{
 use rastok::{envelope, node};
 use std::collections::BTreeMap;
 
-use rastok::boundary::TypedError;
 use rastok::compiler::compile;
 use rastok::contract::Registry;
 use rastok::envelope::Encoding;
@@ -511,26 +510,28 @@ fn a_claimed_mailbox_is_skipped_until_released() {
 }
 
 #[test]
-fn the_connector_outcome_matches_the_reference_trace() {
+fn the_connector_completion_matches_the_reference_trace() {
     let (plan, _) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
     let request = input("salut").envelope;
     let connector_path = node::Path::new(["echo"]).unwrap();
-    let event = BoundaryEvent {
-        call_ref: ids::call_ref(
-            ids::delivery_ref("shout.out>echo.in", request.meta().sys().id()),
-            &[7; 32],
-        ),
-        connector_path: connector_path.clone(),
-        emitting_id: request.meta().sys().id(),
-        port: node::Port::new("err").unwrap(),
-        outcome: CallOutcome::Failure(TypedError {
-            kind: String::from("ExecFailed"),
-            data: Data::encoded(Encoding::Raw, *b"exit 1"),
-        }),
-    };
-    let outcome = executor.connector_outcome(
-        &event,
+    let completion = Completion::process(
+        vec![
+            Data::materialized(envelope::Value::Text(String::from("first"))),
+            Data::materialized(envelope::Value::Text(String::from("second"))),
+        ],
+        vec![Data::materialized(envelope::Value::Text(String::from(
+            "diagnostic",
+        )))],
+        ProcessExit::Exited {
+            exit_code: 1,
+            signal: None,
+        },
+    );
+    let outcome = executor.connector_completion(
+        &connector_path,
+        request.meta().sys().id(),
+        &completion,
         &node::Trigger::Port(node::Port::new("in").unwrap()),
         request.meta(),
         ConsumedPosition {
@@ -540,13 +541,24 @@ fn the_connector_outcome_matches_the_reference_trace() {
     );
     assert_eq!(outcome.record.node_path, connector_path);
     assert_eq!(outcome.record.trigger.to_string(), "p:in");
+    assert_eq!(outcome.record.emissions.len(), 4);
+    let ports_and_indexes: Vec<_> = outcome
+        .record
+        .emissions
+        .iter()
+        .map(|emission| (emission.port.name(), emission.index))
+        .collect();
+    assert_eq!(
+        ports_and_indexes,
+        [("out", 0), ("out", 1), ("err", 0), ("exit", 0)]
+    );
     let emission = &outcome.record.emissions[0];
-    assert_eq!(emission.port.name(), "err");
+    assert_eq!(emission.port.name(), "out");
     let expected = ids::emission_id(
         &connector_path,
         &outcome.record.trigger,
         request.meta().sys().id(),
-        &node::Port::new("err").unwrap(),
+        &node::Port::new("out").unwrap(),
         0,
     );
     assert_eq!(emission.envelope.meta().sys().id(), expected);

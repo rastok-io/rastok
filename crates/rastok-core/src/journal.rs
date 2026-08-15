@@ -19,7 +19,7 @@
 //! [`identity.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/identity.md
 
 use crate::boundary::{
-    CallOutcome, CallRef, InboundSubmission, IngressAuthority, Intent, SubmissionSequence,
+    CallRef, Completion, InboundSubmission, IngressAuthority, Intent, SubmissionSequence,
 };
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::node;
@@ -210,13 +210,13 @@ pub enum OutboundStatus {
     Abandoned,
 }
 
-/// What closed a call — the partner's outcome or the timeout,
-/// exactly one. The outcome carries the raw reply or typed error;
-/// the connector's own transaction builds the envelope.
+/// What closed a call — the partner's completion or the timeout,
+/// exactly one. Completion outputs are still drafts; the connector's
+/// transaction builds their envelopes atomically.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Closure {
-    /// The partner answered — with a reply or a typed failure.
-    Response(CallOutcome),
+    /// The partner answered with ordered outputs and one terminal exit.
+    Response(Completion),
     /// The scheduler's budget expired first.
     Timeout,
 }

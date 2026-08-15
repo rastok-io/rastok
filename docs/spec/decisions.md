@@ -40,8 +40,8 @@ typed output: the convention gives it lifecycle meaning, not another
 emission or conformance path. Tagged-union construction is a general value
 form and every assignment to a port lowers through the ordinary emit path.
 The connector-level `error_set`, `TypedError`, failure-only `CallOutcome`
-branch and error-specific `err_value` grammar are temporary approximations
-to remove, not a model to extend.
+branch and error-specific `err_value` grammar were temporary approximations,
+not a model to extend. B5–B7 have removed all four from executable code.
 
 This generalizes rather than abandons the original M1.3 typed-error goal.
 Its error codes become cases of the invocation's tagged `exit` union, beside
@@ -105,11 +105,10 @@ document, `bytes` → one bounded captured byte value). On-exit publication
 commits those ordered values atomically with `exit`; it does not silently
 fold them into an array or one text blob.
 
-When B5 introduces `err_codec` into the executable Process sheet, its
-default is materialized before hashing like every other contract default.
-That is one deliberate identity move for Process graphs; the implementation
-must inventory and re-bless the affected packages and goldens in that change,
-not let the move arrive accidentally with the B7 adapter rewrite.
+B5 introduced `err_codec` into the executable Process sheet and materialized
+its default before hashing like every other contract default. That deliberate
+identity move was inventoried and re-blessed in B5; B7 separately inventories
+the Process framing/completion move rather than conflating the two causes.
 
 The removal of the temporary failure scaffold follows this explicit table;
 an implementation never maps by similar spelling:
@@ -267,17 +266,15 @@ policy, boundary ports cannot carry node sink policy, and the VM routes an
 unclaimed output only from the row's `RootSink` value — never from the string
 `err`.
 
-The executable v6 bridge is deliberately exact rather than aspirational:
-`lines` resolves `in/out` to `text`, `jsonl` resolves them to
-`variant/array<variant>`, and `bytes` resolves them to `bytes`; the private
-success/failure Partner seam still requires `err/exit: variant`. B7 replaces
-those last two carriers with framed stderr and `ProcessExit`, and replaces the
-JSONL aggregate with repeated unit emissions. The B5 sheet nevertheless owns
+The B5 executable v6 bridge was deliberately exact rather than aspirational:
+`lines` resolved `in/out` to `text`, `jsonl` resolved them to
+`variant/array<variant>`, and `bytes` resolved them to `bytes`; the private
+success/failure Partner seam still required `err/exit: variant`. B7 replaced
+those carriers with framed stderr and repeated unit emissions plus exact
+`ProcessExit` at the in-memory completion gate. The B5 sheet nevertheless owns
 the complete target vocabulary now: `codec = bytes`, independent
 `err_codec = lines | bytes` with materialized default `lines`, the conventional
-`exit` row, and the fixed old-fact-to-`ProcessExit` migration table. The current
-adapter binds either bytes choice as a named B7 deferral; it never silently
-falls back to lines.
+`exit` row, and the fixed old-fact-to-`ProcessExit` migration table.
 
 The travelling `error_set` is removed. Its private-v6 connector key is retired,
 and the port row's direction code now also carries `RequireWire | RootSink`.
@@ -319,6 +316,29 @@ Only its resolved `RootSink` policy is conventional. Struct/tagged constructor
 and contextual `As` nodes remain categorically outside v6 package format; B8
 publishes them once with the complete v7 expression/type registry. Existing
 v6 programs, packages, hashes and goldens therefore do not move in B6.
+
+**B7 implementation checkpoint (2026-08-15).** A boundary `Completion`
+carries an ordered sequence of ordinary `PortOutput` drafts and structurally
+requires exactly one final `exit`. `CompletionGate` validates every draft
+against the resolved output pin and validates the terminal materialized value
+against exact `ProcessExit` before the journal can close the call. The VM alone
+mints envelopes and commits the complete sequence atomically; the Partner and
+Lab mocks manufacture neither envelope identities nor journal records.
+
+`Process(job)` now frames stdout and stderr independently and publishes
+`out*`, `err*`, then `exit`. `lines`, `jsonl` and `bytes` each produce unit
+values; `err_codec = lines | bytes` never inherits the data codec. Every
+observed child status becomes `Exited { exit_code, signal }`, including a
+non-zero code. Spawn, timeout, decode, capture and output-overflow facts map to
+their declared `ProcessExit` cases; stderr is never folded into one. The old
+`CallOutcome`/`TypedError` seam is deleted.
+
+The package remains private v6. Its raw `Process.exit` row is still `variant`
+because v6 cannot encode tagged-union types, but compiler, binder, completion
+gate and runtime all use the exact union. B8 owns the sole remaining bridge and
+publishes it in v7. B7 deliberately moves Process identities and causal
+goldens: echo/spike `e322906a…`, JSONL `87d13844…`, compiler probe
+`77d326e3…`; connector-free gauge remains `0d3ad43d…`.
 
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign
