@@ -21,15 +21,24 @@ jobs:
       - run: cargo doc --workspace --no-deps
       - run: cargo run --quiet -- simulate examples/echo.rkg
 
-  # The kernel must stay buildable for bare metal: an OS leak into
-  # rastok-core is a build error here before it is a review comment.
+  # The kernel must stay buildable for bare metal across the three
+  # portability boundaries we claim: current Arm M-profile, an older
+  # no-FPU Arm baseline, and a non-Arm 32-bit ISA. An OS or architecture
+  # leak into rastok-core is a build error here before it is a review
+  # comment. Execution remains the separate Cortex-M33 spike below.
   no-std-frontier:
+    strategy:
+      matrix:
+        target:
+          - thumbv8m.main-none-eabihf
+          - thumbv7m-none-eabi
+          - riscv32imac-unknown-none-elf
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.97.1 --no-self-update
-      - run: rustup target add thumbv8m.main-none-eabihf --toolchain 1.97.1
-      - run: cargo check -p rastok-core --target thumbv8m.main-none-eabihf
+      - run: rustup target add ${{ matrix.target }} --toolchain 1.97.1
+      - run: cargo check -p rastok-core --no-default-features --target ${{ matrix.target }}
 
   # The spike's proof must not rot outside the workspace: build it
   # warnings-as-errors and execute it under QEMU, asserting the

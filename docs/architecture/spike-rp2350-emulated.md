@@ -62,6 +62,16 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
   proxy: no flash wait states, no cache modeling. Volet B on silicon
   is what verifies wall-clock.
 
+### Compile-only portability companions
+
+The Cortex-M33 image remains the one executable embedded proof. CI also
+compiles `rastok-core` with default features disabled for
+`thumbv7m-none-eabi` (Cortex-M3: older Armv7-M baseline without an FPU) and
+`riscv32imac-unknown-none-elf` (generic non-Arm 32-bit baseline). These two
+checks prove that the semantic kernel has no accidental Armv8-M, hardware
+floating-point or Arm-only dependency; they make no execution, timing,
+peripheral or silicon claim.
+
 ## Numbers (corrected)
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
