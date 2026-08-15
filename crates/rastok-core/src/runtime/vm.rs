@@ -142,9 +142,9 @@ struct PendingCall {
 
 /// The plan-backed gate for one atomic boundary completion.
 ///
-/// The v6 raw plan still transports `Process.exit` through its explicit
-/// `variant` bridge until B8. This gate nevertheless judges the exact
-/// `ProcessExit` union now, so no malformed terminal fact can become causal.
+/// Format v7 transports the exact `ProcessExit` union in the resolved port
+/// table. This gate judges that same type, so no malformed terminal fact can
+/// become causal.
 struct PlanGate<'plan> {
     plan: &'plan ValidatedExecutionPlan,
 }

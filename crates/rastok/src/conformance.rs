@@ -342,10 +342,8 @@ fn resolved_exit_cases(
         .find(|spec| spec.contract == contract.name)
         .ok_or_else(|| format!("the probe instantiates no `{}` connector", contract.name))?;
     let exit = if contract.name == "Process" {
-        // B5 removes the travelling name list and audits the old adapter
-        // against the fixed migration target. The active v6 port carrier is
-        // still `variant`; B7 constructs these cases and B8 transports the
-        // tagged type.
+        // The harness reads the same exact union carried by the v7 resolved
+        // port table; there is no parallel error-name list or variant bridge.
         crate::boundary::process_exit_type()
             .map_err(|error| format!("the ProcessExit contract is invalid: {error}"))?
     } else {

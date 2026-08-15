@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.3 B7, 2026-08-15)
+title Rastok — bird's-eye module overview (M1.3 B8, 2026-08-15)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -158,11 +158,13 @@ package "plan — serializable compiled execution model" as P_PLAN {
   class ExecutionPlan <<struct>>
   ExecutionPlan : private compiled tables before / inside validation
   class ValidatedExecutionPlan <<struct>>
-  ValidatedExecutionPlan : only plan form accepted by the machine and encoder
+  ValidatedExecutionPlan : plan plus total effective port types
+  class ResolvedPortTable <<struct>>
+  ResolvedPortTable : exact declared/inferred type of every port
   enum NodeKind <<enum>>
   NodeKind : operator, or connector with its spec
   class ConnectorSpec <<struct>>
-  ConnectorSpec : typed effect, behavior, attributes, error set
+  ConnectorSpec : typed effect, behavior, and effective attributes
   class Handler <<struct>>
   Handler : activation-selected ordered statement body
   class Slot <<struct>>
@@ -179,13 +181,13 @@ package "plan — serializable compiled execution model" as P_PLAN {
   GuestProgram : opaque compiled guest program
   class AssetBlob <<struct>>
   AssetBlob : content-addressed build-time asset bytes
-  class "encode / decode (format v6)" as PLAN_CODEC <<mod>>
+  class "encode / decode (format v7)" as PLAN_CODEC <<mod>>
   PLAN_CODEC : canonical validated plan package transport
 }
 
 package "contract — compiler-layer node contract metamodel" as P_CONTRACT {
   class ConnectorContract <<struct>>
-  ConnectorContract : ports, attributes, profiles, and error set
+  ConnectorContract : ports, attributes, and profiles
   class AttributeSpec <<struct>>
   AttributeSpec : name, presence, and value domain
   enum Presence <<enum>>

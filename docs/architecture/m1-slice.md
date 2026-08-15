@@ -8,9 +8,8 @@
 
 **Current checkpoint (2026-08-15): items 1 and 2 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
-The current transport is plan-package v6; valid-program identity for
-the spike is `e322906a…` after B7's deliberate Process framing/completion
-move.
+The current transport is plan-package v7; valid-program identity for
+the spike is `514d4ab7…` after B8's deliberate complete-type publication.
 Item 3 has been replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md).**
@@ -233,18 +232,18 @@ step touches `vm.rs` once.
    typed-error deliverable into `ProcessExit`; partition `stop` remains a
    distinct lifecycle implemented by the following `per` slice. Core
    `datatype::DataType` and core `value::Value` now own the complete strict
-   JSON Schema/Avro/Arrow logical and materialized domains without a v6
-   identity move; resolved type parameters are not copied into envelopes.
+   JSON Schema/Avro/Arrow logical and materialized domains; resolved type
+   parameters are not copied into envelopes.
    `expr::EvalValue` is only the transient carrier of the lazy payload witness.
    Core `Value::validate` and `DataType::violation` provide the single
    structural-validation and recursive-conformance doors used by plans,
    metadata, state, ingress and emissions; JSON no longer owns the decimal128
    domain. B2 now resolves every
    used or declared port into a total `Declared`/`Inferred` table on
-   `ValidatedExecutionPlan`; v6 decoders re-derive it, and no unresolved hole
-   becomes `variant`. B3 has renamed the consumer to `expr`, added typed
+   `ValidatedExecutionPlan`; v7 transports and re-derives it, and no unresolved
+   hole becomes `variant`. B3 has renamed the consumer to `expr`, added typed
    deterministic `is`/`as` narrowing and pinned the compatible operator
-   oracle; v6 refuses those new AST nodes until B8 publishes v7. B4 has landed
+   oracle. B4 has landed
    the single byte-adjacent `name!` frontend form. B5 has replaced flat
    connector port/error lists with one resolved `PortContract` table,
    materialized `Process.in/out/err/exit`, moved root-sink behavior into plan
@@ -252,12 +251,14 @@ step touches `vm.rs` once.
    the travelling `error_set`. B6 has made `Case { ... }` a general typed
    value constructor, inserted structural-union wrapping once in checked HIR,
    and removed the special `ErrEmit` syntax/HIR path: `err` now emits like
-   every other port. These constructor trees remain outside v6 and are
-   published only by B8. B7 has removed `TypedError` and the
+   every other port. B7 has removed `TypedError` and the
    success/failure-only reply split: the Partner returns one ordered
    completion, the VM commits all its ordinary port outputs atomically, and
-   `Process(job)` frames `out*`/`err*` before a final typed `exit`. Ordered
-   gates and evidence are in
+   `Process(job)` frames `out*`/`err*` before a final typed `exit`. B8 now
+   transports the complete canonical type/value/expression registry, exact
+   `ProcessExit`, static `number`, and the mandatory total resolved-port
+   table. B9 closes external projection adapters and removes the historical
+   v6 scaffolding. Ordered gates and evidence are in
    the dedicated
    [M1.3 backlog](m1.3-type-system-backlog.md).
 4. **`per` — the partition surface** — keyed nodes and graphs on the

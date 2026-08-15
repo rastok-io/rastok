@@ -6,15 +6,16 @@
 > the implementation is being brought to this model, not the other way
 > around.
 >
-> **Implementation checkpoint (B6 + B3 + B1 completion, 2026-08-15).** The no_std
+> **Implementation checkpoint (B8, 2026-08-15).** The no_std
 > core owns the complete `DataType` and materialized `Value` algebras for the
 > strict JSON Schema, Avro and Arrow profiles; the `expr` engine consumes those
 > authorities. Deterministic `is`/`as` narrowing for precise,
 > structural-union and tagged-union targets is executable in memory. Tagged
-> constructors and contextual structural-union wrapping are now checked and
-> executable in memory; `err` uses the same emission path as any port. Package
-> v6 categorically refuses the new families and expression forms; B8 publishes
-> their sole v7 encoding.
+> constructors and contextual structural-union wrapping are checked,
+> executable and transported; `err` uses the same emission path as any port.
+> Package v7 publishes the complete type/value/expression registry and the
+> total effective port table. V6 is categorically refused rather than
+> migrated.
 
 Rastok owns the logical type system of envelope payloads. The expression
 language, Connectors, codecs, guest frontends, state and metadata consume
@@ -413,7 +414,8 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (`.rkp` v6 versus v7);
+- a package-format reader (v7 rejects older `.rkp` versions rather than
+  translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.
 

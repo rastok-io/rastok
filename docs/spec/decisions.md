@@ -212,13 +212,13 @@ expression operators while retaining the branch index in materialized data;
 tagged selection preserves the name, external discriminators are explicit,
 and mismatch, ambiguity and invalid
 configuration remain distinct. Positive tests narrow only the right side of
-`&&`, true ternary branch and guarded handler body. The v6 validator refuses
-these new AST forms with `ExpressionNotInFormat`; no private tag was added.
+`&&`, true ternary branch and guarded handler body. The private v6 validator
+refused these new AST forms with `ExpressionNotInFormat`; no private tag was added.
 The compatible expression subset is independently evaluated against
 exact-pinned, dev-only `cel-interpreter 0.10.0`; all divergences are recorded
-in `expressions.md`. The remaining v6 `decimal(...) -> variant` tree type is a
-named transport bridge, not the target type: B8 changes it to `number` when
-the one v7 type/expression registry lands. Legacy unchecked member access on
+in `expressions.md`. B8 subsequently removed the private-v6
+`decimal(...) -> variant` bridge: the v7 tree type is canonical `number`.
+Legacy unchecked member access on
 `variant` remains isolated until the B9 evidence sweep.
 
 **B1 completion checkpoint (2026-08-14).** A materialized `Value` carries
@@ -229,8 +229,8 @@ in the value because they select semantic data. The core value/conformance
 matrix now covers every family in the strict JSON Schema, Avro and Arrow
 profiles, including exact binary16/32 promotion, UUID, all temporal shapes,
 canonical non-text map keys and Avro's unsigned month/day/millisecond interval
-without conflating it with Arrow's signed intervals. V6 refuses those new
-constant forms; B8 alone publishes their typed v7 seal.
+without conflating it with Arrow's signed intervals. Private v6 refused those
+new constant forms; B8 now publishes their typed v7 seal.
 
 **B3 narrowing closure (2026-08-15).** Narrowing an exact integer or decimal
 to `decimal(p,s)` rescales to the declared scale exactly: zeros may be padded,
@@ -251,7 +251,7 @@ munch keeps `json!=x` an intrinsic expression. The JSON reader accepts its
 complete value grammar, including scalars, and reports trailing input at the
 host position boundary. `asset(path, content_type?)` is an ordinary expression
 call whose filesystem binding is resolved before HIR identity or plan
-validation; an unbound call is categorically refused by the v6 plan gate. No
+validation; an unbound call is categorically refused by the plan gate. No
 plan-format tag, valid-program hash or golden moved in this checkpoint.
 
 **B5 implementation checkpoint (2026-08-15).** `ConnectorContract` now owns
@@ -285,8 +285,8 @@ probe `e26af508… -> f068bcd1…`. The connector-free gauge semantic hash remai
 runtime-fault `err` row is now explicit plan data. Echo, JSONL and gauge package
 goldens are re-blessed for these causes; causal trace goldens remain unchanged.
 The unreleased v6 reader refuses prior bodies at validation or canonical
-re-encoding rather than migrating them. B8 still owns the single published v7
-type/expression registry.
+re-encoding rather than migrating them. B8 subsequently replaced the body with
+the single published v7 type/expression registry.
 
 **B6 implementation checkpoint (2026-08-15).** `IDENT { ... }` in a host
 value position is the predictive tagged-constructor production. The parser
@@ -313,9 +313,9 @@ The syntax and HIR `ErrEmit`/`err_value` split are removed. `err = value` is an
 ordinary assignment to an ordinary output and lowers through
 `Statement::Emit`, exactly like `out`, `exit` or an application-named port.
 Only its resolved `RootSink` policy is conventional. Struct/tagged constructor
-and contextual `As` nodes remain categorically outside v6 package format; B8
-publishes them once with the complete v7 expression/type registry. Existing
-v6 programs, packages, hashes and goldens therefore do not move in B6.
+and contextual `As` nodes remained categorically outside v6 package format;
+B8 now publishes them once with the complete v7 expression/type registry.
+Existing v6 programs, packages, hashes and goldens therefore did not move in B6.
 
 **B7 implementation checkpoint (2026-08-15).** A boundary `Completion`
 carries an ordered sequence of ordinary `PortOutput` drafts and structurally
@@ -333,12 +333,44 @@ non-zero code. Spawn, timeout, decode, capture and output-overflow facts map to
 their declared `ProcessExit` cases; stderr is never folded into one. The old
 `CallOutcome`/`TypedError` seam is deleted.
 
-The package remains private v6. Its raw `Process.exit` row is still `variant`
-because v6 cannot encode tagged-union types, but compiler, binder, completion
-gate and runtime all use the exact union. B8 owns the sole remaining bridge and
-publishes it in v7. B7 deliberately moves Process identities and causal
+At the B7 checkpoint the package remained private v6. Its raw `Process.exit`
+row was still `variant` because v6 could not encode tagged-union types, while
+compiler, binder, completion gate and runtime used the exact union. B8 has now
+removed that sole remaining bridge. B7 deliberately moved Process identities and causal
 goldens: echo/spike `e322906a…`, JSONL `87d13844…`, compiler probe
 `77d326e3…`; connector-free gauge remains `0d3ad43d…`.
+
+**B8 implementation checkpoint (2026-08-15).** Format v7 publishes one
+complete, extend-only `DataType` constructor registry for every scalar
+parameter, closed composite and both union families. Struct fields, enum
+symbols, tagged cases and resolved-port rows are sorted by their semantic
+keys; structural branches use the canonical type order. Constructors and the
+package reader enforce the existing member/node/nesting and byte budgets,
+reject duplicates and overlapping unions, and never admit recursion or an
+unresolved inference variable.
+
+The body carries the mandatory total `ResolvedPortTable`, including each
+boundary/node port's direction, exact effective type and
+`Declared | Inferred` origin. Decode first parses the claim, rebuilds the
+table from the raw plan constraints without a compiler Registry, and requires
+exact equality before accepting the package. The expression alphabet now
+transports closed structs, tagged constructors, `is`, `as`, their resolved
+targets and explicit external discriminators. All B1 materialized-value tags
+remain the one registry in `identity.md`; v7 activates interval tag 24 and
+both structural-index and tagged-name selectors under union tag 21 without
+renumbering an existing value tag.
+
+The B3/B7 representation bridges are gone: `decimal()` carries static
+`number`, `Process.exit` carries exact `ProcessExit`, and integer literals
+outside the `int32` range carry `int64` (same-carrier arithmetic widens to the
+larger declared width). V6 is refused categorically rather than migrated.
+Avro branch indexes and Arrow union type codes are adapter mappings to the
+canonical branch/case; Arrow dense/sparse and Avro container layout never enter
+logical identity. This is a deliberate pre-public identity move: echo/spike
+`e322906a… -> 514d4ab7…`, JSONL `87d13844… -> 18dda78c…`, and compiler
+probe `77d326e3… -> fa5abd79…`; the connector-free gauge remains
+`0d3ad43d…`. Package goldens and the embedded measurement are re-blessed only
+for this categorical publication.
 
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign
@@ -350,8 +382,8 @@ amendments; and D-2026-08-11-1's reserved `bytes` codec and single
 `array<variant>` job reply (each decoded JSONL document is now an ordinary
 `variant` emission). It also supersedes D-2026-08-13-1's claim that `cel`
 remains the module/type authority and its indefinite “Dyn until a future type
-slice” for `decimal`: the logical target is now `number`, with only the named
-v6 transport bridge above remaining until B8. The unreleased diagnostic
+slice” for `decimal`: the logical and transported target is now `number`; B8
+removed the named private-v6 bridge. The unreleased diagnostic
 spelling `E-CEL-EXPR` becomes `E-EXPR` in the same pre-public B3 migration.
 Their still-compatible parser,
 exact-number, capture-budget, attribute-contract and framing invariants

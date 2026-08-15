@@ -1,9 +1,10 @@
 //! Effective port types derived from a raw plan.
 //!
-//! `ExecutionPlan` v6 still transports source pins as
-//! `Option<DataType>`. This module is the semantic firewall in front of
-//! execution: inference variables live only while this function runs, and a
-//! [`ResolvedPortTable`] contains neither an option nor a recovery case.
+//! Raw [`ExecutionPlan`] source pins remain `Option<DataType>`. This module is
+//! the semantic firewall in front of execution: inference variables live only
+//! while this function runs, and a [`ResolvedPortTable`] contains neither an
+//! option nor a recovery case. Format v7 carries that total result and checks
+//! it by deriving it again at decode.
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -1026,7 +1027,7 @@ fn resolved_expression_type(expr: &expr::Expr, input: &DataType) -> Option<DataT
             expr::Function::Duration => DataType::DURATION,
             expr::Function::Timestamp => DataType::TIMESTAMP,
             expr::Function::Size => DataType::INT,
-            expr::Function::Decimal => DataType::Variant,
+            expr::Function::Decimal => DataType::Number,
         }),
         expr::Expr::List(items) => {
             let mut element = None;
@@ -1098,7 +1099,7 @@ fn intrinsic_expression_type(expr: &expr::Expr) -> Option<DataType> {
             expr::Function::Duration => DataType::DURATION,
             expr::Function::Timestamp => DataType::TIMESTAMP,
             expr::Function::Size => DataType::INT,
-            expr::Function::Decimal => DataType::Variant,
+            expr::Function::Decimal => DataType::Number,
         }),
         expr::Expr::List(items) => {
             let mut element = None;
@@ -1162,7 +1163,7 @@ fn intrinsic_value_type(value: &crate::value::Value) -> Option<DataType> {
         // These carriers deliberately omit the surrounding unit, timezone,
         // interval shape or map-key type. A port/schema constraint can recover
         // that information; a context-free expression literal cannot invent
-        // it. None of these cases is source-constructible in v6.
+        // it. None of these cases is a context-free source literal.
         crate::value::Value::Uuid(_) => DataType::Uuid,
         crate::value::Value::Date(_)
         | crate::value::Value::Time(_)
@@ -1170,7 +1171,7 @@ fn intrinsic_value_type(value: &crate::value::Value) -> Option<DataType> {
         | crate::value::Value::Interval { .. }
         | crate::value::Value::KeyedMap(_) => DataType::Variant,
         crate::value::Value::Null => DataType::Null,
-        crate::value::Value::Decimal { .. } => DataType::Variant,
+        crate::value::Value::Decimal { .. } => DataType::Number,
         crate::value::Value::Array(items) => {
             let mut element = None;
             for item in items {

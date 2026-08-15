@@ -152,7 +152,7 @@ graph g : App {
     assert_eq!(boundary.origin(), plan::TypeOrigin::Declared);
 
     let package = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, _) = plan::decode(&package).expect("the source pin survives v6");
+    let (decoded, _) = plan::decode(&package).expect("the source pin survives v7");
     assert_eq!(
         decoded
             .resolved_ports()
@@ -1025,7 +1025,7 @@ fn what_the_type_accepts_the_format_reads_back() {
 }
 
 #[test]
-fn valid_m13_types_cannot_leak_into_a_v6_package() {
+fn complete_m13_types_round_trip_through_v7() {
     let mut plan = raw_probe();
     let relay = plan
         .nodes
@@ -1033,126 +1033,95 @@ fn valid_m13_types_cannot_leak_into_a_v6_package() {
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
     relay.vars[0].ty = DataType::LONG;
-
-    assert_eq!(
-        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::DataTypeNotInFormat {
-            location: String::from("state `relay.seen`"),
-            ty: DataType::LONG,
-            format: plan::FORMAT_VERSION,
-        }
-    );
+    let validated = ValidatedExecutionPlan::try_new(plan).expect("int64 is a v7 type");
+    let bytes = plan::encode(&validated, &plan::SemanticHash::from_bytes([1; 32]));
+    let (decoded, _) = plan::decode(&bytes).expect("the complete type reads back");
+    assert_eq!(decoded, validated);
 }
 
 #[test]
-fn expression_result_types_share_the_v6_package_gate() {
+fn complete_expression_result_types_round_trip_through_v7() {
     let mut plan = raw_probe();
-    let expression = plan
-        .handlers
-        .iter_mut()
-        .flat_map(|handler| handler.body.iter_mut())
-        .find_map(|step| match step {
-            Step::SetVar { expr, .. } => Some(expr),
-            _ => None,
-        })
-        .expect("the probe state write");
-    expression.ty = DataType::LONG;
-
-    assert!(matches!(
-        ValidatedExecutionPlan::try_new(plan),
-        Err(PlanValidationError::DataTypeNotInFormat {
-            location,
+    plan.handlers[0].body[0] = Step::Let {
+        name: String::from("wide"),
+        expr: expr::Tree {
+            root: expr::Expr::Literal(rastok::value::Value::Int(i64::MAX)),
             ty: DataType::LONG,
-            format: plan::FORMAT_VERSION,
-        }) if location.contains("state expression")
-    ));
+        },
+    };
+    let validated = ValidatedExecutionPlan::try_new(plan).expect("int64 trees are representable");
+    let bytes = plan::encode(&validated, &plan::SemanticHash::from_bytes([2; 32]));
+    let (decoded, _) = plan::decode(&bytes).expect("the expression type reads back");
+    assert_eq!(decoded, validated);
 }
 
 #[test]
-fn narrowing_expressions_cannot_leak_into_a_v6_package() {
-    for (form, predicate) in [("is", true), ("as", false)] {
+fn narrowing_expressions_round_trip_through_v7() {
+    for predicate in [true, false] {
         let mut plan = raw_probe();
-        let expression = plan
-            .handlers
-            .iter_mut()
-            .flat_map(|handler| handler.body.iter_mut())
-            .find_map(|step| match step {
-                Step::SetVar { expr, .. } => Some(expr),
-                _ => None,
-            })
-            .expect("the probe state write");
-        let operand = core::mem::replace(
-            &mut expression.root,
-            expr::Expr::Literal(rastok::value::Value::Int(0)),
-        );
         let target = expr::NarrowTarget::Type(Box::new(expr::NarrowType::new(DataType::INT)));
-        expression.root = if predicate {
-            expression.ty = DataType::Bool;
+        let root = if predicate {
             expr::Expr::Is {
-                expr: Box::new(operand),
+                expr: Box::new(expr::Expr::Literal(rastok::value::Value::Int(0))),
                 target: Box::new(target),
             }
         } else {
-            expression.ty = DataType::INT;
             expr::Expr::As {
-                expr: Box::new(operand),
+                expr: Box::new(expr::Expr::Literal(rastok::value::Value::Int(0))),
                 target: Box::new(target),
             }
         };
-
-        assert_eq!(
-            ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-            PlanValidationError::ExpressionNotInFormat {
-                form,
-                format: plan::FORMAT_VERSION,
-            }
-        );
+        plan.handlers[0].body[0] = Step::Let {
+            name: String::from("narrowed"),
+            expr: expr::Tree {
+                root,
+                ty: if predicate {
+                    DataType::Bool
+                } else {
+                    DataType::INT
+                },
+            },
+        };
+        let validated = ValidatedExecutionPlan::try_new(plan).expect("narrowing is a v7 form");
+        let bytes = plan::encode(&validated, &plan::SemanticHash::from_bytes([3; 32]));
+        let (decoded, _) = plan::decode(&bytes).expect("the narrowing tree reads back");
+        assert_eq!(decoded, validated);
     }
 }
 
 #[test]
-fn constructed_values_cannot_leak_into_a_v6_package() {
+fn constructed_values_round_trip_through_v7() {
     let payload = StructType::new(Vec::new()).expect("the empty payload is closed");
     let union = TaggedUnionType::new(vec![
-        TaggedCase::new("Done", payload).expect("the case is named"),
+        TaggedCase::new("Done", payload.clone()).expect("the case is named"),
     ])
     .expect("one named case is a tagged union");
 
-    for (form, root) in [
-        ("a struct constructor", expr::Expr::Struct(Vec::new())),
+    for (root, ty) in [
+        (expr::Expr::Struct(Vec::new()), DataType::Struct(payload)),
         (
-            "a tagged-union constructor",
             expr::Expr::Tagged {
                 union: Box::new(union.clone()),
                 case: String::from("Done"),
                 fields: Vec::new(),
             },
+            DataType::TaggedUnion(union.clone()),
         ),
     ] {
         let mut plan = raw_probe();
-        let expression = plan
-            .handlers
-            .iter_mut()
-            .flat_map(|handler| handler.body.iter_mut())
-            .find_map(|step| match step {
-                Step::SetVar { expr, .. } => Some(expr),
-                _ => None,
-            })
-            .expect("the probe state write");
-        expression.root = root;
-
-        assert_eq!(
-            ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-            PlanValidationError::ExpressionNotInFormat {
-                form,
-                format: plan::FORMAT_VERSION,
-            }
-        );
+        plan.handlers[0].body[0] = Step::Let {
+            name: String::from("constructed"),
+            expr: expr::Tree { root, ty },
+        };
+        let validated = ValidatedExecutionPlan::try_new(plan).expect("constructors are v7 forms");
+        let bytes = plan::encode(&validated, &plan::SemanticHash::from_bytes([4; 32]));
+        let (decoded, _) = plan::decode(&bytes).expect("the constructor reads back");
+        assert_eq!(decoded, validated);
     }
 }
 
 #[test]
-fn source_narrowing_names_the_v7_transport_gate() {
+fn source_narrowing_crosses_the_v7_transport() {
     let source = r#"
 graph g : App {
   input in: variant
@@ -1165,16 +1134,15 @@ graph g : App {
   . -> o -> .
 }
 "#;
-    let bag = compile(
+    let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect_err("v6 has no narrowing-expression spelling");
-    assert!(bag.diagnostics().iter().any(|diagnostic| {
-        diagnostic.code() == rastok::compiler::check::E_CHECK_DEFERRED
-            && diagnostic.message().contains("plan-package v6")
-            && diagnostic.message().contains("`is`")
-    }));
+    .expect("the source narrowing compiles");
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, hash) = plan::decode(&bytes).expect("the source narrowing reads back");
+    assert_eq!(decoded, compilation.plan);
+    assert_eq!(hash, compilation.hash);
 }
 
 fn shell_path() -> rastok::node::Path {

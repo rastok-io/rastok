@@ -1,13 +1,13 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated through the landed M1.3 B4 frontend surface on
+> of the build; updated through the landed M1.3 B8 package registry on
 > 2026-08-15. The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
 > evidence lives in [`m1-slice.md`](m1-slice.md). The specified M1.3
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
-> describes the current v6 implementation until that landing is complete.
+> describes the current v7 implementation.
 
 This document refines the responsibility table of
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md) to the component level: the
@@ -152,7 +152,7 @@ data out, the governing spec, and current status.
 | **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; byte-adjacent `IDENT!` frontend selection; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes + frontend Registry → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1; D-2026-08-14-1 | M1.3 B4 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspect admission | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.3 B5; new expression/type trees gated from v6 until B8 |
+| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspect admission | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.3 B8; complete checked trees travel in v7 |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
 | **Lowering + plan gate** | node/edge/handler tables, expression trees, `Slot` resolution, schemas and assets; structural validation before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | M0.5, extended in M1 |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
@@ -201,7 +201,7 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core landed; v7 transport remains B8 |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + B8 v7 transport |
 
 `expr` never sees an envelope, node, or partition, and owns its own
 `expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
@@ -226,14 +226,14 @@ document rules.
 
 The boundary rename and typed `is`/`as` narrowing are landed. The compatible
 operator corpus is executed against a pinned independent CEL oracle; Rastok's
-extensions and divergences are listed in `expressions.md`. v6 validation
-categorically refuses the new AST forms, so only B8 assigns their package ids.
+extensions and divergences are listed in `expressions.md`. V7 assigns the
+resolved constructor/narrowing forms their canonical package ids.
 
 ### 3.3 The executable plan (`plan`)
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; construction validates structure, solves every used/declared port, and rejects unresolved or conflicting constraints | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [plan-package.md](plan-package.md) | M1.3 B2; v6 re-derives the table, v7 will transport it |
+| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; construction validates structure, solves every used/declared port, and rejects unresolved or conflicting constraints | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [plan-package.md](plan-package.md) | M1.3 B8; v7 transports and independently re-derives the table |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -524,7 +524,7 @@ The chronological detail and commit evidence remain in
   gate.
 - **M1.2:** `sys`/`app`/`ext` metadata, exact JSON/decimal values,
   assets, named structural types, and the Process `jsonl` codec are in
-  the executable subset. The package is format v6.
+  the executable subset. The package is format v7.
 - **Compiler interludes:** `contract` is the sole node-attribute
   metamodel; defaults are injected before identity, and the parser is a
   forward lexeme-stream parser. The lexer owns cursor/lookahead and
@@ -533,13 +533,14 @@ The chronological detail and commit evidence remain in
   ownership, validation and recursive conformance authority serves plans,
   state, metadata, expressions and VM doors. B2 adds a total effective port table,
   with declared/inferred origin, and makes unresolved/conflicting constraints
-  typed refusals without a package-format move. B3 renames the consumer to
-  `expr`, adds deterministic typed narrowing, and keeps its new AST behind the
-  v7 package gate. B4 selects every registered frontend through byte-adjacent
+  typed refusals. B3 renames the consumer to
+  `expr` and adds deterministic typed narrowing. B4 selects every registered frontend through byte-adjacent
   `IDENT!`, restores scalar JSON and keeps frontend framing out of the host
-  grammar without moving the v6 package identity.
-- **Next:** M1.3 lands uniform connector port contracts, external
-  JSON/Avro/Arrow schema adapters, multi-output boundary completion and v7.
+  grammar. B5-B7 land uniform Connector ports, tagged construction and
+  multi-output completion. B8 publishes the complete v7 registry and total
+  effective port table.
+- **Next:** M1.3 closes external JSON/Avro/Arrow schema adapters and removes
+  historical v6 scaffolding in B9.
   `per`, joins, new adapters,
   Loop, counters, and `--watch` remain guarded in the order recorded by
   the slice.

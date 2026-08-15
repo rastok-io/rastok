@@ -24,7 +24,7 @@ use core::fmt;
 use core::ops::Range;
 
 use crate::datatype::{
-    DataType, Discriminator, NarrowingFailure, StructType, TaggedUnionType, TypeField,
+    DataType, Discriminator, IntegerType, NarrowingFailure, StructType, TaggedUnionType, TypeField,
 };
 use crate::value::Value;
 
@@ -1843,12 +1843,18 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
         }
         Expr::Unary { op, expr } => {
             let inner = check(expr, signature, text)?;
+            if *op == UnaryOp::Neg
+                && let Expr::Literal(Value::Int(value)) = expr.as_ref()
+                && let Some(negated) = value.checked_neg()
+            {
+                return Ok(literal_type(&Value::Int(negated)));
+            }
             match (op, &inner) {
                 (_, DataType::Variant) => Ok(DataType::Variant),
                 (UnaryOp::Not, DataType::Bool) => Ok(DataType::Bool),
                 (UnaryOp::Neg, ty)
-                    if ty == &DataType::INT
-                        || ty == &DataType::DOUBLE
+                    if matches!(ty, DataType::Integer(IntegerType::Signed(_)))
+                        || matches!(ty, DataType::Float(_))
                         || ty == &DataType::DURATION =>
                 {
                     Ok(inner)
@@ -1892,7 +1898,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             match base_ty {
                 DataType::Variant => Ok(DataType::Variant),
                 DataType::Array(array) => {
-                    if matches!(index_ty, DataType::INT | DataType::UINT | DataType::Variant) {
+                    if matches!(index_ty, DataType::Integer(_) | DataType::Variant) {
                         Ok(array.element().clone())
                     } else {
                         Err(fail(String::from("a list index must be an integer")))
@@ -1938,11 +1944,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                 }
                 Ok(match function {
                     Function::Duration => DataType::DURATION,
-                    // The value is an exact Rastok decimal. The static
-                    // `variant` result is the one remaining v6 package
-                    // compatibility bridge; B8 replaces it with `number`
-                    // when the complete type registry ships in v7.
-                    Function::Decimal => DataType::Variant,
+                    Function::Decimal => DataType::Number,
                     _ => DataType::TIMESTAMP,
                 })
             }
@@ -2086,7 +2088,13 @@ fn check_narrowing_compatibility(source: &DataType, target: &NarrowTarget) -> Re
 fn literal_type(value: &Value) -> DataType {
     match value {
         Value::Bool(_) => DataType::Bool,
-        Value::Int(_) => DataType::INT,
+        Value::Int(value) => {
+            if i32::try_from(*value).is_ok() {
+                DataType::INT
+            } else {
+                DataType::LONG
+            }
+        }
         Value::Uint(_) => DataType::UINT,
         Value::Double(_) => DataType::DOUBLE,
         Value::Text(_) => DataType::Text,
@@ -2100,9 +2108,7 @@ fn literal_type(value: &Value) -> DataType {
         // No struct type exists in the annotation subset; the value
         // carries its own witness and types as dynamic.
         Value::Struct(_) => DataType::Variant,
-        // The exact value already belongs to Rastok's decimal domain. Its
-        // v6 tree type remains `variant` until B8 can transport `number`.
-        Value::Decimal { .. } => DataType::Variant,
+        Value::Decimal { .. } => DataType::Number,
         Value::Uuid(_) => DataType::Uuid,
         Value::Date(_)
         | Value::Time(_)
@@ -2134,13 +2140,12 @@ fn binary_type(op: BinaryOp, lhs: &DataType, rhs: &DataType) -> Option<DataType>
         And | Or => (lhs == &DataType::Bool && rhs == &DataType::Bool).then_some(DataType::Bool),
         Eq | Ne => Some(DataType::Bool),
         Lt | Le | Gt | Ge => {
-            let comparable = lhs == &DataType::INT
-                || lhs == &DataType::UINT
-                || lhs == &DataType::DOUBLE
-                || lhs == &DataType::Text
-                || lhs == &DataType::DURATION
-                || lhs == &DataType::TIMESTAMP;
-            (comparable && lhs == rhs).then_some(DataType::Bool)
+            let comparable = numeric(lhs, rhs).is_some()
+                || (lhs == rhs
+                    && (lhs == &DataType::Text
+                        || lhs == &DataType::DURATION
+                        || lhs == &DataType::TIMESTAMP));
+            comparable.then_some(DataType::Bool)
         }
         Add if lhs == &DataType::Text && rhs == &DataType::Text => Some(DataType::Text),
         Add if lhs == &DataType::DURATION && rhs == &DataType::DURATION => Some(DataType::DURATION),
@@ -2162,8 +2167,26 @@ fn binary_type(op: BinaryOp, lhs: &DataType, rhs: &DataType) -> Option<DataType>
 }
 
 fn numeric(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
-    (lhs == rhs && (lhs == &DataType::INT || lhs == &DataType::UINT || lhs == &DataType::DOUBLE))
-        .then(|| lhs.clone())
+    let same_carrier_family = matches!(
+        (lhs, rhs),
+        (
+            DataType::Integer(IntegerType::Signed(_)),
+            DataType::Integer(IntegerType::Signed(_))
+        ) | (
+            DataType::Integer(IntegerType::Unsigned(_)),
+            DataType::Integer(IntegerType::Unsigned(_))
+        ) | (DataType::Float(_), DataType::Float(_))
+    );
+    if !same_carrier_family {
+        return None;
+    }
+    if lhs.is_assignable_to(rhs) {
+        Some(rhs.clone())
+    } else if rhs.is_assignable_to(lhs) {
+        Some(lhs.clone())
+    } else {
+        None
+    }
 }
 
 // ===== evaluation =====

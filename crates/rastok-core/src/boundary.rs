@@ -158,11 +158,9 @@ impl RequestCodec {
 /// Effective logical type of one currently executable Connector port.
 ///
 /// The compiler sheet owns the source-facing rule. This core mirror lets a
-/// package validator prove the same current-v6 table without a compiler
-/// Registry. B7 uses unit output types; only `Process.exit` remains an
-/// explicit v6 `variant` bridge until B8 publishes its tagged union.
+/// package validator prove the same table without a compiler Registry.
 #[must_use]
-pub fn legacy_v6_process_port_type(
+pub fn process_port_type(
     contract: &str,
     port: &str,
     codec_word: Option<&str>,
@@ -181,19 +179,15 @@ pub fn legacy_v6_process_port_type(
             Some("bytes") => Some(DataType::BYTES),
             _ => None,
         },
-        // The runtime validates the exact ProcessExit union in B7. The raw
-        // v6 plan keeps the variant carrier until B8 publishes v7's type
-        // registry in one categorical move.
-        ("exit", Some("lines" | "jsonl" | "bytes")) => Some(DataType::Variant),
+        ("exit", Some("lines" | "jsonl" | "bytes")) => process_exit_type().ok(),
         _ => None,
     }
 }
 
 /// The canonical logical type of the conventional `Process.exit` port.
 ///
-/// B5 fixes the migration target beside the old boundary facts. The active v6
-/// port carrier remains `variant`; B7 constructs this union and B8 assigns its
-/// published wire representation.
+/// B5 fixes the migration target beside the old boundary facts; v7 transports
+/// this exact union as the ordinary type of the port.
 ///
 /// # Errors
 ///

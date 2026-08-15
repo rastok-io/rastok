@@ -459,9 +459,9 @@ impl Writer<'_> {
     /// Stable domain tags for the logical data-type vocabulary — never a Rust
     /// `Debug` rendering, which renames could silently change.
     fn ty(&mut self, ty: &DataType) {
-        // Preserve every pre-M1.3 hash exactly. The parameterized forms below
-        // extend the HIR domain; these legacy aliases keep their historical
-        // one-byte spelling until the categorical identity move in B8.
+        // The historical scalar aliases retain their domain tags. Composite
+        // and parameterized forms extend that registry; the v7 package uses
+        // its own transport tags over the same resolved DataType authority.
         if ty == &DataType::INT {
             self.tag(2);
             return;
@@ -699,10 +699,6 @@ impl Writer<'_> {
         }
         let mut ports: Vec<_> = node.ports.iter().collect();
         ports.sort_by_key(|decl| (decl.port.name(), decl.direction));
-        let process = matches!(
-            &node.role,
-            NodeRole::Connector { trait_name, .. } if trait_name == "Process"
-        );
         self.count(ports.len());
         for decl in ports {
             self.str(decl.port.name());
@@ -716,12 +712,6 @@ impl Writer<'_> {
             // boundary and the var initializers.
             match &decl.ty {
                 None => self.tag(0),
-                Some(_ty) if process && decl.port.name() == "exit" => {
-                    // The v6 identity remains on the explicit variant bridge;
-                    // B8 moves it once with the published tagged-union table.
-                    self.tag(1);
-                    self.ty(&DataType::Variant);
-                }
                 Some(ty) => {
                     self.tag(1);
                     self.ty(ty);
@@ -1104,10 +1094,9 @@ impl Writer<'_> {
     }
 }
 
-/// Materializes fixed runtime capability and adapts the one exact type that
-/// v6 cannot yet transport. An untyped Operator `err` receives the derived
-/// RuntimeFault row because the VM is a real producer even when no source
-/// emission names that port.
+/// Materializes fixed runtime capability. An untyped Operator `err` receives
+/// the derived RuntimeFault row because the VM is a real producer even when
+/// no source emission names that port.
 fn executable_ports(node: &HirNode) -> Vec<crate::plan::PortDecl> {
     let mut ports = node.ports.clone();
     match &node.role {
@@ -1122,14 +1111,6 @@ fn executable_ports(node: &HirNode) -> Vec<crate::plan::PortDecl> {
                     node::Port::conventional_err(),
                     Some(DataType::text_map(DataType::Text)),
                 ));
-            }
-        }
-        NodeRole::Connector { trait_name, .. } if trait_name == "Process" => {
-            // B7 checks and executes the exact ProcessExit union. The v6 plan
-            // registry cannot transport tagged unions; B8 removes this one
-            // explicit bridge while publishing v7 categorically.
-            if let Some(exit) = ports.iter_mut().find(|port| port.port.name() == "exit") {
-                exit.ty = Some(DataType::Variant);
             }
         }
         NodeRole::Connector { .. } => {}
@@ -1346,9 +1327,11 @@ graph m0_probe : App {
         // `err_codec = lines` before hashing.
         // DELIBERATE MOVE 2026-08-15 (M1.3 B7): jsonl replies are unit
         // emissions, stderr has its resolved framing, and every Process
-        // invocation terminates on the explicit `exit` port. The v6 hash
-        // seals that executable bridge while B8 owns the categorical v7
-        // type registry.
+        // invocation terminates on the explicit `exit` port.
+        // DELIBERATE MOVE 2026-08-15 (M1.3 B8): v7 seals exact resolved
+        // types and the total effective port table. The former Process.exit
+        // and decimal transport bridges are gone; wide integer literals keep
+        // their honest int64 type.
         let hash = compile(
             &[M0_PROBE],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1357,7 +1340,7 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "77d326e3420851d43486fc81e472146c8f7a849fd187d4d5af9fb7630d3ae250"
+            "fa5abd79b5a1eb09969c985bdf8c4320e2c9188df4dfe8bccaa2d892dceda45e"
         );
     }
 

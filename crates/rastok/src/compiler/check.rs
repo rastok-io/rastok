@@ -1379,13 +1379,12 @@ impl Checker<'_, '_> {
                     if !self.guard_binding_name(&port.name, "a boundary port") {
                         continue;
                     }
-                    // The annotation resolves through the same type
-                    // subset as state cells — its deferrals (long,
-                    // float, unions) refuse identically.
+                    // Boundary and state annotations resolve through the same
+                    // complete logical type algebra.
                     let pinned = match &port.ty {
                         None => None,
                         Some(type_ref) => match self.state_type(type_ref) {
-                            Some((mapped, _)) => Some(mapped),
+                            Some(mapped) => Some(mapped),
                             None => continue,
                         },
                     };
@@ -2349,7 +2348,7 @@ impl Checker<'_, '_> {
                     let pinned = match &port.ty {
                         None => None,
                         Some(type_ref) => match self.state_type(type_ref) {
-                            Some((mapped, _)) => Some(mapped),
+                            Some(mapped) => Some(mapped),
                             None => continue,
                         },
                     };
@@ -2631,7 +2630,7 @@ impl Checker<'_, '_> {
         if !self.guard_binding_name(&decl.name, "a var") {
             return None;
         }
-        let (ty, int_bounded) = self.state_type(&decl.ty)?;
+        let ty = self.state_type(&decl.ty)?;
         let init = match &decl.value {
             None => None,
             // The parser already spoke for its recovery form.
@@ -2640,21 +2639,6 @@ impl Checker<'_, '_> {
                 let tree =
                     self.typed_value_tree(value, signature, Some(&ty), decl.span, &decl.name.text)?;
                 let constant = self.reduce_constant(tree, decl.span, consts)?;
-                if int_bounded
-                    && let crate::value::Value::Int(value) = constant.value
-                    && i32::try_from(value).is_err()
-                {
-                    self.bag.push(
-                        Diagnostic::new(
-                            E_EXPR,
-                            Phase::Check,
-                            format!("`{value}` does not fit `int` (32-bit)"),
-                        )
-                        .with_span(decl.span)
-                        .with_field("detail", "out of the 32-bit int range"),
-                    );
-                    return None;
-                }
                 if !ty.accepts(&constant.value) {
                     let init_ty = match value_type(&constant.value) {
                         Ok(Some(ty)) => ty.to_string(),
@@ -2778,12 +2762,9 @@ impl Checker<'_, '_> {
 
     /// Resolves a source type structurally into the canonical core algebra.
     /// Named declarations are aliases only; no source spelling survives in
-    /// the result. The boolean keeps the existing focused diagnostic for the
-    /// friendly 32-bit `int` alias.
-    fn state_type(&mut self, ty: &TypeRef) -> Option<(DataType, bool)> {
-        let mapped = self.resolve_type_ref(ty)?;
-        let int_bounded = mapped == DataType::INT;
-        Some((mapped, int_bounded))
+    /// the result.
+    fn state_type(&mut self, ty: &TypeRef) -> Option<DataType> {
+        self.resolve_type_ref(ty)
     }
 
     fn inferred_value_type(&mut self, value: &crate::value::Value, span: Span) -> Option<DataType> {
@@ -2809,9 +2790,8 @@ impl Checker<'_, '_> {
     }
 
     /// Host constructors already carry the exact resolved composite type in
-    /// their tree. Historical expression literals keep their value-driven
-    /// inference (notably the empty-collection hole) until B8 removes the v6
-    /// bridge.
+    /// their tree. Scalar and collection literals keep value-driven inference;
+    /// an empty collection still needs contextual type information.
     fn constant_binding_type(&mut self, value: &Const, span: Span) -> Option<DataType> {
         if matches!(
             value.tree.ty,
@@ -4392,10 +4372,10 @@ impl Checker<'_, '_> {
                 return None;
             }
             let tree = match &entry.value {
-                // A named case is the one B6 addition to an untyped map
-                // value. Other nested forms retain their established v6
-                // behavior; in particular a non-empty struct still names its
-                // deferral instead of silently acquiring a v7-only type.
+                // A named case is the B6 addition to an untyped map value.
+                // Other nested forms retain their established source rules;
+                // in particular a non-empty struct still names its deferral
+                // rather than inferring a structurally unrelated map value.
                 SynValue::Tagged { .. } => {
                     self.typed_value_tree(&entry.value, signature, None, at, "map value")?
                 }
@@ -6011,12 +5991,15 @@ fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError
             }
             DataType::Struct(StructType::new(resolved)?)
         }
-        // The exact value is not an inference hole. v6 can only transport
-        // the historical `variant` tree type; B8 switches this bridge to the
-        // canonical `number` type together with the single v7 registry.
-        crate::value::Value::Decimal { .. } => DataType::Variant,
+        crate::value::Value::Decimal { .. } => DataType::Number,
         crate::value::Value::Bool(_) => DataType::Bool,
-        crate::value::Value::Int(_) => DataType::INT,
+        crate::value::Value::Int(value) => {
+            if i32::try_from(*value).is_ok() {
+                DataType::INT
+            } else {
+                DataType::LONG
+            }
+        }
         crate::value::Value::Uint(_) => DataType::UINT,
         crate::value::Value::Double(_) => DataType::DOUBLE,
         crate::value::Value::Text(_) => DataType::Text,
@@ -6025,7 +6008,7 @@ fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError
         crate::value::Value::Timestamp(_) => DataType::TIMESTAMP,
         // The materialized carrier does not repeat temporal parameters or a
         // keyed map's schema. These cases acquire their precise type from a
-        // port/schema constraint; none is a source literal in v6.
+        // port/schema constraint; none is a context-free source literal.
         crate::value::Value::Uuid(_) => DataType::Uuid,
         crate::value::Value::Date(_)
         | crate::value::Value::Time(_)
@@ -6817,7 +6800,8 @@ graph g : App {
         assert!(
             bag.diagnostics()
                 .iter()
-                .any(|diagnostic| diagnostic.message().contains("does not fit `int`"))
+                .any(|diagnostic| diagnostic.code() == E_PORT_TYPE
+                    && diagnostic.message().contains("requires int32"))
         );
     }
 

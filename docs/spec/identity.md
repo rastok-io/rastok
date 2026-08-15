@@ -5,12 +5,11 @@
 > **allocation of `graph_version`**, and the **canonical byte form** of
 > journal records.
 >
-> The registry below describes executable plan-package v6. The M1.3
-> target in D-2026-08-14-1 transports a canonical `DataType` registry,
-> complete resolved port types and structural/tagged unions together in
-> v7. B2 already requires and derives the complete effective table when a v6
-> plan validates or decodes; this registry remains only the current wire
-> authority and is not the design constraint for v7.
+> The registry below describes executable plan-package v7. D-2026-08-14-1
+> transports the canonical `DataType` registry, complete resolved port types
+> and structural/tagged unions together. Decode re-derives the effective table
+> from the plan constraints and requires exact agreement with the transported
+> claim.
 
 ## 1. The semantic hash
 
@@ -69,8 +68,8 @@ typed port model. Consequently Process graphs move once (echo/spike
 `a7511135…`, JSONL `4eacb55c…`, compiler probe `f068bcd1…`). The
 connector-free gauge semantic hash remains `0d3ad43d…`: B5 only makes its
 already-existing implicit Operator runtime-fault row explicit in the package,
-which changes transport bytes but not program meaning. These are pre-public v6
-checkpoints; v7 later seals the full tagged types without renumbering their
+which changes transport bytes but not program meaning. These were pre-public
+v6 checkpoints; v7 now seals the full tagged types without renumbering their
 logical registry.
 
 **B6 construction checkpoint (2026-08-15).** A checked `Case { ... }` hashes
@@ -78,9 +77,9 @@ as its resolved name-stable tagged-union constructor and a contextual
 structural-union write hashes as the explicit resolved `as` node inserted by
 the checker. `err` contributes no error-specific statement tag: it is the same
 ordered port emission as `out`, `exit` or an application-named output. These
-nodes have no v6 package spelling and are categorically refused until B8;
-therefore no previously valid v6 program, semantic hash or golden moves at
-B6.
+nodes had no v6 package spelling and were categorically refused until B8;
+therefore no previously valid v6 program, semantic hash or golden moved at
+B6. V7 now carries them.
 
 **B7 completion checkpoint (2026-08-15).** A Process invocation now publishes
 unit-framed `out*`, independently framed `err*`, then one exact terminal
@@ -90,8 +89,17 @@ echo/spike `e322906a…`, JSONL `87d13844…`, and compiler probe `77d326e3…`.
 Their package and causal-trace goldens are re-blessed because both the plan
 contract and closed-call/output record shapes changed. The connector-free
 gauge hash remains `0d3ad43d…`, proving the move is scoped. The raw v6 package
-still represents `Process.exit` as `variant`; B8 replaces that transport bridge
+represented `Process.exit` as `variant`; B8 replaced that transport bridge
 with the exact tagged union in v7.
+
+**B8 package checkpoint (2026-08-15).** V7 transports the complete canonical
+type tree, expression forms and total resolved-port table. The semantic
+representation bridges disappear: `Process.exit` is exact `ProcessExit`,
+`decimal()` is `number`, and an integer literal outside `int32` is `int64`.
+This deliberate pre-public move changes echo/spike to `514d4ab7…`, JSONL to
+`18dda78c…`, and the compiler probe to `fa5abd79…`; connector-free gauge stays
+`0d3ad43d…`. Package goldens move because the body adds the resolved table and
+complete type constructors even when the graph's semantic hash is unchanged.
 
 ## 2. `graph_version` and the manifest
 
@@ -257,7 +265,7 @@ delivery-semantics §4) — keys `40–46` :
 Key 44's `status` is the internal state of the current v6 WAL record, not a
 graph port and not a payload union. M1.3's conventional `exit` port therefore
 does not rename this concept by implication. B7 changed the private v6 closure
-payload to an ordered multi-output completion; B8 changes only the package's
+payload to an ordered multi-output completion; B8 changed only the package's
 logical type transport to v7.
 
 **Normative sub-form encodings.** Every
@@ -303,25 +311,23 @@ cannot diverge on bytes for the same journal :
   | 21 | union | `[branch_index (uint), tagged_value]` — the branch's 0-based position in the union's declared order. **Branches MUST be pairwise disjoint : overlapping/identical branches (`int \| int`, `int \| long`, `number \| long`) are a compile error `E-UNION-OVERLAP`, so a value maps to exactly one `branch_index`** |
   | 22 | variant | the dynamic tree, encoded as the `tagged_value` of its resolved concrete tag |
   | 23 | uint | CBOR unsigned integer (u64 range) — the Rastok `uint` domain (originally introduced by the CEL-compatible evaluator) ; appended 2026-08-07 (see errata E-2026-08-07-1) : it previously borrowed tag 3, making `long 2^31` and `uint 2^31` seal identically |
-  | 24 | interval (**reserved for v7; v6 refuses**) | `[months (int), days (int), nanoseconds (int)]` ; the resolved interval `DataType` fixes the admitted component shape (`year_month`, `day_time`, `month_day_nano`, or Avro's unsigned month/day/millisecond profile) |
+  | 24 | interval | `[months (int), days (int), nanoseconds (int)]` ; the resolved interval `DataType` fixes the admitted component shape (`year_month`, `day_time`, `month_day_nano`, or Avro's unsigned month/day/millisecond profile) |
 
-  The v6 row for tag 21 describes its only executable union form:
-  structural `[branch_index, tagged_value]`. The M1.3 logical value algebra
-  also has name-stable tagged unions; its in-memory canonical projection is
+  The historical v6 row for tag 21 described only structural
+  `[branch_index, tagged_value]`. The M1.3 logical value algebra also has
+  name-stable tagged unions; its canonical projection is
   `[case_name (text), tagged struct payload]`, deliberately distinguishable
-  from the unsigned structural selector. No validated v6 plan can carry that
-  form. B8 freezes both selector forms as part of the one v7 registry rather
-  than retroactively extending v6.
+  from the unsigned structural selector. V7 freezes both selector forms as
+  part of one registry rather than retroactively extending v6.
 
   The materialized carrier does not duplicate its resolved type parameters.
   Integer/float width, fixed length, decimal precision, temporal unit and
   timestamp timezone come from the plan/schema selected by the record's
   `graph_version`; the value carries only the canonical data and semantic
-  discriminants. B8 therefore seals a typed value from `(resolved DataType,
+  discriminants. V7 therefore seals a typed value from `(resolved DataType,
   Value)` while storing that schema context once in the retained plan/manifest,
-  not as a full type tree in every envelope. The old v6 `value_tagged` rows stay
-  byte-stable for its admitted subset; tags and type constructors unavailable
-  to v6 are categorically refused by its validator.
+  not as a full type tree in every envelope. The old `value_tagged` rows remain
+  byte-stable; v7 activates the complete family without renumbering them.
 
   (Sort keys — struct by `field` UTF-8 ; map by the key's canonical
   `tagged_value` bytes. All temporal logical types share the Arrow

@@ -92,8 +92,8 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             name: "exit",
             direction: Direction::Output,
             unwired: UnwiredPolicy::RootSink,
-            // The compiler/checker sees the exact union now. Lowering keeps
-            // only the explicit v6 carrier until B8 publishes the v7 table.
+            // One exact union is shared by the contract, v7 port table,
+            // completion gate and Process adapter.
             ty: PortTypeRule::Fixed(PortDataType::ProcessExit),
         },
     ],

@@ -841,8 +841,8 @@ impl fmt::Display for NarrowingFailure {
 impl core::error::Error for NarrowingFailure {}
 
 // This key, rather than the source order of `DataType` variants, owns the
-// deterministic in-memory order used to canonicalize structural unions. B8
-// will assign the package bytes to this already-explicit logical order.
+// deterministic order used to canonicalize structural unions. Format v7
+// serializes branches in this already-explicit logical order.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum TypeOrderKey<'a> {
     Null,
@@ -1125,8 +1125,9 @@ impl DataType {
         Ok(())
     }
 
-    /// Whether v6 can transport this type without changing its published
-    /// registry. B8 removes this gate when the categorical v7 package lands.
+    /// Whether the retired private-v6 draft could transport this type.
+    /// No executable or package path consults this historical subset; B9
+    /// removes it with the remaining migration scaffolding.
     #[must_use]
     pub fn is_v6_wire_type(&self) -> bool {
         match self {
@@ -2875,7 +2876,7 @@ mod tests {
     }
 
     #[test]
-    fn v6_subset_is_named_without_weakening_the_new_algebra() {
+    fn retired_v6_subset_is_named_without_weakening_the_new_algebra() {
         assert!(DataType::INT.is_v6_wire_type());
         assert!(DataType::array(DataType::Text).is_v6_wire_type());
         assert!(!DataType::LONG.is_v6_wire_type());

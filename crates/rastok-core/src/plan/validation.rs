@@ -121,7 +121,7 @@ pub enum PlanValidationError {
         port: &'static str,
     },
     /// A resolved built-in Connector row disagrees with its self-contained
-    /// contract rule (direction, routing policy, or v6 execution pin).
+    /// contract rule (direction, routing policy, or effective type).
     ContractPortMismatch {
         /// Connector node.
         node: node::Path,
@@ -159,10 +159,8 @@ pub enum PlanValidationError {
         /// The undeclared name.
         name: String,
     },
-    /// A constant value no source can express — a struct constant:
-    /// Rastok expressions cannot construct one, so the compiler never emits one,
-    /// and the codec's tables do not carry one. Refused so
-    /// `encode ⇒ decode` stays total.
+    /// A materialized constant or compiled expression tree contradicts its
+    /// claimed resolved type or canonical constructor shape.
     UnrepresentableConstant,
     /// A metadata write outside the travelling zone schema — the
     /// checker's grid, re-verified without a Registry
@@ -281,8 +279,8 @@ pub enum PlanValidationError {
         /// The violated type invariant.
         reason: TypeError,
     },
-    /// The logical type is valid in the M1.3 algebra but has no spelling in
-    /// the currently published plan-package registry.
+    /// Historical private-format refusal retained until B9. Format v7 has a
+    /// spelling for every valid [`DataType`].
     DataTypeNotInFormat {
         /// Where the type occurs in the plan.
         location: String,
@@ -291,9 +289,9 @@ pub enum PlanValidationError {
         /// Published format that cannot carry it.
         format: u32,
     },
-    /// The logical expression is valid in memory but its AST node has no
-    /// spelling in the currently published package format. B8 lifts this
-    /// categorical gate with v7 rather than extending v6 piecemeal.
+    /// Historical private-format refusal retained until B9. Its sole current
+    /// use names an `asset()` call that lowering failed to bind, not a missing
+    /// v7 expression spelling.
     ExpressionNotInFormat {
         /// Expression form requiring the later registry.
         form: &'static str,
@@ -549,6 +547,13 @@ impl ValidatedExecutionPlan {
     pub fn try_new(plan: ExecutionPlan) -> Result<Self, PlanValidationError> {
         validate(&plan)?;
         let resolved_ports = super::type_resolution::resolve(&plan)?;
+        let depth = super::serialization::deepest_level_with_resolved(&plan, &resolved_ports);
+        if depth >= crate::canonical_cbor::MAX_NESTING {
+            return Err(PlanValidationError::NestingBudgetExceeded {
+                depth,
+                budget: crate::canonical_cbor::MAX_NESTING,
+            });
+        }
         Ok(Self {
             plan,
             resolved_ports,
@@ -563,9 +568,9 @@ impl ValidatedExecutionPlan {
 
     /// Effective logical types of every graph-boundary and node port.
     ///
-    /// Unlike the raw v6 declarations, this table contains no inference
-    /// variable and no recovery hole. It is derived again when a package is
-    /// decoded; B8 will make it part of the published v7 representation.
+    /// Unlike raw source declarations, this table contains no inference
+    /// variable and no recovery hole. Format v7 carries it and the decoder
+    /// derives it again from the raw constraints before requiring equality.
     #[must_use]
     pub const fn resolved_ports(&self) -> &super::type_resolution::ResolvedPortTable {
         &self.resolved_ports
@@ -817,28 +822,45 @@ fn assets_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 
 fn data_type_at(ty: &DataType, location: String) -> Result<(), PlanValidationError> {
     ty.validate()
-        .map_err(|reason| PlanValidationError::InvalidDataType {
-            location: location.clone(),
-            reason,
-        })?;
-    if ty.is_v6_wire_type() {
-        Ok(())
-    } else {
-        Err(PlanValidationError::DataTypeNotInFormat {
-            location,
-            ty: ty.clone(),
-            format: super::serialization::FORMAT_VERSION,
-        })
-    }
+        .map_err(|reason| PlanValidationError::InvalidDataType { location, reason })
 }
 
 fn tree_type_at(tree: &expr::Tree, location: String) -> Result<(), PlanValidationError> {
-    data_type_at(&tree.ty, location)
+    data_type_at(&tree.ty, location)?;
+    let holds = match &tree.root {
+        expr::Expr::Literal(value) => tree.ty.accepts(value),
+        expr::Expr::Struct(fields) => match &tree.ty {
+            DataType::Struct(structure) => {
+                structure.fields().len() == fields.len()
+                    && structure
+                        .fields()
+                        .iter()
+                        .zip(fields)
+                        .all(|(expected, (found, _))| expected.name() == found)
+            }
+            _ => false,
+        },
+        expr::Expr::Tagged { union, .. } => tree.ty == DataType::TaggedUnion((**union).clone()),
+        expr::Expr::Is { .. } => tree.ty == DataType::Bool,
+        expr::Expr::As { target, .. } => match target.as_ref() {
+            expr::NarrowTarget::Type(target) => &tree.ty == target.ty(),
+            expr::NarrowTarget::Case { payload, .. } => &tree.ty == payload.as_ref(),
+        },
+        expr::Expr::Call {
+            function: expr::Function::Decimal,
+            ..
+        } => tree.ty == DataType::Number,
+        _ => true,
+    };
+    if holds {
+        Ok(())
+    } else {
+        Err(PlanValidationError::UnrepresentableConstant)
+    }
 }
 
-/// Holds the package boundary while B1 grows the canonical algebra ahead of
-/// B8's categorical wire bump. Every type-bearing plan position passes this
-/// one audit before the infallible v6 encoder can observe the plan.
+/// Every type-bearing plan position passes this audit before the infallible
+/// v7 encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -1007,6 +1029,9 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
             if let Some(init) = &var.init {
                 value_expressible(init)?;
+                if !var.ty.accepts(init) {
+                    return Err(PlanValidationError::UnrepresentableConstant);
+                }
             }
         }
         for pair in node.vars.windows(2) {
@@ -1110,7 +1135,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             port: name,
                         });
                     };
-                    let expected_ty = crate::boundary::legacy_v6_process_port_type(
+                    let expected_ty = crate::boundary::process_port_type(
                         &spec.contract,
                         name,
                         Some(codec),
@@ -1369,54 +1394,13 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     Ok(())
 }
 
-/// The expressible-constant gate. Rastok expressions cannot construct a struct, so
-/// the one struct constant a compiled plan holds is the EMPTY record
-/// literal (`parent = {}`, D-2026-08-09-2) — the v4 tables read it
-/// back, and anything with fields still refuses: admitting more than the
-/// compiler emits would make hand-forged plans indistinguishable from
-/// compiled ones. A runtime laziness witness is not a core
-/// [`Value`](crate::value::Value) and is therefore unrepresentable here by
+/// The complete materialized-value gate. Runtime-only laziness witnesses are
+/// not core [`Value`](crate::value::Value)s and remain unrepresentable by
 /// construction.
 fn value_expressible(value: &crate::value::Value) -> Result<(), PlanValidationError> {
     value
         .validate()
-        .map_err(|_| PlanValidationError::UnrepresentableConstant)?;
-    value_shape_expressible(value)
-}
-
-fn value_shape_expressible(value: &crate::value::Value) -> Result<(), PlanValidationError> {
-    match value {
-        // The current expression subset cannot CONSTRUCT a struct; the one
-        // struct constant a compiler emits is the EMPTY record literal (`parent = {}`,
-        // D-2026-08-09-1). Anything with fields still refuses.
-        crate::value::Value::Struct(fields) if fields.is_empty() => Ok(()),
-        // The decoder's exact rule (D-2026-08-13-1, review round):
-        // a plan constant is a DECLARED-scale decimal — `decimal()`
-        // preserves written scale, and a document-origin (minimal)
-        // form satisfies the same gate. A name must not change a
-        // program's validity: `val p = decimal("1.50")` folds to
-        // this constant.
-        crate::value::Value::Decimal { unscaled, scale } => {
-            if crate::json::declared_decimal_well_formed(*unscaled, *scale) {
-                Ok(())
-            } else {
-                Err(PlanValidationError::UnrepresentableConstant)
-            }
-        }
-        crate::value::Value::Struct(_)
-        | crate::value::Value::Date(_)
-        | crate::value::Value::Time(_)
-        | crate::value::Value::TimestampNtz(_)
-        | crate::value::Value::Interval { .. }
-        | crate::value::Value::Uuid(_)
-        | crate::value::Value::KeyedMap(_)
-        | crate::value::Value::Enum(_)
-        | crate::value::Value::StructuralUnion { .. }
-        | crate::value::Value::TaggedUnion(_) => Err(PlanValidationError::UnrepresentableConstant),
-        crate::value::Value::Array(items) => items.iter().try_for_each(value_shape_expressible),
-        crate::value::Value::Map(entries) => entries.values().try_for_each(value_shape_expressible),
-        _ => Ok(()),
-    }
+        .map_err(|_| PlanValidationError::UnrepresentableConstant)
 }
 
 /// Every map literal in a shipped expression tree is construction-sorted —
@@ -1479,23 +1463,68 @@ fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
                 .map(|(_, value)| value)
                 .try_for_each(expr_canonical)
         }
-        expr::Expr::Struct(_) => Err(PlanValidationError::ExpressionNotInFormat {
-            form: "a struct constructor",
-            format: crate::plan::serialization::FORMAT_VERSION,
-        }),
-        expr::Expr::Tagged { .. } => Err(PlanValidationError::ExpressionNotInFormat {
-            form: "a tagged-union constructor",
-            format: crate::plan::serialization::FORMAT_VERSION,
-        }),
-        expr::Expr::Is { .. } => Err(PlanValidationError::ExpressionNotInFormat {
-            form: "is",
-            format: crate::plan::serialization::FORMAT_VERSION,
-        }),
-        expr::Expr::As { .. } => Err(PlanValidationError::ExpressionNotInFormat {
-            form: "as",
-            format: crate::plan::serialization::FORMAT_VERSION,
-        }),
+        expr::Expr::Struct(fields) => expression_fields_canonical(fields, "struct constructor"),
+        expr::Expr::Tagged {
+            union,
+            case,
+            fields,
+        } => {
+            DataType::TaggedUnion((**union).clone())
+                .validate()
+                .map_err(|_| PlanValidationError::UnrepresentableConstant)?;
+            let Some(declared) = union
+                .cases()
+                .iter()
+                .find(|declared| declared.name() == case)
+            else {
+                return Err(PlanValidationError::UnrepresentableConstant);
+            };
+            if declared.payload().fields().len() != fields.len()
+                || !declared
+                    .payload()
+                    .fields()
+                    .iter()
+                    .zip(fields)
+                    .all(|(expected, (found, _))| expected.name() == found)
+            {
+                return Err(PlanValidationError::UnrepresentableConstant);
+            }
+            expression_fields_canonical(fields, "tagged-union constructor")
+        }
+        expr::Expr::Is { expr, target } | expr::Expr::As { expr, target } => {
+            narrow_target_canonical(target)?;
+            expr_canonical(expr)
+        }
     }
+}
+
+fn expression_fields_canonical(
+    fields: &[(String, expr::Expr)],
+    collection: &'static str,
+) -> Result<(), PlanValidationError> {
+    for pair in fields.windows(2) {
+        if pair[0].0 >= pair[1].0 {
+            return Err(PlanValidationError::NonCanonicalOrder { collection });
+        }
+    }
+    fields
+        .iter()
+        .map(|(_, value)| value)
+        .try_for_each(expr_canonical)
+}
+
+fn narrow_target_canonical(target: &expr::NarrowTarget) -> Result<(), PlanValidationError> {
+    let ty = match target {
+        expr::NarrowTarget::Type(target) => target.ty(),
+        expr::NarrowTarget::Case { name, payload } => {
+            if name.is_empty() || !matches!(payload.as_ref(), DataType::Struct(_)) {
+                return Err(PlanValidationError::UnrepresentableConstant);
+            }
+            payload
+        }
+    };
+    ty.validate()
+        .map_err(|_| PlanValidationError::UnrepresentableConstant)
 }
 
 #[cfg(test)]
@@ -1504,7 +1533,7 @@ mod value_format_tests {
     use crate::value::Value;
 
     #[test]
-    fn v6_refuses_every_value_family_owned_by_the_v7_registry() {
+    fn v7_admits_every_well_formed_value_family() {
         let values = alloc::vec![
             Value::Date(0),
             Value::Time(0),
@@ -1518,11 +1547,7 @@ mod value_format_tests {
             Value::KeyedMap(alloc::vec![(Value::Int(1), Value::Bool(true))]),
         ];
         for value in values {
-            assert_eq!(
-                value_expressible(&value),
-                Err(PlanValidationError::UnrepresentableConstant),
-                "v6 unexpectedly admitted {value:?}"
-            );
+            assert_eq!(value_expressible(&value), Ok(()), "v7 refused {value:?}");
         }
     }
 }

@@ -72,9 +72,11 @@ The repository opens publicly with this milestone (15 October 2026).
   construction, one contextual union-wrapping door and ordinary `err`
   emission. B7 has replaced the success/failure seam with atomic ordered
   completions: `Process(job)` now publishes unit-framed `out*`, independently
-  framed stderr on `err*`, and exactly one typed `exit`. The remaining ordered
-  gates publish the one categorical v7 format, then close projection and
-  corpus evidence.
+  framed stderr on `err*`, and exactly one typed `exit`. B8 has published the
+  categorical v7 type/value/expression registry and mandatory total resolved
+  port table, removing the last Process/decimal transport bridges. The
+  remaining B9 gate closes projection adapters, deletes private-v6
+  scaffolding, and completes the cross-layer corpus evidence.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

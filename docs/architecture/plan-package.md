@@ -18,48 +18,35 @@
 > The package is a TRANSPORT format: versioned and free to evolve by
 > version bump; none of v1, v2, or v3 was ever published and no
 > decoder reads them — each refuses by its number.
-> **Format v6 is CURRENT** (D-2026-08-13-1, landed 2026-08-13): the
-> call alphabet gained `decimal` (fn 4) — a new id extends the
-> format's vocabulary, so the categorical rule bumps the version;
-> v5 joined the refused drafts. No hash moved: identity lives in
-> the HIR canonical form, and the goldens re-blessed for the
-> version byte alone (the spike re-proved the same semantic hash
-> on target). The v5 entry below stays as history.
-> **M1.3 target:** D-2026-08-14-1 transports the complete canonical
-> `DataType` registry and resolved port tables in one categorical format v7
-> landing. B1's complete strict-profile type/value domain and B2's total
-> effective table already govern execution: v6 transports source pins and
-> deterministically re-solves them at validation/decode. v7 is not current
-> until its full wire validator and sabotage matrix land; the ordered work is in
-> [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). It will
-> carry canonical union discriminants and complete effective types, not
-> Avro branch indexes, Arrow dense/sparse layout, or unresolved compiler
-> variables.
-> M1.3 B3 follows the same line for expression trees: `is`/`as` are valid
-> in-memory `expr` nodes, but v6 validation returns
-> `ExpressionNotInFormat` before encoding. No provisional v6 expression tag
-> exists; B8 assigns the resolved target/discriminator form once in v7.
-> **M1.3 B6 follows that same categorical gate:** closed-struct and
-> tagged-union constructors, plus contextual union wrapping represented as
-> `as`, are valid checked in-memory expression nodes. V6 validation refuses
-> each constructor form by name; no private tag extends the table below.
-> B8 publishes the four new forms together with the complete v7 type registry.
-> **Private v6 B5 revision (2026-08-15):** v6 has never been published, so
+> **Format v7 is CURRENT** (D-2026-08-14-1, landed 2026-08-15).
+> It is the one categorical M1.3 B8 publication: the complete canonical
+> `DataType` constructor registry, all materialized value tags allocated in
+> identity.md, the full expression alphabet (`struct`, tagged constructor,
+> `is`, `as`) and the total resolved-port table travel together. A decoder
+> rebuilds the effective table from raw constraints and compares it exactly
+> with the transported claim; no compiler Registry or unresolved inference
+> variable can enter execution. `Process.exit` therefore carries exact
+> `ProcessExit`, and `decimal()` is statically `number`; their former v6
+> representation bridges are gone. V6 joins the refused drafts and is never
+> migrated silently. Avro branch indexes, Arrow type codes and dense/sparse
+> layout remain adapter projection facts mapped explicitly to canonical union
+> discriminants, never logical type identity.
+> **Historical private v6 B5 revision (2026-08-15):** v6 was never published, so
 > B5 replaces its current canonical body rather than allocating a transitory
 > v7 before the categorical type registry lands. Connector spec key 5
 > (`error_set`) is retired; complete resolved Connector port rows travel, and
 > each row's mode now includes its unwired policy. A previous v6 body is not
 > migrated: validation or canonical re-encoding refuses it. The semantic
-> moves and affected goldens are recorded under D-2026-08-14-1. B8 remains the
-> one published v7 boundary.
-> **Private v6 B7 revision (2026-08-15):** Process framing now produces unit
+> moves and affected goldens are recorded under D-2026-08-14-1. B8 subsequently
+> replaced this body with the categorical v7 registry above.
+> **Historical private v6 B7 revision (2026-08-15):** Process framing produced unit
 > outputs (`lines -> text`, `jsonl -> variant`, `bytes -> bytes`), while
 > stderr follows the independently resolved `err_codec`. The in-memory
-> completion gate requires exact `ProcessExit`; only the raw v6 plan row keeps
-> `exit: variant` because the v6 type grammar cannot transport tagged unions.
+> completion gate required exact `ProcessExit`; only the raw v6 plan row kept
+> `exit: variant` because the v6 type grammar could not transport tagged unions.
 > This is one named representation bridge, not the execution contract. The
-> plan remains structurally v6, but effective Process port meaning changes its
-> canonical body and semantic identity; B8 removes the bridge in the single v7
+> plan remained structurally v6, but effective Process port meaning changed its
+> canonical body and semantic identity. B8 removed the bridge in the single v7
 > type/expression publication.
 > Format v5 (D-2026-08-10-9, landed 2026-08-10): the
 > three-zone metadata write targets, the travelling `app`/`ext`
@@ -100,7 +87,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (this document: 6)   │
+        │ 1 : format_version   uint      (this document: 7)   │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -143,7 +130,7 @@ of the contract, in order:
    the plan documents as canonically ordered actually is: nodes by
    (kind rank, path), boundary and port tables sorted and unique with
    untyped conventional rows omitted (a typed `in`/`out`/`err` row is a
-   real v6 source constraint), edges by their endpoint text,
+   real source constraint), edges by their endpoint text,
    handlers by (slot, activation key) with one handler per
    activation, vars and attributes sorted — attributes are the
    EFFECTIVE sheet (D-2026-08-12-1): the checker injected every
@@ -181,7 +168,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (current private v6 layout)
+## Body tables (format v7)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -192,13 +179,14 @@ traces seal, shared code and shared bytes; since 2026-08-07 the Rastok
 `uint` domain has its own registry tag 23, and tag 3 is `long` only
 (E-2026-08-07-1 — v1 reused tag 3 for both, and a decode could turn
 an `int` into a `uint` while keeping the plan's hash). Since v4 an
-expression literal may carry the struct tag 17; the validator holds
-shipped constants to the expressible subset — the EMPTY record only,
-the one struct constant a compiler emits (D-2026-08-09-2).
+expression literal may carry the struct tag 17. V7 admits the complete
+materialized struct family; the surrounding resolved `DataType` supplies its
+closed field contract, and validation checks conformance before encoding.
 
 ```text
 plan       := {1: [node*], 2: [boundary*], 3: [edge*], 4: [handler*],
-               5: app_schema?, 6: ext_schema?, 7: [asset_bytes*]?}
+               5: app_schema?, 6: ext_schema?, 7: [asset_bytes*]?,
+               8: resolved_ports}
                                                   // 5/6 : the travelling zone schemas —
                                                   //   [[field (text), type]*], sorted, prefix-free
                                                   //   (D-2026-08-10-1) ; absent = empty ; the ext
@@ -207,6 +195,8 @@ plan       := {1: [node*], 2: [boundary*], 3: [edge*], 4: [handler*],
                                                   // 7 : the asset table — raw asset bytes in
                                                   //   digest order ; digests are DERIVED at decode
                                                   //   (and thereby verified) ; absent = none
+                                                  // 8 : mandatory total effective port table;
+                                                  //   validation re-solves and compares it exactly
 
 node       := {1: path (text), 2: kind, 3: [port_decl*], 4: [var*]}
 kind       := 1                                   — operator
@@ -235,8 +225,16 @@ mode       := uint: 1 input/require-wire · 2 output/require-wire ·
               from these rows, connector pins and graph constraints; an
               unresolved variable refuses and never becomes variant
               — since B5, every Connector contract row is present and typed;
-              Operator/boundary rows may still be source constraints whose
-              effective type is carried by ResolvedPortTable until v7
+              Operator/boundary rows may still be source constraints; their
+              mandatory effective type is carried by resolved_ports
+resolved_ports := [boundary_resolved, [node_resolved*]]
+boundary_resolved := [resolved_port*]
+node_resolved     := [resolved_port*]              // one row per node Slot
+resolved_port := [name (text), direction, type, origin]
+direction    := uint: 1 input · 2 output
+origin       := uint: 1 declared · 2 inferred
+              // rows use the same canonical (name,direction) order as the
+              // derived table; node table length equals the node table
 var        := {1: name (text), 2: type, 3: init (tagged_value)?}
 
 edge       := [endpoint, endpoint | null]         — null = «-> nothing»
@@ -258,31 +256,80 @@ target     := [1, [seg (text)*]]                  — data path (empty = whole d
               data path · app field · ext field (D-2026-08-10-1)
 
 tree       := [type, expr]
-type       := uint: 1 bool · 2 int · 3 uint · 4 double · 5 text · 6 bytes ·
-              7 duration · 8 timestamp · 9 null · 10 variant
-            | [11, type]                          — array of
-            | [12, type]                          — map of
+type       := 1                                   — null
+            | 2                                   — bool
+            | [3, signedness, width]              — integer
+            | [4, width]                          — IEEE float
+            | [5, precision, scale]               — decimal128
+            | 6                                   — exact number
+            | 7                                   — text
+            | [8, length?]                        — bytes; null = variable
+            | temporal
+            | 10                                  — uuid
+            | [11, [[field (text), type]*]]       — closed struct
+            | [12, type, type]                    — map key/value
+            | [13, type, length?]                 — array; null = variable
+            | [14, [symbol (text)+]]              — enum
+            | [15, [type+]]                       — structural union
+            | [16, [[case (text), [[field, type]*]]+]] — tagged union
+            | 17                                  — variant
+signedness := 1 signed · 2 unsigned
+width      := uint: integer 8|16|32|64; float 16|32|64
+scale      := canonical signed CBOR integer
+length?    := null | uint                         // fixed bytes: > 0;
+                                                  // fixed array: may be 0
+temporal   := [9, 1, date_unit]                   — date
+            | [9, 2, time_unit]                   — time
+            | [9, 3, time_unit, zone]             — timestamp
+            | [9, 4, time_unit]                   — timestamp_ntz
+            | [9, 5, time_unit]                   — duration
+            | [9, 6, interval_unit]               — interval
+date_unit  := 1 day · 2 millisecond
+time_unit  := 1 second · 2 millisecond · 3 microsecond · 4 nanosecond
+zone       := null | text                         // null is canonical UTC
+interval_unit := 1 year_month · 2 day_time · 3 month_day_nano ·
+                 4 month_day_millis_unsigned
 expr       := [1, tagged_value]                   — literal
             | [2, [seg (text)*]]                  — path
             | [3, unop (uint), expr]              — unary   (1 not · 2 neg)
             | [4, binop (uint), expr, expr]       — binary  (1 mul … 13 or, declaration order)
             | [5, expr, expr, expr]               — ternary
             | [6, expr, expr]                     — index
-            | [7, fn (uint), [expr*]]             — call    (1 duration · 2 timestamp · 3 size · 4 decimal)
+            | [7, fn (uint), [expr*]]             — call    (1 duration · 2 timestamp · 3 size · 4 decimal;
+                                                  //   5 asset is a decoder-recognized pre-binding
+                                                  //   form that validation refuses)
             | [8, [expr*]]                        — list literal
             | [9, [[key (text), expr]*]]          — map literal (already construction-sorted)
             | [10, index (uint)]                  — asset reference into body key 7
                                                   //   (D-2026-08-10-5 ; the HASH seals the content
                                                   //   digest, never this index)
+            | [11, [[field (text), expr]*]]       — closed struct constructor
+            | [12, type, case (text), [[field, expr]*]] — tagged constructor
+            | [13, expr, narrow_target]           — is
+            | [14, expr, narrow_target]           — as
+narrow_target := [1, type]                        — resolved type
+               | [1, type, discriminator]         — external discriminator
+               | [2, case (text), struct_type]    — tagged case
+discriminator := [field (text), [[external (text), case (text)]*]]
+struct_type  := type constrained to discriminant 11
 ```
 
-The `tagged_value` alphabet gained the exact decimal (registry tag
-10, D-2026-08-10-7): typed decimals at their declared scale,
-document-origin dynamics at minimal scale, `decimal("…")` dynamics
-at their DECLARED scale (D-2026-08-13-1), 38 significant digits and
-the decimal128 exponent domain as hard budgets — plan constants and
-the wire admit any form the written-scale fold would not have
-collapsed to an integer.
+Every sequence that is semantically unordered is constructor-canonical before
+encoding: struct fields, enum symbols, tagged cases and resolved-port rows are
+sorted by their declared keys; structural-union branches use the canonical
+`DataType` order. Constructors reject duplicates, overlapping structural
+branches, empty enums/tagged unions and the published member/node/nesting
+budgets. The package reader additionally enforces its byte and CBOR-depth
+budgets before constructing a type.
+
+`tagged_value` is exactly the extend-only registry in
+[`identity.md`](../spec/identity.md): v7 admits all allocated B1 families,
+including interval tag 24 and both union selectors under tag 21. A typed
+decimal may carry its declared scale, including scale zero; the integer fold
+remains a document/constructor reader rule, not a schema-blind package rule.
+The surrounding `type` in the expression/state/schema context supplies width,
+precision, units, fixed sizes and timezone rather than duplicating those
+parameters in every materialized value.
 
 All discriminants and keys are extend-only: append, never renumber.
 Anything a future plan carries that these tables cannot express is a

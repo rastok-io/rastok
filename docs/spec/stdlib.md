@@ -1,11 +1,11 @@
 # Standard library contracts
 
 > **Status: Normative M1.3 target — under review.** B5 removed the
-> travelling v6 `error_set` and made the complete resolved port table the
+> travelling private-v6 `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
-> Only the raw v6 package's `Process.exit: variant` representation remains a
-> named bridge until B8 publishes the exact union in v7.
+> B8 removed the last raw-plan bridge: package v7 carries exact
+> `Process.exit: ProcessExit` and the total effective port table.
 > Companion to [execution-model.md](execution-model.md) (`timeout` /
 > `on_timeout`, the correlator duty), [delivery-semantics.md](delivery-semantics.md)
 > (INBOUND / OUTBOUND records) and [simulation-semantics.md](simulation-semantics.md)

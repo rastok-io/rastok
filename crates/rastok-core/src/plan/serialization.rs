@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v6: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v7: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -19,7 +19,11 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use crate::canonical_cbor::{self, Value as Cbor};
-use crate::datatype::DataType;
+use crate::datatype::{
+    ArrayType, BinaryType, ByteLength, DataType, DateUnit, DecimalType, Discriminator, EnumType,
+    FloatType, IntegerType, IntegerWidth, IntervalUnit, MapType, StructType, TaggedCase,
+    TaggedUnionType, TemporalType, TimeUnit, TimeZone, TypeField,
+};
 use crate::envelope::WriteTarget;
 use crate::expr;
 use crate::identity::encoding::value_tagged;
@@ -34,13 +38,11 @@ use crate::value::Value;
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
-/// The format version this module writes and reads. v3 widened
-/// `port_decl`; v4 admitted the empty-struct literal; v5 is the
-/// consolidated reform (D-2026-08-10-9): the three-zone write
-/// targets, the travelling `app`/`ext` schemas, and the rest of the
-/// reform's tables. A new format is a new version, and an old
-/// decoder refuses it by name, exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 6;
+/// The format version this module writes and reads. V7 publishes the complete
+/// logical type, materialized-value and expression registries together with
+/// the mandatory resolved-port table. A new format is a new version, and an
+/// old decoder refuses it by name, exactly as the format note promises.
+pub const FORMAT_VERSION: u32 = 7;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -70,6 +72,9 @@ pub enum DecodeError {
     /// A decoded plan that violates the ExecutionPlan invariants —
     /// well-shaped bytes naming impossible structure.
     Invalid(PlanValidationError),
+    /// The transported effective-port table disagrees with the table derived
+    /// from the plan's own constraints.
+    ResolvedPortTableMismatch,
 }
 
 impl core::fmt::Display for DecodeError {
@@ -87,6 +92,9 @@ impl core::fmt::Display for DecodeError {
             Self::Malformed(detail) => write!(f, "malformed plan package: {detail}"),
             Self::NonCanonical(detail) => write!(f, "not the canonical encoding: {detail}"),
             Self::Invalid(error) => error.fmt(f),
+            Self::ResolvedPortTableMismatch => {
+                f.write_str("the resolved port table disagrees with the plan")
+            }
         }
     }
 }
@@ -112,7 +120,7 @@ fn checksum(version: u32, hash: &[u8; 32], body: &[u8]) -> [u8; 32] {
 /// so what this function accepts, [`decode`] reads back.
 #[must_use]
 pub fn encode(plan: &ValidatedExecutionPlan, declared_hash: &SemanticHash) -> Vec<u8> {
-    let body = canonical_cbor::encode(&plan_tree(plan.plan()));
+    let body = canonical_cbor::encode(&validated_plan_tree(plan));
     let digest = checksum(FORMAT_VERSION, declared_hash.as_bytes(), &body);
     let envelope = Cbor::Map(BTreeMap::from([
         (1, Cbor::Uint(u64::from(FORMAT_VERSION))),
@@ -176,14 +184,19 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
     if used != body.len() {
         return Err(DecodeError::Malformed("trailing body bytes".into()));
     }
+    let body_fields = map_of(&tree, "plan")?;
+    let resolved_claim = resolved_table_from(get(body_fields, 8, "resolved port table")?)?;
     let plan = plan_from(&tree)?;
     let validated = ValidatedExecutionPlan::try_new(plan).map_err(DecodeError::Invalid)?;
+    if resolved_claim != resolved_table_tree(validated.resolved_ports()) {
+        return Err(DecodeError::ResolvedPortTableMismatch);
+    }
     // Canonicity, as one total check: the only accepted bytes for
     // this plan are the ones this module would write. Re-encoding
     // catches non-minimal integers, reordered or duplicated keys,
     // and every other non-canonical variant at once — and the outer
     // envelope is held to the same rule.
-    if canonical_cbor::encode(&plan_tree(validated.plan())) != *body {
+    if canonical_cbor::encode(&validated_plan_tree(&validated)) != *body {
         return Err(DecodeError::NonCanonical(
             "the body is not the canonical encoding of its plan",
         ));
@@ -204,7 +217,19 @@ pub fn decode(bytes: &[u8]) -> Result<(ValidatedExecutionPlan, SemanticHash), De
 
 // ===================== encoding: plan → tree =====================
 
+fn validated_plan_tree(plan: &ValidatedExecutionPlan) -> Cbor {
+    plan_tree_with_resolved(plan.plan(), Some(plan.resolved_ports()))
+}
+
+#[cfg(test)]
 fn plan_tree(plan: &ExecutionPlan) -> Cbor {
+    plan_tree_with_resolved(plan, None)
+}
+
+fn plan_tree_with_resolved(
+    plan: &ExecutionPlan,
+    resolved: Option<&super::ResolvedPortTable>,
+) -> Cbor {
     let mut pairs = BTreeMap::from([
         (1, Cbor::Array(plan.nodes.iter().map(node_tree).collect())),
         (
@@ -238,7 +263,88 @@ fn plan_tree(plan: &ExecutionPlan) -> Cbor {
             ),
         );
     }
+    if let Some(resolved) = resolved {
+        pairs.insert(8, resolved_table_tree(resolved));
+    }
     Cbor::Map(pairs)
+}
+
+fn resolved_table_tree(table: &super::ResolvedPortTable) -> Cbor {
+    let row = |ports: &[super::ResolvedPort]| {
+        Cbor::Array(
+            ports
+                .iter()
+                .map(|port| {
+                    Cbor::Array(vec![
+                        Cbor::Text(port.port().name().to_string()),
+                        Cbor::Uint(match port.direction() {
+                            node::Direction::Input => 1,
+                            node::Direction::Output => 2,
+                        }),
+                        type_tree(port.ty()),
+                        Cbor::Uint(match port.origin() {
+                            super::TypeOrigin::Declared => 1,
+                            super::TypeOrigin::Inferred => 2,
+                        }),
+                    ])
+                })
+                .collect(),
+        )
+    };
+    Cbor::Array(vec![
+        row(table.boundary()),
+        Cbor::Array(
+            (0..)
+                .map(Slot::new)
+                .map_while(|slot| table.node(slot))
+                .map(row)
+                .collect(),
+        ),
+    ])
+}
+
+fn resolved_table_from(tree: &Cbor) -> Result<Cbor, DecodeError> {
+    fn row(tree: &Cbor) -> Result<Cbor, DecodeError> {
+        let mut decoded = Vec::new();
+        for port in array_of(tree, "resolved port row")? {
+            let [
+                Cbor::Text(name),
+                Cbor::Uint(direction),
+                ty,
+                Cbor::Uint(origin),
+            ] = array_of(port, "resolved port")?
+            else {
+                return Err(err("resolved port"));
+            };
+            node::Port::new(name.clone()).map_err(|_| err("resolved port name"))?;
+            if !matches!(direction, 1 | 2) {
+                return Err(err("resolved port direction"));
+            }
+            if !matches!(origin, 1 | 2) {
+                return Err(err("resolved port origin"));
+            }
+            decoded.push(Cbor::Array(vec![
+                Cbor::Text(name.clone()),
+                Cbor::Uint(*direction),
+                type_tree(&type_from(ty)?),
+                Cbor::Uint(*origin),
+            ]));
+        }
+        Ok(Cbor::Array(decoded))
+    }
+
+    let [boundary, nodes] = array_of(tree, "resolved port table")? else {
+        return Err(err("resolved port table"));
+    };
+    Ok(Cbor::Array(vec![
+        row(boundary)?,
+        Cbor::Array(
+            array_of(nodes, "resolved node port tables")?
+                .iter()
+                .map(row)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    ]))
 }
 
 fn schema_tree(schema: &[(String, DataType)]) -> Cbor {
@@ -422,29 +528,150 @@ fn tree_tree(tree: &expr::Tree) -> Cbor {
 
 fn type_tree(ty: &DataType) -> Cbor {
     match ty {
-        DataType::Bool => Cbor::Uint(1),
-        ty if ty == &DataType::INT => Cbor::Uint(2),
-        ty if ty == &DataType::UINT => Cbor::Uint(3),
-        ty if ty == &DataType::DOUBLE => Cbor::Uint(4),
-        DataType::Text => Cbor::Uint(5),
-        ty if ty == &DataType::BYTES => Cbor::Uint(6),
-        ty if ty == &DataType::DURATION => Cbor::Uint(7),
-        ty if ty == &DataType::TIMESTAMP => Cbor::Uint(8),
-        DataType::Null => Cbor::Uint(9),
-        DataType::Variant => Cbor::Uint(10),
-        DataType::Array(array) if array.length().is_none() => {
-            Cbor::Array(vec![Cbor::Uint(11), type_tree(array.element())])
+        DataType::Null => Cbor::Uint(1),
+        DataType::Bool => Cbor::Uint(2),
+        DataType::Integer(integer) => {
+            let (signedness, width) = match integer {
+                IntegerType::Signed(width) => (1, width.bits()),
+                IntegerType::Unsigned(width) => (2, width.bits()),
+            };
+            Cbor::Array(vec![
+                Cbor::Uint(3),
+                Cbor::Uint(signedness),
+                Cbor::Uint(u64::from(width)),
+            ])
         }
-        DataType::Map(map) if map.key() == &DataType::Text => {
-            Cbor::Array(vec![Cbor::Uint(12), type_tree(map.value())])
+        DataType::Float(float) => {
+            Cbor::Array(vec![Cbor::Uint(4), Cbor::Uint(u64::from(float.bits()))])
         }
-        // A ValidatedExecutionPlan proves that every type belongs to the v6
-        // registry before this private encoder is reached. Keeping this arm
-        // total avoids a production panic if a future caller violates that
-        // proof; tag zero has never been a data-type spelling and the reader
-        // rejects it.
-        _ => Cbor::Array(vec![Cbor::Uint(0)]),
+        DataType::Decimal(decimal) => Cbor::Array(vec![
+            Cbor::Uint(5),
+            Cbor::Uint(u64::from(decimal.precision())),
+            signed_tree(i64::from(decimal.scale())),
+        ]),
+        DataType::Number => Cbor::Uint(6),
+        DataType::Text => Cbor::Uint(7),
+        DataType::Bytes(binary) => Cbor::Array(vec![
+            Cbor::Uint(8),
+            match binary {
+                BinaryType::Variable => Cbor::Null,
+                BinaryType::Fixed(length) => Cbor::Uint(u64::from(length.get())),
+            },
+        ]),
+        DataType::Temporal(temporal) => temporal_type_tree(temporal),
+        DataType::Uuid => Cbor::Uint(10),
+        DataType::Struct(structure) => {
+            Cbor::Array(vec![Cbor::Uint(11), struct_fields_tree(structure)])
+        }
+        DataType::Map(map) => Cbor::Array(vec![
+            Cbor::Uint(12),
+            type_tree(map.key()),
+            type_tree(map.value()),
+        ]),
+        DataType::Array(array) => Cbor::Array(vec![
+            Cbor::Uint(13),
+            type_tree(array.element()),
+            array
+                .length()
+                .map_or(Cbor::Null, |length| Cbor::Uint(u64::from(length.get()))),
+        ]),
+        DataType::Enum(enumeration) => Cbor::Array(vec![
+            Cbor::Uint(14),
+            Cbor::Array(
+                enumeration
+                    .symbols()
+                    .iter()
+                    .map(|symbol| Cbor::Text(symbol.clone()))
+                    .collect(),
+            ),
+        ]),
+        DataType::StructuralUnion(union) => Cbor::Array(vec![
+            Cbor::Uint(15),
+            Cbor::Array(union.branches().iter().map(type_tree).collect()),
+        ]),
+        DataType::TaggedUnion(union) => Cbor::Array(vec![
+            Cbor::Uint(16),
+            Cbor::Array(
+                union
+                    .cases()
+                    .iter()
+                    .map(|case| {
+                        Cbor::Array(vec![
+                            Cbor::Text(case.name().to_string()),
+                            struct_fields_tree(case.payload()),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ]),
+        DataType::Variant => Cbor::Uint(17),
     }
+}
+
+fn struct_fields_tree(structure: &StructType) -> Cbor {
+    Cbor::Array(
+        structure
+            .fields()
+            .iter()
+            .map(|field| {
+                Cbor::Array(vec![
+                    Cbor::Text(field.name().to_string()),
+                    type_tree(field.ty()),
+                ])
+            })
+            .collect(),
+    )
+}
+
+fn temporal_type_tree(temporal: &TemporalType) -> Cbor {
+    let time_unit = |unit: TimeUnit| {
+        Cbor::Uint(match unit {
+            TimeUnit::Second => 1,
+            TimeUnit::Millisecond => 2,
+            TimeUnit::Microsecond => 3,
+            TimeUnit::Nanosecond => 4,
+        })
+    };
+    let mut parts = vec![Cbor::Uint(9)];
+    match temporal {
+        TemporalType::Date(unit) => {
+            parts.push(Cbor::Uint(1));
+            parts.push(Cbor::Uint(match unit {
+                DateUnit::Day => 1,
+                DateUnit::Millisecond => 2,
+            }));
+        }
+        TemporalType::Time(unit) => {
+            parts.push(Cbor::Uint(2));
+            parts.push(time_unit(*unit));
+        }
+        TemporalType::Timestamp { unit, zone } => {
+            parts.push(Cbor::Uint(3));
+            parts.push(time_unit(*unit));
+            parts.push(match zone {
+                TimeZone::Utc => Cbor::Null,
+                TimeZone::Named(name) => Cbor::Text(name.as_str().to_string()),
+            });
+        }
+        TemporalType::TimestampNtz(unit) => {
+            parts.push(Cbor::Uint(4));
+            parts.push(time_unit(*unit));
+        }
+        TemporalType::Duration(unit) => {
+            parts.push(Cbor::Uint(5));
+            parts.push(time_unit(*unit));
+        }
+        TemporalType::Interval(unit) => {
+            parts.push(Cbor::Uint(6));
+            parts.push(Cbor::Uint(match unit {
+                IntervalUnit::YearMonth => 1,
+                IntervalUnit::DayTime => 2,
+                IntervalUnit::MonthDayNano => 3,
+                IntervalUnit::MonthDayMillisUnsigned => 4,
+            }));
+        }
+    }
+    Cbor::Array(parts)
 }
 
 fn expr_tree(expr: &expr::Expr) -> Cbor {
@@ -494,9 +721,8 @@ fn expr_tree(expr: &expr::Expr) -> Cbor {
                 expr::Function::Duration => 1,
                 expr::Function::Timestamp => 2,
                 expr::Function::Size => 3,
-                // v6 (D-2026-08-13-1): the exact-number constructor
-                // extends the call alphabet — the categorical rule
-                // of plan-package.md bumps the format.
+                // D-2026-08-13-1 allocated call id 4 to the exact-number
+                // constructor; v7 preserves that append-only spelling.
                 expr::Function::Decimal => 4,
             }),
             Cbor::Array(args.iter().map(expr_tree).collect()),
@@ -516,13 +742,69 @@ fn expr_tree(expr: &expr::Expr) -> Cbor {
                     .collect(),
             ),
         ]),
-        // A validated v6 plan categorically refuses these B3 forms. Tag zero
-        // is intentionally unreadable and only keeps this private encoder
-        // total if a future caller violates that proof.
-        expr::Expr::Struct(_)
-        | expr::Expr::Tagged { .. }
-        | expr::Expr::Is { .. }
-        | expr::Expr::As { .. } => Cbor::Array(vec![Cbor::Uint(0)]),
+        expr::Expr::Struct(fields) => {
+            Cbor::Array(vec![Cbor::Uint(11), expression_fields_tree(fields)])
+        }
+        expr::Expr::Tagged {
+            union,
+            case,
+            fields,
+        } => Cbor::Array(vec![
+            Cbor::Uint(12),
+            type_tree(&DataType::TaggedUnion((**union).clone())),
+            Cbor::Text(case.clone()),
+            expression_fields_tree(fields),
+        ]),
+        expr::Expr::Is { expr, target } => Cbor::Array(vec![
+            Cbor::Uint(13),
+            expr_tree(expr),
+            narrow_target_tree(target),
+        ]),
+        expr::Expr::As { expr, target } => Cbor::Array(vec![
+            Cbor::Uint(14),
+            expr_tree(expr),
+            narrow_target_tree(target),
+        ]),
+    }
+}
+
+fn expression_fields_tree(fields: &[(String, expr::Expr)]) -> Cbor {
+    Cbor::Array(
+        fields
+            .iter()
+            .map(|(name, value)| Cbor::Array(vec![Cbor::Text(name.clone()), expr_tree(value)]))
+            .collect(),
+    )
+}
+
+fn narrow_target_tree(target: &expr::NarrowTarget) -> Cbor {
+    match target {
+        expr::NarrowTarget::Type(target) => {
+            let mut parts = vec![Cbor::Uint(1), type_tree(target.ty())];
+            if let Some(discriminator) = target.discriminator() {
+                parts.push(Cbor::Array(vec![
+                    Cbor::Text(discriminator.field().to_string()),
+                    Cbor::Array(
+                        discriminator
+                            .mapping()
+                            .iter()
+                            .map(|(external, case)| {
+                                Cbor::Array(vec![
+                                    Cbor::Text(external.clone()),
+                                    Cbor::Text(case.clone()),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                ]));
+            }
+            Cbor::Array(parts)
+        }
+        expr::NarrowTarget::Case { name, payload } => Cbor::Array(vec![
+            Cbor::Uint(2),
+            Cbor::Text(name.clone()),
+            type_tree(payload),
+        ]),
     }
 }
 
@@ -645,9 +927,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                             max = max.max(level + 2);
                         }
                     }
-                    expr::Expr::Unary { expr, .. }
-                    | expr::Expr::Is { expr, .. }
-                    | expr::Expr::As { expr, .. } => {
+                    expr::Expr::Unary { expr, .. } => {
                         stack.push(Item::Expr(expr, level + 1));
                     }
                     expr::Expr::Binary { left, right, .. } => {
@@ -685,14 +965,24 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                             stack.push(Item::Expr(value, level + 3));
                         }
                     }
-                    expr::Expr::Struct(fields) | expr::Expr::Tagged { fields, .. } => {
+                    expr::Expr::Struct(fields) => {
+                        max = max.max(level + 3);
                         for (_, value) in fields {
-                            // v7 assigns the exact container shape; this
-                            // conservative depth keeps the preflight total
-                            // even if its categorical validation gate is
-                            // accidentally bypassed.
-                            stack.push(Item::Expr(value, level + 2));
+                            stack.push(Item::Expr(value, level + 3));
                         }
+                    }
+                    expr::Expr::Tagged { union, fields, .. } => {
+                        max = max.max(level + 3);
+                        for (_, value) in fields {
+                            stack.push(Item::Expr(value, level + 3));
+                        }
+                        max = max.max(
+                            level + 1 + data_type_level(&DataType::TaggedUnion((**union).clone())),
+                        );
+                    }
+                    expr::Expr::Is { expr, target } | expr::Expr::As { expr, target } => {
+                        stack.push(Item::Expr(expr, level + 1));
+                        max = max.max(level + 1 + narrow_target_level(target));
                     }
                 }
             }
@@ -739,9 +1029,13 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                         stack.push(Item::Val(value, level + 2));
                     }
                     Value::TaggedUnion(tagged) => {
+                        // `[21, [case, [17, [field-pair*]]]]`: the tagged
+                        // struct root sits at +2, its fields array at +3, a
+                        // field pair at +4, and its name/value roots at +5.
+                        max = max.max(level + 3);
                         for (_, value) in &tagged.payload {
-                            max = max.max(level + 3);
-                            stack.push(Item::Val(value, level + 3));
+                            max = max.max(level + 5);
+                            stack.push(Item::Val(value, level + 5));
                         }
                     }
                     _ => {}
@@ -754,13 +1048,155 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 }
                 DataType::Map(map) => {
                     max = max.max(level + 1);
+                    stack.push(Item::Ty(map.key(), level + 1));
                     stack.push(Item::Ty(map.value(), level + 1));
                 }
-                _ => max = max.max(level),
+                DataType::Struct(structure) => {
+                    max = max.max(level + 3);
+                    for field in structure.fields() {
+                        stack.push(Item::Ty(field.ty(), level + 3));
+                    }
+                }
+                DataType::StructuralUnion(union) => {
+                    max = max.max(level + 2);
+                    for branch in union.branches() {
+                        stack.push(Item::Ty(branch, level + 2));
+                    }
+                }
+                DataType::TaggedUnion(union) => {
+                    max = max.max(level + 5);
+                    for case in union.cases() {
+                        for field in case.payload().fields() {
+                            stack.push(Item::Ty(field.ty(), level + 5));
+                        }
+                    }
+                }
+                DataType::Enum(enumeration) => {
+                    max = max.max(if enumeration.symbols().is_empty() {
+                        level + 1
+                    } else {
+                        level + 2
+                    });
+                }
+                DataType::Integer(_)
+                | DataType::Float(_)
+                | DataType::Decimal(_)
+                | DataType::Bytes(_)
+                | DataType::Temporal(_) => max = max.max(level + 1),
+                DataType::Null
+                | DataType::Bool
+                | DataType::Number
+                | DataType::Text
+                | DataType::Uuid
+                | DataType::Variant => max = max.max(level),
             },
         }
     }
     max
+}
+
+pub(crate) fn deepest_level_with_resolved(
+    plan: &ExecutionPlan,
+    resolved: &super::ResolvedPortTable,
+) -> usize {
+    let mut max = deepest_level(plan).max(2);
+    for port in resolved.boundary() {
+        max = max.max(4 + data_type_level(port.ty()));
+    }
+    let mut slot = 0_u32;
+    while let Some(row) = resolved.node(Slot::new(slot)) {
+        max = max.max(3);
+        for port in row {
+            max = max.max(5 + data_type_level(port.ty()));
+        }
+        let Some(next) = slot.checked_add(1) else {
+            break;
+        };
+        slot = next;
+    }
+    max
+}
+
+fn data_type_level(ty: &DataType) -> usize {
+    let mut max = 0;
+    let mut stack = vec![(ty, 0usize)];
+    while let Some((ty, level)) = stack.pop() {
+        match ty {
+            DataType::Integer(_)
+            | DataType::Float(_)
+            | DataType::Decimal(_)
+            | DataType::Bytes(_)
+            | DataType::Temporal(_) => max = max.max(level + 1),
+            DataType::Struct(structure) => {
+                max = max.max(level + 3);
+                stack.extend(
+                    structure
+                        .fields()
+                        .iter()
+                        .map(|field| (field.ty(), level + 3)),
+                );
+            }
+            DataType::Map(map) => {
+                max = max.max(level + 1);
+                stack.push((map.key(), level + 1));
+                stack.push((map.value(), level + 1));
+            }
+            DataType::Array(array) => {
+                max = max.max(level + 1);
+                stack.push((array.element(), level + 1));
+            }
+            DataType::Enum(enumeration) => {
+                max = max.max(
+                    level
+                        + if enumeration.symbols().is_empty() {
+                            1
+                        } else {
+                            2
+                        },
+                );
+            }
+            DataType::StructuralUnion(union) => {
+                max = max.max(level + 2);
+                stack.extend(union.branches().iter().map(|branch| (branch, level + 2)));
+            }
+            DataType::TaggedUnion(union) => {
+                max = max.max(level + 5);
+                for case in union.cases() {
+                    stack.extend(
+                        case.payload()
+                            .fields()
+                            .iter()
+                            .map(|field| (field.ty(), level + 5)),
+                    );
+                }
+            }
+            DataType::Null
+            | DataType::Bool
+            | DataType::Number
+            | DataType::Text
+            | DataType::Uuid
+            | DataType::Variant => max = max.max(level),
+        }
+    }
+    max
+}
+
+fn narrow_target_level(target: &expr::NarrowTarget) -> usize {
+    match target {
+        expr::NarrowTarget::Type(target) => {
+            let base = 1 + data_type_level(target.ty());
+            if let Some(discriminator) = target.discriminator() {
+                base.max(if discriminator.mapping().is_empty() {
+                    2
+                } else {
+                    4
+                })
+            } else {
+                base
+            }
+        }
+        expr::NarrowTarget::Case { payload, .. } => 1 + data_type_level(payload),
+    }
 }
 
 fn binop_code(op: expr::BinaryOp) -> u64 {
@@ -1090,22 +1526,163 @@ fn tree_from(tree: &Cbor) -> Result<expr::Tree, DecodeError> {
 
 fn type_from(tree: &Cbor) -> Result<DataType, DecodeError> {
     match tree {
-        Cbor::Uint(1) => Ok(DataType::Bool),
-        Cbor::Uint(2) => Ok(DataType::INT),
-        Cbor::Uint(3) => Ok(DataType::UINT),
-        Cbor::Uint(4) => Ok(DataType::DOUBLE),
-        Cbor::Uint(5) => Ok(DataType::Text),
-        Cbor::Uint(6) => Ok(DataType::BYTES),
-        Cbor::Uint(7) => Ok(DataType::DURATION),
-        Cbor::Uint(8) => Ok(DataType::TIMESTAMP),
-        Cbor::Uint(9) => Ok(DataType::Null),
-        Cbor::Uint(10) => Ok(DataType::Variant),
-        Cbor::Array(parts) => match parts.as_slice() {
-            [Cbor::Uint(11), inner] => Ok(DataType::array(type_from(inner)?)),
-            [Cbor::Uint(12), inner] => Ok(DataType::text_map(type_from(inner)?)),
-            _ => Err(err("data type")),
-        },
+        Cbor::Uint(1) => Ok(DataType::Null),
+        Cbor::Uint(2) => Ok(DataType::Bool),
+        Cbor::Uint(6) => Ok(DataType::Number),
+        Cbor::Uint(7) => Ok(DataType::Text),
+        Cbor::Uint(10) => Ok(DataType::Uuid),
+        Cbor::Uint(17) => Ok(DataType::Variant),
+        Cbor::Array(parts) => type_parts_from(parts),
         _ => Err(err("data type")),
+    }
+}
+
+fn type_parts_from(parts: &[Cbor]) -> Result<DataType, DecodeError> {
+    let built = match parts {
+        [Cbor::Uint(3), Cbor::Uint(signedness), Cbor::Uint(width)] => {
+            let width = integer_width_from(*width)?;
+            DataType::Integer(match signedness {
+                1 => IntegerType::Signed(width),
+                2 => IntegerType::Unsigned(width),
+                _ => return Err(err("integer signedness")),
+            })
+        }
+        [Cbor::Uint(4), Cbor::Uint(width)] => DataType::Float(match width {
+            16 => FloatType::Binary16,
+            32 => FloatType::Binary32,
+            64 => FloatType::Binary64,
+            _ => return Err(err("float width")),
+        }),
+        [Cbor::Uint(5), Cbor::Uint(precision), scale] => {
+            let precision = u32::try_from(*precision).map_err(|_| err("decimal precision"))?;
+            let scale = i32::try_from(int_from(scale)?).map_err(|_| err("decimal scale"))?;
+            DataType::Decimal(DecimalType::new(precision, scale).map_err(|_| err("decimal type"))?)
+        }
+        [Cbor::Uint(8), length] => DataType::Bytes(match length {
+            Cbor::Null => BinaryType::Variable,
+            Cbor::Uint(length) => BinaryType::Fixed(
+                ByteLength::new(u32::try_from(*length).map_err(|_| err("byte length"))?)
+                    .map_err(|_| err("byte length"))?,
+            ),
+            _ => return Err(err("byte length")),
+        }),
+        [Cbor::Uint(9), ..] => DataType::Temporal(temporal_type_from(parts)?),
+        [Cbor::Uint(11), fields] => DataType::Struct(struct_fields_from(fields)?),
+        [Cbor::Uint(12), key, value] => DataType::Map(
+            MapType::new(type_from(key)?, type_from(value)?).map_err(|_| err("map type"))?,
+        ),
+        [Cbor::Uint(13), element, length] => DataType::Array(match length {
+            Cbor::Null => ArrayType::variable(type_from(element)?),
+            Cbor::Uint(length) => ArrayType::fixed(
+                type_from(element)?,
+                u32::try_from(*length).map_err(|_| err("array length"))?,
+            )
+            .map_err(|_| err("array length"))?,
+            _ => return Err(err("array length")),
+        }),
+        [Cbor::Uint(14), Cbor::Array(symbols)] => DataType::Enum(
+            EnumType::new(
+                symbols
+                    .iter()
+                    .map(|symbol| Ok(text_of(symbol, "enum symbol")?.to_string()))
+                    .collect::<Result<Vec<_>, DecodeError>>()?,
+            )
+            .map_err(|_| err("enum type"))?,
+        ),
+        [Cbor::Uint(15), Cbor::Array(branches)] => DataType::structural_union(
+            branches
+                .iter()
+                .map(type_from)
+                .collect::<Result<Vec<_>, _>>()?,
+        )
+        .map_err(|_| err("structural union"))?,
+        [Cbor::Uint(16), Cbor::Array(cases)] => DataType::TaggedUnion(
+            TaggedUnionType::new(
+                cases
+                    .iter()
+                    .map(|case| match array_of(case, "tagged-union case")? {
+                        [Cbor::Text(name), fields] => {
+                            TaggedCase::new(name.clone(), struct_fields_from(fields)?)
+                                .map_err(|_| err("tagged-union case"))
+                        }
+                        _ => Err(err("tagged-union case")),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+            .map_err(|_| err("tagged union"))?,
+        ),
+        _ => return Err(err("data type")),
+    };
+    built.validate().map_err(|_| err("data type budget"))?;
+    Ok(built)
+}
+
+fn integer_width_from(width: u64) -> Result<IntegerWidth, DecodeError> {
+    match width {
+        8 => Ok(IntegerWidth::Bits8),
+        16 => Ok(IntegerWidth::Bits16),
+        32 => Ok(IntegerWidth::Bits32),
+        64 => Ok(IntegerWidth::Bits64),
+        _ => Err(err("integer width")),
+    }
+}
+
+fn struct_fields_from(tree: &Cbor) -> Result<StructType, DecodeError> {
+    StructType::new(
+        array_of(tree, "struct fields")?
+            .iter()
+            .map(|field| match array_of(field, "struct field type")? {
+                [Cbor::Text(name), ty] => Ok(TypeField::new(name.clone(), type_from(ty)?)),
+                _ => Err(err("struct field type")),
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    )
+    .map_err(|_| err("struct type"))
+}
+
+fn temporal_type_from(parts: &[Cbor]) -> Result<TemporalType, DecodeError> {
+    let time_unit = |code: u64| match code {
+        1 => Ok(TimeUnit::Second),
+        2 => Ok(TimeUnit::Millisecond),
+        3 => Ok(TimeUnit::Microsecond),
+        4 => Ok(TimeUnit::Nanosecond),
+        _ => Err(err("time unit")),
+    };
+    match parts {
+        [Cbor::Uint(9), Cbor::Uint(1), Cbor::Uint(unit)] => Ok(TemporalType::Date(match unit {
+            1 => DateUnit::Day,
+            2 => DateUnit::Millisecond,
+            _ => return Err(err("date unit")),
+        })),
+        [Cbor::Uint(9), Cbor::Uint(2), Cbor::Uint(unit)] => {
+            Ok(TemporalType::Time(time_unit(*unit)?))
+        }
+        [Cbor::Uint(9), Cbor::Uint(3), Cbor::Uint(unit), zone] => Ok(TemporalType::Timestamp {
+            unit: time_unit(*unit)?,
+            zone: match zone {
+                Cbor::Null => TimeZone::Utc,
+                Cbor::Text(name) => {
+                    TimeZone::named(name.clone()).map_err(|_| err("timestamp timezone"))?
+                }
+                _ => return Err(err("timestamp timezone")),
+            },
+        }),
+        [Cbor::Uint(9), Cbor::Uint(4), Cbor::Uint(unit)] => {
+            Ok(TemporalType::TimestampNtz(time_unit(*unit)?))
+        }
+        [Cbor::Uint(9), Cbor::Uint(5), Cbor::Uint(unit)] => {
+            Ok(TemporalType::Duration(time_unit(*unit)?))
+        }
+        [Cbor::Uint(9), Cbor::Uint(6), Cbor::Uint(unit)] => {
+            Ok(TemporalType::Interval(match unit {
+                1 => IntervalUnit::YearMonth,
+                2 => IntervalUnit::DayTime,
+                3 => IntervalUnit::MonthDayNano,
+                4 => IntervalUnit::MonthDayMillisUnsigned,
+                _ => return Err(err("interval unit")),
+            }))
+        }
+        _ => Err(err("temporal type")),
     }
 }
 
@@ -1167,7 +1744,79 @@ fn expr_from(tree: &Cbor) -> Result<expr::Expr, DecodeError> {
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         )),
+        [Cbor::Uint(11), fields] => Ok(expr::Expr::Struct(expression_fields_from(fields)?)),
+        [Cbor::Uint(12), union, Cbor::Text(case), fields] => {
+            let DataType::TaggedUnion(union) = type_from(union)? else {
+                return Err(err("tagged constructor type"));
+            };
+            Ok(expr::Expr::Tagged {
+                union: alloc::boxed::Box::new(union),
+                case: case.clone(),
+                fields: expression_fields_from(fields)?,
+            })
+        }
+        [Cbor::Uint(13), value, target] => Ok(expr::Expr::Is {
+            expr: alloc::boxed::Box::new(expr_from(value)?),
+            target: alloc::boxed::Box::new(narrow_target_from(target)?),
+        }),
+        [Cbor::Uint(14), value, target] => Ok(expr::Expr::As {
+            expr: alloc::boxed::Box::new(expr_from(value)?),
+            target: alloc::boxed::Box::new(narrow_target_from(target)?),
+        }),
         _ => Err(err("expression")),
+    }
+}
+
+fn expression_fields_from(tree: &Cbor) -> Result<Vec<(String, expr::Expr)>, DecodeError> {
+    array_of(tree, "expression fields")?
+        .iter()
+        .map(|field| match array_of(field, "expression field")? {
+            [Cbor::Text(name), value] => Ok((name.clone(), expr_from(value)?)),
+            _ => Err(err("expression field")),
+        })
+        .collect()
+}
+
+fn narrow_target_from(tree: &Cbor) -> Result<expr::NarrowTarget, DecodeError> {
+    match array_of(tree, "narrow target")? {
+        [Cbor::Uint(1), ty] => Ok(expr::NarrowTarget::Type(alloc::boxed::Box::new(
+            expr::NarrowType::new(type_from(ty)?),
+        ))),
+        [Cbor::Uint(1), ty, discriminator] => {
+            let [Cbor::Text(field), Cbor::Array(entries)] =
+                array_of(discriminator, "discriminator")?
+            else {
+                return Err(err("discriminator"));
+            };
+            let mut mapping = BTreeMap::new();
+            for entry in entries {
+                let [Cbor::Text(external), Cbor::Text(case)] =
+                    array_of(entry, "discriminator mapping")?
+                else {
+                    return Err(err("discriminator mapping"));
+                };
+                if mapping.insert(external.clone(), case.clone()).is_some() {
+                    return Err(err("duplicate discriminator mapping"));
+                }
+            }
+            let discriminator =
+                Discriminator::new(field.clone(), mapping).map_err(|_| err("discriminator"))?;
+            Ok(expr::NarrowTarget::Type(alloc::boxed::Box::new(
+                expr::NarrowType::discriminated(type_from(ty)?, discriminator)
+                    .map_err(|_| err("narrow target"))?,
+            )))
+        }
+        [Cbor::Uint(2), Cbor::Text(name), payload] => {
+            let payload = type_from(payload)?;
+            if !matches!(payload, DataType::Struct(_)) || name.is_empty() {
+                return Err(err("case target"));
+            }
+            Ok(expr::NarrowTarget::Case {
+                name: name.clone(),
+                payload: alloc::boxed::Box::new(payload),
+            })
+        }
+        _ => Err(err("narrow target")),
     }
 }
 
@@ -1219,22 +1868,12 @@ fn value_from(tree: &Cbor) -> Result<Value, DecodeError> {
                 wide[16 - unscaled.len()..].copy_from_slice(unscaled);
                 let value = i128::from_be_bytes(wide);
                 let scale_wide = int_from(scale)?;
-                // The reader RE-VERIFIES the invariants a compiler
-                // enforced (D-2026-08-13-1, review round): the
-                // decimal128 budgets, and — plan constants being
-                // DECLARED-scale decimals — the written-scale fold
-                // that keeps the integer domain disjoint. Trailing
-                // zeros are significant (`decimal("1.50")`).
-                let scale_ok = scale_wide >= i64::from(crate::json::MIN_SCALE)
-                    && scale_wide <= i64::from(crate::json::MAX_SCALE);
-                if !scale_ok {
-                    return Err(err("decimal scale"));
-                }
-                #[allow(clippy::cast_possible_truncation)]
-                let scale = scale_wide as i32;
-                // ONE shared rule with the validator — encode ⇒
-                // decode has no gap to hide in.
-                if !crate::json::declared_decimal_well_formed(value, scale) {
+                // The value registry carries the decimal128 domain. Whether
+                // the value is a declared-scale decimal or a schema-less
+                // number is decided by its transported DataType, not by a
+                // second decoder-local fold.
+                let scale = i32::try_from(scale_wide).map_err(|_| err("decimal scale"))?;
+                if !crate::datatype::decimal_in_domain(value, scale) {
                     return Err(err("decimal form"));
                 }
                 Ok(Value::Decimal {
@@ -1245,11 +1884,20 @@ fn value_from(tree: &Cbor) -> Result<Value, DecodeError> {
             _ => Err(err("decimal")),
         },
         [Cbor::Uint(12), value] => Ok(Value::Timestamp(int_from(value)?)),
+        [Cbor::Uint(11), value] => Ok(Value::Date(int_from(value)?)),
+        [Cbor::Uint(13), value] => Ok(Value::TimestampNtz(int_from(value)?)),
+        [Cbor::Uint(14), value] => Ok(Value::Time(int_from(value)?)),
+        [Cbor::Uint(15), Cbor::Bytes(value)] => Ok(Value::Uuid(
+            value
+                .as_slice()
+                .try_into()
+                .map_err(|_| err("uuid length"))?,
+        )),
         [Cbor::Uint(16), value] => Ok(Value::Duration(int_from(value)?)),
         [Cbor::Uint(17), Cbor::Array(pairs)] => {
-            // The struct literal — bare text keys, declaration
-            // order AS SEALED (sorted); the validator holds shipped
-            // constants to the expressible subset (empty only).
+            // The struct literal — bare text keys, declaration order AS
+            // SEALED (sorted). Its surrounding DataType supplies the closed
+            // field contract; validation checks conformance before encoding.
             let mut fields = alloc::vec::Vec::new();
             for pair in pairs {
                 match array_of(pair, "struct field")? {
@@ -1261,29 +1909,76 @@ fn value_from(tree: &Cbor) -> Result<Value, DecodeError> {
             }
             Ok(Value::Struct(fields))
         }
-        [Cbor::Uint(18), Cbor::Array(pairs)] => {
-            let mut map = alloc::collections::BTreeMap::new();
-            for pair in pairs {
-                match array_of(pair, "map entry")? {
-                    [key, value] => {
-                        let key = match array_of(key, "map key")? {
-                            [Cbor::Uint(8), Cbor::Text(text)] => text.clone(),
-                            _ => return Err(err("map key")),
-                        };
-                        map.insert(key, value_from(value)?);
-                    }
-                    _ => return Err(err("map entry")),
-                }
-            }
-            Ok(Value::Map(map))
-        }
+        [Cbor::Uint(18), Cbor::Array(pairs)] => map_value_from(pairs),
         [Cbor::Uint(19), Cbor::Array(items)] => Ok(Value::Array(
             items
                 .iter()
                 .map(value_from)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
+        [Cbor::Uint(20), Cbor::Text(symbol)] => Ok(Value::Enum(symbol.clone())),
+        [Cbor::Uint(21), payload] => match array_of(payload, "union value")? {
+            [Cbor::Uint(branch), value] => Ok(Value::StructuralUnion {
+                branch: u16::try_from(*branch).map_err(|_| err("union branch"))?,
+                value: alloc::boxed::Box::new(value_from(value)?),
+            }),
+            [Cbor::Text(case), value] => {
+                let Value::Struct(payload) = value_from(value)? else {
+                    return Err(err("tagged-union payload"));
+                };
+                Ok(Value::TaggedUnion(alloc::boxed::Box::new(
+                    crate::value::TaggedUnionValue {
+                        case: case.clone(),
+                        payload,
+                    },
+                )))
+            }
+            _ => Err(err("union value")),
+        },
+        [Cbor::Uint(24), payload] => match array_of(payload, "interval")? {
+            [months, days, nanoseconds] => Ok(Value::Interval {
+                months: int_from(months)?,
+                days: int_from(days)?,
+                nanoseconds: int_from(nanoseconds)?,
+            }),
+            _ => Err(err("interval")),
+        },
         _ => Err(err("tagged value")),
+    }
+}
+
+fn map_value_from(pairs: &[Cbor]) -> Result<Value, DecodeError> {
+    let mut decoded = Vec::with_capacity(pairs.len());
+    let mut all_text = true;
+    for pair in pairs {
+        let [key, value] = array_of(pair, "map entry")? else {
+            return Err(err("map entry"));
+        };
+        let key = value_from(key)?;
+        all_text &= matches!(key, Value::Text(_));
+        decoded.push((key, value_from(value)?));
+    }
+    if all_text {
+        let mut map = BTreeMap::new();
+        for (key, value) in decoded {
+            let Value::Text(key) = key else {
+                return Err(err("text map key"));
+            };
+            if map.insert(key, value).is_some() {
+                return Err(err("duplicate map key"));
+            }
+        }
+        Ok(Value::Map(map))
+    } else {
+        Ok(Value::KeyedMap(decoded))
+    }
+}
+
+fn signed_tree(value: i64) -> Cbor {
+    if value >= 0 {
+        Cbor::Uint(value.unsigned_abs())
+    } else {
+        Cbor::Negative((-1 - value).unsigned_abs())
     }
 }
 
@@ -1561,31 +2256,464 @@ mod tests {
     }
 
     #[test]
-    fn data_type_ownership_does_not_move_the_v6_wire_ids() {
+    fn v7_type_registry_is_total_and_pins_its_discriminants() {
+        let enumeration = DataType::Enum(EnumType::new(vec![text("a"), text("b")]).unwrap());
+        let structural = DataType::structural_union(vec![DataType::Null, DataType::Text]).unwrap();
+        let tagged = DataType::TaggedUnion(
+            TaggedUnionType::new(vec![
+                TaggedCase::new("Done", StructType::new(vec![]).unwrap()).unwrap(),
+            ])
+            .unwrap(),
+        );
         let cases = [
-            (DataType::Bool, Cbor::Uint(1)),
-            (DataType::INT, Cbor::Uint(2)),
-            (DataType::UINT, Cbor::Uint(3)),
-            (DataType::DOUBLE, Cbor::Uint(4)),
-            (DataType::Text, Cbor::Uint(5)),
-            (DataType::BYTES, Cbor::Uint(6)),
-            (DataType::DURATION, Cbor::Uint(7)),
-            (DataType::TIMESTAMP, Cbor::Uint(8)),
-            (DataType::Null, Cbor::Uint(9)),
-            (DataType::Variant, Cbor::Uint(10)),
+            (DataType::Null, Cbor::Uint(1)),
+            (DataType::Bool, Cbor::Uint(2)),
             (
-                DataType::array(DataType::INT),
-                Cbor::Array(vec![Cbor::Uint(11), Cbor::Uint(2)]),
+                DataType::INT,
+                Cbor::Array(vec![Cbor::Uint(3), Cbor::Uint(1), Cbor::Uint(32)]),
+            ),
+            (
+                DataType::DOUBLE,
+                Cbor::Array(vec![Cbor::Uint(4), Cbor::Uint(64)]),
+            ),
+            (
+                DataType::Decimal(DecimalType::new(10, 2).unwrap()),
+                Cbor::Array(vec![Cbor::Uint(5), Cbor::Uint(10), Cbor::Uint(2)]),
+            ),
+            (DataType::Number, Cbor::Uint(6)),
+            (DataType::Text, Cbor::Uint(7)),
+            (
+                DataType::BYTES,
+                Cbor::Array(vec![Cbor::Uint(8), Cbor::Null]),
+            ),
+            (
+                DataType::DURATION,
+                Cbor::Array(vec![Cbor::Uint(9), Cbor::Uint(5), Cbor::Uint(4)]),
+            ),
+            (DataType::Uuid, Cbor::Uint(10)),
+            (
+                DataType::empty_struct(),
+                Cbor::Array(vec![Cbor::Uint(11), Cbor::Array(vec![])]),
             ),
             (
                 DataType::text_map(DataType::Text),
-                Cbor::Array(vec![Cbor::Uint(12), Cbor::Uint(5)]),
+                Cbor::Array(vec![Cbor::Uint(12), Cbor::Uint(7), Cbor::Uint(7)]),
             ),
+            (
+                DataType::array(DataType::INT),
+                Cbor::Array(vec![
+                    Cbor::Uint(13),
+                    Cbor::Array(vec![Cbor::Uint(3), Cbor::Uint(1), Cbor::Uint(32)]),
+                    Cbor::Null,
+                ]),
+            ),
+            (
+                enumeration,
+                Cbor::Array(vec![
+                    Cbor::Uint(14),
+                    Cbor::Array(vec![Cbor::Text(text("a")), Cbor::Text(text("b"))]),
+                ]),
+            ),
+            (
+                structural,
+                Cbor::Array(vec![
+                    Cbor::Uint(15),
+                    Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(7)]),
+                ]),
+            ),
+            (
+                tagged,
+                Cbor::Array(vec![
+                    Cbor::Uint(16),
+                    Cbor::Array(vec![Cbor::Array(vec![
+                        Cbor::Text(text("Done")),
+                        Cbor::Array(vec![]),
+                    ])]),
+                ]),
+            ),
+            (DataType::Variant, Cbor::Uint(17)),
         ];
         for (ty, wire) in cases {
             assert_eq!(type_tree(&ty), wire);
             assert_eq!(type_from(&wire).unwrap(), ty);
         }
+    }
+
+    #[test]
+    fn v7_type_parameters_have_one_pinned_spelling() {
+        let integers = [
+            (IntegerType::Signed(IntegerWidth::Bits8), 1, 8),
+            (IntegerType::Signed(IntegerWidth::Bits16), 1, 16),
+            (IntegerType::Signed(IntegerWidth::Bits32), 1, 32),
+            (IntegerType::Signed(IntegerWidth::Bits64), 1, 64),
+            (IntegerType::Unsigned(IntegerWidth::Bits8), 2, 8),
+            (IntegerType::Unsigned(IntegerWidth::Bits16), 2, 16),
+            (IntegerType::Unsigned(IntegerWidth::Bits32), 2, 32),
+            (IntegerType::Unsigned(IntegerWidth::Bits64), 2, 64),
+        ];
+        for (integer, signedness, width) in integers {
+            let wire = Cbor::Array(vec![
+                Cbor::Uint(3),
+                Cbor::Uint(signedness),
+                Cbor::Uint(width),
+            ]);
+            assert_eq!(type_tree(&DataType::Integer(integer)), wire);
+            assert_eq!(type_from(&wire), Ok(DataType::Integer(integer)));
+        }
+
+        let floats = [
+            (FloatType::Binary16, 16),
+            (FloatType::Binary32, 32),
+            (FloatType::Binary64, 64),
+        ];
+        for (float, width) in floats {
+            let wire = Cbor::Array(vec![Cbor::Uint(4), Cbor::Uint(width)]);
+            assert_eq!(type_tree(&DataType::Float(float)), wire);
+            assert_eq!(type_from(&wire), Ok(DataType::Float(float)));
+        }
+
+        let temporal = [
+            (TemporalType::Date(DateUnit::Day), vec![1, 1]),
+            (TemporalType::Date(DateUnit::Millisecond), vec![1, 2]),
+            (TemporalType::Time(TimeUnit::Second), vec![2, 1]),
+            (TemporalType::Time(TimeUnit::Millisecond), vec![2, 2]),
+            (TemporalType::Time(TimeUnit::Microsecond), vec![2, 3]),
+            (TemporalType::Time(TimeUnit::Nanosecond), vec![2, 4]),
+            (TemporalType::TimestampNtz(TimeUnit::Nanosecond), vec![4, 4]),
+            (TemporalType::Duration(TimeUnit::Microsecond), vec![5, 3]),
+            (TemporalType::Interval(IntervalUnit::YearMonth), vec![6, 1]),
+            (TemporalType::Interval(IntervalUnit::DayTime), vec![6, 2]),
+            (
+                TemporalType::Interval(IntervalUnit::MonthDayNano),
+                vec![6, 3],
+            ),
+            (
+                TemporalType::Interval(IntervalUnit::MonthDayMillisUnsigned),
+                vec![6, 4],
+            ),
+        ];
+        for (temporal, parameters) in temporal {
+            let mut parts = vec![Cbor::Uint(9)];
+            parts.extend(parameters.into_iter().map(Cbor::Uint));
+            let wire = Cbor::Array(parts);
+            let ty = DataType::Temporal(temporal);
+            assert_eq!(type_tree(&ty), wire);
+            assert_eq!(type_from(&wire), Ok(ty));
+        }
+
+        let utc_timestamp = DataType::Temporal(TemporalType::Timestamp {
+            unit: TimeUnit::Second,
+            zone: TimeZone::Utc,
+        });
+        let utc_wire = Cbor::Array(vec![
+            Cbor::Uint(9),
+            Cbor::Uint(3),
+            Cbor::Uint(1),
+            Cbor::Null,
+        ]);
+        assert_eq!(type_tree(&utc_timestamp), utc_wire);
+        assert_eq!(type_from(&utc_wire), Ok(utc_timestamp));
+
+        let named_timestamp = DataType::Temporal(TemporalType::Timestamp {
+            unit: TimeUnit::Millisecond,
+            zone: TimeZone::named("Europe/Paris").unwrap(),
+        });
+        let named_wire = Cbor::Array(vec![
+            Cbor::Uint(9),
+            Cbor::Uint(3),
+            Cbor::Uint(2),
+            Cbor::Text(text("Europe/Paris")),
+        ]);
+        assert_eq!(type_tree(&named_timestamp), named_wire);
+        assert_eq!(type_from(&named_wire), Ok(named_timestamp));
+
+        let fixed_bytes = DataType::Bytes(BinaryType::Fixed(ByteLength::new(32).unwrap()));
+        let fixed_bytes_wire = Cbor::Array(vec![Cbor::Uint(8), Cbor::Uint(32)]);
+        assert_eq!(type_tree(&fixed_bytes), fixed_bytes_wire);
+        assert_eq!(type_from(&fixed_bytes_wire), Ok(fixed_bytes));
+
+        let fixed_array = DataType::Array(ArrayType::fixed(DataType::Text, 4).unwrap());
+        let fixed_array_wire = Cbor::Array(vec![Cbor::Uint(13), Cbor::Uint(7), Cbor::Uint(4)]);
+        assert_eq!(type_tree(&fixed_array), fixed_array_wire);
+        assert_eq!(type_from(&fixed_array_wire), Ok(fixed_array));
+
+        let signed_decimal = DataType::Decimal(DecimalType::new(18, -3).unwrap());
+        let signed_decimal_wire =
+            Cbor::Array(vec![Cbor::Uint(5), Cbor::Uint(18), Cbor::Negative(2)]);
+        assert_eq!(type_tree(&signed_decimal), signed_decimal_wire);
+        assert_eq!(type_from(&signed_decimal_wire), Ok(signed_decimal));
+    }
+
+    #[test]
+    fn v7_rejects_each_malformed_type_table_family() {
+        let malformed = [
+            Cbor::Array(vec![Cbor::Uint(3), Cbor::Uint(3), Cbor::Uint(32)]),
+            Cbor::Array(vec![Cbor::Uint(3), Cbor::Uint(1), Cbor::Uint(24)]),
+            Cbor::Array(vec![Cbor::Uint(4), Cbor::Uint(128)]),
+            Cbor::Array(vec![Cbor::Uint(5), Cbor::Uint(0), Cbor::Uint(0)]),
+            Cbor::Array(vec![Cbor::Uint(8), Cbor::Uint(0)]),
+            Cbor::Array(vec![Cbor::Uint(9), Cbor::Uint(2), Cbor::Uint(9)]),
+            Cbor::Array(vec![
+                Cbor::Uint(11),
+                Cbor::Array(vec![
+                    Cbor::Array(vec![Cbor::Text(text("x")), Cbor::Uint(7)]),
+                    Cbor::Array(vec![Cbor::Text(text("x")), Cbor::Uint(7)]),
+                ]),
+            ]),
+            Cbor::Array(vec![
+                Cbor::Uint(12),
+                Cbor::Array(vec![Cbor::Uint(13), Cbor::Uint(7), Cbor::Null]),
+                Cbor::Uint(7),
+            ]),
+            Cbor::Array(vec![Cbor::Uint(14), Cbor::Array(vec![])]),
+            Cbor::Array(vec![
+                Cbor::Uint(15),
+                Cbor::Array(vec![Cbor::Uint(7), Cbor::Uint(7)]),
+            ]),
+            Cbor::Array(vec![Cbor::Uint(16), Cbor::Array(vec![])]),
+        ];
+        for wire in malformed {
+            assert!(
+                type_from(&wire).is_err(),
+                "malformed type admitted: {wire:?}"
+            );
+        }
+
+        let unsorted = Cbor::Array(vec![
+            Cbor::Uint(11),
+            Cbor::Array(vec![
+                Cbor::Array(vec![Cbor::Text(text("z")), Cbor::Uint(7)]),
+                Cbor::Array(vec![Cbor::Text(text("a")), Cbor::Uint(7)]),
+            ]),
+        ]);
+        let normalized = type_tree(&type_from(&unsorted).unwrap());
+        assert_ne!(normalized, unsorted, "source order is not a second seal");
+    }
+
+    #[test]
+    fn every_v7_expression_form_round_trips_with_its_resolved_target() {
+        let payload = StructType::new(vec![TypeField::new("message", DataType::Text)]).unwrap();
+        let union = TaggedUnionType::new(vec![TaggedCase::new("Failed", payload.clone()).unwrap()])
+            .unwrap();
+        let mut mapping = BTreeMap::new();
+        mapping.insert(text("failure"), text("Failed"));
+        let discriminator = Discriminator::new("kind", mapping).unwrap();
+        let target = expr::NarrowTarget::Type(Box::new(
+            expr::NarrowType::discriminated(DataType::TaggedUnion(union.clone()), discriminator)
+                .unwrap(),
+        ));
+        let forms = [
+            expr::Expr::Struct(vec![(
+                text("message"),
+                expr::Expr::Literal(Value::Text(text("bad"))),
+            )]),
+            expr::Expr::Tagged {
+                union: Box::new(union),
+                case: text("Failed"),
+                fields: vec![(
+                    text("message"),
+                    expr::Expr::Literal(Value::Text(text("bad"))),
+                )],
+            },
+            expr::Expr::Is {
+                expr: Box::new(expr::Expr::Path(vec![text("data")])),
+                target: Box::new(target.clone()),
+            },
+            expr::Expr::As {
+                expr: Box::new(expr::Expr::Path(vec![text("data")])),
+                target: Box::new(expr::NarrowTarget::Case {
+                    name: text("Failed"),
+                    payload: Box::new(DataType::Struct(payload)),
+                }),
+            },
+        ];
+        for form in forms {
+            assert_eq!(expr_from(&expr_tree(&form)).unwrap(), form);
+        }
+    }
+
+    #[test]
+    fn every_published_value_family_round_trips_in_v7() {
+        let mut text_map = BTreeMap::new();
+        text_map.insert(text("k"), Value::Bool(true));
+        let values = vec![
+            Value::Null,
+            Value::Bool(true),
+            Value::Int(i64::MIN),
+            Value::Uint(u64::MAX),
+            Value::Double(-0.0),
+            Value::Text(text("x")),
+            Value::Decimal {
+                unscaled: 100,
+                scale: 0,
+            },
+            Value::Bytes(vec![1, 2]),
+            Value::Duration(1),
+            Value::Timestamp(2),
+            Value::Date(3),
+            Value::Time(4),
+            Value::TimestampNtz(5),
+            Value::Interval {
+                months: 1,
+                days: 2,
+                nanoseconds: 3,
+            },
+            Value::Uuid([7; 16]),
+            Value::Struct(vec![(text("x"), Value::Int(1))]),
+            Value::Map(text_map),
+            Value::KeyedMap(vec![(Value::Int(1), Value::Text(text("one")))]),
+            Value::Array(vec![Value::Int(1)]),
+            Value::Enum(text("Ready")),
+            Value::StructuralUnion {
+                branch: 1,
+                value: Box::new(Value::Text(text("x"))),
+            },
+            Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+                case: text("Done"),
+                payload: vec![(text("code"), Value::Int(0))],
+            })),
+        ];
+        for value in values {
+            assert_eq!(value_from(&value_tagged(&value)).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn the_resolved_table_is_mandatory_and_cannot_lie() {
+        let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
+            nodes: vec![],
+            boundary: vec![],
+            edges: vec![],
+            handlers: vec![],
+            app_schema: vec![],
+            ext_schema: vec![],
+            assets: vec![],
+        })
+        .unwrap();
+        let hash = SemanticHash::from_bytes([0; 32]);
+        let package = encode(&validated, &hash);
+
+        let mutate = |edit: &dyn Fn(&mut BTreeMap<u64, Cbor>)| {
+            let (Cbor::Map(mut envelope), _) =
+                canonical_cbor::decode(&package[MAGIC.len()..]).expect("envelope")
+            else {
+                panic!("map envelope");
+            };
+            let Cbor::Bytes(body) = envelope.get(&3).unwrap() else {
+                panic!("body");
+            };
+            let (Cbor::Map(mut plan), _) = canonical_cbor::decode(body).expect("body") else {
+                panic!("map body");
+            };
+            edit(&mut plan);
+            let body = canonical_cbor::encode(&Cbor::Map(plan));
+            envelope.insert(3, Cbor::Bytes(body.clone()));
+            envelope.insert(
+                4,
+                Cbor::Bytes(checksum(FORMAT_VERSION, &[0; 32], &body).to_vec()),
+            );
+            let mut bytes = MAGIC.to_vec();
+            bytes.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope)));
+            bytes
+        };
+
+        let missing = mutate(&|plan| {
+            plan.remove(&8);
+        });
+        assert!(matches!(decode(&missing), Err(DecodeError::Malformed(_))));
+
+        let lying = mutate(&|plan| {
+            plan.insert(
+                8,
+                Cbor::Array(vec![
+                    Cbor::Array(vec![Cbor::Array(vec![
+                        Cbor::Text(text("ghost")),
+                        Cbor::Uint(1),
+                        Cbor::Uint(7),
+                        Cbor::Uint(2),
+                    ])]),
+                    Cbor::Array(vec![]),
+                ]),
+            );
+        });
+        assert_eq!(
+            decode(&lying).unwrap_err(),
+            DecodeError::ResolvedPortTableMismatch
+        );
+
+        let invalid_union = mutate(&|plan| {
+            plan.insert(
+                8,
+                Cbor::Array(vec![
+                    Cbor::Array(vec![Cbor::Array(vec![
+                        Cbor::Text(text("ghost")),
+                        Cbor::Uint(1),
+                        Cbor::Array(vec![
+                            Cbor::Uint(15),
+                            Cbor::Array(vec![Cbor::Uint(7), Cbor::Uint(7)]),
+                        ]),
+                        Cbor::Uint(2),
+                    ])]),
+                    Cbor::Array(vec![]),
+                ]),
+            );
+        });
+        assert!(matches!(
+            decode(&invalid_union),
+            Err(DecodeError::Malformed(_))
+        ));
+
+        let malformed_rows = [
+            Cbor::Array(vec![]),
+            Cbor::Array(vec![Cbor::Array(vec![]), Cbor::Uint(0)]),
+            Cbor::Array(vec![
+                Cbor::Array(vec![Cbor::Array(vec![
+                    Cbor::Text(text("")),
+                    Cbor::Uint(1),
+                    Cbor::Uint(7),
+                    Cbor::Uint(1),
+                ])]),
+                Cbor::Array(vec![]),
+            ]),
+            Cbor::Array(vec![
+                Cbor::Array(vec![Cbor::Array(vec![
+                    Cbor::Text(text("in")),
+                    Cbor::Uint(3),
+                    Cbor::Uint(7),
+                    Cbor::Uint(1),
+                ])]),
+                Cbor::Array(vec![]),
+            ]),
+            Cbor::Array(vec![
+                Cbor::Array(vec![Cbor::Array(vec![
+                    Cbor::Text(text("in")),
+                    Cbor::Uint(1),
+                    Cbor::Uint(7),
+                    Cbor::Uint(3),
+                ])]),
+                Cbor::Array(vec![]),
+            ]),
+        ];
+        for table in malformed_rows {
+            assert!(
+                resolved_table_from(&table).is_err(),
+                "malformed resolved table admitted: {table:?}"
+            );
+        }
+
+        let wrong_node_count = mutate(&|plan| {
+            plan.insert(
+                8,
+                Cbor::Array(vec![
+                    Cbor::Array(vec![]),
+                    Cbor::Array(vec![Cbor::Array(vec![])]),
+                ]),
+            );
+        });
+        assert_eq!(
+            decode(&wrong_node_count).unwrap_err(),
+            DecodeError::ResolvedPortTableMismatch
+        );
     }
 
     #[test]
@@ -1610,10 +2738,44 @@ mod tests {
         deep_type_plan.handlers[0].body = vec![Step::Let {
             name: text("x"),
             expr: expr::Tree {
-                ty: nested_type,
+                ty: nested_type.clone(),
                 root: expr::Expr::Literal(Value::Null),
             },
         }];
+        let payload = StructType::new(vec![TypeField::new("message", DataType::Text)]).unwrap();
+        let union = TaggedUnionType::new(vec![TaggedCase::new("Failed", payload.clone()).unwrap()])
+            .unwrap();
+        let tagged_value = Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+            case: text("Failed"),
+            payload: vec![(text("message"), Value::Text(text("bad")))],
+        }));
+        let mut mapping = BTreeMap::new();
+        mapping.insert(text("failure"), text("Failed"));
+        let discriminated = expr::NarrowTarget::Type(Box::new(
+            expr::NarrowType::discriminated(
+                DataType::TaggedUnion(union.clone()),
+                Discriminator::new("kind", mapping).unwrap(),
+            )
+            .unwrap(),
+        ));
+        let tagged_is = expr::Expr::Is {
+            expr: Box::new(expr::Expr::Tagged {
+                union: Box::new(union),
+                case: text("Failed"),
+                fields: vec![(text("message"), expr::Expr::Literal(tagged_value.clone()))],
+            }),
+            target: Box::new(discriminated),
+        };
+        let structured_as = expr::Expr::Struct(vec![(
+            text("result"),
+            expr::Expr::As {
+                expr: Box::new(expr::Expr::Literal(tagged_value)),
+                target: Box::new(expr::NarrowTarget::Case {
+                    name: text("Failed"),
+                    payload: Box::new(DataType::Struct(payload)),
+                }),
+            },
+        )]);
         let plans = [
             ExecutionPlan {
                 nodes: vec![],
@@ -1629,6 +2791,8 @@ mod tests {
             one_step_plan(nested_maplit),
             one_step_plan(expr::Expr::Literal(nested_value)),
             deep_type_plan,
+            one_step_plan(tagged_is),
+            one_step_plan(structured_as),
         ];
         for plan in &plans {
             assert_eq!(
@@ -1637,5 +2801,27 @@ mod tests {
                 "the walker's arithmetic drifted from the builders"
             );
         }
+
+        let resolved_plan = ExecutionPlan {
+            nodes: vec![],
+            boundary: vec![PortDecl {
+                port: port("deep"),
+                direction: node::Direction::Input,
+                unwired: crate::plan::UnwiredPolicy::RequireWire,
+                ty: Some(nested_type),
+            }],
+            edges: vec![],
+            handlers: vec![],
+            app_schema: vec![],
+            ext_schema: vec![],
+            assets: vec![],
+        };
+        let resolved = crate::plan::type_resolution::resolve(&resolved_plan)
+            .expect("the declared boundary type resolves");
+        assert_eq!(
+            deepest_level_with_resolved(&resolved_plan, &resolved),
+            levels(&plan_tree_with_resolved(&resolved_plan, Some(&resolved))),
+            "the resolved-port table drifted from the depth walker"
+        );
     }
 }

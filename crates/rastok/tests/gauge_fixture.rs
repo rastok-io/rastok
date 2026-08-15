@@ -6,7 +6,7 @@
 //! owe (D-2026-08-08-2/-3): one graph carrying a TYPED named
 //! boundary input, typed operator ports, and a typed named output,
 //! with its Lab scenario. Pinned here: the exact semantic hash (the
-//! identity move of the port-table presence tag), the current v6 package
+//! identity move of the port-table presence tag), the current v7 package
 //! bytes, and the full golden trace whose INBOUND record seals the
 //! ingress port as key 24.
 
@@ -60,7 +60,7 @@ fn the_package_matches_its_golden() {
     }
     let golden = std::fs::read_to_string(&path)
         .expect("no package golden; run once with RASTOK_BLESS=1 to bless");
-    assert_eq!(golden.trim(), rendered, "the v6 typed package is pinned");
+    assert_eq!(golden.trim(), rendered, "the v7 typed package is pinned");
 }
 
 #[test]

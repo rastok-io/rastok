@@ -4,7 +4,9 @@
 > projection profiles between external schemas and Rastok
 > [`DataType`](types.md). A Connector may implement a strict subset, but it may
 > not reinterpret or weaken a refusal. Library iteration order and physical
-> container layout never become type identity.
+> container layout never become type identity. B8 package v7 can transport
+> every resulting logical type and union discriminant; B9 owns the external
+> schema parsers, reverse projections and their round-trip corpus.
 
 Schema projection is a boundary operation:
 

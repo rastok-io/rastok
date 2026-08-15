@@ -44,6 +44,55 @@ fn the_round_trip_preserves_the_plan_and_its_identity() {
 }
 
 #[test]
+fn v7_round_trips_tagged_structural_and_narrowing_expressions() {
+    let sources = [
+        r#"
+type Failure = union { Broken { message: text } }
+graph g : App {
+  input in: variant
+  operator o {
+    output failure: Failure
+    on in { failure = Broken { message = "no" } }
+  }
+  . -> o
+}
+"#,
+        r#"
+type Customer = struct { id: int }
+graph g : App {
+  input in: variant
+  output out: variant
+  operator o { on in where data is Customer { out = data.id } }
+  . -> o -> .
+}
+"#,
+        r#"
+graph g : App {
+  input in: int
+  output out: int | text
+  operator o {
+    input in: int
+    output out: int | text
+    on in { out = 5 }
+  }
+  . -> o -> .
+}
+"#,
+    ];
+    for source in sources {
+        let compilation = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("a valid v7 program");
+        let bytes = plan::encode(&compilation.plan, &compilation.hash);
+        let (decoded, hash) = plan::decode(&bytes).expect("the v7 package opens");
+        assert_eq!(decoded, compilation.plan);
+        assert_eq!(hash, compilation.hash);
+    }
+}
+
+#[test]
 fn the_example_package_matches_its_golden() {
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -81,19 +130,20 @@ fn every_refusal_is_typed() {
     assert_eq!(plan::decode(&foreign).unwrap_err(), DecodeError::BadMagic);
 
     // A future format version — refused by name.
+    let future = u64::from(plan::FORMAT_VERSION) + 1;
     let bumped = reframe(&bytes, |pairs| {
-        pairs.insert(1, Cbor::Uint(7));
+        pairs.insert(1, Cbor::Uint(future));
     });
     assert_eq!(
         plan::decode(&bumped).unwrap_err(),
-        DecodeError::UnsupportedVersion(7)
+        DecodeError::UnsupportedVersion(future)
     );
 
     // The RETIRED draft versions — v2 lacked the typed port_decl,
     // v3 the empty-struct literal, v4 the three-zone reform
     // (D-2026-08-10-9), v5 the `decimal(…)` call (D-2026-08-13-1);
     // each is refused by number, never migrated silently.
-    for draft in [2u64, 3, 4, 5] {
+    for draft in [2u64, 3, 4, 5, 6] {
         let retired = reframe(&bytes, |pairs| {
             pairs.insert(1, Cbor::Uint(draft));
         });
@@ -262,7 +312,7 @@ fn a_non_canonical_envelope_refuses() {
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x06],
+        &[0xa4, 0x01, 0x07],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -277,16 +327,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 6 written on two
-    // bytes (0x18 0x06) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 7 written on two
+    // bytes (0x18 0x07) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x06],
+        &[0xa4, 0x01, 0x07],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x06]);
+    widened.splice(6..7, [0x18, 0x07]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))

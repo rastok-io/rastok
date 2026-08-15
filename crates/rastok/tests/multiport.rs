@@ -1122,8 +1122,8 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
 
 #[test]
 fn the_empty_record_travels_and_hashes_stably() {
-    // The one struct constant a plan may carry: the empty record
-    // literal survives the package round trip, revalidates, and the
+    // The empty record remains a useful boundary case of the complete v7
+    // struct family: it survives the package round trip, revalidates, and its
     // hash is deterministic across compiles.
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = { parent = {} } }\n  }\n  . -> o -> .\n}\n";
     let first = compile(
@@ -2205,10 +2205,9 @@ lab g {
 }
 
 #[test]
-fn a_struct_constant_cannot_enter_a_plan() {
-    // Rastok expression cannot construct a struct, so no source produces one — a
-    // hand-built plan carrying one would break `encode ⇒ decode`
-    // (the tables refuse the form). The validator holds the line.
+fn a_struct_initializer_cannot_enter_an_int_state_cell() {
+    // V7 carries struct constants, but the resolved state-cell type still
+    // judges the initializer before a hand-built plan can become executable.
     use rastok::plan::{PlanValidationError, ValidatedExecutionPlan};
     let source = "graph g : App {\n  input in: variant\n  operator relay {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> relay -> .\n}\n";
     let mut plan = compile(

@@ -15,14 +15,14 @@ these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
 the primitive `operator` / `connector` keywords stand on their own
 when no alias fits.
 
-The parser implements executable v6 as a forward lexeme stream, but this
-page shows the M1.3 target surface and deliberately ranges beyond that
-subset. As of 2026-08-14, `Process(mode = job)` with `lines`/`jsonl`,
-multiport, the three metadata zones, v6 literals, and structural type
-aliases execute; `IDENT!`, the unified type/value domain, HTTP/File
-adapters, `per`, joins, Loop, Process service mode, and guest engines are
-still pending or guarded. Thus these are parser- and design-reference
-snippets, not a claim that every section runs today. The small executable fixtures under
+The parser is a forward lexeme stream and format v7 carries the complete
+M1.3 type/value/expression registry. As of 2026-08-15,
+`Process(mode = job)` with `lines`/`jsonl`/`bytes`, multiport completion,
+the three metadata zones, `IDENT!` frontends, structural and tagged types,
+and typed narrowing execute. HTTP/File adapters, `per`, joins, Loop,
+Process service mode, and guest engines are still pending or guarded. Thus
+these are parser- and design-reference snippets, not a claim that every
+section runs today. The small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.
 
 ## 1. Minimal — HTTP echo + log

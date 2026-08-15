@@ -832,11 +832,12 @@ fn a_named_decimal_is_the_same_program_family() {
 
 #[test]
 fn the_validator_matches_the_decoder_on_decimals_and_digests() {
+    use rastok::datatype::{DataType, DecimalType};
     use rastok::plan::{AssetBlob, PlanValidationError, ValidatedExecutionPlan};
-    // A FOLDABLE decimal (the written-scale fold would have made an
-    // Int) cannot obtain validation — exactly what the decoder
-    // refuses. A declared trailing-zero form ({100, 2} =
-    // decimal("1.00")) is legitimate (D-2026-08-13-1, review round).
+    // V7 carries the surrounding declared decimal type, so a scale-zero
+    // typed decimal and a trailing-zero typed decimal are both honest. The
+    // document-origin integer fold remains a reader rule, not a package
+    // decoder rule applied without the schema context.
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> o -> .\n}\n";
     let mut plan = compile(
         &[source],
@@ -845,29 +846,39 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     .expect("a valid plan")
     .plan
     .into_inner();
-    plan.nodes
+    // This test is about the declared initializer carrier. Remove the source
+    // program's integer state update so it does not add an unrelated int32
+    // constraint after the raw state type is changed below.
+    plan.handlers[0].body.remove(0);
+    let relay = plan
+        .nodes
         .iter_mut()
         .find(|node| node.path.to_string() == "o")
-        .expect("the operator")
-        .vars[0]
-        .init = Some(rastok::value::Value::Decimal {
+        .expect("the operator");
+    relay.vars[0].ty = DataType::Decimal(DecimalType::new(10, 0).unwrap());
+    relay.vars[0].init = Some(rastok::value::Value::Decimal {
         unscaled: 20,
         scale: 0,
     });
-    assert_eq!(
-        ValidatedExecutionPlan::try_new(plan.clone()).unwrap_err(),
-        PlanValidationError::UnrepresentableConstant
-    );
-    plan.nodes
+    let validated = ValidatedExecutionPlan::try_new(plan.clone())
+        .expect("a declared scale-zero decimal validates");
+    let bytes = rastok::plan::encode(&validated, &rastok::plan::SemanticHash::from_bytes([7; 32]));
+    rastok::plan::decode(&bytes).expect("the scale-zero decimal reads back");
+
+    let relay = plan
+        .nodes
         .iter_mut()
         .find(|node| node.path.to_string() == "o")
-        .expect("the operator")
-        .vars[0]
-        .init = Some(rastok::value::Value::Decimal {
+        .expect("the operator");
+    relay.vars[0].ty = DataType::Decimal(DecimalType::new(10, 2).unwrap());
+    relay.vars[0].init = Some(rastok::value::Value::Decimal {
         unscaled: 100,
         scale: 2,
     });
-    ValidatedExecutionPlan::try_new(plan).expect("a declared trailing-zero decimal validates");
+    let validated =
+        ValidatedExecutionPlan::try_new(plan).expect("a declared trailing-zero decimal validates");
+    let bytes = rastok::plan::encode(&validated, &rastok::plan::SemanticHash::from_bytes([8; 32]));
+    rastok::plan::decode(&bytes).expect("the trailing-zero decimal reads back");
     // A blob lying about its digest cannot obtain validation.
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     let mut plan = compile(

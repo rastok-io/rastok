@@ -42,7 +42,10 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE MOVE 2026-08-15 (M1.3 B7): jsonl stdout is a sequence of
 // unit `variant` emissions and each invocation adds one typed terminal
 // `exit`; the completion closure seals both ordered drafts.
-const JSONL_HASH: &str = "87d13844117ce1e379b686a1036d9c054cf2c3aa274433989122ed47c96660d2";
+// DELIBERATE MOVE 2026-08-15 (M1.3 B8): format v7 seals the complete
+// resolved type registry and total effective port table; the raw exit bridge
+// disappears without changing the connector's runtime contract.
+const JSONL_HASH: &str = "18dda78c625678f05297c1a2cb739a5e645981603613d170cf4d6bb2a1a104e6";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

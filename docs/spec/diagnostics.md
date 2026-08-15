@@ -10,7 +10,7 @@ Runtime outcome cases (`JoinExpired`, `LoopExhausted`,
 ordinary typed port payloads, hashed through their resolved types and
 compared in the causal core. They live in their home specs, not here.
 
-The current `E-EXPR` and `IDENT!` rows describe executable v6. New or
+The current `E-EXPR` and `IDENT!` rows describe executable v7. New or
 renamed checks are registered only when their focused negative tests
 land, never pre-allocated by a planning pass.
 `E-EXPR` supersedes the unreleased `E-CEL-EXPR` spelling as part of B3;
