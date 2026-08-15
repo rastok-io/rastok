@@ -527,40 +527,26 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                     *setting = rastok::plan::AttrSetting::Word(String::from("json"));
                 }
             }
-            node.ports.extend([
+            node.ports = vec![
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("in").expect("a conventional port"),
                     direction: rastok::node::Direction::Input,
+                    unwired: rastok::plan::UnwiredPolicy::RequireWire,
                     ty: Some(rastok::datatype::DataType::Variant),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("out").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
+                    unwired: rastok::plan::UnwiredPolicy::RequireWire,
                     ty: Some(rastok::datatype::DataType::array(
                         rastok::datatype::DataType::Variant,
                     )),
                 },
-            ]);
+            ];
             node.ports
                 .sort_by(|left, right| left.key().cmp(&right.key()));
         }
     }
-    plan.boundary.extend([
-        rastok::plan::PortDecl {
-            port: rastok::node::Port::new("in").expect("a conventional port"),
-            direction: rastok::node::Direction::Input,
-            ty: Some(rastok::datatype::DataType::Variant),
-        },
-        rastok::plan::PortDecl {
-            port: rastok::node::Port::new("out").expect("a conventional port"),
-            direction: rastok::node::Direction::Output,
-            ty: Some(rastok::datatype::DataType::array(
-                rastok::datatype::DataType::Variant,
-            )),
-        },
-    ]);
-    plan.boundary
-        .sort_by(|left, right| left.key().cmp(&right.key()));
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan);
     assert!(
         validated.is_ok(),

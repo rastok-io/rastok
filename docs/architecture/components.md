@@ -152,7 +152,7 @@ data out, the governing spec, and current status.
 | **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; byte-adjacent `IDENT!` frontend selection; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes + frontend Registry → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1; D-2026-08-14-1 | M1.3 B4 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles, mandatory legacy err sets, typed `is`/`as` narrowing, aspect admission | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.3 B3; new trees gated from v6 until B8 |
+| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspect admission | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.3 B5; new expression/type trees gated from v6 until B8 |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
 | **Lowering + plan gate** | node/edge/handler tables, expression trees, `Slot` resolution, schemas and assets; structural validation before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | M0.5, extended in M1 |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
@@ -303,8 +303,8 @@ The **`Dispatcher`** (owned here) is the loop between the journal and
 the partners: it takes OUTBOUND records the VM opened, drives the
 selected `Partner` implementation, and settles answers through
 `journal::close_outbound(call_ref, …) → Won | AlreadyClosed`. Before
-any closure, the **`OutcomeGate`** judges the reply against the
-calling connector's sealed error set — a refused reply never becomes
+any closure, the **`OutcomeGate`** judges the private pre-B7 reply against
+the fixed `ProcessExit` migration table — a refused reply never becomes
 a causal fact: it returns in `PumpBatch::rejected` with its reason,
 and the call stays open, honestly settleable by the timeout. Only a
 `Won` closure becomes an input event for the VM; `AlreadyClosed`
@@ -367,7 +367,7 @@ bless, diff rendering) is driven by `lab` and `main`.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`contract::ConnectorContract`** | the compiler-facing contract sheet: ports, common attributes, optional profile selector, effective presence/default/domain rules, and typed error set. The ten-case prose template remains the normative design review checklist; only executable checker facts belong in this type | consumed by the checker and adapter binding; **never depends on adapter code** | [stdlib.md §1–3](../spec/stdlib.md); D-2026-08-12-1 | M1.2 interlude (`Process` sheet only) |
+| **`contract::ConnectorContract`** | the compiler-facing contract sheet: one `PortContract` table (direction, unwired policy, fixed/same-as/choice-selected logical type rules), common attributes, optional profile selector, and effective presence/default/domain rules. The ten-case prose template remains the normative design review checklist; only executable checker facts belong in this type | resolved by the checker into self-contained plan rows; **never depends on adapter code and never travels as a Registry** | [stdlib.md §1–3](../spec/stdlib.md); D-2026-08-12-1; D-2026-08-14-1 | M1.3 B5 (`Process` sheet) |
 | **`contract::FrontendContract`** | an ordinary source name plus its registered framing/reader policy. Built-in JSON/text/base64 execute; guest/data names retain a specific framing contract and named deferral until their compiler lands | consumed by parser and checker; never serialized by itself | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md); [identity.md §1](../spec/identity.md) | M1.3 B4 |
 
 This module answers "how does the compiler know what `Process` is

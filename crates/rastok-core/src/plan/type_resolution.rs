@@ -13,9 +13,7 @@ use crate::datatype::{DataType, StructType, TypeField};
 use crate::envelope::WriteTarget;
 use crate::expr;
 use crate::node;
-use crate::plan::{
-    Emission, EndpointRef, ExecutionPlan, NodeKind, PlanValidationError, Slot, Step,
-};
+use crate::plan::{Emission, EndpointRef, ExecutionPlan, PlanValidationError, Slot, Step};
 
 /// Why one effective port type holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,35 +214,10 @@ impl<'plan> Solver<'plan> {
                     self.declare(index, ty.clone())?;
                 }
             }
-            match &planned.kind {
-                NodeKind::Connector(spec) => {
-                    for (name, direction) in [
-                        ("in", node::Direction::Input),
-                        ("out", node::Direction::Output),
-                        ("err", node::Direction::Output),
-                    ] {
-                        let Ok(port) = node::Port::new(name) else {
-                            continue;
-                        };
-                        let Some(ty) = crate::boundary::resolved_port_type(spec, &port) else {
-                            continue;
-                        };
-                        let index = self.ensure(Some(node_index), &port, direction);
-                        self.declare(index, ty)?;
-                    }
-                }
-                NodeKind::Operator => {
-                    // Until B6 replaces the legacy RuntimeFault emission with
-                    // an ordinary declared union, the VM can emit this exact
-                    // two-text map even when no source statement names `err`.
-                    // Seed that real producer so the resolved table remains
-                    // total at the pre-commit conformance gate.
-                    if let Ok(port) = node::Port::new("err") {
-                        let index = self.ensure(Some(node_index), &port, node::Direction::Output);
-                        let _ = self.produce(index, DataType::text_map(DataType::Text))?;
-                    }
-                }
-            }
+            // B5 materializes both resolved Connector contracts and the
+            // operator RuntimeFault bridge as ordinary rows before this
+            // Registry-free resolver runs. No port name creates a hidden
+            // producer or type here.
         }
         for edge in &self.plan.edges {
             let source = self.endpoint(&edge.from, node::Direction::Output);

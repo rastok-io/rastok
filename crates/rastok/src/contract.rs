@@ -13,6 +13,115 @@ use std::collections::BTreeMap;
 
 use crate::expr;
 
+/// One closed logical type used by a real port contract today.
+///
+/// The enum deliberately grows only when a shipped contract pays for another
+/// constructor.  It is not a second type algebra: every case resolves to the
+/// canonical [`crate::datatype::DataType`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortDataType {
+    /// UTF-8 text.
+    Text,
+    /// Variable-size opaque bytes.
+    Bytes,
+    /// Explicit dynamic payload tree.
+    Variant,
+    /// Temporary v6 `Process(codec = jsonl)` reply aggregation.
+    /// B7 replaces this carrier with repeated unit `variant` emissions.
+    VariantArray,
+}
+
+impl PortDataType {
+    fn resolve(self) -> Result<crate::datatype::DataType, crate::datatype::TypeError> {
+        match self {
+            Self::Text => Ok(crate::datatype::DataType::Text),
+            Self::Bytes => Ok(crate::datatype::DataType::BYTES),
+            Self::Variant => Ok(crate::datatype::DataType::Variant),
+            Self::VariantArray => Ok(crate::datatype::DataType::array(
+                crate::datatype::DataType::Variant,
+            )),
+        }
+    }
+}
+
+/// One word-to-type arm of an attribute-selected port rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortTypeChoice {
+    /// Word admitted by the selecting attribute.
+    pub word: &'static str,
+    /// Effective logical type selected by that word.
+    pub ty: PortDataType,
+}
+
+/// How one contract port obtains its effective logical type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortTypeRule {
+    /// One fixed logical type.
+    Fixed(PortDataType),
+    /// The exact type resolved for another port in this contract.
+    SameAs(&'static str),
+    /// A closed choice attribute selects one concrete type.
+    AttributeSelected {
+        /// Attribute name.
+        attribute: &'static str,
+        /// Total mapping of that attribute's choice words.
+        choices: &'static [PortTypeChoice],
+    },
+}
+
+/// One port of a connector sheet under the same direction/type/routing model
+/// as every other node port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortContract {
+    /// Port name.
+    pub name: &'static str,
+    /// Input or output direction.
+    pub direction: crate::node::Direction,
+    /// What an unclaimed output does. Inputs must be `RequireWire`.
+    pub unwired: crate::plan::UnwiredPolicy,
+    /// Rule producing the effective logical type for this instantiation.
+    pub ty: PortTypeRule,
+}
+
+/// Why a validated sheet could not resolve one concrete port table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortResolutionError {
+    /// A required choice attribute is absent from the effective attributes.
+    MissingAttribute(&'static str),
+    /// The effective word is outside the validated rule's mapping.
+    UnknownChoice {
+        /// Selecting attribute.
+        attribute: &'static str,
+        /// Effective word.
+        word: String,
+    },
+    /// A same-as dependency did not resolve; sheet validation normally makes
+    /// this unreachable.
+    UnresolvedDependency(&'static str),
+    /// The canonical type constructor refused.
+    InvalidType(crate::datatype::TypeError),
+    /// A validated port name unexpectedly failed the core constructor.
+    InvalidPort(&'static str),
+}
+
+impl core::fmt::Display for PortResolutionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::MissingAttribute(name) => write!(f, "missing effective attribute `{name}`"),
+            Self::UnknownChoice { attribute, word } => {
+                write!(f, "`{attribute}` has no port-type arm for `{word}`")
+            }
+            Self::UnresolvedDependency(port) => {
+                write!(f, "the type dependency of port `{port}` did not resolve")
+            }
+            Self::InvalidType(error) => error.fmt(f),
+            Self::InvalidPort(name) => write!(f, "`{name}` is not a valid port name"),
+        }
+    }
+}
+
+impl std::error::Error for PortResolutionError {}
+
 /// How a connector type name resolves against the registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability<'registry> {
@@ -107,18 +216,14 @@ pub struct FrontendContract {
 pub struct ConnectorContract {
     /// The NodeType name (`Process`).
     pub name: &'static str,
-    /// The envelope ports the type defines as inputs.
-    pub input_ports: &'static [&'static str],
-    /// The envelope ports the type defines as outputs.
-    pub output_ports: &'static [&'static str],
+    /// Ports, their directions, effective type rules and unwired policy.
+    pub ports: &'static [PortContract],
     /// The attributes common to every profile.
     pub common: &'static [AttributeSpec],
     /// The profile selector, when the contract has profiles. The
     /// admitted selector words are DERIVED from the profiles — they
     /// are spelled nowhere else.
     pub selector: Option<ProfileSelector>,
-    /// The typed error set; every member reaches the `err` port.
-    pub error_set: &'static [&'static str],
 }
 
 impl ConnectorContract {
@@ -154,6 +259,82 @@ impl ConnectorContract {
             .profiles
             .iter()
             .find(|profile| profile.word == word)
+    }
+
+    /// Resolves this sheet's complete travelling port table from effective
+    /// choice attributes. The caller passes attributes after defaults have
+    /// been materialized, so no runtime Registry lookup remains.
+    ///
+    /// # Errors
+    ///
+    /// A missing/unknown selector, invalid canonical type, or unresolved
+    /// same-as dependency refuses the instantiation.
+    pub fn resolve_ports(
+        &self,
+        attributes: &BTreeMap<String, String>,
+    ) -> Result<Vec<crate::plan::PortDecl>, PortResolutionError> {
+        let mut resolved: BTreeMap<&'static str, crate::datatype::DataType> = BTreeMap::new();
+        for _ in 0..self.ports.len().saturating_add(1) {
+            let mut changed = false;
+            for port in self.ports {
+                if resolved.contains_key(port.name) {
+                    continue;
+                }
+                let ty = match port.ty {
+                    PortTypeRule::Fixed(ty) => {
+                        Some(ty.resolve().map_err(PortResolutionError::InvalidType)?)
+                    }
+                    PortTypeRule::SameAs(other) => resolved.get(other).cloned(),
+                    PortTypeRule::AttributeSelected { attribute, choices } => {
+                        let word = attributes
+                            .get(attribute)
+                            .ok_or(PortResolutionError::MissingAttribute(attribute))?;
+                        let choice = choices.iter().find(|choice| choice.word == word).ok_or(
+                            PortResolutionError::UnknownChoice {
+                                attribute,
+                                word: word.clone(),
+                            },
+                        )?;
+                        Some(
+                            choice
+                                .ty
+                                .resolve()
+                                .map_err(PortResolutionError::InvalidType)?,
+                        )
+                    }
+                };
+                if let Some(ty) = ty {
+                    resolved.insert(port.name, ty);
+                    changed = true;
+                }
+            }
+            if resolved.len() == self.ports.len() {
+                break;
+            }
+            if !changed {
+                return Err(PortResolutionError::UnresolvedDependency(
+                    self.ports
+                        .iter()
+                        .find(|port| !resolved.contains_key(port.name))
+                        .map_or("?", |port| port.name),
+                ));
+            }
+        }
+        let mut ports = Vec::with_capacity(self.ports.len());
+        for contract in self.ports {
+            let port = crate::node::Port::new(contract.name.to_string())
+                .map_err(|_| PortResolutionError::InvalidPort(contract.name))?;
+            let ty = resolved
+                .remove(contract.name)
+                .ok_or(PortResolutionError::UnresolvedDependency(contract.name))?;
+            ports.push(crate::plan::PortDecl {
+                port,
+                direction: contract.direction,
+                unwired: contract.unwired,
+                ty: Some(ty),
+            });
+        }
+        Ok(ports)
     }
 }
 
@@ -343,12 +524,42 @@ pub enum SheetDefect {
     ConflictingPort(&'static str),
     /// A default port listed against its implicit direction.
     MisdirectedDefault(&'static str),
+    /// An input tried to carry an output-only unwired policy.
+    InputHasSinkPolicy(&'static str),
+    /// A same-as rule names no port on the sheet.
+    UnknownPortDependency {
+        /// Dependent port.
+        port: &'static str,
+        /// Missing source port.
+        dependency: &'static str,
+    },
+    /// Same-as rules form a cycle.
+    CyclicPortTypes(&'static str),
+    /// An attribute-selected rule names no closed choice attribute.
+    UnknownPortTypeAttribute {
+        /// Port carrying the rule.
+        port: &'static str,
+        /// Missing or non-choice attribute.
+        attribute: &'static str,
+    },
+    /// A selected port rule repeats or omits a choice arm.
+    PortTypeChoiceMismatch {
+        /// Port carrying the rule.
+        port: &'static str,
+        /// Selecting attribute.
+        attribute: &'static str,
+    },
+    /// A fixed/selected port type violates the canonical type algebra.
+    InvalidPortType {
+        /// Port carrying the rule.
+        port: &'static str,
+        /// Canonical type refusal.
+        reason: String,
+    },
     /// An attribute declared twice within one scope (the common
     /// sheet, or one profile), or in both the common sheet and a
     /// profile.
     DuplicateAttribute(&'static str),
-    /// An error kind declared twice.
-    DuplicateErrorKind(&'static str),
     /// Two profiles carry one word.
     DuplicateProfile(&'static str),
     /// The selector's default names no profile.
@@ -387,8 +598,31 @@ impl core::fmt::Display for SheetDefect {
             Self::MisdirectedDefault(name) => {
                 write!(f, "`{name}` is a default port listed against its direction")
             }
+            Self::InputHasSinkPolicy(name) => {
+                write!(
+                    f,
+                    "input port `{name}` cannot carry an unwired output policy"
+                )
+            }
+            Self::UnknownPortDependency { port, dependency } => write!(
+                f,
+                "port `{port}` derives its type from unknown port `{dependency}`"
+            ),
+            Self::CyclicPortTypes(port) => {
+                write!(f, "port `{port}` participates in a same-as type cycle")
+            }
+            Self::UnknownPortTypeAttribute { port, attribute } => write!(
+                f,
+                "port `{port}` selects its type from unknown/non-choice attribute `{attribute}`"
+            ),
+            Self::PortTypeChoiceMismatch { port, attribute } => write!(
+                f,
+                "port `{port}` does not map every `{attribute}` choice exactly once"
+            ),
+            Self::InvalidPortType { port, reason } => {
+                write!(f, "port `{port}` has an invalid logical type: {reason}")
+            }
             Self::DuplicateAttribute(name) => write!(f, "`{name}` is declared twice"),
-            Self::DuplicateErrorKind(name) => write!(f, "`{name}` is declared twice"),
             Self::DuplicateProfile(word) => write!(f, "profile `{word}` is declared twice"),
             Self::UnknownDefaultProfile(word) => {
                 write!(
@@ -432,7 +666,7 @@ impl std::error::Error for SheetDefect {}
 
 /// Whether a sheet-declared name is expressible in the DSL — the
 /// identifier grammar the sheet's ports, attributes, selector,
-/// profile words, choice words and error kinds must all satisfy: an
+/// profile words and choice words must all satisfy: an
 /// admitted sheet is an authority, so nothing inexpressible enters.
 fn expressible_name(text: &str) -> bool {
     // `nothing` is excluded with the literals: the parser turns it
@@ -539,17 +773,9 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
         return Err(SheetDefect::InexpressibleName(contract.name));
     }
     let mut seen = std::collections::BTreeSet::new();
-    for (name, direction) in contract
-        .input_ports
-        .iter()
-        .map(|name| (*name, crate::node::Direction::Input))
-        .chain(
-            contract
-                .output_ports
-                .iter()
-                .map(|name| (*name, crate::node::Direction::Output)),
-        )
-    {
+    for port in contract.ports {
+        let name = port.name;
+        let direction = port.direction;
         if !expressible_name(name) || crate::node::Port::new(name.to_string()).is_err() {
             return Err(SheetDefect::InvalidPortName(name));
         }
@@ -558,13 +784,18 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
         }
         let implicit = match name {
             "in" => Some(crate::node::Direction::Input),
-            "out" | "err" => Some(crate::node::Direction::Output),
+            "out" | "err" | "exit" => Some(crate::node::Direction::Output),
             _ => None,
         };
         if let Some(expected) = implicit
             && expected != direction
         {
             return Err(SheetDefect::MisdirectedDefault(name));
+        }
+        if direction == crate::node::Direction::Input
+            && port.unwired != crate::plan::UnwiredPolicy::RequireWire
+        {
+            return Err(SheetDefect::InputHasSinkPolicy(name));
         }
     }
     let mut names = std::collections::BTreeSet::new();
@@ -612,13 +843,114 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
             return Err(SheetDefect::UnknownDefaultProfile(default));
         }
     }
-    let mut kinds = std::collections::BTreeSet::new();
-    for kind in contract.error_set {
-        if !expressible_name(kind) {
-            return Err(SheetDefect::InexpressibleName(kind));
-        }
-        if !kinds.insert(*kind) {
-            return Err(SheetDefect::DuplicateErrorKind(kind));
+    // A port type may depend on one common closed choice, or on the profile
+    // selector itself. Profile-local attributes are deliberately excluded:
+    // sibling profiles may reuse one attribute name with different domains,
+    // so that spelling alone cannot name one deterministic type rule.
+    let choice_domain = |attribute: &str| -> Option<Vec<&'static str>> {
+        contract
+            .common
+            .iter()
+            .find_map(|spec| {
+                (spec.name == attribute)
+                    .then_some(&spec.domain)
+                    .and_then(|domain| match domain {
+                        ValueDomain::Choice(words) => Some(words.to_vec()),
+                        _ => None,
+                    })
+            })
+            .or_else(|| {
+                contract.selector.as_ref().and_then(|selector| {
+                    (selector.attribute == attribute).then_some(
+                        selector
+                            .profiles
+                            .iter()
+                            .map(|profile| profile.word)
+                            .collect::<Vec<_>>(),
+                    )
+                })
+            })
+    };
+    for port in contract.ports {
+        match port.ty {
+            PortTypeRule::Fixed(ty) => {
+                let resolved = ty
+                    .resolve()
+                    .map_err(|reason| SheetDefect::InvalidPortType {
+                        port: port.name,
+                        reason: reason.to_string(),
+                    })?;
+                resolved
+                    .validate()
+                    .map_err(|reason| SheetDefect::InvalidPortType {
+                        port: port.name,
+                        reason: reason.to_string(),
+                    })?;
+            }
+            PortTypeRule::SameAs(dependency) => {
+                if !contract
+                    .ports
+                    .iter()
+                    .any(|candidate| candidate.name == dependency)
+                {
+                    return Err(SheetDefect::UnknownPortDependency {
+                        port: port.name,
+                        dependency,
+                    });
+                }
+                let mut visited = std::collections::BTreeSet::new();
+                let mut next = port.name;
+                loop {
+                    if !visited.insert(next) {
+                        return Err(SheetDefect::CyclicPortTypes(port.name));
+                    }
+                    let Some(candidate) = contract.ports.iter().find(|item| item.name == next)
+                    else {
+                        break;
+                    };
+                    match candidate.ty {
+                        PortTypeRule::SameAs(other) => next = other,
+                        _ => break,
+                    }
+                }
+            }
+            PortTypeRule::AttributeSelected { attribute, choices } => {
+                let Some(words) = choice_domain(attribute) else {
+                    return Err(SheetDefect::UnknownPortTypeAttribute {
+                        port: port.name,
+                        attribute,
+                    });
+                };
+                let mut arms = std::collections::BTreeSet::new();
+                for choice in choices {
+                    if !arms.insert(choice.word) || !words.contains(&choice.word) {
+                        return Err(SheetDefect::PortTypeChoiceMismatch {
+                            port: port.name,
+                            attribute,
+                        });
+                    }
+                    let resolved =
+                        choice
+                            .ty
+                            .resolve()
+                            .map_err(|reason| SheetDefect::InvalidPortType {
+                                port: port.name,
+                                reason: reason.to_string(),
+                            })?;
+                    resolved
+                        .validate()
+                        .map_err(|reason| SheetDefect::InvalidPortType {
+                            port: port.name,
+                            reason: reason.to_string(),
+                        })?;
+                }
+                if words.iter().any(|word| !arms.contains(word)) {
+                    return Err(SheetDefect::PortTypeChoiceMismatch {
+                        port: port.name,
+                        attribute,
+                    });
+                }
+            }
         }
     }
     Ok(())

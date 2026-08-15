@@ -145,7 +145,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
             })
             .collect();
         attributes.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut ports = hir_node.ports.clone();
+        let mut ports = executable_ports(hir_node);
         ports.sort_by(|a, b| a.key().cmp(&b.key()));
         let mut vars: Vec<_> = hir_node
             .vars
@@ -160,24 +160,12 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
             kind: match &hir_node.role {
-                NodeRole::Connector {
-                    trait_name,
-                    error_set,
-                    ..
-                } => {
-                    // The error set is a SET: it ships sorted, like
-                    // the hash already reads it — the registry's
-                    // declaration order is not identity material.
-                    let mut error_set = error_set.clone();
-                    error_set.sort();
-                    NodeKind::Connector(ConnectorSpec {
-                        contract: trait_name.clone(),
-                        effect: typed_effect(hir_node),
-                        behavior: typed_behavior(hir_node),
-                        attributes,
-                        error_set,
-                    })
-                }
+                NodeRole::Connector { trait_name, .. } => NodeKind::Connector(ConnectorSpec {
+                    contract: trait_name.clone(),
+                    effect: typed_effect(hir_node),
+                    behavior: typed_behavior(hir_node),
+                    attributes,
+                }),
                 NodeRole::Operator => NodeKind::Operator,
             },
             ports,
@@ -649,22 +637,9 @@ impl Writer<'_> {
         self.str(&node.path.to_string());
         match &node.role {
             crate::compiler::hir::NodeRole::Operator => self.tag(0),
-            crate::compiler::hir::NodeRole::Connector {
-                trait_name,
-                error_set,
-                ..
-            } => {
+            crate::compiler::hir::NodeRole::Connector { trait_name, .. } => {
                 self.tag(1);
                 self.str(trait_name);
-                // The resolved contract is identity material: two
-                // sheet revisions with different error sets must not
-                // share a hash.
-                let mut kinds: Vec<&String> = error_set.iter().collect();
-                kinds.sort();
-                self.count(kinds.len());
-                for kind in kinds {
-                    self.str(kind);
-                }
             }
         }
         let mut vals: Vec<_> = node.vals.iter().collect();
@@ -709,9 +684,11 @@ impl Writer<'_> {
         self.count(ports.len());
         for decl in ports {
             self.str(decl.port.name());
-            self.tag(match decl.direction {
-                Direction::Input => 1,
-                Direction::Output => 2,
+            self.tag(match (decl.direction, decl.unwired) {
+                (Direction::Input, crate::plan::UnwiredPolicy::RequireWire) => 1,
+                (Direction::Output, crate::plan::UnwiredPolicy::RequireWire) => 2,
+                (Direction::Output, crate::plan::UnwiredPolicy::RootSink) => 3,
+                (Direction::Input, crate::plan::UnwiredPolicy::RootSink) => 4,
             });
             // The pinned type, present-or-absent — same idiom as the
             // boundary and the var initializers.
@@ -1075,6 +1052,30 @@ impl Writer<'_> {
     }
 }
 
+/// Adds the one runtime-produced Operator port that has no source emission.
+/// Connector rows already come resolved from their contract without a second
+/// lowering interpretation.
+fn executable_ports(node: &HirNode) -> Vec<crate::plan::PortDecl> {
+    let mut ports = node.ports.clone();
+    match &node.role {
+        NodeRole::Operator => {
+            if let Some(err) = ports.iter_mut().find(|port| port.port.name() == "err") {
+                err.unwired = crate::plan::UnwiredPolicy::RootSink;
+                if err.ty.is_none() {
+                    err.ty = Some(DataType::text_map(DataType::Text));
+                }
+            } else if let Ok(err) = node::Port::new("err") {
+                ports.push(crate::plan::PortDecl::root_sink(
+                    err,
+                    Some(DataType::text_map(DataType::Text)),
+                ));
+            }
+        }
+        NodeRole::Connector { .. } => {}
+    }
+    ports
+}
+
 #[cfg(test)]
 mod tests {
     use super::DataType;
@@ -1272,12 +1273,16 @@ graph m0_probe : App {
         // exact spelling of a default are ONE identity, so every
         // Process-carrying graph moved once.
         // DELIBERATE MOVE 2026-08-12, same day (review round): the
-        // Process error_set gained `CaptureFailed` (a pipe READ
-        // fault is its own kind), and the set travels in the plan.
+        // former Process error_set gained `CaptureFailed` (a pipe READ
+        // fault is its own kind).
         // DELIBERATE FIXTURE MIGRATION 2026-08-14 (M1.3 B2): the
         // probe now emits `data.text`, not a one-field record, because
         // the Process `lines` input is text. The identity recipe did
         // not move; this previously ill-typed program did.
+        // DELIBERATE MOVE 2026-08-15 (M1.3 B5): complete resolved
+        // Connector port rows and their routing policies replace the
+        // travelling error_set. The Process sheet also materializes
+        // `err_codec = lines` before hashing.
         let hash = compile(
             &[M0_PROBE],
             &Registry::try_m0().expect("the standard catalogue holds"),
@@ -1286,7 +1291,7 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "e26af508fc6320fa055f344e53a66cce3206900fd7e19a4e7668f60be6681857"
+            "f068bcd1d7b2f0756fceb59b160e8e033bbb7791f39840c4456643fadca97a1a"
         );
     }
 
@@ -1309,8 +1314,14 @@ graph m0_probe : App {
             ported.hash, bare_hash,
             "a declared boundary port is identity"
         );
-        assert_eq!(ported.plan.boundary.len(), 1);
-        assert_eq!(ported.plan.boundary[0].port.name(), "feed");
+        assert_eq!(ported.plan.boundary.len(), 3);
+        assert!(
+            ported
+                .plan
+                .boundary
+                .iter()
+                .any(|port| port.port.name() == "feed")
+        );
     }
 
     #[test]
@@ -1382,7 +1393,7 @@ graph m0_probe : App {
         )
         .unwrap();
         let ports = &compilation.plan.nodes[0].ports;
-        assert_eq!(ports.len(), 2);
+        assert_eq!(ports.len(), 3, "the VM-produced err row travels too");
         assert!(ports.iter().any(|decl| decl.port.name() == "event"));
         assert!(ports.iter().any(|decl| decl.port.name() == "result"));
     }

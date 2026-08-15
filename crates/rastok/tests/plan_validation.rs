@@ -52,10 +52,11 @@ fn port(name: &str) -> Port {
 }
 
 #[test]
-fn a_declared_port_extends_the_implicit_trio() {
-    // The checker keeps `in`/`out`/`err` implicit and lets a declared
-    // port EXTEND them; the validator must hold the same union, or a
-    // checked program dies at lowering as a false compiler bug.
+fn a_declared_port_extends_the_conventional_ports() {
+    // Source conventions need no declaration, while the checked HIR
+    // materializes every used row. A declared port extends that table;
+    // the validator must accept the complete union or a checked program
+    // would die at lowering as a false compiler bug.
     let source = r#"
 graph probe : App {
   operator o {
@@ -79,8 +80,8 @@ graph probe : App {
 #[test]
 fn redeclaring_a_default_boundary_port_in_its_direction_is_a_no_op() {
     // The grammar makes the defaults REDEFINABLE: `input in` restates
-    // what is already true, compiles, and leaves the serialized table
-    // empty — the trio stays implicit.
+    // what is already true. B5 materializes every used conventional
+    // port, so the restatement and the edge share one row.
     let source = r#"
 graph g : App {
   input in
@@ -99,9 +100,14 @@ graph g : App {
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a same-direction redeclaration is a no-op");
+    assert_eq!(compilation.plan.plan().boundary.len(), 2);
     assert!(
-        compilation.plan.plan().boundary.is_empty(),
-        "the defaults never enter the declared table"
+        compilation
+            .plan
+            .plan()
+            .boundary
+            .iter()
+            .any(|port| port.port.name() == "in")
     );
 }
 
@@ -184,7 +190,7 @@ fn the_legacy_runtime_fault_has_a_resolved_producer_pin() {
         .expect("a VM-produced runtime fault has an effective pin");
 
     assert_eq!(err.ty(), &DataType::text_map(DataType::Text));
-    assert_eq!(err.origin(), plan::TypeOrigin::Inferred);
+    assert_eq!(err.origin(), plan::TypeOrigin::Declared);
 }
 
 #[test]
@@ -216,19 +222,18 @@ fn a_raw_port_cannot_contradict_its_instantiated_contract() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node");
-    shell.ports.push(plan::PortDecl {
-        port: port("in"),
-        direction: Direction::Input,
-        ty: Some(DataType::INT),
-    });
+    shell
+        .ports
+        .iter_mut()
+        .find(|decl| decl.port.name() == "in")
+        .expect("the instantiated input")
+        .ty = Some(DataType::INT);
 
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::ConflictingPortTypes {
-            node: Some(rastok::node::Path::new(["shell"]).unwrap()),
+        PlanValidationError::ContractPortMismatch {
+            node: rastok::node::Path::new(["shell"]).unwrap(),
             port: port("in"),
-            expected: DataType::INT,
-            found: DataType::Text,
         }
     );
 }
@@ -266,8 +271,8 @@ graph g : App {
 }
 
 #[test]
-fn redeclaring_an_implicit_boundary_port_refuses_at_check() {
-    // `output in` CONTRADICTS the implicit boundary; it must die in
+fn redeclaring_a_conventional_boundary_port_backwards_refuses_at_check() {
+    // `output in` CONTRADICTS the conventional boundary direction; it must die in
     // the checker with a named diagnostic, never reach the validator
     // as an internal error.
     let source = r#"
@@ -303,32 +308,77 @@ graph probe : App {
 }
 
 #[test]
-fn a_node_table_cannot_declare_the_implicit_trio() {
+fn a_process_table_cannot_omit_a_contract_port() {
     let mut plan = raw_probe();
-    let relay = plan
+    let shell = plan
         .nodes
         .iter_mut()
-        .find(|node| node.path.to_string() == "relay")
-        .expect("the operator");
-    relay.ports = vec![plan::PortDecl::untyped(port("in"), Direction::Input)];
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the connector");
+    shell.ports.retain(|decl| decl.port.name() != "exit");
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::ImplicitPortDeclared {
-            node: Some(rastok::node::Path::new(["relay"]).unwrap()),
-            port: port("in"),
+        PlanValidationError::MissingContractPort {
+            node: rastok::node::Path::new(["shell"]).unwrap(),
+            port: "exit",
         }
     );
 }
 
 #[test]
-fn the_boundary_cannot_declare_the_implicit_trio() {
+fn a_process_plan_cannot_omit_the_effective_err_codec() {
     let mut plan = raw_probe();
-    plan.boundary = vec![plan::PortDecl::untyped(port("err"), Direction::Output)];
+    let shell = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the Process node");
+    let rastok::plan::NodeKind::Connector(shell) = &mut shell.kind else {
+        panic!("the Process spec");
+    };
+    shell.attributes.retain(|(name, _)| name != "err_codec");
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::ImplicitPortDeclared {
-            node: None,
-            port: port("err"),
+        PlanValidationError::MissingErrCodec {
+            node: rastok::node::Path::new(["shell"]).unwrap(),
+        }
+    );
+}
+
+#[test]
+fn a_boundary_port_cannot_carry_a_node_root_sink_policy() {
+    let mut plan = raw_probe();
+    let input = plan
+        .boundary
+        .iter_mut()
+        .find(|decl| decl.port.name() == "in")
+        .expect("the used conventional input is materialized");
+    input.unwired = plan::UnwiredPolicy::RootSink;
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::BoundaryHasRootSink { port: port("in") }
+    );
+}
+
+#[test]
+fn a_node_input_cannot_publish_to_a_root_sink() {
+    let mut plan = raw_probe();
+    let shell = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the Process node");
+    shell
+        .ports
+        .iter_mut()
+        .find(|decl| decl.port.name() == "in")
+        .expect("the resolved input")
+        .unwired = plan::UnwiredPolicy::RootSink;
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::InputHasRootSink {
+            node: rastok::node::Path::new(["shell"]).unwrap(),
+            port: port("in"),
         }
     );
 }
@@ -339,7 +389,10 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     // INPUT: the boundary convention inverts the node one, and the
     // checker refuses this shape — the type must too.
     let mut plan = raw_probe();
-    plan.boundary = vec![plan::PortDecl::untyped(port("request"), Direction::Input)];
+    plan.boundary
+        .push(plan::PortDecl::untyped(port("request"), Direction::Input));
+    plan.boundary
+        .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
         from: EndpointRef {
             node: Some(Slot::new(0)),
@@ -369,7 +422,10 @@ fn a_boundary_output_cannot_be_an_edge_source() {
     // `.response -> operator.in` with `response` declared as a graph
     // OUTPUT.
     let mut plan = raw_probe();
-    plan.boundary = vec![plan::PortDecl::untyped(port("response"), Direction::Output)];
+    plan.boundary
+        .push(plan::PortDecl::untyped(port("response"), Direction::Output));
+    plan.boundary
+        .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
         from: EndpointRef {
             node: None,
@@ -395,8 +451,8 @@ fn a_boundary_output_cannot_be_an_edge_source() {
 }
 
 #[test]
-fn the_implicit_trio_holds_its_directions() {
-    // Implicit `in` used as a TARGET — the graph's input fed from
+fn conventional_ports_hold_their_directions() {
+    // Conventional `in` used as a TARGET — the graph's input fed from
     // inside the graph — refuses.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
@@ -422,7 +478,7 @@ fn the_implicit_trio_holds_its_directions() {
         }
     );
 
-    // Implicit `out` used as a SOURCE refuses likewise.
+    // Conventional `out` used as a SOURCE refuses likewise.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
         from: EndpointRef {
@@ -446,6 +502,33 @@ fn the_implicit_trio_holds_its_directions() {
             expected: Direction::Input,
         }
     );
+}
+
+#[test]
+fn exit_is_a_connector_convention_not_a_global_reserved_direction() {
+    let source = r#"
+graph probe : App {
+  input in: text
+  output out: text
+
+  operator relay {
+    input exit: text
+    output out: text
+
+    on exit {
+      out = data
+    }
+  }
+
+  . -> relay.exit
+  relay -> .
+}
+"#;
+    compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an Operator may use the ordinary name `exit` for an input");
 }
 
 #[test]
@@ -706,28 +789,6 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
         }
     );
 
-    let mut plan = raw_probe();
-    let shell = plan
-        .nodes
-        .iter_mut()
-        .find(|node| node.path.to_string() == "shell")
-        .expect("the connector");
-    let rastok::plan::NodeKind::Connector(spec) = &mut shell.kind else {
-        panic!("a connector");
-    };
-    spec.error_set = vec![
-        String::from("Zeta"),
-        String::from("Alpha"),
-        String::from("Zeta"),
-    ];
-    assert_eq!(
-        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::DuplicateErrorKind {
-            node: shell_path(),
-            kind: String::from("Zeta"),
-        }
-    );
-
     let plan = with_setvar_root(expr::Expr::MapLit(vec![
         (
             String::from("z"),
@@ -810,46 +871,44 @@ fn reordered_handlers_are_not_canonical() {
 }
 
 #[test]
-fn a_reversed_error_set_is_not_canonical() {
-    // The reviewer's reproducer: reverse a raw plan's error set and
-    // the old validator accepted it — two packages for one contract,
-    // where the hash reads the set sorted. The set is now audited.
+fn a_reversed_contract_port_table_is_not_canonical() {
     let mut plan = raw_probe();
     let shell = plan
         .nodes
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the connector");
-    let rastok::plan::NodeKind::Connector(spec) = &mut shell.kind else {
-        panic!("a connector");
-    };
-    spec.error_set.reverse();
+    shell.ports.reverse();
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::NonCanonicalOrder {
-            collection: "error_set"
+            collection: "ports"
         }
     );
 }
 
 #[test]
-fn a_duplicated_error_kind_refuses() {
+fn an_extra_process_port_refuses_without_a_registry() {
     let mut plan = raw_probe();
     let shell = plan
         .nodes
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the connector");
-    let rastok::plan::NodeKind::Connector(spec) = &mut shell.kind else {
-        panic!("a connector");
-    };
-    let first = spec.error_set[0].clone();
-    spec.error_set.insert(0, first.clone());
+    shell.ports.push(plan::PortDecl {
+        port: port("ghost"),
+        direction: Direction::Output,
+        unwired: plan::UnwiredPolicy::RequireWire,
+        ty: Some(DataType::Variant),
+    });
+    shell
+        .ports
+        .sort_by(|left, right| left.key().cmp(&right.key()));
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
-        PlanValidationError::DuplicateErrorKind {
+        PlanValidationError::UnexpectedContractPort {
             node: shell_path(),
-            kind: first,
+            port: port("ghost"),
         }
     );
 }

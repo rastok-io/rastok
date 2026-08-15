@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v5: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v6: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -297,15 +297,6 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
                     .collect(),
             ),
         ),
-        (
-            5,
-            Cbor::Array(
-                spec.error_set
-                    .iter()
-                    .map(|kind| Cbor::Text(kind.clone()))
-                    .collect(),
-            ),
-        ),
     ]))
 }
 
@@ -319,9 +310,11 @@ fn attr_tree(setting: &AttrSetting) -> Cbor {
 fn port_decl_tree(decl: &PortDecl) -> Cbor {
     let mut parts = vec![
         Cbor::Text(decl.port.name().to_string()),
-        Cbor::Uint(match decl.direction {
-            node::Direction::Input => 1,
-            node::Direction::Output => 2,
+        Cbor::Uint(match (decl.direction, decl.unwired) {
+            (node::Direction::Input, super::UnwiredPolicy::RequireWire) => 1,
+            (node::Direction::Output, super::UnwiredPolicy::RequireWire) => 2,
+            (node::Direction::Output, super::UnwiredPolicy::RootSink) => 3,
+            (node::Direction::Input, super::UnwiredPolicy::RootSink) => 4,
         }),
     ];
     // The optional third element is the pinned type — ABSENT when
@@ -572,9 +565,6 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 if let AttrSetting::Value(value) = setting {
                     stack.push(Item::Val(value, 8));
                 }
-            }
-            if !spec.error_set.is_empty() {
-                max = max.max(6);
             }
         }
         for decl in &node.ports {
@@ -912,16 +902,11 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
             _ => return Err(err("attribute")),
         }
     }
-    let mut error_set = Vec::new();
-    for kind in array_of(get(pairs, 5, "error set")?, "error set")? {
-        error_set.push(text_of(kind, "error kind")?.to_string());
-    }
     Ok(ConnectorSpec {
         contract,
         effect,
         behavior,
         attributes,
-        error_set,
     })
 }
 
@@ -939,13 +924,17 @@ fn port_decl_from(tree: &Cbor) -> Result<PortDecl, DecodeError> {
         [Cbor::Text(name), Cbor::Uint(direction), ty] => (name, direction, Some(type_from(ty)?)),
         _ => return Err(err("port declaration")),
     };
+    let (direction, unwired) = match direction {
+        1 => (node::Direction::Input, super::UnwiredPolicy::RequireWire),
+        2 => (node::Direction::Output, super::UnwiredPolicy::RequireWire),
+        3 => (node::Direction::Output, super::UnwiredPolicy::RootSink),
+        4 => (node::Direction::Input, super::UnwiredPolicy::RootSink),
+        _ => return Err(err("port direction/policy")),
+    };
     Ok(PortDecl {
         port: node::Port::new(name.clone()).map_err(|_| err("port name"))?,
-        direction: match direction {
-            1 => node::Direction::Input,
-            2 => node::Direction::Output,
-            _ => return Err(err("port direction")),
-        },
+        direction,
+        unwired,
         ty,
     })
 }
@@ -1422,6 +1411,7 @@ mod tests {
                         PortDecl {
                             port: port("typed"),
                             direction: node::Direction::Input,
+                            unwired: crate::plan::UnwiredPolicy::RequireWire,
                             ty: Some(DataType::text_map(DataType::array(DataType::Text))),
                         },
                     ],
@@ -1441,7 +1431,6 @@ mod tests {
                             (text("cmd"), AttrSetting::Value(map_value)),
                             (text("codec"), AttrSetting::Word(text("lines"))),
                         ],
-                        error_set: vec![text("A"), text("B")],
                     }),
                     ports: vec![],
                     vars: vec![],
@@ -1451,6 +1440,7 @@ mod tests {
                 PortDecl {
                     port: port("entry"),
                     direction: node::Direction::Input,
+                    unwired: crate::plan::UnwiredPolicy::RequireWire,
                     ty: Some(DataType::array(DataType::INT)),
                 },
                 PortDecl::untyped(port("feed"), node::Direction::Output),

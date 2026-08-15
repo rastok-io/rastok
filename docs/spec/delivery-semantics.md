@@ -246,17 +246,20 @@ record to test this table — the crash becomes an ordinary simulation case.
 Outputs do not acquire gravity from their name. Every resolved output
 port carries an `UnwiredPolicy` in the validated plan:
 
-- `require_wire`: an emitted but unwired output is a compile error;
-- `journal`: the output is delivered to the app's journal/observation
-  sink when no graph edge consumes it;
-- `bubble(<boundary-port>)`: composition forwards it to a named graph
-  boundary of a compatible type;
-- `discard`: allowed only when declared by the contract or written as an
-  explicit `-> nothing` edge.
+- `RequireWire`: leaving it unwired emits `W-UNWIRED-OUTPUT`; if the warning
+  is accepted, the transaction emission remains a journaled/observable fact
+  but creates no downstream delivery;
+- `RootSink`: if no edge claims the emission, the VM additionally publishes
+  it at the root observation sink.
+
+Forwarding to a boundary and explicit discard are ordinary topology
+(`node.port -> .named` and `node.port -> nothing`), not extra policy variants.
+This keeps routing visible in the edge table instead of hiding it inside a
+port declaration.
 
 The compiler desugars defaults from the node contract into this data; the
 VM never compares a port name with `"err"` or `"exit"`. Ordinary
-application outputs default to `require_wire`. Standard Connector tables
+application outputs default to `RequireWire`. Standard Connector tables
 state their diagnostic/exit policy explicitly. Thus `err` and `exit` remain
 useful conventions without becoming second emission or typing mechanisms.
 The answer to “where did this output go?” is always in the resolved plan.

@@ -69,9 +69,9 @@ pub enum VmError {
         /// The violated invariant.
         reason: &'static str,
     },
-    /// An injection at a port that is not a graph input — neither the
-    /// implicit `in` nor a declared boundary input. Checked sources
-    /// never build one; the raw API is verified, not trusted.
+    /// An injection at a port that is not a materialized graph input.
+    /// Checked sources always materialize conventional `in`; the raw API is
+    /// verified, not trusted.
     UnknownIngress(node::Port),
     /// An ingress draft that violates a pin — the ingress port's own
     /// or a destination's it would fan out to. The CLIENT's value is
@@ -145,9 +145,11 @@ struct PendingCall {
     delivery: Delivery,
 }
 
-/// The plan-backed outcome gate: a failure kind must belong to the
-/// calling connector's sealed error set. Timeout-minted failures
-/// never pass here — the machine, not a partner, makes those.
+/// The plan-backed outcome gate for the private pre-B7 reply seam.
+///
+/// B5 removed the travelling `error_set`; the explicit migration table maps
+/// each legacy Process fact to its target `ProcessExit` case. Timeout-minted
+/// failures never pass here — the machine, not a partner, makes those.
 struct PlanGate<'plan> {
     plan: &'plan crate::plan::ExecutionPlan,
 }
@@ -161,18 +163,18 @@ impl crate::boundary::OutcomeGate for PlanGate<'_> {
         let CallOutcome::Failure(error) = outcome else {
             return Ok(());
         };
-        let known = self
+        let process = self
             .plan
             .nodes
             .iter()
             .find(|node| &node.path == connector)
             .and_then(crate::plan::Node::connector)
-            .is_some_and(|spec| spec.error_set.iter().any(|kind| kind == &error.kind));
-        if known {
+            .is_some_and(|spec| spec.contract == "Process");
+        if process && crate::boundary::legacy_process_failure_exit_case(&error.kind).is_some() {
             Ok(())
         } else {
             Err(format!(
-                "`{}` is not in the error set of `{connector}`",
+                "`{}` has no ProcessExit migration case for `{connector}`",
                 error.kind
             ))
         }
@@ -325,11 +327,11 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         submission: InboundSubmission,
     ) -> Result<Id, VmError> {
-        // The submission's port is verified against the graph, not
-        // trusted: the implicit `in` or a DECLARED boundary input —
-        // the same union the plan validator holds edges to.
-        let ingress_ok = submission.port.name() == "in"
-            || self.plan.boundary.iter().any(|decl| {
+        // The submission's port is verified against the materialized graph
+        // table. Source sugar may spell `.`, but no runtime string creates an
+        // implicit ingress.
+        let ingress_ok =
+            self.plan.boundary.iter().any(|decl| {
                 decl.port == submission.port && decl.direction == node::Direction::Input
             });
         if !ingress_ok {
@@ -697,9 +699,10 @@ impl<'plan> Vm<'plan> {
         &self.outputs
     }
 
-    /// The root error sink: `err` emissions no edge claimed. The spec
-    /// bubbles unwired errors to the boundary — they surface here
-    /// instead of vanishing.
+    /// Legacy pre-B7 envelope-only view of the root sink. Any output whose
+    /// resolved policy is `RootSink` surfaces here; its port remains present
+    /// in the transaction and [`Self::observations`]. B7 replaces the
+    /// failure-only convenience surface together with `CallOutcome`.
     #[must_use]
     pub fn errors(&self) -> &[Envelope] {
         &self.errors
@@ -1000,10 +1003,15 @@ impl<'plan> Vm<'plan> {
                 node: Some(slot),
                 port: emission.port.clone(),
             };
+            let root_sink = self.plan.nodes[slot.index()]
+                .ports
+                .iter()
+                .find(|port| port.port == emission.port)
+                .is_some_and(|port| port.unwired == crate::plan::UnwiredPolicy::RootSink);
             let claimed = self.route(&from, &emission.envelope);
-            // An `err` no edge claims bubbles to the root error sink
-            // instead of vanishing.
-            if claimed == 0 && emission.port.name() == "err" {
+            // The resolved port policy, never its spelling, decides whether
+            // an unclaimed output reaches the root sink.
+            if claimed == 0 && root_sink {
                 self.errors.push(emission.envelope.clone());
                 self.observed.push(Observed {
                     node: None,

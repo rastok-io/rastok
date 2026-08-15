@@ -35,8 +35,11 @@ fn compilation() -> rastok::compiler::Compilation {
 // `on_timeout = kill` (`mode = job` was written).
 // DELIBERATE MOVE 2026-08-12, same day (review round): the Process
 // error_set gained `CaptureFailed` — a pipe READ fault is its own
-// kind, and the set travels in the plan.
-const JSONL_HASH: &str = "60f45914b07ab1a962de3d59e64457cbafb5d87829091d80d5d3dd5ddaa4d7fa";
+// kind, and the set travelled in the plan.
+// DELIBERATE MOVE 2026-08-15 (M1.3 B5): the complete resolved
+// Process port contract replaces that set, carries routing policy,
+// and injects `err_codec = lines` before hashing.
+const JSONL_HASH: &str = "4eacb55c2ced016d61196a4c259c66e17cde33e846954780b53e76241ff85697";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

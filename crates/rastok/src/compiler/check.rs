@@ -900,11 +900,11 @@ impl Checker<'_, '_> {
                         .iter()
                         .map(|segment| segment.text.as_str())
                         .collect();
-                    // The injection target is a graph INPUT of the
-                    // App — the implicit `in` or a declared boundary
-                    // input; the boundary convention makes a boundary
-                    // source an input of the graph. Source-Connector
-                    // injection still joins with the source adapters.
+                    // The injection target is a graph INPUT of the App.
+                    // Source syntax predeclares conventional `in`; the
+                    // checker materializes every used boundary row before
+                    // HIR leaves. Source-Connector injection still joins with
+                    // the source adapters.
                     let ["app", name] = segments.as_slice() else {
                         self.deferred("an injection outside the app boundary", target.span);
                         continue;
@@ -1266,11 +1266,10 @@ impl Checker<'_, '_> {
                         crate::compiler::syntax::PortDirection::Input => Direction::Input,
                         crate::compiler::syntax::PortDirection::Output => Direction::Output,
                     };
-                    // The conventional ports are pre-bound in direction,
-                    // but an explicit annotation is still a real source
-                    // constraint. An untyped restatement remains absent
-                    // from the raw v6 table; a typed one travels so B2 can
-                    // resolve it without treating `variant` as a fallback.
+                    // Conventional boundary spellings are pre-bound in
+                    // direction. Every declaration is materialized; an
+                    // annotation additionally contributes a real source type
+                    // constraint, never an implicit `variant` fallback.
                     let implicit = match port.name.text.as_str() {
                         "in" => Some(Direction::Input),
                         "out" | "err" => Some(Direction::Output),
@@ -1305,12 +1304,13 @@ impl Checker<'_, '_> {
                                 .with_span(port.name.span)
                                 .with_field("port", port.name.text.clone()),
                             );
-                        } else if let Some(ty) = pinned {
+                        } else {
                             match node::Port::new(port.name.text.clone()) {
                                 Ok(declared) => graph.boundary.push(crate::plan::PortDecl {
                                     port: declared,
                                     direction,
-                                    ty: Some(ty),
+                                    unwired: crate::plan::UnwiredPolicy::RequireWire,
+                                    ty: pinned,
                                 }),
                                 Err(invalid) => self.bag.push(
                                     Diagnostic::new(
@@ -1347,6 +1347,7 @@ impl Checker<'_, '_> {
                         Ok(declared) => graph.boundary.push(crate::plan::PortDecl {
                             port: declared,
                             direction,
+                            unwired: crate::plan::UnwiredPolicy::RequireWire,
                             ty: pinned,
                         }),
                         Err(invalid) => self.bag.push(
@@ -1412,19 +1413,23 @@ impl Checker<'_, '_> {
                 graph.edges.push(candidate);
             }
         }
+        self.materialize_boundary_ports(&mut graph);
+        self.materialize_node_edge_ports(&mut graph);
         self.reject_cycles(&graph, decl.span);
         self.warn_unwired_outputs(&graph);
         graph
     }
 
-    /// Every non-`err` output either reaches an edge or is discarded
+    /// Every output requiring a wire either reaches an edge or is discarded
     /// in writing (`-> nothing`); a port that just leaks gets flagged.
-    /// `err` is exempt: unwired errors bubble to the root sink.
+    /// Outputs whose resolved policy is `RootSink` are exempt. The source
+    /// convention commonly gives that policy to `err`, but the warning
+    /// decision itself never inspects the spelling.
     fn warn_unwired_outputs(&mut self, graph: &Graph) {
         for node in &graph.nodes {
-            // Untyped conventional ports do not enter the raw table, but an
-            // emission on them leaks all the same. A typed restatement may
-            // already be present, so sweep emitted ports beside the rows.
+            // Emission inference normally materializes the row already; sweep
+            // the bodies as a defensive union so diagnostics never depend on
+            // that construction order.
             let mut outputs: Vec<node::Port> = node
                 .ports
                 .iter()
@@ -1441,7 +1446,12 @@ impl Checker<'_, '_> {
                 }
             }
             for port in &outputs {
-                if port.name() == "err" {
+                if node
+                    .ports
+                    .iter()
+                    .find(|decl| decl.port == *port)
+                    .is_some_and(|decl| decl.unwired == crate::plan::UnwiredPolicy::RootSink)
+                {
                     continue;
                 }
                 let wired = graph.edges.iter().any(|edge| {
@@ -1463,6 +1473,70 @@ impl Checker<'_, '_> {
                     );
                 }
             }
+        }
+    }
+
+    /// Every boundary convention actually used by an edge becomes an
+    /// ordinary table row. Syntax may still abbreviate `.`, but the plan and
+    /// VM never infer a port from that spelling.
+    fn materialize_boundary_ports(&mut self, graph: &mut Graph) {
+        let mut used = Vec::new();
+        for edge in &graph.edges {
+            if edge.from.node.is_none() {
+                used.push((edge.from.port.clone(), Direction::Input));
+            }
+            if let EdgeTarget::Port(target) = &edge.to
+                && target.node.is_none()
+            {
+                used.push((target.port.clone(), Direction::Output));
+            }
+        }
+        for (port, direction) in used {
+            if graph.boundary.iter().any(|decl| decl.port == port) {
+                continue;
+            }
+            graph.boundary.push(crate::plan::PortDecl {
+                port,
+                direction,
+                unwired: crate::plan::UnwiredPolicy::RequireWire,
+                ty: None,
+            });
+        }
+    }
+
+    /// Conventional node ports are source sugar only. If an edge uses one
+    /// that no body declaration/inference has materialized, add the ordinary
+    /// row before HIR leaves the checker. Later layers never recover a port
+    /// from its spelling.
+    fn materialize_node_edge_ports(&mut self, graph: &mut Graph) {
+        let mut used = Vec::new();
+        for edge in &graph.edges {
+            if let Some(path) = &edge.from.node {
+                used.push((path.clone(), edge.from.port.clone(), Direction::Output));
+            }
+            if let EdgeTarget::Port(target) = &edge.to
+                && let Some(path) = &target.node
+            {
+                used.push((path.clone(), target.port.clone(), Direction::Input));
+            }
+        }
+        for (path, port, direction) in used {
+            let Some(node) = graph.nodes.iter_mut().find(|node| node.path == path) else {
+                continue;
+            };
+            if node.ports.iter().any(|decl| decl.port == port) {
+                continue;
+            }
+            node.ports.push(crate::plan::PortDecl {
+                unwired: if port.name() == "err" {
+                    crate::plan::UnwiredPolicy::RootSink
+                } else {
+                    crate::plan::UnwiredPolicy::RequireWire
+                },
+                port,
+                direction,
+                ty: None,
+            });
         }
     }
 
@@ -1629,51 +1703,15 @@ impl Checker<'_, '_> {
             self.deferred("a keyed node (per)", decl.span);
         }
         let path = self.node_path(&decl.name.text, decl.name.span)?;
-        // The RESOLVED contract materializes into the node — error
-        // set and the non-implicit port table alike: the plan must
-        // carry everything its embedded validator will check, because
-        // that validator has no Registry to consult (m1-slice's
-        // transport rule). Types join when the sheets carry them.
-        let (error_set, contract_ports) = match self.registry.connector(&trait_name) {
-            contract::Availability::Available(contract) => {
-                let mut ports = Vec::new();
-                for (name, direction) in contract
-                    .input_ports
-                    .iter()
-                    .map(|name| (*name, Direction::Input))
-                    .chain(
-                        contract
-                            .output_ports
-                            .iter()
-                            .map(|name| (*name, Direction::Output)),
-                    )
-                {
-                    if !matches!(name, "in" | "out" | "err") {
-                        // Sheets are validated at the registry door
-                        // (`Registry::try_with`), so the name IS a
-                        // port name.
-                        let port = node::Port::new(name.to_string())
-                            .unwrap_or_else(|_| unreachable!("a validated sheet"));
-                        ports.push(crate::plan::PortDecl::untyped(port, direction));
-                    }
-                }
-                (
-                    contract.error_set.iter().map(ToString::to_string).collect(),
-                    ports,
-                )
-            }
-            _ => (Vec::new(), Vec::new()),
-        };
         let mut node = Node {
             path,
             role: NodeRole::Connector {
-                error_set,
                 trait_name,
                 attributes: Vec::new(),
             },
             vals: Vec::new(),
             vars: Vec::new(),
-            ports: contract_ports,
+            ports: Vec::new(),
             handlers: Vec::new(),
         };
         self.node_body(&decl.body, &mut node, graph_signature, graph_consts, true);
@@ -1720,6 +1758,32 @@ impl Checker<'_, '_> {
                 return;
             }
         };
+        // Name, direction and sink policy do not depend on attribute
+        // values. Materialize that part immediately so a bad selector or
+        // attribute keeps its one truthful diagnostic instead of causing
+        // downstream "unknown port" cascades. A successful resolution below
+        // replaces these recovery rows with the effective types.
+        let mut recovery_ports = Vec::with_capacity(contract.ports.len());
+        for declared in contract.ports {
+            let port = match node::Port::new(declared.name) {
+                Ok(port) => port,
+                Err(error) => {
+                    self.bag.push(
+                        Diagnostic::new(E_CONTRACT_ATTR, Phase::Check, error.to_string())
+                            .with_span(decl.span)
+                            .with_field("detail", error.to_string()),
+                    );
+                    return;
+                }
+            };
+            recovery_ports.push(crate::plan::PortDecl {
+                port,
+                direction: declared.direction,
+                unwired: declared.unwired,
+                ty: None,
+            });
+        }
+        node.ports = recovery_ports;
         let span_of = |name: &str| {
             decl.body
                 .iter()
@@ -2066,6 +2130,42 @@ impl Checker<'_, '_> {
         if let NodeRole::Connector { attributes, .. } = &mut node.role {
             attributes.extend(injected);
         }
+        let effective_words: BTreeMap<String, String> = node
+            .attributes()
+            .iter()
+            .filter_map(|attribute| match &attribute.value {
+                AttrValue::Word(word) => Some((attribute.name.clone(), word.clone())),
+                AttrValue::Const(_) => None,
+            })
+            .collect();
+        match contract.resolve_ports(&effective_words) {
+            Ok(ports) => node.ports = ports,
+            Err(error) => {
+                // Missing/invalid effective choices have already received
+                // their source-facing contract diagnostic above. A type
+                // constructor failure is a sheet defect and cannot pass the
+                // Registry door; this guard prevents an incomplete HIR if a
+                // future rule violates that invariant.
+                if !matches!(
+                    &error,
+                    contract::PortResolutionError::MissingAttribute(_)
+                        | contract::PortResolutionError::UnknownChoice { .. }
+                ) {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTRACT_ATTR,
+                            Phase::Check,
+                            format!(
+                                "the {} port contract did not resolve: {error}",
+                                contract.name
+                            ),
+                        )
+                        .with_span(decl.span)
+                        .with_field("detail", error.to_string()),
+                    );
+                }
+            }
+        }
     }
 
     fn node_path(&mut self, name: &str, span: Span) -> Option<node::Path> {
@@ -2255,10 +2355,10 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Adds one port to a node's semantic table, refusing conflicting
-    /// roles. Conventional ports remain implicit when merely used, but
-    /// an explicit type annotation enters the table like any other source
-    /// constraint. A matching inferred use never overwrites that pin.
+    /// Adds one port to a node's semantic table, refusing conflicting roles.
+    /// Conventional names contribute their fixed direction; an explicit type
+    /// annotation is a source constraint, and matching inference never
+    /// overwrites that pin.
     fn add_port(
         &mut self,
         node: &mut Node,
@@ -2276,15 +2376,17 @@ impl Checker<'_, '_> {
             .ports
             .iter()
             .position(|decl| decl.port.name() == name.text);
-        let existing = table_entry
-            .map(|index| node.ports[index].direction)
-            .or(default_direction);
-        let is_conventional = default_direction.is_some();
-        let push = |node: &mut Node, ty: Option<DataType>| {
+        let existing = table_entry.map(|index| node.ports[index].direction);
+        let push = |node: &mut Node, actual_direction: Direction, ty: Option<DataType>| {
             if let Ok(port) = node::Port::new(name.text.clone()) {
                 node.ports.push(crate::plan::PortDecl {
                     port,
-                    direction,
+                    direction: actual_direction,
+                    unwired: if actual_direction == Direction::Output && name.text == "err" {
+                        crate::plan::UnwiredPolicy::RootSink
+                    } else {
+                        crate::plan::UnwiredPolicy::RequireWire
+                    },
                     ty,
                 });
                 true
@@ -2292,6 +2394,35 @@ impl Checker<'_, '_> {
                 false
             }
         };
+        if let Some(expected) = default_direction
+            && expected != direction
+        {
+            // Handler/emission inference only discovers the spelling. Put
+            // the conventional row in its canonical direction and let the
+            // real use site emit E-PORT-DIRECTION once. An explicit source
+            // declaration is itself the fault and speaks here.
+            if origin != "declared" {
+                if existing.is_none() {
+                    let _ = push(node, expected, pinned);
+                }
+                return;
+            }
+            self.bag.push(
+                Diagnostic::new(
+                    E_PORT_CONFLICT,
+                    Phase::Check,
+                    format!(
+                        "`{}` is conventionally {}; it cannot be {} ({origin})",
+                        name.text,
+                        direction_words(expected),
+                        direction_words(direction),
+                    ),
+                )
+                .with_span(name.span)
+                .with_field("port", name.text.clone()),
+            );
+            return;
+        }
         match existing {
             Some(known) if known != direction => {
                 self.bag.push(
@@ -2312,23 +2443,14 @@ impl Checker<'_, '_> {
             Some(_) => {
                 // A declaration may COMPLETE an inferred entry with
                 // its pinned type; inference never overwrites one.
-                if let Some(ty) = pinned {
-                    if let Some(index) = table_entry {
-                        node.ports[index].ty = Some(ty);
-                    } else if is_conventional && !push(node, Some(ty)) {
-                        self.bag.push(
-                            Diagnostic::new(
-                                E_PORT_UNKNOWN,
-                                Phase::Check,
-                                format!("`{}` is not a valid port name", name.text),
-                            )
-                            .with_span(name.span),
-                        );
-                    }
+                if let Some(ty) = pinned
+                    && let Some(index) = table_entry
+                {
+                    node.ports[index].ty = Some(ty);
                 }
             }
             None => {
-                if !push(node, pinned) {
+                if !push(node, direction, pinned) {
                     self.bag.push(
                         Diagnostic::new(
                             E_PORT_UNKNOWN,
@@ -4456,27 +4578,13 @@ impl Checker<'_, '_> {
         self.port_ref(reference, graph, is_source)
     }
 
-    /// The direction a port has on a node: declared ports first, then
-    /// the connector contract's port sheet, then the pre-bound
-    /// defaults. `None` means the node exposes no such port.
+    /// The direction carried by a node's materialized port table.
     fn node_port_direction(&self, target: &Node, port_name: &str) -> Option<Direction> {
-        // ONE source of truth: the node's resolved table (contract
-        // ports materialize into it at resolution) plus the implicit
-        // trio. The Registry is never consulted again — a sheet
-        // defect cannot make the checker and the plan's validator
-        // disagree.
-        if let Some(decl) = target
+        target
             .ports
             .iter()
             .find(|decl| decl.port.name() == port_name)
-        {
-            return Some(decl.direction);
-        }
-        match port_name {
-            "in" => Some(Direction::Input),
-            "out" | "err" => Some(Direction::Output),
-            _ => None,
-        }
+            .map(|decl| decl.direction)
     }
 
     /// The ONE notion of pinned-port conformance, shared by
@@ -4736,7 +4844,17 @@ impl Checker<'_, '_> {
             self.deferred("a connector edge beyond the default trio", reference.span);
             return None;
         }
-        let Some(direction) = self.node_port_direction(target, port_name) else {
+        let direction = self.node_port_direction(target, port_name).or_else(|| {
+            if target.connector_trait().is_some() {
+                return None;
+            }
+            match port_name {
+                "in" => Some(Direction::Input),
+                "out" | "err" => Some(Direction::Output),
+                _ => None,
+            }
+        });
+        let Some(direction) = direction else {
             self.bag.push(
                 Diagnostic::new(
                     E_PORT_UNKNOWN,
@@ -4798,28 +4916,6 @@ fn node_port_pin(node: &Node, port: &node::Port) -> Option<DataType> {
         .iter()
         .find(|decl| decl.port == *port)
         .and_then(|decl| decl.ty.clone())
-        .or_else(|| {
-            // The derivation itself lives in one boundary helper; B5 moves
-            // it into the contract metamodel without changing callers.
-            let NodeRole::Connector {
-                trait_name,
-                attributes,
-                ..
-            } = &node.role
-            else {
-                return None;
-            };
-            let word = attributes.iter().find_map(|attribute| {
-                if attribute.name != "codec" {
-                    return None;
-                }
-                match &attribute.value {
-                    crate::compiler::hir::AttrValue::Word(word) => Some(word.as_str()),
-                    crate::compiler::hir::AttrValue::Const(_) => None,
-                }
-            });
-            rastok_core::boundary::resolved_contract_port_type(trait_name, port.name(), word)
-        })
 }
 
 /// The pinned type of an edge endpoint, when its port declares one:
@@ -5291,10 +5387,11 @@ graph m0_probe : App {
         assert_eq!(echo.category(), node::Kind::Connector);
         assert_eq!(echo.connector_trait(), Some("Process"));
         // The EFFECTIVE sheet (D-2026-08-12-1): the five written
-        // attributes plus the injected defaults — `args = []` and,
+        // attributes plus the injected defaults — `args = []`,
+        // `err_codec = lines` and,
         // on the job profile, `max_output = "8MiB"` and
         // `on_timeout = kill`. `mode` was written here.
-        assert_eq!(echo.attributes().len(), 8);
+        assert_eq!(echo.attributes().len(), 9);
         assert_eq!(
             echo.attributes()[0].value,
             AttrValue::Word(String::from("job"))

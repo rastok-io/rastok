@@ -67,6 +67,17 @@ pub enum PlanValidationError {
         /// The declaring node.
         node: node::Path,
     },
+    /// A `Process` connector carries no effective `err_codec` even though
+    /// the sheet defaults it before lowering.
+    MissingErrCodec {
+        /// The declaring node.
+        node: node::Path,
+    },
+    /// A `Process` connector's stderr framing is outside `lines | bytes`.
+    UnknownErrCodec {
+        /// The declaring node.
+        node: node::Path,
+    },
     /// A connector some edge DELIVERS TO declares `Effect::None` —
     /// a delivery opens a call, and a call needs an effect class.
     /// (A source connector with no incoming edge may honestly be
@@ -84,25 +95,45 @@ pub enum PlanValidationError {
         /// activation changes nothing about this variant's shape.
         activation: node::HandlerActivation,
     },
-    /// A connector's error set names one kind twice.
-    DuplicateErrorKind {
+    /// An input carries an output-only root-sink policy.
+    InputHasRootSink {
         /// The declaring node.
         node: node::Path,
-        /// The repeated kind.
-        kind: String,
+        /// The invalid input.
+        port: node::Port,
+    },
+    /// Boundary ports cannot carry node-output routing policy. A boundary
+    /// output is already the graph's externally observed endpoint.
+    BoundaryHasRootSink {
+        /// The invalid boundary port.
+        port: node::Port,
     },
     /// A Rastok expression map literal names one key twice.
     DuplicateMapKey {
         /// The repeated key.
         key: String,
     },
-    /// A port table redundantly declares an untyped conventional port.
-    /// `in`, `out`, and `err` already exist; only an explicit type adds
-    /// semantic information worth transporting in the raw v6 table.
-    ImplicitPortDeclared {
-        /// The declaring node; `None` is the boundary.
-        node: Option<node::Path>,
-        /// The implicit port.
+    /// A resolved built-in Connector table omits one promised port.
+    MissingContractPort {
+        /// Connector node.
+        node: node::Path,
+        /// Missing port.
+        port: &'static str,
+    },
+    /// A resolved built-in Connector row disagrees with its self-contained
+    /// contract rule (direction, routing policy, or v6 execution pin).
+    ContractPortMismatch {
+        /// Connector node.
+        node: node::Path,
+        /// Mismatching port.
+        port: node::Port,
+    },
+    /// A built-in Connector table carries a row its resolved contract does
+    /// not declare.
+    UnexpectedContractPort {
+        /// Connector node.
+        node: node::Path,
+        /// Unexpected port.
         port: node::Port,
     },
     /// A referenced port exists, but not in the referenced role —
@@ -345,7 +376,7 @@ impl core::fmt::Display for PlanValidationError {
             Self::UnknownCodec { node } => {
                 write!(
                     f,
-                    "invalid plan: `{node}` carries a codec outside the dispatch domain (lines | jsonl)"
+                    "invalid plan: `{node}` carries a codec outside the contract domain (bytes | jsonl | lines)"
                 )
             }
             Self::MissingCodec { node } => {
@@ -354,6 +385,14 @@ impl core::fmt::Display for PlanValidationError {
                     "invalid plan: `{node}` is a Process connector without a codec — the sheet requires one"
                 )
             }
+            Self::MissingErrCodec { node } => write!(
+                f,
+                "invalid plan: `{node}` is a Process connector without effective `err_codec`"
+            ),
+            Self::UnknownErrCodec { node } => write!(
+                f,
+                "invalid plan: `{node}` carries `err_codec` outside lines | bytes"
+            ),
             Self::EffectlessCallee { node } => {
                 write!(
                     f,
@@ -366,22 +405,29 @@ impl core::fmt::Display for PlanValidationError {
                     "invalid plan: `{node}` declares two handlers on `{activation}`"
                 )
             }
-            Self::DuplicateErrorKind { node, kind } => {
-                write!(f, "invalid plan: duplicate error kind `{kind}` on `{node}`")
-            }
+            Self::InputHasRootSink { node, port } => write!(
+                f,
+                "invalid plan: input `{node}.{port}` carries an output root-sink policy"
+            ),
+            Self::BoundaryHasRootSink { port } => write!(
+                f,
+                "invalid plan: boundary port `{port}` carries node-output root-sink policy"
+            ),
             Self::DuplicateMapKey { key } => {
                 write!(f, "invalid plan: duplicate map literal key `{key}`")
             }
-            Self::ImplicitPortDeclared { node, port } => match node {
-                Some(node) => write!(
-                    f,
-                    "invalid plan: `{node}` declares the implicit port `{port}`"
-                ),
-                None => write!(
-                    f,
-                    "invalid plan: the boundary declares the implicit port `{port}`"
-                ),
-            },
+            Self::MissingContractPort { node, port } => write!(
+                f,
+                "invalid plan: `{node}` omits resolved contract port `{port}`"
+            ),
+            Self::ContractPortMismatch { node, port } => write!(
+                f,
+                "invalid plan: `{node}.{port}` disagrees with the resolved connector contract"
+            ),
+            Self::UnexpectedContractPort { node, port } => write!(
+                f,
+                "invalid plan: `{node}` carries undeclared contract port `{port}`"
+            ),
             Self::WrongPortDirection {
                 node,
                 port,
@@ -886,15 +932,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             });
         }
     }
-    // Untyped conventional declarations are redundant byte forms. A
-    // typed declaration is different: it carries a source constraint
-    // that B2 must retain until the complete resolved table ships in v7.
     let conventional_direction = |port: &node::Port| match port.name() {
         "in" => Some(node::Direction::Input),
         "out" | "err" => Some(node::Direction::Output),
         _ => None,
     };
-    let implicit = |port: &node::Port| conventional_direction(port).is_some();
     if let Some((decl, expected)) = plan.boundary.iter().find_map(|decl| {
         conventional_direction(&decl.port)
             .filter(|expected| decl.direction != *expected)
@@ -909,10 +951,9 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     if let Some(decl) = plan
         .boundary
         .iter()
-        .find(|decl| implicit(&decl.port) && decl.ty.is_none())
+        .find(|decl| decl.unwired == crate::plan::UnwiredPolicy::RootSink)
     {
-        return Err(PlanValidationError::ImplicitPortDeclared {
-            node: None,
+        return Err(PlanValidationError::BoundaryHasRootSink {
             port: decl.port.clone(),
         });
     }
@@ -928,13 +969,12 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 expected,
             });
         }
-        if let Some(decl) = node
-            .ports
-            .iter()
-            .find(|decl| implicit(&decl.port) && decl.ty.is_none())
-        {
-            return Err(PlanValidationError::ImplicitPortDeclared {
-                node: Some(node.path.clone()),
+        if let Some(decl) = node.ports.iter().find(|decl| {
+            decl.direction == node::Direction::Input
+                && decl.unwired == crate::plan::UnwiredPolicy::RootSink
+        }) {
+            return Err(PlanValidationError::InputHasRootSink {
+                node: node.path.clone(),
                 port: decl.port.clone(),
             });
         }
@@ -1004,9 +1044,12 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 }
             }
             if spec.contract == "Process" {
-                match spec.attribute("codec") {
+                let codec = match spec.attribute("codec") {
                     Some(crate::plan::AttrSetting::Word(word))
-                        if word == "lines" || word == "jsonl" => {}
+                        if matches!(word.as_str(), "bytes" | "jsonl" | "lines") =>
+                    {
+                        word.as_str()
+                    }
                     Some(_) => {
                         return Err(PlanValidationError::UnknownCodec {
                             node: node.path.clone(),
@@ -1017,6 +1060,78 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                             node: node.path.clone(),
                         });
                     }
+                };
+                let err_codec = match spec.attribute("err_codec") {
+                    Some(crate::plan::AttrSetting::Word(word))
+                        if matches!(word.as_str(), "bytes" | "lines") =>
+                    {
+                        word.as_str()
+                    }
+                    Some(_) => {
+                        return Err(PlanValidationError::UnknownErrCodec {
+                            node: node.path.clone(),
+                        });
+                    }
+                    None => {
+                        return Err(PlanValidationError::MissingErrCodec {
+                            node: node.path.clone(),
+                        });
+                    }
+                };
+                let expected = [
+                    (
+                        "in",
+                        node::Direction::Input,
+                        crate::plan::UnwiredPolicy::RequireWire,
+                    ),
+                    (
+                        "out",
+                        node::Direction::Output,
+                        crate::plan::UnwiredPolicy::RequireWire,
+                    ),
+                    (
+                        "err",
+                        node::Direction::Output,
+                        crate::plan::UnwiredPolicy::RootSink,
+                    ),
+                    (
+                        "exit",
+                        node::Direction::Output,
+                        crate::plan::UnwiredPolicy::RootSink,
+                    ),
+                ];
+                for (name, direction, unwired) in expected {
+                    let Some(port) = node.ports.iter().find(|port| port.port.name() == name) else {
+                        return Err(PlanValidationError::MissingContractPort {
+                            node: node.path.clone(),
+                            port: name,
+                        });
+                    };
+                    let expected_ty = crate::boundary::legacy_v6_process_port_type(
+                        &spec.contract,
+                        name,
+                        Some(codec),
+                        Some(err_codec),
+                    );
+                    if port.direction != direction
+                        || port.unwired != unwired
+                        || port.ty != expected_ty
+                    {
+                        return Err(PlanValidationError::ContractPortMismatch {
+                            node: node.path.clone(),
+                            port: port.port.clone(),
+                        });
+                    }
+                }
+                if let Some(port) = node
+                    .ports
+                    .iter()
+                    .find(|port| !matches!(port.port.name(), "in" | "out" | "err" | "exit"))
+                {
+                    return Err(PlanValidationError::UnexpectedContractPort {
+                        node: node.path.clone(),
+                        port: port.port.clone(),
+                    });
                 }
             }
             let mut attributes = BTreeSet::new();
@@ -1032,25 +1147,6 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 if pair[0].0 >= pair[1].0 {
                     return Err(PlanValidationError::NonCanonicalOrder {
                         collection: "attributes",
-                    });
-                }
-            }
-            // The error set is a SET — the hash reads it sorted, so
-            // an unsorted table would be a second byte form of the
-            // same contract.
-            let mut kinds = BTreeSet::new();
-            for kind in &spec.error_set {
-                if !kinds.insert(kind.as_str()) {
-                    return Err(PlanValidationError::DuplicateErrorKind {
-                        node: node.path.clone(),
-                        kind: kind.clone(),
-                    });
-                }
-            }
-            for pair in spec.error_set.windows(2) {
-                if pair[0] >= pair[1] {
-                    return Err(PlanValidationError::NonCanonicalOrder {
-                        collection: "error_set",
                     });
                 }
             }
@@ -1070,17 +1166,12 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         });
     }
 
-    // References: slots, ports in their roles, handlers, vars. The
-    // The conventional trio is always available in its fixed directions.
-    // A typed restatement may additionally occur in the table; direction
-    // remains conventional while the row supplies its source constraint.
-    let has_port = |node: &Node, port: &node::Port, direction: node::Direction| match port.name() {
-        "in" => direction == node::Direction::Input,
-        "out" | "err" => direction == node::Direction::Output,
-        _ => node
-            .ports
+    // References: slots, ports in their roles, handlers, vars. Every port is
+    // now a row; conventional source spelling confers no hidden existence.
+    let has_port = |node: &Node, port: &node::Port, direction: node::Direction| {
+        node.ports
             .iter()
-            .any(|decl| &decl.port == port && decl.direction == direction),
+            .any(|decl| &decl.port == port && decl.direction == direction)
     };
     let node_at = |slot: Slot| {
         plan.nodes
@@ -1125,17 +1216,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         node::Direction::Output => node::Direction::Input,
                         node::Direction::Input => node::Direction::Output,
                     };
-                    // Conventional direction first — `in` is the graph's
-                    // input, `out` and `err` its outputs — then extra rows.
-                    let actual = match endpoint.port.name() {
-                        "in" => Some(node::Direction::Input),
-                        "out" | "err" => Some(node::Direction::Output),
-                        _ => plan
-                            .boundary
-                            .iter()
-                            .find(|decl| decl.port == endpoint.port)
-                            .map(|decl| decl.direction),
-                    };
+                    let actual = plan
+                        .boundary
+                        .iter()
+                        .find(|decl| decl.port == endpoint.port)
+                        .map(|decl| decl.direction);
                     match actual {
                         None => Err(PlanValidationError::UnknownBoundaryPort {
                             port: endpoint.port.clone(),
@@ -1169,18 +1254,6 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     .iter()
                     .find(|decl| decl.port == endpoint.port)
                     .and_then(|decl| decl.ty.clone())
-                    .or_else(|| {
-                        // The connector contract's effective conventional pin
-                        // — the same authority the checker, the
-                        // mock judge, and the machine consult
-                        // (D-2026-08-11-1, amended).
-                        match &node.kind {
-                            NodeKind::Connector(spec) => {
-                                crate::boundary::resolved_port_type(spec, &endpoint.port)
-                            }
-                            NodeKind::Operator => None,
-                        }
-                    })
             }
             None => plan
                 .boundary

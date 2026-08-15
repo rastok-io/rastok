@@ -255,6 +255,42 @@ call whose filesystem binding is resolved before HIR identity or plan
 validation; an unbound call is categorically refused by the v6 plan gate. No
 plan-format tag, valid-program hash or golden moved in this checkpoint.
 
+**B5 implementation checkpoint (2026-08-15).** `ConnectorContract` now owns
+one `PortContract` table: direction, unwired policy and a fixed, same-as,
+common-choice-selected or profile-selector-selected logical type rule. A
+profile-local attribute cannot select a port type because sibling profiles may
+reuse that attribute name with different domains. Resolution happens after
+defaults/profile selection and materializes every Connector port as an
+ordinary typed plan row. The package validator then checks the complete active
+`Process` table without the compiler Registry. Inputs cannot carry output sink
+policy, boundary ports cannot carry node sink policy, and the VM routes an
+unclaimed output only from the row's `RootSink` value — never from the string
+`err`.
+
+The executable v6 bridge is deliberately exact rather than aspirational:
+`lines` resolves `in/out` to `text`, `jsonl` resolves them to
+`variant/array<variant>`, and `bytes` resolves them to `bytes`; the private
+success/failure Partner seam still requires `err/exit: variant`. B7 replaces
+those last two carriers with framed stderr and `ProcessExit`, and replaces the
+JSONL aggregate with repeated unit emissions. The B5 sheet nevertheless owns
+the complete target vocabulary now: `codec = bytes`, independent
+`err_codec = lines | bytes` with materialized default `lines`, the conventional
+`exit` row, and the fixed old-fact-to-`ProcessExit` migration table. The current
+adapter binds either bytes choice as a named B7 deferral; it never silently
+falls back to lines.
+
+The travelling `error_set` is removed. Its private-v6 connector key is retired,
+and the port row's direction code now also carries `RequireWire | RootSink`.
+These are deliberate pre-public identity/package moves: echo/spike
+`c75b840d… -> a7511135…`, JSONL `60f45914… -> 4eacb55c…`, and the compiler
+probe `e26af508… -> f068bcd1…`. The connector-free gauge semantic hash remains
+`0d3ad43d…`; its package alone moves because the formerly hidden Operator
+runtime-fault `err` row is now explicit plan data. Echo, JSONL and gauge package
+goldens are re-blessed for these causes; causal trace goldens remain unchanged.
+The unreleased v6 reader refuses prior bodies at validation or canonical
+re-encoding rather than migrating them. B8 still owns the single published v7
+type/expression registry.
+
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign
 literal spelling and `TAG_KW` partition in D-2026-08-12-1; the
@@ -271,6 +307,11 @@ spelling `E-CEL-EXPR` becomes `E-EXPR` in the same pre-public B3 migration.
 Their still-compatible parser,
 exact-number, capture-budget, attribute-contract and framing invariants
 survive.
+
+B5 additionally supersedes only the *downstream representation* clauses of
+D-2026-08-08-1/-2 that called the conventional trio implicit in the plan or
+VM. Their source convenience, direction and bounded-restatement rules survive;
+the checked HIR and runtime plan now materialize the rows.
 
 ## D-2026-08-13-1 — A lexeme-stream parser, json documents, and `decimal(…)`
 

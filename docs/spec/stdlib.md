@@ -1,8 +1,9 @@
 # Standard library contracts
 
-> **Status: Normative M1.3 target — under review.** The current v6
-> `error_set` and success/failure boundary seam are implementation
-> scaffolding superseded by D-2026-08-14-1.
+> **Status: Normative M1.3 target — under review.** B5 has removed the
+> travelling v6 `error_set` and made the complete resolved port table the
+> executable contract. The success/failure boundary seam and its temporary
+> `variant` carriers remain implementation scaffolding until B7.
 > Companion to [execution-model.md](execution-model.md) (`timeout` /
 > `on_timeout`, the correlator duty), [delivery-semantics.md](delivery-semantics.md)
 > (INBOUND / OUTBOUND records) and [simulation-semantics.md](simulation-semantics.md)

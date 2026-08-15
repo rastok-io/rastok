@@ -12,8 +12,11 @@
 
 use crate::contract::{
     AttributeSpec, ConnectorContract, DefaultValue, FrontendContract, FrontendFraming,
-    FrontendReader, Presence, Profile, ProfileSelector, ProfileSupport, Registry, ValueDomain,
+    FrontendReader, PortContract, PortDataType, PortTypeChoice, PortTypeRule, Presence, Profile,
+    ProfileSelector, ProfileSupport, Registry, ValueDomain,
 };
+use crate::node::Direction;
+use crate::plan::UnwiredPolicy;
 
 /// The `Process` sheet of `stdlib.md` §3.3 on the D-2026-08-12-1
 /// metamodel: the common attributes, and the `mode` selector picking
@@ -22,8 +25,68 @@ use crate::contract::{
 /// domains deferred-only).
 pub const PROCESS: ConnectorContract = ConnectorContract {
     name: "Process",
-    input_ports: &["in"],
-    output_ports: &["out", "err"],
+    ports: &[
+        PortContract {
+            name: "in",
+            direction: Direction::Input,
+            unwired: UnwiredPolicy::RequireWire,
+            ty: PortTypeRule::AttributeSelected {
+                attribute: "codec",
+                choices: &[
+                    PortTypeChoice {
+                        word: "lines",
+                        ty: PortDataType::Text,
+                    },
+                    PortTypeChoice {
+                        word: "jsonl",
+                        ty: PortDataType::Variant,
+                    },
+                    PortTypeChoice {
+                        word: "bytes",
+                        ty: PortDataType::Bytes,
+                    },
+                ],
+            },
+        },
+        PortContract {
+            name: "out",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RequireWire,
+            ty: PortTypeRule::AttributeSelected {
+                attribute: "codec",
+                choices: &[
+                    PortTypeChoice {
+                        word: "lines",
+                        ty: PortDataType::Text,
+                    },
+                    PortTypeChoice {
+                        word: "jsonl",
+                        ty: PortDataType::VariantArray,
+                    },
+                    PortTypeChoice {
+                        word: "bytes",
+                        ty: PortDataType::Bytes,
+                    },
+                ],
+            },
+        },
+        PortContract {
+            name: "err",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RootSink,
+            // The v6 Partner still sends typed failures through `err`.
+            // B7 replaces this carrier with independently framed stderr.
+            ty: PortTypeRule::Fixed(PortDataType::Variant),
+        },
+        PortContract {
+            name: "exit",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RootSink,
+            // The name and sink policy are executable now. B7 constructs
+            // ProcessExit values; B8 publishes the tagged-union wire type.
+            ty: PortTypeRule::Fixed(PortDataType::Variant),
+        },
+    ],
     common: &[
         AttributeSpec {
             name: "args",
@@ -42,7 +105,14 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             // reaffirmed by D-2026-08-12-1).
             name: "codec",
             presence: Presence::Required,
-            domain: ValueDomain::Choice(&["jsonl", "lines"]),
+            domain: ValueDomain::Choice(&["bytes", "jsonl", "lines"]),
+        },
+        AttributeSpec {
+            // stderr is an independent physical channel. It never inherits
+            // the stdout codec and defaults to one text value per line.
+            name: "err_codec",
+            presence: Presence::Defaulted(DefaultValue::Choice("lines")),
+            domain: ValueDomain::Choice(&["bytes", "lines"]),
         },
         AttributeSpec {
             name: "command",
@@ -111,18 +181,6 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             },
         ],
     }),
-    error_set: &[
-        "SpawnFailed",
-        "DecodeError",
-        // A pipe READ failed: incomplete capture for an I/O reason,
-        // distinct from invalid content (D-2026-08-12-1, review
-        // round). Closed, empty payload.
-        "CaptureFailed",
-        "StderrLine",
-        "TimeoutExpired",
-        "ExecFailed",
-        "OutputOverflow",
-    ],
 };
 
 /// The catalogue names declared by `stdlib.md` whose adapters are not
@@ -275,7 +333,20 @@ mod tests {
             PROCESS.owning_profile("restart").map(|p| p.word),
             Some("service")
         );
-        assert!(PROCESS.error_set.contains(&"ExecFailed"));
+        let ports = PROCESS
+            .resolve_ports(&std::collections::BTreeMap::from([
+                (String::from("codec"), String::from("lines")),
+                (String::from("err_codec"), String::from("lines")),
+            ]))
+            .expect("the effective Process sheet resolves");
+        assert_eq!(ports.len(), 4);
+        assert!(ports.iter().any(|port| {
+            port.port.name() == "exit" && port.ty == Some(crate::datatype::DataType::Variant)
+        }));
+        assert!(matches!(
+            crate::boundary::process_exit_type().expect("the target type is valid"),
+            crate::datatype::DataType::TaggedUnion(_)
+        ));
     }
 
     #[test]

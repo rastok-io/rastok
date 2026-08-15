@@ -6,10 +6,11 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-14): items 1 and 2 are landed, as are
+**Current checkpoint (2026-08-15): items 1 and 2 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 The current transport is plan-package v6; valid-program identity for
-the spike remains `c75b840d…`. Item 3 has been replaced before public
+the spike is `a7511135…` after B5's deliberate contract-identity move.
+Item 3 has been replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md).**
 
@@ -242,10 +243,14 @@ step touches `vm.rs` once.
    `ValidatedExecutionPlan`; v6 decoders re-derive it, and no unresolved hole
    becomes `variant`. B3 has renamed the consumer to `expr`, added typed
    deterministic `is`/`as` narrowing and pinned the compatible operator
-   oracle; v6 refuses those new AST nodes until B8 publishes v7. The remaining
-   `error_set`, `TypedError` and
-   success/failure-only reply split are removed by the ordered M1.3 gates,
-   not promoted as an intermediate model. Ordered gates and evidence are in
+   oracle; v6 refuses those new AST nodes until B8 publishes v7. B4 has landed
+   the single byte-adjacent `name!` frontend form. B5 has replaced flat
+   connector port/error lists with one resolved `PortContract` table,
+   materialized `Process.in/out/err/exit`, moved root-sink behavior into plan
+   data, added `codec = bytes` and defaulted `err_codec = lines`, and removed
+   the travelling `error_set`. The active v6 `TypedError` and
+   success/failure-only reply split remain isolated until B7 rather than being
+   promoted as a model. Ordered gates and evidence are in
    the dedicated
    [M1.3 backlog](m1.3-type-system-backlog.md).
 4. **`per` — the partition surface** — keyed nodes and graphs on the

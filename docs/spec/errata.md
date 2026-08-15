@@ -75,8 +75,8 @@ and execution-equivalence round-trip tests pin the fix.
 
 > **Resolved in the M1.3 target by D-2026-08-14-1.** There is no
 > name-based `err` exception. Every resolved output carries an explicit
-> `UnwiredPolicy`; the v6 warning/bubble behavior remains documented below
-> only as implementation history until that gate lands.
+> `UnwiredPolicy`; B5 landed the two exact policies (`RequireWire` and
+> `RootSink`) in plan data. Forwarding/discard remain ordinary edges.
 
 - **Where:** [grammar.md](grammar.md) (wiring prose) vs
   [delivery-semantics.md](delivery-semantics.md) (routing rules).
@@ -84,14 +84,11 @@ and execution-equivalence round-trip tests pin the fix.
   output a *warning*; delivery-semantics.md treats an unrouted data
   emission as an *error*. Both agree `-> nothing` is the explicit
   discard and that `err` bubbles to the root sink.
-- **Interim behavior (implementation):** `W-UNWIRED-OUTPUT`, a
-  warning — the plan still ships. The runtime never silently drops:
-  unwired `err` emissions surface at the root error sink, and
-  unwired data emissions are visible at check time.
-- **Resolution direction:** pick one severity and align both specs.
-  The warning reading keeps exploratory graphs compiling; the error
-  reading serves the "nothing silent" axiom better once `-> nothing`
-  is cheap to write everywhere.
+- **Resolution:** `RequireWire` keeps `W-UNWIRED-OUTPUT`, so exploratory
+  graphs still compile; an accepted warning leaves the emission in the
+  journal/observation surface but creates no downstream delivery.
+  `RootSink` additionally publishes an unclaimed emission at the root sink.
+  The resolved row, never the spelling `err`, selects the behavior.
 - **Found by:** external code review (fourth pass), 2026-08-03.
 
 ## E-2026-08-03-3 — the idempotency-key rule vs the Process sheet

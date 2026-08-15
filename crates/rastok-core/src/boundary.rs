@@ -9,7 +9,9 @@
 //!
 //! [`delivery-semantics.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/delivery-semantics.md
 
-use crate::datatype::DataType;
+use crate::datatype::{
+    DataType, EnumType, StructType, TaggedCase, TaggedUnionType, TypeError, TypeField,
+};
 use crate::envelope::{self, Envelope};
 use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
@@ -105,15 +107,6 @@ impl PreparedRequest {
     }
 }
 
-/// Frames request data under `codec = lines`: text is one line (one
-/// trailing newline ensured, never doubled), raw bytes pass verbatim,
-/// anything else refuses as a typed decode reason — before any open
-/// fact, before any effect. Pure: the machine and any adapter see one
-/// framing.
-///
-/// # Errors
-///
-/// The decode reason when the data cannot be framed as a line.
 /// The request-framing codec of a connector — read once from the
 /// spec, dispatched here (D-2026-08-11-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +115,8 @@ pub enum RequestCodec {
     Lines,
     /// One JSON value per line, the JSON model exactly.
     Jsonl,
+    /// One opaque byte payload.
+    Bytes,
 }
 
 impl RequestCodec {
@@ -133,6 +128,7 @@ impl RequestCodec {
     pub fn from_word(word: Option<&str>) -> Self {
         match word {
             Some("jsonl") => Self::Jsonl,
+            Some("bytes") => Self::Bytes,
             _ => Self::Lines,
         }
     }
@@ -161,46 +157,102 @@ impl RequestCodec {
 
 /// Effective logical type of one currently executable Connector port.
 ///
-/// This is the temporary B2 contract resolver shared by the compiler HIR and
-/// raw-plan validation. B5 moves the same attribute-dependent rule into the
-/// general `PortContract` metamodel. The JSONL output remains the historical
-/// v6 aggregate `array<variant>` until B6 changes Process to repeated ordinary
-/// emissions.
+/// B5's compiler sheet owns the source-facing rule. This core mirror lets a
+/// package validator prove the same current-v6 table without a compiler
+/// Registry. The JSONL output remains the historical `array<variant>` until
+/// B7 changes Process to repeated ordinary emissions.
 #[must_use]
-pub fn resolved_contract_port_type(
+pub fn legacy_v6_process_port_type(
     contract: &str,
     port: &str,
     codec_word: Option<&str>,
+    _err_codec_word: Option<&str>,
 ) -> Option<DataType> {
     if contract != "Process" {
         return None;
     }
     match (port, codec_word) {
         ("in" | "out", Some("lines")) => Some(DataType::Text),
-        ("in", Some("jsonl")) | ("err", Some("lines" | "jsonl")) => Some(DataType::Variant),
+        ("in" | "out", Some("bytes")) => Some(DataType::BYTES),
+        ("in", Some("jsonl")) => Some(DataType::Variant),
         ("out", Some("jsonl")) => Some(DataType::array(DataType::Variant)),
+        ("err" | "exit", Some("lines" | "jsonl" | "bytes")) => Some(DataType::Variant),
         _ => None,
     }
 }
 
-/// The effective logical type of one port in the currently executable
-/// `Process` contract.
+/// The canonical logical type of the conventional `Process.exit` port.
 ///
-/// B2 resolves every travelling port before execution while B5 will move this
-/// attribute-dependent rule into the general contract metamodel.
+/// B5 fixes the migration target beside the old boundary facts. The active v6
+/// port carrier remains `variant`; B7 constructs this union and B8 assigns its
+/// published wire representation.
+///
+/// # Errors
+///
+/// Returns the canonical type constructor's precise invariant violation.
+pub fn process_exit_type() -> Result<DataType, TypeError> {
+    let empty = || StructType::new(Vec::new());
+    let optional_int = DataType::INT.optional()?;
+    let optional_text = DataType::Text.optional()?;
+    let exited = TaggedCase::new(
+        "Exited",
+        StructType::new(alloc::vec![
+            TypeField::new("exit_code", DataType::INT),
+            TypeField::new("signal", optional_int),
+        ])?,
+    )?;
+    let spawn_failed = TaggedCase::new(
+        "SpawnFailed",
+        StructType::new(alloc::vec![TypeField::new("message", DataType::Text)])?,
+    )?;
+    let timeout_expired = TaggedCase::new("TimeoutExpired", empty()?)?;
+    let decode_failed = TaggedCase::new(
+        "DecodeFailed",
+        StructType::new(alloc::vec![
+            TypeField::new("line", optional_text),
+            TypeField::new("message", DataType::Text),
+        ])?,
+    )?;
+    let capture_failed = TaggedCase::new("CaptureFailed", empty()?)?;
+    let reason = DataType::Enum(EnumType::new(alloc::vec![
+        String::from("budget"),
+        String::from("capacity"),
+    ])?);
+    let output_overflow = TaggedCase::new(
+        "OutputOverflow",
+        StructType::new(alloc::vec![
+            TypeField::new("limit", DataType::UINT),
+            TypeField::new("reason", reason),
+        ])?,
+    )?;
+    Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
+        exited,
+        spawn_failed,
+        timeout_expired,
+        decode_failed,
+        capture_failed,
+        output_overflow,
+    ])?))
+}
+
+/// B5's explicit migration table from the private success/failure seam to
+/// the target `ProcessExit` cases. B7 consumes this table while replacing the
+/// seam; until then the plan-backed gate uses it instead of a travelling
+/// `error_set`.
 #[must_use]
-pub fn resolved_port_type(
-    spec: &crate::plan::ConnectorSpec,
-    port: &crate::node::Port,
-) -> Option<DataType> {
-    if spec.contract != "Process" {
-        return None;
-    }
-    let codec = match spec.attribute("codec") {
-        Some(crate::plan::AttrSetting::Word(word)) => Some(word.as_str()),
+pub fn legacy_process_failure_exit_case(kind: &str) -> Option<&'static str> {
+    match kind {
+        "SpawnFailed" => Some("SpawnFailed"),
+        "TimeoutExpired" => Some("TimeoutExpired"),
+        "DecodeError" => Some("DecodeFailed"),
+        "CaptureFailed" => Some("CaptureFailed"),
+        "OutputOverflow" => Some("OutputOverflow"),
+        "ExecFailed" => Some("Exited"),
+        // Stderr is ordinary data on `err`; it is deliberately not an exit
+        // case and the Process job adapter never emits this legacy kind.
+        "StderrLine" => None,
         _ => None,
-    };
-    resolved_contract_port_type(&spec.contract, port.name(), codec)
+    }
 }
 
 /// Frames one request under the given codec.
@@ -215,7 +267,37 @@ pub fn prepare_request(
     match codec {
         RequestCodec::Lines => prepare_lines(data),
         RequestCodec::Jsonl => prepare_jsonl(data),
+        RequestCodec::Bytes => prepare_bytes(data),
     }
+}
+
+/// Frames one opaque byte request without text or data-model conversion.
+///
+/// # Errors
+///
+/// The typed refusal when the payload is neither raw encoded bytes nor the
+/// materialized bytes scalar.
+pub fn prepare_bytes(data: &envelope::Data) -> Result<PreparedRequest, String> {
+    use envelope::{Data, Encoding, Value};
+    let bytes = match data {
+        Data::Encoded {
+            encoding: Encoding::Raw,
+            bytes,
+            ..
+        }
+        | Data::Materialized(Value::Bytes(bytes)) => bytes.clone(),
+        Data::Encoded { encoding, .. } => {
+            return Err(alloc::format!(
+                "the bytes codec requires raw bytes; the request is {encoding:?}-encoded"
+            ));
+        }
+        Data::Materialized(other) => {
+            return Err(alloc::format!(
+                "the bytes codec requires bytes; the request data is {other:?}"
+            ));
+        }
+    };
+    Ok(PreparedRequest::seal(bytes))
 }
 
 /// Frames a request as ONE canonical JSON line (D-2026-08-11-1):
@@ -316,28 +398,29 @@ pub struct Response {
     pub outcome: CallOutcome,
 }
 
-/// What a call produced: the boundary can say failure, because every
-/// connector contract has an error set beside its reply.
+/// What the private pre-B7 Process seam produced.
+///
+/// B7 replaces this success/failure split with a completion carrying ordinary
+/// port drafts plus one terminal `exit` draft.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallOutcome {
     /// The reply payload, bound for the connector's `out` port.
     Success(envelope::Data),
-    /// A member of the connector's typed error set, bound for `err`.
+    /// A legacy Process failure fact, temporarily bound for `err`.
     Failure(TypedError),
 }
 
-/// One member of a connector's declared error set.
+/// One legacy Process failure fact retained only until B7.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedError {
-    /// The error kind, from the contract sheet's error set.
+    /// The temporary fact name, checked through the fixed migration table.
     pub kind: String,
     /// The typed payload of the error.
     pub data: envelope::Data,
 }
 
-/// Judges a partner's outcome against the calling connector's
-/// contract before it may become a causal fact. The plan owns the
-/// error sets; the dispatcher only asks.
+/// Judges a partner's outcome against the calling connector's resolved
+/// contract before it may become a causal fact. The dispatcher only asks.
 pub trait OutcomeGate {
     /// `Ok` to admit; `Err(reason)` to refuse the closure.
     ///
@@ -682,6 +765,25 @@ mod tests {
         let mut digest = [0u8; 32];
         hasher.finalize_xof().fill(&mut digest);
         assert_eq!(raw.digest(), &digest);
+    }
+
+    #[test]
+    fn the_bytes_codec_never_falls_back_to_lines() {
+        use crate::envelope::{Data, Value};
+        assert_eq!(RequestCodec::from_word(Some("bytes")), RequestCodec::Bytes);
+        let framed = prepare_request(
+            RequestCodec::Bytes,
+            &Data::materialized(Value::Bytes(alloc::vec![0, 0xff, b'\n'])),
+        )
+        .unwrap();
+        assert_eq!(framed.bytes(), &[0, 0xff, b'\n']);
+        assert!(
+            prepare_request(
+                RequestCodec::Bytes,
+                &Data::materialized(Value::Text(String::from("not bytes"))),
+            )
+            .is_err()
+        );
     }
 
     use super::*;

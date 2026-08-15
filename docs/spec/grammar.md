@@ -674,13 +674,12 @@ form means *"this transaction emits nothing"* (source side) ; `-> nothing` means
 *"this output stream goes to /dev/null"* (sink side). The drain **always
 consumes**, so it never applies back-pressure.
 
-**An emitted output port that is left unwired is a compile warning** — it is
-ambiguous and, with bounded queues, dangerous : under `backpressure = block` an
-unconsumed port would stall (deadlock) its producer ; under a drop policy it
-would lose data silently. Resolve it explicitly — wire it to a consumer, or to
-`nothing`. (The runtime default for an ignored warning is specified in
-`docs/spec/delivery-semantics.md` ; the recommendation is *drop*, since blocking a
-whole partition on a forgotten wire is the worse failure.)
+**An emitted `RequireWire` output port that is left unwired is a compile
+warning** — it usually means the topology is incomplete. Resolve it explicitly:
+wire it to a consumer or to `nothing`. If the warning is accepted, the emission remains in its transaction
+record and observation stream but creates no downstream delivery; a
+`RootSink` contract row additionally publishes an unclaimed emission at the
+root sink. The runtime never infers either behavior from the port name.
 
 ### Bidirectional wiring
 
@@ -1318,11 +1317,14 @@ Simulation setup uses fixtures: injection is the setup, and preloading a
 `Memory` is expressed as ordinary injections at its feeding edge. Reading
 uses the Connector's explicit `read` and `out` ports.
 
-The conventional ports **`in` / `out` / `err`** are not keywords. They
-are ordinary pre-bound identifiers and may be explicitly restated once
-in their conventional direction; a second declaration or contradictory
-direction is `E-PORT-CONFLICT`. M1.3 materializes their effective types
-in the resolved port table exactly like every other port.
+The conventional ports **`in` / `out` / `err`** are not keywords. A
+Connector contract may additionally conventionally declare **`exit`** for one
+invocation's terminal fact. They are ordinary pre-bound identifiers and may be
+explicitly restated once in their conventional direction where the owning node
+kind permits declarations; a second declaration or contradictory direction is
+`E-PORT-CONFLICT`. M1.3 materializes every effective row in the resolved port
+table exactly like any other port; no runtime layer recreates one from its
+name.
 Reservation is BY POSITION, never a global ban on a spelling
 (D-2026-08-12-1; enforcement stated exactly by D-2026-08-13-1
 review round 3 — this section supersedes the earlier draft that

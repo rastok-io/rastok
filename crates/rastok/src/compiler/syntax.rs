@@ -463,9 +463,9 @@ pub enum Statement {
         /// The assigned value.
         value: Value,
     },
-    /// `err = Kind { … }` — typed-error emission.
+    /// `err = Kind { … }` — the temporary pre-B6 tagged emission spelling.
     ErrEmit {
-        /// The error kind, from the node's declared error set.
+        /// The case name; B6 generalizes the constructor to every typed port.
         kind: Name,
         /// Optional typed fields.
         body: Option<StructBody>,

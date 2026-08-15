@@ -151,7 +151,7 @@ graph merge : App {
 
 #[test]
 fn an_injection_at_an_output_refuses_by_direction() {
-    // The implicit `out`, and a graph output generally, is not an
+    // Conventional `out`, and a graph output generally, is not an
     // ingress — the world cannot write the graph's own answers.
     assert!(
         refusal_code(MERGER_GRAPH, "app.out").contains(&"E-PORT-DIRECTION"),
@@ -571,17 +571,51 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
 // ===== the resolved contract table travels in the plan =====
 
 #[test]
-fn an_untyped_contract_port_never_enters_a_validated_plan() {
-    use rastok::contract::{AttributeSpec, ConnectorContract, Presence, ValueDomain};
+fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
+    use rastok::contract::{
+        AttributeSpec, ConnectorContract, PortContract, PortDataType, PortTypeRule, Presence,
+        ValueDomain,
+    };
+    use rastok::node::Direction;
+    use rastok::plan::UnwiredPolicy;
 
-    // B2 closes the old hole: a contract name and direction are not
-    // enough to make a usable port. B5 will give contract sheets typed
-    // PortContracts; until then, an otherwise unconstrained named port
-    // cannot enter a ValidatedExecutionPlan as an implicit variant.
+    // B5 closes the old hole: a contract name and direction are not enough
+    // to make a usable port. The resolved sheet ships every row with its
+    // effective type; no named port becomes an implicit variant.
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
         name: "Probe",
-        input_ports: &["in", "request"],
-        output_ports: &["out", "err", "response"],
+        ports: &[
+            PortContract {
+                name: "in",
+                direction: Direction::Input,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "request",
+                direction: Direction::Input,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "out",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "err",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RootSink,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "response",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+        ],
         common: &[
             AttributeSpec {
                 name: "behavior",
@@ -595,33 +629,65 @@ fn an_untyped_contract_port_never_enters_a_validated_plan() {
             },
         ],
         selector: None,
-        error_set: &["ProbeFailed"],
     };
     let registry = Registry::try_m0()
         .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
     let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay -> probe -> .\n}\n";
-    let bag = compile(&[source], &registry).expect_err("request has no logical type yet");
-    assert!(
-        bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code().as_str() == "E-PORT-TYPE"
-                && diagnostic
-                    .fields()
-                    .iter()
-                    .any(|(key, value)| *key == "port" && value == "request")
-        }),
-        "{bag:?}"
-    );
+    let compilation = compile(&[source], &registry).expect("the sheet resolves every port type");
+    let probe = compilation
+        .plan
+        .nodes
+        .iter()
+        .find(|node| node.path.to_string() == "probe")
+        .expect("the connector");
+    assert_eq!(probe.ports.len(), 5, "the complete contract table travels");
+    assert!(probe.ports.iter().all(|port| port.ty.is_some()));
 }
 
 #[test]
 fn a_named_connector_edge_defers_by_name() {
-    use rastok::contract::{AttributeSpec, ConnectorContract, Presence, ValueDomain};
+    use rastok::contract::{
+        AttributeSpec, ConnectorContract, PortContract, PortDataType, PortTypeRule, Presence,
+        ValueDomain,
+    };
+    use rastok::node::Direction;
+    use rastok::plan::UnwiredPolicy;
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
         name: "Probe",
-        input_ports: &["in", "request"],
-        output_ports: &["out", "err", "response"],
+        ports: &[
+            PortContract {
+                name: "in",
+                direction: Direction::Input,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "request",
+                direction: Direction::Input,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "out",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "err",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RootSink,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "response",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+        ],
         common: &[
             AttributeSpec {
                 name: "behavior",
@@ -635,7 +701,6 @@ fn a_named_connector_edge_defers_by_name() {
             },
         ],
         selector: None,
-        error_set: &["ProbeFailed"],
     };
     let registry = Registry::try_m0()
         .expect("the standard catalogue holds")
@@ -1147,16 +1212,40 @@ lab g {
 
 #[test]
 fn a_defective_sheet_is_held_at_the_door() {
-    use rastok::contract::{ConnectorContract, SheetDefect};
-    let sheet = |input_ports: &'static [&'static str], output_ports: &'static [&'static str]| {
-        ConnectorContract {
-            name: "Bad",
-            input_ports,
-            output_ports,
-            common: &[],
-            selector: None,
-            error_set: &[],
-        }
+    use rastok::contract::{
+        ConnectorContract, PortContract, PortDataType, PortTypeRule, SheetDefect,
+    };
+    use rastok::node::Direction;
+    use rastok::plan::UnwiredPolicy;
+    const MISDIRECTED: ConnectorContract = ConnectorContract {
+        name: "Bad",
+        ports: &[PortContract {
+            name: "out",
+            direction: Direction::Input,
+            unwired: UnwiredPolicy::RequireWire,
+            ty: PortTypeRule::Fixed(PortDataType::Variant),
+        }],
+        common: &[],
+        selector: None,
+    };
+    const CONFLICTING: ConnectorContract = ConnectorContract {
+        name: "Bad",
+        ports: &[
+            PortContract {
+                name: "request",
+                direction: Direction::Input,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "request",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+        ],
+        common: &[],
+        selector: None,
     };
     // A default port against its implicit direction — the exact
     // defect that would have split the checker from the validator
@@ -1164,7 +1253,7 @@ fn a_defective_sheet_is_held_at_the_door() {
     assert_eq!(
         Registry::try_m0()
             .expect("the standard catalogue holds")
-            .try_with(sheet(&["out"], &[]))
+            .try_with(MISDIRECTED)
             .unwrap_err(),
         SheetDefect::MisdirectedDefault("out")
     );
@@ -1172,7 +1261,7 @@ fn a_defective_sheet_is_held_at_the_door() {
     assert_eq!(
         Registry::try_m0()
             .expect("the standard catalogue holds")
-            .try_with(sheet(&["request"], &["request"]))
+            .try_with(CONFLICTING)
             .unwrap_err(),
         SheetDefect::ConflictingPort("request")
     );
@@ -1799,13 +1888,9 @@ lab g {
 
 #[test]
 fn the_validator_reads_the_table_and_gates_the_capability() {
-    // Two DISTINCT refusals prove the table is read without any
-    // Registry: a port the table knows refuses by CAPABILITY
-    // (UnsupportedConnectorPort — the Partner seam cannot execute it
-    // yet, same verdict as the checker), while a port the table does
-    // not know refuses by IGNORANCE (WrongPortDirection). Vm::boot
-    // therefore never accepts a plan this machine cannot execute
-    // faithfully.
+    // Two DISTINCT refusals prove the table is read without any Registry:
+    // Process cannot grow a port beyond its resolved contract, while a
+    // referenced row absent from the table refuses by ignorance.
     use rastok::datatype::DataType;
     use rastok::node::Direction;
     use rastok::plan::{Edge, EndpointRef, PortDecl, Slot, ValidatedExecutionPlan};
@@ -1826,6 +1911,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     probe.ports.push(PortDecl {
         port: rastok::node::Port::new("request").unwrap(),
         direction: Direction::Input,
+        unwired: rastok::plan::UnwiredPolicy::RequireWire,
         ty: Some(DataType::Text),
     });
     probe
@@ -1845,14 +1931,11 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     edges.sort_by_key(|edge| plan.edge_text(edge));
     plan.edges = edges;
     let error = ValidatedExecutionPlan::try_new(plan.clone()).unwrap_err();
-    assert!(
-        matches!(
-            &error,
-            rastok::plan::PlanValidationError::UnsupportedConnectorPort { node, port }
-                if node.to_string() == "probe" && port.name() == "request"
-        ),
-        "refused by CAPABILITY, from the traveled table: {error:?}"
-    );
+    assert!(matches!(
+        &error,
+        rastok::plan::PlanValidationError::UnexpectedContractPort { node, port }
+            if node.to_string() == "probe" && port.name() == "request"
+    ));
     // A port the table does NOT know refuses by ignorance instead —
     // the distinction is what proves the table answered.
     let ghost = plan
@@ -1865,6 +1948,9 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
         })
         .expect("the spliced edge");
     ghost.to.as_mut().expect("a target").port = rastok::node::Port::new("ghost").unwrap();
+    plan.nodes[probe_slot]
+        .ports
+        .retain(|port| port.port.name() != "request");
     let mut edges = plan.edges.clone();
     edges.sort_by_key(|edge| plan.edge_text(edge));
     plan.edges = edges;

@@ -39,6 +39,14 @@
 > in-memory `expr` nodes, but v6 validation returns
 > `ExpressionNotInFormat` before encoding. No provisional v6 expression tag
 > exists; B8 assigns the resolved target/discriminator form once in v7.
+> **Private v6 B5 revision (2026-08-15):** v6 has never been published, so
+> B5 replaces its current canonical body rather than allocating a transitory
+> v7 before the categorical type registry lands. Connector spec key 5
+> (`error_set`) is retired; complete resolved Connector port rows travel, and
+> each row's mode now includes its unwired policy. A previous v6 body is not
+> migrated: validation or canonical re-encoding refuses it. The semantic
+> moves and affected goldens are recorded under D-2026-08-14-1. B8 remains the
+> one published v7 boundary.
 > Format v5 (D-2026-08-10-9, landed 2026-08-10): the
 > three-zone metadata write targets, the travelling `app`/`ext`
 > schemas, the content-addressed asset table, expanded named types
@@ -127,8 +135,8 @@ of the contract, in order:
    EFFECTIVE sheet (D-2026-08-12-1): the checker injected every
    omitted contract default before lowering, and nothing of the
    metamodel itself (presence, defaults, profiles) is serialized —
-   the error set sorted (it
-   is a SET — the hash reads it sorted), and every expression map literal
+   complete Connector port tables are resolved and typed before lowering;
+   every expression map literal
    construction-sorted, walked recursively through guards, steps,
    and writes. These orders live in domain arrays the serializer
    reproduces faithfully, so the re-encoding check below cannot see
@@ -151,13 +159,15 @@ the compiler surfaces that refusal as the user diagnostic
 `E-PLAN-DEPTH` — so what `encode` accepts, `decode` reads back, with
 no gap at the boundary.
 
-Deep semantic checking (expression typing, contract coherence) remains the
-compiler's job — the package's validation holds the *structural*
+Expression typing and arbitrary compiler-Registry coherence remain the
+compiler's job. For executable built-ins, the package validates the resolved
+contract facts it must dereference: the active `Process` attributes and exact
+four-row port table are checked without a Registry. The package's validation holds the *structural*
 invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (v5 layout retained by current format v6)
+## Body tables (current private v6 layout)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -188,10 +198,15 @@ node       := {1: path (text), 2: kind, 3: [port_decl*], 4: [var*]}
 kind       := 1                                   — operator
             | [2, spec]                           — connector
 spec       := {1: contract (text), 2: effect, 3: behavior (uint: 1 deterministic · 2 probabilistic),
-               4: [[name (text), attr]*], 5: [error_kind (text)*]}
+               4: [[name (text), attr]*]}
+              // key 5 (error_set) is RETIRED by B5 and never reused
 effect     := 0 | [1, class (uint: 1 idempotent · 2 compensable · 3 irreversible)]
 attr       := [1, word (text)] | [2, tagged_value]
-port_decl  := [name (text), direction (uint: 1 in · 2 out), type?]
+port_decl  := [name (text), mode, type?]
+mode       := uint: 1 input/require-wire · 2 output/require-wire ·
+                    3 output/root-sink
+              // mode 4 (input/root-sink) is decoder-recognized only so a
+              // forged body receives a precise typed refusal; encode never emits it
               — the third element is the PINNED type (same encoding
               as var types), present exactly when the source
               annotates: an unannotated port keeps its two-element
@@ -205,6 +220,9 @@ port_decl  := [name (text), direction (uint: 1 in · 2 out), type?]
               ResolvedPortTable (effective type + Declared/Inferred origin)
               from these rows, connector pins and graph constraints; an
               unresolved variable refuses and never becomes variant
+              — since B5, every Connector contract row is present and typed;
+              Operator/boundary rows may still be source constraints whose
+              effective type is carried by ResolvedPortTable until v7
 var        := {1: name (text), 2: type, 3: init (tagged_value)?}
 
 edge       := [endpoint, endpoint | null]         — null = «-> nothing»

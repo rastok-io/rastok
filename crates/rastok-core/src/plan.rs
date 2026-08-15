@@ -45,8 +45,20 @@ impl Slot {
     }
 }
 
+/// What happens when an output has no outgoing edge.
+///
+/// This is plan data, not a convention inferred from the port's name.  The
+/// validated plan rejects a root-sink policy on an input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnwiredPolicy {
+    /// The compiler warns when the output is left unwired.
+    RequireWire,
+    /// The VM publishes an unclaimed emission at the root sink.
+    RootSink,
+}
+
 /// One entry of a port table — a node's or the boundary's: the name,
-/// the direction, and the OPTIONAL pinned type. A present type is a
+/// direction, unwired policy, and OPTIONAL pinned type. A present type is a
 /// public contract (identity material, transported in the package);
 /// an absent one is a source-level inference variable, never an implicit
 /// `variant`. The canonical order key is
@@ -57,6 +69,9 @@ pub struct PortDecl {
     pub port: node::Port,
     /// The declared direction.
     pub direction: node::Direction,
+    /// Routing policy when no edge claims this port. Inputs must use
+    /// [`UnwiredPolicy::RequireWire`].
+    pub unwired: UnwiredPolicy,
     /// The pinned type, when annotated.
     pub ty: Option<DataType>,
 }
@@ -68,7 +83,19 @@ impl PortDecl {
         Self {
             port,
             direction,
+            unwired: UnwiredPolicy::RequireWire,
             ty: None,
+        }
+    }
+
+    /// An output which publishes unclaimed emissions at the root sink.
+    #[must_use]
+    pub fn root_sink(port: node::Port, ty: Option<DataType>) -> Self {
+        Self {
+            port,
+            direction: node::Direction::Output,
+            unwired: UnwiredPolicy::RootSink,
+            ty,
         }
     }
 
@@ -156,10 +183,10 @@ pub struct Node {
     pub path: node::Path,
     /// What the node is.
     pub kind: NodeKind,
-    /// The node's source port table, in canonical order. Conventional
-    /// `in`, `out`, and `err` rows are omitted when unannotated; an explicit
-    /// annotation may restate them. Effective declared/inferred types live
-    /// in [`ValidatedExecutionPlan::resolved_ports`].
+    /// The node's materialized port table, in canonical order. Every resolved
+    /// Connector contract row is present and typed; Operator rows record
+    /// source/inferred constraints. The total effective types, including
+    /// inference origin, live in [`ValidatedExecutionPlan::resolved_ports`].
     pub ports: Vec<PortDecl>,
     /// Declared state cells with their boot-time defaults, in
     /// canonical order.
@@ -190,9 +217,6 @@ pub struct ConnectorSpec {
     /// The remaining declared attributes, reduced; the typed axes
     /// above are not repeated here.
     pub attributes: Vec<(String, AttrSetting)>,
-    /// The contract's typed error kinds — the runtime validates every
-    /// settled failure against this set, so no partner can invent one.
-    pub error_set: Vec<String>,
 }
 
 impl ConnectorSpec {

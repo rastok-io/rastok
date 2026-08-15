@@ -84,11 +84,6 @@ pub enum NodeRole {
         trait_name: String,
         /// Checked attributes, in declaration order.
         attributes: Vec<Attribute>,
-        /// The resolved contract's error kinds — a snapshot taken at
-        /// check: the plan and the semantic hash both derive from
-        /// this one object, so a sheet evolution can never produce
-        /// two differently-validating plans under one hash.
-        error_set: Vec<String>,
     },
 }
 
@@ -104,9 +99,9 @@ pub struct Node {
     pub vals: Vec<Val>,
     /// Mutable state cells, in declaration order.
     pub vars: Vec<Var>,
-    /// Source port rows and inferred port existence, with directions.
-    /// Untyped conventional ports stay implicit; a typed restatement is a
-    /// real source constraint. Effective types belong to the validated plan.
+    /// Complete source/resolved port rows. Connector contracts materialize
+    /// every conventional port with its active logical type and routing
+    /// policy; operators materialize every port their body can use.
     pub ports: Vec<crate::plan::PortDecl>,
     /// Checked handlers, in declaration order.
     pub handlers: Vec<Handler>,

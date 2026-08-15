@@ -6,7 +6,7 @@
 //! owe (D-2026-08-08-2/-3): one graph carrying a TYPED named
 //! boundary input, typed operator ports, and a typed named output,
 //! with its Lab scenario. Pinned here: the exact semantic hash (the
-//! identity move of the port-table presence tag), the v3 package
+//! identity move of the port-table presence tag), the current v6 package
 //! bytes, and the full golden trace whose INBOUND record seals the
 //! ingress port as key 24.
 
@@ -33,6 +33,8 @@ fn compilation() -> rastok::compiler::Compilation {
 /// deliberately, with this constant re-blessed in review.
 // DELIBERATE MOVE 2026-08-10 (D-2026-08-10-7): trees seal
 // [type, root] — see lower.rs's pinned-hash note.
+// M1.3 B5 keeps this connector-free semantic hash unchanged while
+// its package makes the Operator runtime-fault `err` row explicit.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]
@@ -58,7 +60,7 @@ fn the_package_matches_its_golden() {
     }
     let golden = std::fs::read_to_string(&path)
         .expect("no package golden; run once with RASTOK_BLESS=1 to bless");
-    assert_eq!(golden.trim(), rendered, "the v3 typed package is pinned");
+    assert_eq!(golden.trim(), rendered, "the v6 typed package is pinned");
 }
 
 #[test]

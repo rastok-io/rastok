@@ -31,6 +31,7 @@
 use crate::boundary::{Draft, InboundSubmission, IngressAuthority, Partner, SubmissionSequence};
 use crate::compiler::compile;
 use crate::contract::{ConnectorContract, Registry};
+use crate::datatype::DataType;
 use crate::envelope::{Data, Namespace, Value};
 use crate::journal::{Closure, MemJournal, OutboundStatus, Record};
 use crate::node;
@@ -138,6 +139,13 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
             return report;
         }
     };
+    let exit_cases = match resolved_exit_cases(profile.contract, &compilation.plan) {
+        Ok(cases) => cases,
+        Err(violation) => {
+            report.violations.push(violation);
+            return report;
+        }
+    };
 
     // The silence half of case 7: a partner that was never started
     // has nothing to say. An event out of nowhere is an invented
@@ -155,8 +163,8 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
 
     // The happy path through the real machine: journal-before-effect
     // and close-once are observed on the record, not trusted (case
-    // 10), and the outcome gate holds every reply to the declared
-    // error set along the way (case 8). Correlation (case 7) is
+    // 10), and the outcome gate holds every private-v6 reply to the
+    // fixed ProcessExit migration target (case 8). Correlation (case 7) is
     // implied by arrival: only a response bearing an open call's
     // reference can settle.
     {
@@ -172,6 +180,12 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
                         "the happy path ended with {} error(s) at the root sink",
                         vm.errors().len()
                     ));
+                } else if exit_cases.iter().any(|case| case == "Exited")
+                    && !report.proven_kinds.contains(&"Exited")
+                {
+                    // The private pre-B7 success reply is the executable
+                    // witness for the target successful terminal case.
+                    report.proven_kinds.push("Exited");
                 }
             }
         }
@@ -181,7 +195,14 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
     // declared kind at the root sink.
     for provocation in &profile.provocations {
         match run_provocation(provocation, registry, factory) {
-            Ok(()) => report.proven_kinds.push(provocation.kind),
+            Ok(()) => {
+                if let Some(case) =
+                    crate::boundary::legacy_process_failure_exit_case(provocation.kind)
+                    && !report.proven_kinds.contains(&case)
+                {
+                    report.proven_kinds.push(case);
+                }
+            }
             Err(violation) => report.violations.push(violation),
         }
     }
@@ -191,7 +212,9 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
     if let Some(mute_source) = &profile.mute_source {
         match mute_battery(mute_source, registry, factory) {
             Ok(()) => {
-                if profile.contract.error_set.contains(&"TimeoutExpired") {
+                if exit_cases.iter().any(|case| case == "TimeoutExpired")
+                    && !report.proven_kinds.contains(&"TimeoutExpired")
+                {
                     report.proven_kinds.push("TimeoutExpired");
                 }
             }
@@ -212,12 +235,23 @@ pub fn verify(profile: &Profile, registry: &Registry, factory: &mut dyn AdapterF
     // mints it, which needs a crash outside this harness's reach;
     // the fold carries its own tests.
     for (kind, reason) in &profile.unprovable {
-        report.unproven_kinds.push((kind, reason));
+        if let Some(case) = crate::boundary::legacy_process_failure_exit_case(kind)
+            && !report
+                .unproven_kinds
+                .iter()
+                .any(|(known, _)| *known == case)
+            && !report.proven_kinds.contains(&case)
+        {
+            report.unproven_kinds.push((case, reason));
+        }
     }
-    for kind in profile.contract.error_set {
-        let covered = report.proven_kinds.contains(kind)
-            || report.unproven_kinds.iter().any(|(k, _)| k == kind)
-            || *kind == "OutcomeUnknown";
+    for kind in &exit_cases {
+        let covered = report.proven_kinds.iter().any(|known| *known == kind)
+            || report
+                .unproven_kinds
+                .iter()
+                .any(|(known, _)| *known == kind)
+            || kind == "OutcomeUnknown";
         if !covered {
             report.violations.push(format!(
                 "declared kind `{kind}` is neither provoked nor declared unprovable"
@@ -255,16 +289,20 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
     if contract.name.is_empty() {
         report.violations.push("the sheet has no name".into());
     }
-    if contract.error_set.is_empty() {
+    if !contract
+        .ports
+        .iter()
+        .any(|port| port.name == "exit" && port.direction == crate::node::Direction::Output)
+    {
         report
             .violations
-            .push("the sheet declares no error set (case 8 is mandatory)".into());
+            .push("the sheet declares no terminal `exit` output (case 8 is mandatory)".into());
     }
-    for port in contract.input_ports.iter().chain(contract.output_ports) {
-        if node::Port::new(*port).is_err() {
+    for port in contract.ports {
+        if node::Port::new(port.name).is_err() {
             report
                 .violations
-                .push(format!("the sheet names an invalid port `{port}`"));
+                .push(format!("the sheet names an invalid port `{}`", port.name));
         }
     }
     // Duplicates are judged BY SCOPE: within the common sheet,
@@ -297,6 +335,53 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
     }
 }
 
+fn resolved_exit_cases(
+    contract: &ConnectorContract,
+    plan: &ValidatedExecutionPlan,
+) -> Result<Vec<String>, String> {
+    let spec = plan
+        .nodes
+        .iter()
+        .filter_map(crate::plan::Node::connector)
+        .find(|spec| spec.contract == contract.name)
+        .ok_or_else(|| format!("the probe instantiates no `{}` connector", contract.name))?;
+    let exit = if contract.name == "Process" {
+        // B5 removes the travelling name list and audits the old adapter
+        // against the fixed migration target. The active v6 port carrier is
+        // still `variant`; B7 constructs these cases and B8 transports the
+        // tagged type.
+        crate::boundary::process_exit_type()
+            .map_err(|error| format!("the ProcessExit contract is invalid: {error}"))?
+    } else {
+        let words = spec
+            .attributes
+            .iter()
+            .filter_map(|(name, setting)| match setting {
+                crate::plan::AttrSetting::Word(word) => Some((name.clone(), word.clone())),
+                crate::plan::AttrSetting::Value(_) => None,
+            })
+            .collect();
+        let ports = contract.resolve_ports(&words).map_err(|error| {
+            format!("the resolved contract has no complete port table: {error}")
+        })?;
+        ports
+            .into_iter()
+            .find(|port| port.port.name() == "exit")
+            .and_then(|port| port.ty)
+            .ok_or_else(|| String::from("the resolved contract has no typed `exit` port"))?
+    };
+    let DataType::TaggedUnion(union) = &exit else {
+        return Err(String::from(
+            "the resolved `exit` port is not a tagged union",
+        ));
+    };
+    Ok(union
+        .cases()
+        .iter()
+        .map(|case| case.name().to_string())
+        .collect())
+}
+
 fn submission(text: &str) -> InboundSubmission {
     InboundSubmission {
         authority: IngressAuthority::single(
@@ -316,8 +401,8 @@ fn submission(text: &str) -> InboundSubmission {
 
 /// Drives one submission to stability, mapping the wall clock onto
 /// the virtual clock in small steps so declared budgets expire for
-/// real. Any gate rejection is a violation: the adapter answered
-/// outside its declared error set.
+/// real. Any gate rejection is a violation: the adapter answered outside its
+/// resolved completion contract.
 fn drive(
     vm: &mut Vm<'_>,
     journal: &mut MemJournal,

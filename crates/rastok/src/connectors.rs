@@ -52,18 +52,19 @@ pub enum ProcessSettingsError {
     ArgNotText(String),
     /// A codec word outside the dispatch domain.
     UnknownCodec(String),
+    /// A contract-valid framing whose B7 adapter path is not active yet.
+    FramingDeferred {
+        /// Selecting attribute.
+        attribute: &'static str,
+        /// Selected word.
+        word: String,
+    },
     /// `max_output` is not a declared byte size.
     NotASize(String),
     /// A budget this host's `Vec` cannot even EXPRESS
     /// (`> isize::MAX` on this target) — representability, not a
     /// memory promise.
     HostCapacity(u64),
-    /// An error kind this adapter really produces is missing from
-    /// the spec's declared set — its response would be refused at
-    /// the PlanGate after consumption, leaving the call open
-    /// forever.
-    UndeclaredError(&'static str),
-
     /// `timeout` is not a duration.
     TimeoutNotDuration,
 }
@@ -94,32 +95,29 @@ impl core::fmt::Display for ProcessSettingsError {
                 f,
                 "an argument is not text: {value} — nothing is dropped silently"
             ),
-            Self::UnknownCodec(word) => write!(
+            Self::UnknownCodec(word) => {
+                write!(f, "`{word}` is outside the Process framing domains")
+            }
+            Self::FramingDeferred { attribute, word } => write!(
                 f,
-                "`{word}` is outside the codec dispatch domain (lines | jsonl)"
+                "`{attribute} = {word}` is a valid Process contract choice; its adapter framing lands in M1.3 B7"
             ),
             Self::NotASize(text) => write!(f, "max_output `{text}` is not a size"),
             Self::HostCapacity(size) => write!(
                 f,
                 "this host cannot express a {size}-byte buffer (beyond its Vec limit)"
             ),
-            Self::UndeclaredError(kind) => write!(
-                f,
-                "the adapter produces `{kind}` but the spec's error_set does not declare it — \
-                 its response would strand the call open"
-            ),
-
             Self::TimeoutNotDuration => write!(f, "the timeout attribute is not a duration"),
         }
     }
 }
 
-/// Every failure THIS adapter can hand the machine, with its payload
-/// SHAPE sealed beside its kind — one authority: a new emission site
-/// cannot exist without a variant, `into_outcome` is the only
-/// `TypedError` builder, and every kind is proven declared at
-/// binding (no real response can be refused at the PlanGate after
-/// the dispatcher consumed the event — a stranded open call).
+/// Every failure the private pre-B7 adapter can hand the machine, with its
+/// payload shape sealed beside its kind. A new emission site cannot exist
+/// without a variant, `into_outcome` is the only `TypedError` builder, and
+/// tests prove every variant has an explicit target `ProcessExit` case. This
+/// prevents a real response from being rejected after the dispatcher consumed
+/// it and stranding the open call.
 #[derive(Debug, Clone, PartialEq)]
 enum ProcessFailure {
     /// The OS refused a launch — or an intent reached an unbound
@@ -179,6 +177,7 @@ const CHANNEL_CAPACITY: usize = 64;
 /// the adapter's own — required at binding for the same
 /// stranded-call reason. The spelling is the machine's own constant:
 /// one authority across the crates.
+#[cfg(test)]
 const MACHINE_EMITS: &[&str] = &[crate::runtime::vm::TIMEOUT_EXPIRED];
 
 /// Seals variant ↔ canonical name ↔ binding list in ONE declaration:
@@ -190,6 +189,7 @@ macro_rules! process_failure_names {
         impl ProcessFailure {
             /// Every kind the ADAPTER emits — derived from the one
             /// declaration below.
+            #[cfg(test)]
             const KINDS: &'static [&'static str] = &[$($name),+];
 
             /// The canonical kind — EXHAUSTIVE: a new variant fails
@@ -253,11 +253,6 @@ impl ProcessSettings {
         if spec.contract != "Process" {
             return Err(E::NotProcess(spec.contract.clone()));
         }
-        for kind in ProcessFailure::KINDS.iter().chain(MACHINE_EMITS) {
-            if !spec.error_set.iter().any(|declared| declared == kind) {
-                return Err(E::UndeclaredError(kind));
-            }
-        }
         match spec.attribute("mode") {
             Some(AttrSetting::Word(word)) if word == "job" => {}
             Some(AttrSetting::Word(word)) => return Err(E::UnknownMode(word.clone())),
@@ -296,9 +291,26 @@ impl ProcessSettings {
             Some(AttrSetting::Word(word)) if word == "jsonl" => {
                 crate::boundary::RequestCodec::Jsonl
             }
+            Some(AttrSetting::Word(word)) if word == "bytes" => {
+                return Err(E::FramingDeferred {
+                    attribute: "codec",
+                    word: word.clone(),
+                });
+            }
             Some(AttrSetting::Word(word)) => return Err(E::UnknownCodec(word.clone())),
             _ => return Err(E::Unresolved("codec")),
         };
+        match spec.attribute("err_codec") {
+            Some(AttrSetting::Word(word)) if word == "lines" => {}
+            Some(AttrSetting::Word(word)) if word == "bytes" => {
+                return Err(E::FramingDeferred {
+                    attribute: "err_codec",
+                    word: word.clone(),
+                });
+            }
+            Some(AttrSetting::Word(word)) => return Err(E::UnknownCodec(word.clone())),
+            _ => return Err(E::Unresolved("err_codec")),
+        }
         let max_output = match spec.attribute("max_output") {
             Some(AttrSetting::Value(crate::value::Value::Text(text))) => {
                 match crate::contract::byte_size(text) {
@@ -350,9 +362,9 @@ impl ProcessSettings {
 /// inherits the pipes can never hang this process: readers are never
 /// joined, only drained.
 ///
-/// Job-mode stderr travels inside `ExecFailed` on failure; on a
-/// successful exit it is dropped in this build — `StderrLine` events
-/// belong to the service-mode stream machinery.
+/// Job-mode stderr still travels inside the private `ExecFailed` fact on
+/// failure and is dropped on success. B7 replaces both behaviors with the
+/// independently framed ordinary `err` output.
 #[derive(Debug)]
 pub struct Process<'plan> {
     /// The borrow anchoring this world to its VALIDATED plan for
@@ -813,27 +825,44 @@ impl Run {
             }
             .into_outcome()
         } else {
-            match String::from_utf8(std::mem::take(&mut self.capture.stdout)) {
-                Ok(text) => match self.codec {
-                    // `codec = lines`, job mode: the whole stdout,
-                    // one text blob.
-                    crate::boundary::RequestCodec::Lines => {
+            let stdout = std::mem::take(&mut self.capture.stdout);
+            match self.codec {
+                // ProcessSettings keeps this adapter mode behind the B7
+                // bind-time deferral. Keeping its physical branch exact
+                // prevents any future opening from decoding bytes as text.
+                crate::boundary::RequestCodec::Bytes => {
+                    CallOutcome::Success(Data::materialized(Value::Bytes(stdout)))
+                }
+                crate::boundary::RequestCodec::Lines => match String::from_utf8(stdout) {
+                    Ok(text) => {
+                        // `codec = lines`, job mode: the whole stdout,
+                        // one text blob.
                         CallOutcome::Success(Data::materialized(Value::Text(text)))
                     }
-                    // `codec = jsonl`, job mode: the decoded lines,
-                    // `data = array<variant>` (D-2026-08-11-1). The
-                    // house reader owns the numbers; an unparseable
-                    // line — an interior empty one included — is a
-                    // typed DecodeError carrying the offending line.
-                    crate::boundary::RequestCodec::Jsonl => match decode_jsonl(&text) {
-                        Ok(items) => CallOutcome::Success(Data::materialized(Value::Array(items))),
-                        Err(message) => ProcessFailure::DecodeError { message }.into_outcome(),
-                    },
+                    Err(_) => ProcessFailure::DecodeError {
+                        message: "stdout is not valid UTF-8".to_string(),
+                    }
+                    .into_outcome(),
                 },
-                Err(_) => ProcessFailure::DecodeError {
-                    message: "stdout is not valid UTF-8".to_string(),
-                }
-                .into_outcome(),
+                crate::boundary::RequestCodec::Jsonl => match String::from_utf8(stdout) {
+                    Ok(text) => {
+                        // `codec = jsonl`, job mode: the decoded lines,
+                        // `data = array<variant>` (D-2026-08-11-1). The
+                        // house reader owns the numbers; an unparseable
+                        // line — an interior empty one included — is a
+                        // typed DecodeError carrying the offending line.
+                        match decode_jsonl(&text) {
+                            Ok(items) => {
+                                CallOutcome::Success(Data::materialized(Value::Array(items)))
+                            }
+                            Err(message) => ProcessFailure::DecodeError { message }.into_outcome(),
+                        }
+                    }
+                    Err(_) => ProcessFailure::DecodeError {
+                        message: "stdout is not valid UTF-8".to_string(),
+                    }
+                    .into_outcome(),
+                },
             }
         };
         Response {
@@ -1544,14 +1573,17 @@ graph unframeable : App {
             .kind(),
             "SpawnFailed"
         );
-        for kind in ProcessFailure::KINDS {
+        let exit = crate::boundary::process_exit_type().expect("ProcessExit is canonical");
+        let crate::datatype::DataType::TaggedUnion(exit) = exit else {
+            panic!("ProcessExit is tagged");
+        };
+        for kind in ProcessFailure::KINDS.iter().chain(MACHINE_EMITS) {
+            let case = crate::boundary::legacy_process_failure_exit_case(kind)
+                .expect("every emitted legacy fact has an explicit B7 mapping");
             assert!(
-                crate::stdlib::PROCESS.error_set.contains(kind),
-                "`{kind}` must be on the sheet"
+                exit.cases().iter().any(|declared| declared.name() == case),
+                "`{kind}` maps to declared ProcessExit case `{case}`"
             );
-        }
-        for kind in MACHINE_EMITS {
-            assert!(crate::stdlib::PROCESS.error_set.contains(kind));
         }
     }
 

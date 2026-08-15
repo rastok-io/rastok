@@ -9,9 +9,11 @@
 use rastok::compiler::compile;
 use rastok::contract::{
     AttributeSpec, ConnectorContract, DefaultValue, FrontendContract, FrontendFraming,
-    FrontendReader, Presence, Profile, ProfileSelector, ProfileSupport, Registry, SheetDefect,
-    ValueDomain,
+    FrontendReader, PortContract, PortDataType, PortTypeChoice, PortTypeRule, Presence, Profile,
+    ProfileSelector, ProfileSupport, Registry, SheetDefect, ValueDomain,
 };
+use rastok::node::Direction;
+use rastok::plan::UnwiredPolicy;
 
 fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
     compile(
@@ -42,13 +44,31 @@ fn refusal_with(source: &str, code: &str, needle: &str) {
 // ---------- the metamodel holds its own door ----------
 
 fn sheet(common: &'static [AttributeSpec], selector: Option<ProfileSelector>) -> ConnectorContract {
+    const PORTS: &[PortContract] = &[
+        PortContract {
+            name: "in",
+            direction: Direction::Input,
+            unwired: UnwiredPolicy::RequireWire,
+            ty: PortTypeRule::Fixed(PortDataType::Variant),
+        },
+        PortContract {
+            name: "out",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RequireWire,
+            ty: PortTypeRule::Fixed(PortDataType::Variant),
+        },
+        PortContract {
+            name: "err",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RootSink,
+            ty: PortTypeRule::Fixed(PortDataType::Variant),
+        },
+    ];
     ConnectorContract {
         name: "Probe",
-        input_ports: &["in"],
-        output_ports: &["out", "err"],
+        ports: PORTS,
         common,
         selector,
-        error_set: &["ProbeFailed"],
     }
 }
 
@@ -73,6 +93,221 @@ fn a_duplicate_attribute_is_a_sheet_defect() {
             .unwrap_err(),
         SheetDefect::DuplicateAttribute("x")
     );
+}
+
+#[test]
+fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
+    const CYCLIC: ConnectorContract = ConnectorContract {
+        name: "Cyclic",
+        ports: &[
+            PortContract {
+                name: "first",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::SameAs("second"),
+            },
+            PortContract {
+                name: "second",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::SameAs("third"),
+            },
+            PortContract {
+                name: "third",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::SameAs("second"),
+            },
+        ],
+        common: &[],
+        selector: None,
+    };
+    assert!(matches!(
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(CYCLIC),
+        Err(SheetDefect::CyclicPortTypes("first"))
+    ));
+}
+
+#[test]
+fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() {
+    const PROFILES: &[Profile] = &[
+        Profile {
+            word: "textual",
+            support: ProfileSupport::Available,
+            attributes: &[],
+        },
+        Profile {
+            word: "binary",
+            support: ProfileSupport::Available,
+            attributes: &[],
+        },
+    ];
+    const SHEET: ConnectorContract = ConnectorContract {
+        name: "Parametric",
+        ports: &[
+            PortContract {
+                name: "in",
+                direction: Direction::Input,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::AttributeSelected {
+                    attribute: "mode",
+                    choices: &[
+                        PortTypeChoice {
+                            word: "textual",
+                            ty: PortDataType::Text,
+                        },
+                        PortTypeChoice {
+                            word: "binary",
+                            ty: PortDataType::Bytes,
+                        },
+                    ],
+                },
+            },
+            PortContract {
+                name: "out",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::SameAs("in"),
+            },
+        ],
+        common: &[],
+        selector: Some(ProfileSelector {
+            attribute: "mode",
+            default: Some("textual"),
+            profiles: PROFILES,
+        }),
+    };
+    let registry = Registry::try_m0()
+        .expect("the standard catalogue holds")
+        .try_with(SHEET.clone())
+        .expect("the parametric sheet is sound");
+    assert!(matches!(
+        registry.connector("Parametric"),
+        rastok::contract::Availability::Available(_)
+    ));
+    let ports = SHEET
+        .resolve_ports(&std::collections::BTreeMap::from([(
+            String::from("mode"),
+            String::from("binary"),
+        )]))
+        .expect("the selected table resolves");
+    assert!(
+        ports
+            .iter()
+            .all(|port| { port.ty.as_ref() == Some(&rastok::datatype::DataType::BYTES) })
+    );
+}
+
+#[test]
+fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
+    const SHAPE_TEXT: &[AttributeSpec] = &[AttributeSpec {
+        name: "shape",
+        presence: Presence::Optional,
+        domain: ValueDomain::Choice(&["text"]),
+    }];
+    const SHAPE_BYTES: &[AttributeSpec] = &[AttributeSpec {
+        name: "shape",
+        presence: Presence::Optional,
+        domain: ValueDomain::Choice(&["bytes"]),
+    }];
+    const AMBIGUOUS: ConnectorContract = ConnectorContract {
+        name: "Ambiguous",
+        ports: &[PortContract {
+            name: "out",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RequireWire,
+            ty: PortTypeRule::AttributeSelected {
+                attribute: "shape",
+                choices: &[PortTypeChoice {
+                    word: "text",
+                    ty: PortDataType::Text,
+                }],
+            },
+        }],
+        common: &[],
+        selector: Some(ProfileSelector {
+            attribute: "mode",
+            default: Some("a"),
+            profiles: &[
+                Profile {
+                    word: "a",
+                    support: ProfileSupport::Available,
+                    attributes: SHAPE_TEXT,
+                },
+                Profile {
+                    word: "b",
+                    support: ProfileSupport::Available,
+                    attributes: SHAPE_BYTES,
+                },
+            ],
+        }),
+    };
+    assert_eq!(
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(AMBIGUOUS)
+            .unwrap_err(),
+        SheetDefect::UnknownPortTypeAttribute {
+            port: "out",
+            attribute: "shape",
+        }
+    );
+}
+
+#[test]
+fn an_input_cannot_own_an_unwired_output_policy() {
+    const INVALID: ConnectorContract = ConnectorContract {
+        name: "InvalidSink",
+        ports: &[PortContract {
+            name: "in",
+            direction: Direction::Input,
+            unwired: UnwiredPolicy::RootSink,
+            ty: PortTypeRule::Fixed(PortDataType::Variant),
+        }],
+        common: &[],
+        selector: None,
+    };
+    assert_eq!(
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(INVALID)
+            .unwrap_err(),
+        SheetDefect::InputHasSinkPolicy("in")
+    );
+}
+
+#[test]
+fn process_codec_choices_resolve_the_current_execution_pins() {
+    use rastok::datatype::DataType;
+    for (codec, input, output) in [
+        ("lines", DataType::Text, DataType::Text),
+        (
+            "jsonl",
+            DataType::Variant,
+            DataType::array(DataType::Variant),
+        ),
+        ("bytes", DataType::BYTES, DataType::BYTES),
+    ] {
+        let ports = rastok::stdlib::PROCESS
+            .resolve_ports(&std::collections::BTreeMap::from([
+                (String::from("codec"), String::from(codec)),
+                (String::from("err_codec"), String::from("lines")),
+            ]))
+            .expect("every sheet choice resolves");
+        let ty = |name: &str| {
+            ports
+                .iter()
+                .find(|port| port.port.name() == name)
+                .and_then(|port| port.ty.clone())
+                .expect("the promised port is typed")
+        };
+        assert_eq!(ty("in"), input);
+        assert_eq!(ty("out"), output);
+        assert_eq!(ty("err"), DataType::Variant);
+        assert_eq!(ty("exit"), DataType::Variant);
+    }
 }
 
 #[test]
@@ -287,6 +522,10 @@ fn every_default_travels_in_the_plan() {
         Some(rastok::plan::AttrSetting::Word(String::from("kill")))
     );
     assert_eq!(
+        get("err_codec"),
+        Some(rastok::plan::AttrSetting::Word(String::from("lines")))
+    );
+    assert_eq!(
         get("max_output"),
         Some(rastok::plan::AttrSetting::Value(
             rastok::value::Value::Text(String::from("8MiB"))
@@ -312,13 +551,14 @@ fn defaults_survive_the_package_round_trip() {
     );
     assert!(spec.attribute("args").is_some());
     assert!(spec.attribute("on_timeout").is_some());
+    assert!(spec.attribute("err_codec").is_some());
 }
 
 #[test]
 fn writing_a_default_exactly_is_the_same_identity() {
     let omitted = compile_one(&process_graph(FULL)).expect("valid");
     let written = compile_one(&process_graph(&format!(
-        "{FULL}\n    args = []\n    max_output = \"8MiB\"\n    on_timeout = kill\n    mode = job"
+        "{FULL}\n    args = []\n    err_codec = lines\n    max_output = \"8MiB\"\n    on_timeout = kill\n    mode = job"
     )))
     .expect("valid");
     assert_eq!(omitted.hash.to_string(), written.hash.to_string());
@@ -348,6 +588,28 @@ fn codec_stays_required() {
             .any(|d| d.code().as_str() == "E-CONTRACT-REQUIRED" && d.message().contains("`codec`")),
         "{bag:?}"
     );
+}
+
+#[test]
+fn bytes_framing_is_contract_valid_and_binds_as_the_named_b7_deferral() {
+    for (attribute, body) in [
+        (
+            "codec",
+            "    command = \"cat\" ; codec = bytes\n    effect = idempotent ; behavior = deterministic"
+                .to_string(),
+        ),
+        ("err_codec", format!("{FULL}\n    err_codec = bytes")),
+    ] {
+        let compilation = compile_one(&process_graph(&body))
+            .unwrap_or_else(|bag| panic!("`{attribute} = bytes` is on the sheet: {bag:?}"));
+        let message = rastok::connectors::Process::try_new(&compilation.plan)
+            .expect_err("B7 owns the physical adapter framing")
+            .to_string();
+        assert!(
+            message.contains(&format!("{attribute} = bytes")) && message.contains("M1.3 B7"),
+            "{message}"
+        );
+    }
 }
 
 #[test]
@@ -458,33 +720,6 @@ fn the_binding_drops_no_argument_silently() {
 }
 
 #[test]
-fn the_binding_refuses_every_undeclared_adapter_error() {
-    // The review's blocker: an error the adapter REALLY produces but
-    // the spec does not declare would be refused at the PlanGate
-    // after consumption — a stranded open call. The binding proves
-    // the subset up front.
-    for kind in [
-        "SpawnFailed",
-        "DecodeError",
-        "CaptureFailed",
-        "ExecFailed",
-        "OutputOverflow",
-        // Machine-produced, still part of the bound world's
-        // vocabulary — a travelling error_set may not contradict
-        // what the scheduler emits.
-        "TimeoutExpired",
-    ] {
-        let message = bind_error(|spec| {
-            spec.error_set.retain(|declared| declared != kind);
-        });
-        assert!(
-            message.contains(kind) && message.contains("error_set"),
-            "`{kind}` must be declared: {message}"
-        );
-    }
-}
-
-#[test]
 fn a_callable_foreign_connector_refuses_at_bind() {
     // The review's blocker: in a single-Partner world, a CALLABLE
     // connector of another contract would receive its intents at
@@ -496,41 +731,30 @@ fn a_callable_foreign_connector_refuses_at_bind() {
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
             spec.contract = String::from("Custom");
-            node.ports.extend([
+            node.ports = vec![
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("in").expect("a conventional port"),
                     direction: rastok::node::Direction::Input,
+                    unwired: UnwiredPolicy::RequireWire,
                     ty: Some(rastok::datatype::DataType::Text),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("out").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
+                    unwired: UnwiredPolicy::RequireWire,
                     ty: Some(rastok::datatype::DataType::Text),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("err").expect("a conventional port"),
                     direction: rastok::node::Direction::Output,
+                    unwired: UnwiredPolicy::RootSink,
                     ty: Some(rastok::datatype::DataType::Variant),
                 },
-            ]);
+            ];
             node.ports
                 .sort_by(|left, right| left.key().cmp(&right.key()));
         }
     }
-    plan.boundary.extend([
-        rastok::plan::PortDecl {
-            port: rastok::node::Port::new("in").expect("a conventional port"),
-            direction: rastok::node::Direction::Input,
-            ty: Some(rastok::datatype::DataType::Text),
-        },
-        rastok::plan::PortDecl {
-            port: rastok::node::Port::new("out").expect("a conventional port"),
-            direction: rastok::node::Direction::Output,
-            ty: Some(rastok::datatype::DataType::Text),
-        },
-    ]);
-    plan.boundary
-        .sort_by(|left, right| left.key().cmp(&right.key()));
     let callable = rastok::plan::ValidatedExecutionPlan::try_from(plan.clone())
         .expect("the foreign connector is structurally typed");
     let message = rastok::connectors::Process::try_new(&callable)
@@ -554,6 +778,7 @@ fn a_callable_foreign_connector_refuses_at_bind() {
     );
     plan.edges
         .retain(|edge| edge.to.as_ref().is_none_or(|to| to.node != Some(slot)));
+    plan.boundary.retain(|port| port.port.name() != "in");
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan)
         .expect("the foreign pure source remains structurally valid");
     assert!(
@@ -673,11 +898,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
     );
     let unnameable = ConnectorContract {
         name: "Not A Name",
-        input_ports: &["in"],
-        output_ports: &["out", "err"],
-        common: &[],
-        selector: None,
-        error_set: &[],
+        ..sheet(&[], None)
     };
     assert_eq!(
         Registry::try_m0()
@@ -721,7 +942,7 @@ fn a_bare_tag_word_is_judged_by_the_contract() {
     refusal_with(
         &source,
         "E-CONTRACT-ATTR",
-        "expected one of [\"jsonl\", \"lines\"], got `json`",
+        "expected one of [\"bytes\", \"jsonl\", \"lines\"], got `json`",
     );
 }
 
@@ -828,11 +1049,14 @@ fn sibling_profiles_may_share_an_attribute_name() {
 fn an_inexpressible_sheet_name_is_a_sheet_defect() {
     let bad_port = ConnectorContract {
         name: "Probe",
-        input_ports: &["bad port"],
-        output_ports: &["out", "err"],
+        ports: &[PortContract {
+            name: "bad port",
+            direction: Direction::Input,
+            unwired: UnwiredPolicy::RequireWire,
+            ty: PortTypeRule::Fixed(PortDataType::Variant),
+        }],
         common: &[],
         selector: None,
-        error_set: &[],
     };
     assert_eq!(
         Registry::try_m0()

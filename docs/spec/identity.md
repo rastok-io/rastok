@@ -60,6 +60,19 @@ Rules :
 - Identity = canonical-form equality, nothing more ; semantic
   equivalence of different programs is out of scope.
 
+**B5 connector-contract move (2026-08-15).** A resolved Connector's complete
+port rows — name, direction, unwired policy and effective logical type — are
+canonical HIR identity. `err_codec` is a normal `Defaulted` attribute, so its
+omission and `err_codec = lines` are identical after pre-hash injection. The
+former `error_set` identity slot is retired rather than retained beside the
+typed port model. Consequently Process graphs move once (echo/spike
+`a7511135…`, JSONL `4eacb55c…`, compiler probe `f068bcd1…`). The
+connector-free gauge semantic hash remains `0d3ad43d…`: B5 only makes its
+already-existing implicit Operator runtime-fault row explicit in the package,
+which changes transport bytes but not program meaning. These are pre-public v6
+checkpoints; v7 later seals the full tagged types without renumbering their
+logical registry.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
