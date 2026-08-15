@@ -842,7 +842,9 @@ impl core::error::Error for NarrowingFailure {}
 
 // This key, rather than the source order of `DataType` variants, owns the
 // deterministic order used to canonicalize structural unions. Format v7
-// serializes branches in this already-explicit logical order.
+// serializes branches in this already-explicit logical order. The derived
+// `Ord` of every borrowed parameter type below is consequently identity
+// material too; `canonical_parameter_order_is_pinned` freezes those orders.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum TypeOrderKey<'a> {
     Null,
@@ -2235,6 +2237,56 @@ impl core::error::Error for ConformanceViolation {}
 mod tests {
     use super::*;
     use alloc::collections::BTreeMap;
+
+    #[test]
+    fn canonical_parameter_order_is_pinned() {
+        use core::cmp::Ordering::Less;
+
+        let ordered_pairs = [
+            (
+                DataType::Integer(IntegerType::Signed(IntegerWidth::Bits8)),
+                DataType::Integer(IntegerType::Signed(IntegerWidth::Bits64)),
+            ),
+            (
+                DataType::Integer(IntegerType::Signed(IntegerWidth::Bits64)),
+                DataType::Integer(IntegerType::Unsigned(IntegerWidth::Bits8)),
+            ),
+            (
+                DataType::Float(FloatType::Binary16),
+                DataType::Float(FloatType::Binary64),
+            ),
+            (
+                DataType::Bytes(BinaryType::Variable),
+                DataType::Bytes(BinaryType::Fixed(
+                    ByteLength::new(1).expect("one byte is valid"),
+                )),
+            ),
+            (
+                DataType::Temporal(TemporalType::Date(DateUnit::Millisecond)),
+                DataType::Temporal(TemporalType::Time(TimeUnit::Second)),
+            ),
+            (
+                DataType::Temporal(TemporalType::Timestamp {
+                    unit: TimeUnit::Nanosecond,
+                    zone: TimeZone::Utc,
+                }),
+                DataType::Temporal(TemporalType::TimestampNtz(TimeUnit::Second)),
+            ),
+            (
+                DataType::Temporal(TemporalType::Duration(TimeUnit::Nanosecond)),
+                DataType::Temporal(TemporalType::Interval(IntervalUnit::YearMonth)),
+            ),
+        ];
+        for (left, right) in ordered_pairs {
+            assert_eq!(left.cmp(&right), Less, "{left} must sort before {right}");
+        }
+
+        assert!(TimeUnit::Second < TimeUnit::Nanosecond);
+        assert!(IntervalUnit::YearMonth < IntervalUnit::MonthDayMillisUnsigned);
+        assert!(
+            TimeZone::Utc < TimeZone::named("Europe/Paris").expect("a named zone is canonical")
+        );
+    }
 
     #[test]
     fn conformance_reports_the_exact_nested_path() {

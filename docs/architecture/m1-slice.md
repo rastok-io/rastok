@@ -59,12 +59,12 @@ step touches `vm.rs` once.
    door and is never consulted past resolution; `2aa50f4` fourth
    pass — the frontiers: boundary outputs carry their port, named
    connector edges defer by name until the Partner seam speaks
-   them, one pre-commit choke point judges every emission — synthesized
-   errors included — against every pin of its fan-out,
+   them, one pre-commit choke point judges every emission — including the
+   then-synthesized errors — against every pin of its fan-out,
    the builders are physically STRUCTS (tag 17) across all three
    interpreters, and the validator audits pinned edges; `92a4da4`
    fifth pass — Dyn is one rule across checker, validator, and
-   runtime, synthesized error emissions take the same pre-commit
+   runtime, the then-synthesized error emissions take the same pre-commit
    gate as everything else, and a bare `data` relay preserves the
    logical Struct/Map type; `76b220a` sixth pass — the struct
    witness rode the then-named `cel::Value`, so every equivalent spelling
@@ -259,7 +259,10 @@ step touches `vm.rs` once.
    `ProcessExit`, static `number`, and the mandatory total resolved-port
    table. B9 has closed the strict external projection adapters, removed the
    historical v6 type/expression scaffolding, and made narrowing mandatory
-   before structural access to `variant`. Ordered gates and evidence are in
+   before structural access to `variant`. Its final review also removed the
+   hidden Operator runtime-fault producer: `err` exists only when the program
+   declares, emits or wires it, while engine faults reach supervision.
+   Ordered gates and evidence are in
    the dedicated
    [M1.3 backlog](m1.3-type-system-backlog.md).
 4. **`per` — the partition surface** — keyed nodes and graphs on the

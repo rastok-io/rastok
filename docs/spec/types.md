@@ -288,10 +288,22 @@ outcome of one admitted invocation. A contract may add any number of other
 outputs (`rejected`, `audit`, ...), all judged by the same conformance
 relation.
 
+The convention does not allocate ports. An Operator with no declared,
+handled, emitted or wired `err` has no `err` row in its effective table. For
+a simple Operator, `in: I` and `out: R` approximate `I -> R`; adding and
+explicitly emitting `err: E` approximates `I -> Result<R,E>`. The value `E`
+is ordinary domain data. This analogy does not impose mutual exclusion or a
+single emission on a general multi-output handler. Pure evaluation or machine
+faults are not payload types, do not select `err`, and commit no transaction;
+they leave the graph through the supervision API. An anticipated dynamic
+rejection must be modeled in the graph, usually by checking/narrowing and
+emitting the declared domain case.
+
 The `exit` convention preserves the original typed-error requirement while
 removing its special channel: terminal error codes are tagged-union cases on
-`exit`, next to successful or neutral terminal cases. Diagnostic bytes remain
-ordinary values on `err`.
+`exit`, next to successful or neutral terminal cases. For `Process`,
+diagnostic bytes remain ordinary values on `err`; this connector-specific
+meaning does not turn every Operator `err` into stderr.
 
 ### 3.1 Invocation exit is not partition stop
 

@@ -825,7 +825,7 @@ lab m0_probe {
     }
 
     #[test]
-    fn a_declared_int_cannot_silently_become_a_long() {
+    fn a_declared_int_overflow_faults_the_scenario_without_an_implicit_err() {
         // The fifth review's repro: count = i32::MAX, then + 1 —
         // previously widened silently and sealed as a long.
         let source = r#"
@@ -846,7 +846,6 @@ lab m0_probe {
     scenario overflow {
       app.in = { text = "x" }
       expect nothing app.out
-      expect "the overflow is typed" app.err where data["kind"] == "RuntimeFault"
     }
   }
 }
@@ -857,9 +856,14 @@ lab m0_probe {
         )
         .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        assert!(!runs[0].report.passed());
         assert!(
-            runs[0].report.passed(),
-            "the overflow leaves as a typed error: {:#?}",
+            runs[0]
+                .report
+                .failures
+                .iter()
+                .any(|failure| failure.contains("a step faulted")),
+            "the engine fault must reach scenario supervision: {:#?}",
             runs[0].report.failures
         );
     }

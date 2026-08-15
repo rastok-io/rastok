@@ -295,7 +295,7 @@ impl Partner for ScriptedWorld {
 }
 
 #[test]
-fn a_value_fault_becomes_a_typed_runtime_fault_not_a_lost_envelope() {
+fn a_value_fault_aborts_the_operator_transaction_and_reaches_supervision() {
     let source = r#"
 graph g : App {
   input in: variant
@@ -315,22 +315,21 @@ on in {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
-    // The input is consumed causally — a transaction exists — and
-    // the fault left as a typed error on the root sink.
-    assert!(vm.is_stable(), "the machine did not wedge");
-    let last = journal.records().last().unwrap();
-    let Record::Transaction(transaction) = last else {
-        panic!("expected the fault transaction");
-    };
-    assert_eq!(transaction.emissions[0].port.name(), "err");
-    assert_eq!(vm.errors().len(), 1);
-    let Data::Materialized(Value::Map(payload)) = vm.errors()[0].data() else {
-        panic!("expected the typed error payload");
-    };
-    assert_eq!(
-        payload.get("kind"),
-        Some(&Value::Text(String::from("RuntimeFault")))
+    let error = vm
+        .drain(&mut journal)
+        .expect_err("a failed narrowing is a VM fault, not a domain result");
+    assert!(matches!(error, VmError::Fault(_)), "{error:?}");
+    assert!(
+        journal
+            .records()
+            .iter()
+            .all(|record| !matches!(record, Record::Transaction(_))),
+        "the faulted transaction must not consume or emit"
+    );
+    assert!(vm.errors().is_empty(), "no implicit err output exists");
+    assert!(
+        !vm.is_stable(),
+        "the triggering delivery stays reserved for supervision/recovery"
     );
 }
 

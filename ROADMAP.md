@@ -79,7 +79,10 @@ The repository opens publicly with this milestone (15 October 2026).
   the complete logical type or refuse by path and reason; `variant` requires
   explicit narrowing before structural inspection; the obsolete v6
   type/expression scaffolding is gone; and the cross-layer corpus, three
-  no-std targets and emulated Cortex-M33 proof are green.
+  no-std targets and emulated Cortex-M33 proof are green. The closing review
+  also removed the last synthetic Operator fault channel: an optional
+  `err: E` is explicit domain output, while engine faults abort and reach
+  supervision.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

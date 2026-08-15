@@ -215,10 +215,10 @@ impl<'plan> Solver<'plan> {
                     self.declare(index, ty.clone())?;
                 }
             }
-            // B5 materializes both resolved Connector contracts and the
-            // operator RuntimeFault bridge as ordinary rows before this
-            // Registry-free resolver runs. No port name creates a hidden
-            // producer or type here.
+            // B5 materializes resolved Connector contracts before this
+            // Registry-free resolver runs. Operators carry only ports that
+            // their source declares, emits, handles, or wires: no port name
+            // creates a hidden producer or type here.
         }
         for edge in &self.plan.edges {
             let source = self.endpoint(&edge.from, node::Direction::Output);

@@ -185,14 +185,16 @@ Every other concept (Reducer, Aggregator, Window, Joiner) is just an Operator pa
 The word **Processor** is not part of the canonical vocabulary. Runtime traits
 such as `Reader`, `Transformer`, and `Writer` may exist in an implementation,
 but the DSL exposes Nodes, `input` / `output` endpoints (with the default
-`in` / `out` / `err` ports), and (for Connectors) external configuration.
+`in` / `out` / `err` spellings available on use), and (for Connectors)
+external configuration.
 
 Supporting concepts :
 
 - **Node** — any element of a graph : Operator, Connector, or Graph.
 - **input / output** — typed envelope endpoints declared with `input` /
-  `output` inside a Node body (plus the default `in` / `out` / `err`
-  ports). Connected to other Nodes via DAG edges.
+  `output` inside a Node body or inferred from handler/wiring use (including
+  the conventional `in` / `out` / `err` spellings). Connected to other Nodes
+  via DAG edges.
 - **state binding** — a Node's typed access to a partition's key instance. Declared via `per <partition>` on the Node. *Not* an arrow in the DAG ; it is a binding to a partition-keyed state cell held by the runtime.
 - **external configuration** — (Connector only) attributes such as URL,
   path, command, codec, protocol, timeout, retry policy, etc. A grouped
@@ -530,7 +532,7 @@ A bare duration value as a lifetime is interpreted as `idle_ttl`. For other life
 | Graph names | snake_case (graphs are named like modules, not like node types) | `teams_inbound`, `codex_session`, `api_to_s3` |
 | Node types | PascalCase | `HttpServer`, `HttpClient`, `Jaq`, `Process` |
 | Node instances | snake_case | `inbound`, `to_codex`, `client_ws`, `sessions` |
-| Ports | snake_case, role-named, **no direction suffix** (direction from `input`/`output`) ; `in`/`out`/`err` are defaults | `event`, `delta`, `flush`, `matched` |
+| Ports | snake_case, role-named, **no direction suffix** (direction from declaration/use) ; `in`/`out`/`err` are conventional spellings | `event`, `delta`, `flush`, `matched` |
 | Config keys | snake_case | `listen`, `nonce_ttl`, `jwks_url` |
 
 Node type names describe a stable external role or a pure graph primitive.
@@ -559,7 +561,9 @@ usually declare *no* ports at all — the `input` / `output` keywords are
 optional, needed only to **pin** a type/schema (`output x: T`), or to
 document a node with no handler (e.g. a saga) or a graph's public
 interface. Direction is carried by the keyword, not the name. The names
-**`in` / `out` / `err`** are conventional default ports — pre-bound but
+**`in` / `out` / `err`** are conventional default spellings — their usual
+directions and sink policies are known without a declaration, but a plan row
+exists only when the program declares, handles, emits or wires it. They are
 typed by the same mechanism as every other port. A `Process` maps them
 exactly to stdin, decoded stdout and raw stderr; its ordinary `exit`
 output carries the tagged lifecycle/outcome value. Conventions :
@@ -569,7 +573,10 @@ output carries the tagged lifecycle/outcome value. Conventions :
 - a port's **type is inferred** ; annotate (`output x: T`) only to pin / force
 - Connector contracts declare fixed or parametric port rules; the
   instantiated contract plus codec resolves their effective types
-- `err` conventionally carries diagnostic bytes/data; it has no special
+- an Operator is not required to have `err`; when present it conventionally
+  carries an explicit domain alternative (`I -> Result<R,E>` for the simple
+  one-in/one-out shape), never a synthesized machine fault
+- `Process.err` specifically carries framed stderr; `err` has no special
   grammar, type or transaction semantics
 - a Connector's `exit` conventionally carries the tagged terminal outcome of
   one admitted invocation; it is still an ordinary typed output
@@ -1188,7 +1195,7 @@ Required Rust extensions for the parser to land :
 | Envelope | `meta + data`. `meta` is three zones of typed scalars (`meta.sys` read-only/runtime, `meta.app` application-owned, `meta.ext` external context — D-2026-08-10-1) ; `data` is the typed payload. See [WHITEPAPER.md §2.1](../../WHITEPAPER.md). |
 | Edge config | The `{ ... }` block after an arrow, configuring `capacity / backpressure / close / trace`. |
 | Tagged frontend | `name! <region>` — source owned by a registered reader/compiler. |
-| Port naming | Ports are role-named with no direction suffix ; direction comes from the `input` / `output` keyword. `in` / `out` / `err` are default pre-bound ports (stdio-aligned), not keywords. |
+| Port naming | Ports are role-named with no direction suffix ; direction comes from the `input` / `output` keyword or use position. `in` / `out` / `err` are conventional spellings, not keywords or mandatory rows. |
 | Branchement | Fan-out (`a -> { b; c }`) or fan-in (`{ a; b } -> c`). Real DSL primitive. |
 | Endpoint | Connector that owns an external resource address/lifecycle and declares explicit envelope ports. |
 | `scenario` | one executable case inside a `simulation` : a fixture (the scripted world-half of the journal) + expectations. See simulation-semantics.md. |
@@ -1317,12 +1324,13 @@ Simulation setup uses fixtures: injection is the setup, and preloading a
 `Memory` is expressed as ordinary injections at its feeding edge. Reading
 uses the Connector's explicit `read` and `out` ports.
 
-The conventional ports **`in` / `out` / `err`** are not keywords. A
+The conventional port spellings **`in` / `out` / `err`** are not keywords. A
 Connector contract may additionally conventionally declare **`exit`** for one
-invocation's terminal fact. They are ordinary pre-bound identifiers and may be
+invocation's terminal fact. Their direction is known when used and they may be
 explicitly restated once in their conventional direction where the owning node
 kind permits declarations; a second declaration or contradictory direction is
-`E-PORT-CONFLICT`. M1.3 materializes every effective row in the resolved port
+`E-PORT-CONFLICT`. An unused conventional Operator port has no row. M1.3
+materializes every effective row in the resolved port
 table exactly like any other port; no runtime layer recreates one from its
 name.
 Reservation is BY POSITION, never a global ban on a spelling
@@ -1429,7 +1437,7 @@ partition_inline  ::= "{" partition_body "}"                          // block f
 partition_field   ::= "key" "=" expr | "lifetime" "=" lifetime_value
 
 port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source annotation OPTIONAL; every validated port has an effective type
-                    // in / out / err are conventional pre-bound ports and use this same model; the resolved plan materializes them like every other port.
+                    // in / out / err are conventional spellings and use this same model; only used/declared rows materialize in the resolved plan.
                     // Connector contracts declare fixed or parametric port rules; attributes/codecs resolve them per instantiation.
                     // No port-side inbound shortcut : wiring is always graph-level.
                     // To bind a port to a source, declare the Connector then wire it :

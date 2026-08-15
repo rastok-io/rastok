@@ -280,32 +280,26 @@ fn an_input_cannot_own_an_unwired_output_policy() {
 
 #[test]
 fn process_codec_choices_resolve_the_current_execution_pins() {
-    use rastok::datatype::DataType;
-    for (codec, input, output) in [
-        ("lines", DataType::Text, DataType::Text),
-        ("jsonl", DataType::Variant, DataType::Variant),
-        ("bytes", DataType::BYTES, DataType::BYTES),
-    ] {
-        let ports = rastok::stdlib::PROCESS
-            .resolve_ports(&std::collections::BTreeMap::from([
-                (String::from("codec"), String::from(codec)),
-                (String::from("err_codec"), String::from("lines")),
-            ]))
-            .expect("every sheet choice resolves");
-        let ty = |name: &str| {
-            ports
-                .iter()
-                .find(|port| port.port.name() == name)
-                .and_then(|port| port.ty.clone())
-                .expect("the promised port is typed")
-        };
-        assert_eq!(ty("in"), input);
-        assert_eq!(ty("out"), output);
-        assert_eq!(ty("err"), DataType::Text);
-        assert_eq!(
-            ty("exit"),
-            rastok::boundary::process_exit_type().expect("ProcessExit is canonical")
-        );
+    for codec in ["lines", "jsonl", "bytes"] {
+        for err_codec in ["lines", "bytes"] {
+            let ports = rastok::stdlib::PROCESS
+                .resolve_ports(&std::collections::BTreeMap::from([
+                    (String::from("codec"), String::from(codec)),
+                    (String::from("err_codec"), String::from(err_codec)),
+                ]))
+                .expect("every sheet choice resolves");
+            for port in ports {
+                let sheet = port.ty.expect("the promised port is typed");
+                let core = rastok::boundary::process_port_type(
+                    "Process",
+                    port.port.name(),
+                    Some(codec),
+                    Some(err_codec),
+                )
+                .expect("the core mirror recognizes every sheet row");
+                assert_eq!(sheet, core, "{codec}/{err_codec} on {}", port.port);
+            }
+        }
     }
 }
 

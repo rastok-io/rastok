@@ -145,7 +145,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
             })
             .collect();
         attributes.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut ports = executable_ports(hir_node);
+        let mut ports = hir_node.ports.clone();
         ports.sort_by(|a, b| a.key().cmp(&b.key()));
         let mut vars: Vec<_> = hir_node
             .vars
@@ -1094,30 +1094,6 @@ impl Writer<'_> {
     }
 }
 
-/// Materializes fixed runtime capability. An untyped Operator `err` receives
-/// the derived RuntimeFault row because the VM is a real producer even when
-/// no source emission names that port.
-fn executable_ports(node: &HirNode) -> Vec<crate::plan::PortDecl> {
-    let mut ports = node.ports.clone();
-    match &node.role {
-        NodeRole::Operator => {
-            if let Some(err) = ports.iter_mut().find(|port| port.port.name() == "err") {
-                err.unwired = crate::plan::UnwiredPolicy::RootSink;
-                if err.ty.is_none() {
-                    err.ty = Some(DataType::text_map(DataType::Text));
-                }
-            } else {
-                ports.push(crate::plan::PortDecl::root_sink(
-                    node::Port::conventional_err(),
-                    Some(DataType::text_map(DataType::Text)),
-                ));
-            }
-        }
-        NodeRole::Connector { .. } => {}
-    }
-    ports
-}
-
 #[cfg(test)]
 mod tests {
     use super::DataType;
@@ -1317,7 +1293,7 @@ graph m0_probe : App {
         // exact spelling of a default are ONE identity, so every
         // Process-carrying graph moved once.
         // DELIBERATE MOVE 2026-08-12, same day (review round): the
-        // former Process error_set gained `CaptureFailed` (a pipe READ
+        // former Process error set gained `CaptureFailed` (a pipe READ
         // fault is its own kind).
         // DELIBERATE FIXTURE MIGRATION 2026-08-14 (M1.3 B2): the
         // probe now emits `data.text`, not a one-field record, because
@@ -1325,7 +1301,7 @@ graph m0_probe : App {
         // not move; this previously ill-typed program did.
         // DELIBERATE MOVE 2026-08-15 (M1.3 B5): complete resolved
         // Connector port rows and their routing policies replace the
-        // travelling error_set. The Process sheet also materializes
+        // travelling error set. The Process sheet also materializes
         // `err_codec = lines` before hashing.
         // DELIBERATE MOVE 2026-08-15 (M1.3 B7): jsonl replies are unit
         // emissions, stderr has its resolved framing, and every Process
@@ -1447,9 +1423,13 @@ graph m0_probe : App {
         )
         .unwrap();
         let ports = &compilation.plan.nodes[0].ports;
-        assert_eq!(ports.len(), 3, "the VM-produced err row travels too");
+        assert_eq!(ports.len(), 2, "only the operator's real ports travel");
         assert!(ports.iter().any(|decl| decl.port.name() == "event"));
         assert!(ports.iter().any(|decl| decl.port.name() == "result"));
+        assert!(
+            ports.iter().all(|decl| decl.port.name() != "err"),
+            "an operator has no hidden runtime-fault producer"
+        );
     }
 
     #[test]

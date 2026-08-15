@@ -615,7 +615,7 @@ the optional read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
 | Connector declaration | `connector <name> : <NativeType> [per <partition>] { ... }` |
 | Graph declaration | `graph <name> [per <partition>] { ... }` (keying on the graph, like an Operator) |
 | Sub-graph instance | declaration = instance : `graph <name> per <partition> { max_instances = … ; … }`, wired by name (`compose` is not a declaration form) |
-| Operator port | **Implicit** : `on <name>` ⇒ input, `<name> = …` ⇒ output. Declare `input`/`output <name>[: T]` only to pin a type/schema or document. `in`/`out`/`err` are defaults. |
+| Operator port | **Inferred from use** : `on <name>` ⇒ input, `<name> = …` ⇒ output. Declare `input`/`output <name>[: T]` only to pin a type/schema or document. `in`/`out`/`err` are conventional spellings; unused ones do not exist, and `err: E` is an explicit domain result rather than a machine-fault trap. |
 | Public graph port | single-in/out → defaults `in`/`out` ; a multi-port graph declares its interface by name (`input admin`, …), optionally typed |
 | Connector port | never redeclared — the Connector contract + attributes resolve its complete typed port table (`in`/`out`/`err`/`exit` for Process) |
 | Type | `variant`, scalar (`text`/`int`/`bytes`/…), `struct { … }`, `map<text, V>`, `array<T>`, `enum`, `union`, `T?` |

@@ -46,7 +46,8 @@ pub trait GuestExecutor {
 }
 
 /// A runtime fault of one transaction. Atomicity holds: a faulted
-/// transaction changed nothing.
+/// transaction changed nothing. This is supervision output from the VM,
+/// never a payload emitted on an Operator port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
     /// A Rastok expression evaluation fault.
@@ -637,66 +638,6 @@ impl<'plan> TransactionExecutor<'plan> {
         }
         timers.sort();
         timers
-    }
-
-    /// The ordinary `err` emission for a faulted operator handler: the input
-    /// is consumed causally and the fixed `RuntimeFault` payload leaves on
-    /// the operator's resolved port — a machine never swallows an envelope.
-    /// Crate-private:
-    /// it indexes the slot unchecked, which is the VM's invariant to
-    /// hold (its slots come from the plan) — the verified public
-    /// door is [`Self::fire`].
-    #[must_use]
-    pub(crate) fn fault_transaction(
-        &self,
-        slot: Slot,
-        delivery: &Delivery,
-        fault: &Fault,
-    ) -> TransactionOutcome {
-        let node = &self.plan.nodes[slot.index()];
-        let trigger = node::Trigger::Port(delivery.port.clone());
-        let err = node::Port::conventional_err();
-        let id = ids::emission_id(
-            &node.path,
-            &trigger,
-            delivery.envelope.meta().sys().id(),
-            &err,
-            0,
-        );
-        let sys = MetaSys::emission(id, delivery.envelope.meta().sys(), self.graph_version.0);
-        let mut payload = BTreeMap::new();
-        payload.insert(
-            String::from("kind"),
-            envelope::Value::Text(String::from("RuntimeFault")),
-        );
-        payload.insert(
-            String::from("message"),
-            envelope::Value::Text(fault.to_string()),
-        );
-        TransactionOutcome {
-            record: TransactionRecord {
-                node_path: node.path.clone(),
-                trigger,
-                consumed: vec![ConsumedPosition {
-                    edge: delivery.edge.clone(),
-                    seq: delivery.seq,
-                }],
-                state_delta: vec![],
-                timers: vec![],
-                emissions: vec![Emission {
-                    port: err,
-                    index: 0,
-                    envelope: Envelope::new(
-                        // Uniform propagation (D-2026-08-10-2): the
-                        // error envelope inherits the input's zones;
-                        // its payload is fresh, so the carried
-                        // content_type is struck.
-                        inherit_zones(Meta::new(sys), delivery.envelope.meta()),
-                        Data::materialized(envelope::Value::Map(payload)),
-                    ),
-                }],
-            },
-        }
     }
 
     /// The connector's completion transaction for a settled call: every

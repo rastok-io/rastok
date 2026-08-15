@@ -39,8 +39,8 @@ use core::fmt;
 /// A machine-integrity refusal — never a business error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmError {
-    /// A transaction fault the machine cannot represent as the operator's
-    /// ordinary `RuntimeFault` output — a plan/configuration integrity breach.
+    /// An evaluation or engine fault. It is outside every graph port
+    /// contract: the transaction commits nothing and supervision decides.
     Fault(Fault),
     /// The journal refused an operation.
     Journal(crate::journal::Error),
@@ -174,8 +174,6 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
             Slot::new(u32::try_from(index).map_err(|_| {
                 format!("the slot of `{connector}` is not representable by the plan")
             })?);
-        let exact_exit = crate::boundary::process_exit_type()
-            .map_err(|error| format!("the ProcessExit contract is invalid: {error}"))?;
         for output in completion.outputs() {
             let resolved = self
                 .plan
@@ -194,11 +192,10 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
                     output.port.name()
                 ));
             }
-            let expected = if output.port.name() == "exit" {
-                &exact_exit
-            } else {
-                resolved.ty()
-            };
+            // Validation has already proved that the transported Process
+            // contract row is the canonical ProcessExit type. The resolved
+            // table is therefore the sole admission authority here too.
+            let expected = resolved.ty();
             if output.port.name() == "exit" && !matches!(&output.data, Data::Materialized(_)) {
                 return Err(format!(
                     "`{connector}.exit` must carry a materialized terminal union"
@@ -744,9 +741,9 @@ impl<'plan> Vm<'plan> {
 
     /// Legacy envelope-only view of the conventional `err` root sink.
     ///
-    /// `exit` is an independent ordinary port and remains visible, with its
-    /// name, through [`Self::observations`]; terminal facts are never folded
-    /// into this stderr-shaped compatibility view.
+    /// This view contains explicit graph emissions only; it never classifies
+    /// or converts [`VmError::Fault`]. `exit` is an independent ordinary port
+    /// and remains visible, with its name, through [`Self::observations`].
     #[must_use]
     pub fn errors(&self) -> &[Envelope] {
         &self.errors
@@ -833,15 +830,13 @@ impl<'plan> Vm<'plan> {
     ) -> Result<(), VmError> {
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
         let state = self.state.cell_unchecked(self.plan.plan(), slot, key);
-        let outcome = match executor.fire(slot, delivery, &state) {
-            Ok(outcome) => outcome,
-            // A missing handler is a wiring integrity breach, not a
-            // value fault — nothing can consume this delivery.
-            Err(fault @ Fault::MissingHandler) => return Err(VmError::Fault(fault)),
-            // A value fault consumes the input causally and leaves as
-            // a typed error — the machine never swallows an envelope.
-            Err(fault) => executor.fault_transaction(slot, delivery, &fault),
-        };
+        // An Operator's declared `err` is an ordinary domain-result port,
+        // close to the E in `I -> Result<R, E>`. Engine/evaluation faults are
+        // outside that contract: the transaction stays uncommitted and the
+        // VM reports the fault to supervision.
+        let outcome = executor
+            .fire(slot, delivery, &state)
+            .map_err(VmError::Fault)?;
         self.validate_and_reserve_emissions(slot, &outcome.record)?;
         journal
             .commit(outcome.record.clone())
@@ -961,12 +956,11 @@ impl<'plan> Vm<'plan> {
     /// The FINAL gate every commit candidate passes — validation
     /// and reservation, in that order, both named by this function.
     ///
-    /// Pin conformance runs at TWO levels, deliberately: the recoverable
-    /// construction level converts an operator value fault into its ordinary
-    /// `RuntimeFault` output, while [`CompletionGate`] refuses an invalid
-    /// partner draft before closure. THIS final, non-recursive level catches
-    /// a violated plan/runtime invariant; it cannot manufacture another
-    /// emission on the same bad wiring, so NOTHING commits.
+    /// Pin conformance runs at TWO levels, deliberately: construction checks
+    /// ordinary Operator emissions, while [`CompletionGate`] refuses an
+    /// invalid partner draft before closure. THIS final, non-recursive level
+    /// catches a violated plan/runtime invariant; it cannot manufacture
+    /// another emission on the same bad wiring, so NOTHING commits.
     fn validate_and_reserve_emissions(
         &self,
         slot: Slot,

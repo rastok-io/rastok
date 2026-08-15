@@ -234,6 +234,12 @@ expect "charged exactly once" ledger.in count == 1 …       // optional label, 
   `app.<port>`; node outputs use their qualified node path (`pay.exit`,
   `process.err`, …). The Lab reads the resolved `UnwiredPolicy` exactly as
   production does. There is no synthetic root-error port.
+- **Expectation types are source-visible.** When an observed port has no type
+  annotation available while the Lab source is checked, its predicate sees
+  `data: variant`; structural access then requires explicit `is`/`as`
+  narrowing. Pinning the port type gives the predicate that precise type.
+  This is a check-time ergonomics rule, never a runtime fallback from an
+  unresolved validated-plan port (the latter is categorically forbidden).
 - **Black-box only** : expectations target ports ; internal state (`var`,
   partition fields) is not directly assertable — the golden trace (§6) sees
   everything anyway, and scenarios stay robust to internal refactorings.

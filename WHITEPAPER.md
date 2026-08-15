@@ -792,8 +792,10 @@ annotation : trait/role + aspects — optional on operator/graph (implicit canon
 ```
 
 The port-declaration keywords are **`input`** and **`output`**; the names
-**`in`**, **`out`** and **`err`** are conventional pre-bound ports,
-non-reserved and typed by the same mechanism as every other port. A
+**`in`**, **`out`** and **`err`** are conventional, non-reserved spellings
+typed by the same mechanism as every other port. They acquire plan rows only
+when declared, handled, emitted or wired; an Operator has no mandatory
+`err`. A
 validated plan carries an effective type for all ports, whether inferred
 or explicitly pinned. For `Process`, the mapping is exact: `in` is stdin,
 `out` is stdout decoded by the selected codec, `err` is stderr bytes, and
@@ -841,8 +843,9 @@ Three categories of section:
 
 - **Declarative interface** (`input`, `output`, `var`, `per`). **Ports
   are implicit**: `on <name>` declares an input, an assignment
-  `<name> = …` declares an output, and `in`/`out`/`err` exist by
-  default — so a Node usually declares no ports at all. `input` /
+  `<name> = …` declares an output, and `in`/`out`/`err` have conventional
+  directions — so a Node usually declares no ports at all. A conventional
+  port not used by the program does not exist in its effective table. `input` /
   `output` are written only to *pin* a type/schema, or to document a
   node with no handler (a saga) or a graph's public interface. `var`
   holds state; `per` keys it to a partition.
@@ -2728,12 +2731,16 @@ wins.
 16. **Ports may be inferred from handlers, while `input` / `output`
     pin or document constraints. Every validated port has one effective
     logical type. `in` / `out` / `err` are conventions, not categories;
+    an Operator has no implicit `err`. In the simple shape, explicit
+    `err: E` makes `I -> Result<R,E>` while engine faults abort and reach
+    supervision rather than becoming envelopes.
     Connector contracts declare fixed or parametric port rules. For
-    a Connector conventionally uses `exit` for each invocation's tagged
+    each invocation, a Connector conventionally uses `exit` for its tagged
     terminal outcome. For Process, `err` is stderr and `exit` carries
     `ProcessExit`, including the original typed error cases. One completion
     carries `out* + err* + exactly one exit`; `stop` independently closes the
-    owning partition instance. Panics are supervision, never envelopes.**
+    owning partition instance. Engine faults and panics are supervision,
+    never envelopes.**
 17. **The `data` payload is statically typed by default; `variant` is
     the only dynamic type, narrowed before use. The type tree is
     scalar(parameters+logical) / struct / map / array / enum / union,

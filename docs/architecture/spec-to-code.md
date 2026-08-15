@@ -68,7 +68,9 @@ removes `TypedError` and the success/failure-only boundary reply. B8 removed
 the last representational bridges: raw packages carry exact `ProcessExit` and
 `decimal()` carries `number`.
 B9 adds the strict external adapters, removes the last v6 subset/refusal
-scaffolding, and closes unchecked structural access through `variant`.
+scaffolding, closes unchecked structural access through `variant`, and removes
+the hidden Operator runtime-fault producer: explicit `err` is an ordinary
+domain output and VM faults commit nothing.
 
 ## Keeping the map honest
 

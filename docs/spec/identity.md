@@ -66,11 +66,13 @@ omission and `err_codec = lines` are identical after pre-hash injection. The
 former `error_set` identity slot is retired rather than retained beside the
 typed port model. Consequently Process graphs move once (echo/spike
 `a7511135…`, JSONL `4eacb55c…`, compiler probe `f068bcd1…`). The
-connector-free gauge semantic hash remains `0d3ad43d…`: B5 only makes its
-already-existing implicit Operator runtime-fault row explicit in the package,
-which changes transport bytes but not program meaning. These were pre-public
-v6 checkpoints; v7 now seals the full tagged types without renumbering their
-logical registry.
+connector-free gauge semantic hash remains `0d3ad43d…`. B5 temporarily made
+an implicit Operator runtime-fault row explicit only in the package; the final
+M1.3 review removed that invented row and the synthetic fault emission. Echo,
+JSONL and gauge package bodies move back to the port tables their canonical
+HIR hashes actually describe, while those hashes and causal traces remain
+unchanged. These are pre-public checkpoints; v7 still seals the full tagged
+types without renumbering their logical registry.
 
 **B6 construction checkpoint (2026-08-15).** A checked `Case { ... }` hashes
 as its resolved name-stable tagged-union constructor and a contextual

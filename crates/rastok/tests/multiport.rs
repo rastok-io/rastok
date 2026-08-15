@@ -1180,9 +1180,9 @@ fn a_computed_overflow_faults_at_the_pin() {
     // The reviewer's runtime escape: `data + 2147483647` with data=1
     // types as int and passes every static gate, but the VALUE
     // leaves the 32-bit contract. The emission's construction now
-    // judges it like a state-cell write: the transaction faults, a
-    // typed RuntimeFault reaches err, and NOTHING crosses the pinned
-    // output.
+    // judges it like a state-cell write. This is an engine/program fault,
+    // not the E in an Operator's optional `Result<R, E>` surface: the
+    // transaction aborts and NOTHING crosses the pinned output.
     let source = r#"
 graph g : App {
   input feed : int
@@ -1206,12 +1206,30 @@ lab g {
     scenario s "computed overflow" {
       app.feed = 1
       expect "no long through an int pin" app.result count == 0
-      expect "the fault is typed" app.err count == 1
     }
   }
 }
 "#;
-    lab_passes(source);
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid unit");
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    assert!(!runs[0].report.passed());
+    assert!(
+        runs[0]
+            .report
+            .failures
+            .iter()
+            .any(|failure| failure.contains("a step faulted")),
+        "the fault reaches supervision: {:#?}",
+        runs[0].report.failures
+    );
 }
 
 #[test]
@@ -1591,7 +1609,7 @@ fn a_named_constant_answers_like_its_literal() {
     );
 }
 
-// ===== round five — variant coherence, synthesized errors, the relay =====
+// ===== round five — variant coherence, fault atomicity, the relay =====
 
 #[test]
 fn an_explicit_variant_is_dynamic_not_an_inference_hole() {
@@ -1633,13 +1651,14 @@ fn an_explicit_variant_is_dynamic_not_an_inference_hole() {
 }
 
 #[test]
-fn a_synthesized_runtime_fault_makes_an_incompatible_edge_untypable() {
-    // The VM is a real producer of source.err even though no source
-    // Step::Emit names it. The resolved table includes that two-text map,
-    // so `source.err -> sink.evt : int` refuses statically rather than
-    // waiting for a faulted transaction to discover the contradiction.
+fn an_operator_err_name_does_not_synthesize_a_runtime_producer() {
+    // `err` is a convention, not a mandatory capability. With no explicit
+    // emission, this ordinary output can infer `int` from its edge; an engine
+    // fault never crosses it.
     let source = r#"
 graph g : App {
+  input in : variant
+
   operator source {
     on in { out = data as text }
   }
@@ -1655,25 +1674,57 @@ graph g : App {
   sink -> .
 }
 "#;
-    let bag = compile(
+    let compilation = compile(
         &[source],
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
-    .expect_err("a map producer cannot feed an int consumer");
-    assert!(
-        bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code().as_str() == "E-PORT-TYPE"
-                && diagnostic
-                    .fields()
-                    .iter()
-                    .any(|(key, value)| *key == "port" && value == "evt")
-                && diagnostic
-                    .fields()
-                    .iter()
-                    .any(|(key, value)| *key == "found" && value == "map<text,text>")
-        }),
-        "the contradiction names the real hidden producer: {bag:?}"
-    );
+    .expect("the name err carries no hidden producer type");
+    let source = compilation
+        .plan
+        .plan()
+        .nodes
+        .iter()
+        .position(|node| node.path.to_string() == "source")
+        .and_then(|index| {
+            compilation
+                .plan
+                .resolved_ports()
+                .node(rastok::plan::Slot::new(u32::try_from(index).ok()?))
+        })
+        .and_then(|ports| ports.iter().find(|port| port.port().name() == "err"))
+        .expect("the wired ordinary port resolves");
+    assert_eq!(source.ty(), &rastok::datatype::DataType::INT);
+}
+
+#[test]
+fn an_explicit_operator_err_is_an_ordinary_domain_output() {
+    let source = r#"
+type Failure = union { Rejected { reason: text } }
+
+graph g : App {
+  input in : text
+  output rejected : Failure
+
+  operator decide {
+    input in : text
+    output err : Failure
+    on in { err = Rejected { reason = "no" } }
+  }
+
+  . -> decide
+  decide.err -> .rejected
+}
+
+lab g {
+  simulation domain_result on app {
+    scenario rejected {
+      app.in = "request"
+      expect app.rejected where data is Rejected && data.reason == "no"
+    }
+  }
+}
+"#;
+    lab_passes(source);
 }
 
 #[test]
@@ -2270,14 +2321,15 @@ fn data_materializes_only_on_demand() {
             },
         )
         .expect("the injection lands");
-        vm.drain(&mut journal).expect("no forced materialization");
-        (vm.outputs().to_vec(), vm.errors().len())
+        let result = vm.drain(&mut journal);
+        (result, vm.outputs().to_vec(), vm.errors().len())
     };
     // A guard reading nothing + identity: bytes, encoding, and MIME
     // survive whole.
-    let (outputs, errors) = run(
+    let (result, outputs, errors) = run(
         "graph g : App {\n  input in: variant\n  operator o {\n    on in where true { out = . }\n  }\n  . -> o -> .\n}\n",
     );
+    result.expect("no opaque read was asked for");
     assert_eq!(errors, 0, "no opaque read was asked for");
     assert!(matches!(
         outputs[0].envelope.data(),
@@ -2293,20 +2345,23 @@ fn data_materializes_only_on_demand() {
         ))
     );
     // A false guard consumes without decoding and without error.
-    let (outputs, errors) = run(
+    let (result, outputs, errors) = run(
         "graph g : App {\n  input in: variant\n  operator o {\n    on in where false { out = . }\n  }\n  . -> o -> .\n}\n",
     );
+    result.expect("the false branch performs no read");
     assert_eq!((outputs.len(), errors), (0, 0));
     // A meta-only guard touches meta, never data.
-    let (outputs, errors) = run(
+    let (result, outputs, errors) = run(
         "graph g : App {\n  input in: variant\n  operator o {\n    on in where meta.sys.graph_version == 1 { out = . }\n  }\n  . -> o -> .\n}\n",
     );
+    result.expect("the meta-only branch performs no data read");
     assert_eq!(errors, 0);
     assert_eq!(outputs.len(), 1);
     // A state write independent of data materializes nothing.
-    let (outputs, errors) = run(
+    let (result, outputs, errors) = run(
         "graph g : App {\n  input in: variant\n  operator o {\n    var seen : int = 0\n    on in {\n      seen = seen + 1\n      out = .\n    }\n  }\n  . -> o -> .\n}\n",
     );
+    result.expect("the state-only transaction performs no data read");
     assert_eq!(errors, 0);
     assert_eq!(outputs.len(), 1);
 }
@@ -2343,38 +2398,50 @@ fn short_circuits_never_demand_the_data() {
             },
         )
         .expect("the injection lands");
-        vm.drain(&mut journal).expect("no forced materialization");
-        (vm.outputs().to_vec(), vm.errors().len())
+        let result = vm.drain(&mut journal);
+        (result, vm.outputs().to_vec(), vm.errors().len())
     };
     // `false && (data as bool)`: the right side never evaluates —
     // filtered, no decode, no fault.
-    let (outputs, errors) = run(
+    let (result, outputs, errors) = run(
         "graph g : App {\n  input in: variant\n  operator o {\n    on in where false && (data as bool) { out = . }\n  }\n  . -> o -> .\n}\n",
     );
+    result.expect("the short-circuited right side performs no read");
     assert_eq!((outputs.len(), errors), (0, 0), "filtered without a fault");
     // `true || (data as bool)`: the identity ships the bytes whole.
-    let (outputs, errors) = run(
+    let (result, outputs, errors) = run(
         "graph g : App {\n  input in: variant\n  operator o {\n    on in where true || (data as bool) { out = . }\n  }\n  . -> o -> .\n}\n",
     );
+    result.expect("the short-circuited right side performs no read");
     assert_eq!(errors, 0, "the right side never ran");
     assert!(matches!(
         outputs[0].envelope.data(),
         Data::Encoded { encoding: Encoding::Avro, bytes, .. } if bytes.as_slice() == b"\x01\x02"
     ));
     // `false ? size(data) : 1`: the untaken arm never demands.
-    let (outputs, errors) = run(
+    let (result, outputs, errors) = run(
         "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = false ? size(data) : 1 }\n  }\n  . -> o -> .\n}\n",
     );
+    result.expect("the untaken ternary arm performs no read");
     assert_eq!(errors, 0, "the untaken arm never ran");
     assert_eq!(
         outputs[0].envelope.data(),
         &Data::materialized(Value::Int(1))
     );
-    // The control: a taken read still faults, typed.
-    let (outputs, errors) = run(
+    // The control: a taken read is an engine fault. It commits no graph
+    // emission and reaches supervision; it is not synthesized on `err`.
+    let (result, outputs, errors) = run(
         "graph g : App {\n  input in: variant\n  operator o {\n    on in where true && (data as bool) { out = . }\n  }\n  . -> o -> .\n}\n",
     );
-    assert_eq!((outputs.len(), errors), (0, 1), "a real read still faults");
+    assert!(
+        matches!(result, Err(rastok::runtime::vm::VmError::Fault(_))),
+        "a real read reaches supervision"
+    );
+    assert_eq!(
+        (outputs.len(), errors),
+        (0, 0),
+        "the failed transaction emits nothing"
+    );
 }
 
 #[test]

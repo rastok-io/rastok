@@ -43,6 +43,18 @@ Within a transaction, statements run in **handler-text order** (the imperative
 intra-transaction model of the DSL). This order is what makes emission identity
 derivable (§4).
 
+An Operator is pure with respect to the external world, but its evaluation can
+still refuse (for example, a dynamic narrowing has no match or encoded data
+cannot be materialized). Such a `Fault` is a supervision fact, not a graph
+value: the transaction commits neither its input cursor, state nor emissions,
+and the VM returns the fault to its caller. The conventional output name
+`err` is never selected automatically. When rejection is expected domain
+behavior, the handler expresses it explicitly and emits a value on a declared
+output — conventionally `err`, giving the simple shape `I -> Result<R,E>`.
+Catastrophic host failure such as an allocator abort is outside this typed
+contract; the runtime does not pretend every hardware/process failure is
+recoverable in-process.
+
 
 ## 2. M:N — a mailbox per key, a bounded pool of workers
 

@@ -34,7 +34,7 @@ fn compilation() -> rastok::compiler::Compilation {
 // fixture gained `args = []`, `max_output = "8MiB"` and
 // `on_timeout = kill` (`mode = job` was written).
 // DELIBERATE MOVE 2026-08-12, same day (review round): the Process
-// error_set gained `CaptureFailed` — a pipe READ fault is its own
+// former error set gained `CaptureFailed` — a pipe READ fault is its own
 // kind, and the set travelled in the plan.
 // DELIBERATE MOVE 2026-08-15 (M1.3 B5): the complete resolved
 // Process port contract replaces that set, carries routing policy,
@@ -48,6 +48,9 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE FIXTURE MIGRATION 2026-08-15 (M1.3 B9): each jsonl frame
 // remains `variant` at the connector, then the sift explicitly narrows it to
 // the declared JSON-object map before indexing. Dynamic indexing is gone.
+// M1.3 final review: the semantic hash stays fixed while the package drops
+// the lowering-only Operator runtime-fault `err` row. It was never part of
+// canonical HIR identity and no causal trace changes.
 const JSONL_HASH: &str = "9e66e62cbe17c17d6394e3692ed074e3416782ac3a3ea569a53af9edea54c29b";
 
 #[test]

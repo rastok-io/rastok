@@ -43,6 +43,18 @@ The connector-level `error_set`, `TypedError`, failure-only `CallOutcome`
 branch and error-specific `err_value` grammar were temporary approximations,
 not a model to extend. B5–B7 have removed all four from executable code.
 
+An Operator has no mandatory `err` port and the runtime never synthesizes
+one. Its effective table contains only ports declared, handled, emitted or
+wired by the program. A simple Operator with `in: I`, `out: R` is analogous
+to `I -> R`; adding an explicit `err: E` gives the useful `I -> Result<R,E>`
+shape, without making `err` exceptional or imposing mutual exclusion on a
+general multi-output handler. `E` is a domain result deliberately emitted by
+the graph. A failed expression, impossible materialization, invalid plan
+reference or other engine fault aborts the node transaction and reaches the
+supervision boundary; it never becomes an envelope on `err`. If a dynamic
+condition is an expected business alternative, the author checks it (for
+example with `is`) and emits the chosen domain value explicitly.
+
 This generalizes rather than abandons the original M1.3 typed-error goal.
 Its error codes become cases of the invocation's tagged `exit` union, beside
 non-error terminal cases. `err` remains diagnostic data actually observed at
@@ -281,10 +293,10 @@ The travelling `error_set` is removed. Its private-v6 connector key is retired,
 and the port row's direction code now also carries `RequireWire | RootSink`.
 These are deliberate pre-public identity/package moves: echo/spike
 `c75b840d… -> a7511135…`, JSONL `60f45914… -> 4eacb55c…`, and the compiler
-probe `e26af508… -> f068bcd1…`. The connector-free gauge semantic hash remains
-`0d3ad43d…`; its package alone moves because the formerly hidden Operator
-runtime-fault `err` row is now explicit plan data. Echo, JSONL and gauge package
-goldens are re-blessed for these causes; causal trace goldens remain unchanged.
+probe `e26af508… -> f068bcd1…`. The B5 implementation also made the former
+implicit Operator runtime-fault row explicit in private package bodies. The
+M1.3 closure below supersedes that intermediate choice: an Operator has no
+such producer or row. Causal trace goldens remain unchanged.
 The unreleased v6 reader refuses prior bodies at validation or canonical
 re-encoding rather than migrating them. B8 subsequently replaced the body with
 the single published v7 type/expression registry.
@@ -413,6 +425,24 @@ narrows each unit `variant` frame to its declared JSON-object map before
 indexing. The JSONL package golden is re-blessed for that source-semantic
 change; its causal trace is unchanged.
 
+**Operator-fault closure (2026-08-15).** The final M1.3 review removes the
+last failure-shaped exception: the VM no longer turns a pure Operator's
+evaluation fault into `{ kind: "RuntimeFault", message: ... }`, and lowering
+no longer invents an `err: map<text,text>` producer row. Explicit `err = E`
+remains an ordinary typed domain emission. A runtime fault leaves the
+delivery reserved, commits no state, record or envelope, and is returned to
+the supervision caller. The regression suite proves both halves: an
+explicit tagged `err` is materialized normally, while failed narrowing and
+opaque reads produce `VmError::Fault` with no transaction or root emission.
+
+This correction changes the echo, JSONL and gauge package bodies because
+they contained the lowering-only row, but changes none of their semantic
+hashes or causal traces. That mismatch was the evidence: the row had never
+participated in canonical HIR identity and therefore could not honestly be
+program semantics. The package goldens and embedded echo package are
+re-blessed to the plan the hash actually describes; format v7 itself and all
+registry numbers remain unchanged.
+
 **Supersedes:** D-2026-08-13-1's claims that `json` is reserved, JSON
 scalars are removed, and CEL is the intrinsic authority; the foreign
 literal spelling and `TAG_KW` partition in D-2026-08-12-1; the
@@ -429,6 +459,11 @@ spelling `E-CEL-EXPR` becomes `E-EXPR` in the same pre-public B3 migration.
 Their still-compatible parser,
 exact-number, capture-budget, attribute-contract and framing invariants
 survive.
+
+The Operator-fault closure also supersedes D-2026-08-08-3's recoverable
+construction rule that converted an Operator value breach into a synthesized
+typed value on `err`. Its final fan-out conformance gate and all-or-nothing
+transaction rule survive; only the invented graph result is removed.
 
 B5 additionally supersedes only the *downstream representation* clauses of
 D-2026-08-08-1/-2 that called the conventional trio implicit in the plan or
@@ -1213,7 +1248,10 @@ addition would silently reclassify existing records).
 > `variant` is an explicit dynamic type, not symmetric inference territory.
 > Precise → variant is assignable; variant → precise requires narrowing. The
 > annotation remains identity material in v6, while the derived effective
-> table is recomputed by validation until v7 transports it.
+> table is recomputed by validation until v7 transports it. D-2026-08-14-1's
+> Operator-fault closure additionally supersedes the historical synthesized
+> `err` recovery described below: conformance gates remain, but an engine fault
+> commits nothing and reaches supervision.
 
 Second multiport lift. A port annotation (`input evt : text`)
 resolves through the same type subset as state cells (its deferrals

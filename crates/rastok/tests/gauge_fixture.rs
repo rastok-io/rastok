@@ -33,8 +33,9 @@ fn compilation() -> rastok::compiler::Compilation {
 /// deliberately, with this constant re-blessed in review.
 // DELIBERATE MOVE 2026-08-10 (D-2026-08-10-7): trees seal
 // [type, root] — see lower.rs's pinned-hash note.
-// M1.3 B5 keeps this connector-free semantic hash unchanged while
-// its package makes the Operator runtime-fault `err` row explicit.
+// M1.3 final review keeps this connector-free semantic hash unchanged and
+// removes the lowering-only Operator `err` row from its package. That row
+// was never canonical HIR identity and never belonged in the plan.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]

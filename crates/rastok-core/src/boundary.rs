@@ -515,6 +515,9 @@ impl Completion {
     ///
     /// Refuses a missing, repeated, or non-terminal `exit` output.
     pub fn try_new(outputs: Vec<PortOutput>) -> Result<Self, CompletionError> {
+        // `exit` is the boundary protocol's conventional terminal port, not a
+        // VM routing shortcut. The resolved port table owns its type and the
+        // graph still routes it like every other named output.
         let exit_count = outputs
             .iter()
             .filter(|output| output.port.name() == "exit")
@@ -1200,6 +1203,8 @@ mod tests {
 
     #[test]
     fn every_process_exit_projection_inhabits_the_one_union() {
+        // Populated optional fields pin the Null-first branch convention used
+        // by `into_value`; changing canonical union order must break here.
         let exits = [
             ProcessExit::Exited {
                 exit_code: -1,

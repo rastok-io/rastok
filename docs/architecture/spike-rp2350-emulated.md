@@ -76,15 +76,15 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (882-byte v7 package, complete type/value/expression registry + total resolved-port proof + canonicity re-encode; re-measured at B9 on 2026-08-15: same package/hash, one tick below B8) | 14 716 | 736 k | 4.91 ms |
+| `plan::decode` (861-byte v7 package, complete type/value/expression registry + total resolved-port proof + canonicity re-encode; re-measured after the M1.3 Operator-fault closure on 2026-08-15) | 14 106 | 705 k | 4.70 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32; re-measured 2026-08-15 — deterministic under this QEMU icount run) | 2 323 (min 2 257 / max 2 613) | **116 k** | **0.77 ms** |
+| relay transaction (avg of 32; re-measured 2026-08-15 — deterministic under this QEMU icount run) | 2 318 (min 2 254 / max 2 592) | **116 k** | **0.77 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.8 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-15 after B8) | 67 880 B (66.3 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 325 908 + 40 184 = 366 092 B (357.5 KiB; re-measured 2026-08-15 after B8) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-15 after M1.3 closure) | 67 800 B (66.2 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 324 660 + 39 932 = 364 592 B (356.0 KiB; re-measured 2026-08-15 after M1.3 closure) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
@@ -92,7 +92,7 @@ Notes the numbers carry:
 - The relay transaction meets its criterion with a **1.29× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 14 716 across the
+- Package decode grew from v1's 1 468 ticks to 14 106 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
   nesting budget, the domain-order audits) and the canonicity
@@ -105,13 +105,12 @@ Notes the numbers carry:
   does not substitute `variant` merely to save these resources. No
   criterion bounds boot cost; the transaction path remains below its
   recorded bound.
-- The B0–B3 adversarial closure records the VM's implicit `Operator.err`
-  producer in that same resolved table instead of letting the runtime skip a
-  missing endpoint. That closes a real totality gap without changing the v6
-  package or semantic hash. Relative to the preceding measurement, the honest
-  cost is 121 decode ticks, 3 relay ticks, 40 bytes at the heap peak and 2 216
-  bytes of `.text + .rodata`; exact decimal rescaling and structural-union
-  reselection are included in the linked code.
+- The B0–B3 adversarial closure temporarily recorded the VM's implicit
+  `Operator.err` producer in the resolved table. Final M1.3 review removed
+  the premise: pure Operator engine faults never become graph values, and an
+  explicit `err` is only a domain output. The package is re-measured in the
+  table above without that invented row; its semantic hash and causal behavior
+  remain unchanged.
 - B3 leaves the v6 package, heap peak and semantic hash unchanged. Linking
   the expression narrowing and union-consumption paths adds 55 ticks to the
   measured relay and 15 508 bytes to `.text + .rodata`; both costs are stated
@@ -140,14 +139,19 @@ Notes the numbers carry:
   changes by 7 ticks, the heap peak grows by 1 556 B, and linked flash grows
   by 25 496 B. The one-time boot cost is not a relay criterion; all recorded
   resource bounds continue to hold.
-- Flash grew from 193 KiB to 357.5 KiB (`.text` 325 908 B +
-  `.rodata` 40 184 B, re-measured 2026-08-15): the consolidated
+- Final M1.3 review removes the lowering-only Operator `err` row and its
+  synthetic fault path. Relative to B9, the echo package shrinks 882 B →
+  861 B, decode drops 610 ticks, relay drops 5 ticks, heap peak drops 80 B,
+  and linked flash drops 1 500 B. The semantic hash and causal trace remain
+  byte-identical.
+- Flash grew from 193 KiB to 356.0 KiB (`.text` 324 660 B +
+  `.rodata` 39 932 B, re-measured 2026-08-15): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
   complete logical-type algebra, inference solver and validator link into
   the kernel even for a `lines` plan — the core is one crate, and dead-code
   elimination keeps what the plan decoder can reach. The 1 MiB criterion holds with a
-  2.86× margin; trimming by feature gate is noted, not needed.
-- The true high-water mark (66.3 KiB) sits above the old sampled
+  2.88× margin; trimming by feature gate is noted, not needed.
+- The true high-water mark (66.2 KiB) sits above the old sampled
   figure (57.2 KiB), as a real peak must; the first M1 lift added
   the ingress port to every inbound record (+688 B over 32 rounds),
   and the consolidated reform's five-field spine and ext zone
@@ -195,8 +199,8 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 **GO (provisional), re-issued 2026-08-07 on the corrected
 instrumentation and re-measured 2026-08-15 on package v7.** All four
 criteria of record hold: no patched dependencies, 116 k instructions
-per relay transaction against the 150 k bound (1.29×), a 66.3 KiB true
-high-water mark against 128 KiB, 357.5 KiB of flash against 1 MiB. The
+per relay transaction against the 150 k bound (1.29×), a 66.2 KiB true
+high-water mark against 128 KiB, 356.0 KiB of flash against 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as
 planned — no embedded chantier opens. Silicon confirmation (volet B)

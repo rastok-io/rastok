@@ -94,6 +94,9 @@ graph g : App {
 
 #[test]
 fn the_example_package_matches_its_golden() {
+    // M1.3 final review removes the lowering-only Operator runtime-fault
+    // `err` row. The source hash is intentionally unchanged: that invented
+    // row never belonged to canonical HIR identity.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
