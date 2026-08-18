@@ -24,21 +24,23 @@
 ```rastok
 graph sim04 : App {
   durability = local                       // a file — the saga domain's floor
-  partition booking { key = meta.app.booking_id; lifetime = duration("1h") }
 
   connector bookings : HttpServer { path = "/book" ; effect = none }
   connector confirmed : Memory { }
 
   graph book_trip : Saga {
+    instances = { key = meta.ext.booking_id }
+    lifetime = { kind = idle; after = duration("1h") }
+
     Saga.timeout = duration("10m")
 
     connector reserve : HttpClient {
       url    = "https://hotel.example/hold"
       effect = compensable
       behavior = deterministic
-      idempotency_key = meta.app.booking_id + "/hold"
+      idempotency_key = meta.ext.booking_id + "/hold"
       on compensate {
-        idempotency_key = meta.app.booking_id + "/release"   // its OWN operation (E-COMPENSATE-KEY)
+        idempotency_key = meta.ext.booking_id + "/release"   // its OWN operation (E-COMPENSATE-KEY)
         out = { data = { op = "release" } }
       }
     }
@@ -46,7 +48,7 @@ graph sim04 : App {
       url    = "https://bank.example/charge"
       effect = irreversible
       behavior = deterministic
-      idempotency_key = meta.app.booking_id + "/charge"
+      idempotency_key = meta.ext.booking_id + "/charge"
     }
     . -> reserve -> pay -> .
     pay.exit -> Saga.rollback when data is PaymentDeclined

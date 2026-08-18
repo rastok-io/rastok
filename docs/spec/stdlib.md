@@ -4,7 +4,7 @@
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
-> B8 removed the last raw-plan bridge: package v7 carries exact
+> B8 removed the last raw-plan bridge: the categorical package retains v7's exact
 > `Process.exit: ProcessExit` and the total effective port table.
 > Companion to [execution-model.md](execution-model.md) (`timeout` /
 > `on_timeout`, the correlator duty), [delivery-semantics.md](delivery-semantics.md)
@@ -32,10 +32,10 @@ optional — a Connector whose contract leaves a case blank is not spec'd:
 | 3 | **Ports** | `in`/`out`/`err`/`exit` conventions + extras, with types |
 | 4 | **`effect`** | pre-declared by the trait, or per-instance (dev-declared) |
 | 5 | **`behavior`** | deterministic / probabilistic — §2; pre-declared or per-instance |
-| 6 | **Attributes** | the config surface (boot phase: `env()`/`secret()` legal); `timeout`/`on_timeout`/`restart` inherited where calls/instances exist |
+| 6 | **Attributes** | the config surface with a contract-declared latest evaluation site (plan, boot, instance, or invocation); checking chooses the earliest legal actual site and transports it; `env()`/`secret()` are boot-only, while `timeout`/`on_timeout`/`restart` apply where calls/instances exist |
 | 7 | **Correlator** | what "a call" is in its protocol (execution-model §6.1: the Connector matches) |
 | 8 | **Outcome coverage** | the finite typed cases each output may emit and the completion rule the future `rastok simulate --coverage` enumerates |
-| 9 | **Instances** | singleton / `per`-keyed (each with `run_id`) / per-call; partition stop policy and each call's terminal exit |
+| 9 | **Instances** | singleton / `instances.key` (each resource run may have a `run_id`) / per-call; Node-instance closing policy and each call's terminal exit |
 | 10 | **Journal & sim** | which records it writes (INBOUND w/ `inbound_seq`; OUTBOUND open-closed); how it is mocked/injected |
 
 Case 8 deserves the emphasis: coverage must enumerate the cases a
@@ -47,12 +47,12 @@ fact: it closes one obligation and may carry several typed port outputs.
 `--coverage` counts the cases and the completion paths.
 
 The lifecycle scopes do not collapse into one another. A static Connector
-Node may have several partition instances; each partition instance may admit
-several calls. `stop` closes the partition instance, while the conventional
-typed `exit` port closes one call. One partition can therefore observe many
-exits before it stops. Partition closure refuses new admissions and later
+Node may have several logical instances; each Node instance may admit several
+calls. `stop` closes the Node instance, while the conventional typed `exit`
+port closes one call. One instance can therefore observe many exits before it
+stops. Instance closure refuses new admissions and later
 drains or cancels every open call under a bounded policy; it never replaces
-their individual terminal exits. The call identity, not merely the partition
+their individual terminal exits. The call identity, not merely the instance
 key, correlates every `out`/`err` frame with its one `exit`.
 
 **Naming rule**: stdlib traits carry **no suffix** — the keyword already says
@@ -141,7 +141,7 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Attributes | `url`/`base_url`+`path`, `method`, `codec`, `auth`, `tls`, `timeout`, `on_timeout = bypass (default) \| kill`, `idempotency_key` (mandatory when `irreversible`) |
 | Correlator | protocol-native: HTTP request ↔ response |
 | Outcome cases | Every call emits exactly one `exit`: a successful response completion or `ConnectFailed`, `TimeoutExpired`, `DecodeFailed`, or recovery's `OutcomeUnknown`. A completed HTTP response — 2xx or otherwise — also remains on `out`, with its code in `meta.ext.status`; retry policy explicitly selects response codes and/or exit cases instead of inheriting a universal `transient` bit. Exact case names and payloads land with the HttpClient slice. |
-| Instances | singleton (`per` legal, rarely useful) |
+| Instances | singleton by default; the common Node attribute `instances.key` may key the Connector |
 | Journal / sim | OUTBOUND open (key, digest) / closed / discarded; mocked in scenarios |
 
 ### 3.3 `Process` — child processes, two modes
@@ -162,23 +162,29 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 selector; its omission selects `job` and the checker materializes
 `mode = job` into the effective HIR — omission and the exact
 spelling of a default are one identity (hash included). The plan
-carries the EFFECTIVE attributes; the adapter consumes resolved
-values and never reintroduces a default.
+carries the EFFECTIVE attributes; each contract row declares the latest
+permitted site, checking chooses the earliest site where the expression
+closes, and the adapter consumes resolved values or an explicitly transported
+boot/instance/invocation expression and never
+reintroduces a default. M1.4 R1 makes the evaluation-site column executable;
+until then the implementation's constant-only rows remain a named subset, not
+an alternate contract.
 
-| Attribute | Profile | Domain | Presence |
-|---|---|---|---|
-| `command` | common | Rastok expression → `text` | **Required** |
-| `args` | common | Rastok expression → `array<text>` | Defaulted(`[]`) — omission ≡ `[]`; `null` refuses (no domain is implicitly nullable) |
-| `codec` | common | choice `lines \| jsonl \| bytes` for `in` and `out` | **Required** — request/reply framing is never chosen silently (D-2026-08-11-1) |
-| `err_codec` | common | choice `lines \| bytes` for stderr only | Defaulted(`lines`) — diagnostics never inherit `jsonl` from `codec`; omission ≡ `lines` |
-| `effect` | common | choice, typed | **Required** |
-| `behavior` | common | choice, typed | **Required** |
-| `timeout` | common | Rastok expression → `duration` | Optional — a true optional: no budget declared, no budget |
-| `env` | common | composite map — **deferred** (named diagnostic until composite domains land; the canonical spelling will be `env = { "K": v }`) | — |
-| `max_output` | job | byte size: `<digits><unit>`, unit ∈ `B \| KiB \| MiB \| GiB` (explicit, required), ASCII whitespace tolerated around and between, ≤ 4 GiB (syntax bound; the adapter binding additionally proves the budget is REPRESENTABLE on this host — at most `isize::MAX` — while actual allocation is judged chunk by chunk at intake via `try_reserve`, surfacing as the typed overflow, never an abort) — one parser (`contract::byte_size`) judges at check AND enforces at run | Defaulted(`"8MiB"`) |
-| `on_timeout` | job | choice `kill` (one word — "fixed to `kill`") | Defaulted(`kill`) |
-| `correlate` | service | Rastok expression path over runtime data (deferred-only domain) | Optional |
-| `restart` | service | struct (deferred-only domain) | Optional |
+| Attribute | Profile | Domain | Latest evaluation site | Presence |
+|---|---|---|---|---|
+| `command` | common | Rastok expression → `text` | instance | **Required** |
+| `args` | common | Rastok expression → `array<text>` | instance | Defaulted(`[]`) — omission ≡ `[]`; `null` refuses (no domain is implicitly nullable) |
+| `cwd` | common | Rastok expression → `text` | instance | Optional |
+| `codec` | common | choice `lines \| jsonl \| bytes` for `in` and `out` | plan | **Required** — request/reply framing is never chosen silently (D-2026-08-11-1) |
+| `err_codec` | common | choice `lines \| bytes` for stderr only | plan | Defaulted(`lines`) — diagnostics never inherit `jsonl` from `codec`; omission ≡ `lines` |
+| `effect` | common | choice, typed | plan | **Required** |
+| `behavior` | common | choice, typed | plan | **Required** |
+| `timeout` | common | Rastok expression → `duration` | instance | Optional — a true optional: no budget declared, no budget |
+| `env` | common | `map<text,text>` | instance | Optional; canonical spelling `env = { "K": v }` |
+| `max_output` | job | byte size: `<digits><unit>`, unit ∈ `B \| KiB \| MiB \| GiB` (explicit, required), ASCII whitespace tolerated around and between, ≤ 4 GiB (syntax bound; the adapter binding additionally proves the budget is REPRESENTABLE on this host — at most `isize::MAX` — while actual allocation is judged chunk by chunk at intake via `try_reserve`, surfacing as the typed overflow, never an abort) — one parser (`contract::byte_size`) judges at check AND enforces at run | plan | Defaulted(`"8MiB"`) |
+| `on_timeout` | job | choice `kill` (one word — "fixed to `kill`") | plan | Defaulted(`kill`) |
+| `correlate` | service | Rastok expression path over invocation data | invocation | Optional |
+| `restart` | service | struct | instance | Optional |
 
 `correlate` and `restart` do NOT exist on the job profile: writing
 one there refuses by NAME (« `restart` belongs to
@@ -256,8 +262,8 @@ truncated bytes never presented as the whole. Every observed exit emits
 compile error here. `timeout` = the whole-run budget; `on_timeout = kill`
 **forced** (bypassing a detached run is meaningless). `restart` is likewise
 a compile error on a job (re-running a possibly-irreversible one-shot is a
-graph decision — a Loop — never a supervisor reflex). `per` still
-orders (alice's conversions run serially) — it shares nothing. The safe
+graph decision — a Loop — never a supervisor reflex). `instances.key` still
+orders one customer's conversions serially — it shares nothing. The safe
 default: zero hidden shared state.
 
 **The `jsonl` wire (D-2026-08-11-1).** One JSON value per `\n`-framed
@@ -295,9 +301,10 @@ matches an open call are its response (OUTBOUND closed, emitted on `out`,
 trigger `p:in`, parent = the request); non-matching lines are **spontaneous
 events** — INBOUND roots (the Process is also a source: codex
 notifications). Without `correlate`: pure streams (in = stdin sink, out =
-stdout source, no calls, no per-call timeout). `per` = one instance per key
-(a codex **per session**), each with its `run_id`, terminal envelope and
-`restart` policy; without `per` = the **explicit** shared singleton. Lazy
+stdout source, no calls, no per-call timeout). `instances.key` = one logical
+Node instance per canonical key (a codex per session), each with its `run_id`,
+terminal envelope and `restart` policy; without `instances` = the explicit
+shared singleton. Lazy
 spawn (first delivery).
 
 ### 3.4 `Clock` — the metronome
@@ -343,7 +350,7 @@ relative — vs calendar time — civil, absolute.)*
 | Attributes | `cap = <n>` (default 10 000 — bounded **by construction**), `overflow = evict_oldest (default, evictions journaled) \| reject` |
 | Correlator | each delivery to `in` or `read` is one operation; a read also completes with an `out` snapshot, and every operation has exactly one ordinary typed exit |
 | Outcome cases | every admitted append or read emits exactly one `MemoryExit`: `Completed` (with an `out` snapshot for a read), or `CapacityExceeded` when `overflow = reject` |
-| Instances | one store per declared Node instance and therefore per partition key when the declaration uses `per` |
+| Instances | one store per declared Node instance and therefore per canonical key when the declaration uses `instances.key` |
 | Journal / sim | content is Node state, recovered by folding appends and evictions at the Node's effective durability scope; reads and their snapshots are journaled and deterministic |
 
 `Memory` stores the incoming `data` value, not a magical copy of the whole
@@ -369,15 +376,15 @@ These names expose common patterns without adding a second execution model:
 | Name | Canonical core form |
 |---|---|
 | `Router` | one pure selector and a finite set of statically declared output ports |
-| `Reducer` | an Operator with `var` state, normally keyed with `per` |
-| `Aggregator` | a Reducer whose partition has a window lifetime |
+| `Reducer` | an Operator with Node-local `var` state |
+| `Aggregator` | a Reducer with `instances.key` |
 | `Joiner` | a multi-input handler using the ordinary join and bound rules |
-| `Dispatch` | the runtime role of a declared `graph ... per <partition>` |
+| `Dispatch` | the runtime role of a Graph carrying `instances.key` |
 | `Jaq` | a pure Operator whose computation is a pinned `jq! { ... }` guest program |
 
 They are deterministic by construction. Their names may improve diagnostics
 and generated diagrams, but the semantics below reduce to the same handlers,
-partitions, and edges as any other Operator or Graph.
+instance addresses, Node-local state, and edges as any other Operator or Graph.
 
 ```rastok
 operator route : Router {
@@ -392,12 +399,8 @@ The selector returns one declared port name, or a list of declared names for
 a bounded multicast. An undeclared result is a typed routing error.
 
 ```rastok
-partition account {
-  key = meta.app.account_id
-  lifetime = persistent
-}
-
-operator total : Reducer per account {
+operator total : Reducer {
+  instances = { key = meta.app.account_id }
   var amount: decimal(18, 2) = 0
 
   on in {
@@ -411,17 +414,15 @@ operator total : Reducer per account {
 the handler.
 
 ```rastok
-partition request {
-  key = meta.app.request_id
-  lifetime = duration("48h")
-}
+operator decide : Joiner {
+  instances = { key = meta.app.request_id }
+  lifetime = { kind = idle ; after = duration("48h") }
 
-operator decide : Joiner per request {
   on (expense, decision) within duration("48h") {
     approval = {
       meta.app.request_id = expense.meta.app.request_id   // per-field pick (D-2026-08-10-2: the merge is automatic, picks are explicit)
       data = {
-        request_id = request.key
+        request_id = instance.key
         approved = decision.data.approved
       }
     }
@@ -433,13 +434,14 @@ The existing join rules still define correlation, bounds, and expiry. A
 `Joiner` cannot hide an unbounded buffer.
 
 ```rastok
-graph conversation per session {
+graph conversation {
+  instances = { key = meta.app.session_id }
   . -> classify -> answer -> .
 }
 ```
 
 This declaration is the Dispatch pattern: the graph type is static, while
-the runtime creates bounded instances by `session` key. No dynamic graph
+the runtime creates instances by session key. No dynamic graph
 type is loaded.
 
 ```rastok
@@ -512,7 +514,7 @@ must instead be owned by a Connector. This rule reserves no new syntax.
 The parallel plane's contract is set (real times = journal `committed_at` +
 spans; nothing wall-clock in the data plane). This note pins four things:
 
-1. **Normative metric names** — per partition: `mailbox_depth`, `lag` (per
+1. **Normative metric names** — per logical instance: `mailbox_depth`, `lag` (per
    edge — *the* backpressure signal), `instances`, `evictions`; per
    Connector: `calls`, `timeouts`, `retries`, `outbound_open` (in-flight),
    `terminals`; per app: `journal_size` vs `low_water_mark`. Dashboards
@@ -526,7 +528,7 @@ spans; nothing wall-clock in the data plane). This note pins four things:
    spans are derived** — never the reverse.
 4. **Per-session cost attribution** — OUTBOUND records MAY carry a `cost`
    map declared by the Connector (tokens, calls, bytes); aggregated by
-   partition key / `origin_id` → per-session spend. With §2: the
+   logical instance address / `origin_id` → per-session spend. With §2: the
    probabilistic surface is *where* the cost lives; the journal *prices*
    it.
 

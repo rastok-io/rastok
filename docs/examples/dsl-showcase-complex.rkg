@@ -1,13 +1,9 @@
-// Illustrative M1.3 target-surface example. HttpServer, Postgres, File,
-// partitions, joins, and the jq/SQL guests remain guarded as of 2026-08-14;
+// Illustrative M1 target-surface example. HttpServer, Postgres, File,
+// keyed owners, lifetime, joins, and the jq/SQL guests remain guarded as of
+// 2026-08-18;
 // Process(job) is executable. The IDENT! frontend syntax shown here lands in
 // M1.3; this file is a design reference, not a current executable fixture.
 graph agent_gateway : App {
-
-  partition user {
-    key = meta.app.user_id
-    lifetime = persistent
-  }
 
   connector webhook : HttpServer {
     listen = "0.0.0.0:8080/inbound"
@@ -60,7 +56,9 @@ graph agent_gateway : App {
     }
   }
 
-  operator enrich_and_gate per user {
+  operator enrich_and_gate {
+    instances = { key = meta.app.user_id }
+    lifetime = { kind = persistent }
 
     var total_tokens_used: int = 0
     var requests_count: int = 0

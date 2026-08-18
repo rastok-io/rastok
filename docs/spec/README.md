@@ -40,6 +40,8 @@ semantic ownership rather than by release layer.
 [expressions.md](expressions.md) (pure expressions + tagged frontends) →
 [grammar.md](grammar.md) (host surface and delimitation) →
 [envelope.md](envelope.md) (identity, metadata, storage) →
+[instances.md](instances.md) (Node-owned keys, state scope, lifetime,
+logical addresses and the shard boundary) →
 [execution-model.md](execution-model.md) (transactions, mailboxes, time) →
 [delivery-semantics.md](delivery-semantics.md) (journal, recovery,
 boundaries) → [simulation-semantics.md](simulation-semantics.md) (the
@@ -60,6 +62,7 @@ six Connectors and guest languages) →
 | [expressions.md](expressions.md) | Rastok expression contract, CEL-compatible core, `IDENT!` tagged frontends, JSON values, narrowing |
 | [grammar.md](grammar.md) | host syntax, keywords, LL(1) productions, expression/frontend positions and delimitation, simulation grammar |
 | [envelope.md](envelope.md) | envelope structure, `meta.sys`, identity framing, storage and wire form, provenance |
+| [instances.md](instances.md) | Node-owned instance keys, canonical logical addresses, Node-local mutable state, lifetime, lifecycle containment, placement/shard separation |
 | [execution-model.md](execution-model.md) | node transactions, mailboxes M:N, ordering, dated events, timeouts, windows, `advance` |
 | [delivery-semantics.md](delivery-semantics.md) | journal records, cursors, backpressure, boundary WAL, recovery, sagas × lifecycle |
 | [simulation-semantics.md](simulation-semantics.md) | simulations, scenarios, fixtures, mocks, expectations, golden traces, coverage, production-to-fixture projection |

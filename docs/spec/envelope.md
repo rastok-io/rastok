@@ -99,7 +99,7 @@ immutable ; and it is honest provenance : that envelope *is* the scope's
 product). **In the language**, the aspect context is *instance* context —
 inside the lexical scope, the Rastok expression environment exposes `meta.sys.saga_id`,
 `saga_stack`, `loop_id`, `loop_stack`, `iter_count` **resolved from the
-aspect instance** (exactly like partition fields `session.key`) : always
+aspect instance** (exactly like the contextual `instance.key`) : always
 present inside — even while processing the scope-*creating* envelope, which
 was born outside — and not in the env at all outside the scope (compile
 error, even with `.?` — no abstraction leak). Lifecycle facts
@@ -148,9 +148,9 @@ The five components :
   **relative to the composition root — the `: App` graph, whose own name is
   EXCLUDED** so renaming the deployment entry does not perturb every
   descendant id,
-  **static, without the partition key** (one envelope can never enter two
-  `per`-instances of the same node — Dispatch routes by key — so the key adds
-  no uniqueness ; it is per-hop journal data). Without this component, two
+  **static, without the logical instance address** (one envelope enters one
+  address of a given node for a delivery; the address therefore adds no
+  envelope uniqueness and remains per-hop journal data). Without this component, two
   nodes fed by the same fan-out envelope would derive colliding child ids.
 - **`trigger`** — *what fired*. Namespaced to make port names and lifecycle
   names collision-free forever :
@@ -307,7 +307,8 @@ Composed cases :
 - **Join** `on (a, b)` → the emitted envelope's `parent_id` is the
   **triggering** envelope (the one whose arrival completed presence) and its
   `trigger` is that envelope's arrival port ; the join partners contributed
-  through partition state, recorded in the per-hop journal (§7).
+  through the owning Operator instance's join buffer, recorded in the per-hop
+  journal (§7).
   **The output inherits the trigger's `origin_id`** — when two lineage roots
   feed one join, the other root stays reachable through the journal (the
   3-piece provenance) ; there is no "merged" origin, and the exported OTel
@@ -327,9 +328,9 @@ transactions that no port arrival triggers :
 
 | Transaction | `trigger` | `parent_id` (the cause) | Emitter (`node_path`) |
 |---|---|---|---|
-| `on start` | `l:start` | the envelope whose arrival created the partition instance | the node itself |
+| `on start` | `l:start` | the envelope whose admission created the Node instance | the node itself |
 | `on stop` via the `stop` action | `l:stop` | the envelope being processed when `stop` ran | the node itself |
-| `on stop` via lifetime expiry | `l:stop` | **the envelope that armed the deadline** — the instance's last-activity envelope (idle-ttl) or its creator (fixed/window). Always exists; there is no phantom tick | the node itself |
+| `on stop` via lifetime expiry | `l:stop` | **the envelope that armed the deadline** — the last admitted envelope (`idle`), creator (`fixed`), or creating admission of the processing-time box (`tumbling`). Always exists; there is no phantom tick | the node itself |
 | Loop re-injection | `l:next` | the previous call's output — the chain *is* the iteration history | **the `: Loop`-carrying node** |
 | Saga compensation envelope | `l:compensate` | **the envelope explicitly routed to `Saga.rollback`** (or the saga's `SagaExpired` timeout event); for compensations 2..n: the previous compensation's ack (the chain IS the reverse rollback order) | **the `: Saga`-carrying node**, port `compensate` (reserved), index 0 |
 | Budget expiry (call `timeout`, `Saga.timeout`) | `l:timeout` | **the envelope that ARMED the budget** — the request (call) ; the instance-creating envelope (saga) | the Connector node / the `: Saga` node |
@@ -516,7 +517,7 @@ together reconstruct everything :
 |---|---|---|
 | `parent_id` linked list | envelope | the primary lineage, walkable via the journal in `O(depth)` |
 | join contributions | journal, per-hop — the **`join_inputs`** field of the joining TRANSACTION record's causal core ([delivery-semantics.md §1](delivery-semantics.md)) | the full DAG (which envelopes fed which transaction) |
-| partition key at each keyed node | journal, per-hop | which node keyed the envelope to which key |
+| logical instance reference at each hop | journal, per-hop | which Node address and generation received the delivery |
 | `committed_at` (UTC) | journal, per-hop — an **observation annotation** on the record (outside the causal core / the trace fingerprint, [delivery-semantics.md §1](delivery-semantics.md)) | the **regulatory timestamp** — commit-authoritative, single source of truth |
 
 The `parent_id` pointer *references* history, it does not *transport* it :
@@ -526,7 +527,7 @@ correlation, debug) but the chain only walks back as far as upstream envelopes
 still live in memory.
 
 **The journal's structure (fields, access rules) is specified separately** —
-it is the home of `seq`, `committed_at`, the partition key per hop, and the
+it is the home of `seq`, `committed_at`, the logical instance reference per hop, and the
 join contributions. See [delivery-semantics.md](delivery-semantics.md) (#4) and
 the audit dossier (#8). This doc only states *what moved there* and *why*.
 
@@ -537,7 +538,7 @@ Three principles drove every inclusion and every removal :
 
 1. **The envelope carries identity ; the journal carries events.** Anything
    that is a *fact of a transaction* (when it committed, in what arrival position, at
-   what partition key, who else fed the join) is per-hop and lives in the
+   what logical instance reference, who else fed the join) is per-hop and lives in the
    journal — not on the envelope. Anything that is the envelope's own *identity*
    (its derived id, its lineage pointers, its role, its content type, its build
    stamp) is on the envelope.
@@ -566,9 +567,9 @@ canonical mapping :
 | Old field | Status | Where the concern went |
 |---|---|---|
 | `envelope_id` | renamed | → `id` (now derived, §2) |
-| `seq` | removed from envelope | → per-hop journal ; ordering = mailbox FIFO per partition (§7, and execution model #2) |
+| `seq` | removed from envelope | → per-hop journal ; ordering = mailbox FIFO per instance reference (§7, and execution model #2) |
 | `created_at` | **removed** | hidden clock leak (§8) ; regulatory timestamp → journal `committed_at` |
-| `correlation_id` | removed | → Connector-internal protocol ids + partition key + a `meta.app` echo-token (re-addable later, additive) |
+| `correlation_id` | removed | → Connector-internal protocol ids + logical instance address + a `meta.app` echo-token (re-addable later, additive) |
 | `trace_id` | merged | → `origin_id` *is* the OTel trace id (§1.1). There is **no** `meta.sys.trace_*` field, now or planned. |
 | `direction` | removed | no use case (the stream-protocol "direction" of a *Connector* is a different thing and stays) |
 | `action` (`forward`/`compensate`) | renamed | → `role` (extensible enum, §1.1) |

@@ -24,7 +24,6 @@
 ```rastok
 graph sim05 : App {
   durability = local
-  partition user { key = meta.app.user_id; lifetime = duration("2h") }
 
   connector ping   : HttpServer { path = "/ping" ; effect = none }
   connector notify : HttpClient {
@@ -34,7 +33,10 @@ graph sim05 : App {
     timeout = duration("5s")
   }
 
-  operator count per user {
+  operator count {
+    instances = { key = meta.ext.user_id }
+    lifetime = { kind = idle; after = duration("2h") }
+
     input in : struct { }
     var n : int = 0
     on in {
@@ -87,7 +89,7 @@ for readability and are excluded from the causal-core fingerprint.
                              role: default, graph_version: 1,
                              meta.app: { user_id: "alice" },      ← UTF-8 field order
                              data: struct {} } }
-2  TRANSACTION { node: "count", key: "alice", trigger: "p:in",
+2  TRANSACTION { node: "count", instance_address: count[key="alice"], trigger: "p:in",
                  consumed: [ (edge ping→count, pos 1) ],          ← the cursor
                  state: { n: 0 → 1 },
                  emissions: [ (out, 0, C1 = H("count"‖"p:in"‖A0‖"out"‖0),
@@ -98,7 +100,7 @@ for readability and are excluded from the causal-core fingerprint.
                  key: ∅ (idempotent, no idempotency_key), digest: d(C1), t: 0 }
                  — chrono armed : would expire at t=5
 4  OUTBOUND      { closed(response) : call C1, reply R1 = { ok: true } }
-5  TRANSACTION { node: "notify", key: "alice", trigger: "p:in",
+5  TRANSACTION { node: "notify", instance_address: notify[singleton], trigger: "p:in",
                  consumed: [ (edge count→notify, pos 1) ],
                  state: ∅,
                  emissions: [ (out, 0, N1 = H("notify"‖"p:in"‖C1‖"out"‖0),
@@ -107,7 +109,7 @@ for readability and are excluded from the causal-core fingerprint.
                  — N1 wired to `nothing` : discarded, WRITTEN in the graph text
 6  INBOUND     { connector: "ping", inbound_seq: 1, committed_at: 0,
                  envelope: { id: A1 = H("ping"‖1), … } }
-7  TRANSACTION { node: "count", key: "alice", trigger: "p:in",
+7  TRANSACTION { node: "count", instance_address: count[key="alice"], trigger: "p:in",
                  consumed: [ (edge ping→count, pos 2) ],
                  state: { n: 1 → 2 },
                  emissions: [ (out, 0, C2 = H("count"‖"p:in"‖A1‖"out"‖0),
@@ -116,7 +118,7 @@ for readability and are excluded from the causal-core fingerprint.
                  committed_at: 0 }
 8  OUTBOUND      { open : call C2, connector: "notify", digest: d(C2), t: 0 }
 9  OUTBOUND      { closed(response) : call C2, reply R2 = { ok: true } }
-10 TRANSACTION { node: "notify", key: "alice", trigger: "p:in",
+10 TRANSACTION { node: "notify", instance_address: notify[singleton], trigger: "p:in",
                  consumed: [ (edge count→notify, pos 2) ],
                  emissions: [ (out, 0, N2 = H(…‖C2‖"out"‖0), { data: { ok: true } }) ],
                  committed_at: 0 }

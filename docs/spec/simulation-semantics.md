@@ -244,8 +244,8 @@ expect "charged exactly once" ledger.in count == 1 …       // optional label, 
   scenario; the scenario language has no positive `expect fault` form yet.
   A future supervision slice may add one explicitly, but it must not recreate
   a synthetic `err` producer or graph envelope.
-- **Black-box only** : expectations target ports ; internal state (`var`,
-  partition fields) is not directly assertable — the golden trace (§6) sees
+- **Black-box only** : expectations target ports ; Node-local `var` state and
+  runtime instance context are not directly assertable — the golden trace (§6) sees
   everything anyway, and scenarios stay robust to internal refactorings.
 
 ### 5.3 Civil time in scenarios — `origin`
@@ -411,7 +411,8 @@ incident is a **mechanical projection**, not inference :
 | crash + recovery (visible in the journal) | → | `crash after <record>` / `restart` |
 
 The **slice** is well-defined : the transitive closure of a lineage through
-the 3-piece provenance (parent chain + join contributions + per-node keys).
+the 3-piece provenance (parent chain + join contributions + per-hop logical
+instance addresses).
 
 This table is a *completeness contract on the journal* : every row requires
 only data the three record types already carry. The extraction tooling itself

@@ -4,8 +4,9 @@
 > projection profiles between external schemas and Rastok
 > [`DataType`](types.md). A Connector may implement a strict subset, but it may
 > not reinterpret or weaken a refusal. Library iteration order and physical
-> container layout never become type identity. B8 package v7 transports every
-> resulting logical type and union discriminant. B9 implements the adapters in
+> container layout never become type identity. Published package v7 transports
+> every resulting logical type and union discriminant; the next categorical
+> instance format retains that registry. B9 implements the adapters in
 > `rastok::schema_projection` and pins their reverse projections, physical
 > union mappings and refusal corpus.
 

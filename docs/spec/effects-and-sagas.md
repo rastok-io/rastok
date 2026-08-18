@@ -350,14 +350,14 @@ mechanism declared *implicitly* by :
 - per-Connector : `effect = compensable` + `on compensate { … }`
 - per-scope     : `: Saga` aspect on a graph (or any node)
 
-It runs alongside the partition manager and the provenance chain. All three
+It runs alongside the instance scheduler and the provenance chain. All three
 share the same property : **statically declared, runtime-orchestrated, no
 hidden magic**.
 
 | Layer | Declared by | Runtime mechanism |
 |---|---|---|
 | Provenance | the journal (`durability = local` for single-host recovery ; `global` for cross-host/audit reach) | the causal records + `join_inputs` (delivery-semantics §6) |
-| Partition / grain | `per <partition>` | mailbox + FIFO + single-active-instance per key |
+| Node instance | optional `instances.key` + `lifetime` | addressed mailbox + FIFO + one active transaction per instance |
 | **Saga manager** | `: Saga` aspect + `effect = compensable` | provenance walker + compensation dispatcher |
 | **Loop manager** | `: Loop` aspect | re-injection scheduler + iteration counter + measure checker |
 
@@ -515,7 +515,7 @@ silent."
 Two mechanisms carry saga context :
 
 - **In the Rastok expression environment** (inside the lexical `: Saga` scope, resolved from the
-  **saga instance**, like partition fields) : `meta.sys.saga_id`,
+  **saga instance**, alongside contextual `instance.key`) : `meta.sys.saga_id`,
   `saga_stack`. Always present inside — even while processing the
   scope-creating envelope ; not in the env outside (compile error, even with
   `.?`).
@@ -581,6 +581,12 @@ fixed by the normative contracts.
    on different shards / hosts, the saga manager must coordinate cross-host.
    That coordination requires a separate cluster contract; this
    specification only declares the static semantics.
+
+   Closing a Node instance does not cancel compensation debt. A pending Loop
+   wakeup is generation-scoped, but a committed Saga step is journal-scoped:
+   the fold re-derives and resumes its required compensations after instance
+   closure, restart, or shard movement. `l:stop` is never permission to erase
+   that history.
 
 6. **Process lifecycle interplay.**
    ([delivery-semantics.md §7](delivery-semantics.md)). Saga state is a

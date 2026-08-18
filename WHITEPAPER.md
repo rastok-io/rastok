@@ -77,9 +77,10 @@ live in the annex (§9), after the model they compare.
 And for the reader who wants the model up front, in one formal
 sentence:
 
-> *Rastok is a graph of stateful state machines, keyed by named
-> partitions, communicating through immutable envelopes over a strictly
-> acyclic topology, specifiable by executable simulations.*
+> *Rastok is a strictly acyclic graph of typed Nodes whose logical instances
+> communicate through immutable envelopes, commit Node-local state and
+> effects through a causal journal, and are specifiable by executable
+> simulations.*
 
 Every word of that sentence is unpacked in §2–§6.
 
@@ -106,7 +107,7 @@ difficult operational properties:
 
 | Problem | What commonly goes wrong | Rastok's contract |
 |---|---|---|
-| Long-lived keyed state | Session state is scattered across workers, caches, and correlation tables. | Named partitions index state, serialize work per key, and expose lifetime. |
+| Long-lived keyed state | Session state is scattered across workers, caches, and correlation tables. | A Node selects a logical instance by key; its private state and mailbox serialize work, while lifetime remains an independent policy. |
 | Events arriving out of order | Each flow grows its own correlation state machine and locking rules. | Bounded joins correlate typed envelopes by key. |
 | External side effects | HTTP calls, processes, files, payments, and retries are hidden inside application code. | Every external interaction crosses a declared Connector. |
 | Probabilistic components | An LLM may return different answers for the same request, with variable latency and cost. | The journal records each boundary outcome; the graph isolates and measures the probabilistic surface. |
@@ -203,7 +204,7 @@ from the source, always accurate, and never a second artifact to keep
 in sync. Text is what Git versions, reviewers compare, CI checks, type
 systems verify, and LLMs generate fluently.
 
-> Rastok = a typed DAG of state machines, keyed by named partitions,
+> Rastok = a typed DAG of Node-owned logical instances,
 > communicating through immutable envelopes, with every effect
 > crossing a declared boundary.
 
@@ -217,11 +218,10 @@ The platform of §1.2 follows from four decisions:
    Mock the Connectors and the graph becomes a closed, deterministic
    system. That makes simulation (§6) a first-class artifact
    instead of a best-effort test harness.
-3. **Named partitions define keying dimensions for stateful Nodes**
-   (§3). A partition does not represent global graph state. It tells
-   the runtime how to index a Node's state. Processing is serialized
-   per key and parallel across keys, which supports local reasoning and
-   sharding (§4).
+3. **A Node may select its own logical instance by key** (§3), independently
+   of its lifetime. Its `var` state remains private to that Node. Processing
+   is serialized within one instance and may run in parallel across addresses;
+   every keyed owner is also a future sharding boundary (§4).
 4. **Every transaction is journaled.** A node consumes an envelope,
    updates its state, and emits atomically. The journal records the
    outcome of every arrival race. A run is a pure function of
@@ -312,7 +312,6 @@ side never arrives, the bounded join reports the technical
 
 ```rastok
 graph expense_approval : App {                     // `: App` marks the deployment entry
-  partition expense { key = meta.ext.request_id ; lifetime = duration("72h") }
   output rejection
 
   connector requests   : HttpServer { path = "/requests" }    // two independent sources
@@ -324,7 +323,10 @@ graph expense_approval : App {                     // `: App` marks the deployme
     idempotency_key = meta.ext.request_id
   }
 
-  operator decide per expense {                    // state keyed by the expense
+  operator decide {                                // one logical instance per expense
+    instances = { key = meta.ext.request_id }
+    lifetime = { kind = idle ; after = duration("72h") }
+
     output approval
     output rejection
 
@@ -333,7 +335,7 @@ graph expense_approval : App {                     // `: App` marks the deployme
       within duration("48h") {
       approval = {
         meta.ext.request_id = request.meta.ext.request_id   // a join picks explicitly; common fields merge (CommonOrAbsent)
-        data = { request_id = expense.key,
+        data = { request_id = instance.key,
                         amount     = request.data.amount }
       }
     }
@@ -343,7 +345,7 @@ graph expense_approval : App {                     // `: App` marks the deployme
       within duration("48h") {
       rejection = {
         meta.ext.request_id = request.meta.ext.request_id
-        data = { request_id = expense.key,
+        data = { request_id = instance.key,
                         amount     = request.data.amount,
                         reason     = decision.data.reason }
       }
@@ -410,8 +412,8 @@ The message of this example: **two independent events may arrive in any
 order; Rastok correlates them by key, separates approval from rejection,
 and bounds the wait.** Note what is already visible:
 
-- **Stateful correlation is the model, not plumbing.** `per expense`
-  keys the operator's state; the join `on (request, decision)` matches
+- **Stateful correlation is the model, not plumbing.** `instances.key`
+  selects the Operator instance; the join `on (request, decision)` matches
   the two legs of the *same* expense automatically, whatever the arrival
   order.
 - **Business outcomes and technical outcomes remain distinct.** The two
@@ -458,12 +460,10 @@ agent), with bounded concurrency and per-session lifetime. Abridged from
 [docs/examples/teams-codex-gateway.rkg](docs/examples/teams-codex-gateway.rkg):
 
 ```rastok
-graph sessions per session {          // declaration = instantiation; `per` = one instance per key
-  max_instances = 1000                // Dispatch knobs are ordinary body attributes
-  spawn_policy  = lazy
-
-  partition session { key = meta.app.session_key ; lifetime = duration("2h") }
-  val cwd = "/workspace/" + session.key            // per-instance Rastok expression
+graph sessions {                       // declaration = instantiation
+  instances = { key = meta.ext.session_key }
+  lifetime  = { kind = idle ; after = duration("2h") }
+  val cwd = "/workspace/" + instance.key           // immutable instance context
 
   connector codex : Process {
     command = "codex"
@@ -481,7 +481,6 @@ graph sessions per session {          // declaration = instantiation; `per` = on
   codex.out -> out
   codex.err           -> nothing      // abridged: production wires a diagnostic sink
   codex.exit          -> nothing      // terminal outcome of each correlated call
-  codex.instance.exit -> nothing      // terminal outcome of the resident child
   // err is stderr; exit carries Exited/TimeoutExpired/etc. Every
   // boundary crossing is journaled, so
   // per-session cost is an aggregate over the journal, not a guess.
@@ -503,7 +502,7 @@ graph agent_gateway : App {
 lab agent_gateway {
   simulation conversations on app {
     scenario first_turn "a user message reaches codex ; the reply reaches the user" {
-      mock sessions.codex {             // a qualified path into the per-key sub-graph
+      mock sessions.codex {             // a qualified path into the keyed sub-graph
         on in where data.type == "message" {
           out = { method = "item/agentMessage",
                   params = { message = "Bonjour" } }
@@ -523,15 +522,15 @@ lab agent_gateway {
 }
 ```
 
-The rule this example makes visible: **declaring is placing, `per` is
+The rule this example makes visible: **declaring is placing, key selection is
 cardinality, wiring is naming.** A `graph` is a Node like any other —
 `sessions` is declared once and wired by name. Because it has
-`per session`, the runtime materializes one graph instance for each
+`instances.key`, the runtime materializes one graph instance for each
 distinct session key. Every child Node belongs to that graph instance.
-A child with its own `per` adds that keying dimension; a child without
-one has one instance inside its parent Graph instance. The
-`max_instances` and `spawn_policy` attributes control when those
-per-key Graph instances are created and how many may coexist.
+A child with its own `instances.key` adds an independently shardable address
+frame; a child without one has one singleton instance inside its parent Graph
+instance. Live-cardinality caps and placement remain deployment policy rather
+than source semantics.
 
 Beyond the mechanics, note the operational posture: a thousand
 concurrent sessions are one declaration and one knob — and one journal.
@@ -683,6 +682,12 @@ The plan boundary leaves room for future execution forms:
 
 These are architectural directions, not current product commitments.
 
+Although cycle checking may expand composition into one spatial DAG, the
+validated plan retains the parent-linked Graph/Operator/Connector owner tree.
+That tree is semantic: it locates Graph boundaries, instance frames, private
+state and lifecycle. A compiler may flatten passive routing, but it may not
+erase an owner and later attempt to reconstruct containment from a path.
+
 Rastok recognizes exactly **three families of node**, sharing the same
 underlying structure:
 
@@ -694,7 +699,7 @@ Node
 ```
 
 An Operator reacts to envelope arrivals on its inputs, optionally reads
-and updates state keyed by a partition, and emits zero or more
+and updates Node-local state in its current logical instance, and emits zero or more
 envelopes on its outputs. A Connector is a Node with extra
 **boundary attributes** (URL, path, command, codec, schedule, …) that
 describe how it interacts with the external world (HTTP, processes,
@@ -780,7 +785,7 @@ routing therefore does not pay parse cost. The exact authority is
 Every Node, regardless of family, shares one declarative skeleton:
 
 ```
-<family> <name> [: <annotation>] [per <partition>] { <body> }
+<family> <name> [: <annotation>] { <body> }
 
 family     : operator | connector | graph        (a graph instantiates by DECLARATION
                                                    and wires by name ; the `: App` role
@@ -804,15 +809,18 @@ the additional `exit` output carries the tagged `ProcessExit`
 non-zero exit is an `Exited` fact; graph policy decides what it means.
 
 ```rastok
-operator <name> [: <trait + aspects>] [per <partition>] {
+operator <name> [: <trait + aspects>] {
   input  <port> [: <type>]   // source annotation optional; effective type mandatory after validation
   output <port> [: <type>]   // a single-in/out node just uses the defaults
 
   var <field>: <type> [= <default>]    // optional state fields
 
-  on start            { ... }          // partition starts (lazy, first key)
+  instances = { key = <expr> }         // optional; absence = singleton
+  lifetime  = { kind = <profile> ... } // optional; absence = persistent
+
+  on start            { ... }          // logical instance starts lazily
   on <trigger> [where …] [having …] [within …] [last …] { ... }   // see §2.3
-  on stop             { ... }          // partition ends (lifetime expired)
+  on stop             { ... }          // logical instance has finished Closing
 }
 ```
 
@@ -821,34 +829,36 @@ outside world; built-ins do not re-declare their ports (their type
 defines them):
 
 ```
-connector <name> : <NativeType> [per <partition>] {
+connector <name> : <NativeType> {
   <attr> = <value>           // e.g., url = "...", codec = json ; Connectors declare NO ports
   on <trigger> { ... }       // the contract + codec resolve every typed port
 }
 ```
 
-A sub-graph is a Node too: **its declaration is its instance**. It is
-keyed by its own `per <partition>` and wired by name. Dispatch knobs
-are body attributes:
+A sub-graph is a Node too: **its declaration is its instance owner**. It is
+wired by name and may select keyed instances exactly like any other Node:
 
 ```
-graph <name> [: App | <aspects>] [per <partition>] {   // per → one instance per key (Dispatch, §2.6)
-  max_instances = 1000                 // optional Dispatch knobs (body attributes)
-  val <field> = "..." + <partition>.key + "..."   // per-instance graph-level Rastok expressions
+graph <name> [: App | <aspects>] {
+  instances = { key = <expr> }         // optional; one Graph instance per key
+  lifetime  = { kind = idle ; after = duration("2h") }
+  val <field> = "..." + instance.key + "..."      // immutable instance context
   ...                                  // operators / connectors / sub-graphs / wiring
 }
 ```
 
 Three categories of section:
 
-- **Declarative interface** (`input`, `output`, `var`, `per`). **Ports
+- **Declarative interface** (`input`, `output`, `var`, `instances`,
+  `lifetime`). **Ports
   are implicit**: `on <name>` declares an input, an assignment
   `<name> = …` declares an output, and `in`/`out`/`err` have conventional
   directions — so a Node usually declares no ports at all. A conventional
   port not used by the program does not exist in its effective table. `input` /
   `output` are written only to *pin* a type/schema, or to document a
   node with no handler (a saga) or a graph's public interface. `var`
-  holds state; `per` keys it to a partition.
+  holds state owned only by that Node; `instances.key` selects its logical
+  address and `lifetime` independently controls temporal closure.
 - **Active behavior** — the `on <trigger>` handlers (§2.3). Outputs are
   assigned explicitly; **atomic multi-emit** uses tuple assignment
   `(out, exit) = (e1, e2)`. A handler may emit nothing (pure state
@@ -878,7 +888,7 @@ condition and bound the join state.
 | Trigger        | Fires when                                                          |
 |----------------|---------------------------------------------------------------------|
 | `on a`         | an envelope arrives on port `a`                                     |
-| `on (a, b, …)` | envelopes are present on all named ports (a **join**), zipped by arrival order within the partition |
+| `on (a, b, …)` | envelopes are present on all named ports (a **join**), zipped by arrival order within the owning Operator instance |
 
 OR across ports is expressed as **separate handlers** (`on a { }` /
 `on b { }`) — there is no `||` in a trigger.
@@ -886,15 +896,15 @@ OR across ports is expressed as **separate handlers** (`on a { }` /
 **Refinements.** `where <pred>` is a predicate over the matched
 envelopes' content; `having count(p) >= k` is a quorum (k-of-n).
 
-**Join key = partition key.** For an Operator `per K`, every envelope
-on every input must yield `K` (that is how it routes to the right
-partition instance) — so a join correlates by `K` for free; `by
-<expr>` overrides the key when needed. The §1.5 approval graph is
-exactly this: `on (request, decision)` matches the two legs of the
-same expense because both carry the `expense` key.
+**Join key = owner instance.** Every envelope reaches one logical instance of
+the Operator before it can enter the join buffer, so `on (a, b)` correlates in
+that address for free. There is no second `by` key authority. If a flow needs
+a different correlation domain, the Operator declares the corresponding
+`instances.key`. The §1.5 approval graph is exactly this: both legs select the
+same request-id instance.
 
 **Joins are bounded — and the bound is behavior.** A presence join
-(`on (a, b)`) zips by arrival order within the partition and is
+(`on (a, b)`) zips by arrival order within the instance and is
 bounded by edge backpressure. A join whose `where` *correlates the
 content* of several ports is a θ-join and must declare an explicit
 bound: `last N` (count — the static memory guarantee, clock-free)
@@ -933,19 +943,21 @@ chosen the value (D-2026-08-10-2). Single-input handlers copy each
 zone from their one parent; `meta.ext.content_type` follows the
 payload, not the merge (D-2026-08-10-4).
 
-**Lifecycle.** `on start` fires when a partition key is first seen;
-`on stop` when its `lifetime` expires. Inside any handler the **`stop`**
-action ends the current partition instance after the handler completes
-(`stop <partition>` to target one of several bound partitions). To
-reset a `var` without ending the partition, just assign it (`count =
-0`). `on stop` is the time-driven counterpart of the event-driven
-`stop` action.
+**Lifecycle.** `on start` fires when the first envelope is admitted to a new
+logical Node instance. A lifetime deadline or bare **`stop`** requests Closing
+of that current instance after the transaction commits. `on stop` runs last,
+after already admitted work and every required Connector terminal `exit` have
+been handled under the bounded Closing contract. There is no targeted
+`stop <name>`. To reset a `var` without ending its owner, assign it (`count =
+0`). Stopping a Graph also closes its live descendants inner-first; this is a
+lifecycle relation, not shared state.
 
 **No `on tick`.** All time-based behavior comes from a `Clock`
 wired to an input — time enters the graph as envelopes (§5):
 
 ```rastok
-operator stats per session {
+operator stats {
+  instances = { key = meta.app.session_id }
   input  tick : timestamp                // a Clock tick's payload IS the timestamp
   var count: int = 0
 
@@ -963,14 +975,16 @@ minute_clock -> stats.tick
 ```
 
 A join example (settle an order once both legs arrive, correlated by
-the `order` partition key):
+the Operator's order-id instance):
 
 ```rastok
-operator settle per order {
+operator settle {
+  instances = { key = meta.app.order_id }
+
   on (invoice, payment) {
     out = {
       meta.app.invoice_id = invoice.meta.app.invoice_id   // a join picks explicitly; common fields merge (see below)
-      data = { order_id = order.key,     // `order` = the partition → its key
+      data = { order_id = instance.key,  // read-only current owner key
                       amount   = invoice.data.amount,   // envelopes are named by PORT
                       paid     = payment.data.confirmed }
     }
@@ -985,7 +999,7 @@ in an external system — for example, a Postgres query may call
 `NOW()` — but its controlled Lab handler must return a declared outcome
 instead of reading the host clock.
 
-### 2.4 State and partition reads
+### 2.4 Node-local state
 
 State is **read-modify-write, imperatively**, within a transaction. A
 persistent field `var x: T = default` is read by its bare name (`x`)
@@ -997,7 +1011,8 @@ value, exactly like an imperative function. The transaction as a whole still
 commits atomically — state delta + emissions + audit — at its end.
 
 ```rastok
-operator counter per session {
+operator counter {
+  instances = { key = meta.app.session_id }
   var count: int = 0
 
   on msg {
@@ -1015,7 +1030,7 @@ actual `DataType`/`Value` domain and extensions such as exact decimal,
 unions and narrowing. Expressions are checked, bounded, pure and have no
 ambient I/O. The right-hand side of an assignment is a Rastok expression
 (§2.5): `count = count + 1`, `x = x * 2 + data.n`,
-`label = meta.app.region + "-" + tenant.key`. Structural reshaping may
+`label = meta.app.region + "-" + instance.key`. Structural reshaping may
 use tagged frontends such as `jq! { … }` / `sql! { … }`. No expression
 position admits `now()`, environment lookup, network or filesystem I/O.
 
@@ -1038,56 +1053,36 @@ proceeds imperatively. The synchronous-dataflow `pre` of Lustre/SCADE
 applies at the **inter-transaction** boundary — each transaction is one cycle —
 not *inside* a transaction (see §9.1).
 
-**Read-only cross-partition access.** An Operator bound to one
-partition may read another partition's state by nominal lookup. It
-cannot write that state. The runtime
-extracts the other partition's key from the current envelope and
-returns the requested var:
+**One owner, no remote reads.** A `var` belongs exclusively to the Node that
+declares it and is visible only in that Node's handlers. A child Node cannot
+read an ancestor Graph's mutable cell, and sibling Nodes cannot address one
+another's cells by name. Keying a Graph serializes its own mailbox; it does not
+turn the whole traversal of an envelope into a graph transaction.
+
+Shared mutable behavior is modeled as an explicit stateful Operator with typed
+command/result ports. Operations that must be atomic over the same state live
+in that Operator's handlers and are serialized by its instance mailbox:
 
 ```rastok
-operator session_metric per session {
-  var count: int = 0
+operator account {
+  instances = { key = meta.app.account_id }
+  var balance: long = 0
 
-  on msg {
-    count = count + 1
+  on debit {
+    balance = balance - data.amount
+    out = { balance = balance }
+  }
 
-    out = {
-      meta.app.tenant_plan = tenant.?plan_tier.orValue("free")   // cross-partition read, with default
-      meta.app.session_id = session.key                // current partition's key
-      meta.app.trigger_id = meta.sys.id                // current envelope's derived id
-      meta.app.count      = count                      // my own state (new value, imperative)
-    }
+  on credit {
+    balance = balance + data.amount
+    out = { balance = balance }
   }
 }
 ```
 
-The compiler resolves `<partition>.<field>` against the
-partitions declared in the graph (see §3).
-
-**Two rules for cross-partition reads**:
-
-1. **Uniqueness (compile-time)** — for each `(partition, field)`
-   pair, at most one Operator in the graph may declare that
-   var. Two Operators `per tenant` both declaring `var plan_tier`
-   is a build error: the cross-read would be ambiguous. Rename
-   one, or merge the Operators.
-2. **Absence handling (compile-time + runtime)** — a
-   cross-partition read produces `T?` (an optional). If upstream
-   paths to the reading Operator don't all guarantee the
-   partition's key is present in `meta.app`, the compiler emits a
-   warning. Absence follows the Rastok expression absent-field grid
-   ([grammar.md](docs/spec/grammar.md) §References; the old « missing ≡ null » rule
-   survives only inside `jq! { }` blocks). The dev handles legitimate
-   absence explicitly — `.?` + `.orValue()` in Rastok expressions, `//` in jq:
-
-   ```
-   val plan = tenant.?plan_tier.orValue("free")   // expression: absence is explicit
-   val cap  = jq! { .data.max_tokens // 1000 }     // inside jq: a missing DOCUMENT field is null
-   ```
-
-Writes are not allowed across partitions — only the Operator
-declared `per <partition>` may write its state. Cross-partition
-access is read-only.
+This removes nominal action at a distance and gives one ACID unit everywhere:
+the Node transaction. Across Nodes, composition is envelopes plus the causal
+journal, not shared memory.
 
 #### 2.4.1 Values and state: `val` / `var`
 
@@ -1098,12 +1093,11 @@ not by the keyword.
 
 | Keyword | Where | Mutable? | Lifetime |
 |---|---|---|---|
-| `val` | App-level | no | App run (global constants) |
-| `val` | Graph-level | no | Graph instance — per partition key when the graph is `per …` (derive from `<partition>.key`, a Rastok expression) |
-| `val` | Operator-level | no | App run (Operator-scoped constants) |
+| `val` | Unit/App-level | no | deployment run (global immutable input) |
+| `val` | Graph-level | no | current Graph instance; lexically visible to descendants and may derive from `instance.key` |
+| `val` | Operator/Connector-level | no | current Node instance; private to that Node |
 | `val` | Inside a handler | no | One transaction (handler-local binding) |
-| `var` | Operator-level (with or without `per`) | yes (read-modify-write per transaction) | Partition slot (or graph-scoped) |
-| `var` | Graph-level (shared across operators) | — | **deferred** — depends on a complete per-key concurrency contract |
+| `var` | Node-level | yes (read-modify-write per transaction) | current logical Node instance; visible only in that Node's handlers |
 
 ```rastok
 graph my_app : App {
@@ -1111,9 +1105,10 @@ graph my_app : App {
   val SLACK_CHANNEL = "#alerts"
 }
 
-operator pricing per tenant {
+operator pricing {
+  instances = { key = meta.app.tenant_id }
   val TIERS = { "free": 0, "pro": 99, "enterprise": 999 }   // Operator-level constant (a map: `:` keys)
-  var subscribed_tier: text = "free"                   // partition state
+  var subscribed_tier: text = "free"                   // private Node-instance state
 
   on upgrade {
     val tier = data.new_tier                           // handler-local binding (val = DRY, used twice)
@@ -1123,12 +1118,31 @@ operator pricing per tenant {
 }
 ```
 
-A graph declared `per <partition>` also holds **graph-level `val`s** — per-instance
-constants derived from `<partition>.key` in Rastok expressions (e.g. a session's home dir / cwd),
-referenced by name by the nodes inside it (see §3 and the
-[grammar](docs/spec/grammar.md)). Mutable per-key state stays in an operator
-`var per …`; a *shared* graph-level `var` across operators is deferred (it
-depends on a complete per-key concurrency contract).
+A keyed Graph may hold **graph-level `val`s** derived from `instance.key`
+(for example a session's home directory). Descendants may read those values
+because they are immutable lexical context. A Graph `var`, if declared, is
+still private to the Graph's own handlers; lexical containment never grants a
+mutable read to a child.
+
+These scopes also define evaluation phase. Unit/App boot `val`s are resolved
+once for the deployment. A Node-level `val` is derived once for each new
+instance from enclosing immutable values and that owner's local
+`instance.key`; it cannot read `data`, `meta`, or mutable state. Handler-local
+`val`s are transaction bindings. `instance.key` is a reserved contextual root,
+not a name that searches upward: a child consumes a parent Graph key only
+through a lexical Graph `val`.
+
+Connector contracts apply the same distinction by declaring the latest
+evaluation site a field permits: plan, boot, instance, or invocation. Checking
+selects the earliest site where the written expression closes. Profile,
+port-type, effect, behavior, and other plan-shaping attributes permit only
+plan resolution. An operational setting (`cwd`, path, URL, command, arguments,
+environment) may permit instance binding; its typed expression may consume
+enclosing immutable context and is evaluated once when the Connector instance
+binds. A literal still reduces at plan and an `env()`-only expression at boot.
+The plan transports the actual phase and expression, so neither the runtime
+nor the adapter guesses. This is what makes a child `Process` safely consume a
+session Graph's immutable `cwd` without gaining access to its state.
 
 Reading rules:
 - **In bare DSL** (envelope literals, assignments, conditions):
@@ -1141,29 +1155,27 @@ Reading rules:
   previously committed value. They are the same operation
   expressed in the respective grammars.
 
-Tunable runtime knobs (e.g., a feature flag that an admin can flip
-without redeploying) are not a separate concept — they are just a
-graph-scoped Operator with a `var` and an admin control port:
+Tunable runtime knobs (e.g., a feature flag that an admin can flip without
+redeploying) are not shared variables. They are an explicit stateful Operator
+with typed control and query/output ports:
 
 ```rastok
 operator settings {
   var rate_limit: int = 100
 
-  on admin { rate_limit = data.?rate_limit.orValue(rate_limit) }  // absent field → keep current
-}
-
-operator stamp per tenant {
-  on req {
-    out = { meta.app.rate_limit = settings.rate_limit }  // read the live knob
+  on admin {
+    rate_limit = data.?rate_limit.orValue(rate_limit)
+    changed = { rate_limit = rate_limit }
   }
+
+  on read { current = { rate_limit = rate_limit } }
 }
 ```
 
-The admin pushes envelopes to `settings.admin` (via the Cloud UI
-or an HTTP endpoint) and the change propagates without redeployment —
-an Operator without `per` holds a single graph-scoped cell, and other
-nodes read it by name (`settings.rate_limit`) under the same rules as a
-cross-partition read: one writer, read-only for everyone else.
+The admin pushes envelopes to `settings.admin` (via the Cloud UI or an HTTP
+endpoint); consumers wire `settings.changed` or request `settings.read`.
+Ownership and ordering are visible in topology instead of hidden behind a
+nominal remote read.
 
 ### 2.5 Computation: Rastok expressions, tagged frontends, helpers, and primitives
 
@@ -1177,7 +1189,7 @@ guest; SQL is the planned relational guest.
 Additional guests are admitted only through the same contract.
 
 **Rastok expressions — the intrinsic core.** Every expression position in the DSL — a
-`where` guard, a partition key, a Router selector, a state expression,
+`where` guard, an instance-key expression, a Router selector, a state expression,
 an attribute value, a simulation expectation — is one pure Rastok expression:
 
 ```rastok
@@ -1299,7 +1311,7 @@ preserve static analyzability:
 | Primitive  | Selection mode                       | Topology contract                        |
 |------------|--------------------------------------|------------------------------------------|
 | Router     | Runtime choice 1-of-N (or list-of-N) | All N output ports are declared          |
-| Dispatch   | Per-key sub-graph instance           | The sub-graph is statically declared     |
+| Dispatch   | Keyed sub-graph instance             | The sub-graph and key expression are statically declared |
 
 Broadcast to multiple outputs is expressed inline by the atomic
 multi-emit statement `(a, b, c, d) = x` — the same envelope is
@@ -1322,15 +1334,12 @@ Here, `select` is a Rastok expression. The runtime value chooses a route, while 
 possible ports remain visible to the compiler. A list of port names
 selects several outputs.
 
-Dispatch is the per-key instantiation of a declared sub-graph:
+Dispatch is the keyed instantiation of a declared sub-graph:
 
 ```rastok
-partition session {
-  key = meta.app.session_id
-  lifetime = duration("2h")
-}
-
-graph conversation per session {
+graph conversation {
+  instances = { key = meta.app.session_id }
+  lifetime = { kind = idle ; after = duration("2h") }
   . -> classify -> answer -> .
 }
 
@@ -1351,9 +1360,9 @@ real systems iterate. Rastok's answer is that cycles never appear *in
 the topology* — they appear in three other places, each bounded and
 journaled:
 
-- **In state and sequence.** A `per`-keyed Operator accumulates across
-  arrivals (§2.4, §3) — what a `while` loop does with a mutable variable,
-  a partition does across envelopes.
+- **In state and sequence.** A stateful Operator accumulates across arrivals
+  in its logical instance (§2.4, §3) — what a `while` loop does with a mutable
+  variable, Node-local state does across envelopes.
 - **In the Connector** (§2.7). External feedback loops — a user replying
   turn after turn, a retried HTTP call — stay outside the graph; each
   round trip re-enters as a fresh arrival.
@@ -1413,276 +1422,249 @@ Those arrival orders are recorded per hop in the journal — which is
 exactly what makes replay deterministic (envelope.md §2.0/§8). The
 Connector draws the boundary; the journal captures what crosses it.
 
-**Lifecycle-bound resources carry invocation scopes, not hidden
-partitions.** A static Connector Node may run in several explicit partition
-instances, and one partition instance may admit several calls or sessions —
+**Lifecycle-bound resources carry invocation scopes, not hidden addressing
+dimensions.** A static Connector Node may run at several logical addresses,
+and one Node instance may admit several calls or sessions —
 concurrently when its resolved policy permits. Every admitted invocation has
 its own causal call identity and ends with exactly one ordinary typed `exit`;
 it may first produce zero or more `out` and `err` envelopes. A `Process`
 child, WebSocket interaction or database operation is therefore a resource
-scope inside the partition, not an automatically invented partition key.
+scope inside the Node instance, not an automatically invented key.
 
-`stop` and `exit` name the two distinct boundaries. `stop` closes the
-containing partition instance; `exit` reports the observed termination of
+`stop` and `exit` name the two distinct boundaries. `stop` closes the current
+Node instance; `exit` reports the observed termination of
 one admitted invocation. Many exits may occur before one stop. Closing a
-partition stops admission and must drain or cancel every open invocation
+Node instance stops admission and must drain or cancel every open invocation
 under a bounded policy; it cannot erase their terminal obligations. Call
 identity correlates frames even when several invocations share the same
-partition, and no `out` or `err` for a call may follow its `exit`.
+instance, and no `out` or `err` for a call may follow its `exit`.
 
 For a `Process`, `Exited { exit_code, signal }`, `TimeoutExpired`,
 `SpawnFailed` and the former typed error codes are cases of `ProcessExit`.
 `out` stays the data stream and `Process.err` stays stderr; a graph reacting
-to termination wires `process.exit -> …`. A resident service may qualify the
-two real scopes as `call.exit` and `instance.exit`; `restart = { … }` creates
-a fresh resource instance inside the same owning partition rather than
-silently creating a partition hierarchy. `meta.sys` stays closed while call,
-resource and partition-instance identities remain causal journal facts.
+to termination wires `process.exit -> …`. A resident resource has a separate
+runtime `run_id`; `restart = { … }` may create a fresh resource run inside the
+same logical Node instance without inventing another source key. `meta.sys`
+stays closed while call, resource, and Node-instance identities remain causal
+journal facts.
 
 ---
 
-## 3. Partitions and Keys
+## 3. Instances, Keys, and Lifetime
 
-Stateful Operators bind their state to a **partition**. A partition
-is two things: a **key** extracted from the envelope, and a
-**lifetime** that tells the runtime when to clean up.
+The old word “partition” bundled three different questions:
 
-```rastok
-partition session {
-  key      = meta.app.session_id
-  lifetime = duration("2h")
-}
+1. **Where does this envelope belong?** — logical instance addressing.
+2. **When does that instance end?** — lifetime.
+3. **Who can read mutable state?** — ownership and lexical scope.
 
-partition tenant {
-  key      = meta.app.tenant_id
-  lifetime = persistent
-}
-```
+Rastok keeps those concerns separate. A Node owns its address selection, a
+separate lifetime may close it, and every mutable cell remains private to the
+Node that declares it. The normative detail is
+[docs/spec/instances.md](docs/spec/instances.md).
 
-The key is a Rastok expression. The lifetime is a DSL policy:
-`persistent` is a structural DSL value, not a Rastok expression or a
-clock read. That is the entire shape of a partition: a name, a key,
-and a lifetime. **No parent declaration. No hierarchy. No automatic
-cascade.** This is deliberate — the same flat keyed-state
-pattern that Kafka Streams, Flink, and Orleans have proven at scale
-for a decade.
+### 3.1 One Node, optional key, optional lifetime
 
-> **Note on terminology** — at the DSL level, "partition" is a
-> *named dimension* declared by the developer. At the runtime level,
-> the keys of a partition are sliced across multiple Hosts; each
-> slice is called a **shard**. See §4.3.
-
-### 3.1 Binding state with `per`
-
-An Operator binds its state to a partition using `per`:
+Every Graph, Operator, and Connector may carry the same common attributes:
 
 ```rastok
-operator counter per session {
-  var count: int = 0
-
-  on msg {
-    count = count + 1
-    out = { meta.app.count = count }
+operator cart {
+  instances = {
+    key = meta.app.customer_id
   }
-}
-```
 
-The assignment mutates in place; the emit reads the **new** value
-(imperative intra-transaction semantics, see §2.4).
+  lifetime = {
+    kind = idle
+    after = duration("30m")
+  }
 
-The runtime, at each transaction, extracts the session key from the
-envelope (via `session.key`) and indexes the Operator's state by
-that key. Two envelopes with different session keys see independent
-state; two envelopes with the same session key share state and are
-serialized in arrival order.
-
-**Multi-key partitions** use a tuple:
-
-```rastok
-operator metric per tenant, session {
-  // state indexed by (tenant_key, session_key) tuple
-}
-```
-
-This is a **flat composite key**, *not* a hierarchy: there is no
-`tenant ⊃ session` nesting, no parent, no cascade — just one state cell
-per distinct `(tenant_key, session_key)`. A lifecycle-bound Connector
-(§2.7) adds its own **implicit dimension** the same way: a `Process` per
-session is keyed `(session_key, run_id)`, the `run_id` being a runtime
-handle, not an envelope field — still flat, still no cascade. Resource
-cleanup when a key idles out happens via teardown of the per-key Dispatch
-instance (§2.6), never by partition cascade.
-
-**Without `per`**, an Operator has one state cell inside each instance
-of its containing Graph. This is not a free global variable: the state
-still belongs to that Operator, other Nodes can only read it through
-the nominal read-only rule, and a per-key parent Graph gives each parent
-instance its own cell.
-
-Partitions are declared explicitly, then referenced by name:
-
-```rastok
-partition cart {
-  key = meta.app.user_id
-  lifetime = duration("30m")
-}
-
-operator cart_aggregator per cart {
+  var total: decimal(18, 2) = 0
   ...
 }
 ```
 
-A partition may also be declared **inline and anonymous** on a node's `per`,
-for the common case where a single node owns it:
+The attributes are independent:
+
+| Key | Lifetime | Meaning |
+|---|---|---|
+| absent | absent | persistent singleton |
+| present | absent | persistent instance per key |
+| absent | present | temporal singleton/window within the enclosing Graph address |
+| present | present | keyed session/window |
+
+There is no named or inline `partition`, no `per` binding, and no catalogue
+of standard partition names. The owner states its key once. Absence of
+`instances` is an explicit singleton in the enclosing Graph instance;
+absence of `lifetime` is persistent.
+
+At the App root, this makes a global tumbling window honest instead of
+simulating one with a fake constant key:
 
 ```rastok
-operator cart_aggregator per ( key = meta.app.user_id, lifetime = duration("30m") ) { … }
-graph    session_graph   per { key = meta.app.session_key ; lifetime = duration("2h") } { … }
+operator global_metrics {
+  lifetime = { kind = tumbling ; every = duration("5m") }
+  var total: long = 0
+  ...
+}
 ```
 
-The inline form has **no name** — so it supports no cross-partition reads and no
-`<partition>.key` references (plain Rastok expressions — the `${…}` interpolation is gone, [grammar.md](docs/spec/grammar.md) §References). When a partition is shared by several nodes,
-or a graph needs to interpolate its key, declare it as a named block and
-reference it by name. Composite keys (`per a, b`) are named references only.
+### 3.2 Key selection is a journaled routing decision
 
-### 3.2 Cross-partition reads
+`instances.key` is one Rastok expression evaluated exactly once when an
+envelope crosses into that owner. It may read the complete immutable entering
+envelope — `data`, `meta.sys`, `meta.app`, and `meta.ext` — plus immutable
+`val` bindings from enclosing lexical scopes. The owner's body is entered only
+after selection, so its own `val`s cannot participate in its key. It cannot read target mailbox
+state, arrival sequence, commit time, selected shard, or another destination
+fact that does not exist yet.
 
-A useful long form to keep in mind: a « partition » is always **the
-partition of a node's state** — the `partition` declaration is the
-shared slicing *scheme* (key + lifetime), while the sliced state
-belongs to one node. Sharing is therefore asymmetric by construction:
-one writer, read-only for everyone else.
+The M1.3 port solver first resolves every effective input type. The compiler
+then infers one total key type under every input that can reach the Node.
+Missing paths or incompatible inferred types refuse; omission of a source port
+annotation never silently becomes `variant`. A world-producing source uses
+its Connector contract's resolved ingress-produced envelope type as the same
+admission signature; having no graph input is not an untyped exception.
 
-An Operator bound to one partition may **read** another partition's
-state by nominal lookup:
+A key is either a canonical map-key scalar/enum value or a closed, recursively
+nested struct of such leaves:
 
 ```rastok
-operator session_metric per session {
-  var tier_cached: text?
-
-  on msg {
-    tier_cached = tenant.?plan_tier.orValue("free")   // Rastok expression, absence explicit
-    // ...
+instances = {
+  key = {
+    tenant = meta.app.tenant_id
+    conversation = data.conversation_id
   }
 }
 ```
 
-The runtime extracts the `tenant` key from the envelope (via
-`tenant.key`), finds the state of whatever Operator declared
-`var plan_tier` under `per tenant`, and returns it. The dev
-references `<partition>.<field>` by name.
+Field order is not identity; the address frame seals the complete resolved key
+type beside its value, so field name, resolved type, and canonical value are.
+Optional/missing leaves, floats, dynamic `number`, null, variant, union,
+collections, tables, and opaque values refuse. The same canonical bytes serve
+routing, journal identity, state lookup, and future shard hashing.
 
-The reserved name `<partition>.key` always yields the current
-envelope's value for that partition's key (e.g., `tenant.key`
-returns the string from `meta.app.tenant_id`). State fields named
-`key` are therefore disallowed in Operators bound to a partition.
+The producer reserves destination capacity, obtains the current generation,
+and records the selected target instance reference `(address, generation)`
+before committing. Replay uses that recorded decision and never re-routes old
+traffic by evaluating the expression again. Rewriting metadata later cannot
+migrate the current instance, and delayed transport cannot enter a successor
+generation.
 
-**Writes are not allowed across partitions.** Only a Node bound to
-a partition may write that partition's state. This prevents
-action-at-a-distance and keeps data flow visible in the graph
-topology.
+Nested entry is ordered outermost to innermost. An enclosing owner is selected
+and its immutable instance context is validated before a child may use that
+context in its own key or Connector configuration. A source Connector's
+listener or poller must therefore be boot-configurable; instance
+configuration starts only after an accepted envelope has selected that
+instance.
 
-### 3.3 The envelope is not a partition
+The selected key is contextual `instance.key`, not
+`meta.sys.instance_key`. `meta.sys` belongs to the immutable envelope and
+travels across Nodes; an envelope can visit several owners with different
+addresses. Hop-local addressing therefore belongs in the journal and the
+current execution context. `instance.key` is statically available only on an
+owner that declares `instances.key`; it never means an ancestor key or null.
 
-Each envelope carries runtime-managed metadata in the **`meta.sys`**
-namespace. The canonical field list and terminal-envelope additions are frozen
-in [docs/spec/envelope.md](docs/spec/envelope.md). These fields are read
-directly:
+### 3.3 Logical address, state ownership, and joins
 
+A logical address is:
+
+```text
+static Node path
++ dynamic key/time frames of keyed or temporal ancestors
++ this owner's dynamic frame, if any
 ```
-meta.sys.id          // this envelope's derived identity (blake3, replay-stable)
-meta.sys.parent_id   // immediate ancestor — the lineage is a linked list
-meta.sys.origin_id   // lineage root = OTel trace id
-```
 
-Per-hop facts — arrival order (`seq`), commit time (`committed_at`),
-the partition key at each keyed node, join contributions — are **NOT**
-envelope fields; they live in the per-hop **journal**
-([docs/spec/delivery-semantics.md](docs/spec/delivery-semantics.md)). The
-envelope carries identity; the journal carries events.
+Frames are ordered outermost to innermost. An instance is the currently live
+mailbox, derived immutable bindings, Node-local state, open calls, armed events,
+and lifecycle at that address. After closure, a later delivery may create a clean instance at the
+same address. The runtime calls successive lives **generations**; generation
+is the zero-based journal-derived ordinal of `l:start`, fences stale events and
+deliveries, and never enters the logical address or call identity. Runtime and
+journal facts refer to an instance with `(address, generation)`.
 
-The envelope is **the message currently being processed**, not a
-partition. There is no `per envelope` — it would create a state
-cell that is immediately discarded. **`meta.sys` is read-only** to
-Operators (absolutely, including in simulation): transport
-request/response correlation is set by the runtime when crossing a
-Connector; business correlation is a join `on (a, b)`; an echo token
-an external system imposes is an `app` field. Writable metadata lives
-in `meta.app` (the application's zone) or `meta.ext` (the external
-boundaries' zone).
+A `var` belongs only to its declaring Node and is visible only in that Node's
+handlers. Keying a Graph does not create a transaction around the Graph and
+does not expose mutable cells to children. Graph-level `val` bindings remain
+lexical and immutable, so descendants may safely consume context derived from
+the Graph's `instance.key`.
 
-### 3.4 Lifetime and termination
+When mutable behavior must be shared, it is an explicit stateful Operator with
+typed command/result ports. That topology makes ownership, serialization, and
+failure visible; there is no nominal cross-Node state lookup.
 
-A partition instance can end in one of two ways:
+A join correlates inside the logical instance of its owning Operator.
+`where` refines candidates and `within` / `last` bound retention. There is
+no join `by` override: a different correlation domain is expressed by the
+Operator's own `instances.key`, keeping routing and correlation under one
+authority.
 
-**1. Time-driven** — the `lifetime` declared on the partition expires.
-A small vocabulary covers the standard cases:
+### 3.4 Lifetime and Closing
+
+Lifetime uses the ordinary composite-attribute form:
 
 ```rastok
-lifetime = duration("2h")                  // idle-ttl, the dominant case
-lifetime = persistent                      // alive until explicitly revoked
-lifetime = single_pass                     // alive while the originating envelope is in flight
-lifetime = fixed duration("30s")           // alive for 30s regardless of traffic
-lifetime = window duration("5m") tumbling  // window with composite keying (key, window_id)
+lifetime = { kind = persistent }
+lifetime = { kind = idle       ; after = duration("2h") }
+lifetime = { kind = fixed      ; after = duration("30s") }
+lifetime = { kind = single_pass }
+lifetime = { kind = tumbling   ; every = duration("5m") }
 ```
 
-`duration("2h")` constructs a value; it does not read the clock and has
-no side effect. The runtime compares that declared duration with ticks
-from `system_clock`. Production supplies real ticks, while the Lab
-supplies virtual ticks. A bare duration is interpreted as an idle TTL.
-The structural words (`persistent`, `single_pass`, `fixed`, `window`)
-belong to the DSL, and their duration arguments are ordinary Rastok
-values. When the lifetime ends, the optional `on stop` handler fires
-before the slot is reclaimed.
+- **persistent** arms no deadline;
+- **idle** closes after mailbox-admission silence;
+- **fixed** closes at a fixed age from the creating admission;
+- **single_pass** admits one root and closes after its bounded work settles;
+- **tumbling** selects the epoch-aligned processing-time box open at admission.
 
-**2. Event-driven** — a handler executes `stop`. The slot
-is reclaimed at the end of that transaction, the next envelope for the
-same key creates a fresh instance.
+Sliding windows and event-time/watermark semantics remain deferred because
+they make one arrival select several boxes or require an additional time
+authority.
 
-```rastok
-on checkout {
-  out = { … }
-  stop           // explicit end after this handler
-}
+The first admission starts an instance causally with `l:start`. Bare
+`stop` requests Closing of the current Node instance after the current
+transaction commits; it has no target operand. Closing stops external
+admission, continues already admitted internal work for a finite drain,
+cancels and settles remaining calls without suppressing their typed `exit`,
+runs `on stop` after the last required terminal fact, then reclaims state.
+The exact finite `closing = { ... }` sheet is frozen by the M1.4 Closing gate;
+no hidden kill or timeout default is implied before then.
+
+Stopping a Graph also closes every live descendant created in that Graph
+generation, inner-first. This is a durable lifecycle relationship, not shared
+memory. A non-root child's `l:start` carries its enclosing Graph instance
+reference because the logical address intentionally omits ancestor
+generations. New arrivals wait under normal bounded backpressure and start a
+fresh generation after reclamation.
+
+Obligation scope matters: a pending Loop `l:next` wakeup is generation-bound
+and becomes stale when its instance closes; Saga compensation debt is a fold
+over the journal and survives instance closure, restart, and shard movement.
+
+### 3.5 Concurrency and future sharding
+
+One logical instance reference owns one bounded mailbox; at most one worker
+executes a transaction from it at a time. FIFO is guaranteed within that
+reference. No
+order is promised across independent addresses, and Node-private state makes
+that non-order unobservable as shared memory.
+
+Hierarchical address does not force hierarchical placement. Every keyed owner
+is an independent routing boundary and may map to a virtual shard independently
+of its parent. Otherwise one hot outer key would trap every inner key on one
+shard. Crossing such a boundary remains a journaled delivery even when both
+owners are currently colocated.
+
+```text
+logical instance address
+        -> stable virtual shard
+        -> current Worker owner
 ```
 
-Use `lifetime` as a fallback (e.g., 30min idle TTL for safety) and
-`stop` as the normal close path for event-driven workflows
-(carts, sagas, multi-turn conversations).
-
-There is **no automatic cascade between partitions**. If a tenant
-is deactivated, its sessions idle-out naturally. When precise
-coordinated cleanup is required, write an Operator with an
-`on stop` handler or use `stop` from a relevant event
-handler. Cascade is a footgun — silent destruction of referenced
-state is the source of many bugs. TTL + explicit `stop`
-covers all practical cases.
-
-### 3.5 Stdlib partitions
-
-Frequently used partitions are pre-declared by the stdlib:
-
-```rastok
-partition tenant   { key = meta.app.tenant_id ;  lifetime = persistent }
-partition session  { key = meta.app.session_id ; lifetime = duration("2h")         }
-partition request  { key = meta.app.request_id ; lifetime = single_pass }
-partition user     { key = meta.app.user_id ;    lifetime = duration("24h")        }
-```
-
-These are conventions, not magic. The DSL is open: declare any
-partition inline with a domain-specific name (`device`, `workspace`,
-`conversation`, …).
-
-### 3.6 Concurrency by key
-
-Two envelopes with different keys at the same partition are
-processed **in parallel**. Two envelopes with the same key are
-**serialized** in arrival order at any Operator bound to that
-partition. This is the standard Flink/Kafka Streams concurrency
-model — what makes per-key reasoning tractable and per-entity
-scaling predictable.
-
----
+Worker count may change without changing semantic identity or the virtual
+shard function. Changing the virtual-shard count is an explicit reshard
+migration. Worker, Host, lease, and leader epoch are never causal fields.
+The synchronous one-worker runtime is the embedded/reference realization of
+this same contract, not a different language model.
 
 ## 4. Distribution Model
 
@@ -1708,24 +1690,34 @@ runtime mode and storage belong to deployment.
 
 ```
 Cluster
-└── Host                      (one machine or K8s pod)
-    └── Runtime               (one App deployed)
-        ├── Coordinator       (parent process, 1 per Host)
-        └── Workers           (child processes, N per Host)
+└── Host                         (machine or pod)
+    └── Runtime                  (one App deployment)
+        ├── Coordinator          (parent/control process)
+        └── Workers              (bounded child data-plane processes)
 ```
 
-**Host** is the machine-level unit. The word "Node" is reserved for
-graph elements (Operators, Connectors, and sub-Graphs — §2), never
-for machines.
+**Host** is the machine-level unit. “Node” is reserved for graph elements —
+Operators, Connectors, and Graphs — never machines.
 
-The **Coordinator** is the parent process on a Host (the Chrome /
-postmaster pattern): it owns the inbound listeners, routes each
-arriving envelope to the **Worker** that owns its key, and supervises
-the Workers. Workers hold the in-memory state for their keys and talk
-to external systems directly — inbound is centralized and key-aware,
-outbound is decentralized, and once an envelope enters a Worker it
-stays there for the full graph traversal. The process-level contracts
-belong to the future runtime-architecture deliverable.
+The target standalone/clustered runtime follows a supervised multi-process
+shape. The Coordinator owns membership, leases, virtual-shard placement, and
+Worker restart. Each Worker loads the same validated App plan and executes the
+logical addresses whose shards it currently owns. A Worker crash therefore
+does not have to kill the Host runtime: the Coordinator fences it, restarts or
+reassigns its shards, and recovery folds the journal permitted by the declared
+durability scope.
+
+The reference M1 runtime is deliberately the degenerate form: one process,
+one Worker, synchronous pump. An embedded/no_std deployment may remain exactly
+that. Neither source semantics nor journal identity depends on the existence
+of an OS process boundary.
+
+Ingress is a logical producer with its own stable replica identity. Whether a
+listener physically lives beside the Coordinator or in a Worker is an adapter
+and deployment choice. It mints the complete inbound envelope, evaluates the
+first target address, journals that route, and only then delivers. Workers
+perform outbound effects through Connector adapters. A child spawned by the
+`Process` Connector is workload isolation, not itself a Rastok Worker.
 
 ### 4.2 Durability scopes
 
@@ -1818,52 +1810,57 @@ contract survives crash and recovery testing.
 
 ### 4.3 Scaling and sharding
 
-Horizontal scaling is achieved by **graph replication + sharding
-by key** — the pattern Kafka Streams, Cassandra, and Orleans have
-used at scale for a decade.
+Horizontal scaling is graph-plan replication plus assignment of **stable
+virtual shards**. The mapping has three layers:
 
-```
-Cluster
-└── App deployed on N Hosts
-    ├── Host 1  (owns shard 0..K/N)
-    ├── Host 2  (owns shard K/N..2K/N)
-    └── Host N  (...)
+```text
+logical instance address
+        -> stable virtual shard
+        -> current Worker lease
 ```
 
-Each worker instantiates the **whole graph** but processes only its
-slice of keys. The slicing is a fixed function: `shard =
-hash(partition key) mod N`, with N declared at deployment — a key's
-shard never changes; only shard→worker assignments move.
+The canonical logical address is the static Node path plus its outer-to-inner
+dynamic key/time frames (§3). A fixed, architecture-independent hash maps
+those bytes into a deployment's virtual-shard space. The virtual-shard count
+is stable and independent of Worker count: adding a Worker moves leases, not
+keys. Changing the virtual-shard count is an explicit reshard migration with a
+separate compatibility protocol.
 
-A **shard** is the runtime-level slice of the keyspace assigned to
-one worker (a Host runs one or more workers). A DSL `partition` is a
-*named dimension*; its keys at runtime are distributed across the N
-shards.
+Each keyed owner is a routing boundary and may shard independently from its
+keyed parent. This is essential: a hot tenant must not force all of its
+sessions onto one Worker. The address remains hierarchical for lifecycle and
+causality, but placement is free to distribute the child frame. An unkeyed
+child remains the singleton child of its enclosing Graph address.
 
-An envelope arriving at any worker is forwarded to the worker that
-owns its key's shard — explicit, observable, journaled forwarding
-with a durability receipt, not a hidden RPC. The Coordinator is a
-pure control plane: it holds the placement map and never touches an
-envelope.
+Crossing a keyed boundary is always an ordinary journaled delivery. The
+producer reserves and seals the target instance reference — logical address
+plus generation; the transport consults the current lease and obtains a
+durability receipt. If source and target are colocated,
+the runtime may use an in-process fast path but may not remove causal records.
+No Worker, Host, lease, epoch, or target shard id enters the envelope or causal
+journal.
 
-**The system is CP** in the CAP sense, for keyed state. When a Host
-fails, its shards are temporarily unavailable until reassigned, and
-their state is rebuilt from the durable journal per the graph's
-declared durability scope — no active replication of `var` state
-across Hosts beyond the journal's own replication, the same
-rebuild-from-persistence pattern Erlang/OTP follows. Split-brain is
-prevented by **epoch fencing**: shard reassignment increments a
-write epoch, and stale-epoch writes are rejected at the durable
-boundary. Membership, lease, and rebalancing contracts are deferred
-cluster-protocol work and are not implementation claims.
+A committed route consumes the referenced generation even if physical
+delivery never reaches a worker. Recovery either completes that generation's
+start or Closing retires it with an explicit residual-delivery fact; a later
+instance can never reuse an ordinal still named by history.
 
-**No operator-level placement.** Rastok deliberately does **not**
-support placing different Operators of the same graph on different
-Hosts (the Flink-style operator placement model). Each Host runs
-the whole graph for its keys. This trades expressive power for
-operational simplicity — no cross-Host shuffles inside a graph, no
-network channels between Operators, no per-operator parallelism
-tuning.
+A Graph close can therefore cross Workers. Parent-to-child lifecycle relations
+are journal-derived obligations: the parent sends durable close requests to
+its live children and completes inner-first. The local runtime executes the
+same protocol as function calls.
+
+For globally durable keyed state, the availability posture is CP: one virtual
+shard has one fenced writer. On Host failure it becomes unavailable until a
+new lease is established and state is rebuilt from the replicated journal.
+Lease epochs reject stale writes at the durable boundary. Membership, lease,
+rebalancing, and reshard protocols remain future cluster work; this section
+fixes the semantic constraints they must preserve.
+
+There is no source-level arbitrary Operator placement. Authors declare
+logical addressing, not machines. Workers all understand the same plan;
+placement policy assigns virtual shards and may later offer colocation hints
+that cannot alter graph behavior or identity.
 
 ---
 
@@ -1882,7 +1879,8 @@ orthogonal mechanisms.
 | **Causality**        | Happens-before partial order on the global trace       | Theorem reasoning                            |
 | **Simulation clock** | Virtual clock controlled by the simulator              | `simulate at 50ms`, replay                   |
 
-Partition lifetimes combine a declared duration with clock events.
+Instance lifetimes combine a declared duration with journaled supervision
+events.
 The duration is a pure value. Expiration occurs only when a Clock event
 advances the relevant timeline.
 
@@ -1925,7 +1923,8 @@ A Node that needs to react to time therefore has an input wired to a
 timestamp — the `stats` Operator of §2.3 is the canonical shape:
 
 ```rastok
-operator stats per session {
+operator stats {
+  instances = { key = meta.app.session_id }
   input  tick : timestamp        // time is just a port
   …                              // on tick { … } — an ordinary handler
 }
@@ -1967,10 +1966,10 @@ explicit `Clock` wiring:
 
 | Pattern | Mechanism (no clock wire needed) |
 |---|---|
-| Cleanup of an idle state slot | `lifetime = duration("2h")` on the partition |
-| Tumbling window aggregation *(sliding windows are deferred)* | `lifetime = window duration("5m") tumbling` on the partition |
-| Rate limit "max N per minute" | Partition with `lifetime = window duration("1m") tumbling` + a counter |
-| Deadline / timeout for a saga | `lifetime = fixed duration("30s")` + `on stop` handler |
+| Cleanup of an idle Node instance | `lifetime = { kind = idle; after = duration("2h") }` |
+| Tumbling window aggregation *(sliding windows are deferred)* | `lifetime = { kind = tumbling; every = duration("5m") }` |
+| Rate limit "max N per minute" | keyed or singleton tumbling instance + a private counter |
+| Deadline / timeout for a saga | the distinct `Saga.timeout` aspect attribute |
 
 Explicit `Clock` is reserved for patterns where an
 Operator actively emits or polls on tick — periodic metrics,
@@ -1982,7 +1981,7 @@ time. In the Lab, `advance duration("2h")` asks the virtual clock to
 emit the same relevant events without waiting two hours. Those events
 travel through the same lifetime, window, and handler logic.
 
-For example, an idle lifetime records the last activity event and its
+For example, an idle lifetime records the last mailbox-admission event and its
 declared duration. Advancing the Lab clock past that deadline emits the
 same expiration event that production would emit later. The resulting
 `on stop` transaction is therefore deterministic for the same plan,
@@ -2552,7 +2551,7 @@ coordination (Naiad).
 **What Rastok leaves behind:** the batch/analytics focus *and the
 watermark machinery*. Beam/Flink reorder by event-time with watermarks
 and grace periods; Rastok deliberately matches joins by **arrival
-order within the partition** (processing-time) and bounds them by
+order within the owning logical instance** (processing-time) and bounds them by
 **count** (`last`, the static memory guarantee) plus an optional time
 window (`within`) — clock-free, deterministic, simulable — accepting
 that event-time correctness requires upstream reordering. Those systems
@@ -2620,11 +2619,11 @@ incumbents.
   event log. The practical gaps to close before claiming full
   Airflow parity: the stdlib `Calendar` (cron + tz, spec'd in stdlib.md),
   documented backfill semantics, and a monitoring UI for live
-  partition keys.
+  logical instances.
 
 - **Agent runtimes and LLM orchestration** (LangGraph, Semantic
-  Kernel, ADK). The Operator/Connector model with per-session
-  partitions, mockable Connectors, and `on (a, b)` join handlers for
+  Kernel, ADK). The Operator/Connector model with keyed session
+  instances, mockable Connectors, and `on (a, b)` join handlers for
   multi-input correlation covers the common patterns of agentic
   graphs. Rastok adds a constrained typed DSL, specified deterministic
   simulation, and keyed Dispatch as part of the model.
@@ -2688,9 +2687,9 @@ wins.
    atomically. It is not a tuple-to-tuple function.**
 3. **Topology is static. Dispatch is dynamic. The dynamism is bounded
    by the topology.**
-4. **Every piece of state is attached to a partition. Every
-   partition has a key and a lifetime. No parent, no cascade. The
-   envelope is the current message, not a partition.**
+4. **Every mutable cell has one Node owner. Key selection addresses a
+   logical instance; lifetime closes it; lexical scope exposes immutable
+   context. Do not fuse the three.**
 5. **Cycles do not appear in the graph. They appear in state, in
    events, and in sequence.**
 6. **Operators do not read a hidden clock. Sequence is journaled;
@@ -2719,15 +2718,12 @@ wins.
     emit new ones. Single input inherits `meta` additively; a join
     merges by value — common fields survive, conflicts drop, and
     explicit writes win (D-2026-08-10-2).**
-14. **A partition instance has three lifecycle phases: starts
-    (lazy, on first envelope for a key, transaction `on start`), runs
-    (handlers fire on events), stops (event-driven via `stop`
-    action, or time-driven via `lifetime` expiration transaction
-    `on stop`).**
-15. **Two keywords, scope by position: `val` for any immutable
-    binding (App-level, Operator-level, or handler-local), `var`
-    for partition state with read-modify-write per transaction. Position
-    determines lifetime.**
+14. **A logical Node instance starts lazily, runs mailbox transactions,
+    enters bounded Closing by `stop` or lifetime expiry, runs `on stop` last,
+    and may later be recreated at the same address as a fresh generation.**
+15. **Two keywords, scope by position: `val` for immutable context and
+    `var` for mutable Node-local state with read-modify-write per transaction.
+    Graph `val`s are lexical; no child inherits an ancestor `var`.**
 16. **Ports may be inferred from handlers, while `input` / `output`
     pin or document constraints. Every validated port has one effective
     logical type. `in` / `out` / `err` are conventions, not categories;
@@ -2739,7 +2735,7 @@ wins.
     terminal outcome. For Process, `err` is stderr and `exit` carries
     `ProcessExit`, including the original typed error cases. One completion
     carries `out* + err* + exactly one exit`; `stop` independently closes the
-    owning partition instance. Engine faults and panics are supervision,
+    owning Node instance. Engine faults and panics are supervision,
     never envelopes.**
 17. **The `data` payload is statically typed by default; `variant` is
     the only dynamic type, narrowed before use. The type tree is
@@ -2748,8 +2744,8 @@ wins.
     including unions — project into this one algebra without lossy
     fallback. `table` is the relational view of
     `array<struct>`, not a type. Numbers are lossless until narrowed.**
-18. **A handler is a transaction guard. `on (a, b)` is a join keyed by the
-    partition; correlating two ports' content is a θ-join and demands
+18. **A handler is a transaction guard. `on (a, b)` is a join correlated by
+    its owning Operator instance; content correlation is a θ-join and demands
     a bound (`last` for memory, optionally `within` for staleness).
     OR across ports is separate handlers, not `||`.**
 

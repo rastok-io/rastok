@@ -1,10 +1,11 @@
 // =============================================================================
 // teams-codex-gateway.rkg
 //
-// Teams <-> Codex bridge — larger M1.3 target-surface example.
+// Teams <-> Codex bridge — larger M1 target-surface example.
 // It is intentionally ahead of the executable subset: Http/File/Memory,
-// partitions, Loop, Process(service), jq, and IDENT! frontends remain guarded
-// as of 2026-08-14. This is a design reference, not a current fixture.
+// keyed owners, lifetime/closing, Loop, Process(service), jq, and IDENT!
+// frontends remain guarded as of 2026-08-18. This is a design reference,
+// not a current fixture.
 //
 // Demonstrates :
 //   - graph composability : `sessions` = a per-key sub-graph, declared in place
@@ -13,7 +14,7 @@
 //     declared by NAME only (types inferred ; annotate `: T` only to pin)
 //   - Composite configuration attributes (env = { … }, jwt = { … }, auth = { … })
 //   - handler guards, the `data` payload, meta.sys / meta.app / meta.ext,
-//     partitions,
+//     Node-owned instances and lifetimes,
 //     deterministic simulations
 //
 // Syntax reference : docs/spec/grammar.md, docs/examples/dsl-examples.md, WHITEPAPER.md
@@ -22,20 +23,19 @@
 
 // -----------------------------------------------------------------------------
 // Composable Codex session.
-// Keyed on its own `per session` (like an Operator) → one instance per session.
+// Keyed by its own `instances.key` → one logical Graph instance per session.
 // -----------------------------------------------------------------------------
 
-graph sessions per session {          // declaration = instance
-  max_instances = 1000                  // Dispatch knob = body attribute
-  // `per session` → one Process instance per session key (Dispatch).
+graph sessions {
+  instances = { key = meta.app.session_key }
+  lifetime = { kind = idle; after = duration("2h") }
+  // One Graph instance per canonical session key. Capacity and placement are
+  // deployment policy rather than logical attributes.
   // Single in / out pass-through → uses the default `in` / `out` ports.
-  partition session {
-    key      = meta.app.session_key
-    lifetime = duration("2h")                          // idle TTL → governs instance eviction
-  }
   // Per-session config, derived from the key, as graph-level `val` :
-  val codex_home = "/var/codex/" + session.key
-  val cwd        = "/workspace/" + session.key
+  val session_key = instance.key
+  val codex_home = "/var/codex/" + instance.key
+  val cwd        = "/workspace/" + instance.key
 
   connector codex : Process {
     command = "codex"
@@ -50,7 +50,7 @@ graph sessions per session {          // declaration = instance
     protocol = "jsonrpc"
     effect = idempotent
     behavior = probabilistic
-    // in / out / err / status = stdin / decoded stdout / stderr bytes / lifecycle
+    // in / out / err / exit = stdin / decoded stdout / stderr bytes / invocation terminal
 
     init = {
       message = { method = "initialize" }
@@ -61,7 +61,7 @@ graph sessions per session {          // declaration = instance
   }
 
   connector codex_logs : File {
-    path = "/var/codex/" + session.key + "/codex.stderr.log"
+    path = "/var/codex/" + session_key + "/codex.stderr.log"
     codec = text
   }
 
@@ -80,11 +80,6 @@ graph sessions per session {          // declaration = instance
 // -----------------------------------------------------------------------------
 
 graph teams_inbound : App {
-  partition turn {
-    key = data.?params.?turn.?id.orValue(data.?params.?turnId.orValue(meta.app.session_key))
-    lifetime = duration("30s")
-  }
-
   connector teams_in : HttpServer {
     listen = ":8080/adapters/teams/webhook"
     codec = json
@@ -162,7 +157,13 @@ graph teams_inbound : App {
     }
   }
 
-  operator aggregate_reply per turn {
+  operator aggregate_reply {
+    instances = {
+      key = data.?params.?turn.?id.orValue(
+        data.?params.?turnId.orValue(meta.app.session_key))
+    }
+    lifetime = { kind = idle; after = duration("30s") }
+
     var buffer: text = ""
 
 

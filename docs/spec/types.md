@@ -11,8 +11,11 @@
 > structural-union and tagged-union targets is executable in memory. Tagged
 > constructors and contextual structural-union wrapping are checked,
 > executable and transported; `err` uses the same emission path as any port.
-> Package v7 publishes the complete type/value/expression registry and the
-> total effective port table. Standard-layer projection adapters implement the
+> The categorical M1.4 transport retains v7's complete type/value/expression
+> registry and total effective port table, then adds the parent-linked Node
+> owner tree plus instance-key/lifetime descriptors without changing this
+> logical algebra. The unpublished named-partition v8
+> draft has no compatibility status. Standard-layer projection adapters implement the
 > exact external profiles, including physical union-selector mappings and
 > path-specific loss refusals. Unchecked structural access through `variant`
 > is closed. V6 is categorically refused rather than migrated.
@@ -305,25 +308,25 @@ removing its special channel: terminal error codes are tagged-union cases on
 diagnostic bytes remain ordinary values on `err`; this connector-specific
 meaning does not turn every Operator `err` into stderr.
 
-### 3.1 Invocation exit is not partition stop
+### 3.1 Invocation exit is not instance stop
 
 The scopes are nested but distinct:
 
 ```text
 Node definition
-  -> partition instance*                 ended by stop
+  -> logical Node instance*              ended by stop
        -> Connector invocation*           ended by exit
             -> out* + err* + one exit
 ```
 
-A partition may run several invocations, including concurrent ones when its
-resolved concurrency policy permits it. Their outputs carry the call identity
-and partition-instance generation needed for causal correlation. `exit` is
+A Node instance may run several invocations, including concurrent ones when
+its resolved concurrency policy permits it. Their outputs carry call identity
+and the owning instance generation needed for causal correlation. `exit` is
 the terminal barrier for one invocation: no output for that call may follow
-it. `stop` begins closure of the containing partition instance. Closure must
+it. `stop` begins closure of the current Node instance. Closure must
 refuse new calls and settle every admitted obligation by draining or
 cancelling it under a bounded declared policy; it cannot substitute one
-partition event for the calls' individual `exit` values.
+instance lifecycle event for the calls' individual `exit` values.
 
 Framing controls how bytes become values; publication controls when those
 values become visible. A line-framed stream may therefore emit many envelopes

@@ -9,7 +9,7 @@
 
 | Rule | Source |
 |---|---|
-| Join `on (a, b)` : early arrival buffered in partition state | execution-model.md §3 |
+| Join `on (a, b)`: early arrival buffered in the Operator instance | execution-model.md §3 |
 | The triggering envelope = the presence-completing arrival (mailbox FIFO) | execution-model.md §3 |
 | Join emission : parent = the trigger, trigger = the trigger's port | envelope.md §3 |
 | Explicit namespace attribution on join output | envelope.md §3 |
@@ -24,14 +24,15 @@
 ```rastok
 graph sim02 : App {
 
-  partition order { key = meta.app.order_id; lifetime = duration("30m") }
-
   connector orders   : HttpServer { path = "/orders"   ; effect = none }
   connector payments : HttpServer { path = "/payments" ; effect = none }
   connector ledger   : Memory { }                       // settled results
   connector dlq      : Memory { }                       // evicted halves — never silent
 
-  operator settle per order {
+  operator settle {
+    instances = { key = meta.ext.order_id }
+    lifetime = { kind = idle; after = duration("30m") }
+
     input order   : struct { total: decimal(10,2) }
     input payment : struct { amount: decimal(10,2) }
 
@@ -94,13 +95,13 @@ Symbolic ids (`H` = blake3/128). `t = 0` at start ; `inbound_seq` counters :
 
 ```
 t=0  A0 born at inbound (orders)          id = H("orders" ‖ 0)     origin = A0
-     mailbox order=42 ◄─ A0 (arrival seq 0 — journaled with key "42")
+     mailbox settle[key="42"] ◄─ A0 (arrival seq 0 — address journaled)
        TRANSACTION attempt : presence(order, payment) incomplete (payment missing)
-       → A0 BUFFERED in partition state ; within chrono ARMED : evicts A0 at t=15min   ← dated event
+       → A0 BUFFERED in the settle instance ; within chrono ARMED : evicts A0 at t=15min   ← dated event
      mailboxes empty → stable.
 
 t=0  P0 born at inbound (payments)        id = H("payments" ‖ 0)   origin = P0
-     mailbox order=42 ◄─ P0 (arrival seq 1)
+     mailbox settle[key="42"] ◄─ P0 (arrival seq 1)
        presence complete → TRANSACTION settle
          TRIGGER = P0 (the presence-completing arrival, FIFO)      → trigger port = p:payment
          parent  = P0
@@ -125,7 +126,7 @@ trigger side.
 
 ```
 t=0   B0 born at inbound (orders, seq 1)   id = H("orders" ‖ 1)    origin = B0
-      mailbox order=43 ◄─ B0 (arrival seq 0 in THIS box — independent key, independent box)
+      mailbox settle[key="43"] ◄─ B0 (arrival seq 0 in THIS instance — independent key and mailbox)
         presence incomplete → B0 BUFFERED ; within chrono armed : evicts at t=15min   ← dated event
       stable.
 

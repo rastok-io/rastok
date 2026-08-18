@@ -21,13 +21,17 @@ record** :
 ```
    transaction record = CAUSAL CORE + OBSERVATION ANNOTATIONS
 
-   causal core   : node, partition key, trigger (p:/l:),
+   causal core   : node, instance reference (address + generation), trigger (p:/l:),
                    consumed positions   (the cursor advances, §2),
                    join_inputs          (the buffered envelope ids a join
-                                         consumed from partition state — the
+                                         consumed from the owning instance's join buffer — the
                                          provenance DAG's other half),
                    state delta,
                    emissions            [(port, emission_index, id, envelope)]
+                   routed targets       (instance references reserved before
+                                         this commit)
+                   parent instance      (on a non-root l:start only)
+                   lifecycle cause      (when no consumed cursor names it)
    annotations   : committed_at (UTC in production, virtual in simulation —
                    the REGULATORY timestamp, commit-authoritative),
                    … every clock-valued field (e.g. an OUTBOUND's arming t)
@@ -50,7 +54,10 @@ worlds close cleanly :
   emission ids** (zero randomness in the recipe) → downstream dedup makes the
   retry invisible.
 - **Crash after commit** → the emissions are durable facts ; delivery resumes
-  from the journal.
+  from the journal. A keyed target resumes from the route bytes retained by
+  its producer (INBOUND key 25 / TRANSACTION key 38); recovery never
+  re-evaluates `instances.key` against old traffic or substitutes a later
+  generation.
 
 Net observable guarantee **inside the graph : effectively-once** — the
 derived-id recipe is the mechanism (where Kafka needs producer epochs and
@@ -61,7 +68,7 @@ sequence numbers, Rastok's identity recipe *is* the idempotence).
 
 Dedup does not remember ids (an unbounded set) ; it remembers **a position**.
 The journal orders each node's emissions ; delivery reads them in order ;
-therefore delivery is **FIFO per (edge × source partition)** — and deduping a
+therefore delivery is **FIFO per (edge × source instance reference)** — and deduping a
 FIFO stream takes one integer :
 
 ```
@@ -79,7 +86,10 @@ FIFO stream takes one integer :
   either (the data plane cannot repair corruption) : delivery on that edge
   **halts**, and an operator alert fires on the observation plane. The same
   channel serves a §4.2 request-digest mismatch on retry.
-- Dedup state : **O(edges × partitions) integers**. Bounded, trivial.
+- Dedup state : **O(edges × live source instance references) integers** for the live
+  working set. Each committed consumed position is the exact
+  `[edge, source_instance_ref, seq]` tuple; the target instance reference is
+  independently retained by the producing record and transaction key.
 
 
 ## 3. Bounded everywhere — RAM, flow, disk
@@ -92,7 +102,8 @@ Three accumulations, three answers — nothing can grow without limit :
    construction.
 2. **Flow — bounded lag, pressure to the inbound.** The gap between a
    producer's journal position and its consumer's cursor is **bounded per
-   edge**. At the bound, the producer stops being served ; the pressure
+   edge and live source instance reference**. At the bound, the producer stops
+   being served ; the pressure
    propagates edge by edge back to the inbound Connector, which **translates
    it into its protocol** : HTTP 429/503 or slowed accepts, a polling source
    stops polling, a `Process` stops reading stdin. The world sees a slow or
@@ -113,9 +124,9 @@ Three accumulations, three answers — nothing can grow without limit :
               every LIVE instance's state floor )
    ```
 
-   A bare floor would pin the whole journal (a `persistent` partition = never
+   A bare floor would pin the whole journal (a persistent instance = never
    prunable), so the runtime MAY write **SNAPSHOT records** — the folded
-   state of an instance (vars, join buffers, cursors) or of an open saga (the
+   state of one Node instance (its private vars, join buffers, cursors) or of an open saga (the
    fold-so-far). A snapshot is **derived, not causal** : it contains no new
    fact, is always rebuildable from the causal records, is **excluded from
    golden traces and replay semantics** (the journal-relative contract reads
@@ -232,10 +243,10 @@ At restart, `open` outbound records without closure = the set of unknowns :
 
 **The general principle: recovery rebuilds the dated-events
 queue by the same fold that rebuilds state.** Every dated obligation is
-derivable from (journal, state) : an open call's REMAINING budget (its
+derivable from (journal, state): an open call's REMAINING budget (its
 arming `t` annotation + `timeout`), a buffered join half's `within` deadline
 (its buffering annotation + the window), a live instance's lifetime (last
-activity + idle-ttl, or the origin-aligned arithmetic), an open saga's
+admission + `idle`, creator + `fixed`, or epoch-aligned tumbling arithmetic), an open saga's
 `Saga.timeout` (creator record + budget), a Loop's pending backoff.
 At restart each obligation is re-armed for its remainder ; obligations
 already past **fire immediately, in date order** — a call whose budget
@@ -406,7 +417,7 @@ never doubling — a near-stateless dev router is legitimate).
 | At the boundary | at-least-once + byte-same idempotency key → effectively-once when the partner dedups ; `OutcomeUnknown` (loud) when nothing safer exists |
 | Across a crash, `durability ≥ local` | full recovery : cursors, outbound triage, saga fold |
 | Across a crash, `durability = none` | **at-most-once : loss, never doubling** ; sagas refused at compile time |
-| Ordering | FIFO per (edge × source partition) ; cross-edge = journal-relative (envelope.md §2.0) |
+| Ordering | FIFO per (edge × source instance reference); cross-edge = journal-relative (envelope.md §2.0) |
 
 
 ## 9. Trigger vocabulary

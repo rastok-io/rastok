@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.3 B9, 2026-08-15)
+title Rastok — bird's-eye module overview (M1.4 instance rebase, 2026-08-18)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -154,7 +154,7 @@ package "compiler — source-to-plan compilation pipeline" as P_COMP {
   class Hir <<struct>>
   Hir : desugared, resolved, and typed graph + labs
   enum NodeRole <<enum>>
-  NodeRole : operator, or connector with its resolved contract
+  NodeRole : graph, operator, or connector with its resolved contract
   class Lab <<struct>>
   Lab : checked simulation corpus (never hashed)
   class Scenario <<struct>>
@@ -165,17 +165,19 @@ package "compiler — source-to-plan compilation pipeline" as P_COMP {
 
 package "plan — serializable compiled execution model" as P_PLAN {
   class ExecutionPlan <<struct>>
-  ExecutionPlan : private compiled tables before / inside validation
+  ExecutionPlan : parent-linked owner tree plus scoped edges and handlers
   class ValidatedExecutionPlan <<struct>>
   ValidatedExecutionPlan : plan plus total effective port types
   class ResolvedPortTable <<struct>>
   ResolvedPortTable : exact declared/inferred type of every port
   enum NodeKind <<enum>>
-  NodeKind : operator, or connector with its spec
+  NodeKind : graph, operator, or connector with its spec
   class ConnectorSpec <<struct>>
-  ConnectorSpec : typed effect, behavior, and effective attributes
+  ConnectorSpec : typed effect, behavior, and effective phase-tagged attributes
   class Handler <<struct>>
   Handler : activation-selected ordered statement body
+  class InstanceSpec <<struct>>
+  InstanceSpec : optional key expression and independent lifetime profile
   class Slot <<struct>>
   Slot : compile-time resolved reference
   class SymbolTable <<struct>>
@@ -190,7 +192,7 @@ package "plan — serializable compiled execution model" as P_PLAN {
   GuestProgram : opaque compiled guest program
   class AssetBlob <<struct>>
   AssetBlob : content-addressed build-time asset bytes
-  class "encode / decode (format v7)" as PLAN_CODEC <<mod>>
+  class "encode / decode (next categorical format)" as PLAN_CODEC <<mod>>
   PLAN_CODEC : canonical validated plan package transport
 }
 
@@ -260,7 +262,7 @@ package "boundary — contracts with the external world" as P_BND {
   class Response <<struct>>
   Response : protocol-correlated atomic completion
   enum DatedPayload <<enum>>
-  DatedPayload : a delivery budget, referenced by (edge, envelope id)
+  DatedPayload : delivery budget or Node-instance lifetime event
 }
 
 package "runtime — deterministic execution machinery" as P_RT {
@@ -269,19 +271,23 @@ package "runtime — deterministic execution machinery" as P_RT {
   class Scheduler <<struct>>
   Scheduler : deterministic work picking; the dated-event queue
   class Mailboxes <<struct>>
-  Mailboxes : bounded per-(node, key) FIFO queues with claims
+  Mailboxes : bounded FIFO queues per instance reference
   class Delivery <<struct>>
   Delivery : one queued envelope with its port, edge, and seq
   class TransactionExecutor <<struct>>
   TransactionExecutor : atomic node-transaction executor
-  class PartitionState <<struct>>
-  PartitionState : state cells partitioned by key
+  class InstanceState <<struct>>
+  InstanceState : private Node state cells indexed by instance reference
+  class InstanceAddress <<struct>>
+  InstanceAddress : owner path plus outer-to-inner canonical frames
+  class InstanceRef <<struct>>
+  InstanceRef : logical address plus journal-derived generation
   class EmissionBuffer <<struct>>
   EmissionBuffer : ordered per-port emissions
   class Observed <<struct>>
   Observed : one logged delivery — the observation surface
   enum Fault <<enum>>
-  Fault : evaluation faults emitted on an ordinary resolved err port
+  Fault : engine refusal returned to supervision, transaction uncommitted
   interface GuestExecutor <<trait>>
   GuestExecutor : pure deterministic guest execution contract
   class BootBindings <<struct>> <<next>>
@@ -304,7 +310,7 @@ package "journal — durable causal history and recovery model" as P_J {
   enum Record <<enum>>
   Record : inbound, transaction, or outbound record
   class TransactionRecord <<struct>>
-  TransactionRecord : consumed, delta, emissions, armed timers
+  TransactionRecord : instance ref, parent ref, consumed, delta, emissions, routes, cause
   class OutboundRecord <<struct>>
   OutboundRecord : journaled external-call record
   class "mod ids" as IDS_API <<mod>>

@@ -5,6 +5,235 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-18-1 — Nodes own instances; key, lifetime, and state scope are separate
+
+The unreleased named-partition model fused three independent concerns: a key
+selected an execution address, a lifetime ended it, and a partition name let
+distant Nodes reach state outside topology. Rastok now assigns each concern
+to its natural owner. The complete contract is
+[instances.md](instances.md); this entry records the decisions and named
+supersessions.
+
+**A Node declares its own addressing.** Any Operator, Connector, or Graph may
+carry the common composite attribute `instances = { key = <expr> }`. Its key
+expression is evaluated exactly once for each envelope crossing that Node's
+boundary, against the complete immutable envelope (`data`, `meta.sys`,
+`meta.app`, `meta.ext`) and lexical immutable values. Destination facts are
+unavailable. The canonical selected instance reference — address plus the
+generation returned by destination reservation — is recorded by the producer
+before commit and is the sole replay authority. No `instances` means a
+singleton inside the enclosing Graph instance.
+
+The key type is inferred after total port resolution and transported in the
+validated plan. It is either a canonical map-key value or a recursively closed
+struct of canonical key leaves. Struct field order is erased by canonical
+name ordering; field names, resolved types, and values remain identity.
+Missing/optional fields, float, `number`, null, interval, variant, unions,
+collections, tables, and opaque values refuse.
+
+Ordinary Nodes check that expression under every resolved admitting input.
+An inbound source instead uses its contract's resolved ingress-produced
+envelope type as the same admission signature; a source without a graph input
+never gains an untyped key path.
+
+**Address is hierarchical; placement is not identity.** A logical address is
+the static owner path followed by dynamic keyed/time-box frames, outermost
+first; singleton ownership adds no frame. A later delivery may create a fresh
+instance at the same address after closure. The runtime's zero-based
+generation is derived from journaled `l:start` facts, fences stale
+observations, and never enters the logical address, call identity, or source
+vocabulary. Routes and transactions carry the instance reference `(address,
+generation)` so delayed physical delivery cannot cross a close.
+
+Every keyed owner is a routing boundary and may, by default, be assigned to a
+virtual shard independently of a keyed parent. Cross-boundary traffic remains
+an ordinary journaled delivery even when colocated. Physical colocation,
+Worker count, Host, lease, and leader epoch never change source semantics or
+causal identity. A stable virtual-shard count is independent of Worker count;
+changing it is an explicit reshard migration.
+
+**Mutable state has one Node owner.** A `var` is visible only in the handlers
+of the Node that declares it. It is never inherited by child Nodes and no
+Graph traversal is an implicit transaction. A child may declare the same
+spelling as an independent cell. Graph-level immutable `val` bindings remain
+lexical and may be used by descendants. Shared mutable behavior is an
+explicit stateful Operator reached through typed ports. This retains the node
+transaction as the only ACID unit and makes independent placement possible
+without remote shared memory.
+
+**Immutable context has an explicit phase.** Unit/App `val`s are boot
+bindings. A `val` inside another Node is derived once per Node instance from
+enclosing immutable bindings and that owner's local `instance.key`; it cannot
+read the entering payload or mutable state. Graph values are lexical to
+descendants, while Operator/Connector values are private. Connector contracts
+declare the latest permitted evaluation site — plan, boot, instance, or
+invocation — and checking selects the earliest site where the expression
+closes. Anything selecting a profile, port type, or topology fact permits only
+plan resolution. Instance-capable configuration may use enclosing `val`s and
+the Connector's own key and is evaluated once into the instance bundle; a
+literal may still reduce at plan and an `env()`-only value at boot. The
+categorical plan transports the typed expression and its actual phase; an
+adapter never reinterprets a plan-resolved choice as dynamic.
+
+Nested entry proceeds outermost to innermost. Each owner key is selected and
+its candidate instance bindings are validated before a child may consume
+those bindings. A source Connector's bootstrap fields must close by boot;
+instance-site configuration exists only after an accepted envelope selects
+the instance and cannot configure the listener or poller that accepted it.
+
+**Compilation preserves the owner tree.** Spatial cycle checking may expand
+composition into one flat DAG, but lowering may not erase a Graph that owns
+ports, immutable bindings, state, handlers, `instances`, or `lifetime`. The categorical plan
+materializes Graph, Operator, and Connector owners under one parent relation.
+Each route retains the lexical Graph that owns the edge, so crossing a keyed
+Graph boundary is derivable and replayable even when the executable edge is
+otherwise flattened. This is required by hierarchical addresses and by
+future independent placement; a path string alone is not a lifecycle tree.
+
+**Time is a separate common attribute.** `lifetime` is orthogonal to
+`instances`: omission means persistent; `idle`, `fixed`, `single_pass`, and
+processing-time `tumbling` use one composite attribute family. A lifetime
+without a key is a real temporal singleton within its enclosing Graph address,
+and is App-global only when all ancestors are singleton. Idle measures mailbox
+admission silence; its expiry requests Closing even when obligations remain,
+and the separate bounded closing protocol must settle them without erasing a
+Connector exit or Saga compensation. Sliding windows remain deferred because
+one admission would select several instances.
+
+**Containment owns lifecycle, not memory.** Bare `stop` targets the current
+Node instance. Stopping a Graph also requests inner-first closure of its live
+descendant instances. Child start/stop relations are runtime journal facts,
+not application state. A non-root child's `l:start` carries its parent
+instance reference because ancestor generations are deliberately absent from
+the logical address; the fold can therefore support the same cascade across
+future shards. The exact finite `closing = { ... }` sheet, drain,
+cancellation, settlement, and residual-delivery rules remain the next P4
+decision. No hidden default is authorized meanwhile.
+
+**One correlation model.** A join correlates within its owning Operator's
+logical instance. `where` refines candidates and `within`/`last` bound them;
+the former `by` override is removed. A distinct correlation domain is a
+distinct keyed owner.
+
+**Named supersessions.** This decision supersedes D-2026-08-16-1 and the
+unreleased P0–P3 source model: `partition` declarations, inline partitions,
+all `per` forms, standard partitions, `<partition>.key`, nominal
+cross-partition reads, `stop <partition>`, shared Graph `var`, and join `by`.
+It preserves P0–P3's canonical key bytes, pre-commit route decision,
+journaled replay authority, keyed mailbox/state/open-call isolation, causal
+start/stop, generation fences, and one-worker reference implementation. The
+unpublished v8 draft must be realigned categorically before P4; no deployed
+compatibility promise attaches to its old `PartitionSpec` spelling.
+
+This rebase declares two separate identity consequences. The categorical plan
+body moves once when the new owner/instance tables land; semantic graph hashes
+move only when the semantic plan changes. The causal trace format moves for
+every firing because `(address, generation)` becomes mandatory journal
+authority, including for singleton owners. Those trace and golden moves must
+be enumerated before R2 re-blesses them; they are not cleanup noise.
+
+## D-2026-08-16-1 — A partition key is a journaled routing decision
+
+> **Superseded in full by D-2026-08-18-1 before public release.** The key and
+> route proofs survive under Node-owned hierarchical instance addresses; the
+> named `partition` / `per` surface, `meta.sys` exclusion, flat state binding,
+> and fused lifetime descriptor do not.
+
+**`per` selects an instance, not a worker.** A keyed Node has one logical
+instance for each canonical key. Its mailbox, mutable state, open calls and
+lifecycle are indexed by the same `(node, partition_key)` pair. A Node without
+`per` has one explicit singleton instance. Transactions are serialized and
+FIFO within an instance; scheduling order across keys is deliberately
+unspecified because no graph state is shared across those instances.
+
+The reference M1 runtime remains synchronous, single-process and one-worker.
+That implementation is the degenerate case of the normative M:N scheduler,
+not a new language restriction. A bounded thread pool, work stealing, shard
+movement, or the documented Coordinator/child-Worker process model may later
+execute independent keys concurrently under the same as-if-RTC and
+journal-relative contracts. No async dependency, mutex, worker thread or OS
+process enters M1.4 merely to simulate that future topology.
+
+**The key is a Rastok value with one canonical byte authority.** Its admitted
+type domain is the canonical map-key domain from `types.md`: closed scalar or
+enum types with a total tagged encoding; float, `number`, null, interval,
+variant and composites refuse. The runtime key is those tagged canonical
+bytes, not text and not a host hash. Composite `per a, b` is a framed tuple of
+component key values in written order; its exact frame lands with the
+composite-key gate rather than being guessed by the first single-key lift.
+
+**Routing evaluates once; the journal remembers.** When an envelope crosses
+an edge into a keyed Node, the target key expression is evaluated against that
+envelope before the producer transaction commits and before mailbox capacity
+is reserved. The resulting bytes choose the target mailbox. The target
+transaction records those same bytes as identity key 31. More importantly,
+the causal producer records every non-singleton selection *before delivery*:
+INBOUND key 25 stores `[edge, target_partition]`, while TRANSACTION key 38
+stores `[delivery_id, edge, target_partition]`. Thus a crash after the source
+commit but before the target fires cannot reopen the key expression. The
+target's consumed cursor records the producer's partition bytes as key 33's
+`[edge, source_partition, seq]`, and the sequence is allocated per
+`(edge, source_partition)`. Replay reads the recorded routing decision; it may
+re-evaluate the expression as an integrity check, never as the authority that
+could reinterpret old traffic under a changed graph.
+
+The admitted key vocabulary is `data`, `meta.app`, `meta.ext` and graph
+constants. `meta.sys` is excluded: the runtime mints that zone at the source
+commit, while target selection must already be complete before that commit.
+This is a causal boundary, not an expression-engine limitation.
+
+An omitted input-port annotation does not force an annotation merely because
+`per` reads `data`. The M1.3 port solver first closes every effective input
+type; the partition expression is then projected through those resolved
+inputs and its one effective canonical key type is materialized in the
+validated plan. Different input ports may share the expression only when it
+resolves to the same key type for each; otherwise compilation refuses by
+name. Thus `annotation omitted != variant` remains true at this boundary too.
+
+This deliberately rejects the alternative “the key is derivable, so do not
+journal it”. A key expression is derivable from a loaded plan and envelope,
+but the selected destination is an event of that hop, just like arrival order.
+`envelope.md` and identity keys 25/31/33/38 assign that fact to the journal.
+
+**Lifecycle is per instance.** The first envelope admitted to the keyed
+mailbox lazily starts an incarnation and causally triggers `on start` before
+its port transaction. Mailbox admission is the precise activity point. A bare
+positive duration is an idle TTL re-armed there with a generation token;
+`persistent` arms nothing, and stale generations do nothing. Expiry or an
+explicit `stop` closes admission and causally triggers `on stop`. An idle stop
+uses the last admitted envelope as its explicit cause (TRANSACTION key 39).
+If a Connector call is still open, expiry marks closure pending: the call's
+terminal `exit` commits first, and only then may `l:stop` run. State is
+detached from the live key at closure and reclaimed only after the stop
+transaction commits. An arrival during closure belongs to a following clean
+incarnation, never to the detached one. Fixed/window, single-pass and
+composite lifetime execution remain named gates; syntax is not partial
+permission.
+
+**Call exit is nested, never replaced.** Stopping a partition first closes
+admission, then follows an explicitly bounded drain/cancel policy. Every
+Connector invocation admitted before that boundary retains its own call
+obligation and terminal output (`Process.exit` in the current contract).
+Neither `l:stop` nor cancellation may suppress that exit. The exact policy
+surface must be decided before the stop/cancel gate; M1.4 will not bury a
+process-killing default in the VM.
+
+**Transport and identity.** The resolved partition descriptor — optional
+name, compiled key expression and lifetime — is semantic HIR identity. Its
+first executable transport is plan-package **v8**. V7 remains categorical and
+does not acquire an after-the-fact field. Adding v8 changes package bytes for
+all plans but changes a graph's semantic hash only when that graph actually
+binds `per`; a partition-free graph is the immobility witness. Canonical
+journal keys 31 and 33 were already reserved; keys 25 and 38 extend the
+corresponding record tables without renumbering. Empty-key routes remain
+omitted because the singleton destination is plan-derivable.
+
+**Rejected:** one thread/task per key; a `String` runtime key; relying on
+hash-map or scheduler iteration order; recomputing an unrecorded key during
+replay; treating a named partition as shared mutable graph state; cascading
+stop through similarly named partitions; and introducing Host/Worker process
+isolation as part of this semantic slice.
+
 ## D-2026-08-14-1 — Rastok owns payload types; frontends are `name!`
 
 **The owner changes.** Rastok's logical payload type system is the
@@ -85,21 +314,21 @@ or `err` may belong to it. One boundary completion is the control fact that
 closes the obligation and may carry several ordered typed port outputs; the
 VM alone turns those drafts into envelopes and journal emissions. Call
 identity correlates every output, so two concurrent invocations in the same
-partition cannot mix their frames or buffers. Call closure is therefore not
+Node instance cannot mix their frames or buffers. Call closure is therefore not
 inferred from a port name, even though the resolved Connector contract names
 its terminal output `exit`.
 
 **`stop` and `exit` terminate different scopes.** A Node definition is
-static. At runtime it may have several partition instances in parallel, and
-one partition instance may admit several Connector invocations. `stop`
-requests the end of the partition instance; `exit` reports the observed end
-of one invocation. Many `exit` values may therefore precede one partition
-`stop`. Closing a partition must stop admission and either drain or cancel
+static. At runtime it may have several logical instances in parallel, and one
+Node instance may admit several Connector invocations. `stop` requests the
+end of the current Node instance; `exit` reports the observed end of one
+invocation. Many `exit` values may therefore precede one Node-instance
+`stop`. Closing an instance must stop admission and either drain or cancel
 its open invocations according to an explicit bounded policy; it may not
 erase their obligations. Each admitted invocation still produces exactly
-one `exit` before the partition is reclaimed. M1.3 fixes and implements the
-invocation contract for `Process(job)`; the following `per`/partition slice
-implements the partition-closing policy without changing that port model.
+one `exit` before the instance is reclaimed. M1.3 fixes and implements the
+invocation contract for `Process(job)`; M1.4 implements Node-owned instance
+addressing and bounded Closing without changing that port model.
 
 Framing and publication are separate decisions. A line framer may yield two
 hundred `err` envelopes for one invocation, while a bounded collector may

@@ -11,7 +11,8 @@ behind a visual low-code format.
 A Rastok graph connects existing services, models, tools, data, and
 business processes. It contains three kinds of nodes:
 
-- **Operators** contain pure graph logic. They may update graph state,
+- **Operators** contain pure graph logic. They may update their own
+  Node-local state,
   but they cannot read from or write to the external environment.
 - **Connectors** are explicit, typed boundaries to the external world:
   APIs, processes, databases, files, brokers, and clocks.

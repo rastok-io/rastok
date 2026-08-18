@@ -6,13 +6,19 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-15): items 1, 2 and the replacement item 3 are landed, as are
+**Current checkpoint (2026-08-18): items 1, 2 and the replacement item 3 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
-The current transport is plan-package v7; valid-program identity for
-the spike remains `514d4ab7…` after B9 closed without changing that program.
+M1.4 has been normatively rebased by D-2026-08-18-1 before public release.
+The executable P0–P3 named-`partition` / `per` draft is not the target source
+or package contract; its mechanisms are being realigned behind Node-owned
+`instances.key`, independent `lifetime`, Node-private state, and hierarchical
+logical addresses. Its valid-program/golden evidence remains evidence, not a
+compatibility promise.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
-[`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md).**
+[`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
+continues under the ordered [M1.4 instance backlog](m1.4-instances-backlog.md),
+starting at R0/R1 rather than layering Closing over the superseded draft.**
 
 ## The shape of M1
 
@@ -31,7 +37,7 @@ after the fact.
 ## Scope, in order
 
 The order is load-bearing: the multiport machine comes first because
-joins, `per`, and the HTTP pair all stand on it — and its
+joins, keyed Node instances, and the HTTP pair all stand on it — and its
 delivery-reference prerequisite was sealed in M0.5 precisely so this
 step touches `vm.rs` once.
 
@@ -229,8 +235,8 @@ step touches `vm.rs` once.
    Boundary completion may carry several ordinary port outputs, so
    `Process.err` is exact stderr while `Process.exit` carries the tagged
    terminal outcome of each invocation. This generalizes the original
-   typed-error deliverable into `ProcessExit`; partition `stop` remains a
-   distinct lifecycle implemented by the following `per` slice. Core
+   typed-error deliverable into `ProcessExit`; Node-instance `stop` remains a
+   distinct lifecycle implemented by the following instance slice. Core
    `datatype::DataType` and core `value::Value` now own the complete strict
    JSON Schema/Avro/Arrow logical and materialized domains; resolved type
    parameters are not copied into envelopes.
@@ -240,7 +246,7 @@ step touches `vm.rs` once.
    metadata, state, ingress and emissions; JSON no longer owns the decimal128
    domain. B2 now resolves every
    used or declared port into a total `Declared`/`Inferred` table on
-   `ValidatedExecutionPlan`; v7 transports and re-derives it, and no unresolved
+   `ValidatedExecutionPlan`; the categorical package retains and re-derives it, and no unresolved
    hole becomes `variant`. B3 has renamed the consumer to `expr`, added typed
    deterministic `is`/`as` narrowing and pinned the compatible operator
    oracle. B4 has landed
@@ -265,11 +271,20 @@ step touches `vm.rs` once.
    Ordered gates and evidence are in
    the dedicated
    [M1.3 backlog](m1.3-type-system-backlog.md).
-4. **`per` — the partition surface** — keyed nodes and graphs on the
-   flat two-concept model; scheduler keys over the proven multiport
-   routing. This slice implements the `stop` side of the M1.3 scope
-   contract: stop admission, then boundedly drain or cancel every open
-   invocation without suppressing its individual `exit`.
+4. **Node instances, keys, lifetime, and Closing** — any Graph, Operator, or
+   Connector may select a canonical address once at its boundary through
+   `instances.key`; absence means singleton. `lifetime` is independent, so
+   keyed/unkeyed and persistent/temporal combinations are all expressible.
+   Mutable `var` state is private to its declaring Node; Graph `val` context
+   remains lexical. The producer journals each hierarchical target address
+   plus its reserved generation as one instance reference, and every keyed
+   owner may shard independently of its parent. This slice
+   implements the `stop` side of M1.3: close admission, boundedly drain,
+   cancel and settle open invocations without suppressing their individual
+   typed `exit`, then run `on stop` and reclaim. D-2026-08-18-1 is the
+   authority; the ordered
+   [M1.4 instance backlog](m1.4-instances-backlog.md) realigns the private
+   P0–P3 draft before finite Closing and cluster-readiness proof.
 5. **Joins — `on (a, b)` bounded by `within …` / `last N`** —
    correlation windows and the static metadata merge of
    D-2026-08-10-2; the last language lift of the milestone. Here

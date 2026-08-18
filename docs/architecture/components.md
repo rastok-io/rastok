@@ -1,13 +1,15 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated through the landed M1.3 B9 closure on
-> 2026-08-15. The M0 deviations remain recorded in
+> of the build; updated 2026-08-18 for the M1.4 instance rebase. The former
+> named-partition P1-P3 implementation is superseded and is not target
+> evidence until rebased. The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
 > evidence lives in [`m1-slice.md`](m1-slice.md). The specified M1.3
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
-> describes the current v7 implementation.
+> distinguishes the published v7 subset from the next categorical instance
+> transport.
 
 This document refines the responsibility table of
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md) to the component level: the
@@ -154,9 +156,9 @@ data out, the governing spec, and current status.
 | **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; byte-adjacent `IDENT!` frontend selection; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes + frontend Registry → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1; D-2026-08-14-1 | M1.3 B4 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspect admission | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.3 B8; complete checked trees travel in v7 |
+| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspects, Node-owned instance-key expressions and lifetime profiles | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.4 rebase; the former named-partition P1-P3 code is superseded and the categorical transport lands at R2 |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
-| **Lowering + plan gate** | node/edge/handler tables, expression trees, `Slot` resolution, schemas and assets; structural validation before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | M0.5, extended in M1 |
+| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, handlers, expression trees, `Slot` resolution, schemas and assets; structural validation before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | v7 current; categorical owner-tree lowering lands at M1.4 R2 |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
 
 The facade returns `Result<Compilation, Diagnostics>` with
@@ -185,8 +187,11 @@ still rejected before HIR construction
 contracts from `stdlib` (§3.7) through the `contract` metamodel,
 never from adapter code — and it INJECTS every omitted `Defaulted`
 attribute into the effective HIR (D-2026-08-12-1), so the plan
-carries effective attributes only and adapters never reintroduce a
-default. `Hir` is the
+carries effective attributes only and adapters never reintroduce a default.
+D-2026-08-18-1 adds one explicit distinction inside that effective row: a
+plan-resolved word/value versus a contract-authorized dynamic expression. The
+contract declares its latest permitted site; the effective row transports the
+earliest actual boot/instance/invocation site selected by checking. `Hir` is the
 spec's own name for the checked form ([identity.md §1](../spec/identity.md):
 "blake3(canonical HIR)"), and the hash covers the production graph
 only — the lab never enters it.
@@ -203,9 +208,9 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + B8 v7 transport |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + published v7 registry, retained unchanged by the next categorical format |
 
-`expr` never sees an envelope, node, or partition, and owns its own
+`expr` never sees an envelope, Node, or placement boundary, and owns its own
 `expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
 The *signature* — the typed names visible at one expression position —
 is the entire interface, which keeps the chain independently
@@ -235,7 +240,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; construction validates structure, solves every used/declared port, and rejects unresolved or conflicting constraints | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [plan-package.md](plan-package.md) | M1.3 B8; v7 transports and independently re-derives the table |
+| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; the categorical instance target preserves every Graph/Operator/Connector owner and parent relation, validates scoped routes, solves every port, and rejects unresolved or conflicting constraints | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | v7 is published; R2 replaces the private flattened-owner draft in the next categorical format |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -278,7 +283,7 @@ single-stepping and future journal-relative inspection structural.
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
 | **Scheduler** | run-to-completion firing; the single dated-event queue — the **call budgets, armed at DELIVERY** so queue time counts, referenced by `(edge, envelope id)`, resolved reserve→resolve→ack so a refused expiry replays (a timeout is the scheduler's dated event, never a partner's answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
-| **Mailboxes** | per-key FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered per-key delivery | [execution-model.md §2–3](../spec/execution-model.md) | M0 |
+| **Mailboxes** | per-instance-reference FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered delivery within one address generation | [execution-model.md §2–3](../spec/execution-model.md) | M0 base; M1.4 R3 rebase |
 | **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
 | **Boundary completion** | one correlated completion closes an invocation and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically | completion drafts → one transaction of routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md) | M1.3 B7 |
@@ -369,7 +374,7 @@ bless, diff rendering) is driven by `lab` and `main`.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`contract::ConnectorContract`** | the compiler-facing contract sheet: one `PortContract` table (direction, unwired policy, fixed/same-as/choice-selected logical type rules), common attributes, optional profile selector, and effective presence/default/domain rules. The ten-case prose template remains the normative design review checklist; only executable checker facts belong in this type | resolved by the checker into self-contained plan rows; **never depends on adapter code and never travels as a Registry** | [stdlib.md §1–3](../spec/stdlib.md); D-2026-08-12-1; D-2026-08-14-1 | M1.3 B5 (`Process` sheet) |
+| **`contract::ConnectorContract`** | the compiler-facing contract sheet: one `PortContract` table (direction, unwired policy, fixed/same-as/choice-selected logical type rules), common attributes, optional profile selector, and effective presence/default/domain/**latest-evaluation-site** rules. Plan-shaping attributes are compile-time; operational settings may permit boot/instance context and invocation expressions keep their request/call bindings. Checking selects the earliest actual site and ships it. The ten-case prose template remains the normative design review checklist; only executable checker facts belong in this type | resolved by the checker into self-contained plan rows; **never depends on adapter code and never travels as a Registry** | [stdlib.md §1–3](../spec/stdlib.md); [instances.md §3](../spec/instances.md); D-2026-08-12-1; D-2026-08-14-1 | M1.3 B5 base; M1.4 R1 phase lift |
 | **`contract::FrontendContract`** | an ordinary source name plus its registered framing/reader policy. Built-in JSON/text/base64 execute; guest/data names retain a specific framing contract and named deferral until their compiler lands | consumed by parser and checker; never serialized by itself | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md); [identity.md §1](../spec/identity.md) | M1.3 B4 |
 
 This module answers "how does the compiler know what `Process` is
@@ -526,7 +531,7 @@ The chronological detail and commit evidence remain in
   gate.
 - **M1.2:** `sys`/`app`/`ext` metadata, exact JSON/decimal values,
   assets, named structural types, and the Process `jsonl` codec are in
-  the executable subset. The package is format v7.
+  the executable subset. Their published transport is format v7.
 - **Compiler interludes:** `contract` is the sole node-attribute
   metamodel; defaults are injected before identity, and the parser is a
   forward lexeme-stream parser. The lexer owns cursor/lookahead and
@@ -543,6 +548,13 @@ The chronological detail and commit evidence remain in
   effective port table. B9 implements strict JSON Schema/Avro/Arrow
   projections, removes historical v6 type/expression scaffolding, and closes
   unchecked `variant` structural access.
-- **Next:** `per`, joins, new adapters,
-  Loop, counters, and `--watch` remain guarded in the order recorded by
-  the slice.
+- **M1.4 rebase:** D-2026-08-18-1 replaces the unreleased P0-P3 surface and
+  transport with Node-owned `instances.key`, independent `lifetime`, private
+  Node state, hierarchical logical addresses, and journal-derived instance
+  references. The reusable routing,
+  mailbox, cursor and lifecycle proofs must be re-landed through R1-R4. The
+  reference VM remains synchronous and one-worker.
+- **Next:** categorical instance transport, hierarchical routing, lifetime,
+  bounded Closing, keyed Lab observability, Dispatch, joins, new adapters,
+  Loop, counters, and `--watch` remain guarded in the order recorded by the
+  [M1.4 backlog](m1.4-instances-backlog.md).

@@ -5,7 +5,11 @@
 > **allocation of `graph_version`**, and the **canonical byte form** of
 > journal records.
 >
-> The registry below describes executable plan-package v7. D-2026-08-14-1
+> The registry below retains the executable v7 type/value/expression registry
+> and specifies the categorical M1.4 instance-address extension under
+> D-2026-08-18-1. The old unpublished v8 named-partition draft is superseded;
+> implementation must either replace it categorically before publication or
+> refuse it in favor of the next version. D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
 > from the plan constraints and requires exact agreement with the transported
@@ -35,8 +39,10 @@ of the default — `duration("60s")` and `duration("1m")` keep two
 trees) ; **the entire lab** (a lab never alters the
 production graph).
 
-**Sensitive to** : topology (nodes, edges, ports, edge configs),
-partitions and `per` bindings ; handlers, the order of statements inside
+**Sensitive to** : topology (the parent-linked Graph/Operator/Connector owner
+tree, scoped edges, ports, edge configs), resolved
+`instances.key` and `lifetime` attributes; owner `val` expressions and every
+effective Connector attribute's selected evaluation site; handlers, the order of statements inside
 a handler (`emission_index` = text order) and the order of ports in a
 join ; every Rastok expression (hashed as its canonical expression AST) ;
 resolved logical types and complete port tables, attributes,
@@ -214,44 +220,52 @@ a record is canonicalized (its full `meta.sys`, per envelope.md §1) :
 |---|---|---|---|
 | 10 | kind | uint | 1 = INBOUND · 2 = TRANSACTION · 3 = OUTBOUND |
 
-**Virtual dated time is NOT a sealed field**, consistently with
-simulation-semantics §6.1, which excludes the arming `t` from the
-fingerprint. A timeout firing at t = 48 h *is* behavior — but
+**A raw virtual timestamp is NOT a sealed field**, consistently with
+simulation-semantics §6.1, which excludes an obligation's arming and due
+times from the fingerprint. A timeout firing at t = 48 h *is* behavior — but
 that behavior manifests as a **record that exists in a position**
 (the dated-event firing produces its TRANSACTION), and the absolute
 µs value is **derivable from (journal, state)** (delivery-semantics
 §4 : every dated obligation is derivable). So virtual time is
 recorded as an **annotation** (available to `trace dump`, re-derived
 on replay), never a compared byte of the seal. Two runs differ in the
-seal because their *records and orders* differ, not because a time
-field differs.
+seal because their *records and orders* differ, not because a timer annotation
+differs. The one deliberate distinction is a processing-time tumbling box:
+its canonical box start identifies the selected logical instance and therefore
+travels inside the sealed `instance_address` below. That is a journaled routing
+fact derived once at admission, not a general license to seal wall-clock or
+timer fields.
 
-**INBOUND** (kind 1 — an envelope entered) — keys `20–24` :
+**INBOUND** (kind 1 — an envelope entered) — keys `20–25` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
 | 20 | envelope | map | the spine (keys 1–9) of the entering envelope |
 | 21 | connector_path | text | the ingress node's root-relative path (root recipe input, envelope.md §2) |
 | 22 | inbound_seq | uint | the atomic sequence for `(connector_path, replica)` — minted by the owning shard's leader ; root recipe input |
-| 23 | replica | uint | the logical replica id = `shard_id` ; sealed so the record autonomously reconstructs the root recipe `(connector_path, replica, inbound_seq)` ; the entry is passive, the owning shard's leader mints under this stable, worker-independent identity |
+| 23 | replica | uint | the logical ingress-producer replica id; sealed so the record autonomously reconstructs `(connector_path, replica, inbound_seq)`. It may be allocated by the leader of the ingress producer's shard, but is never the target-routing shard and never changes when a destination moves Workers. |
 | 24 | ingress_port | text | the graph input the envelope entered — a causal fact : replay re-routes from this port ; **omitted for the default `in`** (absent = omitted), so pre-multiport records are byte-identical (D-2026-08-08-2) |
+| 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INBOUND record. |
 
 **TRANSACTION** (kind 2 — one node firing ; the commit packet of
-execution-model §1) — keys `30–37` :
+execution-model §1) — keys `30–39` and `48` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
 | 30 | node_path | text | the firing node, root-relative |
-| 31 | partition_key | bytes | the instance's canonical key bytes ; omitted for a single-cell node |
+| 31 | instance_ref | array | `[instance_address (bytes), generation (uint)]`, mandatory for every firing; generation is the zero-based journal-derived `l:start` ordinal for that address |
 | 32 | trigger | text | namespaced `p:<port>` / `l:<lifecycle>` (envelope.md §3 ; closed `l:` registry) |
-| 33 | consumed | array | the consumed input **positions** — each a fixed tuple `[edge (text), source_partition (bytes), seq (uint)]` (the cursor key, delivery-semantics §2 — per `(graph-edge × source partition)`, NOT per port : several edges feed one port, so `(port, seq)` is not injective) ; **array sorted by `(edge, source_partition, seq)`** — what leaves the boxes |
+| 33 | consumed | array | the consumed input **positions** — each a fixed tuple `[edge (text), source_instance_ref, seq (uint)]` (the cursor key, delivery-semantics §2 — per `(graph-edge × source instance reference)`, NOT per port: several edges feed one port, so `(port, seq)` is not injective); **array sorted by canonical `(edge, source_instance_ref, seq)`** |
 | 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16) ; **sorted by the trigger's port order then id** ; omitted otherwise |
-| 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the `var`/partition-field changes `state → state'` (sub-form below ; fields sorted by `field_path`) ; omitted when empty |
+| 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
 | 37 | timers | array | dated obligations armed by this firing — each a fixed tuple `[kind (uint), ref (bytes)]` where `ref` identifies the obligation (call id / join / instance) ; **sorted by `(kind, ref)`** ; **the due µs is NOT sealed** (derivable and re-armed by the fold) |
+| 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instances.key` and never substitutes a later generation. |
+| 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction with no consumed mailbox cursor (`l:start`, `l:stop`, later `l:evict`); omitted when key 33 already identifies the cause. This keeps an empty lifecycle hook causally autonomous rather than relying on record order. |
+| 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
 
 **OUTBOUND** (kind 3 — one external call's WAL record ;
-delivery-semantics §4) — keys `40–46` :
+delivery-semantics §4) — keys `40–47` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -261,8 +275,8 @@ delivery-semantics §4) — keys `40–46` :
 | 43 | request_digest | bytes(32) | the boundary integrity seal (delivery-semantics §4.2) |
 | 44 | status | uint | the SEALED causal states : `1 = open · 2 = closed · 4 = abandoned` ; value `3` is reserved — `discarded` (a late reply after closure) is a NON-causal observability record, never a sealed status |
 | 45 | closure | array | present iff status ∈ {closed, abandoned} ; EXACT byteshape fixed BY `status` (`[1,outputs]` response · `[2]` timeout · `[]` abandoned ; sub-forms below), so `status` and `closure` never disagree |
+| 46 | edge_cursor | array | present only on an inter-shard delivery — the DURABLE LOGICAL cursor `[edge (text), source_instance_ref, seq (uint)]` (seq never restarts on leader change within that source generation; the transport `leader_epoch` fence is separate and NOT sealed); a transport cursor, NOT an envelope id, outside every id domain |
 | 47 | edge | text | the canonical edge of the causing delivery ; with key 40 (`emitting_id`) it reconstructs `delivery_ref` and hence `call_ref` (envelope.md §2) — the record stays autonomous |
-| 46 | edge_cursor | array | present only on an inter-shard delivery — the DURABLE LOGICAL cursor `[edge (text), source_partition (bytes), seq (uint)]` (seq never restarts on leader change ; the transport `leader_epoch` fence is separate and NOT sealed) ; a transport cursor, NOT an envelope id, outside every id domain |
 
 Key 44's `status` is the internal state of the OUTBOUND WAL record, not a
 graph port and not a payload union. M1.3's conventional `exit` port therefore
@@ -334,6 +348,26 @@ cannot diverge on bytes for the same journal :
   (Sort keys — struct by `field` UTF-8 ; map by the key's canonical
   `tagged_value` bytes. All temporal logical types share the Arrow
   nanosecond convention — no µs anywhere in the seal.)
+- **`instance_address`** is the canonical CBOR
+  bytes of `[owner_path (text), frames (array)]`. `frames` is ordered from
+  outermost to innermost owner. Each frame is
+  `[frame_owner_path (text), frame_kind (uint), payload]`, with the
+  extend-only kinds `1 = selected_key` (payload = `[resolved_key_type,
+  tagged_value]`, using the plan's canonical `DataType` sub-form and the value
+  registry above) and `2 = processing_time_box` (payload = the epoch-aligned
+  box-start timestamp in signed nanoseconds). The type is required because a
+  materialized `Value` deliberately does not duplicate integer width, temporal
+  unit, decimal precision, enum domain, or struct field types. When one owner contributes both
+  frames, selected-key precedes time-box. Singleton ownership contributes no
+  frame; the static `owner_path` still distinguishes Nodes. Generation,
+  virtual shard, Worker, Host, lease, and leader epoch are never address
+  fields. An **`instance_ref`** is the fixed array `[instance_address (bytes),
+  generation (uint)]`. Generation is the zero-based ordinal of `l:start` for
+  that address; the target reserves it before producer commit and the
+  corresponding `l:start` record carries it in key 31. Instance refs, not bare
+  addresses, identify live mailbox/state/lifecycle ownership and occur in
+  record keys 25/31/33/38/46/48. The address bytes alone remain the stable
+  shard hash input; generation changes neither placement nor call identity.
 - **The `encoding_tag` registry** — EXACTLY the fixed internal
   representations of envelope.md §5, `raw | avro | arrow-ipc`,
   extend-only, never renumbered : `1 = raw (identity bytes, no codec)
@@ -346,8 +380,10 @@ cannot diverge on bytes for the same journal :
   `[encoding_tag (uint), bytes]` — the bytes are opaque, compared
   as-is, never re-encoded.
 - **`state_delta` (TX key 35)** = a canonical sorted list of pairs
-  `[field_path (text), tagged_value]` sorted by `field_path` — every
-  value self-describing via the `type_tag` registry above.
+  `[field_path (text), tagged_value]` sorted by `field_path` — every value
+  belongs to the firing Node instance at key 31 and is self-describing via the
+  `type_tag` registry above. No owner qualifier is needed because mutable
+  state cannot cross a Node boundary.
 - **`app_meta` values (spine key 9)** : each triple's third element is
   a `tagged_value` (per the registry above).
 - **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,

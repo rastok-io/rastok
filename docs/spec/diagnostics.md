@@ -10,7 +10,8 @@ Runtime outcome cases (`JoinExpired`, `LoopExhausted`,
 ordinary typed port payloads, hashed through their resolved types and
 compared in the causal core. They live in their home specs, not here.
 
-The current `E-EXPR` and `IDENT!` rows describe executable v7. New or
+The current `E-EXPR` and `IDENT!` rows describe the expression registry in
+published v7; the next categorical instance format retains it unchanged. New or
 renamed checks are registered only when their focused negative tests
 land, never pre-allocated by a planning pass.
 `E-EXPR` supersedes the unreleased `E-CEL-EXPR` spelling as part of B3;
@@ -77,10 +78,9 @@ no public diagnostic contract ever carried the old code.
 | E-TYPE-UNRESOLVED | error | check | [types.md](types.md) | an open source constraint reaches a position that requires one closed effective type (for example `struct { .. }` or an empty collection without contextual element type); field `type` |
 | E-CONTENT-TYPE | error | check | [decisions.md](decisions.md) | a content-typed byte form (`base64!(ct)`, `asset(path, ct)`) outside whole-payload position — a nested field has no `meta.ext` of its own (D-2026-08-10-5); field `tag` |
 | E-TYPE-BUDGET | error | check | [grammar.md](grammar.md) | a type expansion beyond a structural budget — depth (128), nodes (4096), width (256), or alias links followed (256) — with the MEASURED value in the payload (D-2026-08-10-8); fields `name` + `depth`/`nodes`/`count`/`aliases` |
-| E-NAME-RESERVED | error | resolve | [grammar.md](grammar.md) | a reserved word in a binding position: `nothing` or `true`/`false`/`null`; a node named `meta`/`data`/`sys`/`app`/`ext`; or a user `type` spelling a builtin type. Frontend names are ordinary identifiers; only their adjacent `!` has structural meaning. One naming policy, refusal at the declaration; field `name` |
+| E-NAME-RESERVED | error | resolve | [grammar.md](grammar.md) | a reserved word in a binding position: `nothing` or `true`/`false`/`null`; a node named `meta`/`data`/`sys`/`app`/`ext`/`instance`; a binding named `data`/`meta`/`instance`; or a user `type` spelling a builtin type. Frontend names are ordinary identifiers; only their adjacent `!` has structural meaning. One naming policy, refusal at the declaration; field `name` |
 | E-BRACE-MIXED | error | check | [grammar.md](grammar.md) | a braced value mixing ordinary data fields with reserved envelope roots (`data`, `meta` — `mime_type` left the list with D-2026-08-10-4) — wrap the data in `data = { … }`; never a silent reinterpretation (D-2026-08-09-1); field `field` |
 | E-PORT-TYPE | error | check | [grammar.md](grammar.md) | a typed destination cannot accept or uniquely wrap its value: an unsolved port variable, incompatible edge/emission/ingress/state/case-field requirement, zero or several contextual union branches, a dynamic `variant` without narrowing, or an implicit conversion between distinct union types; fields `port` (destination name), `expected`, `found`. Since M1.3 B2, validation owns a total resolved port table and never substitutes `variant` for an unsolved variable. |
-| E-PARTITION-MISMATCH | error | check | [execution-model.md](execution-model.md) | a join input arriving under a different partition than the join requires — an explicit re-key step is needed; reserved for the joins slice; fields `port`, `expected`, `found` |
 | E-DUP-EDGE | error | check | [envelope.md](envelope.md) | the same source endpoint wired twice to the same target, compared after desugaring — the deliveries would derive one call ref; field `edge` |
 | E-DUP-LAB-IDENTITY | error | resolve | [simulation-semantics.md](simulation-semantics.md) | a duplicated lab identity — simulation, scenario, or mock of one connector at one level; fragments merge, homonyms refuse; field `name` |
 | E-INTERNAL-PLAN | error | plan | [plan-package.md](../architecture/plan-package.md) | the lowering emitted a plan its own validator refuses — a compiler defect surfaced as a diagnostic, never a panic; field `detail` |

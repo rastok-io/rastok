@@ -3,7 +3,8 @@
 > **Status: normative and executable through M1.3 B9.** The
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as`, closed-struct and tagged-constructor trees execute, are
-> type-checked, and travel in package v7 with their resolved targets. The
+> type-checked, and travel in published package v7 with their resolved targets.
+> The next categorical instance format retains that registry unchanged. The
 > `IDENT!` frontend surface and full JSON-value reader described below are
 > executable. A `variant` must be narrowed before member or index access.
 
@@ -33,6 +34,24 @@ Arrow-anchored logical types.
 Every divergence from the CEL-compatible core is named and tested. In
 particular, Rastok's comments, line-bounded strings, absence rules,
 narrowing and type domain are not described as upstream CEL behavior.
+
+`instance` is a reserved contextual root, like `data` and `meta`. Its
+currently admitted member is `instance.key`, available only while checking or
+running a Node that declares `instances.key`. It denotes that owner's local
+selected key; it never searches an ancestor and never becomes null. An
+enclosing Graph passes such context to descendants through an immutable
+lexical `val`.
+
+Expression availability is phase-checked. Unit/App boot `val`s and effective
+settings bound at boot may use `env()` / `secret()`. A Node-level per-instance
+`val`, or an effective Connector setting bound at the instance site, may use
+enclosing immutable bindings and that owner's local key but not `data`, `meta`,
+or `var`. Handler expressions have their ordinary transaction bindings;
+invocation-site Connector settings use their declared request/call signature.
+A contract declares the latest permitted site, while checking selects and the
+plan transports the earliest actual site at which the expression closes. A
+plan-shaping contract attribute permits only the plan site and cannot become
+dynamic by spelling.
 
 ### 1.1 Compatibility oracle and divergence ledger
 

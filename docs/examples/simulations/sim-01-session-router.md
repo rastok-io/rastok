@@ -21,14 +21,12 @@
 | `advance` = discrete sweep (dated events in date order, zero-time computation) | execution-model.md §8 |
 | Fixture seeds via `meta.ext` (never `meta.sys` — A2) | envelope.md §6 |
 | Rastok-expression guard on typed pinned input; absent-field grid row 1 | grammar.md, expression references |
-| Per-hop journal entries : arrival seq, partition key, committed_at | envelope.md §7 |
+| Per-hop journal entries: arrival seq, logical instance address, committed_at | envelope.md §7 |
 
 ## 2. The graph
 
 ```rastok
 graph sim01 : App {
-
-  partition session { key = meta.ext.user_id; lifetime = duration("2h") }
 
   connector teams : HttpServer {
     path   = "/api/messages"
@@ -47,7 +45,10 @@ graph sim01 : App {
     on_timeout = bypass                 // default, written for the reader
   }
 
-  operator route per session {
+  operator route {
+    instances = { key = meta.ext.user_id }
+    lifetime = { kind = idle; after = duration("2h") }
+
     input in : struct { kind: text, text: text }     // typed pin — grid row 1
     var quota : int = 100
 
@@ -137,7 +138,7 @@ t=0  E0 born at inbound
      all mailboxes empty → stable state.                   fixture step complete
 ```
 
-Journal so far (per-hop) : `[E0 arrival @route/session=alice seq0 committed_at=0]`,
+Journal so far (per-hop): `[E0 arrival @route[key="alice"] seq0 committed_at=0]`,
 `[E1 emitted by route]`, `[E1 delivered @codex, chrono armed t=10]`.
 
 ### Step 2 — `expect "turn started" codex.in where …`

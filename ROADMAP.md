@@ -54,17 +54,17 @@ exist? Scope, order, and evidence:
 [`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
 The repository opens publicly with this milestone (15 October 2026).
 
-- Multiport execution, then the constructs that stand on it: the
-  `per` partition surface (including bounded stop/drain/cancel of open
-  invocations) and bounded joins.
+- Multiport execution, then the constructs that stand on it: Node-owned
+  logical instances (`instances.key`), orthogonal lifetime and bounded
+  Closing of open invocations, followed by bounded joins.
 - A JSON/JSONL codec chain across the boundaries.
 - M1.3 resets the payload foundation: one Rastok-owned logical type and
   value algebra, complete effective types on every port, unions across
   JSON/Avro/Arrow projections, one expression consumer, and ordinary
   multi-output completions (for `Process`: decoded `out`, exact stderr on
   `err`, and one typed `exit` per invocation). This subsumes the original
-  typed-error item: its codes become `ProcessExit` cases. Partition `stop`
-  remains a distinct, later lifecycle boundary.
+  typed-error item: its codes become `ProcessExit` cases. Node-instance
+  `stop` remains a distinct, later lifecycle boundary.
   B1's complete strict-profile type/value domain, B2's total validated
   port-type resolution, B3's Rastok-owned expression consumer/narrowing
   core, B4's one `name!` frontend surface, and B5's uniform resolved
@@ -83,6 +83,18 @@ The repository opens publicly with this milestone (15 October 2026).
   also removed the last synthetic Operator fault channel: an optional
   `err: E` is explicit domain output, while engine faults abort and reach
   supervision.
+- M1.4 has been normatively rebased before public release. The unreleased
+  P0–P3 named-`partition` / `per` implementation is superseded as a source and
+  transport model, while its canonical-key, pre-commit routing, mailbox,
+  cursor and lifecycle proofs remain reusable. D-2026-08-18-1 replaces it
+  with Node-owned `instances.key`, independent `lifetime`, Node-private
+  `var`, hierarchical logical addresses, and independently shardable keyed
+  boundaries. The ordered R0–R7 gates in the
+  [M1.4 instance backlog](docs/architecture/m1.4-instances-backlog.md) now
+  realign compiler/transport/runtime before implementing finite Closing. M1
+  keeps the synchronous one-worker reference engine; the same addresses are
+  designed for future concurrent Workers and Coordinator/child-Worker
+  deployment without placing physical facts in causal identity.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

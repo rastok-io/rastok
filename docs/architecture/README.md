@@ -13,14 +13,17 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md) for the
   ordered landing of logical payload types, uniform ports and tagged
   frontends;
+- [`m1.4-instances-backlog.md`](m1.4-instances-backlog.md) for the ordered
+  rebase onto Node-owned keys, lifetime, hierarchical addresses and bounded
+  Closing;
 - [`build-order.md`](build-order.md) for the dependency-driven stage
   sequence used to build the M0 modules;
 - [`components.md`](components.md) for the component blueprint: owned
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for the current `.rkp` transport
-  format and validation boundary;
+- [`plan-package.md`](plan-package.md) for published v7, the next categorical
+  owner-tree target, and the validation boundary;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
 - [`spike-rp2350-emulated.md`](spike-rp2350-emulated.md) for the measured

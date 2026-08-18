@@ -232,6 +232,10 @@ backoff, re-entry is immediate.
 
 A delay is a dated runtime event. Production execution is driven by the
 system Clock; Lab execution is driven by virtual time and `advance`.
+The obligation is scoped to the current Node-instance generation. If that
+instance enters Closing before the delay fires, the pending `l:next` becomes
+stale and cannot create work in a later generation. A Loop wakeup is not a
+Connector call and therefore owes no invocation `exit` of its own.
 
 ## 5. Lifecycle hooks
 

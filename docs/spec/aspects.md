@@ -160,15 +160,15 @@ strict admission test before adding any new aspect to the stdlib.
 
 A construct X is admitted as an aspect **only if it passes all five tests**.
 If it fails one or more, it is expressed via existing primitives (typed
-ports, handlers on typed outcome ports, `per K`, provenance, `Router`, …) or via an attribute on
+ports, handlers on typed outcome ports, `instances.key`, provenance, `Router`, …) or via an attribute on
 an existing aspect.
 
 | # | Test | Question |
 |---|---|---|
-| **T1** | **Runtime layer** | Does X require a non-trivial runtime mechanism (state machine, scheduler, manager) that is not already provided by the partition manager, the saga manager, the loop manager, the provenance chain, or the trait's own implementation ? |
+| **T1** | **Runtime layer** | Does X require a non-trivial runtime mechanism (state machine, scheduler, manager) that is not already provided by the instance scheduler, the saga manager, the loop manager, the provenance chain, or the trait's own implementation ? |
 | **T2** | **Dedicated vocabulary** | Does X introduce clauses, attributes, or hooks that would be illegal or meaningless outside of X's scope ? If the vocabulary is generic (e.g. `timeout = duration("30s")`), X is probably just an attribute of a containing aspect, not its own aspect. |
 | **T3** | **Active orchestration** | Does X actively modify envelope flow — re-route, delay, retry, compensate, emit derived envelopes ? If X only observes (audit, trace), it is better expressed as a runtime-wide concern, not a per-node opt-in. |
-| **T4** | **Non-redundancy** | Can X be expressed naturally with existing primitives (handlers on typed ports, `per K`, `Router`, `durability = global`, etc.)? If yes, X is a pattern, not an aspect. |
+| **T4** | **Non-redundancy** | Can X be expressed naturally with existing primitives (handlers on typed ports, `instances.key`, `Router`, `durability = global`, etc.)? If yes, X is a pattern, not an aspect. |
 | **T5** | **Lexical scope** | Does X wrap a *region* (graph body or node body) and behave as a cross-cutting concern over multiple operations within ? If X parameterizes a single operation, it is an attribute. |
 
 The tests are intentionally strict. They are meant to keep the catalogue
@@ -213,7 +213,7 @@ belong at the per-node level at all.
 | **`Audit`** | Fails **T3** — audit is observation, not orchestration. Fails **T4** — `durability = global` already provides provenance, and a manual audit tee is just an explicit emission. | `durability = global` + an emission on an `audit_out` port wired to a sink. |
 | **`Trace`** | Fails **T3** (observation) and **T5** — tracing is a runtime-wide concern, not a per-node opt-in. Activating it for some nodes and not others would create blind spans. | A runtime-wide configuration option (`runtime.tracing.enabled = true`), with `meta.sys.trace_*` populated automatically. |
 | **`Validate`** | Fails **T4** — already expressible via typed ports (`input X : SomeSchema`) and checked narrowing. | `input X : Schema` declarations + `as` cast, with its typed refusal routed through the containing contract's ordinary outcome port. |
-| **`Mutex`** | Fails **T4** for the common case — `per <K>` already provides single-active-instance-per-key. Cross-key mutex is rare and niche. | `per <K>` for the keyed case. For the rare cross-key case, use a `Postgres` advisory-lock Connector explicitly. |
+| **`Mutex`** | Fails **T4** for the common case — a keyed Node already serializes one transaction per logical instance. Cross-address mutex is rare and niche. | `instances.key` for the keyed case. For the rare cross-address case, use a `Postgres` advisory-lock Connector explicitly. |
 
 **Principle** : when a concern can be expressed via existing primitives
 or by adding an attribute to an existing aspect, prefer that. Reserve
@@ -296,7 +296,7 @@ on the next iteration, a `Saga` dispatches compensation envelopes to
 earlier steps). These back-edges are **runtime mechanisms**, not edges
 in the `.rkg` file. The static topology stays a strict DAG.
 
-This mirrors the partition and provenance mechanisms: declared in the
+This mirrors the instance-addressing and provenance mechanisms: declared in the
 DSL, orchestrated by the runtime, and invisible at the topology level.
 
 
@@ -359,7 +359,7 @@ declarations and execute them.
 | Layer | Declared by | Runtime mechanism |
 |---|---|---|
 | Provenance | `durability = global` | append-only chain of commit records |
-| Partition / grain | `per <partition>` | mailbox + FIFO + single-active-instance per key |
+| Node instance | optional `instances.key` + `lifetime` | addressed mailbox + FIFO + one active transaction per instance |
 | Saga manager | `: Saga` aspect + `effect = compensable` | provenance walker + compensation dispatcher |
 | Loop manager | `: Loop` aspect | re-injection scheduler + iteration counter + measure checker |
 
@@ -427,7 +427,7 @@ time). The common no-collision case stays terse — a bare name is legal
 whenever it is unambiguous.
 
 **The rule extends to lifecycle triggers** : bare
-`on start` / `on stop` bind to the **node** (the partition instance) ; an
+`on start` / `on stop` bind to the **current Node instance**; an
 aspect whose lifecycle differs qualifies its hooks — `on Loop.start { }`,
 `on Loop.stop { }` (a loop run ≠ the instance's life). `on compensate` stays
 bare : nothing node-level collides with it.

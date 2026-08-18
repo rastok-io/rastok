@@ -1,12 +1,15 @@
 # The Execution Model — mailboxes, ordering, time, and the two planes
 
-> **Status:** normative — under review.
+> **Status:** normative. The Node-owned instance model in
+> [instances.md](instances.md) supersedes the unreleased P0–P3
+> named-partition implementation; that implementation must be realigned before
+> execution work resumes.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
 > `emission_index` rule, the mailbox-FIFO ordering contract, the dated-events
 > queue, and the supervision vocabulary.
-> Reference simulations 1–2 exercise mailbox-per-key ordering and the
+> Reference simulations 1–2 exercise mailbox-per-instance ordering and the
 > virtual-clock contract.
 
 The question this doc answers : **when a graph runs, what happens exactly, in
@@ -19,8 +22,8 @@ A **node transaction** consumes one triggering envelope at one node and runs
 the matched handler to completion : `f(state, input) → state', emissions`.
 "Transaction" is meant literally, not as a metaphor — **A**tomic (one commit,
 all-or-nothing : the transaction record, delivery-semantics), **C**onsistent
-(types + guards), **I**solated (one mailbox, one worker at a time = serialized
-per key), **D**urable per the `durability` scope. *(Other traditions call
+(types + guards), **I**solated (one instance mailbox, one worker at a time),
+**D**urable per the `durability` scope. *(Other traditions call
 this unit a Petri* transition firing *or an actor* turn *; Rastok says
 transaction because that is what it does.)*
 
@@ -32,7 +35,7 @@ saga). Shorthand in diagrams and tables : `tx`.
 
 The contract is **as-if-run-to-completion (as-if-RTC)** :
 
-- Observable semantics : for a given partition key, transactions execute one at a
+- Observable semantics : for one logical Node instance, transactions execute one at a
   time, each *as if* uninterrupted, in arrival order.
 - Runtime freedom : underneath, the runtime may suspend on I/O, work-steal,
   move keys across workers, or speculate — anything, as long as the observable
@@ -56,17 +59,17 @@ contract; the runtime does not pretend every hardware/process failure is
 recoverable in-process.
 
 
-## 2. M:N — a mailbox per key, a bounded pool of workers
+## 2. M:N — a mailbox per logical instance, a bounded pool of workers
 
 Not a thread per key (100 000 sessions would kill the OS). One **mailbox per
-partition key**, and a small worker pool :
+logical Node instance**, and a bounded worker pool:
 
 ```
    incoming envelopes
         │
         ▼
   ┌─────────────────────────────────────────┐
-  │  mailboxes (one per key)                │
+  │  mailboxes (one per instance reference) │
   │  session=alice   [ e1, e4 ]   ◄── FIFO  │
   │  session=bob     [ e2 ]                 │
   │  session=carol   [ e3, e5, e6 ]         │
@@ -77,9 +80,10 @@ partition key**, and a small worker pool :
    └─────────────┘
 ```
 
-**The golden rule : a mailbox is never held by two workers at once.** Per key,
-envelopes are processed one at a time, in mailbox order — which is what makes
-`var` state safe without locks, and per-key ordering structural. (This is the
+**The golden rule : a mailbox is never held by two workers at once.** Per
+instance, envelopes are processed one at a time, in mailbox order — which is
+what makes Node-local `var` state safe without locks and instance ordering
+structural. (This is the
 Orleans-grain / Kafka-Streams-task / Restate-virtual-object lineage ; Restate's
 virtual objects validate the same conviction independently.)
 
@@ -87,7 +91,81 @@ Async I/O releases the worker (the mailbox stays claimed by the suspended
 transaction) ; CPU-heavy work (large `jq`, future `sql`) runs on a separate compute
 pool with back-pressure. Both are invisible under as-if-RTC.
 
-A node without `per` is a singleton : one implicit mailbox.
+A Node without `instances` is a singleton within its enclosing Graph
+instance. A keyed Node has one mailbox per canonical key at each enclosing
+address. A `var` is private to the declaring Node, so no graph-wide lock or
+cross-mailbox mutable state exists.
+
+### 2.1 Instance addressing and lifecycle
+
+The M1 reference machine is the physical one-worker case of the model above.
+It does not promise order across addresses, even though one deterministic pump
+makes an order reproducible in that implementation.
+
+An edge crossing a keyed owner is decided before its producer commits. The
+`instances.key` expression sees the complete immutable entering envelope —
+including `meta.sys` — and immutable values from enclosing lexical scopes.
+The owner body is entered only after address selection, so its own `val`s
+cannot participate. The producer reserves destination capacity and records
+the canonical target instance reference `(address, generation)`. Delivery and
+recovery consume that recorded fact; neither re-routes by evaluating the
+expression after commit. The hierarchical address selects placement; its
+journal-derived generation forms the instance reference that indexes mailbox,
+derived immutable instance bindings, Node-local state, open calls, lifecycle,
+armed events, and consumer cursor. Type checking follows the ordinary total
+port solver and creates no second inference mechanism.
+
+When a route enters several nested owners, selection is ordered outermost to
+innermost. Each selected owner reference and its purely evaluated instance
+bindings become the immutable enclosing context for the next selection. A
+route may not skip an owner boundary or evaluate a child against provisional
+mutable state. The final routed target carries one instance reference; the
+preserved owner tree and lifecycle records retain its enclosing chain.
+
+Admission of a delivery into an absent address starts a new **instance**:
+
+1. reserve capacity and the zero-based generation derived from journal history
+   for that address, then seal that instance reference in the producer route;
+2. purely evaluate and validate per-instance bindings; failure consumes
+   nothing, starts nothing, and performs no adapter effect;
+3. commit `l:start` with the admitted envelope as cause and the reserved
+   instance reference;
+4. commit the envelope's port transaction only after the start;
+5. arm any lifetime deadline with that generation;
+6. treat an event carrying an older generation as a harmless stale
+   observation.
+
+An effective expiry requests Closing for that instance. New external
+admission stops; already admitted internal work and Connector-call obligations
+are handled by the bounded closing protocol. Every admitted Connector call
+retains its terminal `exit`, and `on stop` runs only after every required
+terminal fact. State is reclaimed only after the stop transaction commits. A
+later delivery to the same address starts a clean generation and cannot see
+the closed state.
+
+Mailbox reservation plus the producer's route commit is the admission point.
+Reservation returns the instance reference that the route seals. A route that
+wins before `CloseRequested` remains old-generation drain work even if an
+inter-shard transport arrives physically later. A post-close attempt does not
+commit and waits under backpressure for the next generation. Scheduler or
+network order can therefore never leak an old delivery into new state.
+
+A committed reservation consumes the referenced generation even if no worker
+ever polls its envelope. Recovery must complete the corresponding `l:start`,
+or R5 must close and retire that generation while recording the residual
+delivery; it may never recycle the ordinal while a committed route still
+names it. In a future cross-shard implementation, reservation and route
+publication may use a protocol, but a crash may not expose one without a
+recoverable path to the other.
+
+`on start` and `on stop` are ordinary handlers in the Node's handler table.
+They may read the causing envelope and emit ordinary typed outputs. A Graph
+close also requests inner-first closure of live descendants created in that
+Graph generation. A non-root child's `l:start` record carries its enclosing
+Graph's complete instance reference, so the lifecycle fold distinguishes two
+successive parents at the same logical address. The exact closing sheet,
+drain/cancel/settle sequence, and residual-delivery rules remain the R5 gate;
+this document supplies no hidden timeout or kill default.
 
 
 ## 3. Ordering — what is guaranteed, what is journaled
@@ -97,7 +175,8 @@ GUARANTEED : within one mailbox, FIFO — arrival order is processing order.
 NOT DEFINED: order across mailboxes (not observable : no shared state).
 ```
 
-**Joins.** `on (a, b)` buffers early arrivals in partition state ; the transaction
+**Joins.** `on (a, b)` buffers early arrivals in the owning Operator instance;
+the transaction
 triggers when presence completes, and the **triggering envelope is the last
 arrival in mailbox-FIFO order** (arbitration A3). Its port is the transaction's
 trigger ; it is the parent of the join's emissions (envelope.md §3).
@@ -169,7 +248,7 @@ Concretely, the supervision plane maintains **one queue of dated events** :
 | clock tick | `Clock` (`system_clock` incl.) | a root tick envelope (inbound) |
 | per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the contract's typed invocation-exit port (`exit` for Process) |
 | join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's declared typed expiry output (conventionally `expired`) |
-| partition lifetime expiry | `lifetime = …` | the instance's `on stop` (parent = **the envelope that armed the deadline** — last activity for idle-ttl, the creator for fixed/window) |
+| instance lifetime expiry | `lifetime = { … }` | the instance's `on stop` sequence (parent = **the envelope that armed the deadline** — last admission for `idle`, creator for `fixed`, creating admission for its tumbling box) |
 | loop backoff delay | `Loop.backoff` ([loop.md](loop.md) §4) | the re-injected call (trigger `l:next`) |
 | saga completion budget | `Saga.timeout` ([effects-and-sagas.md](effects-and-sagas.md)) | a transaction of the `: Saga` node — trigger `l:timeout`, parent = the instance-creating envelope; emits `SagaExpired` on the ordinary typed `Saga.exit` output and the instance enters `rolling_back` |
 
@@ -232,8 +311,8 @@ One admitted call produces exactly one terminal `exit`: a response completion
 or a timeout, never both. Any `out`/`err` frames carry the same call identity,
 and none may follow that terminal barrier.
 
-This call lifetime is nested inside, but distinct from, a partition
-instance's lifetime. `stop` closes the partition instance; it is not a
+This call lifetime is nested inside, but distinct from, its owning Node
+instance's lifetime. `stop` closes that current instance; it is not a
 substitute for the `exit` of any call already admitted by that instance.
 
 ### 6.4 The instance — `on_timeout`, orthogonal to `restart`
@@ -256,7 +335,7 @@ The fragment omits unrelated required `Process` attributes.
   later calls proceed. A timeout is a flow fact, not a death sentence.
 - **`kill`** : the supervision kills the instance → the **standard death
   path** (WHITEPAPER §2.7 : terminal envelope with the outcome, the implicit
-  `run_id` partition ends — its `on stop` is the cleanup hook) → the `restart`
+  resident-resource `run_id` ends and its cleanup hook runs) → the `restart`
   policy alone decides respawn.
 
 Compositions, not new mechanisms : *restart-on-timeout* =
@@ -368,40 +447,35 @@ In production the same queue runs against wall-clock ; the delivery contract
 journal's role*.
 
 
-## 9. Windows — the minimal forward-compatible contract
+## 9. Windows are lifetime profiles
 
-Window execution is deferred, but its forward-compatible contract is
-defined here so it can land without changing the model. A window in
-Rastok is **not** a separate mechanism — it is a
-**partition-lifetime mode** :
+A window is not a separate runtime mechanism. Key selection answers *which
+logical address?*; lifetime answers *when does the instance end?* The two are
+orthogonal, so a temporal singleton is a real window within its enclosing
+Graph address (App-global only at singleton ancestors), while a keyed owner is
+a window per key.
 
 | Family | Shape | One envelope belongs to | Rastok | Status |
 |---|---|---|---|---|
-| **Session** | elastic, closed by silence | 1 window | `lifetime = duration("2h")` (idle-ttl) | specified |
-| **Tumbling** | fixed boxes, end to end | 1 window | `lifetime = window duration("5m") tumbling` | specified here |
-| **Sliding** | fixed, overlapping | **N windows** | `lifetime = window duration("5m") sliding` | declared; dispatch semantics deferred |
+| **Session** | elastic, closed by admission silence | 1 instance | `lifetime = { kind = idle; after = duration("2h") }` | normative target |
+| **Fixed** | age from instance start | 1 instance | `lifetime = { kind = fixed; after = duration("30s") }` | normative target |
+| **Tumbling** | epoch-aligned boxes | 1 box | `lifetime = { kind = tumbling; every = duration("5m") }` | normative target |
+| **Sliding** | fixed, overlapping | **N boxes** | no accepted spelling yet | deferred |
 
-The four lines of the contract :
+The processing-time tumbling contract has four rules:
 
-1. **Processing-time, period.** An envelope belongs to the window **open at
-   its arrival** (per-partition arrival order — the §3 contract). Corollary :
-   *"late events" do not exist* — in processing-time there is always an open
-   window for you. The watermark machinery is out of the model.
-2. **Event-time is a deferred, additive layer** : windowing on
-   `data.occurred_at` would be an *extra clause* ; nothing here changes.
-3. **Tumbling boxes are epoch-aligned — in both modes** : boundaries at
-   `epoch + k·width`. In simulation, civil time = the scenario's `origin` +
-   the virtual offset (`origin` defaults to the epoch, simulation-semantics
-   §5.3), so the same events fall in the same windows in both modes.
-   Deterministic ; two runs cut identically ; never aligned to the first
-   event.
-4. **Sliding is declared, not yet spec'd.** Overlap means one envelope maps to
-   N live instances — a real multi-instance dispatch question, treated with
-   the `Window` alias. Nothing here forbids it.
+1. an envelope belongs to the box open at mailbox admission;
+2. boundaries are `epoch + k·every`, never relative to the first envelope;
+3. the canonical box start is a runtime-owned address frame, not application
+   data fabricated by the author;
+4. box expiry follows the same Closing protocol and `on stop` ordering as any
+   finite instance.
 
-Window close = lifetime expiry = a dated event (§5) → the instance's `on stop`
-emits the aggregate (parent = the closing tick, envelope.md §3.1). Normal
-semantics — never `JoinExpired` (§7).
+In simulation, civil time is the scenario's `origin` plus the virtual offset
+(`origin` defaults to the epoch, simulation-semantics §5.3), so the same
+admissions select the same boxes. Event-time and watermarks are an additive
+future layer. Sliding remains deferred because overlap makes one admission
+select several instances and therefore requires explicit one-to-many routing.
 
 
 ## 10. Trigger vocabulary
@@ -434,7 +508,7 @@ concern. The recipe keeps zero out-of-graph emitters.
 
 Reference simulations 1–2 must exercise date order, the arming-order
 tie-break at equal dates, zero-duration computation, time advancement
-only on empty mailboxes, and byte-identical per-key traces across runs.
+only on empty mailboxes, and byte-identical per-address traces across runs.
 
 
 ## 13. Related docs

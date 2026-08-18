@@ -24,16 +24,18 @@
 ```rastok
 graph sim03 : App {
   durability = local
-  partition order { key = meta.app.order_id; lifetime = duration("30m") }
 
   connector orders : HttpServer { path = "/orders" ; effect = none }
   connector ledger : Memory { }
 
   connector pay : HttpClient + Loop {
+    instances = { key = meta.ext.order_id }
+    lifetime = { kind = idle; after = duration("30m") }
+
     url             = "https://bank.example/charge"
     effect          = irreversible
     behavior        = deterministic
-    idempotency_key = meta.app.payment_id            // STABLE business key — the §4.3 norm
+    idempotency_key = meta.ext.payment_id            // STABLE business key — the §4.3 norm
     timeout         = duration("10s")
     Loop.variant = {
       kind = measure

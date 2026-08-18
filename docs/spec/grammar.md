@@ -1,12 +1,16 @@
 # Rastok DSL — Grammar notes
 
-> **Status: Normative M1.3 target; the B4 frontend grammar landed
-> 2026-08-15.** The parser accepts only `IDENT!` for frontend-owned
+> **Status: normative M1.4 target under D-2026-08-18-1.** The parser accepts
+> only `IDENT!` for frontend-owned
 > regions; the superseded bare spellings are not a compatibility
 > surface. Frontends whose compiler is not in this build remain admitted
 > by their registered framer and refuse with named `E-CHECK-DEFERRED`.
+> The current P0–P3 parser/checker still carries the superseded `partition` /
+> `per` draft; it is not a compatibility surface and must be realigned before
+> R5. The target surface below uses Node attributes `instances` and
+> `lifetime`; the exact `closing` sheet remains a named R5 gate.
 >
-> **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md). Concepts like `Operator`, `Connector`, event-driven transaction, the parameterization grid behind the named archetypes (Reducer, Aggregator, Window, Joiner), the dynamic dispatch primitives, and the partition model are introduced there. This document is the grammar ; foundations is the constitution.
+> **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
 > The `simulation` DSL is covered in this document. Formal verification,
 > multi-tenancy and runtime deployment remain outside the current normative
@@ -95,13 +99,12 @@ There is **one** keyword for composite units. No `pipeline`, `flow`,
 ```rastok
 graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly one per deployed unit
   durability = local                 // app-level attributes live here
-  partition session { key = meta.app.session_key ; lifetime = duration("2h") }
 
   connector inbound : HttpServer { path = "/teams/webhook" ; codec = json }
 
-  graph sessions per session {       // a graph DECLARES → it IS an instance (a composite Node),
-    max_instances = 1000             //   keyed by `per` like any node ; Dispatch knobs are
-    spawn_policy  = lazy             //   ordinary body attributes
+  graph sessions {                   // a graph DECLARES → it IS a composite Node
+    instances = { key = meta.app.session_key }
+    lifetime  = { kind = idle ; after = duration("2h") }
     connector codex : Process { mode = service ; command = "codex" ; args = ["app-server"]
                                 codec = jsonl ; correlate = data.id
                                 effect = idempotent ; behavior = probabilistic }
@@ -133,7 +136,7 @@ The rules :
 - **`: App` is a graph ROLE** (the third annotation category beside traits
   and aspects) : it marks the deployment entry point. A deployed unit has
   **exactly one** `: App` graph (0 or ≥2 = build error). App-level concerns —
-  `durability`, retention overrides, shared partitions — are its attributes
+  `durability` and retention overrides — are its attributes
   and body. `app` is no longer a keyword; it survives as a **pre-bound
   identifier** aliasing the `: App` graph, so a declared App boundary port
   remains addressable as `app.<port>`. M1.3 removes the special `app.err`
@@ -147,10 +150,10 @@ The rules :
   composite Node in its enclosing scope, wired **by name** — exactly like an
   Operator or Connector. A declared graph that is never wired = dead-code
   warning (the unfed-input family).
-- **`per` is uniform** : it keys the instances of any node — operator,
-  connector, or graph (`graph sessions per session` = one instance per key ;
-  Dispatch, unchanged semantics). The Dispatch knobs (`max_instances`,
-  `spawn_policy`) are body attributes of the keyed graph.
+- **Instance addressing is uniform** : any Operator, Connector, or Graph may
+  carry `instances = { key = <expr> }`. `lifetime` is a separate common
+  attribute. Physical capacity, spawn, placement, shard, and Worker policy do
+  not enter this semantic sheet.
 - **Identity guard** : the `: App` graph is the composition **root** ;
   `node_path` is relative to the root and the root's own name is
   **excluded** ([envelope.md §2](envelope.md)).
@@ -164,7 +167,7 @@ The rules :
 
 Rastok recognizes exactly **three families of node** ([WHITEPAPER.md §2](../../WHITEPAPER.md)) :
 
-- **Operator** — computation internal to the graph. Reacts to envelope events, optionally reads/updates state keyed by a partition, emits zero or more envelopes.
+- **Operator** — computation internal to the graph. Reacts to envelope events, optionally reads/updates its own Node-local state, emits zero or more envelopes.
 - **Connector** — same graph shape as Operator, but it is allowed to talk to an external system (HTTP, processes, files, databases, clocks, brokers, etc.). Its external configuration is expressed as flat attributes and typed ports, not as mandatory subsections.
 - **Graph** — composite Node. Its body declares Nodes and edges ; the graph declaration itself is the instance wired by name.
 
@@ -180,7 +183,7 @@ File, Postgres, Kafka, Clock, MCPConnector, Graph, …
 
 The stdlib exposes shorter aliases for everyday writing : `Jaq`, `Reducer`, `Aggregator`, `HttpClient`, `Process`, `File`, etc. They desugar to the formal type names.
 
-Every other concept (Reducer, Aggregator, Window, Joiner) is just an Operator parameterized along three orthogonal axes : presence of `var` state, presence of `per`, and the handler trigger (`on <port>` vs the `on (a, b)` join). See [Operator parameterization](#operator-parameterization-state--per--transaction) below.
+Every other concept (Reducer, Aggregator, Window, Joiner) is just an Operator parameterized along independent axes : presence of Node-local `var` state, optional `instances.key`, optional `lifetime`, and the handler trigger (`on <port>` vs the `on (a, b)` join). See [Operator parameterization](#operator-parameterization-state--instances--lifetime--transaction) below.
 
 The word **Processor** is not part of the canonical vocabulary. Runtime traits
 such as `Reader`, `Transformer`, and `Writer` may exist in an implementation,
@@ -195,7 +198,9 @@ Supporting concepts :
   `output` inside a Node body or inferred from handler/wiring use (including
   the conventional `in` / `out` / `err` spellings). Connected to other Nodes
   via DAG edges.
-- **state binding** — a Node's typed access to a partition's key instance. Declared via `per <partition>` on the Node. *Not* an arrow in the DAG ; it is a binding to a partition-keyed state cell held by the runtime.
+- **instance addressing** — a Node's optional `instances.key` expression.
+  It selects the logical mailbox/state instance for an entering envelope and
+  is recorded before producer commit. It is not an edge or shared-state name.
 - **external configuration** — (Connector only) attributes such as URL,
   path, command, codec, protocol, timeout, retry policy, etc. A grouped
   configuration is a COMPOSITE attribute (`env = { … }`,
@@ -233,29 +238,21 @@ HttpClient
   world -> connector.out              // HTTP response → envelope
 ```
 
-### Cardinality is declared on the graph, like an Operator's `per`
+### Cardinality belongs to the Node definition
 
-A graph is a Node, so — exactly like an Operator — it declares its own keying
-with `per <partition>` on the **definition**. Cardinality is intrinsic to the
-graph, not re-decided at every use site :
+A Graph is a Node, so it declares its own addressing exactly like an Operator
+or Connector:
 
-- **`graph X { … }`** (no `per`) → **singleton**. One running instance (the
-  whole-service top-level graph, or one shared sub-graph instance fed by all callers).
-- **`graph X per <partition> { … }`** → **per-key** (the `Dispatch` primitive).
-  The runtime materializes one running instance per distinct partition key ; the
-  partition's `lifetime` governs eviction.
+- **`graph X { … }`** without `instances` → one singleton inside each
+  enclosing Graph instance;
+- **`graph X { instances = { key = … }; … }`** → one logical instance per
+  canonical selected key.
 
-This mirrors `operator counter per session` : every Node (operator, connector,
-graph) declares its keying the same way. A graph keyed `per session` carries its
-per-session data as **graph-level `val`** (immutable, derived from
-`session.key`) ; mutable per-session state stays in an operator `var per
-session` inside it. (A *shared* graph-level `var` across operators is deferred —
-it depends on the per-key concurrency model.)
-
-> Trade-off (accepted) : a `per`-graph is no longer reusable as a singleton at a
-> different site — but neither is an `operator per …`. Keying is a property of
-> the Node, decided once. A genuinely cardinality-agnostic graph omits `per`
-> (singleton) ; the rare both-ways case uses a thin wrapper.
+Keying is intrinsic to the definition, not re-decided at each edge. Lifetime
+is orthogonal and uses its own attribute. A Graph-level immutable `val` may be
+derived from `instance.key` and is lexically visible to descendants. Mutable
+`var` state remains private to the Node that declares it; a Graph never lends
+mutable memory to child Nodes.
 
 ### Graph composability
 
@@ -263,15 +260,13 @@ A graph references another graph **by name, as a node** — the third node
 family, not a special construct :
 
 ```rastok
-graph sessions per session {
-  // `per session` → one instance per session key (Dispatch). Single in/out → default ports.
-  // Per-session config lives here as graph-level `val`, derived from the key :
-  partition session {
-    key = meta.app.session_key
-    lifetime = duration("2h")
-  }
-  val codex_home = "/var/codex/" + session.key
-  val cwd        = "/workspace/" + session.key
+graph sessions {
+  instances = { key = meta.app.session_key }
+  lifetime  = { kind = idle ; after = duration("2h") }
+
+  // Per-session immutable context derives from the selected local key.
+  val codex_home = "/var/codex/" + instance.key
+  val cwd        = "/workspace/" + instance.key
 
   connector codex : Process {
     command  = "codex"
@@ -305,28 +300,30 @@ graph teams_inbound {
   }
 
   // `sessions` — declared above, at the unit's top level — is
-  // wired BY NAME : the declaration IS the instance ; Dispatch knobs
-  // (max_instances, spawn_policy) are its body attributes.
+  // wired BY NAME : declaration is instantiation.
   inbound.out -> sessions.in
   sessions.out  -> ...
 }
 ```
 
-A declared graph is an instance ; its key, cardinality and lifetime come from
-its own `per <partition>` ; the **Dispatch knobs** are body attributes :
-
-| Field | Required | Effect |
-|---|---|---|
-| `max_instances` | optional | Cap on concurrent per-key instances. Default applied otherwise (e.g., 1000). |
-| `spawn_policy` | optional | `warm_per_key` (default) / `lazy` / `pre_spawn` / `pool` |
+A declared Graph is a Node instance. Its logical cardinality comes from its
+own optional `instances` attribute and its temporal behavior from `lifetime`.
+Capacity, spawn strategy, placement, Worker count, and shard assignment are
+physical deployment policy and are not inferred as source semantics.
 
 Composition rules :
 - A graph's `input <name>: <type>` declarations become inbound ports on the composed graph node.
 - A graph's `output <name>: <type>` declarations become outbound ports on the composed graph node.
 - A composed graph is still a Node — of the **Graph family** (never reclassified as an Operator or Connector). Effect-wise it is *pure* when it contains no Connector and *effectful* when it wraps a boundary ; that property propagates to analyses, not to its family.
-- A graph that contains a node binding a unique resource (HTTP listener, TCP listen, etc.) **cannot** be composed with `key` : the validator rejects "this graph cannot be replicated, port :X". Such a graph is forced top-level (singleton).
+- A Graph that contains a Node binding a unique resource (HTTP listener, TCP
+  listen, etc.) cannot be key-instanced unless that Connector contract
+  explicitly supports replication. Validation refuses the resolved contract,
+  not the spelling of the key.
 
-DAG validation runs **flat** : after expansion, the runtime composes one giant graph and Kahn rejects cycles across composition boundaries too.
+DAG validation runs **flat**: after expansion, Kahn rejects cycles across
+composition boundaries too. This is a validation projection, not owner
+erasure: the validated plan retains every Graph and its parent relation for
+instance addressing, lifetime and lifecycle (instances.md §3).
 
 ### Graph scope, visibility and liveness
 
@@ -353,32 +350,35 @@ Braces and names carry ALL the semantics — indentation carries none.
   resolved `UnwiredPolicy` of every output (`require_wire`, `journal`,
   `bubble(port)`, or explicit discard with `-> nothing`).
 
-## Operator parameterization : state + per + transaction
+## Operator parameterization : state + instances + lifetime + transaction
 
-Per [WHITEPAPER.md §2.3](../../WHITEPAPER.md), what informal vocabulary called "Reducer", "Aggregator", "Window", "Joiner" are **the same Operator** parameterized along three orthogonal axes :
+Per [WHITEPAPER.md §2.3](../../WHITEPAPER.md), what informal vocabulary called
+"Reducer", "Aggregator", "Window", and "Joiner" are the same Operator
+parameterized along four orthogonal axes:
 
-| Axis            | Values                                | Effect                                          |
-|-----------------|---------------------------------------|-------------------------------------------------|
-| `var` state     | absent / typed `S`                    | Operator becomes stateful                       |
-| `per`           | absent / one key / multiple keys      | State is partitioned per partition key instance |
-| handler trigger | `on <port>` / `on (a, b)` (join)      | Determines when the Operator fires (§2.3 guards) |
+| Axis | Values | Effect |
+|---|---|---|
+| `var` state | absent / typed `S` | Node-local state |
+| `instances` | absent / one canonical key expression | singleton / keyed addresses |
+| `lifetime` | absent / one profile | persistent / temporal instances |
+| handler trigger | `on <port>` / `on (a, b)` | ordinary transaction / join |
 
 The named archetype aliases map mechanically to combinations of these axes :
 
 | Alias          | Equivalent Operator parameterization                                       |
 |----------------|----------------------------------------------------------------------------|
-| Pure transform | no `var`, no `per`                                                         |
-| Reducer        | `var S`, no `per`                                                          |
-| Aggregator     | `var S`, `per K`                                                           |
-| Window         | `var S`, `per K`, partition has `lifetime = window D mode`                 |
-| Joiner         | `var S`, `per K`, an `on (a, b)` join handler (bounded by `last`/`within`) |
+| Pure transform | no `var`, no `instances` |
+| Reducer | `var S`, no `instances` |
+| Aggregator | `var S`, `instances.key = K` |
+| Window | `var S`, optional `instances.key`, temporal `lifetime` |
+| Joiner | optional `var S`, optional `instances.key`, `on (a, b)` bounded as required |
 
 These names are kept in the stdlib **as aliases** for the corresponding `Operator + parameters` combinations. The compiler lowers them all to the same underlying trait. Example aliases :
 
 ```
 alias Jaq        = JaqOperator
 alias Reducer    = JaqOperator                 // alias used when state is present
-alias Aggregator = JaqOperator                 // alias used when state + per are present
+alias Aggregator = JaqOperator                 // alias used when state + instances are present
 ```
 
 Less frequent patterns (filter-with-dedup, buffer-by-size, rate-limit, debouncer, memoize-cache, …) are expressed as the appropriate Operator parameterization plus jaq logic — they do not need their own DSL keyword.
@@ -390,7 +390,7 @@ State is **read-modify-write, imperatively, within a transaction**. A persistent
 ```rastok
 operator counter {
   var count: int = 0                          // default 0 on first transaction
-  // no `per` → single state cell shared across all envelopes (graph-scoped)
+  // no `instances` → one Node-local singleton cell in the enclosing scope
 
   on msg {
     count = count + 1                         // Rastok expression; later reads see the new value
@@ -413,7 +413,7 @@ The graph topology is statically declared (DAG, no cycles, every edge visible in
 | Primitive  | Selection mode                    | Topology contract                                  |
 |------------|-----------------------------------|----------------------------------------------------|
 | **Router** | Runtime choice 1-of-N or list-of-N | All N output ports are declared statically         |
-| **Dispatch** | Per-key sub-graph instantiation | The sub-graph type is declared ; instances per key |
+| **Dispatch** | Keyed sub-graph instantiation | The sub-graph type and `instances.key` expression are declared statically |
 
 These are the only sanctioned ways to express runtime decisions about destination. A node that "decides who to message" outside of these primitives is rejected by the validator. This is what keeps the topology analyzable, the path coverage finite, and LLM-driven graph generation tractable.
 
@@ -482,12 +482,22 @@ forward.c -> c_handler
 
 The detailed syntax for each primitive is documented in the existing sections on multi-port nodes ([Router](#port-naming-and-default-edges)) and composed graphs ([Dispatch](#graph-composability)).
 
-## Partitions in the DSL
+## Instances and lifetime in the DSL
 
-The model defined in [WHITEPAPER.md §3](../../WHITEPAPER.md) is exposed to the DSL through a small stdlib of pre-declared partitions plus the ability to declare custom ones inline. There is no parent-child relationship between partitions ; each partition is a flat `(key, lifetime)` declaration. A Node attaches its state to a partition with the `per` keyword :
+The complete semantic contract lives in [instances.md](instances.md). The host
+surface uses ordinary composite attributes on the Node that owns the behavior:
 
 ```rastok
-operator session_counter per session {
+operator session_counter {
+  instances = {
+    key = meta.app.session_id
+  }
+
+  lifetime = {
+    kind = idle
+    after = duration("2h")
+  }
+
   var count: int = 0
 
   on msg {
@@ -497,32 +507,46 @@ operator session_counter per session {
 }
 ```
 
-The `per` keyword takes one identifier (single-key partition) or several comma-separated identifiers (composite-key partition) :
+Composite correlation dimensions are one structured value, not an ordered
+list of bindings:
 
 ```rastok
-operator user_workspace_quota per user, workspace {
-  var quota: int = 0
-
-  on msg {
-    quota = jq! { $quota + .data.cost }
+operator user_workspace_quota {
+  instances = {
+    key = {
+      user = meta.app.user_id
+      workspace = meta.app.workspace_id
+    }
   }
+
+  var quota: int = 0
+  on msg { quota = quota + data.cost }
 }
 ```
 
-Without `per`, the Node has a single state cell shared across all envelopes (graph-scoped).
-
-Standard partitions (provided by the stdlib) include `tenant`, `session`, `request`, `user`, `workspace`. Runtime-managed envelope metadata (the 5-field `meta.sys` Tier 1 : `id`, `parent_id`, `origin_id`, `role`, `graph_version` — see [envelope.md](envelope.md)) is read-only under `meta.sys.<field>` — the envelope is not a partition.
-
-Custom partitions are first-class :
+No `instances` means one singleton Node instance. No `lifetime` means
+persistent. The admitted lifetime sheet is:
 
 ```rastok
-partition workspace {
-  key      = meta.app.workspace_id
-  lifetime = duration("4h")
-}
+lifetime = { kind = persistent }
+lifetime = { kind = idle       ; after = duration("2h") }
+lifetime = { kind = fixed      ; after = duration("30s") }
+lifetime = { kind = single_pass }
+lifetime = { kind = tumbling   ; every = duration("5m") }
 ```
 
-A bare duration value as a lifetime is interpreted as `idle_ttl`. For other lifetime kinds, use the explicit form : `persistent`, `single_pass`, `fixed duration("…")`, `window duration("…") <mode>` — the structural words are DSL, the durations are ordinary Rastok expression values.
+`instances`, `lifetime`, `kind`, `key`, `after`, and `every` are contract
+attribute/field names, not structural keywords. The parser sees the ordinary
+`attribute = value` production; the checker judges the closed common Node
+sheet. `meta.sys` remains read-only but is readable by the key expression.
+Only immutable `val`s from enclosing scopes are visible while selecting an
+address; the owner's own body has not been entered yet. `instance.key` is
+well-typed only for an owner that declares `instances.key` and never resolves
+to an ancestor key.
+
+There are no stdlib instance names. Reuse comes from expressions and types,
+not a nominal mutable-state binding. A `var` stays private to the declaring
+Node; Graph-level immutable `val`s remain lexical.
 
 ## Naming convention
 
@@ -1017,15 +1041,27 @@ all project into the union forms in [types.md](types.md).
 
 The DSL has no `${…}` interpolation token.
 
-- **Boot phase** (initializer positions only : `val` initializers, Connector
-  config attributes) : the expression functions **`env("VAR")`** and
-  **`secret("path")`**. Using them in a guard/key/state position is a compile
-  error — the language has explicit phases (boot → runtime → blocks).
-- **Runtime** : plain expression paths, no sigil — `session.key` (the partition
-  field), `meta.app.x`, `data.y`, `exit is TimeoutExpired`, a
-  `val`/`var`/alias by name.
+- **Boot phase** (unit/App boot `val`s and effective Connector settings whose
+  selected evaluation site is boot) : the expression functions
+  **`env("VAR")`** and **`secret("path")`**. Using them in an instance key,
+  per-instance `val`, guard, handler-local binding, or state expression is a
+  compile error — the language has explicit phases (boot → instance →
+  transaction → frontend region).
+- **Instance phase** : a Node-level `val` is derived once for each new
+  instance from enclosing immutable `val`s and its local `instance.key`; it
+  cannot read `data`, `meta`, or mutable state. A Graph's values are then
+  lexically visible to descendants; Operator/Connector values stay private.
+  A Connector contract may permit an operational attribute as late as the
+  instance site; the same bindings are legal there. The checker selects the
+  earliest legal actual site, so constants still resolve at plan and an
+  `env()`-only expression at boot. Profile, port-type and other plan-shaping
+  attributes permit only plan resolution.
+- **Runtime** : plain expression paths, no sigil — `instance.key` (the current
+  owner instance key), `meta.app.x`, `data.y`, `exit is TimeoutExpired`, a
+  visible `val`/`var`/alias by name. Handler-local `val`s are transaction
+  bindings.
   String building is expression concatenation :
-  `val cwd = "/workspace/" + session.key`.
+  `val cwd = "/workspace/" + instance.key`.
 - **Inside guest-language blocks** (`jq! { … }`, `bash! { … }`, …) : the block is fully
   raw — no interpolation, ever ; DSL refs enter jq as `$name` bindings (the
   jq convention).
@@ -1058,9 +1094,9 @@ does not claim implementation or release status.
 | `Memory` | bounded in-process store | initial catalog; append and snapshot-read contract in stdlib.md |
 | `Jaq` | Operator alias (jq — document guest over structured values) | specified in the initial stdlib catalog |
 | `Sql` | Operator alias (SQL guest over the table view of `array<struct>`) | planned guest; not in the initial executable slice |
-| `Reducer` | Stateful Operator alias (`var`, normally keyed with `per`) | specified in the initial stdlib catalog |
-| `Aggregator` | Stateful Operator alias (`var` + `per`) | specified ; window contracts remain deferred |
-| `Window` | `Aggregator` with a window-lifetime partition | specified surface ; full window contracts remain deferred |
+| `Reducer` | Stateful Operator alias (`var`, optionally with `instances.key`) | specified in the initial stdlib catalog |
+| `Aggregator` | Stateful Operator alias (`var` + keyed instances) | specified ; window contracts remain deferred |
+| `Window` | `Aggregator` with a finite `lifetime` | specified surface ; sliding/event-time contracts remain deferred |
 | `Joiner` | Operator with an `on (a, b)` join handler | specified |
 | `Router` | Multi-route Operator | specified ; route lowering must preserve the static topology contract |
 | `Fanout` | not part of the surface | broadcast is the atomic multi-emit statement `(a, b, c) = x` ; see [Dynamic dispatch primitives](#dynamic-dispatch-primitives-router-dispatch) |
@@ -1070,7 +1106,7 @@ does not claim implementation or release status.
 | `-> nothing` | Discard sink (built-in) | not a node — `nothing` as an edge target ; non-blocking drain |
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
-| `Join` / `Barrier` | Guarded fan-in | the canonical form is an `on (a, b)` join handler (keyed by the partition ; bounded by `last`/`within`) |
+| `Join` / `Barrier` | Guarded fan-in | the canonical form is an `on (a, b)` join handler (correlated by the owning Operator instance ; bounded by `last`/`within`) |
 | `WebSocket` | Connector node | planned |
 | `Tcp` | Connector node | planned |
 | HTTP/2 | Binding option, not a node | planned ; express as Connector binding, not as a `Http2` node type |
@@ -1186,10 +1222,11 @@ Required Rust extensions for the parser to land :
 | `graph` | Graph declaration keyword. Compiles to the Rust `Graph` type. |
 | Operator | Family of Nodes whose computation is internal to the graph. May be pure or stateful. Concrete types end in `-Operator` (`JaqOperator`, `WasmOperator`, …). |
 | Connector | Family of Nodes that talk to an external system. Same shape as Operator plus boundary attributes (URL/path/command, `codec`, protocol, timeout, auth). Concrete types end in `-Connector` (`HttpClient`, `ProcessConnector`, …). |
-| Operator parameterization | Three orthogonal axes — `var` state, `per`, and the handler trigger (`on <port>` vs the `on (a, b)` join) — that cover all named patterns (Reducer, Aggregator, Window, Joiner). See [Operator parameterization](#operator-parameterization-state--per--transaction). |
+| Operator parameterization | Four orthogonal choices — Node-local `var` state, optional `instances.key`, optional `lifetime`, and the handler trigger (`on <port>` vs the `on (a, b)` join) — that cover the named patterns (Reducer, Aggregator, Window, Joiner). See [Operator parameterization](#operator-parameterization--state--instances--lifetime--transaction). |
 | Stdlib aliases | Short names exposed by the stdlib for frequent Operator parameterizations : `Jaq`, `Reducer`, `Aggregator`, `Window`, `Joiner`, `HttpClient`, `Process`, etc. The compiler resolves them to configurations of the primitive `operator` or to native `Connector` types. |
 | Dynamic primitives | The two runtime-decision nodes : Router, Dispatch. They preserve topology staticity. Broadcast is the inline `(a, b, c) = x` statement. See [Dynamic dispatch primitives](#dynamic-dispatch-primitives-router-dispatch). |
-| Partition | A `(Key, Lifetime)` pair under which a Node's state is materialized. Partitions are flat — no parent declaration, no automatic cascade. Declared with `partition <name> { key = …; lifetime = … }`. See [WHITEPAPER.md §3](../../WHITEPAPER.md). |
+| Instance | One logical execution context of a Node owner. Its address is the owner path plus the outer-to-inner stack of keyed instance frames. A singleton owner has no local key frame. See [instances.md](instances.md). |
+| Lifetime | The policy that says when an instance closes. It is independent from key selection: keyed and singleton owners may both be persistent or finite-lived. |
 | State read-modify-write | **Imperative within a transaction.** `x` (bare in DSL, or `$x` inside `jq! { … }`) starts at the value the previous transaction committed (or the default); assignments mutate it in place, so later reads see the new value (RHS = Rastok expression; no `++`-style shortcuts). The transaction commits atomically at its end. The Lustre `pre` is *inter-transaction*, not intra. |
 | Value types | The data's type tree : `variant` (dynamic, JSON model), scalars (`text`/`bytes`/numeric + logical `date`/`timestamp`/`uuid`/`decimal`/`duration`), composites (`struct`/`map`/`array`), `enum` (closed symbols), `union` (sum type). `table` is the relational view of `array<struct>`, not a type. See [Data](#data--typed-values-and-literals). |
 | Envelope | `meta + data`. `meta` is three zones of typed scalars (`meta.sys` read-only/runtime, `meta.app` application-owned, `meta.ext` external context — D-2026-08-10-1) ; `data` is the typed payload. See [WHITEPAPER.md §2.1](../../WHITEPAPER.md). |
@@ -1200,7 +1237,7 @@ Required Rust extensions for the parser to land :
 | Endpoint | Connector that owns an external resource address/lifecycle and declares explicit envelope ports. |
 | `scenario` | one executable case inside a `simulation` : a fixture (the scripted world-half of the journal) + expectations. See simulation-semantics.md. |
 | `mock` | scenario/simulation-level stand-in for a calling Connector — its body is ordinary handler grammar (+ `after`). Replaces the partner, not the bookkeeping. |
-| Multi-tenancy | Expressed by declaring a keyed sub-graph in place (`graph sessions per <partition> { … }` — `Dispatch`). The runtime materializes one running copy per distinct partition key. Environmental isolation and deployment policy remain outside this grammar. |
+| Multi-tenancy | Expressed by a keyed owner (`instances = { key = … }`). The runtime materializes one logical instance per canonical key and may assign each keyed boundary to an independent virtual shard. Environmental isolation and physical placement remain outside this grammar. |
 
 ## Formal grammar
 
@@ -1250,8 +1287,10 @@ COMMENT    ::= "//" .* EOL  |  "/*" any* "*/"
 // are not accepted). Rate strings stay opaque Connector-attribute values
 // ("10/s per …").
 // There is no `${…}` INTERP atom. Boot-time resolution uses the Rastok expression functions
-// `env("NAME")` / `secret("path")`, legal in initializer positions only ;
-// runtime references are plain Rastok expression paths (`session.key`, `meta.app.x`).
+// `env("NAME")` / `secret("path")`, legal only in unit/App boot vals and
+// effective Connector fields whose selected site is boot ; the contract
+// declares the latest site, and checking chooses the earliest legal one.
+// runtime references are plain Rastok expression paths (`instance.key`, `meta.app.x`).
 // Rastok expression spans are handed to the expression lexer: the DSL lexer only
 // finds the span's END (delimitation rules below).
 // Maximal-munch : "->", "<->", "==", "!=", "<=" and ">=" tokenize as single
@@ -1263,15 +1302,12 @@ COMMENT    ::= "//" .* EOL  |  "/*" any* "*/"
 ### Reserved keyword sets
 
 ```rastok
-DECL_KW    = { "graph", "partition", "operator", "connector",
+DECL_KW    = { "graph", "operator", "connector",
                "type",                                                 // unit-level type alias (D-2026-08-10-8)
-               "per", "val", "var", "input", "output", "on",
+               "val", "var", "input", "output", "on",
                "start", "stop", "compensate",                          // lifecycle / saga handler triggers (see effects-and-sagas.md for `compensate`)
-               "by", "where", "having", "within", "last",
+               "where", "having", "within", "last",
                "when",                                                 // edge guard : a -> b when <expr>
-               "key", "lifetime",
-               "persistent", "single_pass", "fixed", "window",
-               "tumbling", "sliding",                                  // window modes
                "effect", "behavior",                                   // the two mandatory Connector axes (effects-and-sagas.md ; stdlib.md §2)
                "lab", "simulation", "experiment", "theorem", "over",  // the Lab surface
                "scenario", "defaults",
@@ -1342,9 +1378,9 @@ claimed `DECL_KW` unmaskable):
   alike — val/var/let at every level, type names): the value forms
   `nothing` and the expression literals `true`, `false` and `null` are
   RESERVED — one naming policy, refusing at the
-  declaration with `E-NAME-RESERVED`. The envelope surfaces
-  (`meta`/`data`/`sys`/`app`/`ext`) additionally refuse as node
-  names, and `data`/`meta` as binding names. `DECL_KW` words
+  declaration with `E-NAME-RESERVED`. The envelope/context surfaces
+  (`meta`/`data`/`sys`/`app`/`ext`/`instance`) additionally refuse as node
+  names, and `data`/`meta`/`instance` as binding names. `DECL_KW` words
   (`graph`, `operator`, `val`, …) are NOT reserved: declaration
   positions are structural, so a binding named `graph` shadows
   nothing — the position's own grammar decides.
@@ -1385,14 +1421,10 @@ top_decl          ::= graph_decl                       // incl. the one `: App` 
 // A graph instantiates by declaration and wires by name ; the entry point is
 // the `: App`-annotated graph ; `app` is a pre-bound identifier for it.
 
-graph_decl        ::= "graph" IDENT ( ":" type_annotation )? per_clause? "{" graph_body "}"    // top level = graph | lab | val, STRICTLY — nodes, partitions and edges live in graph bodies ; per_clause → composed per-key (Dispatch), graph-level val/state is per-instance ; `: <aspects>` opt-in to Saga / Loop scoping (see aspects.md)
+graph_decl        ::= "graph" IDENT ( ":" type_annotation )? "{" graph_body "}"    // declaration = instantiation; common Node attributes carry instances/lifetime
 
-partition_decl    ::= "partition" IDENT "{" partition_body "}"
-partition_body    ::= ( "key" "=" expr
-                       | "lifetime" "=" lifetime_value )*
-
-operator_decl     ::= "operator" IDENT ( ":" type_annotation )? per_clause? operator_body
-connector_decl    ::= "connector" IDENT ":" type_annotation per_clause? operator_body
+operator_decl     ::= "operator" IDENT ( ":" type_annotation )? operator_body
+connector_decl    ::= "connector" IDENT ":" type_annotation operator_body
 
 // `type_annotation` is a `+`-joined list of stdlib symbols. Each symbol is
 // classified by the type checker as a *trait* (Connector NativeType or Operator
@@ -1413,8 +1445,8 @@ operator_body     ::= "{" ( port_decl | val_decl | var_decl
                                                                       // sub_block is DEAD (D-2026-08-12-1); parsed only to refuse
                                                                       //   with its migration hint
 
-graph_body        ::= ( port_decl | partition_decl | operator_decl | connector_decl
-                       | val_decl | edge_decl
+graph_body        ::= ( port_decl | operator_decl | connector_decl
+                       | val_decl | var_decl | edge_decl
                        | defaults_block
                        | graph_decl                            // graphs NEST (effects-and-sagas §7.2)
                        | attribute                             // aspect attributes : Saga.timeout = duration("10m"), name = …
@@ -1430,12 +1462,6 @@ type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL o
 // (D-2026-08-12-1 — the discriminant is a closed-choice field). Semantic
 // validation of the fields and bounds is specified in loop.md §2/§8.
 
-per_clause        ::= "per" ( IDENT ( "," IDENT )*                   // reference declared partition(s) ; composite = tuple
-                            | partition_inline )                      // inline ANONYMOUS partition (private to this node ; no name ⇒ no cross-partition read, no <part>.key reference)
-partition_inline  ::= "{" partition_body "}"                          // block form — newline- or ;-separated (like a `partition` block)
-                    | "(" partition_field ( "," partition_field )* ")"  // compact form
-partition_field   ::= "key" "=" expr | "lifetime" "=" lifetime_value
-
 port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source annotation OPTIONAL; every validated port has an effective type
                     // in / out / err are conventional spellings and use this same model; only used/declared rows materialize in the resolved plan.
                     // Connector contracts declare fixed or parametric port rules; attributes/codecs resolve them per instantiation.
@@ -1445,7 +1471,7 @@ port_decl         ::= ( "input" | "output" ) IDENT ( ":" type_ref )?  // source 
                     //    c -> a.tick
 
 val_decl          ::= "val" IDENT ( ":" type_ref )? "=" value        // immutable, scope by position
-var_decl          ::= "var" IDENT ":" type_ref ( "=" value )?        // mutable Operator state
+var_decl          ::= "var" IDENT ":" type_ref ( "=" value )?        // mutable state owned by this Node; never inherited by child Nodes
 
 handler_decl      ::= "on" trigger guard_clause* handler_body?
                     // handler_body is OPTIONAL :
@@ -1463,13 +1489,12 @@ trigger           ::= "start"
                     | IDENT                                          // single port
 guard_clause      ::= "where" expr                                   // content predicate (Tier 1 = 1 port, Tier 2 = ≥2)
                     | "having" expr                                  // aggregate predicate (quorum, e.g. count(p) >= k)
-                    | "by" expr                                      // join-key override (default = partition key)
                     | "within" expr                                  // join time window (optional ; constant, duration-typed)
                     | "last" INT                                     // join count bound — a Tier-2 θ-join requires AT LEAST ONE bound (within or last) ; presence joins may use either or none
                     // A `where` clause on any selected outcome input may define the Loop base case when the enclosing node carries `: Loop` — see loop.md §3.
 handler_body      ::= "{" ( val_decl | statement )* "}"
 statement         ::= "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast   // atomic multi-emit — `(` decides ; tuple = explicit per-port ; broadcast = same value everywhere (`Fanout` is not a surface alias)
-                    | "stop" IDENT?                                   // stop action (lifecycle) — word-decided
+                    | "stop"                                          // close the current Node instance after this transaction commits
                     | IDENT path_tail assignment_tail                 // left-factored : ONE consumed word ; the ASSIGNMENT PROBE decides
 assignment_tail   ::= ( ":" type_ref )? "=" value                     // the consumed path is the LVALUE : var write / ordinary port emit / dotted meta·data write ( = nothing → no emit ; = . re-emits the input ; braced values classified by reserved roots — see braced_value ). `err` has no special branch.
                     // There is NO implicit yield (D-2026-08-13-1, review round 7) : a
@@ -1535,12 +1560,6 @@ tagged_case       ::= IDENT ( "{" ( field_decl ( ","? field_decl )* )? "}" )?
 field_name        ::= IDENT | TYPE_KW                                 // field NAMES may reuse type words (`text: text`,
                                                                       //   `kind: text`) — position disambiguates
 
-lifetime_value    ::= expr                                            // bare duration value = idle_ttl (constant, duration-typed)
-                    | "persistent"
-                    | "single_pass"
-                    | "fixed" expr                                     //   (constant, duration-typed)
-                    | "window" expr ( "tumbling" | "sliding" )         //   (constant, duration-typed)
-
 attribute         ::= lvalue "=" value                               // dots = owner qualification ONLY (Loop.backoff = …)
 struct_body       ::= ( attr_entry ( ","? attr_entry )* )?
 attr_entry        ::= lvalue "=" value                               // dotted key for an assignment (meta.app.label = … ; meta.sys is read-only)
@@ -1551,10 +1570,10 @@ attr_entry        ::= lvalue "=" value                               // dotted k
 // ============ WORD CLASSES (D-2026-08-14-1) ============
 // Three roles a word can play — the factoring below names them:
 // - a USER IDENTIFIER introduces a binding (val/var/let, node, port, type,
-//   partition, alias). `nothing` is RESERVED here — it names a structural
+//   alias). `nothing` is RESERVED here — it names a structural
 //   value form and refuses AT THE DECLARATION (E-NAME-RESERVED) ; the
-//   envelope surfaces (meta/data/sys/app/ext) refuse as node names, and
-//   data/meta as binding names.
+//   envelope/context surfaces (meta/data/sys/app/ext/instance) refuse as node
+//   names, and data/meta/instance as binding names.
 // - any IDENT immediately followed by BANG introduces a tagged frontend.
 //   No closed keyword vocabulary participates in this syntax decision.
 //   After this syntax-only choice, the Registry resolves the name and framing
@@ -1649,10 +1668,10 @@ expr              ::= /* a Rastok expression (homegrown parser+checker+eval).
                        evaluator guarantee — golden-trace stability).
                        `is <type-or-case>` tests/narrows and `as <type_ref>` performs a
                        checked conversion at the END of the span.
-                       NO leading dots (paths are bare : data.x, meta.app.y, session.key,
+                       NO leading dots (paths are bare : data.x, meta.app.y, instance.key,
                        alias names). No coalesce shorthand and no
                        string-interpolation tokens. `env()`/`secret()` are
-                       legal in initializer positions only. NO `now`/`now()` and
+                       legal only in boot-site positions. NO `now`/`now()` and
                        no ambient clock read of any kind : time enters an
                        expression only as envelope data (a Clock tick's payload)
                        or as a constant duration()/timestamp() value — replay
@@ -1665,7 +1684,7 @@ expr_path         ::= /* a Rastok expression access path (subset of expr) : IDEN
 // so expression map literals `{"a": 1}` — the SAME punctuation as the DSL map,
 // D-2026-08-10-6 — and struct-ish braces inside the span are fine)
 // until the position's terminator set :
-//   guard positions   (where/having/by/when)  → { having by within last when NEWLINE "{" "->" }
+//   guard positions   (where/having/when)     → { having within last when NEWLINE "{" "->" }
 //   attribute / init  (= …)                   → { NEWLINE ";" "}" }
 //   emission          (out = …)               → { NEWLINE ";" "}" }
 //   paren positions   (args, tuples)          → { "," ")" } at depth 0
@@ -1867,7 +1886,7 @@ parser never needs to peek further than one token.
 | `graph_body` | IDENT — next is `->` / `<->` | `edge_decl` |
 | `graph_body` | `.` | `edge_decl` (boundary sugar — `port_ref` starting with `.`) |
 | `graph_body` | `{` | `edge_decl` (branch_source) |
-| `graph_body` | `graph` / `operator` / `connector` / `partition` / `val` / edge starts | the matching declaration (graphs nest ; declaration = instance) |
+| `graph_body` | `graph` / `operator` / `connector` / `val` / `var` / edge starts | the matching declaration (graphs nest; a Graph `var` remains private to the Graph's own handlers) |
 | `graph_body` | `input` / `output` | `port_decl` |
 | `graph_body` | `on` | `handler_decl` (graph-level — Loop base cases) |
 | `graph_body` | `graph` | nested `graph_decl` |
@@ -1882,9 +1901,9 @@ parser never needs to peek further than one token.
 | `trigger` | `compensate` | saga compensation handler (only valid on a Connector with `effect = compensable`) |
 | `trigger` | `(` | join handler `(a, b)` (presence) |
 | `trigger` | IDENT | single-port handler |
-| `guard_clause` | `where` / `having` / `by` / `within` / `last` | guard clause (0+, in any order) |
+| `guard_clause` | `where` / `having` / `within` / `last` | guard clause (0+, in any order) |
 | `handler_body` (statement) | `val` | `val_decl` |
-| `handler_body` (statement) | `stop` — alone or followed by IDENT | `stop` action |
+| `handler_body` (statement) | `stop` | close the current Node instance; no target operand exists |
 | `handler_body` (statement) | `(` | tuple multi-emit `(a, b) = (e1, e2)` |
 | `handler_body` (statement) | `lvalue` (IDENT, dotted ok — e.g. `meta.app.label`) — next is `=` or `:` | assignment / port emit (`= nothing` = no emit ; `meta.sys` is read-only, never an lvalue) |
 | `handler_body` (statement) | anything else — a bare expression, IDENT-led or not | REFUSAL (`out = <value>` hint): a complete value is consumed by its real reader into one error hole; incomplete input recovers at the line; the implicit yield is REMOVED (D-2026-08-13-1) |
@@ -1897,9 +1916,6 @@ parser never needs to peek further than one token.
 | `value` | `.` (envelope position) | identity — exact re-emission |
 | `value` | `nothing` (emission position) | no-emit |
 | `value` | anything else | hand the span to the Rastok expression parser (`expr`; `is`/`as type_ref` compose at span end) |
-| `lifetime_value` | an expression span | bare duration value → `idle_ttl` |
-| `lifetime_value` | `persistent` / `single_pass` | keyword |
-| `lifetime_value` | `fixed` / `window` | followed by a constant duration expression span (and mode for window) |
 | `port_decl` | `input` / `output` IDENT — next is `:` | typed (pinned) port |
 | `port_decl` | `input` / `output` IDENT — no `:` | port with **inferred** type |
 
@@ -1911,14 +1927,14 @@ symbol of lookahead after the IDENT is consumed. The parser never needs to
 ### What this grammar excludes on purpose
 
 - **One braced form, classified once** (D-2026-08-09-1, punctuated by D-2026-08-10-6). `{ … }` with `=` entries is the struct literal, with `:` entries the map literal (`{}` empty struct, `{:}` empty map, mixing refuses) ; in ENVELOPE positions (handler emissions, fixture injections, mock replies) the checker classifies a struct-form body's top-level roots — no reserved root builds a fresh data record, only reserved roots (`data`, `meta`) select the envelope form, a mix refuses with `E-BRACE-MIXED`. There is no `envelope { … }` keyword form, no `struct { … }` value literal, and no `map { … }` spelling. No silent reinterpretation, LL(1)-clean.
-- **No tag keyword partition.** Built-in and user-registered frontends
+- **No closed frontend-keyword partition.** Built-in and user-registered frontends
   use `name!`; a bare `name` remains an identifier. `@` is unallocated
   and may later introduce schema classification, not guest dispatch.
 - **Separators are Scala-style, scoped by bracket.** Inside a **`{ }` block**
-  (node body, `partition` block, inline `per { … }`, struct), a newline
+  (node body, composite attribute such as `instances`/`lifetime`, struct), a newline
   terminates each statement / attribute and **`;` is the optional same-line
-  separator** (`{ key = meta.app.x ; lifetime = duration("2h") }`). Inside **`( … )`** (compact
-  values, arg lists, the inline `per ( … )` form) items are separated by **`,`**
+  separator** (`{ kind = idle ; after = duration("2h") }`). Inside **`( … )`** (compact
+  values and argument lists) items are separated by **`,`**
   — never `;`.
 - **The intrinsic expression grammar is Rastok's CEL-compatible core.** Every expression position —
   guards, keys, selectors, state expressions, `variant` clauses,
@@ -1936,8 +1952,8 @@ Hand-written recursive descent makes error recovery natural :
 - At a `}` mismatch, report against the OPEN delimiter stack the descent carries — the cursor only ever moves forward (D-2026-08-13-1: no rewind primitive exists).
 
 Because every form starts with a reserved keyword or a clearly typed IDENT, the
-parser can re-synchronize on the next `operator`, `connector`,
-`partition`, `graph`, `lab`, `simulation`, `experiment`, `theorem`, or
+parser can re-synchronize on the next `operator`, `connector`, `graph`,
+`lab`, `simulation`, `experiment`, `theorem`, or
 top-level IDENT.
 
 ### Reserved-but-not-yet-used keywords
@@ -1948,8 +1964,8 @@ that may enter the DSL later :
 ```
 compose    // reserved for a possible future reuse-instantiation form
 foreach    // future per-item fan-out node
-spawn      // explicit per-key spawn directive
-watermark  // future event-time watermark on a partition/window
+spawn      // future explicit keyed-instance spawn directive
+watermark  // future event-time watermark on an instance/window
            // (`theorem` is an ACTIVE keyword with a reserved surface.
            //  Bounded verification is an OPERATION on a theorem, never a DSL
            //  block ; `rastok check` stays the CLI static-validation verb.)

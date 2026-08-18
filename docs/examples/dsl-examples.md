@@ -9,18 +9,22 @@ the two Node families (Operator vs Connector), the flat declarative
 shape (`input`, `output`, `var`, `on`, with the default `in` / `out` /
 `err` ports), the value-type tree (`variant`, scalars, `struct` /
 `map` / `array`), the three dynamic dispatch primitives, and the
-partition model (flat, keyed, with lifetime). Examples below exercise
+orthogonal instance-key and lifetime model. Examples below exercise
 these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
 `File`, …) name Connector types in the target catalogue;
 the primitive `operator` / `connector` keywords stand on their own
 when no alias fits.
 
-The parser is a forward lexeme stream and format v7 carries the complete
-M1.3 type/value/expression registry. As of 2026-08-15,
+The parser is a forward lexeme stream. The next categorical plan format retains
+the complete v7 M1.3 type/value/expression registry while adding Node-owned
+instance descriptors and lifecycle handlers. As of 2026-08-18,
 `Process(mode = job)` with `lines`/`jsonl`/`bytes`, multiport completion,
 the three metadata zones, `IDENT!` frontends, structural and tagged types,
-and typed narrowing execute. HTTP/File adapters, `per`, joins, Loop,
-Process service mode, and guest engines are still pending or guarded. Thus
+and typed narrowing execute. The former named-partition P0-P3 implementation is
+superseded by the `instances`/`lifetime` target and must be rebased before it is
+implementation evidence. HTTP/File adapters, keyed owners, lifetime and closing,
+Dispatch, joins, Loop, Process service
+mode, and guest engines are still pending or guarded. Thus
 these are parser- and design-reference snippets, not a claim that every
 section runs today. The small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.
@@ -63,27 +67,27 @@ implicit yield, D-2026-08-13-1).
 
 ## 2. Codex session — one `Process` Connector, multi-port stdio bridge
 
-A graph is itself a node when composed inside another graph, and — like an
-Operator — it declares its own keying with `per <partition>`. Here
-`sessions per session` means one `Process` instance per session key ; its
-per-session paths are **graph-level `val`s** derived from `session.key` (Rastok expression) and
+A graph is itself a Node when composed inside another graph, and — like an
+Operator or Connector — it may select one logical instance with
+`instances.key`. Here `sessions` selects one instance per session key; its
+per-session paths are **graph-level `val`s** derived from `instance.key` (a
+Rastok expression) and
 referenced by name inside. A single-in/out graph just uses the default `in` /
 `out` ports — no declaration needed. A `Process` Connector's `in` / `out` /
 `err` ports *are* its stdin / stdout / stderr, while `exit` carries its
 tagged lifecycle outcome — likewise no declaration.
 
 ```rastok
-graph sessions per session {   // declaration = instance
-  max_instances = 1000         // Dispatch knob = body attribute
-  // `per session` → one Process instance per session key (Dispatch).
+graph sessions {
+  instances = { key = meta.app.session_key }
+  lifetime = { kind = idle; after = duration("2h") }
+  // One Graph instance per canonical session key. Physical capacity and
+  // placement are deployment policy, not logical instance attributes.
   // Single in / out pass-through → default `in` / `out` ports (no declaration).
-  partition session {
-    key      = meta.app.session_key
-    lifetime = duration("2h")                          // idle TTL → governs instance eviction
-  }
   // Per-session config, derived from the key, as graph-level `val` :
-  val codex_home = "/var/codex/" + session.key
-  val cwd        = "/workspace/" + session.key
+  val session_key = instance.key
+  val codex_home = "/var/codex/" + instance.key
+  val cwd        = "/workspace/" + instance.key
 
   connector codex : Process {
     command = "codex"
@@ -113,7 +117,7 @@ graph sessions per session {   // declaration = instance
   }
 
   connector codex_logs : File {
-    path = "/var/codex/" + session.key + "/codex.stderr.log"
+    path = "/var/codex/" + session_key + "/codex.stderr.log"
     codec = text
   }
 
@@ -125,11 +129,11 @@ graph sessions per session {   // declaration = instance
 
 ## 3. Per-key sub-graph composition
 
-`sessions` (from Example 2) is declared `per session`, so it is a per-key
-sub-graph : **its declaration is its instance** (`compose` is not a
-declaration form). The runtime materializes one running copy per distinct session key ;
-key, lifetime and per-instance `val`s all come from the graph's own
-`per session`. It wires by name, like any node.
+`sessions` (from Example 2) owns `instances.key`, so it is a keyed sub-graph:
+**its declaration owns its instances** (`compose` is not a declaration form).
+The runtime materializes one logical instance per distinct canonical session
+key; key, lifetime and graph-level `val`s all come from that declaration. It
+wires by name like any Node.
 
 ```rastok
 graph teams_inbound {
@@ -147,8 +151,8 @@ graph teams_inbound {
     on in { out = . }                                // pass-through otherwise
   }
 
-  // One running instance of `sessions` per distinct session key (declared in Example 2).
-  // Key + lifetime come from its `per session` ; paths are its graph-level vals.
+  // One logical instance of `sessions` per distinct session key.
+  // Its declaration owns both key and lifetime; paths are graph-level vals.
 
   teams_in.out -> auth.in
   auth.out        -> sessions.in
@@ -158,17 +162,11 @@ graph teams_inbound {
 ## 4. Router + keyed aggregator — fold with flush
 
 Two custom Operators wired together : a Router that classifies
-deltas vs flush triggers, and a stateful Aggregator partitioned
-per turn.
+deltas vs flush triggers, and a stateful Aggregator keyed by turn.
 
 ```rastok
 graph turn_stream {
   // public ports default to in / out (no declaration)
-
-  partition turn {
-    key = data.params.turn_id
-    lifetime = duration("5m")
-  }
 
   operator route {
 
@@ -178,8 +176,10 @@ graph turn_stream {
     }
   }
 
-  // One turn = one partition instance, ended by the flush event.
-  operator turn_aggregator per turn {
+  // One turn = one Operator instance, ended by the flush event.
+  operator turn_aggregator {
+    instances = { key = data.params.turn_id }
+    lifetime = { kind = idle; after = duration("5m") }
     var buffer: text = ""
 
     on delta {
@@ -203,9 +203,9 @@ graph turn_stream {
 }
 ```
 
-The aggregator uses the declared `turn` partition keyed by `turn_id`
-with a 5-minute fallback TTL. The `stop` statement inside `on flush`
-explicitly ends the partition instance when the turn-completed event
+The aggregator selects its own instance by `turn_id` and gives it a five-minute
+idle lifetime. The `stop` statement inside `on flush` explicitly ends the
+current Operator instance when the turn-completed event
 arrives — no manual buffer reset needed. The slot is reclaimed ; a
 future delta for a new `turn_id` starts a fresh aggregator instance.
 
@@ -333,7 +333,7 @@ same braced envelope-form constructor, it does not bypass the invariant). See
 ## 7. Stateful Operator + Connector mock — weather lookup
 
 Exercises three design-intent constructs : a stateful Operator
-keyed by a partition, read-modify-write state semantics via
+keyed by its own instance selector, read-modify-write state semantics via
 `var x` + bare-name reads (or `$x` inside jq) + `x = …`, and a
 `mock` block scripting a Connector's behavior in a simulation.
 
@@ -341,9 +341,11 @@ keyed by a partition, read-modify-write state semantics via
 graph city_weather {
   // public ports default to in / out (no declaration)
 
-  // Stateful Operator per session : counts how many requests this
+  // Stateful Operator per session key: counts how many requests this
   // session has issued, exposed in the meta of the outgoing request.
-  operator request_counter per session {
+  operator request_counter {
+    instances = { key = meta.app.session_key }
+    lifetime = { kind = idle; after = duration("2h") }
     var count: int = 0
 
     on in {
@@ -429,11 +431,11 @@ lab weather_demo {
 
 Four things visible here :
 
-- `operator request_counter per session` keys the Operator's
-  state by the `session` partition defined in the stdlib. The state
-  survives across envelopes of the same session and is
-  garbage-collected when the session key idle-outs. For multi-key
-  partitioning, use `per user, workspace`, etc.
+- `request_counter.instances.key` keys the Operator's state by the incoming
+  session key. The state survives across envelopes of the same canonical key
+  and is reclaimed when that instance becomes idle. Composite identity is one
+  expression, for example `key = { user = meta.app.user_id; workspace =
+  meta.app.workspace_id }`.
 - `var count : int = 0` declares the **typed state field**. It is
   read by bare `count` (or `$count` inside `jq! { … }` — jq's own
   syntax) and mutated **in place** — `count = count + 1` here — so the
@@ -453,7 +455,7 @@ Four things visible here :
 ## 8. Meta as the control plane
 
 `meta` carries small typed scalar facts used for routing,
-partitioning, correlation and observability. The `data` remains the
+instance selection, correlation and observability. The `data` remains the
 payload. Constants declared with `val` make the defaults explicit
 without creating mutable state.
 
@@ -504,32 +506,23 @@ graph meta_control_plane {
 
 The payload can change shape freely after normalization, but the
 small scalar keys in `meta` are now stable enough to drive routing,
-state partitioning and audit.
+instance selection and audit.
 
-## 9. Constants + partitions — tenant policy and per-user quota
+## 9. Constants + keyed owners — tenant policy and per-user quota
 
 This example combines three scopes :
 
 - App-level constants (`DEFAULT_PLAN`, `FALLBACK_LIMIT`,
   `REJECT_REASON`) shared by the graph.
-- A persistent `tenant` partition that stores policy.
-- A `user, tenant` composite partition that stores usage counters.
+- A persistent `tenant_policy` Operator keyed by tenant.
+- A `usage_gate` Operator keyed by the composite `(tenant, user)` identity.
+- An explicit typed flow from policy state to quota state; no remote state read.
 
 ```rastok
 graph quota_control : App {
   val DEFAULT_PLAN = "free"
   val FALLBACK_LIMIT = 1000
   val REJECT_REASON = "quota_exceeded"
-
-  partition tenant {
-    key = meta.app.tenant_id
-    lifetime = persistent
-  }
-
-  partition user {
-    key = meta.app.user_id
-    lifetime = duration("24h")
-  }
 
   graph quota_gateway {
     // public interface declared by name — a multi-port composable graph's contract
@@ -539,7 +532,10 @@ graph quota_control : App {
     output approval
     output rejection
 
-    operator tenant_policy per tenant {
+    operator tenant_policy {
+      instances = { key = meta.app.tenant_id }
+      lifetime = { kind = persistent }
+
       val PLAN_LIMITS = {
         free = 1000,
         pro = 10000,
@@ -555,20 +551,36 @@ graph quota_control : App {
         monthly_limit = jq! { $PLAN_LIMITS[$plan] // $FALLBACK_LIMIT }   // reads the just-written plan
 
         updated = {
-          meta.app.tenant_id = tenant.key
+          meta.app.tenant_id = instance.key
+          meta.app.plan = plan
+          meta.app.monthly_limit = monthly_limit
+        }
+      }
+
+      // The policy crosses the Node boundary as data, not as a remote var read.
+      on lookup {
+        policy = {
           meta.app.plan = plan
           meta.app.monthly_limit = monthly_limit
         }
       }
     }
 
-    operator usage_gate per user, tenant {
+    operator usage_gate {
+      instances = {
+        key = {
+          tenant = meta.app.tenant_id
+          user = meta.app.user_id
+        }
+      }
+      lifetime = { kind = idle; after = duration("24h") }
+
       var used_tokens: int = 0
 
 
       on event {
         val cost = jq! { (.data.tokens // 0) | tonumber }
-        val limit = tenant.?monthly_limit.orValue(FALLBACK_LIMIT)
+        val limit = meta.app.?monthly_limit.orValue(FALLBACK_LIMIT)
 
         used_tokens = used_tokens + cost           // jq below reads the new $used_tokens
 
@@ -595,31 +607,35 @@ graph quota_control : App {
 
     admin -> tenant_policy.update
     tenant_policy.updated -> policy_updated
-    usage -> usage_gate.event
+    usage -> tenant_policy.lookup
+    tenant_policy.policy -> usage_gate.event
     usage_gate.approval -> approval
     usage_gate.rejection -> rejection
   }
 }
 ```
 
-The important part is the read boundary : `usage_gate` writes only
-its own `used_tokens`, but it can read `tenant.monthly_limit` as a
-read-only cross-partition value. If no tenant policy exists yet,
-the optional read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
+The important part is the state boundary: each `var` is private to the Node
+that declares it. `tenant_policy` carries the selected policy across its typed
+`policy` output; `usage_gate` then combines that immutable envelope fact with
+its own private counter. If no tenant policy exists yet, the optional metadata
+read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
 
 ## Conventions visible everywhere
 
 | Construction | Form |
 |---|---|
-| Operator declaration | `operator <name> [per <partition>] { ... }` |
-| Connector declaration | `connector <name> : <NativeType> [per <partition>] { ... }` |
-| Graph declaration | `graph <name> [per <partition>] { ... }` (keying on the graph, like an Operator) |
-| Sub-graph instance | declaration = instance : `graph <name> per <partition> { max_instances = … ; … }`, wired by name (`compose` is not a declaration form) |
+| Node instance selection | ordinary composite attribute: `instances = { key = <expr> }`; omission means one singleton in the enclosing Graph instance |
+| Lifetime | independent ordinary attribute: `lifetime = { kind = persistent }`, `idle`, `fixed`, `single_pass`, or `tumbling` with the profile's duration field |
+| Operator declaration | `operator <name> { ... }` |
+| Connector declaration | `connector <name> : <NativeType> { ... }` |
+| Graph declaration | `graph <name> { ... }`; a Graph may own `instances` and `lifetime` like any Node |
+| Sub-graph instance | declaration = owner; a keyed Graph is wired by name (`compose` is not a declaration form) |
 | Operator port | **Inferred from use** : `on <name>` ⇒ input, `<name> = …` ⇒ output. Declare `input`/`output <name>[: T]` only to pin a type/schema or document. `in`/`out`/`err` are conventional spellings; unused ones do not exist, and `err: E` is an explicit domain result rather than a machine-fault trap. |
 | Public graph port | single-in/out → defaults `in`/`out` ; a multi-port graph declares its interface by name (`input admin`, …), optionally typed |
 | Connector port | never redeclared — the Connector contract + attributes resolve its complete typed port table (`in`/`out`/`err`/`exit` for Process) |
 | Type | `variant`, scalar (`text`/`int`/`bytes`/…), `struct { … }`, `map<text, V>`, `array<T>`, `enum`, `union`, `T?` |
-| State field | `var <name>: <type> [= <default>]` |
+| State field | `var <name>: <type> [= <default>]`; private to its declaring Node and serialized by that Node's logical instance mailbox |
 | Connector attribute | `<name> = <value>` |
 | Composite attribute | `<name> = { ... }` (`restart = { ... }`, `Loop.backoff = { curve = exponential, ... }`) |
 | Handler | `on <trigger> [where … having … within … last …] { ... }` (`on (a, b)` join, `on start`, `on stop`) |
@@ -629,7 +645,7 @@ the optional read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
 | Port emission | `<out_port> = <expr>` (always explicit); atomic multi-emit `(a, b) = (e1, e2)` |
 | Narrowing | `<expr> as <type>` (checked; no implicit dynamic cast or privileged `err` route) |
 | List / array | `[a, b, c]` |
-| References | boot: `env("VAR")` / `secret("path")` (initializers only); runtime: Rastok expressions (`session.key`, `meta.app.x`, `"a" + b`) — the `${…}` interpolation is gone |
+| References | boot: `env("VAR")` / `secret("path")` in unit/App boot vals and contract-marked Connector fields; instance: local `instance.key` and enclosing lexical vals; transaction: `meta.app.x`, `data.y`, `"a" + b` — the `${…}` interpolation is gone |
 | Edge | `a -> b` |
 | Port-qualified edge | `a.<out_port> -> b.<in_port>` |
 | Edge with config | `a -> b { capacity = 1024, backpressure = block }` |
