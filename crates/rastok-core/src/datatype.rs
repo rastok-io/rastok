@@ -1614,11 +1614,8 @@ impl DataType {
         }
     }
 
-    /// Whether values of this type have the total canonical byte form used
-    /// by map keys and partition keys.
-    ///
-    /// The two domains are intentionally identical: a runtime partition key
-    /// is a logical Rastok value, never a host hash or a UTF-8-only shortcut.
+    /// Whether values of this type inhabit the scalar/enum domain admitted as
+    /// canonical map keys.
     #[must_use]
     pub fn is_canonical_key(&self) -> bool {
         matches!(
@@ -1636,6 +1633,26 @@ impl DataType {
                 | Self::Uuid
                 | Self::Enum(_)
         )
+    }
+
+    /// Whether values of this type may select a logical Node instance.
+    ///
+    /// Instance keys extend the canonical map-key leaves with closed structs.
+    /// Recursion is structural and total: unions (including optional fields),
+    /// floats, dynamic values and collections remain outside the domain.
+    #[must_use]
+    pub fn is_instance_key(&self) -> bool {
+        let mut pending = alloc::vec![self];
+        while let Some(candidate) = pending.pop() {
+            if candidate.is_canonical_key() {
+                continue;
+            }
+            let Self::Struct(structure) = candidate else {
+                return false;
+            };
+            pending.extend(structure.fields().iter().map(TypeField::ty));
+        }
+        true
     }
 
     fn overlaps(&self, other: &Self) -> bool {
@@ -2243,6 +2260,43 @@ impl core::error::Error for ConformanceViolation {}
 mod tests {
     use super::*;
     use alloc::collections::BTreeMap;
+
+    #[test]
+    fn instance_keys_add_closed_structs_without_widening_map_keys() {
+        let scope = StructType::new(alloc::vec![
+            TypeField::new("region", DataType::Text),
+            TypeField::new("sequence", DataType::UINT),
+        ])
+        .expect("the nested key type is closed");
+        let key = DataType::Struct(
+            StructType::new(alloc::vec![
+                TypeField::new("scope", DataType::Struct(scope)),
+                TypeField::new("tenant", DataType::Uuid),
+            ])
+            .expect("the outer key type is closed"),
+        );
+
+        assert!(key.is_instance_key());
+        assert!(!key.is_canonical_key());
+        assert!(matches!(
+            MapType::new(key, DataType::Text),
+            Err(TypeError::InvalidMapKey(_))
+        ));
+
+        let optional = DataType::Text
+            .optional()
+            .expect("text and null are disjoint");
+        let optional_field = DataType::Struct(
+            StructType::new(alloc::vec![TypeField::new("maybe", optional)])
+                .expect("the struct itself is closed"),
+        );
+        let float_field = DataType::Struct(
+            StructType::new(alloc::vec![TypeField::new("ratio", DataType::FLOAT)])
+                .expect("the struct itself is closed"),
+        );
+        assert!(!optional_field.is_instance_key());
+        assert!(!float_field.is_instance_key());
+    }
 
     #[test]
     fn canonical_parameter_order_is_pinned() {

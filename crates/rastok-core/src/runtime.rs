@@ -105,12 +105,12 @@ impl PartitionKey {
     ///
     /// # Errors
     ///
-    /// A [`Fault`] when the type is outside the canonical key domain, the
+    /// A [`Fault`] when the type is outside the instance-key domain, the
     /// value is malformed, or it does not conform to the resolved type.
     pub fn from_value(ty: &DataType, value: &Value) -> Result<Self, Fault> {
-        if !ty.is_canonical_key() {
+        if !ty.is_instance_key() {
             return Err(Fault::Unrepresentable(format!(
-                "partition key type `{ty}` is outside the canonical key domain"
+                "instance key type `{ty}` is outside the canonical instance-key domain"
             )));
         }
         value.validate().map_err(Fault::InvalidValue)?;
@@ -1589,9 +1589,44 @@ mod metadata_conformance_tests {
 }
 
 #[cfg(test)]
-mod partition_key_tests {
+mod instance_key_tests {
     use super::*;
-    use crate::datatype::{DateUnit, EnumType, TemporalType};
+    use crate::datatype::{DateUnit, EnumType, StructType, TemporalType, TypeField};
+
+    #[test]
+    fn nested_struct_keys_use_one_field_order_independent_identity() {
+        let scope = StructType::new(vec![
+            TypeField::new("region", DataType::Text),
+            TypeField::new("sequence", DataType::UINT),
+        ])
+        .expect("the nested scope type is closed");
+        let ty = DataType::Struct(
+            StructType::new(vec![
+                TypeField::new("scope", DataType::Struct(scope)),
+                TypeField::new("tenant", DataType::Uuid),
+            ])
+            .expect("the outer key type is closed"),
+        );
+        let tenant = Value::Uuid([0xA5; 16]);
+        let scope = Value::Struct(vec![
+            (String::from("sequence"), Value::Uint(7)),
+            (String::from("region"), Value::Text(String::from("eu"))),
+        ]);
+        let first = Value::Struct(vec![
+            (String::from("tenant"), tenant.clone()),
+            (String::from("scope"), scope.clone()),
+        ]);
+        let reordered = Value::Struct(vec![
+            (String::from("scope"), scope),
+            (String::from("tenant"), tenant),
+        ]);
+
+        assert_eq!(
+            PartitionKey::from_value(&ty, &first).expect("the first value inhabits the key type"),
+            PartitionKey::from_value(&ty, &reordered)
+                .expect("source field order is not key identity")
+        );
+    }
 
     #[test]
     fn every_non_text_key_family_uses_the_shared_canonical_identity() {

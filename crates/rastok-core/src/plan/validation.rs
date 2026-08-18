@@ -298,8 +298,8 @@ pub enum PlanValidationError {
     /// Lowering left an `asset()` call in an executable expression instead of
     /// binding it to the plan's content-addressed asset table.
     UnboundAssetCall,
-    /// A transported partition expression does not yield a value in the
-    /// canonical key domain.
+    /// A transported instance-key expression does not yield a value in the
+    /// canonical scalar/enum-or-struct key domain.
     InvalidPartitionKey {
         /// The keyed node.
         node: node::Path,
@@ -711,7 +711,7 @@ fn resolve_partition_key_types(
         } else {
             partition.key.ty.clone()
         };
-        if !resolved.is_canonical_key() {
+        if !resolved.is_instance_key() {
             return Err(PlanValidationError::InvalidPartitionKey {
                 node: plan.nodes[index].path.clone(),
                 ty: resolved,
@@ -1113,7 +1113,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     node: node.path.clone(),
                 });
             }
-            if partition.key.ty != DataType::Variant && !partition.key.ty.is_canonical_key() {
+            if partition.key.ty != DataType::Variant && !partition.key.ty.is_instance_key() {
                 return Err(PlanValidationError::InvalidPartitionKey {
                     node: node.path.clone(),
                     ty: partition.key.ty.clone(),

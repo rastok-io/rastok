@@ -1986,12 +1986,12 @@ impl Checker<'_, '_> {
             }
             let awaits_port_inference =
                 input_awaits_inference && key_tree.ty == DataType::Variant && reads_data;
-            if !key_tree.ty.is_canonical_key() && !awaits_port_inference {
+            if !key_tree.ty.is_instance_key() && !awaits_port_inference {
                 self.partition_refusal(
                     key_source.span,
                     pending.name.as_deref(),
                     &format!(
-                        "the key has type {}; partition keys use the canonical scalar/enum key domain",
+                        "the key has type {}; instance keys use canonical scalar/enum leaves or a closed struct of those leaves",
                         key_tree.ty
                     ),
                 );
@@ -7297,7 +7297,7 @@ graph g : App {
             diagnostic.code() == E_PARTITION
                 && diagnostic
                     .message()
-                    .contains("canonical scalar/enum key domain")
+                    .contains("canonical scalar/enum leaves")
         }));
     }
 }

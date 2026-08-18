@@ -124,6 +124,14 @@ The materialized carriers are consequently smaller than the type algebra:
 - enum symbols and both union discriminants remain in the value because they
   select semantic data, not merely a schema constraint.
 
+Canonical map keys and Node-instance keys deliberately share one scalar/enum
+leaf domain, but they are not the same shape domain. A map key is one admitted
+leaf. An instance key may additionally be a closed, recursively nested
+`struct` whose every leaf is admitted. Optional fields (structural unions with
+`null`), floats, dynamic values and collections refuse at any depth. Both use
+the same canonical tagged value bytes, so extending instance addressing does
+not widen map-key semantics or create a second encoding authority.
+
 A decimal value carries scale because scale is part of its exact canonical
 value, but does not repeat precision; conformance checks its coefficient
 against the declared precision and requires its carried scale to equal the
