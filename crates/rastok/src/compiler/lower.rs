@@ -22,7 +22,8 @@ use crate::expr;
 use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
-    Node, NodeKind, SemanticHash, Slot, Step, SymbolTable, VarCell,
+    Node, NodeKind, PartitionLifetime as PlanPartitionLifetime, PartitionSpec, SemanticHash, Slot,
+    Step, SymbolTable, VarCell,
 };
 
 /// Computes the semantic hash of a checked graph.
@@ -67,6 +68,22 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     writer.count(edges.len());
     for (text, _) in edges {
         writer.str(&text);
+    }
+    // Extend the old identity as an OPTIONAL suffix. A graph without `per`
+    // feeds byte-for-byte the pre-M1.4 stream (the gauge witness); a keyed
+    // graph adds one explicitly domain-separated table after every old
+    // field, so absence needs no new tag and cannot move old identities.
+    let partitioned: Vec<_> = sorted_nodes(hir)
+        .into_iter()
+        .filter_map(|node| node.partition.as_ref().map(|partition| (node, partition)))
+        .collect();
+    if !partitioned.is_empty() {
+        writer.str("rastok.partition.v1");
+        writer.count(partitioned.len());
+        for (node, partition) in partitioned {
+            writer.str(&node.path.to_string());
+            writer.partition(partition);
+        }
     }
     let mut bytes = [0u8; 32];
     writer.hasher.finalize_xof().fill(&mut bytes);
@@ -157,6 +174,31 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
             })
             .collect();
         vars.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut partition_consts: std::collections::BTreeMap<String, crate::value::Value> = hir
+            .app
+            .vals
+            .iter()
+            .map(|val| (val.name.clone(), val.value.value.clone()))
+            .collect();
+        for val in &hir_node.vals {
+            partition_consts.insert(val.name.clone(), val.value.value.clone());
+        }
+        let partition = hir_node.partition.as_ref().map(|partition| PartitionSpec {
+            name: partition.name.clone(),
+            key: substitute_tree(&partition.key, &partition_consts),
+            lifetime: match &partition.lifetime {
+                crate::compiler::hir::PartitionLifetime::Persistent => {
+                    PlanPartitionLifetime::Persistent
+                }
+                crate::compiler::hir::PartitionLifetime::IdleTtl(value) => {
+                    let nanos = match value.value {
+                        crate::value::Value::Duration(nanos) => nanos,
+                        _ => 0,
+                    };
+                    PlanPartitionLifetime::IdleTtl(nanos)
+                }
+            },
+        });
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
             kind: match &hir_node.role {
@@ -170,6 +212,7 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
             },
             ports,
             vars,
+            partition,
         });
     }
     for hir_node in &nodes {
@@ -756,6 +799,24 @@ impl Writer<'_> {
                         self.tree(value);
                     }
                 }
+            }
+        }
+    }
+
+    fn partition(&mut self, partition: &crate::compiler::hir::Partition) {
+        match &partition.name {
+            None => self.tag(0),
+            Some(name) => {
+                self.tag(1);
+                self.str(name);
+            }
+        }
+        self.tree(&partition.key);
+        match &partition.lifetime {
+            crate::compiler::hir::PartitionLifetime::Persistent => self.tag(1),
+            crate::compiler::hir::PartitionLifetime::IdleTtl(value) => {
+                self.tag(2);
+                self.tree(&value.tree);
             }
         }
     }

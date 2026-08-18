@@ -3,7 +3,7 @@
 //! Raw [`ExecutionPlan`] source pins remain `Option<DataType>`. This module is
 //! the semantic firewall in front of execution: inference variables live only
 //! while this function runs, and a [`ResolvedPortTable`] contains neither an
-//! option nor a recovery case. Format v7 carries that total result and checks
+//! option nor a recovery case. Format v8 carries that total result and checks
 //! it by deriving it again at decode.
 
 use alloc::collections::BTreeMap;
@@ -229,47 +229,58 @@ impl<'plan> Solver<'plan> {
         }
         for handler in &self.plan.handlers {
             let node_index = handler.node.index();
-            let node::HandlerActivation::Port(input_port) = &handler.activation;
-            let input = self.ensure(Some(node_index), input_port, node::Direction::Input);
-            if let Some(guard) = &handler.guard {
-                self.expressions.push(ExpressionRule {
-                    input,
-                    expression: guard,
-                    expected: DataType::Bool,
-                });
-            }
-            for step in &handler.body {
-                match step {
-                    Step::Emit { port, value } => {
-                        let output = self.ensure(Some(node_index), port, node::Direction::Output);
-                        if emission_preserves_payload(value) {
-                            self.flows.push(Flow {
-                                source: input,
-                                target: output,
-                            });
-                        } else if !matches!(value, Emission::Nothing) {
-                            self.emissions.push(EmissionRule {
-                                input,
-                                output,
-                                emission: value,
-                            });
+            let input_ports: Vec<node::Port> = match &handler.activation {
+                node::HandlerActivation::Port(port) => alloc::vec![port.clone()],
+                node::HandlerActivation::Lifecycle(_) => self.plan.nodes[node_index]
+                    .ports
+                    .iter()
+                    .filter(|port| port.direction == node::Direction::Input)
+                    .map(|port| port.port.clone())
+                    .collect(),
+            };
+            for input_port in input_ports {
+                let input = self.ensure(Some(node_index), &input_port, node::Direction::Input);
+                if let Some(guard) = &handler.guard {
+                    self.expressions.push(ExpressionRule {
+                        input,
+                        expression: guard,
+                        expected: DataType::Bool,
+                    });
+                }
+                for step in &handler.body {
+                    match step {
+                        Step::Emit { port, value } => {
+                            let output =
+                                self.ensure(Some(node_index), port, node::Direction::Output);
+                            if emission_preserves_payload(value) {
+                                self.flows.push(Flow {
+                                    source: input,
+                                    target: output,
+                                });
+                            } else if !matches!(value, Emission::Nothing) {
+                                self.emissions.push(EmissionRule {
+                                    input,
+                                    output,
+                                    emission: value,
+                                });
+                            }
                         }
-                    }
-                    Step::SetVar { name, expr } => {
-                        if let Some(expected) = self.plan.nodes[node_index]
-                            .vars
-                            .iter()
-                            .find(|cell| cell.name == *name)
-                            .map(|cell| cell.ty.clone())
-                        {
-                            self.expressions.push(ExpressionRule {
-                                input,
-                                expression: expr,
-                                expected,
-                            });
+                        Step::SetVar { name, expr } => {
+                            if let Some(expected) = self.plan.nodes[node_index]
+                                .vars
+                                .iter()
+                                .find(|cell| cell.name == *name)
+                                .map(|cell| cell.ty.clone())
+                            {
+                                self.expressions.push(ExpressionRule {
+                                    input,
+                                    expression: expr,
+                                    expected,
+                                });
+                            }
                         }
+                        Step::Let { .. } => {}
                     }
-                    Step::Let { .. } => {}
                 }
             }
         }
@@ -968,7 +979,7 @@ fn merge_optional_requirements(
 /// real dynamic value from an unsolved variable. Once a path crosses an
 /// explicit `variant`, its result remains `variant`; no precise constraint is
 /// invented from later field/index spelling.
-fn resolved_expression_type(expr: &expr::Expr, input: &DataType) -> Option<DataType> {
+pub(super) fn resolved_expression_type(expr: &expr::Expr, input: &DataType) -> Option<DataType> {
     match expr {
         expr::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {
             let mut current = input.clone();
@@ -1239,7 +1250,7 @@ fn write_type_path(
     Ok(DataType::Struct(structure))
 }
 
-fn expression_reads_data(expr: &expr::Expr) -> bool {
+pub(super) fn expression_reads_data(expr: &expr::Expr) -> bool {
     let mut stack = alloc::vec![expr];
     while let Some(expr) = stack.pop() {
         match expr {

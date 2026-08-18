@@ -402,7 +402,7 @@ impl MapType {
     ///
     /// Key types outside the v1 canonical-key domain refuse.
     pub fn new(key: DataType, value: DataType) -> Result<Self, TypeError> {
-        if !key.is_map_key() {
+        if !key.is_canonical_key() {
             return Err(TypeError::InvalidMapKey(Box::new(key)));
         }
         Ok(Self {
@@ -1614,7 +1614,13 @@ impl DataType {
         }
     }
 
-    fn is_map_key(&self) -> bool {
+    /// Whether values of this type have the total canonical byte form used
+    /// by map keys and partition keys.
+    ///
+    /// The two domains are intentionally identical: a runtime partition key
+    /// is a logical Rastok value, never a host hash or a UTF-8-only shortcut.
+    #[must_use]
+    pub fn is_canonical_key(&self) -> bool {
         matches!(
             self,
             Self::Bool

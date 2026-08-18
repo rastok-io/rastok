@@ -286,6 +286,7 @@ fn key_name(key: u64) -> String {
         22 => "inbound_seq",
         23 => "replica",
         24 => "ingress_port",
+        25 => "routes",
         30 => "node_path",
         31 => "partition_key",
         32 => "trigger",
@@ -294,6 +295,8 @@ fn key_name(key: u64) -> String {
         35 => "state_delta",
         36 => "emissions",
         37 => "timers",
+        38 => "routes",
+        39 => "cause_id",
         40 => "emitting_id",
         41 => "connector_path",
         42 => "call_key",
@@ -328,6 +331,24 @@ fn record_tree(record: &Record) -> Cbor {
             if inbound.port.name() != "in" {
                 pairs.insert(24, Cbor::Text(inbound.port.name().to_string()));
             }
+            if !inbound.routes.is_empty() {
+                let mut routes = inbound.routes.clone();
+                routes.sort();
+                pairs.insert(
+                    25,
+                    Cbor::Array(
+                        routes
+                            .into_iter()
+                            .map(|route| {
+                                Cbor::Array(vec![
+                                    Cbor::Text(route.edge),
+                                    Cbor::Bytes(route.target_partition),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                );
+            }
             Cbor::Map(pairs)
         }
         Record::Transaction(transaction) => {
@@ -336,6 +357,12 @@ fn record_tree(record: &Record) -> Cbor {
                 (30, Cbor::Text(transaction.node_path.to_string())),
                 (32, Cbor::Text(transaction.trigger.to_string())),
             ]);
+            if !transaction.partition_key.is_empty() {
+                pairs.insert(31, Cbor::Bytes(transaction.partition_key.clone()));
+            }
+            if let Some(cause) = transaction.cause {
+                pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));
+            }
             let mut consumed: Vec<&crate::journal::ConsumedPosition> =
                 transaction.consumed.iter().collect();
             consumed.sort();
@@ -347,9 +374,7 @@ fn record_tree(record: &Record) -> Cbor {
                         .map(|position| {
                             Cbor::Array(vec![
                                 Cbor::Text(position.edge.clone()),
-                                // The single-cell slice: the source
-                                // partition is the empty key.
-                                Cbor::Bytes(Vec::new()),
+                                Cbor::Bytes(position.source_partition.clone()),
                                 Cbor::Uint(position.seq),
                             ])
                         })
@@ -399,6 +424,25 @@ fn record_tree(record: &Record) -> Cbor {
                                 Cbor::Array(vec![
                                     Cbor::Uint(u64::from(*kind)),
                                     Cbor::Bytes(reference.as_bytes().to_vec()),
+                                ])
+                            })
+                            .collect(),
+                    ),
+                );
+            }
+            if !transaction.routes.is_empty() {
+                let mut routes = transaction.routes.clone();
+                routes.sort();
+                pairs.insert(
+                    38,
+                    Cbor::Array(
+                        routes
+                            .into_iter()
+                            .map(|route| {
+                                Cbor::Array(vec![
+                                    Cbor::Bytes(route.delivery.as_bytes().to_vec()),
+                                    Cbor::Text(route.edge),
+                                    Cbor::Bytes(route.target_partition),
                                 ])
                             })
                             .collect(),

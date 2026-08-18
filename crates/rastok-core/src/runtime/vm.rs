@@ -22,11 +22,14 @@ use crate::boundary::{
     Partner, ProcessExit, Response,
 };
 use crate::datatype::DataType;
-use crate::envelope::{Data, Envelope, Id};
-use crate::journal::{ConsumedPosition, Journal, ids};
+use crate::envelope::{Data, Envelope, Id, Meta, MetaSys};
+use crate::journal::{Journal, RouteTarget, RoutedDelivery, ids};
 use crate::node;
 use crate::plan::{Edge, EndpointRef, GraphVersion, NodeKind, Slot, ValidatedExecutionPlan};
-use crate::runtime::{Delivery, Fault, Key, Mailboxes, PartitionState, TransactionExecutor};
+use crate::runtime::{
+    DataSlot, Delivery, Fault, Mailboxes, PartitionKey, PartitionState, TransactionExecutor,
+    eval_lazy, meta_value, resolve_payload,
+};
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::format;
@@ -137,12 +140,56 @@ pub struct PumpReport {
 /// the delivery itself.
 #[derive(Debug, Clone, PartialEq)]
 struct PendingCall {
+    slot: Slot,
     delivery: Delivery,
+    partition_key: PartitionKey,
 }
+
+/// One live incarnation of `(node, partition_key)`. The generation changes
+/// on every admitted envelope, so dated idle events never need deletion.
+#[derive(Debug, Clone)]
+struct Instance {
+    generation: u64,
+    last_activity: Envelope,
+    expiry_pending: bool,
+}
+
+/// Lifecycle work owns its causal envelope. Stop work additionally owns the
+/// detached state snapshot of the closing incarnation, allowing a following
+/// incarnation of the same key to start without sharing cells.
+#[derive(Debug, Clone)]
+struct LifecycleWork {
+    slot: Slot,
+    partition_key: PartitionKey,
+    lifecycle: node::Lifecycle,
+    cause: Envelope,
+    detached_state: Option<BTreeMap<String, crate::value::Value>>,
+}
+
+/// One edge whose target instance was selected before the causing record
+/// committed. Reusing this value after the commit makes routing infallible and
+/// prevents a replay-sensitive second evaluation of `per`.
+#[derive(Debug, Clone)]
+struct PreparedEdge {
+    edge: Edge,
+    target_key: PartitionKey,
+}
+
+/// One emission coupled to the edge fan-out selected for its exact envelope.
+#[derive(Debug)]
+struct PreparedEmission {
+    emission: crate::journal::Emission,
+    routes: Vec<PreparedEdge>,
+}
+
+/// A transaction's post-commit work. The private constructor couples every
+/// emission to its routes, so routing cannot lose alignment after commit.
+#[derive(Debug)]
+struct PreparedEmissions(Vec<PreparedEmission>);
 
 /// The plan-backed gate for one atomic boundary completion.
 ///
-/// Format v7 transports the exact `ProcessExit` union in the resolved port
+/// Format v8 retains the exact `ProcessExit` union in the resolved port
 /// table. This gate judges that same type, so no malformed terminal fact can
 /// become causal.
 struct PlanGate<'plan> {
@@ -315,6 +362,12 @@ pub struct Vm<'plan> {
     /// settles: the completion transaction consumes this cursor, and the
     /// connector's mailbox stays claimed the whole time.
     pending: BTreeMap<CallRef, PendingCall>,
+    /// Live keyed/singleton incarnations whose lifecycle is observable.
+    instances: BTreeMap<(Slot, PartitionKey), Instance>,
+    /// Journal-before-next-work lifecycle transitions. This queue outranks
+    /// ordinary deliveries so `l:start` precedes the creating arrival and a
+    /// detached `l:stop` precedes the following incarnation.
+    lifecycle: VecDeque<LifecycleWork>,
     /// Won closures awaiting their completion transaction — replayable:
     /// an entry leaves this queue only when its transaction commits.
     settled: VecDeque<SettledEntry>,
@@ -341,6 +394,8 @@ impl<'plan> Vm<'plan> {
             state: PartitionState::new(),
             dispatcher: Dispatcher::new(),
             pending: BTreeMap::new(),
+            instances: BTreeMap::new(),
+            lifecycle: VecDeque::new(),
             settled: VecDeque::new(),
             now: 0,
             outputs: Vec::new(),
@@ -427,12 +482,24 @@ impl<'plan> Vm<'plan> {
                 }
             })?;
         }
-        self.reserve_targets(&from)?;
+        // `sys` is minted by the journal commit. Partition expressions are
+        // checked never to depend on it, so this provisional envelope is
+        // exact for the admitted routing vocabulary (`data`, `app`, `ext`).
+        // The selected keys are retained across the append — no semantic
+        // expression is evaluated after a causal record exists.
+        let provisional = Envelope::new(
+            Meta::new(MetaSys::root(Id::from_bytes([0; 16]), self.graph_version.0))
+                .with_ext(submission.draft.ext.clone()),
+            submission.draft.data.clone(),
+        );
+        let prepared = self.prepare_routes(&from, &provisional)?;
+        self.check_room_for_routes(core::iter::once(prepared.as_slice()))?;
+        let recorded_routes = self.inbound_route_targets(&prepared);
         let committed = journal
-            .append_inbound(submission)
+            .append_inbound_routed(submission, recorded_routes)
             .map_err(VmError::Journal)?;
         let id = committed.envelope.meta().sys().id();
-        self.route(&from, &committed.envelope);
+        self.route_prepared(prepared, &committed.envelope, &PartitionKey::singleton());
         Ok(id)
     }
 
@@ -445,6 +512,10 @@ impl<'plan> Vm<'plan> {
     /// A fault leaves the machine exactly as it was — the failed step
     /// committed nothing, and its work stays reserved for a retry.
     pub fn step(&mut self, journal: &mut dyn Journal) -> Result<bool, VmError> {
+        if !self.lifecycle.is_empty() {
+            self.fire_lifecycle_next(journal)?;
+            return Ok(true);
+        }
         if !self.settled.is_empty() {
             self.settle_next(journal)?;
             return Ok(true);
@@ -527,6 +598,10 @@ impl<'plan> Vm<'plan> {
         partner: &mut dyn Partner,
         target: i64,
     ) -> Result<(), VmError> {
+        // Ready work at the current logical instant precedes any future
+        // expiry. In particular, a just-created instance commits `l:start`
+        // before its first idle deadline can close it.
+        self.drain(journal)?;
         while let Some((key, payload)) = self.scheduler.peek_due(target) {
             self.now = key.0;
             // Every expiry OF THIS INSTANT fires before the machine
@@ -553,11 +628,22 @@ impl<'plan> Vm<'plan> {
         partner: &mut dyn Partner,
         payload: DatedPayload,
     ) -> Result<(), VmError> {
-        let DatedPayload::DeliveryBudget {
-            connector,
-            edge,
-            delivery,
-        } = payload;
+        let (connector, edge, delivery) = match payload {
+            DatedPayload::DeliveryBudget {
+                connector,
+                edge,
+                delivery,
+            } => (connector, edge, delivery),
+            DatedPayload::PartitionIdle {
+                node,
+                partition_key,
+                generation,
+                cause,
+            } => {
+                self.expire_partition(node, partition_key, generation, cause);
+                return Ok(());
+            }
+        };
         // An open call for THIS obligation — the delivered edge and
         // envelope both: a fan-out of one envelope arms one budget
         // per receiving edge, and each expires its own call.
@@ -603,7 +689,8 @@ impl<'plan> Vm<'plan> {
             let Some(queued) = self
                 .scheduler
                 .mailboxes
-                .find_by_ref(slot, "", &edge, delivery)
+                .find_by_ref_any(slot, &edge, delivery)
+                .map(|(_, delivery)| delivery)
             else {
                 // Already settled — the budget lost the race.
                 return Ok(());
@@ -650,41 +737,41 @@ impl<'plan> Vm<'plan> {
                 // first: the delivery leaves the queue only after
                 // the commit holds, so a refusal replays with
                 // nothing lost.
-                let outcome = {
-                    let Some(queued) = self
+                let mut outcome = {
+                    let Some((partition_key, queued)) = self
                         .scheduler
                         .mailboxes
-                        .find_by_ref(slot, "", &edge, delivery)
+                        .find_by_ref_any(slot, &edge, delivery)
                     else {
                         return Ok(());
                     };
                     let executor = TransactionExecutor::new(self.plan, self.graph_version);
-                    let trigger = node::Trigger::Port(queued.port.clone());
-                    let connector_path = &self.plan.nodes[slot.index()].path;
                     let completion = Completion::process_exit(ProcessExit::DecodeFailed {
                         message: String::from("the request cannot be framed"),
                         line: None,
                     });
-                    executor.connector_completion(
-                        connector_path,
-                        queued.envelope.meta().sys().id(),
-                        &completion,
-                        &trigger,
-                        queued.envelope.meta(),
-                        ConsumedPosition {
-                            edge: queued.edge.clone(),
-                            seq: queued.seq,
-                        },
-                    )
+                    let trigger = node::Trigger::Port(queued.port.clone());
+                    executor
+                        .connector_completion(slot, &partition_key, queued, &trigger, &completion)
+                        .map_err(VmError::Fault)?
                 };
-                self.validate_and_reserve_emissions(slot, &outcome.record)?;
+                let prepared = self.validate_and_prepare_emissions(slot, &outcome.record)?;
+                outcome.record.routes = self.routed_deliveries(&prepared);
                 journal
                     .commit(outcome.record.clone())
                     .map_err(VmError::Journal)?;
-                self.scheduler
+                let Some((partition_key, _)) = self
+                    .scheduler
                     .mailboxes
-                    .remove_by_ref(slot, "", &edge, delivery);
-                self.route_emissions(slot, &outcome.record);
+                    .remove_by_ref_any(slot, &edge, delivery)
+                else {
+                    return Err(VmError::PlanInvariant {
+                        node: self.plan.nodes[slot.index()].path.clone(),
+                        reason: "a reserved timeout delivery disappeared after commit",
+                    });
+                };
+                self.route_emissions(slot, &partition_key, prepared);
+                self.maybe_begin_pending_stop(slot, &partition_key);
             }
             Some(intent) => {
                 let call_ref = intent.call_ref;
@@ -705,13 +792,24 @@ impl<'plan> Vm<'plan> {
                 }
                 // The facts hold; only now does the delivery leave
                 // the queue and join the settled path.
-                let queued = self
+                let Some((partition_key, queued)) = self
                     .scheduler
                     .mailboxes
-                    .remove_by_ref(slot, "", &edge, delivery)
-                    .unwrap_or_else(|| unreachable!("found above; nothing ran since"));
-                self.pending
-                    .insert(call_ref, PendingCall { delivery: queued });
+                    .remove_by_ref_any(slot, &edge, delivery)
+                else {
+                    return Err(VmError::PlanInvariant {
+                        node: self.plan.nodes[slot.index()].path.clone(),
+                        reason: "a reserved timeout delivery disappeared before settlement",
+                    });
+                };
+                self.pending.insert(
+                    call_ref,
+                    PendingCall {
+                        slot,
+                        delivery: queued,
+                        partition_key,
+                    },
+                );
                 self.settled.push_back(SettledEntry {
                     event: BoundaryEvent {
                         call_ref,
@@ -724,6 +822,38 @@ impl<'plan> Vm<'plan> {
             }
         }
         Ok(())
+    }
+
+    /// Resolves one idle deadline. A superseded generation is a harmless
+    /// clock observation. An open call postpones closure without losing the
+    /// request's terminal obligation; settlement queues the stop afterwards.
+    fn expire_partition(
+        &mut self,
+        path: node::Path,
+        partition_key: Vec<u8>,
+        generation: u64,
+        cause: Id,
+    ) {
+        let slot = self.slot_of(&path);
+        let key = PartitionKey::from_recorded(partition_key);
+        let current = self
+            .instances
+            .get(&(slot, key.clone()))
+            .filter(|instance| {
+                instance.generation == generation
+                    && instance.last_activity.meta().sys().id() == cause
+            })
+            .map(|instance| instance.last_activity.clone());
+        let Some(cause) = current else {
+            return;
+        };
+        if self.instance_has_work(slot, &key) {
+            if let Some(instance) = self.instances.get_mut(&(slot, key.clone())) {
+                instance.expiry_pending = true;
+            }
+            return;
+        }
+        self.begin_stop(slot, &key, cause);
     }
 
     /// The machine's virtual date, in nanoseconds.
@@ -760,7 +890,10 @@ impl<'plan> Vm<'plan> {
     /// settled-but-uncommitted, no open call held.
     #[must_use]
     pub fn is_stable(&self) -> bool {
-        self.scheduler.mailboxes.is_empty() && self.settled.is_empty() && self.pending.is_empty()
+        self.scheduler.mailboxes.is_empty()
+            && self.lifecycle.is_empty()
+            && self.settled.is_empty()
+            && self.pending.is_empty()
     }
 
     /// Whether calls are open against the world — work [`Self::drain`]
@@ -768,6 +901,147 @@ impl<'plan> Vm<'plan> {
     #[must_use]
     pub fn has_open_obligations(&self) -> bool {
         !self.pending.is_empty()
+    }
+
+    fn lifecycle_managed(&self, slot: Slot) -> bool {
+        self.plan.nodes[slot.index()].partition.is_some()
+            || self.plan.handlers.iter().any(|handler| {
+                handler.node == slot
+                    && matches!(
+                        handler.activation,
+                        node::HandlerActivation::Lifecycle(
+                            node::Lifecycle::Start | node::Lifecycle::Stop
+                        )
+                    )
+            })
+    }
+
+    /// Records one admitted envelope as instance activity. This runs only
+    /// after the producer fact committed; every choice it makes was already
+    /// sealed in that producer's route table.
+    fn admit_instance(&mut self, slot: Slot, key: &PartitionKey, envelope: &Envelope) {
+        if !self.lifecycle_managed(slot) {
+            return;
+        }
+        let instance_key = (slot, key.clone());
+        let generation = match self.instances.get_mut(&instance_key) {
+            Some(instance) => {
+                instance.generation = instance.generation.wrapping_add(1);
+                instance.last_activity = envelope.clone();
+                instance.expiry_pending = false;
+                instance.generation
+            }
+            None => {
+                self.instances.insert(
+                    instance_key,
+                    Instance {
+                        generation: 0,
+                        last_activity: envelope.clone(),
+                        expiry_pending: false,
+                    },
+                );
+                self.lifecycle.push_back(LifecycleWork {
+                    slot,
+                    partition_key: key.clone(),
+                    lifecycle: node::Lifecycle::Start,
+                    cause: envelope.clone(),
+                    detached_state: None,
+                });
+                0
+            }
+        };
+        if let Some(crate::plan::PartitionLifetime::IdleTtl(ttl)) = self.plan.nodes[slot.index()]
+            .partition
+            .as_ref()
+            .map(|partition| &partition.lifetime)
+        {
+            self.scheduler.arm(
+                self.now.saturating_add(*ttl),
+                DatedPayload::PartitionIdle {
+                    node: self.plan.nodes[slot.index()].path.clone(),
+                    partition_key: key.as_bytes().to_vec(),
+                    generation,
+                    cause: envelope.meta().sys().id(),
+                },
+            );
+        }
+    }
+
+    fn instance_has_work(&self, slot: Slot, key: &PartitionKey) -> bool {
+        self.scheduler.mailboxes.has_work(slot, key)
+            || self
+                .pending
+                .values()
+                .any(|pending| pending.slot == slot && pending.partition_key == *key)
+    }
+
+    /// Detaches a closing incarnation before its stop transaction. New work
+    /// for the same logical key can then create a fresh state cell, while the
+    /// queued stop owns the old snapshot and remains retryable on refusal.
+    fn begin_stop(&mut self, slot: Slot, key: &PartitionKey, cause: Envelope) {
+        if self.instances.remove(&(slot, key.clone())).is_none() {
+            return;
+        }
+        let detached_state = self.state.take_unchecked(self.plan.plan(), slot, key);
+        self.lifecycle.push_back(LifecycleWork {
+            slot,
+            partition_key: key.clone(),
+            lifecycle: node::Lifecycle::Stop,
+            cause,
+            detached_state: Some(detached_state),
+        });
+    }
+
+    fn maybe_begin_pending_stop(&mut self, slot: Slot, key: &PartitionKey) {
+        let cause = self
+            .instances
+            .get(&(slot, key.clone()))
+            .filter(|instance| instance.expiry_pending)
+            .map(|instance| instance.last_activity.clone());
+        if let Some(cause) = cause
+            && !self.instance_has_work(slot, key)
+        {
+            self.begin_stop(slot, key, cause);
+        }
+    }
+
+    /// Commits exactly one queued lifecycle transition. Start state remains
+    /// live; stop state was detached when admission closed and is reclaimed
+    /// only by this successful commit.
+    fn fire_lifecycle_next(&mut self, journal: &mut dyn Journal) -> Result<(), VmError> {
+        let Some(work) = self.lifecycle.front().cloned() else {
+            return Ok(());
+        };
+        let state = work.detached_state.clone().unwrap_or_else(|| {
+            self.state
+                .cell_unchecked(self.plan.plan(), work.slot, &work.partition_key)
+        });
+        let executor = TransactionExecutor::new(self.plan, self.graph_version);
+        let mut outcome = executor
+            .fire_lifecycle(
+                work.slot,
+                &work.partition_key,
+                work.lifecycle,
+                &work.cause,
+                &state,
+            )
+            .map_err(VmError::Fault)?;
+        let prepared = self.validate_and_prepare_emissions(work.slot, &outcome.record)?;
+        outcome.record.routes = self.routed_deliveries(&prepared);
+        journal
+            .commit(outcome.record.clone())
+            .map_err(VmError::Journal)?;
+        self.lifecycle.pop_front();
+        if work.lifecycle == node::Lifecycle::Start {
+            self.state.apply_unchecked(
+                self.plan.plan(),
+                work.slot,
+                &work.partition_key,
+                &outcome.record.state_delta,
+            );
+        }
+        self.route_emissions(work.slot, &work.partition_key, prepared);
+        Ok(())
     }
 
     /// One won closure becomes the connector's completion transaction.
@@ -780,7 +1054,7 @@ impl<'plan> Vm<'plan> {
             .cloned()
             .unwrap_or_else(|| unreachable!("guarded by the caller"));
         let slot = self.slot_of(&event.connector_path);
-        let Some(request) = self.pending.get(&event.call_ref).map(|held| &held.delivery) else {
+        let Some(request) = self.pending.get(&event.call_ref).cloned() else {
             return Err(VmError::MissingPending(event.call_ref));
         };
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
@@ -799,25 +1073,33 @@ impl<'plan> Vm<'plan> {
                 .map_err(crate::runtime::PinViolation::into_fault)
                 .map_err(VmError::Fault)?;
         }
-        let outcome = executor.connector_completion(
-            &event.connector_path,
-            event.emitting_id,
-            &event.completion,
-            &trigger,
-            request.envelope.meta(),
-            ConsumedPosition {
-                edge: request.edge.clone(),
-                seq: request.seq,
-            },
-        );
-        self.validate_and_reserve_emissions(slot, &outcome.record)?;
+        let mut outcome = executor
+            .connector_completion(
+                slot,
+                &request.partition_key,
+                &request.delivery,
+                &trigger,
+                &event.completion,
+            )
+            .map_err(VmError::Fault)?;
+        let prepared = self.validate_and_prepare_emissions(slot, &outcome.record)?;
+        outcome.record.routes = self.routed_deliveries(&prepared);
         journal
             .commit(outcome.record.clone())
             .map_err(VmError::Journal)?;
         self.settled.pop_front();
         self.pending.remove(&event.call_ref);
-        self.scheduler.mailboxes.release(slot, "");
-        self.route_emissions(slot, &outcome.record);
+        let instance_still_open = self
+            .pending
+            .values()
+            .any(|pending| pending.slot == slot && pending.partition_key == request.partition_key);
+        if !instance_still_open {
+            self.scheduler
+                .mailboxes
+                .release(slot, &request.partition_key);
+        }
+        self.route_emissions(slot, &request.partition_key, prepared);
+        self.maybe_begin_pending_stop(slot, &request.partition_key);
         Ok(())
     }
 
@@ -825,7 +1107,7 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        key: &Key,
+        key: &PartitionKey,
         delivery: &Delivery,
     ) -> Result<(), VmError> {
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
@@ -834,17 +1116,19 @@ impl<'plan> Vm<'plan> {
         // close to the E in `I -> Result<R, E>`. Engine/evaluation faults are
         // outside that contract: the transaction stays uncommitted and the
         // VM reports the fault to supervision.
-        let outcome = executor
-            .fire(slot, delivery, &state)
+        let mut outcome = executor
+            .fire(slot, key, delivery, &state)
             .map_err(VmError::Fault)?;
-        self.validate_and_reserve_emissions(slot, &outcome.record)?;
+        let prepared = self.validate_and_prepare_emissions(slot, &outcome.record)?;
+        outcome.record.routes = self.routed_deliveries(&prepared);
         journal
             .commit(outcome.record.clone())
             .map_err(VmError::Journal)?;
         self.scheduler.mailboxes.pop(slot, key);
         self.state
             .apply_unchecked(self.plan.plan(), slot, key, &outcome.record.state_delta);
-        self.route_emissions(slot, &outcome.record);
+        self.route_emissions(slot, key, prepared);
+        self.maybe_begin_pending_stop(slot, key);
         Ok(())
     }
 
@@ -857,7 +1141,7 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         slot: Slot,
-        key: &Key,
+        key: &PartitionKey,
         delivery: &Delivery,
     ) -> Result<(), VmError> {
         let planned = &self.plan.nodes[slot.index()];
@@ -889,23 +1173,18 @@ impl<'plan> Vm<'plan> {
                     message,
                     line: None,
                 });
-                let outcome = executor.connector_completion(
-                    &planned.path,
-                    emitting_id,
-                    &completion,
-                    &node::Trigger::Port(delivery.port.clone()),
-                    delivery.envelope.meta(),
-                    ConsumedPosition {
-                        edge: delivery.edge.clone(),
-                        seq: delivery.seq,
-                    },
-                );
-                self.validate_and_reserve_emissions(slot, &outcome.record)?;
+                let trigger = node::Trigger::Port(delivery.port.clone());
+                let mut outcome = executor
+                    .connector_completion(slot, key, delivery, &trigger, &completion)
+                    .map_err(VmError::Fault)?;
+                let prepared = self.validate_and_prepare_emissions(slot, &outcome.record)?;
+                outcome.record.routes = self.routed_deliveries(&prepared);
                 journal
                     .commit(outcome.record.clone())
                     .map_err(VmError::Journal)?;
                 self.scheduler.mailboxes.pop(slot, key);
-                self.route_emissions(slot, &outcome.record);
+                self.route_emissions(slot, key, prepared);
+                self.maybe_begin_pending_stop(slot, key);
                 return Ok(());
             }
         };
@@ -933,7 +1212,14 @@ impl<'plan> Vm<'plan> {
             .mailboxes
             .pop(slot, key)
             .unwrap_or_else(|| unreachable!("the reserved head is still there"));
-        self.pending.insert(call_ref, PendingCall { delivery });
+        self.pending.insert(
+            call_ref,
+            PendingCall {
+                slot,
+                delivery,
+                partition_key: key.clone(),
+            },
+        );
         self.scheduler.mailboxes.claim(slot, key);
         Ok(())
     }
@@ -951,21 +1237,22 @@ impl<'plan> Vm<'plan> {
         )
     }
 
-    /// Reserves room in every mailbox a record's emissions will reach.
-    /// Called before the commit: a refusal is pure backpressure.
-    /// The FINAL gate every commit candidate passes — validation
-    /// and reservation, in that order, both named by this function.
+    /// Validates every emission, selects each target instance once, and
+    /// reserves room before the commit. A refusal is pure backpressure or a
+    /// pure evaluation fault; the returned packet is infallible post-commit
+    /// work.
     ///
     /// Pin conformance runs at TWO levels, deliberately: construction checks
     /// ordinary Operator emissions, while [`CompletionGate`] refuses an
     /// invalid partner draft before closure. THIS final, non-recursive level
     /// catches a violated plan/runtime invariant; it cannot manufacture
     /// another emission on the same bad wiring, so NOTHING commits.
-    fn validate_and_reserve_emissions(
+    fn validate_and_prepare_emissions(
         &self,
         slot: Slot,
         record: &crate::runtime::TransactionRecord,
-    ) -> Result<(), VmError> {
+    ) -> Result<PreparedEmissions, VmError> {
+        let mut prepared = Vec::with_capacity(record.emissions.len());
         for emission in &record.emissions {
             if let Data::Materialized(value) = emission.envelope.data() {
                 value
@@ -978,43 +1265,121 @@ impl<'plan> Vm<'plan> {
                 crate::runtime::crossing_pins_hold(self.plan, &from, value)
                     .map_err(|violation| VmError::Fault(violation.into_fault()))?;
             }
-        }
-        let mut needed: BTreeMap<Slot, usize> = BTreeMap::new();
-        for emission in &record.emissions {
             let from = EndpointRef {
                 node: Some(slot),
                 port: emission.port.clone(),
             };
-            for edge in self.plan.edges.iter().filter(|edge| edge.from == from) {
-                if let Some(to) = &edge.to
-                    && let Some(target) = to.node
-                {
-                    *needed.entry(target).or_default() += 1;
-                }
-            }
+            prepared.push(PreparedEmission {
+                emission: emission.clone(),
+                routes: self.prepare_routes(&from, &emission.envelope)?,
+            });
         }
-        self.check_room(&needed)
+        self.check_room_for_routes(prepared.iter().map(|emission| emission.routes.as_slice()))?;
+        Ok(PreparedEmissions(prepared))
     }
 
-    /// Reserves room for one envelope leaving a boundary endpoint.
-    fn reserve_targets(&self, from: &EndpointRef) -> Result<(), VmError> {
-        let mut needed: BTreeMap<Slot, usize> = BTreeMap::new();
-        for edge in self.plan.edges.iter().filter(|edge| edge.from == *from) {
-            if let Some(to) = &edge.to
-                && let Some(target) = to.node
-            {
-                *needed.entry(target).or_default() += 1;
-            }
-        }
-        self.check_room(&needed)
+    /// Selects target keys for every edge leaving one endpoint. The target
+    /// expression sees the envelope as it will be delivered, not the source
+    /// node's state or scheduler context.
+    fn prepare_routes(
+        &self,
+        from: &EndpointRef,
+        envelope: &Envelope,
+    ) -> Result<Vec<PreparedEdge>, VmError> {
+        self.plan
+            .edges
+            .iter()
+            .filter(|edge| edge.from == *from)
+            .cloned()
+            .map(|edge| {
+                let target_key = match edge.to.as_ref().and_then(|to| to.node) {
+                    Some(target) => self.partition_key(target, envelope)?,
+                    None => PartitionKey::singleton(),
+                };
+                Ok(PreparedEdge { edge, target_key })
+            })
+            .collect()
     }
 
-    fn check_room(&self, needed: &BTreeMap<Slot, usize>) -> Result<(), VmError> {
-        for (target, count) in needed {
+    /// The non-singleton route decisions sealed by an inbound record. The
+    /// envelope id is implicit because an inbound record carries exactly one
+    /// envelope.
+    fn inbound_route_targets(&self, prepared: &[PreparedEdge]) -> Vec<RouteTarget> {
+        prepared
+            .iter()
+            .filter(|route| !route.target_key.as_bytes().is_empty())
+            .map(|route| RouteTarget {
+                edge: self.edge_text(&route.edge),
+                target_partition: route.target_key.as_bytes().to_vec(),
+            })
+            .collect()
+    }
+
+    /// The non-singleton route decisions sealed atomically with an emitting
+    /// transaction. Repeated emissions on one edge remain distinct by id.
+    fn routed_deliveries(&self, prepared: &PreparedEmissions) -> Vec<RoutedDelivery> {
+        prepared
+            .0
+            .iter()
+            .flat_map(|emission| {
+                emission
+                    .routes
+                    .iter()
+                    .filter(|route| !route.target_key.as_bytes().is_empty())
+                    .map(|route| RoutedDelivery {
+                        delivery: emission.emission.envelope.meta().sys().id(),
+                        edge: self.edge_text(&route.edge),
+                        target_partition: route.target_key.as_bytes().to_vec(),
+                    })
+            })
+            .collect()
+    }
+
+    fn partition_key(&self, target: Slot, envelope: &Envelope) -> Result<PartitionKey, VmError> {
+        let Some(partition) = &self.plan.nodes[target.index()].partition else {
+            return Ok(PartitionKey::singleton());
+        };
+        let mut bindings = BTreeMap::new();
+        bindings.insert(
+            String::from("meta"),
+            crate::expr::EvalValue::from(meta_value(envelope.meta())),
+        );
+        let data = DataSlot::new(envelope.data());
+        let value = resolve_payload(
+            eval_lazy(&partition.key, &bindings, &data, &self.plan.assets)
+                .map_err(VmError::Fault)?,
+            &data,
+        )
+        .map_err(VmError::Fault)?;
+        PartitionKey::from_value(&partition.key.ty, &value).map_err(VmError::Fault)
+    }
+
+    fn check_room_for_routes<'a>(
+        &self,
+        routes: impl IntoIterator<Item = &'a [PreparedEdge]>,
+    ) -> Result<(), VmError>
+    where
+        PreparedEdge: 'a,
+    {
+        let mut needed: BTreeMap<(Slot, PartitionKey), usize> = BTreeMap::new();
+        for routes in routes {
+            for prepared in routes {
+                let Some(to) = &prepared.edge.to else {
+                    continue;
+                };
+                let Some(target) = to.node else {
+                    continue;
+                };
+                *needed
+                    .entry((target, prepared.target_key.clone()))
+                    .or_default() += 1;
+            }
+        }
+        for ((target, key), count) in &needed {
             if !self
                 .scheduler
                 .mailboxes
-                .has_room(*target, "", count.saturating_sub(1))
+                .has_room(*target, key, count.saturating_sub(1))
             {
                 return Err(VmError::MailboxFull {
                     node: self.plan.nodes[target.index()].path.clone(),
@@ -1025,9 +1390,14 @@ impl<'plan> Vm<'plan> {
     }
 
     /// Routes a committed record's emissions — infallible: capacity
-    /// was reserved before the commit.
-    fn route_emissions(&mut self, slot: Slot, record: &crate::runtime::TransactionRecord) {
-        for emission in &record.emissions {
+    /// and every target key were reserved before the commit.
+    fn route_emissions(
+        &mut self,
+        slot: Slot,
+        source_partition: &PartitionKey,
+        prepared: PreparedEmissions,
+    ) {
+        for PreparedEmission { emission, routes } in prepared.0 {
             // The emission itself is observable at its source port —
             // `expect relay.out` watches departures, not arrivals.
             self.observed.push(Observed {
@@ -1035,16 +1405,12 @@ impl<'plan> Vm<'plan> {
                 port: emission.port.clone(),
                 envelope: emission.envelope.clone(),
             });
-            let from = EndpointRef {
-                node: Some(slot),
-                port: emission.port.clone(),
-            };
             let root_sink = self.plan.nodes[slot.index()]
                 .ports
                 .iter()
                 .find(|port| port.port == emission.port)
                 .is_some_and(|port| port.unwired == crate::plan::UnwiredPolicy::RootSink);
-            let claimed = self.route(&from, &emission.envelope);
+            let claimed = self.route_prepared(routes, &emission.envelope, source_partition);
             // The resolved port policy, never its spelling, decides whether
             // an unclaimed output reaches the root sink.
             if claimed == 0 && root_sink {
@@ -1060,18 +1426,16 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    /// Delivers along every edge leaving `from`; returns how many
-    /// edges claimed the envelope.
-    fn route(&mut self, from: &EndpointRef, envelope: &Envelope) -> usize {
-        let edges: Vec<Edge> = self
-            .plan
-            .edges
-            .iter()
-            .filter(|edge| edge.from == *from)
-            .cloned()
-            .collect();
-        let claimed = edges.len();
-        for edge in edges {
+    /// Applies a preselected fan-out; returns how many edges claimed the
+    /// envelope.
+    fn route_prepared(
+        &mut self,
+        routes: Vec<PreparedEdge>,
+        envelope: &Envelope,
+        source_partition: &PartitionKey,
+    ) -> usize {
+        let claimed = routes.len();
+        for PreparedEdge { edge, target_key } in routes {
             match &edge.to {
                 None => {} // `-> nothing`: the explicit, written discard
                 Some(to) => match to.node {
@@ -1090,10 +1454,18 @@ impl<'plan> Vm<'plan> {
                         let edge_text = self.edge_text(&edge);
                         self.scheduler
                             .mailboxes
-                            .deliver(target, "", to.port.clone(), edge_text, envelope.clone())
+                            .deliver(
+                                target,
+                                &target_key,
+                                source_partition,
+                                to.port.clone(),
+                                edge_text,
+                                envelope.clone(),
+                            )
                             .unwrap_or_else(|_| {
                                 unreachable!("capacity was reserved before the commit")
                             });
+                        self.admit_instance(target, &target_key, envelope);
                         self.observed.push(Observed {
                             node: Some(self.plan.nodes[target.index()].path.clone()),
                             port: to.port.clone(),

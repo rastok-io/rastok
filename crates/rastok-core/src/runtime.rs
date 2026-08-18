@@ -86,15 +86,59 @@ impl fmt::Display for Fault {
 
 impl core::error::Error for Fault {}
 
-/// The partition key of a state cell; M0 runs everything under the
-/// default key, but isolation is keyed from day one.
-pub type Key = String;
+/// Canonical identity of one node instance.
+///
+/// The bytes are the same tagged value bytes used for canonical map keys.
+/// They are opaque to scheduling: ordering them gives a deterministic pump,
+/// while decoding or comparing source spellings is never required.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct PartitionKey(Vec<u8>);
+
+impl PartitionKey {
+    /// The sole key of an unpartitioned node.
+    #[must_use]
+    pub const fn singleton() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Constructs a key from a value and its resolved logical type.
+    ///
+    /// # Errors
+    ///
+    /// A [`Fault`] when the type is outside the canonical key domain, the
+    /// value is malformed, or it does not conform to the resolved type.
+    pub fn from_value(ty: &DataType, value: &Value) -> Result<Self, Fault> {
+        if !ty.is_canonical_key() {
+            return Err(Fault::Unrepresentable(format!(
+                "partition key type `{ty}` is outside the canonical key domain"
+            )));
+        }
+        value.validate().map_err(Fault::InvalidValue)?;
+        if let Some(violation) = ty.violation("partition key", value) {
+            return Err(Fault::Unrepresentable(violation.to_string()));
+        }
+        Ok(Self(value.canonical_key_bytes()))
+    }
+
+    /// The journal representation of this key. Empty means the singleton
+    /// instance and is omitted from transaction records on the wire.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Rehydrates key bytes already sealed by the journal. No semantic value
+    /// is reconstructed and no expression is re-evaluated.
+    pub(crate) fn from_recorded(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
 
 /// State cells partitioned by key: reads under one key never see
 /// another key's writes.
 #[derive(Debug, Default)]
 pub struct PartitionState {
-    cells: BTreeMap<(Slot, Key), BTreeMap<String, Value>>,
+    cells: BTreeMap<(Slot, PartitionKey), BTreeMap<String, Value>>,
 }
 
 impl PartitionState {
@@ -117,7 +161,7 @@ impl PartitionState {
         &self,
         plan: &ValidatedExecutionPlan,
         slot: Slot,
-        key: &str,
+        key: &PartitionKey,
     ) -> Result<BTreeMap<String, Value>, Fault> {
         if plan.nodes.get(slot.index()).is_none() {
             return Err(Fault::UnknownSlot(slot));
@@ -131,9 +175,9 @@ impl PartitionState {
         &self,
         plan: &ExecutionPlan,
         slot: Slot,
-        key: &str,
+        key: &PartitionKey,
     ) -> BTreeMap<String, Value> {
-        if let Some(cell) = self.cells.get(&(slot, Key::from(key))) {
+        if let Some(cell) = self.cells.get(&(slot, key.clone())) {
             return cell.clone();
         }
         plan.nodes[slot.index()]
@@ -153,7 +197,7 @@ impl PartitionState {
         &mut self,
         plan: &ValidatedExecutionPlan,
         slot: Slot,
-        key: &str,
+        key: &PartitionKey,
         delta: &[(String, Value)],
     ) -> Result<(), Fault> {
         if plan.nodes.get(slot.index()).is_none() {
@@ -168,14 +212,28 @@ impl PartitionState {
         &mut self,
         plan: &ExecutionPlan,
         slot: Slot,
-        key: &str,
+        key: &PartitionKey,
         delta: &[(String, Value)],
     ) {
         let mut cell = self.cell_unchecked(plan, slot, key);
         for (name, value) in delta {
             cell.insert(name.clone(), value.clone());
         }
-        self.cells.insert((slot, Key::from(key)), cell);
+        self.cells.insert((slot, key.clone()), cell);
+    }
+
+    /// Detaches one incarnation's state so a following incarnation of the
+    /// same logical key can start while `on stop` still commits against the
+    /// old snapshot.
+    pub(crate) fn take_unchecked(
+        &mut self,
+        plan: &ExecutionPlan,
+        slot: Slot,
+        key: &PartitionKey,
+    ) -> BTreeMap<String, Value> {
+        self.cells
+            .remove(&(slot, key.clone()))
+            .unwrap_or_else(|| self.cell_unchecked(plan, slot, key))
     }
 }
 
@@ -189,6 +247,8 @@ pub struct Delivery {
     pub edge: String,
     /// The position on that edge — the consumed cursor.
     pub seq: u64,
+    /// The partition of the upstream node that minted this cursor.
+    pub source_partition: PartitionKey,
     /// The delivered envelope.
     pub envelope: Envelope,
 }
@@ -201,9 +261,9 @@ pub struct Delivery {
 #[derive(Debug)]
 pub struct Mailboxes {
     capacity: usize,
-    queues: BTreeMap<(Slot, Key), VecDeque<Delivery>>,
-    claimed: alloc::collections::BTreeSet<(Slot, Key)>,
-    edge_seq: BTreeMap<String, u64>,
+    queues: BTreeMap<(Slot, PartitionKey), VecDeque<Delivery>>,
+    claimed: alloc::collections::BTreeSet<(Slot, PartitionKey)>,
+    edge_seq: BTreeMap<(String, PartitionKey), u64>,
 }
 
 impl Mailboxes {
@@ -222,10 +282,10 @@ impl Mailboxes {
     /// `already` reservations against it — the pre-commit capacity
     /// check.
     #[must_use]
-    pub fn has_room(&self, slot: Slot, key: &str, already: usize) -> bool {
+    pub fn has_room(&self, slot: Slot, key: &PartitionKey, already: usize) -> bool {
         let queued = self
             .queues
-            .get(&(slot, Key::from(key)))
+            .get(&(slot, key.clone()))
             .map_or(0, VecDeque::len);
         queued + already < self.capacity
     }
@@ -240,21 +300,26 @@ impl Mailboxes {
     pub fn deliver(
         &mut self,
         slot: Slot,
-        key: &str,
+        key: &PartitionKey,
+        source_partition: &PartitionKey,
         port: node::Port,
         edge: String,
         envelope: Envelope,
     ) -> Result<(), Box<Envelope>> {
-        let queue = self.queues.entry((slot, Key::from(key))).or_default();
+        let queue = self.queues.entry((slot, key.clone())).or_default();
         if queue.len() >= self.capacity {
             return Err(Box::new(envelope));
         }
-        let seq = self.edge_seq.entry(edge.clone()).or_insert(0);
+        let seq = self
+            .edge_seq
+            .entry((edge.clone(), source_partition.clone()))
+            .or_insert(0);
         *seq += 1;
         queue.push_back(Delivery {
             port,
             edge,
             seq: *seq,
+            source_partition: source_partition.clone(),
             envelope,
         });
         Ok(())
@@ -263,7 +328,7 @@ impl Mailboxes {
     /// The first unclaimed non-empty mailbox and a copy of its head —
     /// the reservation: nothing is removed until [`Self::pop`].
     #[must_use]
-    pub fn peek_next(&self) -> Option<(Slot, Key, Delivery)> {
+    pub fn peek_next(&self) -> Option<(Slot, PartitionKey, Delivery)> {
         self.queues
             .iter()
             .find(|((slot, key), queue)| {
@@ -282,14 +347,38 @@ impl Mailboxes {
     pub fn find_by_ref(
         &self,
         slot: Slot,
-        key: &str,
+        key: &PartitionKey,
         edge: &str,
         id: crate::envelope::Id,
     ) -> Option<&Delivery> {
         self.queues
-            .get(&(slot, Key::from(key)))?
+            .get(&(slot, key.clone()))?
             .iter()
             .find(|delivery| delivery.edge == edge && delivery.envelope.meta().sys().id() == id)
+    }
+
+    /// Finds a delivery reference across every instance of one node. The
+    /// delivery reference is globally injective for that fan-out; the key is
+    /// returned because timeout obligations intentionally store the causal
+    /// reference, not a duplicate routing decision.
+    #[must_use]
+    pub fn find_by_ref_any(
+        &self,
+        slot: Slot,
+        edge: &str,
+        id: crate::envelope::Id,
+    ) -> Option<(PartitionKey, &Delivery)> {
+        self.queues
+            .iter()
+            .filter(|((candidate, _), _)| *candidate == slot)
+            .find_map(|((_, key), queue)| {
+                queue
+                    .iter()
+                    .find(|delivery| {
+                        delivery.edge == edge && delivery.envelope.meta().sys().id() == id
+                    })
+                    .map(|delivery| (key.clone(), delivery))
+            })
     }
 
     /// Removes one specific queued delivery by its full reference —
@@ -298,33 +387,57 @@ impl Mailboxes {
     pub fn remove_by_ref(
         &mut self,
         slot: Slot,
-        key: &str,
+        key: &PartitionKey,
         edge: &str,
         id: crate::envelope::Id,
     ) -> Option<Delivery> {
-        let queue = self.queues.get_mut(&(slot, Key::from(key)))?;
+        let queue = self.queues.get_mut(&(slot, key.clone()))?;
         let position = queue.iter().position(|delivery| {
             delivery.edge == edge && delivery.envelope.meta().sys().id() == id
         })?;
         queue.remove(position)
     }
 
+    /// Removes a delivery reference without a duplicated target key, returning
+    /// the instance it occupied.
+    pub fn remove_by_ref_any(
+        &mut self,
+        slot: Slot,
+        edge: &str,
+        id: crate::envelope::Id,
+    ) -> Option<(PartitionKey, Delivery)> {
+        let key = self
+            .queues
+            .iter()
+            .filter(|((candidate, _), _)| *candidate == slot)
+            .find_map(|((_, key), queue)| {
+                queue
+                    .iter()
+                    .any(|delivery| {
+                        delivery.edge == edge && delivery.envelope.meta().sys().id() == id
+                    })
+                    .then(|| key.clone())
+            })?;
+        self.remove_by_ref(slot, &key, edge, id)
+            .map(|delivery| (key, delivery))
+    }
+
     /// Removes the head of a mailbox — only after the transaction
     /// that consumes it is committed.
-    pub fn pop(&mut self, slot: Slot, key: &str) -> Option<Delivery> {
+    pub fn pop(&mut self, slot: Slot, key: &PartitionKey) -> Option<Delivery> {
         self.queues
-            .get_mut(&(slot, Key::from(key)))
+            .get_mut(&(slot, key.clone()))
             .and_then(VecDeque::pop_front)
     }
 
     /// Claims a mailbox for the duration of an external call.
-    pub fn claim(&mut self, slot: Slot, key: &str) {
-        self.claimed.insert((slot, Key::from(key)));
+    pub fn claim(&mut self, slot: Slot, key: &PartitionKey) {
+        self.claimed.insert((slot, key.clone()));
     }
 
     /// Releases a claim after the call settled.
-    pub fn release(&mut self, slot: Slot, key: &str) {
-        self.claimed.remove(&(slot, Key::from(key)));
+    pub fn release(&mut self, slot: Slot, key: &PartitionKey) {
+        self.claimed.remove(&(slot, key.clone()));
     }
 
     /// Whether any delivery is waiting anywhere.
@@ -337,6 +450,15 @@ impl Mailboxes {
     #[must_use]
     pub fn has_ready(&self) -> bool {
         self.peek_next().is_some()
+    }
+
+    /// Whether this exact instance still owns queued or claimed work.
+    #[must_use]
+    pub fn has_work(&self, slot: Slot, key: &PartitionKey) -> bool {
+        self.queues
+            .get(&(slot, key.clone()))
+            .is_some_and(|queue| !queue.is_empty())
+            || self.claimed.contains(&(slot, key.clone()))
     }
 }
 
@@ -415,36 +537,107 @@ impl<'plan> TransactionExecutor<'plan> {
     pub fn fire(
         &self,
         slot: Slot,
+        partition_key: &PartitionKey,
         delivery: &Delivery,
         state: &BTreeMap<String, Value>,
     ) -> Result<TransactionOutcome, Fault> {
-        // The validated plan proves its own references, not the
-        // caller's slot — verified, refused typed.
-        let Some(node) = self.plan.nodes.get(slot.index()) else {
-            return Err(Fault::UnknownSlot(slot));
-        };
         // Two distinct facts share one port here: the handler is
         // *selected* by its activation pattern, while the committed
         // record carries the *causal* trigger. They coincide for a
         // single-port activation and will not for a join.
         let activation = node::HandlerActivation::Port(delivery.port.clone());
-        let trigger = &node::Trigger::Port(delivery.port.clone());
+        let trigger = node::Trigger::Port(delivery.port.clone());
+        let consumed = vec![ConsumedPosition {
+            edge: delivery.edge.clone(),
+            source_partition: delivery.source_partition.as_bytes().to_vec(),
+            seq: delivery.seq,
+        }];
+        self.fire_activation(
+            slot,
+            partition_key,
+            &activation,
+            &trigger,
+            &delivery.envelope,
+            None,
+            consumed,
+            state,
+        )
+    }
+
+    /// Fires one instance lifecycle transaction. The causal envelope is
+    /// explicit because no mailbox cursor is consumed; an absent lifecycle
+    /// handler still commits the transition as an empty causal record.
+    ///
+    /// # Errors
+    ///
+    /// A [`Fault`]; the lifecycle transition then commits nothing.
+    pub fn fire_lifecycle(
+        &self,
+        slot: Slot,
+        partition_key: &PartitionKey,
+        lifecycle: node::Lifecycle,
+        cause: &Envelope,
+        state: &BTreeMap<String, Value>,
+    ) -> Result<TransactionOutcome, Fault> {
+        let activation = node::HandlerActivation::Lifecycle(lifecycle);
+        let trigger = node::Trigger::Lifecycle(lifecycle);
+        self.fire_activation(
+            slot,
+            partition_key,
+            &activation,
+            &trigger,
+            cause,
+            Some(cause.meta().sys().id()),
+            vec![],
+            state,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fire_activation(
+        &self,
+        slot: Slot,
+        partition_key: &PartitionKey,
+        activation: &node::HandlerActivation,
+        trigger: &node::Trigger,
+        input: &Envelope,
+        cause: Option<envelope::Id>,
+        consumed: Vec<ConsumedPosition>,
+        state: &BTreeMap<String, Value>,
+    ) -> Result<TransactionOutcome, Fault> {
+        // The validated plan proves its own references, not the caller's
+        // slot — verified, refused typed.
+        let Some(node) = self.plan.nodes.get(slot.index()) else {
+            return Err(Fault::UnknownSlot(slot));
+        };
         let handler = self
             .plan
             .handlers
             .iter()
-            .find(|handler| handler.node == slot && handler.activation == activation)
-            .ok_or(Fault::MissingHandler)?;
-        let consumed = ConsumedPosition {
-            edge: delivery.edge.clone(),
-            seq: delivery.seq,
+            .find(|handler| handler.node == slot && &handler.activation == activation);
+        let Some(handler) = handler else {
+            if matches!(activation, node::HandlerActivation::Port(_)) {
+                return Err(Fault::MissingHandler);
+            }
+            return Ok(TransactionOutcome {
+                record: TransactionRecord {
+                    node_path: node.path.clone(),
+                    partition_key: partition_key.as_bytes().to_vec(),
+                    trigger: trigger.clone(),
+                    cause,
+                    consumed,
+                    state_delta: vec![],
+                    emissions: vec![],
+                    routes: vec![],
+                    timers: vec![],
+                },
+            });
         };
         // Scratch isolation: the handler runs against copies; nothing
         // below touches the caller's state.
         let mut scratch = state.clone();
         let mut lets: BTreeMap<String, expr::EvalValue> = BTreeMap::new();
         let mut buffer = EmissionBuffer::new();
-        let input = &delivery.envelope;
         let base = |scratch: &BTreeMap<String, Value>,
                     lets: &BTreeMap<String, expr::EvalValue>|
          -> BTreeMap<String, expr::EvalValue> {
@@ -479,10 +672,13 @@ impl<'plan> TransactionExecutor<'plan> {
                     return Ok(TransactionOutcome {
                         record: TransactionRecord {
                             node_path: node.path.clone(),
+                            partition_key: partition_key.as_bytes().to_vec(),
                             trigger: trigger.clone(),
-                            consumed: vec![consumed],
+                            cause,
+                            consumed,
                             state_delta: vec![],
                             emissions: vec![],
+                            routes: vec![],
                             timers: vec![],
                         },
                     });
@@ -596,10 +792,13 @@ impl<'plan> TransactionExecutor<'plan> {
         Ok(TransactionOutcome {
             record: TransactionRecord {
                 node_path: node.path.clone(),
+                partition_key: partition_key.as_bytes().to_vec(),
                 trigger: trigger.clone(),
-                consumed: vec![consumed],
+                cause,
+                consumed,
                 state_delta,
                 emissions,
+                routes: vec![],
                 timers,
             },
         })
@@ -647,17 +846,23 @@ impl<'plan> TransactionExecutor<'plan> {
     ///
     /// # Errors
     ///
-    /// [`Fault::MissingHandler`]-free by construction; faults only if
-    /// the request spine is unavailable.
+    /// [`Fault::UnknownSlot`] when the caller supplies a slot outside the
+    /// validated plan. No handler lookup is involved: a connector completion
+    /// is already the settled result of one delivered request.
     pub fn connector_completion(
         &self,
-        connector_path: &node::Path,
-        emitting_id: envelope::Id,
-        completion: &Completion,
+        slot: Slot,
+        partition_key: &PartitionKey,
+        delivery: &Delivery,
         trigger: &node::Trigger,
-        request_meta: &Meta,
-        consumed: ConsumedPosition,
-    ) -> TransactionOutcome {
+        completion: &Completion,
+    ) -> Result<TransactionOutcome, Fault> {
+        let Some(planned) = self.plan.nodes.get(slot.index()) else {
+            return Err(Fault::UnknownSlot(slot));
+        };
+        let connector_path = &planned.path;
+        let emitting_id = delivery.envelope.meta().sys().id();
+        let request_meta = delivery.envelope.meta();
         let request_sys = request_meta.sys();
         let mut next_index: BTreeMap<node::Port, u32> = BTreeMap::new();
         let emissions = completion
@@ -689,16 +894,23 @@ impl<'plan> TransactionExecutor<'plan> {
                 }
             })
             .collect();
-        TransactionOutcome {
+        Ok(TransactionOutcome {
             record: TransactionRecord {
                 node_path: connector_path.clone(),
+                partition_key: partition_key.as_bytes().to_vec(),
                 trigger: trigger.clone(),
-                consumed: vec![consumed],
+                cause: None,
+                consumed: vec![ConsumedPosition {
+                    edge: delivery.edge.clone(),
+                    source_partition: delivery.source_partition.as_bytes().to_vec(),
+                    seq: delivery.seq,
+                }],
                 state_delta: vec![],
                 timers: vec![],
                 emissions,
+                routes: vec![],
             },
-        }
+        })
     }
 
     /// The handler registered for an activation pattern, if any — the
@@ -1373,6 +1585,45 @@ mod metadata_conformance_tests {
             !meta_conforms(&malformed_decimal, &DataType::Variant),
             "variant is dynamic, not an escape from value well-formedness"
         );
+    }
+}
+
+#[cfg(test)]
+mod partition_key_tests {
+    use super::*;
+    use crate::datatype::{DateUnit, EnumType, TemporalType};
+
+    #[test]
+    fn every_non_text_key_family_uses_the_shared_canonical_identity() {
+        let enumeration = DataType::Enum(
+            EnumType::new(vec![String::from("pending"), String::from("ready")])
+                .expect("the enum fixture is valid"),
+        );
+        let cases = [
+            (DataType::BYTES, Value::Bytes(vec![0, 1, 2])),
+            (
+                DataType::Temporal(TemporalType::Date(DateUnit::Day)),
+                Value::Date(0),
+            ),
+            (enumeration, Value::Enum(String::from("ready"))),
+        ];
+
+        let keys = cases
+            .iter()
+            .map(|(ty, value)| {
+                let first = PartitionKey::from_value(ty, value)
+                    .expect("the fixture inhabits a canonical key type");
+                let second = PartitionKey::from_value(ty, value)
+                    .expect("canonical key construction is repeatable");
+                assert_eq!(first, second);
+                assert!(!first.as_bytes().is_empty());
+                first
+            })
+            .collect::<Vec<_>>();
+
+        assert_ne!(keys[0], keys[1]);
+        assert_ne!(keys[1], keys[2]);
+        assert_ne!(keys[0], keys[2]);
     }
 }
 

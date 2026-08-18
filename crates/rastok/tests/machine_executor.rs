@@ -9,11 +9,10 @@
 
 use rastok::boundary::{Completion, ProcessExit};
 use rastok::envelope::{Data, Envelope, Meta, MetaSys};
-use rastok::journal::ConsumedPosition;
 use rastok::journal::ids;
 use rastok::plan::{GraphVersion, Slot, ValidatedExecutionPlan};
 use rastok::runtime::{
-    Delivery, Fault, Mailboxes, PartitionState, TransactionExecutor, meta_value,
+    Delivery, Fault, Mailboxes, PartitionKey, PartitionState, TransactionExecutor, meta_value,
 };
 use rastok::{envelope, node};
 use std::collections::BTreeMap;
@@ -74,11 +73,24 @@ fn input(text: &str) -> Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>shout.in"),
         seq: 1,
+        source_partition: PartitionKey::singleton(),
         envelope: Envelope::new(
             Meta::new(MetaSys::root(id, 1)),
             Data::materialized(envelope::Value::Map(data)),
         ),
     }
+}
+
+fn singleton() -> PartitionKey {
+    PartitionKey::singleton()
+}
+
+fn text_key(value: &str) -> PartitionKey {
+    PartitionKey::from_value(
+        &rastok::datatype::DataType::Text,
+        &rastok::value::Value::Text(String::from(value)),
+    )
+    .expect("text is a canonical partition key")
 }
 
 fn trigger_in() -> node::Trigger {
@@ -96,7 +108,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
     let state = PartitionState::new()
-        .cell(&compilation.plan, slot, "")
+        .cell(&compilation.plan, slot, &singleton())
         .unwrap();
     // An ancestry-rich input: app fields, ext fields, a
     // content-type hint on unchanged encoded data.
@@ -122,9 +134,12 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>relay.in"),
         seq: 1,
+        source_partition: PartitionKey::singleton(),
         envelope: Envelope::new(meta, Data::encoded(Encoding::Raw, *b"salut")),
     };
-    let outcome = executor.fire(slot, &delivery, &state).unwrap();
+    let outcome = executor
+        .fire(slot, &singleton(), &delivery, &state)
+        .unwrap();
     let emitted = &outcome.record.emissions[0].envelope;
     let sys = emitted.meta().sys();
     let parent = delivery.envelope.meta().sys();
@@ -192,7 +207,9 @@ fn the_meta_projection_carries_the_whole_spine() {
 fn the_activation_pattern_is_not_the_causal_trigger() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
+    let state = PartitionState::new()
+        .cell(&plan, slot, &singleton())
+        .unwrap();
     // A handler is *selected* by its declared activation pattern…
     let activation = node::HandlerActivation::Port(node::Port::new("in").unwrap());
     assert!(executor.handler_for(slot, &activation).is_some());
@@ -201,7 +218,9 @@ fn the_activation_pattern_is_not_the_causal_trigger() {
     // (The connector timeout transaction is the existing proof of
     // divergence: no activation declares `l:timeout`, yet the
     // record fires under it.)
-    let outcome = executor.fire(slot, &input("salut"), &state).unwrap();
+    let outcome = executor
+        .fire(slot, &singleton(), &input("salut"), &state)
+        .unwrap();
     assert_eq!(
         outcome.record.trigger,
         node::Trigger::Port(node::Port::new("in").unwrap())
@@ -259,19 +278,22 @@ fn metadata_writes_land_where_the_spec_says() {
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
     let state = PartitionState::new()
-        .cell(&compilation.plan, slot, "")
+        .cell(&compilation.plan, slot, &singleton())
         .unwrap();
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
     let delivery = Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>o.in"),
         seq: 1,
+        source_partition: PartitionKey::singleton(),
         envelope: Envelope::new(
             Meta::new(MetaSys::root(id, 1)),
             Data::encoded(Encoding::Raw, *b"payload"),
         ),
     };
-    let outcome = executor.fire(slot, &delivery, &state).unwrap();
+    let outcome = executor
+        .fire(slot, &singleton(), &delivery, &state)
+        .unwrap();
     let emitted = &outcome.record.emissions[0].envelope;
     // The app zone holds its flat dotted keys.
     assert_eq!(
@@ -306,10 +328,14 @@ fn metadata_writes_land_where_the_spec_says() {
 fn a_transaction_commits_everything_together() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
+    let state = PartitionState::new()
+        .cell(&plan, slot, &singleton())
+        .unwrap();
     assert_eq!(state.get("count"), Some(&rastok::value::Value::Int(0)));
     let delivery = input("salut");
-    let outcome = executor.fire(slot, &delivery, &state).unwrap();
+    let outcome = executor
+        .fire(slot, &singleton(), &delivery, &state)
+        .unwrap();
     // The commit packet: consumed cursor, state delta, emission.
     assert_eq!(outcome.record.consumed[0].edge, ".in>shout.in");
     assert_eq!(outcome.record.consumed[0].seq, 1);
@@ -341,10 +367,16 @@ fn a_transaction_commits_everything_together() {
 fn execution_is_deterministic() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
+    let state = PartitionState::new()
+        .cell(&plan, slot, &singleton())
+        .unwrap();
     let delivery = input("salut");
-    let once = executor.fire(slot, &delivery, &state).unwrap();
-    let twice = executor.fire(slot, &delivery, &state).unwrap();
+    let once = executor
+        .fire(slot, &singleton(), &delivery, &state)
+        .unwrap();
+    let twice = executor
+        .fire(slot, &singleton(), &delivery, &state)
+        .unwrap();
     assert_eq!(once, twice, "same inputs, same transaction, same ids");
 }
 
@@ -352,8 +384,12 @@ fn execution_is_deterministic() {
 fn a_false_guard_consumes_without_effect() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
-    let outcome = executor.fire(slot, &input(""), &state).unwrap();
+    let state = PartitionState::new()
+        .cell(&plan, slot, &singleton())
+        .unwrap();
+    let outcome = executor
+        .fire(slot, &singleton(), &input(""), &state)
+        .unwrap();
     assert!(outcome.record.emissions.is_empty());
     assert!(outcome.record.state_delta.is_empty());
     assert_eq!(
@@ -367,19 +403,24 @@ fn a_false_guard_consumes_without_effect() {
 fn a_faulted_transaction_changes_nothing() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new().cell(&plan, slot, "").unwrap();
+    let state = PartitionState::new()
+        .cell(&plan, slot, &singleton())
+        .unwrap();
     // Avro payloads cannot be materialized in this build: the
     // handler faults, and the caller applies nothing.
     let delivery = Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>shout.in"),
         seq: 1,
+        source_partition: PartitionKey::singleton(),
         envelope: Envelope::new(
             Meta::new(MetaSys::root(envelope::Id::from_bytes([1; 16]), 1)),
             Data::encoded(Encoding::Avro, *b"opaque"),
         ),
     };
-    let fault = executor.fire(slot, &delivery, &state).unwrap_err();
+    let fault = executor
+        .fire(slot, &singleton(), &delivery, &state)
+        .unwrap_err();
     assert!(matches!(fault, Fault::Opaque(_)));
     assert_eq!(
         state.get("count"),
@@ -392,20 +433,22 @@ fn a_faulted_transaction_changes_nothing() {
 fn state_is_isolated_between_keys() {
     let (plan, slot) = probe();
     let mut partitions = PartitionState::new();
+    let alice = text_key("alice");
+    let bob = text_key("bob");
     partitions
         .apply(
             &plan,
             slot,
-            "alice",
+            &alice,
             &[(String::from("count"), rastok::value::Value::Int(7))],
         )
         .unwrap();
     assert_eq!(
-        partitions.cell(&plan, slot, "alice").unwrap().get("count"),
+        partitions.cell(&plan, slot, &alice).unwrap().get("count"),
         Some(&rastok::value::Value::Int(7))
     );
     assert_eq!(
-        partitions.cell(&plan, slot, "bob").unwrap().get("count"),
+        partitions.cell(&plan, slot, &bob).unwrap().get("count"),
         Some(&rastok::value::Value::Int(0)),
         "bob's cell starts from the plan defaults"
     );
@@ -418,27 +461,50 @@ fn mailboxes_are_fifo_bounded_and_edge_sequenced() {
     let mut mailboxes = Mailboxes::new(2);
     let port = node::Port::new("in").unwrap();
     let envelope = input("a").envelope;
+    let key = singleton();
+    let source = singleton();
     mailboxes
-        .deliver(slot, "", port.clone(), String::from("e"), envelope.clone())
+        .deliver(
+            slot,
+            &key,
+            &source,
+            port.clone(),
+            String::from("e"),
+            envelope.clone(),
+        )
         .unwrap();
     mailboxes
-        .deliver(slot, "", port.clone(), String::from("e"), envelope.clone())
+        .deliver(
+            slot,
+            &key,
+            &source,
+            port.clone(),
+            String::from("e"),
+            envelope.clone(),
+        )
         .unwrap();
     // Bounded: the third delivery is refused, not dropped.
-    assert!(!mailboxes.has_room(slot, "", 0));
+    assert!(!mailboxes.has_room(slot, &key, 0));
     assert!(
         mailboxes
-            .deliver(slot, "", port.clone(), String::from("e"), envelope.clone())
+            .deliver(
+                slot,
+                &key,
+                &source,
+                port.clone(),
+                String::from("e"),
+                envelope.clone(),
+            )
             .is_err()
     );
     // Peek reserves without removing; pop removes.
     let head = mailboxes.peek_next().unwrap();
     assert_eq!(head.2.seq, 1);
-    let first = mailboxes.pop(slot, "").unwrap();
-    let second = mailboxes.pop(slot, "").unwrap();
+    let first = mailboxes.pop(slot, &key).unwrap();
+    let second = mailboxes.pop(slot, &key).unwrap();
     assert_eq!(first.seq, 1);
     assert_eq!(second.seq, 2, "per-edge sequence, FIFO order");
-    assert!(mailboxes.pop(slot, "").is_none());
+    assert!(mailboxes.pop(slot, &key).is_none());
     assert!(mailboxes.is_empty());
 }
 
@@ -453,23 +519,43 @@ fn the_delivery_reference_selects_among_same_envelope_deliveries() {
     let id = envelope.meta().sys().id();
     let a = node::Port::new("a").unwrap();
     let b = node::Port::new("b").unwrap();
+    let key = singleton();
+    let source = singleton();
     mailboxes
-        .deliver(slot, "", a, String::from("s.out>n.a"), envelope.clone())
+        .deliver(
+            slot,
+            &key,
+            &source,
+            a,
+            String::from("s.out>n.a"),
+            envelope.clone(),
+        )
         .unwrap();
     mailboxes
-        .deliver(slot, "", b, String::from("s.out>n.b"), envelope.clone())
+        .deliver(
+            slot,
+            &key,
+            &source,
+            b,
+            String::from("s.out>n.b"),
+            envelope.clone(),
+        )
         .unwrap();
-    assert!(mailboxes.find_by_ref(slot, "", "s.out>n.b", id).is_some());
+    assert!(mailboxes.find_by_ref(slot, &key, "s.out>n.b", id).is_some());
     let removed = mailboxes
-        .remove_by_ref(slot, "", "s.out>n.b", id)
+        .remove_by_ref(slot, &key, "s.out>n.b", id)
         .expect("the b delivery");
     assert_eq!(removed.edge, "s.out>n.b");
     // The sibling on edge a is untouched.
     let survivor = mailboxes
-        .find_by_ref(slot, "", "s.out>n.a", id)
+        .find_by_ref(slot, &key, "s.out>n.a", id)
         .expect("the a delivery survives");
     assert_eq!(survivor.edge, "s.out>n.a");
-    assert!(mailboxes.remove_by_ref(slot, "", "s.out>n.b", id).is_none());
+    assert!(
+        mailboxes
+            .remove_by_ref(slot, &key, "s.out>n.b", id)
+            .is_none()
+    );
 }
 
 #[test]
@@ -480,16 +566,32 @@ fn one_node_mailbox_keeps_arrival_order_across_ports() {
     let z = node::Port::new("z").unwrap();
     let a = node::Port::new("a").unwrap();
     let envelope = input("x").envelope;
+    let key = singleton();
+    let source = singleton();
     mailboxes
-        .deliver(slot, "", z.clone(), String::from("ez"), envelope.clone())
+        .deliver(
+            slot,
+            &key,
+            &source,
+            z.clone(),
+            String::from("ez"),
+            envelope.clone(),
+        )
         .unwrap();
     mailboxes
-        .deliver(slot, "", a.clone(), String::from("ea"), envelope.clone())
+        .deliver(
+            slot,
+            &key,
+            &source,
+            a.clone(),
+            String::from("ea"),
+            envelope.clone(),
+        )
         .unwrap();
     // One FIFO per node instance: `z` arrived first, `z` fires
     // first — the port never reorders shared-state work.
-    assert_eq!(mailboxes.pop(slot, "").unwrap().port, z);
-    assert_eq!(mailboxes.pop(slot, "").unwrap().port, a);
+    assert_eq!(mailboxes.pop(slot, &key).unwrap().port, z);
+    assert_eq!(mailboxes.pop(slot, &key).unwrap().port, a);
 }
 
 #[test]
@@ -498,15 +600,24 @@ fn a_claimed_mailbox_is_skipped_until_released() {
     let _ = &plan;
     let mut mailboxes = Mailboxes::new(8);
     let port = node::Port::new("in").unwrap();
+    let key = singleton();
+    let source = singleton();
     mailboxes
-        .deliver(slot, "", port, String::from("e"), input("x").envelope)
+        .deliver(
+            slot,
+            &key,
+            &source,
+            port,
+            String::from("e"),
+            input("x").envelope,
+        )
         .unwrap();
-    mailboxes.claim(slot, "");
+    mailboxes.claim(slot, &key);
     assert!(
         mailboxes.peek_next().is_none(),
         "a suspended call keeps its mailbox claimed"
     );
-    mailboxes.release(slot, "");
+    mailboxes.release(slot, &key);
     assert!(mailboxes.peek_next().is_some());
 }
 
@@ -514,8 +625,17 @@ fn a_claimed_mailbox_is_skipped_until_released() {
 fn the_connector_completion_matches_the_reference_trace() {
     let (plan, _) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let request = input("salut").envelope;
+    let request = input("salut");
     let connector_path = node::Path::new(["echo"]).unwrap();
+    let connector_slot = Slot::new(
+        u32::try_from(
+            plan.nodes
+                .iter()
+                .position(|planned| planned.path == connector_path)
+                .expect("the probe contains its Process connector"),
+        )
+        .expect("the tiny probe slot is representable"),
+    );
     let completion = Completion::process(
         vec![
             Data::materialized(envelope::Value::Text(String::from("first"))),
@@ -529,17 +649,16 @@ fn the_connector_completion_matches_the_reference_trace() {
             signal: None,
         },
     );
-    let outcome = executor.connector_completion(
-        &connector_path,
-        request.meta().sys().id(),
-        &completion,
-        &node::Trigger::Port(node::Port::new("in").unwrap()),
-        request.meta(),
-        ConsumedPosition {
-            edge: String::from("shout.out>echo.in"),
-            seq: 1,
-        },
-    );
+    let trigger = node::Trigger::Port(node::Port::new("in").unwrap());
+    let outcome = executor
+        .connector_completion(
+            connector_slot,
+            &singleton(),
+            &request,
+            &trigger,
+            &completion,
+        )
+        .expect("the validated connector slot settles");
     assert_eq!(outcome.record.node_path, connector_path);
     assert_eq!(outcome.record.trigger.to_string(), "p:in");
     assert_eq!(outcome.record.emissions.len(), 4);
@@ -558,14 +677,14 @@ fn the_connector_completion_matches_the_reference_trace() {
     let expected = ids::emission_id(
         &connector_path,
         &outcome.record.trigger,
-        request.meta().sys().id(),
+        request.envelope.meta().sys().id(),
         &node::Port::new("out").unwrap(),
         0,
     );
     assert_eq!(emission.envelope.meta().sys().id(), expected);
     assert_eq!(
         emission.envelope.meta().sys().origin_id(),
-        request.meta().sys().origin_id()
+        request.envelope.meta().sys().origin_id()
     );
 }
 
@@ -577,19 +696,21 @@ fn a_caller_supplied_slot_is_verified_not_trusted() {
     let (plan, _) = probe();
     let ghost = Slot::new(999);
     assert_eq!(
-        PartitionState::new().cell(&plan, ghost, "").unwrap_err(),
+        PartitionState::new()
+            .cell(&plan, ghost, &singleton())
+            .unwrap_err(),
         Fault::UnknownSlot(ghost)
     );
     assert_eq!(
         PartitionState::new()
-            .apply(&plan, ghost, "", &[])
+            .apply(&plan, ghost, &singleton(), &[])
             .unwrap_err(),
         Fault::UnknownSlot(ghost)
     );
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
     assert_eq!(
         executor
-            .fire(ghost, &input("salut"), &BTreeMap::new())
+            .fire(ghost, &singleton(), &input("salut"), &BTreeMap::new())
             .unwrap_err(),
         Fault::UnknownSlot(ghost)
     );

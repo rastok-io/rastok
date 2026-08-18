@@ -218,6 +218,112 @@ fn an_unconstrained_raw_port_never_becomes_variant() {
 }
 
 #[test]
+fn a_raw_partition_requires_a_canonical_key_type() {
+    let mut raw = raw_probe();
+    let relay = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the relay operator");
+    relay.partition = Some(plan::PartitionSpec {
+        name: Some(String::from("tenant")),
+        key: expr::Tree {
+            root: expr::Expr::Literal(rastok::value::Value::Int(1)),
+            ty: DataType::Variant,
+        },
+        lifetime: plan::PartitionLifetime::Persistent,
+    });
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::InvalidPartitionKey {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+            ty: DataType::Variant,
+        }
+    );
+}
+
+#[test]
+fn a_raw_partition_requires_a_positive_idle_ttl() {
+    let mut raw = raw_probe();
+    let relay = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the relay operator");
+    relay.partition = Some(plan::PartitionSpec {
+        name: None,
+        key: expr::Tree {
+            root: expr::Expr::Literal(rastok::value::Value::Int(1)),
+            ty: DataType::INT,
+        },
+        lifetime: plan::PartitionLifetime::IdleTtl(0),
+    });
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::InvalidPartitionLifetime {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+        }
+    );
+}
+
+#[test]
+fn a_raw_named_partition_requires_a_nonempty_name() {
+    let mut raw = raw_probe();
+    let relay = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the relay operator");
+    relay.partition = Some(plan::PartitionSpec {
+        name: Some(String::new()),
+        key: expr::Tree {
+            root: expr::Expr::Literal(rastok::value::Value::Int(1)),
+            ty: DataType::INT,
+        },
+        lifetime: plan::PartitionLifetime::Persistent,
+    });
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::InvalidPartitionName {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+        }
+    );
+}
+
+#[test]
+fn a_raw_partition_cannot_route_from_commit_minted_metadata() {
+    let mut raw = raw_probe();
+    let relay = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .expect("the relay operator");
+    relay.partition = Some(plan::PartitionSpec {
+        name: Some(String::from("forged")),
+        key: expr::Tree {
+            root: expr::Expr::Path(vec![
+                String::from("meta"),
+                String::from("sys"),
+                String::from("id"),
+            ]),
+            ty: DataType::Text,
+        },
+        lifetime: plan::PartitionLifetime::Persistent,
+    });
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::InvalidPartitionBinding {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+            path: String::from("meta.sys.id"),
+        }
+    );
+}
+
+#[test]
 fn a_raw_port_cannot_contradict_its_instantiated_contract() {
     let mut raw = raw_probe();
     let shell = raw
@@ -851,6 +957,20 @@ fn a_duplicated_handler_refuses() {
         PlanValidationError::DuplicateHandler {
             node: rastok::node::Path::new(["relay"]).unwrap(),
             activation: rastok::node::HandlerActivation::Port(port("in")),
+        }
+    );
+}
+
+#[test]
+fn a_future_lifecycle_handler_cannot_enter_v8_early() {
+    let mut plan = raw_probe();
+    plan.handlers[0].activation =
+        rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Compensate);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::UnsupportedLifecycleHandler {
+            node: rastok::node::Path::new(["relay"]).unwrap(),
+            lifecycle: rastok::node::Lifecycle::Compensate,
         }
     );
 }

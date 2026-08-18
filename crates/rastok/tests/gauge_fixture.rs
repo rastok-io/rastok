@@ -6,7 +6,7 @@
 //! owe (D-2026-08-08-2/-3): one graph carrying a TYPED named
 //! boundary input, typed operator ports, and a typed named output,
 //! with its Lab scenario. Pinned here: the exact semantic hash (the
-//! identity move of the port-table presence tag), the current v7 package
+//! identity move of the port-table presence tag), the current v8 package
 //! bytes, and the full golden trace whose INBOUND record seals the
 //! ingress port as key 24.
 
@@ -36,6 +36,10 @@ fn compilation() -> rastok::compiler::Compilation {
 // M1.3 final review keeps this connector-free semantic hash unchanged and
 // removes the lowering-only Operator `err` row from its package. That row
 // was never canonical HIR identity and never belonged in the plan.
+// DELIBERATE CONTAINER MOVE 2026-08-16 (M1.4 P1): v8 transports optional
+// partition descriptors and lifecycle activations. Gauge declares neither,
+// so its semantic hash and causal trace stay fixed while the package checksum
+// changes with the format version.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]
@@ -61,7 +65,7 @@ fn the_package_matches_its_golden() {
     }
     let golden = std::fs::read_to_string(&path)
         .expect("no package golden; run once with RASTOK_BLESS=1 to bless");
-    assert_eq!(golden.trim(), rendered, "the v7 typed package is pinned");
+    assert_eq!(golden.trim(), rendered, "the v8 typed package is pinned");
 }
 
 #[test]

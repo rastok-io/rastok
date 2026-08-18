@@ -323,8 +323,10 @@ impl fmt::Display for Trigger {
 ///   bindings) reads them in that order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HandlerActivation {
-    /// Arrival on a single port — the whole executable subset today.
+    /// Arrival on a single port.
     Port(Port),
+    /// One partition-instance lifecycle transition.
+    Lifecycle(Lifecycle),
 }
 
 impl HandlerActivation {
@@ -339,6 +341,7 @@ impl HandlerActivation {
     pub fn canonical_key(&self) -> alloc::string::String {
         match self {
             Self::Port(port) => alloc::format!("p:{port}"),
+            Self::Lifecycle(lifecycle) => alloc::format!("l:{lifecycle}"),
         }
     }
 }
@@ -349,6 +352,7 @@ impl fmt::Display for HandlerActivation {
         // pinned.
         match self {
             Self::Port(port) => write!(f, "p:{port}"),
+            Self::Lifecycle(lifecycle) => write!(f, "l:{lifecycle}"),
         }
     }
 }

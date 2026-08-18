@@ -134,7 +134,9 @@ pub fn compile_with_assets(
         Err(
             error @ (PlanValidationError::UnresolvedPortType { .. }
             | PlanValidationError::ConflictingPortTypes { .. }
-            | PlanValidationError::MismatchedEdgePins { .. }),
+            | PlanValidationError::MismatchedEdgePins { .. }
+            | PlanValidationError::InvalidPartitionKey { .. }
+            | PlanValidationError::ConflictingPartitionKeyTypes { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
             return Err(bag);
@@ -204,6 +206,31 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
         .with_field("port", port.name())
         .with_field("expected", expected.to_string())
         .with_field("found", found.to_string()),
+        PlanValidationError::InvalidPartitionKey { node, ty } => Diagnostic::new(
+            check::E_PARTITION,
+            Phase::Check,
+            format!(
+                "the partition key on `{node}` resolves to {ty}; partition keys use the canonical scalar/enum key domain"
+            ),
+        )
+        .with_field("name", node.to_string())
+        .with_field("detail", format!("non-canonical key type {ty}")),
+        PlanValidationError::ConflictingPartitionKeyTypes {
+            node,
+            expected,
+            found,
+        } => Diagnostic::new(
+            check::E_PARTITION,
+            Phase::Check,
+            format!(
+                "the partition key on `{node}` has no single type: it resolves to {expected} and {found} across its inputs"
+            ),
+        )
+        .with_field("name", node.to_string())
+        .with_field(
+            "detail",
+            format!("conflicting key types {expected} and {found}"),
+        ),
         _ => internal_plan_diagnostic(error),
     }
 }
@@ -242,5 +269,88 @@ mod tests {
                 String::from("invalid plan: `nodes` is not in canonical order"),
             )]
         );
+    }
+
+    #[test]
+    fn a_partition_key_uses_the_graphs_resolved_input_type() {
+        let source = r#"
+graph inferred_partition : App {
+  input in: int
+  output out: int
+  operator relay per (key = data, lifetime = persistent) {
+    on in { out = . }
+  }
+  . -> relay -> .
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the graph supplies the omitted node-port type");
+        assert_eq!(
+            compilation.plan.nodes[0]
+                .partition
+                .as_ref()
+                .expect("the node is partitioned")
+                .key
+                .ty,
+            crate::datatype::DataType::INT
+        );
+    }
+
+    #[test]
+    fn a_resolved_variant_cannot_become_a_partition_key() {
+        let source = r#"
+graph dynamic_partition : App {
+  input in: variant
+  output out: variant
+  operator relay per (key = data, lifetime = persistent) {
+    on in { out = . }
+  }
+  . -> relay -> .
+}
+"#;
+        let bag = compile(
+            &[source],
+            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("a resolved dynamic value has no canonical partition identity");
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == check::E_PARTITION
+                && diagnostic
+                    .message()
+                    .contains("canonical scalar/enum key domain")
+        }));
+    }
+
+    #[test]
+    fn one_partition_expression_requires_one_type_across_input_ports() {
+        let source = r#"
+graph conflicting_partition : App {
+  input alpha: int
+  input beta: text
+  output out: int
+  operator relay per (key = data, lifetime = persistent) {
+    input a: int
+    input b: text
+    output out: int
+    on a { out = 1 }
+    on b { out = 1 }
+  }
+  .alpha -> relay.a
+  .beta -> relay.b
+  relay -> .
+}
+"#;
+        let bag = compile(
+            &[source],
+            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("one key expression cannot change logical type by input port");
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == check::E_PARTITION
+                && diagnostic.message().contains("has no single type")
+        }));
     }
 }

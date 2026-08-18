@@ -138,15 +138,31 @@ pub struct InboundRecord {
     pub seq: u64,
     /// The envelope born here.
     pub envelope: Envelope,
+    /// Non-singleton target instances selected before this inbound fact
+    /// committed. Empty-key routes are derivable from the plan and omitted.
+    pub routes: Vec<RouteTarget>,
+}
+
+/// One pre-commit target selection for a single inbound envelope.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RouteTarget {
+    /// Canonical edge text carrying the envelope.
+    pub edge: String,
+    /// Canonical target partition key bytes. This is never empty: the
+    /// singleton case is derivable and therefore omitted from the record.
+    pub target_partition: Vec<u8>,
 }
 
 /// One consumed input position — the cursor is per
 /// `(graph edge × source partition)`, not per port: several edges can
-/// feed one port. The M0 single-cell slice omits the partition.
+/// feed one port.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsumedPosition {
     /// The graph edge the input arrived on, canonically rendered.
     pub edge: String,
+    /// Canonical key bytes of the upstream node instance. Empty denotes an
+    /// unpartitioned source.
+    pub source_partition: Vec<u8>,
     /// The position on that edge.
     pub seq: u64,
 }
@@ -171,20 +187,43 @@ pub struct Emission {
 pub struct TransactionRecord {
     /// The firing node.
     pub node_path: node::Path,
+    /// Canonical key bytes of the firing node instance. Empty denotes an
+    /// unpartitioned node and is omitted by the canonical projection.
+    pub partition_key: Vec<u8>,
     /// What fired it.
     pub trigger: node::Trigger,
+    /// Causal envelope for a lifecycle transaction that consumes no mailbox
+    /// cursor. Port-triggered and call-completion transactions derive their
+    /// cause from `consumed` and omit this field.
+    pub cause: Option<crate::envelope::Id>,
     /// The consumed input positions; canonically sorted at commit.
     pub consumed: Vec<ConsumedPosition>,
     /// The state changes; canonically sorted by field at commit.
     pub state_delta: Vec<(String, Value)>,
     /// The emissions, in text/emission-index order.
     pub emissions: Vec<Emission>,
+    /// Non-singleton target selections made for those emissions before this
+    /// record committed. The envelope id disambiguates repeated emissions on
+    /// the same port and edge.
+    pub routes: Vec<RoutedDelivery>,
     /// The dated obligations this firing arms — `(timer_kind, ref)`
     /// per identity.md §3 key 37: kind 1 = call budget, ref = the
     /// derived budget identity `budget_ref(edge, envelope_id)`
     /// (erratum E-2026-08-04-2). Sorted at commit; the due instant
     /// is never sealed.
     pub timers: Vec<(u8, crate::envelope::Id)>,
+}
+
+/// One routed delivery whose target instance was selected atomically with
+/// the transaction that emitted it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RoutedDelivery {
+    /// The emitted envelope being delivered.
+    pub delivery: crate::envelope::Id,
+    /// Canonical edge text carrying it.
+    pub edge: String,
+    /// Canonical target partition key bytes; never empty.
+    pub target_partition: Vec<u8>,
 }
 
 /// One fact of a call's WAL (`delivery-semantics.md` §4): the open
@@ -302,7 +341,19 @@ pub trait Journal {
     /// [`Error::SequenceMismatch`] when an explicit sequence diverges
     /// from the journal; [`Error::SequenceOverflow`] when monotonicity
     /// cannot continue.
-    fn append_inbound(&mut self, submission: InboundSubmission) -> Result<CommittedInbound, Error>;
+    fn append_inbound(&mut self, submission: InboundSubmission) -> Result<CommittedInbound, Error> {
+        self.append_inbound_routed(submission, Vec::new())
+    }
+
+    /// Accepts an inbound envelope together with every non-singleton target
+    /// selected before the fact commits. This is the runtime entry point;
+    /// [`Self::append_inbound`] is the route-free convenience used by journal
+    /// tests and callers whose plan has no keyed destination.
+    fn append_inbound_routed(
+        &mut self,
+        submission: InboundSubmission,
+        routes: Vec<RouteTarget>,
+    ) -> Result<CommittedInbound, Error>;
 
     /// Commits one atomic transaction record, canonicalizing its
     /// sorted collections. Durable-before-delivered: a failed commit
@@ -391,7 +442,11 @@ impl MemJournal {
 }
 
 impl Journal for MemJournal {
-    fn append_inbound(&mut self, submission: InboundSubmission) -> Result<CommittedInbound, Error> {
+    fn append_inbound_routed(
+        &mut self,
+        submission: InboundSubmission,
+        mut routes: Vec<RouteTarget>,
+    ) -> Result<CommittedInbound, Error> {
         let next = self
             .next_seq
             .get(&submission.authority)
@@ -417,11 +472,13 @@ impl Journal for MemJournal {
             Meta::new(sys).with_ext(submission.draft.ext),
             submission.draft.data,
         );
+        routes.sort();
         let record = InboundRecord {
             authority: submission.authority.clone(),
             port: submission.port,
             seq,
             envelope: envelope.clone(),
+            routes,
         };
         self.next_seq.insert(submission.authority, following);
         self.records.push(Record::Inbound(record.clone()));
@@ -437,6 +494,7 @@ impl Journal for MemJournal {
         // invalid ordering is not constructible through the journal.
         transaction.consumed.sort();
         transaction.state_delta.sort_by(|a, b| a.0.cmp(&b.0));
+        transaction.routes.sort();
         self.records.push(Record::Transaction(transaction));
         Ok(())
     }
@@ -821,14 +879,18 @@ mod tests {
         journal
             .commit(TransactionRecord {
                 node_path: node::Path::new(["shout"]).unwrap(),
+                partition_key: vec![],
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
+                cause: None,
                 consumed: vec![
                     ConsumedPosition {
                         edge: String::from("b"),
+                        source_partition: vec![1],
                         seq: 1,
                     },
                     ConsumedPosition {
                         edge: String::from("a"),
+                        source_partition: vec![2],
                         seq: 2,
                     },
                 ],
@@ -837,6 +899,7 @@ mod tests {
                     (String::from("a"), Value::Int(2)),
                 ],
                 emissions: vec![],
+                routes: vec![],
                 timers: vec![],
             })
             .unwrap();
@@ -856,9 +919,12 @@ mod tests {
         journal
             .commit(TransactionRecord {
                 node_path: node::Path::new(["shout"]).unwrap(),
+                partition_key: vec![],
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
+                cause: None,
                 consumed: vec![ConsumedPosition {
                     edge: String::from(".in>shout.in"),
+                    source_partition: vec![],
                     seq: 0,
                 }],
                 state_delta: vec![(String::from("count"), Value::Int(1))],
@@ -867,6 +933,7 @@ mod tests {
                     index: 0,
                     envelope: committed.envelope.clone(),
                 }],
+                routes: vec![],
                 timers: vec![],
             })
             .unwrap();

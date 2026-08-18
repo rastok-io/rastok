@@ -105,6 +105,8 @@ pub struct Node {
     pub ports: Vec<crate::plan::PortDecl>,
     /// Checked handlers, in declaration order.
     pub handlers: Vec<Handler>,
+    /// Resolved keyed-instance descriptor; absent means singleton.
+    pub partition: Option<Partition>,
 }
 
 impl Node {
@@ -134,6 +136,26 @@ impl Node {
             NodeRole::Operator => &[],
         }
     }
+}
+
+/// One checked `per` binding.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Partition {
+    /// Name of a referenced graph-level declaration, or none for inline.
+    pub name: Option<String>,
+    /// The canonical-key expression.
+    pub key: expr::Tree,
+    /// Checked lifetime with source expression retained for identity.
+    pub lifetime: PartitionLifetime,
+}
+
+/// Checked partition lifetime.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PartitionLifetime {
+    /// No automatic expiry.
+    Persistent,
+    /// Bare duration, interpreted as idle TTL.
+    IdleTtl(Const),
 }
 
 /// One checked attribute.

@@ -12,6 +12,7 @@ use rastok::envelope::{Data, Envelope};
 use rastok::journal::Journal;
 use rastok::node;
 use rastok::plan::GraphVersion;
+use rastok::runtime::PartitionKey;
 use rastok::runtime::vm::{Vm, VmError};
 
 use rastok::boundary::{
@@ -110,6 +111,18 @@ fn text_submission(text: &str) -> InboundSubmission {
     }
 }
 
+fn int_submission(value: i64) -> InboundSubmission {
+    InboundSubmission {
+        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        port: rastok::node::Port::new("in").unwrap(),
+        draft: Draft {
+            data: Data::materialized(Value::Int(value)),
+            ext: Namespace::new(),
+        },
+        sequence: SubmissionSequence::Next,
+    }
+}
+
 fn root_exit_cases<'a>(vm: &'a Vm<'_>) -> Vec<&'a str> {
     vm.observations()
         .iter()
@@ -196,6 +209,322 @@ fn two_runs_produce_identical_journals() {
     let (twice, second_outputs) = run_probe();
     assert_eq!(once.records(), twice.records(), "replay determinism");
     assert_eq!(first_outputs, second_outputs);
+}
+
+#[test]
+fn keyed_instances_isolate_state_and_own_their_edge_cursors() {
+    let source = r#"
+graph keyed : App {
+  input in: int
+  output out: int
+
+  operator counter per (key = data, lifetime = persistent) {
+    input in: int
+    output out: int
+    var count: int = 0
+    on in {
+      count = count + 1
+      out = count
+    }
+  }
+
+  operator sink per (key = data, lifetime = persistent) {
+    input in: int
+    output out: int
+    on in { out = . }
+  }
+
+  . -> counter -> sink -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the keyed graph checks");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+
+    for value in [7, 9, 7] {
+        vm.inject(&mut journal, int_submission(value)).unwrap();
+        vm.drain(&mut journal).unwrap();
+    }
+
+    let output_values: Vec<i64> = vm
+        .outputs()
+        .iter()
+        .map(|output| match output.envelope.data() {
+            Data::Materialized(Value::Int(value)) => *value,
+            other => panic!("the counter emits ints, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(output_values, [1, 1, 2], "each key owns its state cell");
+
+    let key7 = PartitionKey::from_value(&rastok::datatype::DataType::INT, &Value::Int(7)).unwrap();
+    let key9 = PartitionKey::from_value(&rastok::datatype::DataType::INT, &Value::Int(9)).unwrap();
+    let key1 = PartitionKey::from_value(&rastok::datatype::DataType::INT, &Value::Int(1)).unwrap();
+    let key2 = PartitionKey::from_value(&rastok::datatype::DataType::INT, &Value::Int(2)).unwrap();
+    let inbound_routes: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Inbound(inbound) => Some(inbound.routes[0].target_partition.as_slice()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        inbound_routes,
+        [key7.as_bytes(), key9.as_bytes(), key7.as_bytes()],
+        "the ingress fact seals the selected target before delivery"
+    );
+    let transactions: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction) => Some(transaction),
+            _ => None,
+        })
+        .collect();
+    let counters: Vec<_> = transactions
+        .iter()
+        .copied()
+        .filter(|transaction| {
+            transaction.node_path.to_string() == "counter"
+                && matches!(transaction.trigger, node::Trigger::Port(_))
+        })
+        .collect();
+    assert_eq!(
+        counters
+            .iter()
+            .map(|transaction| transaction.partition_key.as_slice())
+            .collect::<Vec<_>>(),
+        [key7.as_bytes(), key9.as_bytes(), key7.as_bytes()],
+        "the chosen target key is a causal transaction field"
+    );
+    let sinks: Vec<_> = transactions
+        .iter()
+        .copied()
+        .filter(|transaction| {
+            transaction.node_path.to_string() == "sink"
+                && matches!(transaction.trigger, node::Trigger::Port(_))
+        })
+        .collect();
+    assert_eq!(
+        sinks
+            .iter()
+            .map(|transaction| transaction.partition_key.as_slice())
+            .collect::<Vec<_>>(),
+        [key1.as_bytes(), key1.as_bytes(), key2.as_bytes()]
+    );
+    assert_eq!(
+        counters
+            .iter()
+            .map(|transaction| transaction.routes[0].target_partition.as_slice())
+            .collect::<Vec<_>>(),
+        [key1.as_bytes(), key1.as_bytes(), key2.as_bytes()],
+        "the emitting fact seals each downstream target before delivery"
+    );
+    assert_eq!(
+        sinks
+            .iter()
+            .map(|transaction| (
+                transaction.consumed[0].source_partition.as_slice(),
+                transaction.consumed[0].seq,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (key7.as_bytes(), 1),
+            (key9.as_bytes(), 1),
+            (key7.as_bytes(), 2)
+        ],
+        "the cursor advances per edge and source partition"
+    );
+}
+
+#[test]
+fn idle_lifecycle_starts_once_stops_from_last_activity_and_restarts_clean() {
+    let source = r#"
+graph lifecycle : App {
+  input in: int
+  output out: int
+  output stopped: int
+
+  partition tenant { key = data ; lifetime = duration("1s") }
+  operator counter per tenant {
+    input in: int
+    output out: int
+    output stopped: int
+    var count: int = 0
+    on start { count = 100 }
+    on in {
+      count = count + 1
+      out = count
+    }
+    on stop { stopped = count }
+  }
+
+  . -> counter
+  counter.out -> .out
+  counter.stopped -> .stopped
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the lifecycle graph checks");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+
+    let first = vm.inject(&mut journal, int_submission(7)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    let second = vm.inject(&mut journal, int_submission(7)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    let other = vm.inject(&mut journal, int_submission(9)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    assert_eq!(
+        vm.outputs()
+            .iter()
+            .filter(|output| output.port.name() == "out")
+            .map(|output| match output.envelope.data() {
+                Data::Materialized(Value::Int(value)) => *value,
+                other => panic!("the counter emits ints, got {other:?}"),
+            })
+            .collect::<Vec<_>>(),
+        [101, 102, 101]
+    );
+
+    let mut world = EchoWorld::default();
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+    assert_eq!(
+        vm.outputs()
+            .iter()
+            .filter(|output| output.port.name() == "stopped")
+            .map(|output| match output.envelope.data() {
+                Data::Materialized(Value::Int(value)) => *value,
+                other => panic!("the stop hook emits ints, got {other:?}"),
+            })
+            .collect::<Vec<_>>(),
+        [102, 101],
+        "same-time expiries retain arm order after stale generations disappear"
+    );
+
+    let lifecycle: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.node_path.to_string() == "counter"
+                    && matches!(transaction.trigger, node::Trigger::Lifecycle(_)) =>
+            {
+                Some((transaction.trigger.clone(), transaction.cause))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        lifecycle,
+        [
+            (
+                node::Trigger::Lifecycle(node::Lifecycle::Start),
+                Some(first),
+            ),
+            (
+                node::Trigger::Lifecycle(node::Lifecycle::Start),
+                Some(other),
+            ),
+            (
+                node::Trigger::Lifecycle(node::Lifecycle::Stop),
+                Some(second),
+            ),
+            (node::Trigger::Lifecycle(node::Lifecycle::Stop), Some(other),),
+        ]
+    );
+
+    vm.inject(&mut journal, int_submission(7)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    let last = vm
+        .outputs()
+        .iter()
+        .rev()
+        .find(|output| output.port.name() == "out")
+        .expect("the new incarnation emits");
+    assert_eq!(last.envelope.data(), &Data::materialized(Value::Int(101)));
+}
+
+#[test]
+fn idle_partition_stop_waits_for_each_connector_invocation_exit() {
+    let source = r#"
+graph nested_lifetimes : App {
+  input in: text
+  output out: text
+  output exit
+
+  partition request { key = data ; lifetime = duration("1s") }
+  connector shell : Process per request {
+    mode = job
+    command = "cat"
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
+  }
+
+  . -> shell
+  shell.out -> .out
+  shell.exit -> .exit
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the keyed Process graph checks");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let cause = vm.inject(&mut journal, text_submission("salut")).unwrap();
+    vm.drain(&mut journal).unwrap();
+    assert!(vm.has_open_obligations());
+
+    let mut world = EchoWorld::default();
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+    assert!(
+        journal.records().iter().all(|record| !matches!(
+            record,
+            Record::Transaction(transaction)
+                if transaction.trigger
+                    == node::Trigger::Lifecycle(node::Lifecycle::Stop)
+        )),
+        "partition expiry cannot replace an open call's terminal fact"
+    );
+
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.drain(&mut journal).unwrap();
+    let shell_transactions: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction) if transaction.node_path.to_string() == "shell" => {
+                Some(transaction)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shell_transactions.len(), 3);
+    assert_eq!(
+        shell_transactions[0].trigger,
+        node::Trigger::Lifecycle(node::Lifecycle::Start)
+    );
+    assert!(
+        shell_transactions[1]
+            .emissions
+            .iter()
+            .any(|emission| emission.port.name() == "exit")
+    );
+    assert_eq!(
+        shell_transactions[2].trigger,
+        node::Trigger::Lifecycle(node::Lifecycle::Stop)
+    );
+    assert_eq!(shell_transactions[2].cause, Some(cause));
 }
 
 #[test]
@@ -354,11 +683,12 @@ impl FlakyJournal {
 }
 
 impl Journal for FlakyJournal {
-    fn append_inbound(
+    fn append_inbound_routed(
         &mut self,
         submission: InboundSubmission,
+        routes: Vec<rastok::journal::RouteTarget>,
     ) -> Result<rastok::journal::CommittedInbound, rastok::journal::Error> {
-        self.inner.append_inbound(submission)
+        self.inner.append_inbound_routed(submission, routes)
     }
     fn commit(
         &mut self,

@@ -95,6 +95,22 @@ pub enum PlanValidationError {
         /// activation changes nothing about this variant's shape.
         activation: node::HandlerActivation,
     },
+    /// A lifecycle activation belongs to a later executable slice. Format v8
+    /// can represent the closed registry without silently enabling it.
+    UnsupportedLifecycleHandler {
+        /// The declaring node.
+        node: node::Path,
+        /// The unsupported lifecycle name.
+        lifecycle: node::Lifecycle,
+    },
+    /// A start/stop hook has no admission envelope from which an instance or
+    /// causal parent could be created.
+    LifecycleWithoutInput {
+        /// The declaring node.
+        node: node::Path,
+        /// The impossible lifecycle hook.
+        lifecycle: node::Lifecycle,
+    },
     /// An input carries an output-only root-sink policy.
     InputHasRootSink {
         /// The declaring node.
@@ -282,6 +298,42 @@ pub enum PlanValidationError {
     /// Lowering left an `asset()` call in an executable expression instead of
     /// binding it to the plan's content-addressed asset table.
     UnboundAssetCall,
+    /// A transported partition expression does not yield a value in the
+    /// canonical key domain.
+    InvalidPartitionKey {
+        /// The keyed node.
+        node: node::Path,
+        /// The expression's resolved type.
+        ty: DataType,
+    },
+    /// A transported partition expression reads outside the envelope facts
+    /// available before its receiving record commits.
+    InvalidPartitionBinding {
+        /// The keyed node.
+        node: node::Path,
+        /// The forbidden resolved path.
+        path: String,
+    },
+    /// A resolved named partition carries no usable source/tooling name.
+    InvalidPartitionName {
+        /// The keyed node.
+        node: node::Path,
+    },
+    /// Different input ports make one data-dependent partition expression
+    /// resolve to different logical key types.
+    ConflictingPartitionKeyTypes {
+        /// The keyed node.
+        node: node::Path,
+        /// Type resolved for the first input family.
+        expected: DataType,
+        /// Incompatible type resolved for another input family.
+        found: DataType,
+    },
+    /// A transported partition lifetime is not executable.
+    InvalidPartitionLifetime {
+        /// The keyed node.
+        node: node::Path,
+    },
     /// A collection the plan documents as canonically ordered is not.
     NonCanonicalOrder {
         /// Which collection broke the order.
@@ -387,6 +439,14 @@ impl core::fmt::Display for PlanValidationError {
                     "invalid plan: `{node}` declares two handlers on `{activation}`"
                 )
             }
+            Self::UnsupportedLifecycleHandler { node, lifecycle } => write!(
+                f,
+                "invalid plan: `{node}` declares the unsupported lifecycle handler `l:{lifecycle}`"
+            ),
+            Self::LifecycleWithoutInput { node, lifecycle } => write!(
+                f,
+                "invalid plan: `{node}` declares `l:{lifecycle}` but has no input envelope to cause an instance"
+            ),
             Self::InputHasRootSink { node, port } => write!(
                 f,
                 "invalid plan: input `{node}.{port}` carries an output root-sink policy"
@@ -479,6 +539,30 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: an asset() call was not bound to the plan asset table"
             ),
+            Self::InvalidPartitionKey { node, ty } => write!(
+                f,
+                "invalid plan: the partition key on `{node}` has non-canonical key type {ty}"
+            ),
+            Self::InvalidPartitionBinding { node, path } => write!(
+                f,
+                "invalid plan: the partition key on `{node}` reads `{path}`; only `data`, `meta.app`, and `meta.ext` exist before routing commits"
+            ),
+            Self::InvalidPartitionName { node } => write!(
+                f,
+                "invalid plan: the named partition on `{node}` has an empty name"
+            ),
+            Self::ConflictingPartitionKeyTypes {
+                node,
+                expected,
+                found,
+            } => write!(
+                f,
+                "invalid plan: the partition key on `{node}` resolves to both {expected} and {found} across its input ports"
+            ),
+            Self::InvalidPartitionLifetime { node } => write!(
+                f,
+                "invalid plan: the partition lifetime on `{node}` is not positive"
+            ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
             }
@@ -520,9 +604,10 @@ impl ValidatedExecutionPlan {
     /// # Errors
     ///
     /// The first violated invariant, named.
-    pub fn try_new(plan: ExecutionPlan) -> Result<Self, PlanValidationError> {
+    pub fn try_new(mut plan: ExecutionPlan) -> Result<Self, PlanValidationError> {
         validate(&plan)?;
         let resolved_ports = super::type_resolution::resolve(&plan)?;
+        resolve_partition_key_types(&mut plan, &resolved_ports)?;
         let depth = super::serialization::deepest_level_with_resolved(&plan, &resolved_ports);
         if depth >= crate::canonical_cbor::MAX_NESTING {
             return Err(PlanValidationError::NestingBudgetExceeded {
@@ -545,7 +630,7 @@ impl ValidatedExecutionPlan {
     /// Effective logical types of every graph-boundary and node port.
     ///
     /// Unlike raw source declarations, this table contains no inference
-    /// variable and no recovery hole. Format v7 carries it and the decoder
+    /// variable and no recovery hole. Format v8 carries it and the decoder
     /// derives it again from the raw constraints before requiring equality.
     #[must_use]
     pub const fn resolved_ports(&self) -> &super::type_resolution::ResolvedPortTable {
@@ -577,6 +662,66 @@ impl core::ops::Deref for ValidatedExecutionPlan {
     fn deref(&self) -> &Self::Target {
         &self.plan
     }
+}
+
+/// Closes the one type variable a partition expression may still carry after
+/// source checking: `data` on an unannotated input port. The general port
+/// solver remains the sole inference authority; this pass merely projects its
+/// total result through the already-compiled expression and materializes the
+/// effective key type in the validated plan.
+fn resolve_partition_key_types(
+    plan: &mut ExecutionPlan,
+    ports: &super::type_resolution::ResolvedPortTable,
+) -> Result<(), PlanValidationError> {
+    for index in 0..plan.nodes.len() {
+        let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        let Some(partition) = plan.nodes[index].partition.as_ref() else {
+            continue;
+        };
+        let resolved = if super::type_resolution::expression_reads_data(&partition.key.root) {
+            let mut resolved: Option<DataType> = None;
+            for input in ports
+                .node(slot)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|port| port.direction() == node::Direction::Input)
+            {
+                let Some(candidate) = super::type_resolution::resolved_expression_type(
+                    &partition.key.root,
+                    input.ty(),
+                ) else {
+                    return Err(PlanValidationError::InvalidPartitionKey {
+                        node: plan.nodes[index].path.clone(),
+                        ty: DataType::Variant,
+                    });
+                };
+                match &resolved {
+                    Some(previous) if previous != &candidate => {
+                        return Err(PlanValidationError::ConflictingPartitionKeyTypes {
+                            node: plan.nodes[index].path.clone(),
+                            expected: previous.clone(),
+                            found: candidate,
+                        });
+                    }
+                    Some(_) => {}
+                    None => resolved = Some(candidate),
+                }
+            }
+            resolved.unwrap_or(DataType::Variant)
+        } else {
+            partition.key.ty.clone()
+        };
+        if !resolved.is_canonical_key() {
+            return Err(PlanValidationError::InvalidPartitionKey {
+                node: plan.nodes[index].path.clone(),
+                ty: resolved,
+            });
+        }
+        if let Some(partition) = plan.nodes[index].partition.as_mut() {
+            partition.key.ty = resolved;
+        }
+    }
+    Ok(())
 }
 
 /// The node ordering the lowering emits: operators before
@@ -836,7 +981,7 @@ fn tree_type_at(tree: &expr::Tree, location: String) -> Result<(), PlanValidatio
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
-/// v7 encoder can observe the plan.
+/// v8 encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -850,6 +995,9 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         }
     }
     for node in &plan.nodes {
+        if let Some(partition) = &node.partition {
+            tree_type_at(&partition.key, format!("partition key on `{}`", node.path))?;
+        }
         for decl in &node.ports {
             if let Some(ty) = &decl.ty {
                 data_type_at(ty, format!("port `{}.{}`", node.path, decl.port))?;
@@ -959,6 +1107,28 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         });
     }
     for (node_index, node) in plan.nodes.iter().enumerate() {
+        if let Some(partition) = &node.partition {
+            if partition.name.as_ref().is_some_and(String::is_empty) {
+                return Err(PlanValidationError::InvalidPartitionName {
+                    node: node.path.clone(),
+                });
+            }
+            if partition.key.ty != DataType::Variant && !partition.key.ty.is_canonical_key() {
+                return Err(PlanValidationError::InvalidPartitionKey {
+                    node: node.path.clone(),
+                    ty: partition.key.ty.clone(),
+                });
+            }
+            if matches!(partition.lifetime, crate::plan::PartitionLifetime::IdleTtl(nanos) if nanos <= 0)
+            {
+                return Err(PlanValidationError::InvalidPartitionLifetime {
+                    node: node.path.clone(),
+                });
+            }
+            expr_canonical(&partition.key.root)?;
+            asset_indexes_bound(plan, &partition.key.root)?;
+            partition_bindings_available(&partition.key.root, &node.path)?;
+        }
         if let Some((decl, expected)) = node.ports.iter().find_map(|decl| {
             conventional_direction(&decl.port)
                 .filter(|expected| decl.direction != *expected)
@@ -1206,7 +1376,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     // Partner seam cannot execute it yet: refuse by
                     // capability, distinctly from ignorance.
                     if matches!(node.kind, NodeKind::Connector(_))
-                        && !matches!(endpoint.port.name(), "in" | "out" | "err")
+                        && !matches!(endpoint.port.name(), "in" | "out" | "err" | "exit")
                     {
                         return Err(PlanValidationError::UnsupportedConnectorPort {
                             node: node.path.clone(),
@@ -1293,13 +1463,36 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     }
     for handler in &plan.handlers {
         let node = node_at(handler.node)?;
-        let node::HandlerActivation::Port(port) = &handler.activation;
-        if !has_port(node, port, node::Direction::Input) {
-            return Err(PlanValidationError::WrongPortDirection {
-                node: Some(node.path.clone()),
-                port: port.clone(),
-                expected: node::Direction::Input,
-            });
+        match &handler.activation {
+            node::HandlerActivation::Port(port) => {
+                if !has_port(node, port, node::Direction::Input) {
+                    return Err(PlanValidationError::WrongPortDirection {
+                        node: Some(node.path.clone()),
+                        port: port.clone(),
+                        expected: node::Direction::Input,
+                    });
+                }
+            }
+            node::HandlerActivation::Lifecycle(
+                lifecycle @ (node::Lifecycle::Start | node::Lifecycle::Stop),
+            ) => {
+                if !node
+                    .ports
+                    .iter()
+                    .any(|port| port.direction == node::Direction::Input)
+                {
+                    return Err(PlanValidationError::LifecycleWithoutInput {
+                        node: node.path.clone(),
+                        lifecycle: *lifecycle,
+                    });
+                }
+            }
+            node::HandlerActivation::Lifecycle(lifecycle) => {
+                return Err(PlanValidationError::UnsupportedLifecycleHandler {
+                    node: node.path.clone(),
+                    lifecycle: *lifecycle,
+                });
+            }
         }
         if let Some(guard) = &handler.guard {
             expr_canonical(&guard.root)?;
@@ -1467,6 +1660,60 @@ fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
         expr::Expr::Is { expr, target } | expr::Expr::As { expr, target } => {
             narrow_target_canonical(target)?;
             expr_canonical(expr)
+        }
+    }
+}
+
+/// Proves the pre-commit routing boundary independently of the source
+/// checker. Graph and node constants have already been substituted by
+/// lowering, so every surviving path must come from the delivered envelope.
+/// `meta.sys` is intentionally absent: the receiving record mints that spine
+/// only after the route decision has been sealed by its producer.
+fn partition_bindings_available(
+    expr: &expr::Expr,
+    node: &node::Path,
+) -> Result<(), PlanValidationError> {
+    let inspect = |child| partition_bindings_available(child, node);
+    match expr {
+        expr::Expr::Literal(_) | expr::Expr::Asset(_) => Ok(()),
+        expr::Expr::Path(segments) => {
+            let available = matches!(segments.as_slice(), [root, ..] if root == "data")
+                || matches!(segments.as_slice(), [meta, zone, _, ..]
+                    if meta == "meta" && matches!(zone.as_str(), "app" | "ext"));
+            if available {
+                Ok(())
+            } else {
+                Err(PlanValidationError::InvalidPartitionBinding {
+                    node: node.clone(),
+                    path: segments.join("."),
+                })
+            }
+        }
+        expr::Expr::Unary { expr, .. }
+        | expr::Expr::Is { expr, .. }
+        | expr::Expr::As { expr, .. } => inspect(expr),
+        expr::Expr::Binary { left, right, .. } => {
+            inspect(left)?;
+            inspect(right)
+        }
+        expr::Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            inspect(cond)?;
+            inspect(then)?;
+            inspect(otherwise)
+        }
+        expr::Expr::Index { base, index } => {
+            inspect(base)?;
+            inspect(index)
+        }
+        expr::Expr::Call { args, .. } | expr::Expr::List(args) => args.iter().try_for_each(inspect),
+        expr::Expr::MapLit(fields)
+        | expr::Expr::Struct(fields)
+        | expr::Expr::Tagged { fields, .. } => {
+            fields.iter().map(|(_, value)| value).try_for_each(inspect)
         }
     }
 }

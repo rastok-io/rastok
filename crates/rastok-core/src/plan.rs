@@ -191,6 +191,8 @@ pub struct Node {
     /// Declared state cells with their boot-time defaults, in
     /// canonical order.
     pub vars: Vec<VarCell>,
+    /// Keyed-instance descriptor. Absence is the explicit singleton instance.
+    pub partition: Option<PartitionSpec>,
 }
 
 impl Node {
@@ -202,6 +204,27 @@ impl Node {
             NodeKind::Operator => None,
         }
     }
+}
+
+/// One resolved keyed-instance descriptor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartitionSpec {
+    /// Source name when the node references a graph-level declaration;
+    /// anonymous inline partitions carry none.
+    pub name: Option<String>,
+    /// Expression evaluated once against each envelope routed to this node.
+    pub key: expr::Tree,
+    /// Lifetime policy executable in this M1.4 gate.
+    pub lifetime: PartitionLifetime,
+}
+
+/// Executable lifetime policies for a partition instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartitionLifetime {
+    /// No automatic expiry.
+    Persistent,
+    /// Expire after this many nanoseconds without activity.
+    IdleTtl(i64),
 }
 
 /// A connector's planned configuration.

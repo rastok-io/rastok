@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v7: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v8: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -30,8 +30,8 @@ use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
-    Node, NodeKind, PlanValidationError, PortDecl, SemanticHash, Slot, Step,
-    ValidatedExecutionPlan, VarCell,
+    Node, NodeKind, PartitionLifetime, PartitionSpec, PlanValidationError, PortDecl, SemanticHash,
+    Slot, Step, ValidatedExecutionPlan, VarCell,
 };
 use crate::value::Value;
 
@@ -42,7 +42,7 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 /// logical type, materialized-value and expression registries together with
 /// the mandatory resolved-port table. A new format is a new version, and an
 /// old decoder refuses it by name, exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -361,7 +361,7 @@ fn node_tree(node: &Node) -> Cbor {
         NodeKind::Operator => Cbor::Uint(1),
         NodeKind::Connector(spec) => Cbor::Array(vec![Cbor::Uint(2), spec_tree(spec)]),
     };
-    Cbor::Map(BTreeMap::from([
+    let mut fields = BTreeMap::from([
         (1, Cbor::Text(node.path.to_string())),
         (2, kind),
         (
@@ -369,7 +369,27 @@ fn node_tree(node: &Node) -> Cbor {
             Cbor::Array(node.ports.iter().map(port_decl_tree).collect()),
         ),
         (4, Cbor::Array(node.vars.iter().map(var_tree).collect())),
-    ]))
+    ]);
+    if let Some(partition) = &node.partition {
+        fields.insert(5, partition_tree(partition));
+    }
+    Cbor::Map(fields)
+}
+
+fn partition_tree(partition: &PartitionSpec) -> Cbor {
+    Cbor::Array(vec![
+        partition
+            .name
+            .as_ref()
+            .map_or(Cbor::Null, |name| Cbor::Text(name.clone())),
+        tree_tree(&partition.key),
+        match partition.lifetime {
+            PartitionLifetime::Persistent => Cbor::Array(vec![Cbor::Uint(1)]),
+            PartitionLifetime::IdleTtl(nanos) => {
+                Cbor::Array(vec![Cbor::Uint(2), signed_tree(nanos)])
+            }
+        },
+    ])
 }
 
 fn spec_tree(spec: &ConnectorSpec) -> Cbor {
@@ -457,8 +477,14 @@ fn endpoint_tree(endpoint: &EndpointRef) -> Cbor {
 }
 
 fn handler_tree(handler: &Handler) -> Cbor {
-    let node::HandlerActivation::Port(port) = &handler.activation;
-    let activation = Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(port.name().to_string())]);
+    let activation = match &handler.activation {
+        node::HandlerActivation::Port(port) => {
+            Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(port.name().to_string())])
+        }
+        node::HandlerActivation::Lifecycle(lifecycle) => {
+            Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(lifecycle_tag(*lifecycle))])
+        }
+    };
     let mut pairs = BTreeMap::from([
         (1, Cbor::Uint(handler.node.index() as u64)),
         (2, activation),
@@ -468,6 +494,18 @@ fn handler_tree(handler: &Handler) -> Cbor {
     }
     pairs.insert(4, Cbor::Array(handler.body.iter().map(step_tree).collect()));
     Cbor::Map(pairs)
+}
+
+const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
+    match lifecycle {
+        node::Lifecycle::Start => 1,
+        node::Lifecycle::Stop => 2,
+        node::Lifecycle::Compensate => 3,
+        node::Lifecycle::Next => 4,
+        node::Lifecycle::Timeout => 5,
+        node::Lifecycle::Evict => 6,
+        node::Lifecycle::Recover => 7,
+    }
 }
 
 fn step_tree(step: &Step) -> Cbor {
@@ -867,6 +905,12 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             if let Some(init) = &var.init {
                 stack.push(Item::Val(init, 5));
             }
+        }
+        if let Some(partition) = &node.partition {
+            // partition array at 3, name/key/lifetime roots at 4;
+            // tree_tree's expression and type roots sit at 5.
+            max = max.max(5);
+            tree(&partition.key, 5, &mut stack);
         }
     }
     for decl in &plan.boundary {
@@ -1308,11 +1352,34 @@ fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
         .iter()
         .map(var_from)
         .collect::<Result<Vec<_>, _>>()?;
+    let partition = find(pairs, 5).map(partition_from).transpose()?;
     Ok(Node {
         path,
         kind,
         ports,
         vars,
+        partition,
+    })
+}
+
+fn partition_from(tree: &Cbor) -> Result<PartitionSpec, DecodeError> {
+    let [name, key, lifetime] = array_of(tree, "partition")? else {
+        return Err(err("partition"));
+    };
+    let name = match name {
+        Cbor::Null => None,
+        Cbor::Text(name) if !name.is_empty() => Some(name.clone()),
+        _ => return Err(err("partition name")),
+    };
+    let lifetime = match array_of(lifetime, "partition lifetime")? {
+        [Cbor::Uint(1)] => PartitionLifetime::Persistent,
+        [Cbor::Uint(2), nanos] => PartitionLifetime::IdleTtl(signed_from(nanos)?),
+        _ => return Err(err("partition lifetime")),
+    };
+    Ok(PartitionSpec {
+        name,
+        key: tree_from(key)?,
+        lifetime,
     })
 }
 
@@ -1438,6 +1505,18 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
         [Cbor::Uint(1), Cbor::Text(port)] => node::HandlerActivation::Port(
             node::Port::new(port.clone()).map_err(|_| err("activation port"))?,
         ),
+        [Cbor::Uint(2), Cbor::Uint(lifecycle)] => {
+            node::HandlerActivation::Lifecycle(match lifecycle {
+                1 => node::Lifecycle::Start,
+                2 => node::Lifecycle::Stop,
+                3 => node::Lifecycle::Compensate,
+                4 => node::Lifecycle::Next,
+                5 => node::Lifecycle::Timeout,
+                6 => node::Lifecycle::Evict,
+                7 => node::Lifecycle::Recover,
+                _ => return Err(err("activation lifecycle")),
+            })
+        }
         _ => return Err(err("activation")),
     };
     let guard = match find(pairs, 3) {
@@ -1982,6 +2061,17 @@ fn signed_tree(value: i64) -> Cbor {
     }
 }
 
+fn signed_from(value: &Cbor) -> Result<i64, DecodeError> {
+    match value {
+        Cbor::Uint(value) => i64::try_from(*value).map_err(|_| err("signed integer")),
+        Cbor::Negative(value) => {
+            let magnitude = i128::from(*value);
+            i64::try_from(-1_i128 - magnitude).map_err(|_| err("signed integer"))
+        }
+        _ => Err(err("signed integer")),
+    }
+}
+
 fn int_from(tree: &Cbor) -> Result<i64, DecodeError> {
     match tree {
         Cbor::Uint(v) => i64::try_from(*v).map_err(|_| err("integer range")),
@@ -2127,6 +2217,7 @@ mod tests {
                         ty: DataType::text_map(DataType::array(DataType::INT)),
                         init: Some(map_value.clone()),
                     }],
+                    partition: None,
                 },
                 Node {
                     path: node::Path::new(["shell"]).unwrap(),
@@ -2141,6 +2232,7 @@ mod tests {
                     }),
                     ports: vec![],
                     vars: vec![],
+                    partition: None,
                 },
             ],
             boundary: vec![
@@ -2237,6 +2329,7 @@ mod tests {
                 kind: NodeKind::Operator,
                 ports: vec![],
                 vars: vec![],
+                partition: None,
             }],
             boundary: vec![],
             edges: vec![],

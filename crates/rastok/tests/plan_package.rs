@@ -44,7 +44,7 @@ fn the_round_trip_preserves_the_plan_and_its_identity() {
 }
 
 #[test]
-fn v7_round_trips_tagged_structural_and_narrowing_expressions() {
+fn v8_round_trips_tagged_structural_and_narrowing_expressions() {
     let sources = [
         r#"
 type Failure = union { Broken { message: text } }
@@ -84,12 +84,56 @@ graph g : App {
             &[source],
             &Registry::try_m0().expect("the standard catalogue holds"),
         )
-        .expect("a valid v7 program");
+        .expect("a valid v8 program");
         let bytes = plan::encode(&compilation.plan, &compilation.hash);
-        let (decoded, hash) = plan::decode(&bytes).expect("the v7 package opens");
+        let (decoded, hash) = plan::decode(&bytes).expect("the v8 package opens");
         assert_eq!(decoded, compilation.plan);
         assert_eq!(hash, compilation.hash);
     }
+}
+
+#[test]
+fn v8_round_trips_the_resolved_partition_contract() {
+    let source = r#"
+graph g : App {
+  input in: text
+  output out: text
+  partition tenant { key = data ; lifetime = duration("30s") }
+  operator relay per tenant {
+    input in: text
+    output out: text
+    var visits: int = 0
+    on start { visits = visits + 1 }
+    on in { out = . }
+    on stop { visits = visits + 1 }
+  }
+  . -> relay -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the keyed program checks");
+    let before = compilation.plan.plan().nodes[0]
+        .partition
+        .as_ref()
+        .expect("the lowered node is keyed");
+    assert_eq!(before.name.as_deref(), Some("tenant"));
+    assert_eq!(before.key.ty, rastok::datatype::DataType::Text);
+    assert!(matches!(
+        before.lifetime,
+        rastok::plan::PartitionLifetime::IdleTtl(30_000_000_000)
+    ));
+    assert!(compilation.plan.plan().handlers.iter().any(|handler| {
+        handler.activation
+            == rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Start)
+    }));
+
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, hash) = plan::decode(&bytes).expect("the v8 package opens");
+    assert_eq!(decoded, compilation.plan);
+    assert_eq!(hash, compilation.hash);
 }
 
 #[test]
@@ -146,7 +190,7 @@ fn every_refusal_is_typed() {
     // v3 the empty-struct literal, v4 the three-zone reform
     // (D-2026-08-10-9), v5 the `decimal(…)` call (D-2026-08-13-1);
     // each is refused by number, never migrated silently.
-    for draft in [2u64, 3, 4, 5, 6] {
+    for draft in [2u64, 3, 4, 5, 6, 7] {
         let retired = reframe(&bytes, |pairs| {
             pairs.insert(1, Cbor::Uint(draft));
         });
@@ -311,11 +355,11 @@ fn a_non_canonical_envelope_refuses() {
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,
     // because the canonical encoder itself refuses to write an
-    // unsorted map: entry (1, uint 6) is bytes 5..7, entry
+    // unsorted map: entry (1, uint 8) is bytes 5..7, entry
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x07],
+        &[0xa4, 0x01, 0x08],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -330,16 +374,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 7 written on two
+    // A non-minimal integer in the header: uint 8 written on two
     // bytes (0x18 0x07) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x07],
+        &[0xa4, 0x01, 0x08],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x07]);
+    widened.splice(6..7, [0x18, 0x08]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
