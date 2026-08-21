@@ -306,6 +306,44 @@ impl Mailboxes {
             })
     }
 
+    /// The next canonically ordered unclaimed mailbox identity after
+    /// `after`, when its instance is runnable. Returning one key at a time
+    /// lets the VM skip an incomplete join without allocating a snapshot of
+    /// every mailbox on the ordinary one-delivery hot path.
+    pub(crate) fn next_runnable_key(
+        &self,
+        after: Option<&(Slot, InstanceRef)>,
+        ready: impl Fn(Slot, &InstanceRef) -> bool,
+    ) -> Option<(Slot, InstanceRef, Delivery)> {
+        let accepted = |(key, queue): (&(Slot, InstanceRef), &VecDeque<Delivery>)| {
+            let (slot, instance) = key;
+            !queue.is_empty()
+                && !self.claimed.contains(&(*slot, instance.clone()))
+                && ready(*slot, instance)
+        };
+        let found = match after {
+            Some(after) => self
+                .queues
+                .range((
+                    core::ops::Bound::Excluded(after.clone()),
+                    core::ops::Bound::Unbounded,
+                ))
+                .find(|entry| accepted(*entry)),
+            None => self.queues.iter().find(|entry| accepted(*entry)),
+        };
+        found.and_then(|((slot, instance), queue)| {
+            queue
+                .front()
+                .map(|delivery| (*slot, instance.clone(), delivery.clone()))
+        })
+    }
+
+    /// Immutable FIFO contents for activation selection. The returned queue
+    /// is only a reservation view; commit paths remove by full cursor/id.
+    pub(crate) fn queued(&self, slot: Slot, instance: &InstanceRef) -> Option<&VecDeque<Delivery>> {
+        self.queues.get(&(slot, instance.clone()))
+    }
+
     /// Finds one specific queued delivery by its full reference —
     /// the canonical edge it traveled AND its envelope id — without
     /// removing it: the reservation half of the expired-in-queue
@@ -490,6 +528,15 @@ pub(crate) struct LifecycleFiring<'a> {
     pub(crate) cause: &'a Envelope,
 }
 
+/// One complete join candidate in declared-port order. The trigger stays
+/// with the tuple because it owns causal identity even when it is not the
+/// first declared input.
+pub(crate) struct JoinCandidate<'a> {
+    pub(crate) activation: &'a node::HandlerActivation,
+    pub(crate) trigger: &'a Delivery,
+    pub(crate) inputs: &'a [Delivery],
+}
+
 /// Atomic node-transaction executor: scratch isolation while a
 /// handler runs, everything or nothing after.
 #[derive(Debug)]
@@ -561,7 +608,158 @@ impl<'plan> TransactionExecutor<'plan> {
             consumed,
             state,
             instance_values,
+            &BTreeMap::new(),
+            &[],
         )
+    }
+
+    /// Tests a join candidate set without consuming it. `where` refines the
+    /// retained candidates, so a false verdict must not manufacture a cursor
+    /// advance. Evaluation is pure and sees the same merged metadata and
+    /// named-envelope bindings as the eventual firing.
+    pub(crate) fn join_matches(
+        &self,
+        slot: Slot,
+        candidate: JoinCandidate<'_>,
+        state: &BTreeMap<String, Value>,
+        instance_values: &BTreeMap<String, Value>,
+    ) -> Result<bool, Fault> {
+        let Some(handler) =
+            self.plan.handlers.iter().find(|handler| {
+                handler.node == slot && &handler.activation == candidate.activation
+            })
+        else {
+            return Err(Fault::MissingHandler);
+        };
+        let Some(guard) = &handler.guard else {
+            return Ok(true);
+        };
+        let (input, extra) = join_context(self.plan.plan(), candidate.trigger, candidate.inputs);
+        let mut base: BTreeMap<String, expr::EvalValue> = state
+            .iter()
+            .map(|(name, value)| (name.clone(), expr::EvalValue::from(value.clone())))
+            .collect();
+        for (name, value) in instance_values {
+            base.insert(name.clone(), expr::EvalValue::from(value.clone()));
+        }
+        base.extend(extra);
+        base.insert(
+            String::from("meta"),
+            expr::EvalValue::from(meta_value(input.meta())),
+        );
+        let payloads = PayloadSlots::new(&input, candidate.inputs);
+        let verdict = resolve_payload_with_slots(
+            eval_with_slots(guard, &base, &payloads, &self.plan.assets)?,
+            &payloads,
+        )?;
+        match verdict {
+            Value::Bool(value) => Ok(value),
+            other => Err(Fault::Eval(expr::Error {
+                kind: expr::ErrorKind::Evaluation,
+                message: format!("the guard evaluated to {other:?}"),
+            })),
+        }
+    }
+
+    /// Fires one presence-completing join. Inputs are in the handler's
+    /// declared port order; the trigger is the member that arrived last in
+    /// the owning mailbox. Every cursor and contribution id commits in the
+    /// same transaction.
+    pub(crate) fn fire_join(
+        &self,
+        slot: Slot,
+        instance: &InstanceRef,
+        candidate: JoinCandidate<'_>,
+        state: &BTreeMap<String, Value>,
+        instance_values: &BTreeMap<String, Value>,
+    ) -> Result<TransactionOutcome, Fault> {
+        let (input, extra) = join_context(self.plan.plan(), candidate.trigger, candidate.inputs);
+        let consumed = candidate
+            .inputs
+            .iter()
+            .map(|delivery| ConsumedPosition {
+                edge: delivery.edge.clone(),
+                source: delivery.source_instance.clone(),
+                seq: delivery.seq,
+            })
+            .collect();
+        let mut outcome = self.fire_activation(
+            slot,
+            instance,
+            candidate.activation,
+            &node::Trigger::Port(candidate.trigger.port.clone()),
+            &input,
+            None,
+            None,
+            consumed,
+            state,
+            instance_values,
+            &extra,
+            candidate.inputs,
+        )?;
+        outcome.record.join_inputs = candidate
+            .inputs
+            .iter()
+            .map(|delivery| delivery.envelope.meta().sys().id())
+            .collect();
+        Ok(outcome)
+    }
+
+    /// Constructs the explicit typed outcome of one retained join candidate
+    /// being evicted. It is an ordinary emission on the declared `expired`
+    /// port and consumes the candidate cursor atomically.
+    pub(crate) fn join_expired(
+        &self,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+    ) -> Result<TransactionOutcome, Fault> {
+        let Some(node) = self.plan.nodes.get(slot.index()) else {
+            return Err(Fault::UnknownSlot(slot));
+        };
+        let port = node::Port::new("expired")
+            .map_err(|error| Fault::Unrepresentable(error.to_string()))?;
+        let trigger = node::Trigger::Lifecycle(node::Lifecycle::Evict);
+        let parent = delivery.envelope.meta().sys();
+        let id = ids::emission_id(&node.path, &trigger, parent.id(), &port, 0);
+        let value = Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+            case: String::from("JoinExpired"),
+            payload: vec![],
+        }));
+        let from = crate::plan::EndpointRef {
+            node: Some(slot),
+            port: port.clone(),
+        };
+        crossing_pins_hold(self.plan, &from, &value).map_err(PinViolation::into_fault)?;
+        let mut ext = delivery.envelope.meta().ext().clone();
+        ext.remove("content_type");
+        let meta = Meta::new(MetaSys::emission(id, parent, self.graph_version.0))
+            .with_app(delivery.envelope.meta().app().clone())
+            .with_ext(ext);
+        Ok(TransactionOutcome {
+            record: TransactionRecord {
+                owner_path: crate::plan::OwnerPath::from(&node.path),
+                instance: instance.clone(),
+                parent_instance: None,
+                close_scope: None,
+                trigger,
+                cause: Some(delivery.envelope.meta().sys().id()),
+                consumed: vec![ConsumedPosition {
+                    edge: delivery.edge.clone(),
+                    source: delivery.source_instance.clone(),
+                    seq: delivery.seq,
+                }],
+                join_inputs: vec![],
+                state_delta: vec![],
+                emissions: vec![Emission {
+                    port,
+                    index: 0,
+                    envelope: Envelope::new(meta, Data::materialized(value)),
+                }],
+                routes: vec![],
+                timers: vec![],
+            },
+        })
     }
 
     /// Fires one instance lifecycle transaction. The causal envelope is
@@ -592,6 +790,8 @@ impl<'plan> TransactionExecutor<'plan> {
             vec![],
             state,
             instance_values,
+            &BTreeMap::new(),
+            &[],
         )
     }
 
@@ -608,6 +808,8 @@ impl<'plan> TransactionExecutor<'plan> {
         consumed: Vec<ConsumedPosition>,
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
+        extra_bindings: &BTreeMap<String, expr::EvalValue>,
+        named_inputs: &[Delivery],
     ) -> Result<TransactionOutcome, Fault> {
         // The validated plan proves its own references, not the caller's
         // slot — verified, refused typed.
@@ -620,7 +822,10 @@ impl<'plan> TransactionExecutor<'plan> {
             .iter()
             .find(|handler| handler.node == slot && &handler.activation == activation);
         let Some(handler) = handler else {
-            if matches!(activation, node::HandlerActivation::Port(_)) {
+            if matches!(
+                activation,
+                node::HandlerActivation::Port(_) | node::HandlerActivation::Join { .. }
+            ) {
                 return Err(Fault::MissingHandler);
             }
             return Ok(TransactionOutcome {
@@ -632,6 +837,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     trigger: trigger.clone(),
                     cause,
                     consumed,
+                    join_inputs: vec![],
                     state_delta: vec![],
                     emissions: vec![],
                     routes: vec![],
@@ -654,6 +860,9 @@ impl<'plan> TransactionExecutor<'plan> {
             for (name, value) in instance_values {
                 map.insert(name.clone(), expr::EvalValue::from(value.clone()));
             }
+            for (name, value) in extra_bindings {
+                map.insert(name.clone(), value.clone());
+            }
             for (name, value) in lets {
                 map.insert(name.clone(), value.clone());
             }
@@ -668,11 +877,11 @@ impl<'plan> TransactionExecutor<'plan> {
         // an identity emission, or a short-circuited branch never
         // forces an opaque payload to decode (envelope.md §5:
         // opacity is a property, not an ambush).
-        let data_slot = DataSlot::new(input.data());
+        let payloads = PayloadSlots::new(input, named_inputs);
         if let Some(guard) = &handler.guard {
-            let verdict = resolve_payload(
-                eval_lazy(guard, &base(&scratch, &lets), &data_slot, &self.plan.assets)?,
-                &data_slot,
+            let verdict = resolve_payload_with_slots(
+                eval_with_slots(guard, &base(&scratch, &lets), &payloads, &self.plan.assets)?,
+                &payloads,
             )?;
             match verdict {
                 Value::Bool(true) => {}
@@ -687,6 +896,7 @@ impl<'plan> TransactionExecutor<'plan> {
                             trigger: trigger.clone(),
                             cause,
                             consumed,
+                            join_inputs: vec![],
                             state_delta: vec![],
                             emissions: vec![],
                             routes: vec![],
@@ -706,17 +916,26 @@ impl<'plan> TransactionExecutor<'plan> {
         for step in &handler.body {
             match step {
                 Step::Let { name, expr } => {
-                    let value =
-                        eval_lazy(expr, &base(&scratch, &lets), &data_slot, &self.plan.assets)?;
+                    let value = eval_with_slots(
+                        expr,
+                        &base(&scratch, &lets),
+                        &payloads,
+                        &self.plan.assets,
+                    )?;
                     lets.insert(name.clone(), value);
                 }
                 Step::SetVar { name, expr } => {
                     // A state write consumes the value — the store
                     // outlives the transaction, so the witness
                     // resolves here.
-                    let value = resolve_payload(
-                        eval_lazy(expr, &base(&scratch, &lets), &data_slot, &self.plan.assets)?,
-                        &data_slot,
+                    let value = resolve_payload_with_slots(
+                        eval_with_slots(
+                            expr,
+                            &base(&scratch, &lets),
+                            &payloads,
+                            &self.plan.assets,
+                        )?,
+                        &payloads,
                     )?;
                     value.validate().map_err(Fault::InvalidValue)?;
                     // A state cell holds its DECLARED type at every
@@ -739,7 +958,7 @@ impl<'plan> TransactionExecutor<'plan> {
                         value,
                         input,
                         &base(&scratch, &lets),
-                        &data_slot,
+                        &payloads,
                         self.plan,
                     )?;
                     if let Some(built) = built {
@@ -752,9 +971,9 @@ impl<'plan> TransactionExecutor<'plan> {
                             index,
                         );
                         let sys = MetaSys::emission(id, input.meta().sys(), self.graph_version.0);
-                        // The content-type hint: an explicit write
-                        // wins; unchanged content keeps the input's;
-                        // rebuilt content carries none.
+                        // The content-type hint: an explicit write wins; a
+                        // carried payload keeps that source's hint; rebuilt
+                        // content carries none.
                         // Every pin the content must cross — the
                         // emitting port's own and each fan-out
                         // target's — is judged HERE, before the
@@ -768,12 +987,12 @@ impl<'plan> TransactionExecutor<'plan> {
                             port: port.clone(),
                         };
                         let data = match built.data {
-                            BuiltData::Unchanged => {
-                                if let Data::Materialized(current) = input.data() {
+                            BuiltData::Carried(data) => {
+                                if let Data::Materialized(current) = &data {
                                     crossing_pins_hold(self.plan, &from, current)
                                         .map_err(PinViolation::into_fault)?;
                                 }
-                                input.data().clone()
+                                data
                             }
                             BuiltData::Value(value) => {
                                 crossing_pins_hold(self.plan, &from, &value)
@@ -811,6 +1030,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 trigger: trigger.clone(),
                 cause,
                 consumed,
+                join_inputs: vec![],
                 state_delta,
                 emissions,
                 routes: vec![],
@@ -842,6 +1062,25 @@ impl<'plan> TransactionExecutor<'plan> {
                 if budgeted {
                     timers.push((
                         crate::journal::timer_kind::CALL_TIMEOUT,
+                        ids::delivery_ref(
+                            &self.plan.edge_text(edge),
+                            emission.envelope.meta().sys().id(),
+                        ),
+                    ));
+                }
+                let join_within = self.plan.handlers.iter().find_map(|handler| {
+                    (handler.node == target)
+                        .then_some(&handler.activation)
+                        .and_then(|activation| match activation {
+                            node::HandlerActivation::Join {
+                                ports, within_ns, ..
+                            } if ports.contains(&to.port) => *within_ns,
+                            _ => None,
+                        })
+                });
+                if join_within.is_some() {
+                    timers.push((
+                        crate::journal::timer_kind::JOIN_WITHIN,
                         ids::delivery_ref(
                             &self.plan.edge_text(edge),
                             emission.envelope.meta().sys().id(),
@@ -922,6 +1161,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     source: delivery.source_instance.clone(),
                     seq: delivery.seq,
                 }],
+                join_inputs: vec![],
                 state_delta: vec![],
                 timers: vec![],
                 emissions,
@@ -945,11 +1185,9 @@ impl<'plan> TransactionExecutor<'plan> {
     }
 }
 
-/// What one emission carries out of its builder. `data` stays
-/// [`BuiltData::Unchanged`] when no payload write touched it — the
-/// original representation (encoded bytes included) and its
-/// content-type hint survive, per the "no structural read, no
-/// transcode" rule.
+/// What one emission carries out of its builder. A carried payload keeps its
+/// original representation (encoded bytes included) and content-type hint,
+/// per the "no structural read, no transcode" rule.
 pub(crate) struct Built {
     /// The built payload.
     pub(crate) data: BuiltData,
@@ -962,8 +1200,8 @@ pub(crate) struct Built {
 
 /// A builder's payload verdict.
 pub(crate) enum BuiltData {
-    /// No payload write ran: the input's representation ships as-is.
-    Unchanged,
+    /// One input's physical representation ships as-is.
+    Carried(Data),
     /// The payload was (re)built as one materialized core value.
     Value(Value),
 }
@@ -984,7 +1222,7 @@ fn emitted_content(
     emission: &PlanEmission,
     input: &Envelope,
     base: &BTreeMap<String, expr::EvalValue>,
-    slot: &DataSlot<'_>,
+    slots: &PayloadSlots<'_>,
     plan: &crate::plan::ExecutionPlan,
 ) -> Result<Option<Built>, Fault> {
     let assets: &[crate::plan::AssetBlob] = &plan.assets;
@@ -992,20 +1230,47 @@ fn emitted_content(
     // the payload, DERIVE `content_type` from that decision (a kept
     // witness keeps it, fresh data strikes it), then let explicit
     // writes win.
-    let inherited = |data: BuiltData, fresh: bool| {
+    let fresh = |data: Value| {
         let mut ext = input.meta().ext().clone();
-        if fresh {
-            ext.remove("content_type");
-        }
+        ext.remove("content_type");
         Built {
-            data,
+            data: BuiltData::Value(data),
             app: input.meta().app().clone(),
             ext,
         }
     };
+    let carried = |reference: &expr::PayloadRef| -> Result<Built, Fault> {
+        let source = slots.source(reference).ok_or_else(|| {
+            Fault::Eval(expr::Error {
+                kind: expr::ErrorKind::Evaluation,
+                message: format!("payload {reference:?} is not bound"),
+            })
+        })?;
+        let ext = match reference {
+            // The ordinary single-input path already has exactly the source
+            // metadata. Preserve it without a remove/reinsert cycle on every
+            // identity relay.
+            expr::PayloadRef::Input => input.meta().ext().clone(),
+            expr::PayloadRef::Named(_) => {
+                let mut ext = input.meta().ext().clone();
+                ext.remove("content_type");
+                if let Some(content_type) =
+                    source.meta.and_then(|meta| meta.ext().get("content_type"))
+                {
+                    ext.insert(String::from("content_type"), content_type.clone());
+                }
+                ext
+            }
+        };
+        Ok(Built {
+            data: BuiltData::Carried(source.data.data.clone()),
+            app: input.meta().app().clone(),
+            ext,
+        })
+    };
     match emission {
         PlanEmission::Nothing => Ok(None),
-        PlanEmission::Identity => Ok(Some(inherited(BuiltData::Unchanged, false))),
+        PlanEmission::Identity => Ok(Some(carried(&expr::PayloadRef::Input)?)),
         PlanEmission::Data(expr) => {
             // No spelling-dependent special case, in EITHER
             // direction: the evaluator preserves the struct and
@@ -1014,12 +1279,27 @@ fn emitted_content(
             // taken arm of a ternary — ships the REPRESENTATION,
             // content type included; anything else is FRESH data and
             // strikes it (D-2026-08-10-4).
-            let value = eval_lazy(expr, base, slot, assets)?;
-            if matches!(value, expr::EvalValue::Payload) {
-                return Ok(Some(inherited(BuiltData::Unchanged, false)));
+            // `data` is the dominant relay form. Its canonical tree already
+            // denotes the input witness, so avoid entering the general
+            // evaluator unless a (defensively supported) local binding
+            // shadows that name. This preserves the physical representation
+            // and keeps the ordinary embedded relay inside its measured
+            // budget even though joins add independently lazy witnesses.
+            let direct_input = matches!(
+                &expr.root,
+                expr::Expr::Path(path)
+                    if path.len() == 1 && path[0] == "data" && !base.contains_key("data")
+            );
+            let value = if direct_input {
+                expr::EvalValue::Payload(expr::PayloadRef::Input)
+            } else {
+                eval_with_slots(expr, base, slots, assets)?
+            };
+            if let expr::EvalValue::Payload(reference) = value {
+                return Ok(Some(carried(&reference)?));
             }
-            let value = resolve_payload(value, slot)?;
-            Ok(Some(inherited(BuiltData::Value(value), true)))
+            let value = resolve_payload_with_slots(value, slots)?;
+            Ok(Some(fresh(value)))
         }
         PlanEmission::Patch(writes) | PlanEmission::Replace(writes) => {
             let replace = matches!(emission, PlanEmission::Replace(_));
@@ -1041,19 +1321,25 @@ fn emitted_content(
             // carries (`data = "temp"` then `data = data` keeps).
             let carry = if let Some(last) = data_writes.last() {
                 let write = &writes[*last];
-                matches!(&write.target, envelope::WriteTarget::Data(path) if path.is_empty())
-                    && matches!(
-                        eval_lazy(&write.expr, base, slot, assets)?,
-                        expr::EvalValue::Payload
-                    )
+                if matches!(&write.target, envelope::WriteTarget::Data(path) if path.is_empty()) {
+                    match eval_with_slots(&write.expr, base, slots, assets)? {
+                        expr::EvalValue::Payload(reference) => Some(reference),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
             } else {
-                false
+                None
             };
-            // Fresh iff the payload changes: any data write (patch)
-            // or the fresh-build form (replace) — except the carry.
-            let fresh = !carry && (replace || !data_writes.is_empty());
-            let mut built = inherited(BuiltData::Unchanged, fresh);
-            let mut data: Option<envelope::Value> = if replace && !carry {
+            let mut built = if let Some(reference) = &carry {
+                carried(reference)?
+            } else if replace || !data_writes.is_empty() {
+                fresh(envelope::Value::Struct(Vec::new()))
+            } else {
+                carried(&expr::PayloadRef::Input)?
+            };
+            let mut data: Option<envelope::Value> = if replace && carry.is_none() {
                 // A fresh STRUCT — the physical form of a braced
                 // record (D-2026-08-09-1).
                 Some(envelope::Value::Struct(Vec::new()))
@@ -1061,11 +1347,14 @@ fn emitted_content(
                 None
             };
             for write in writes {
-                if carry && matches!(&write.target, envelope::WriteTarget::Data(_)) {
+                if carry.is_some() && matches!(&write.target, envelope::WriteTarget::Data(_)) {
                     // The carried representation IS the payload.
                     continue;
                 }
-                let value = resolve_payload(eval_lazy(&write.expr, base, slot, assets)?, slot)?;
+                let value = resolve_payload_with_slots(
+                    eval_with_slots(&write.expr, base, slots, assets)?,
+                    slots,
+                )?;
                 match &write.target {
                     envelope::WriteTarget::Data(path) => {
                         // The fold base is a DIRECT demand — a
@@ -1076,7 +1365,7 @@ fn emitted_content(
                             Some(current) => current,
                             None => data.insert(match input.data() {
                                 Data::Materialized(value) => value.clone(),
-                                _ => slot.materialize()?,
+                                _ => slots.materialize(&expr::PayloadRef::Input)?,
                             }),
                         };
                         apply_struct_write(current, path, value);
@@ -1263,6 +1552,13 @@ impl<'a> DataSlot<'a> {
     /// # Errors
     /// The materialization fault, if the payload cannot decode.
     pub fn materialize(&self) -> Result<Value, Fault> {
+        // A materialized payload is already the cache. Cloning it into the
+        // transaction-local cell before cloning it back out only duplicates
+        // allocations on the ordinary typed relay; the cell is needed solely
+        // to memoize an encoded decode.
+        if let Data::Materialized(value) = self.data {
+            return Ok(value.clone());
+        }
         if let Some(value) = self.cache.borrow().as_ref() {
             return Ok(value.clone());
         }
@@ -1289,6 +1585,77 @@ impl<'a> DataSlot<'a> {
     }
 }
 
+#[derive(Debug)]
+struct PayloadSource<'a> {
+    data: DataSlot<'a>,
+    meta: Option<&'a Meta>,
+}
+
+/// All lazy payloads visible during one transaction. An ordinary handler has
+/// only [`expr::PayloadRef::Input`]; a join adds one independently cached slot
+/// per declared input port. This is the runtime half of the rule that reading
+/// one join leg must not decode every other leg.
+#[derive(Debug)]
+struct PayloadSlots<'a> {
+    input: PayloadSource<'a>,
+    named: BTreeMap<String, PayloadSource<'a>>,
+}
+
+impl<'a> PayloadSlots<'a> {
+    fn new(input: &'a Envelope, named: &'a [Delivery]) -> Self {
+        let named = named
+            .iter()
+            .map(|delivery| {
+                (
+                    delivery.port.name().to_string(),
+                    PayloadSource {
+                        data: DataSlot::new(delivery.envelope.data()),
+                        meta: Some(delivery.envelope.meta()),
+                    },
+                )
+            })
+            .collect();
+        Self {
+            input: PayloadSource {
+                data: DataSlot::new(input.data()),
+                meta: Some(input.meta()),
+            },
+            named,
+        }
+    }
+
+    fn source(&self, reference: &expr::PayloadRef) -> Option<&PayloadSource<'a>> {
+        match reference {
+            expr::PayloadRef::Input => Some(&self.input),
+            expr::PayloadRef::Named(name) => self.named.get(name),
+        }
+    }
+
+    fn materialize(&self, reference: &expr::PayloadRef) -> Result<Value, Fault> {
+        self.source(reference)
+            .ok_or_else(|| {
+                Fault::Eval(expr::Error {
+                    kind: expr::ErrorKind::Evaluation,
+                    message: format!("payload {reference:?} is not bound"),
+                })
+            })?
+            .data
+            .materialize()
+    }
+
+    fn demand(&self, reference: &expr::PayloadRef) -> Option<expr::EvalValue> {
+        self.source(reference)?.data.demand()
+    }
+
+    fn take_fault(&self) -> Option<Fault> {
+        self.input.data.take_fault().or_else(|| {
+            self.named
+                .values()
+                .find_map(|source| source.data.take_fault())
+        })
+    }
+}
+
 /// Bindings backed by a base map plus the lazy `data` slot. Exact
 /// name only: dotted lookups (`data.x`) fall through to the root,
 /// which is where the demand lands.
@@ -1309,13 +1676,51 @@ impl expr::Bindings for LazyBindings<'_> {
         }
         // Resolving the NAME is not yet inspecting the structure:
         // the witness carries; `Bindings::payload` materializes.
-        (name == "data").then_some(expr::EvalValue::Payload)
+        (name == "data").then_some(expr::EvalValue::Payload(expr::PayloadRef::Input))
     }
 
-    fn payload(&self) -> Result<expr::EvalValue, expr::Error> {
+    fn payload(&self, reference: &expr::PayloadRef) -> Result<expr::EvalValue, expr::Error> {
+        if !matches!(reference, expr::PayloadRef::Input) {
+            return Err(expr::Error {
+                kind: expr::ErrorKind::Evaluation,
+                message: format!("payload {reference:?} is not bound"),
+            });
+        }
         self.data.demand().ok_or_else(|| expr::Error {
             kind: expr::ErrorKind::Evaluation,
             message: String::from("the payload could not materialize"),
+        })
+    }
+
+    fn asset(&self, index: u32) -> Result<expr::EvalValue, expr::Error> {
+        self.assets
+            .get(index as usize)
+            .map(|blob| expr::EvalValue::Bytes(blob.bytes.clone()))
+            .ok_or_else(|| expr::Error {
+                kind: expr::ErrorKind::Evaluation,
+                message: format!("asset {index} is outside the validated table"),
+            })
+    }
+}
+
+#[derive(Debug)]
+struct MultiLazyBindings<'a> {
+    base: &'a BTreeMap<String, expr::EvalValue>,
+    payloads: &'a PayloadSlots<'a>,
+    assets: &'a [crate::plan::AssetBlob],
+}
+
+impl expr::Bindings for MultiLazyBindings<'_> {
+    fn get(&self, name: &str) -> Option<expr::EvalValue> {
+        self.base.get(name).cloned().or_else(|| {
+            (name == "data").then_some(expr::EvalValue::Payload(expr::PayloadRef::Input))
+        })
+    }
+
+    fn payload(&self, reference: &expr::PayloadRef) -> Result<expr::EvalValue, expr::Error> {
+        self.payloads.demand(reference).ok_or_else(|| expr::Error {
+            kind: expr::ErrorKind::Evaluation,
+            message: format!("payload {reference:?} could not materialize"),
         })
     }
 
@@ -1337,9 +1742,102 @@ impl expr::Bindings for LazyBindings<'_> {
 ///
 /// # Errors
 /// The materialization fault, if the payload cannot decode.
+fn resolve_payload_with_slots(
+    value: expr::EvalValue,
+    slots: &PayloadSlots<'_>,
+) -> Result<Value, Fault> {
+    Ok(match value {
+        expr::EvalValue::Payload(reference) => slots.materialize(&reference)?,
+        expr::EvalValue::List(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| resolve_payload_with_slots(item, slots))
+                .collect::<Result<_, _>>()?,
+        ),
+        expr::EvalValue::Map(map) => {
+            let mut deep = BTreeMap::new();
+            for (key, value) in map {
+                deep.insert(key, resolve_payload_with_slots(value, slots)?);
+            }
+            Value::Map(deep)
+        }
+        expr::EvalValue::KeyedMap(entries) => Value::KeyedMap(
+            entries
+                .into_iter()
+                .map(|(key, value)| {
+                    Ok((
+                        resolve_payload_with_slots(key, slots)?,
+                        resolve_payload_with_slots(value, slots)?,
+                    ))
+                })
+                .collect::<Result<_, Fault>>()?,
+        ),
+        expr::EvalValue::Struct(fields) => Value::Struct(
+            fields
+                .into_iter()
+                .map(|(name, value)| Ok((name, resolve_payload_with_slots(value, slots)?)))
+                .collect::<Result<_, _>>()?,
+        ),
+        expr::EvalValue::StructuralUnion { branch, value } => Value::StructuralUnion {
+            branch,
+            value: Box::new(resolve_payload_with_slots(*value, slots)?),
+        },
+        expr::EvalValue::TaggedUnion { case, payload } => {
+            Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+                case,
+                payload: payload
+                    .into_iter()
+                    .map(|(name, value)| Ok((name, resolve_payload_with_slots(value, slots)?)))
+                    .collect::<Result<_, Fault>>()?,
+            }))
+        }
+        other => other.into_value().map_err(Fault::Eval)?,
+    })
+}
+
+/// Evaluates against the lazy binding. A materialization fault takes
+/// precedence over whatever the evaluator made of the missing
+/// binding: a demanded decode that failed is the transaction's
+/// fault, even if the expression could have absorbed an unbound
+/// name.
+///
+/// # Errors
+/// The materialization fault, or the evaluation's own.
+fn eval_with_slots(
+    tree: &expr::Tree,
+    base: &BTreeMap<String, expr::EvalValue>,
+    slots: &PayloadSlots<'_>,
+    assets: &[crate::plan::AssetBlob],
+) -> Result<expr::EvalValue, Fault> {
+    if slots.named.is_empty() {
+        return eval_lazy(tree, base, &slots.input.data, assets);
+    }
+    let env = MultiLazyBindings {
+        base,
+        payloads: slots,
+        assets,
+    };
+    let result = expr::eval(tree, &env).map_err(Fault::Eval);
+    if let Some(fault) = slots.take_fault() {
+        return Err(fault);
+    }
+    result
+}
+
+/// Resolves the ordinary single-input payload witness in a value. Join
+/// execution uses the internal multi-slot twin so named inputs remain lazy.
+///
+/// # Errors
+/// The materialization fault, if the payload cannot decode.
 pub fn resolve_payload(value: expr::EvalValue, slot: &DataSlot<'_>) -> Result<Value, Fault> {
     Ok(match value {
-        expr::EvalValue::Payload => slot.materialize()?,
+        expr::EvalValue::Payload(expr::PayloadRef::Input) => slot.materialize()?,
+        expr::EvalValue::Payload(reference) => {
+            return Err(Fault::Eval(expr::Error {
+                kind: expr::ErrorKind::Evaluation,
+                message: format!("payload {reference:?} is not bound"),
+            }));
+        }
         expr::EvalValue::List(items) => Value::Array(
             items
                 .into_iter()
@@ -1384,14 +1882,10 @@ pub fn resolve_payload(value: expr::EvalValue, slot: &DataSlot<'_>) -> Result<Va
     })
 }
 
-/// Evaluates against the lazy binding. A materialization fault takes
-/// precedence over whatever the evaluator made of the missing
-/// binding: a demanded decode that failed is the transaction's
-/// fault, even if the expression could have absorbed an unbound
-/// name.
+/// Evaluates against one ordinary lazy `data` binding.
 ///
 /// # Errors
-/// The materialization fault, or the evaluation's own.
+/// The materialization fault, or the expression evaluator's own error.
 pub fn eval_lazy(
     tree: &expr::Tree,
     base: &BTreeMap<String, expr::EvalValue>,
@@ -1433,6 +1927,54 @@ fn decode_encoded(encoding: envelope::Encoding, bytes: &[u8]) -> Result<envelope
             "{other} decoding is not in this build"
         ))),
     }
+}
+
+/// Builds the one join evaluation context. Writable metadata uses
+/// CommonOrAbsent across every contribution; the triggering envelope keeps
+/// the runtime spine and payload solely as the causal base. Each declared
+/// port also receives a complete named envelope binding.
+fn join_context(
+    plan: &crate::plan::ExecutionPlan,
+    trigger: &Delivery,
+    inputs: &[Delivery],
+) -> (Envelope, BTreeMap<String, expr::EvalValue>) {
+    let common = |zone: fn(&Meta) -> &envelope::Namespace, fields: &[(String, DataType)]| {
+        let mut values = envelope::Namespace::new();
+        for (field, _) in fields {
+            let mut present = inputs
+                .iter()
+                .filter_map(|delivery| zone(delivery.envelope.meta()).get(field));
+            let Some(value) = present.next() else {
+                continue;
+            };
+            if present.all(|candidate| candidate == value) {
+                values.insert(field.clone(), value.clone());
+            }
+        }
+        values
+    };
+    let meta = Meta::new(trigger.envelope.meta().sys().clone())
+        .with_app(common(Meta::app, &plan.app_schema))
+        // `content_type` is deliberately implicit in the ext vocabulary and
+        // excluded from join fusion: a later payload decision derives it.
+        .with_ext(common(Meta::ext, &plan.ext_schema));
+    let input = Envelope::new(meta, trigger.envelope.data().clone());
+    let mut bindings = BTreeMap::new();
+    for delivery in inputs {
+        let name = delivery.port.name();
+        let meta = meta_value(delivery.envelope.meta());
+        let payload = expr::EvalValue::Payload(expr::PayloadRef::Named(name.to_string()));
+        bindings.insert(format!("{name}.data"), payload.clone());
+        bindings.insert(format!("{name}.meta"), expr::EvalValue::from(meta.clone()));
+        bindings.insert(
+            name.to_string(),
+            expr::EvalValue::Struct(alloc::vec![
+                (String::from("data"), payload),
+                (String::from("meta"), expr::EvalValue::from(meta)),
+            ]),
+        );
+    }
+    (input, bindings)
 }
 
 /// The handler-facing logical view of an envelope's metadata: the full
@@ -1698,7 +2240,10 @@ mod payload_resolution_tests {
         let slot = DataSlot::new(&data);
         let value = expr::EvalValue::TaggedUnion {
             case: String::from("Done"),
-            payload: vec![(String::from("value"), expr::EvalValue::Payload)],
+            payload: vec![(
+                String::from("value"),
+                expr::EvalValue::Payload(expr::PayloadRef::Input),
+            )],
         };
 
         assert_eq!(

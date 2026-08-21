@@ -1,9 +1,10 @@
 # Reference simulation 2 — two-port join, with a `JoinExpired` eviction
 
-> **Status : Reference derivation — not yet executable.** The expected trace
-> is derived by hand from [envelope.md](../../spec/envelope.md) and
-> [execution-model.md](../../spec/execution-model.md). It is a conformance
-> target for presence triggering, FIFO arbitration and eviction.
+> **Status: executable join semantics, reference-only adapters.** M1.4 R6
+> executes the presence, FIFO, instance-local correlation and typed-expiry
+> rules below. The complete scenario remains a paper derivation until its
+> `HttpServer` and `Memory` adapters land; the public executable proof lives in
+> `crates/rastok/tests/instances_lab.rs`.
 
 ## 1. What this sim exercises (the checklist)
 
@@ -22,6 +23,8 @@
 ## 2. The graph
 
 ```rastok
+type JoinExpiry = union { JoinExpired {} }
+
 graph sim02 : App {
 
   connector orders   : HttpServer { path = "/orders"   ; effect = none }
@@ -35,6 +38,7 @@ graph sim02 : App {
 
     input order   : struct { total: decimal(10,2) }
     input payment : struct { amount: decimal(10,2) }
+    output expired: JoinExpiry
 
     on (order, payment) within duration("15m") {
       out = {

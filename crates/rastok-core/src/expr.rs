@@ -16,7 +16,7 @@
 //! guarantee that golden-trace stability relies on.
 
 use alloc::boxed::Box;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -33,9 +33,9 @@ const UNSUPPORTED_FUNCTIONS: &[&str] = &["has", "exists", "exists_one", "all", "
 
 /// An evaluator-only value.
 ///
-/// This mirrors [`Value`] only so a lazy [`Self::Payload`] witness can occur
-/// recursively while evaluating an expression. It is never serialized or
-/// stored; every value crossing an evaluator boundary is a core [`Value`].
+/// This mirrors [`Value`] only so lazy payload witnesses can occur recursively
+/// while evaluating an expression. It is never serialized or stored; every
+/// value crossing an evaluator boundary is a core [`Value`].
 #[derive(Debug, Clone)]
 pub enum EvalValue {
     /// Boolean.
@@ -117,15 +117,20 @@ pub enum EvalValue {
         /// Closed struct payload.
         payload: Vec<(String, EvalValue)>,
     },
-    /// The WHOLE `data` payload, unmaterialized — the laziness
-    /// witness. Resolving the name `data` is not yet inspecting its
-    /// structure: the witness carries through bindings, locals, and
-    /// ternaries untouched, and materializes only where an operation
-    /// demands structure (member, index, operator, call) — through
-    /// [`Bindings::payload`]. It lives inside one evaluation and its
-    /// host's emission builder; it never reaches a plan, a hash, or
-    /// a seal (the expressible-constant gate refuses it).
-    Payload,
+    /// One whole payload, still unmaterialized. The reference keeps join
+    /// inputs distinct: demanding `left.data` must never decode `right.data`,
+    /// and carrying either witness preserves that exact envelope's physical
+    /// representation.
+    Payload(PayloadRef),
+}
+
+/// Evaluation-local identity of a lazy payload source.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PayloadRef {
+    /// The ordinary single-input `data` binding (or a join's causal base).
+    Input,
+    /// A join input selected by its declared port name.
+    Named(String),
 }
 
 impl PartialEq for EvalValue {
@@ -200,9 +205,7 @@ impl PartialEq for EvalValue {
                     payload: b_payload,
                 },
             ) => a_case == b_case && struct_fields_eq(a_payload, b_payload, EvalValue::eq),
-            // One payload exists per evaluation; two witnesses can
-            // only name the same thing.
-            (Self::Payload, Self::Payload) => true,
+            (Self::Payload(a), Self::Payload(b)) => a == b,
             _ => false,
         }
     }
@@ -341,7 +344,7 @@ impl EvalValue {
                         .collect::<Result<_, Error>>()?,
                 }))
             }
-            Self::Payload => {
+            Self::Payload(_) => {
                 return Err(fault(String::from(
                     "an unresolved payload cannot leave expression evaluation",
                 )));
@@ -433,6 +436,11 @@ fn keyed_map_eq_by(
 pub struct Signature {
     names: BTreeMap<String, DataType>,
     types: BTreeMap<String, NarrowType>,
+    /// Exact roots whose descendants belong to Rastok's statically sealed
+    /// metadata grid. `meta` itself is implicit; join aliases such as
+    /// `left.meta` are declared here so `variant` cannot become a general
+    /// member-access escape hatch.
+    metadata_roots: BTreeSet<String>,
 }
 
 impl Signature {
@@ -447,6 +455,23 @@ impl Signature {
     pub fn with(mut self, name: impl Into<String>, ty: DataType) -> Self {
         self.names.insert(name.into(), ty);
         self
+    }
+
+    /// Declares one exact metadata projection root. Its leaves are verified
+    /// by the host compiler against the sealed sys/app/ext schema after the
+    /// full unit has been checked.
+    #[must_use]
+    pub fn with_metadata(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        self.names.insert(name.clone(), DataType::Variant);
+        self.metadata_roots.insert(name);
+        self
+    }
+
+    /// Whether an exact dotted binding is a metadata projection root.
+    #[must_use]
+    pub fn is_metadata_root(&self, name: &str) -> bool {
+        name == "meta" || self.metadata_roots.contains(name)
     }
 
     /// The type of an exact name, if declared.
@@ -642,9 +667,9 @@ pub trait Bindings {
     ///
     /// # Errors
     /// When this environment carries no payload.
-    fn payload(&self) -> Result<EvalValue, Error> {
-        Err(fault(String::from(
-            "`data` carries no payload in this environment",
+    fn payload(&self, reference: &PayloadRef) -> Result<EvalValue, Error> {
+        Err(fault(format!(
+            "payload {reference:?} is not available in this environment"
         )))
     }
 
@@ -1825,7 +1850,9 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                     // sys/app/ext grid after expression collection. The
                     // temporary `meta: variant` binding is not a payload
                     // escape hatch; ordinary dynamic data must narrow first.
-                    DataType::Variant if segments.first().is_some_and(|root| root == "meta") => {
+                    DataType::Variant
+                        if signature.is_metadata_root(&segments[..consumed].join(".")) =>
+                    {
                         DataType::Variant
                     }
                     DataType::Variant => {
@@ -2214,7 +2241,7 @@ fn numeric(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
 /// is what keeps `val copy = data` as lazy as `data` itself.
 fn concrete(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
     match value {
-        EvalValue::Payload => bindings.payload(),
+        EvalValue::Payload(reference) => bindings.payload(&reference),
         // A structural-union branch is transparent once an expression
         // consumes it. Its branch index remains intact in the materialized
         // `Value` and journal; the expression sees the selected logical
@@ -2229,7 +2256,7 @@ fn concrete(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue, Erro
 /// markers.
 fn concrete_deep(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
     Ok(match value {
-        EvalValue::Payload => bindings.payload()?,
+        EvalValue::Payload(reference) => bindings.payload(&reference)?,
         EvalValue::List(items) => EvalValue::List(
             items
                 .into_iter()
@@ -2280,6 +2307,11 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
         Expr::Literal(value) => Ok(EvalValue::from(value.clone())),
         Expr::Asset(index) => bindings.asset(*index),
         Expr::Path(segments) => {
+            if segments.len() == 1 {
+                return bindings
+                    .get(&segments[0])
+                    .ok_or_else(|| fault(format!("`{}` is not bound", segments[0])));
+            }
             let dotted = segments.join(".");
             if let Some(value) = bindings.get(&dotted) {
                 return Ok(value);
@@ -2955,7 +2987,7 @@ mod tests {
 
     #[test]
     fn a_payload_witness_never_becomes_a_materialized_value() {
-        let nested = EvalValue::List(alloc::vec![EvalValue::Payload]);
+        let nested = EvalValue::List(alloc::vec![EvalValue::Payload(PayloadRef::Input)]);
         assert!(
             nested.into_value().is_err(),
             "evaluator state must not enter plans, envelopes, or journals"
@@ -3007,12 +3039,18 @@ mod tests {
     #[test]
     fn keyed_map_equality_stays_total_before_payload_resolution() {
         let unresolved = EvalValue::KeyedMap(alloc::vec![
-            (EvalValue::Payload, EvalValue::Text(String::from("payload"))),
+            (
+                EvalValue::Payload(PayloadRef::Input),
+                EvalValue::Text(String::from("payload")),
+            ),
             (EvalValue::Int(1), EvalValue::Text(String::from("one"))),
         ]);
         let reordered = EvalValue::KeyedMap(alloc::vec![
             (EvalValue::Int(1), EvalValue::Text(String::from("one"))),
-            (EvalValue::Payload, EvalValue::Text(String::from("payload"))),
+            (
+                EvalValue::Payload(PayloadRef::Input),
+                EvalValue::Text(String::from("payload")),
+            ),
         ]);
         assert_eq!(unresolved, reordered);
         assert!(values_equal(&unresolved, &reordered));

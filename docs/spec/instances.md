@@ -11,8 +11,9 @@
 > temporal singletons. R5 executes bounded Closing, successor-generation
 > admission, cancellation, settlement, terminal `OutcomeUnknown`, inner-first
 > Graph closure, and bare `stop`. Source production of some dynamic
-> settings/values, nested Graph syntax, and Graph handlers remain named R1
-> gaps. This document is the single authority for logical
+> settings/values and Graph handlers remain named R1 gaps. R6 makes nested
+> Graphs and instance-local joins public end to end, including Lab and package
+> evidence; R7 remains the closure/cluster-readiness audit. This document is the single authority for logical
 > instance addressing, key selection, Node-local state, lifetime, and the
 > semantic boundary with future sharding.
 
@@ -551,12 +552,32 @@ state remains a fold of ordinary journal facts, never a second ledger.
 
 A join buffers and correlates inside the logical instance of the Operator
 that owns its handler. Presence joins zip arrivals in that instance's mailbox
-order. Content predicates use `where`; `within` and `last` bound retained
-candidates and eviction remains an explicit journaled fact.
+order. The delivery that first completes presence is the causal trigger; the
+tuple itself stays in source-declared port order. With `where`, FIFO candidate
+tuples are tested lexicographically and a false predicate consumes nothing.
+`within` and `last` bound retained candidates independently: the former arms a
+dated obligation per delivery, while the latter evicts the oldest excess
+candidate per port. In the M1.4 surface either bound requires the conventional
+typed output `expired: union { JoinExpired {} }`; eviction emits that ordinary
+value with `l:evict` before consuming the retained cursor, never a silent drop.
+
+There is no implicit current envelope under a join. Bare `data` and
+`out = .` refuse; `a.data` and `a.meta` select the complete input named `a`.
+Each named payload has its own lazy materialization slot, so inspecting one
+encoded input never decodes another. Writable metadata uses CommonOrAbsent
+over present values; an explicit write from a named input wins. The plan
+validator conservatively propagates possible absence through topology and
+rejects a later required bare read until such a choice is made. Optional
+access remains a separately named expression-language gate.
 
 There is no `by` override. A different correlation domain is a different
 owner key and should be expressed by giving that Operator the appropriate
 `instances.key`. This keeps routing and correlation under one instance model.
+
+A partial join is retained state but not runnable work. It is therefore
+quiescent for `drain`/Lab stability until another arrival, a `last` overflow,
+or its dated `within` event makes a transaction runnable. Retention never
+creates another address, generation, or shard key.
 
 ## 9. Placement and shards
 

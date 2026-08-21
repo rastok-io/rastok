@@ -231,6 +231,7 @@ impl<'plan> Solver<'plan> {
             let node_index = handler.node.index();
             let input_ports: Vec<node::Port> = match &handler.activation {
                 node::HandlerActivation::Port(port) => alloc::vec![port.clone()],
+                node::HandlerActivation::Join { ports, .. } => ports.clone(),
                 node::HandlerActivation::Lifecycle(_) => self.plan.nodes[node_index]
                     .ports
                     .iter()

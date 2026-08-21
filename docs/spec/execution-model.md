@@ -431,9 +431,27 @@ The graph decides by ordinary wiring — compensate, alert, DLQ via `Memory`, or
 `-> nothing` if abandonment is genuinely normal (then it is *written*, not
 silent).
 
+R6 fixes candidate selection precisely. Correlation never leaves the owning
+Operator instance. The arrival that first completes a presence set is its
+causal trigger, but the selected tuple and transaction key 34 remain in the
+handler's declared port order. For a content predicate, candidate tuples are
+visited lexicographically by per-port FIFO position; a false `where` consumes
+nothing. `last N` retains at most N candidates on each declared input and
+evicts the oldest excess candidate. `within D` arms timer kind 2 for each
+routed candidate; a stale timer whose cursor was already consumed is a no-op.
+If both bounds apply, the first runnable eviction fact wins through the same
+reserve/commit/remove discipline as a firing.
+
+In the executable M1.4 subset a bounded join declares the exact conventional
+output `expired: union { JoinExpired {} }`. This name is an ordinary typed
+port convention, not a privileged error channel; the requirement keeps v1
+expiry routing statically enumerable. `having` remains a named future gate.
+A partial join with no runnable tuple is quiescent retained mailbox state, so
+`drain` may rest while its dated obligation remains armed.
+
 **The boundary that avoids the false friend** : this rule applies to **join
 buffers only** (an envelope that awaited presence and never got it = a lost
-fact → err). **Window/aggregate eviction is normal semantics** — a closing
+fact → the typed `expired` output). **Window/aggregate eviction is normal semantics** — a closing
 window emits its aggregate through `on stop` (§9) ; leaving a window is life,
 not failure.
 

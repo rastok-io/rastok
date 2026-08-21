@@ -344,6 +344,56 @@ explicit `closing` policy additionally hashes its two expression trees under
 the `rastok.closing.r1` extension; omission cannot collide with an explicit
 policy.
 
+**R6 composition, joins, and public-evidence checkpoint (2026-08-22).** A
+nested Graph is now a public composition boundary from source through the
+checker, HIR, lowering, categorical v9 validation, package round-trip, and VM.
+Its lexical owner row, boundary declarations, immutable `val` scope, instance
+policy, and lifecycle survive lowering; only its passive routing seams are
+flattened to executable edges. The resulting flat graph is checked again for
+cycles at the Registry-free plan boundary. A cycle hidden by composition can
+therefore neither disappear in lowering nor enter `ValidatedExecutionPlan`.
+
+Join activation is the closed v9 handler form `[3, ports, within?, last?]`.
+The declared port order is semantic: it fixes named bindings, tuple identity,
+and transaction key 34. Inside one owning Operator instance, the arrival that
+first completes presence is the trigger; candidate tuples are tried in
+declared-port order with FIFO choices, and a false `where` retains every
+candidate. `last` evicts the oldest excess candidate per port and `within`
+arms one dated obligation per retained delivery. Both produce the ordinary
+empty `JoinExpired` tagged case on the v1-required `expired` output; neither
+drop is silent. `having`, event-time correlation, and a second key authority
+remain unavailable. Bare `data` and `out = .` have no referent in a join;
+`a.data`/`a.meta` name one complete input envelope, and each payload owns an
+independent lazy materialization witness.
+
+Writable metadata follows CommonOrAbsent over present contributions: absent
+everywhere stays absent, one distinct present value survives, and conflicting
+present values disappear. `content_type` is selected only by the emitted
+payload. The R6 implementation supersedes only one transport detail of
+D-2026-08-10-2: v9 does **not** duplicate the canonical app/ext schemas into a
+travelling `JoinMetaPlan`. The Registry-free validator derives conservative
+presence facts from those already-canonical schemas, activation, explicit
+writes, and topology; a required bare read after a join refuses until the
+handler explicitly chooses a named contribution. Runtime fusion is the final
+defense, not the primary presence checker.
+
+Public Lab scenarios now prove canonical-key isolation, nested addresses,
+all five lifetimes, clean successor generations, inner-first Graph closure,
+instance-local join correlation, typed expiry, and canonical trace keys 31
+and 34 without inspecting private state. The bounded-Closing model enumerates
+the reply equivalence classes before drain, during settlement, on cancel,
+after settlement, and never, proving exactly one terminal OUTBOUND fact and
+that `exit` precedes `l:stop` in every case.
+
+R6 changes neither existing semantic hashes, packages, nor causal traces:
+the new activation/hash material is present only for newly executable joins
+or nested Graphs. The unchanged 961-byte echo package still hashes to
+`419a52a1…`. On Cortex-M33 emulation it decodes in 16 864 ticks; 32 ordinary
+relay samples average 2 752 ticks and peak at 2 986, with a 106 788-byte heap
+watermark. The no-join dispatcher and single-payload evaluation retain their
+direct paths, so the established relay bound remains green rather than being
+paid for by programs that do not use R6.
+
 ## D-2026-08-16-1 — A partition key is a journaled routing decision
 
 > **Superseded in full by D-2026-08-18-1 before public release.** The key and
@@ -1368,9 +1418,12 @@ every write in the unit —, sheet `ext` fields, standard fields), the
 merge is CommonOrAbsent — absent
 everywhere → absent; one distinct value → kept; conflicting values →
 absent — using each metadata type's canonical equality, never a map
-order or a scheduler order. The lowering emits a static
-`JoinMetaPlan`: per-field ops in canonical key order; the runtime
-executes a verdict. `content_type` is NOT part of the fusion — it
+order or a scheduler order. The compiler and Registry-free validator derive a
+static per-field presence verdict from the canonical schemas, topology, and
+explicit writes; the runtime executes the corresponding merge. The earlier
+proposed travelling `JoinMetaPlan` is superseded by the R6 checkpoint of
+D-2026-08-18-1: duplicating already-transported schemas would create a second
+claim to reconcile. `content_type` is NOT part of the fusion — it
 derives from the payload decision (D-2026-08-10-4). PRESENCE IS
 STATIC: past a join, a field whose merge can yield absent (a
 conflict is topologically possible, or no input is guaranteed to
@@ -1378,8 +1431,8 @@ carry it) is OPTIONAL — an optional read (`?field`) stays permitted;
 a required read, or a required output contract, refuses at check
 until an explicit write has chosen the value. An unused conflict is
 silent — the refusal sits at the READ or the contract, never at the
-merge itself. The runtime's absent → err rule remains as defense in
-depth for invalid plans, never the primary check. Reads never
+merge itself. The runtime's missing-field fault remains defense in depth for
+invalid plans, never the primary check and never an implicit `err` emission. Reads never
 propagate — a `val`, a guard, or a dead computation changes no
 output metadata; only the merge and explicit writes do, and explicit
 writes win. In a join handler the read forms are `a.meta.*` /

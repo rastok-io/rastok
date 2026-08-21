@@ -1,6 +1,6 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.4 R5.** B5 removed the
+> **Status: normative and executable through M1.4 R6.** B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
@@ -425,9 +425,12 @@ operator total : Reducer {
 the handler.
 
 ```rastok
+type JoinExpiry = union { JoinExpired {} }
+
 operator decide : Joiner {
   instances = { key = meta.app.request_id }
   lifetime = { kind = idle ; after = duration("48h") }
+  output expired: JoinExpiry
 
   on (expense, decision) within duration("48h") {
     approval = {
@@ -441,7 +444,9 @@ operator decide : Joiner {
 }
 ```
 
-The existing join rules still define correlation, bounds, and expiry. A
+The ordinary R6 join rules define correlation, bounds, and expiry. A bounded
+join declares the exact one-case `JoinExpiry` output shown above; retained
+facts leave through that ordinary typed port rather than disappearing. A
 `Joiner` cannot hide an unbounded buffer.
 
 ```rastok

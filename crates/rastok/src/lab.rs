@@ -521,7 +521,7 @@ impl MockPartner<'_> {
                 // arriving uninspected — `out = data`, a local carry
                 // — ships the REPRESENTATION, whatever the spelling.
                 let value = self.lazy_eval(tree, env, slot)?;
-                if matches!(value, expr::EvalValue::Payload) {
+                if matches!(value, expr::EvalValue::Payload(_)) {
                     return Ok(Some(request.data().clone()));
                 }
                 let value = runtime::resolve_payload(value, slot)

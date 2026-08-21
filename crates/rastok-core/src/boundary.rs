@@ -774,6 +774,18 @@ pub enum DatedPayload {
         /// Exact connector instance owning the mailbox/call obligation.
         instance: InstanceRef,
     },
+    /// One retained join candidate reached its `within` bound. The full
+    /// delivery reference makes a consumed candidate's stale event harmless.
+    JoinWithin {
+        /// Operator owning the join buffer.
+        operator: node::Path,
+        /// Edge half of the buffered-delivery reference.
+        edge: String,
+        /// Envelope-id half of the buffered-delivery reference.
+        delivery: envelope::Id,
+        /// Exact Operator generation that retained it.
+        instance: InstanceRef,
+    },
     /// One owner lifetime reached a scheduler-owned deadline. The complete
     /// instance reference is the generation fence; idle additionally compares
     /// the causal admission id, while fixed and tumbling never move after

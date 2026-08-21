@@ -14,6 +14,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
+use crate::datatype::{DataType, StructType, TaggedCase, TaggedUnionType, TypeError};
+
 /// Error returned when a name would break the vocabulary's structural
 /// invariants.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,6 +331,18 @@ impl fmt::Display for Trigger {
 pub enum HandlerActivation {
     /// Arrival on a single port.
     Port(Port),
+    /// Presence of one delivery on every port, inside one owning Operator
+    /// instance. Port order is semantic: it fixes bindings, contribution
+    /// order, and the activation identity. Bounds retain candidates; they
+    /// never select another instance.
+    Join {
+        /// Ports in source-declared order.
+        ports: Vec<Port>,
+        /// Maximum retention in virtual nanoseconds, when declared.
+        within_ns: Option<i64>,
+        /// Maximum retained candidates per port, when declared.
+        last: Option<u32>,
+    },
     /// One lexical-owner instance lifecycle transition.
     Lifecycle(Lifecycle),
 }
@@ -345,6 +359,17 @@ impl HandlerActivation {
     pub fn canonical_key(&self) -> alloc::string::String {
         match self {
             Self::Port(port) => alloc::format!("p:{port}"),
+            Self::Join { ports, .. } => {
+                let mut key = String::from("j:(");
+                for (index, port) in ports.iter().enumerate() {
+                    if index != 0 {
+                        key.push(',');
+                    }
+                    key.push_str(port.name());
+                }
+                key.push(')');
+                key
+            }
             Self::Lifecycle(lifecycle) => alloc::format!("l:{lifecycle}"),
         }
     }
@@ -356,9 +381,35 @@ impl fmt::Display for HandlerActivation {
         // pinned.
         match self {
             Self::Port(port) => write!(f, "p:{port}"),
+            Self::Join { ports, .. } => {
+                f.write_str("j:(")?;
+                for (index, port) in ports.iter().enumerate() {
+                    if index != 0 {
+                        f.write_str(",")?;
+                    }
+                    port.fmt(f)?;
+                }
+                f.write_str(")")
+            }
             Self::Lifecycle(lifecycle) => write!(f, "l:{lifecycle}"),
         }
     }
+}
+
+/// Canonical logical type of the conventional join-expiry output. It is an
+/// ordinary one-case tagged union using the same port/type machinery as every
+/// other output. The executable M1.4 surface requires the port name
+/// `expired`; that is a v1 convention, not a privileged error category.
+///
+/// # Errors
+///
+/// Returns the canonical type constructor's invariant violation.
+pub fn join_expired_type() -> Result<DataType, TypeError> {
+    let payload = StructType::new(Vec::new())?;
+    let case = TaggedCase::new("JoinExpired", payload)?;
+    Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
+        case,
+    ])?))
 }
 
 #[cfg(test)]

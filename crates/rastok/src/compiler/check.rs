@@ -9,8 +9,8 @@
 
 use crate::compiler::hir::{
     AttrValue, Attribute, ClosingPolicy, Const, Direction, Edge, EdgeTarget, EmitValue, Endpoint,
-    FieldWrite, Graph, Handler, Hir, InstanceLifetime, InstancePolicy, Node, NodeRole, Statement,
-    Val, Var,
+    EndpointOwner, FieldWrite, Graph, Handler, Hir, InstanceLifetime, InstancePolicy, Node,
+    NodeRole, Statement, Val, Var,
 };
 use crate::compiler::syntax::{
     Attribute as SynAttribute, BaseType, ConnectorDecl, EdgeDecl, EdgeEndpoint, ExprSource,
@@ -26,7 +26,7 @@ use crate::datatype::{
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 use crate::expr;
 use crate::node;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Diagnostic for a unit without exactly one `: App` graph.
 pub const E_APP_COUNT: Code = Code::new("E-APP-COUNT");
@@ -411,7 +411,7 @@ struct Checker<'bag, 'registry> {
 
 #[derive(Clone)]
 enum InstanceOwner {
-    Graph,
+    Graph(crate::plan::OwnerPath),
     Node(node::Path),
 }
 
@@ -490,7 +490,7 @@ impl Checker<'_, '_> {
                 let (root, content_type) =
                     self.bind_asset_calls(tree.root, source.span, allow_root_content_type)?;
                 tree.root = root;
-                self.collect_meta_reads(&tree.root, source.span);
+                self.collect_meta_reads(&tree.root, source.span, &signature);
                 Some((tree, content_type))
             }
             Err(diagnostics) => {
@@ -1391,10 +1391,27 @@ impl Checker<'_, '_> {
     }
 
     fn graph(&mut self, decl: &GraphDecl) -> Graph {
+        self.graph_at(
+            decl,
+            crate::plan::OwnerPath::root(),
+            &expr::Signature::new(),
+            &BTreeMap::new(),
+            true,
+        )
+    }
+
+    fn graph_at(
+        &mut self,
+        decl: &GraphDecl,
+        path: crate::plan::OwnerPath,
+        inherited_signature: &expr::Signature,
+        inherited_consts: &BTreeMap<String, crate::value::Value>,
+        is_root: bool,
+    ) -> Graph {
         self.guard_binding_name(&decl.name, "a graph");
         if let Some(annotation) = &decl.annotation {
             for symbol in &annotation.symbols {
-                if symbol.text != "App" {
+                if !is_root || symbol.text != "App" {
                     self.deferred("a graph annotation other than App", symbol.span);
                 }
             }
@@ -1407,18 +1424,20 @@ impl Checker<'_, '_> {
         }
         let mut graph = Graph {
             name: decl.name.text.clone(),
+            path: path.clone(),
             boundary: Vec::new(),
             vals: Vec::new(),
             nodes: Vec::new(),
+            graphs: Vec::new(),
             edges: Vec::new(),
             instance: None,
         };
-        let mut consts = BTreeMap::new();
-        let mut signature = expr::Signature::new();
+        let mut consts = inherited_consts.clone();
+        let mut signature = inherited_signature.clone();
         let mut edges = Vec::new();
         let mut redeclared_defaults = std::collections::BTreeSet::new();
         self.queue_instance_attributes(
-            InstanceOwner::Graph,
+            InstanceOwner::Graph(path.clone()),
             decl.body.iter().filter_map(|item| match item {
                 GraphItem::Attribute(attribute) => Some(attribute),
                 _ => None,
@@ -1552,12 +1571,12 @@ impl Checker<'_, '_> {
                     }
                 }
                 GraphItem::Operator(operator) => {
-                    if let Some(node) = self.operator(operator, &signature, &consts) {
+                    if let Some(node) = self.operator(operator, &path, &signature, &consts) {
                         self.push_node(&mut graph, node, operator.name.span);
                     }
                 }
                 GraphItem::Connector(connector) => {
-                    if let Some(node) = self.connector(connector, &signature, &consts) {
+                    if let Some(node) = self.connector(connector, &path, &signature, &consts) {
                         self.push_node(&mut graph, node, connector.name.span);
                     }
                 }
@@ -1566,7 +1585,26 @@ impl Checker<'_, '_> {
                     partition.span,
                     "`partition` was unpublished syntax; declare `instances` and `lifetime` on the Node that owns them",
                 ),
-                GraphItem::Graph(nested) => self.deferred("a nested graph", nested.span),
+                GraphItem::Graph(nested) => {
+                    let mut segments = path.segments().to_vec();
+                    segments.push(nested.name.text.clone());
+                    match crate::plan::OwnerPath::new(segments) {
+                        Ok(nested_path) => {
+                            let checked = self.graph_at(
+                                nested,
+                                nested_path,
+                                &signature,
+                                &consts,
+                                false,
+                            );
+                            self.push_graph(&mut graph, checked, nested.name.span);
+                        }
+                        Err(invalid) => self.bag.push(
+                            Diagnostic::new(E_RESOLVE_UNKNOWN, Phase::Resolve, invalid.to_string())
+                                .with_span(nested.name.span),
+                        ),
+                    }
+                }
                 GraphItem::Defaults(_) => self.deferred("a defaults block", decl.span),
                 GraphItem::Attribute(attribute) => {
                     if !is_common_node_attribute(attribute) {
@@ -1638,7 +1676,8 @@ impl Checker<'_, '_> {
                     continue;
                 }
                 let wired = graph.edges.iter().any(|edge| {
-                    edge.from.node.as_ref() == Some(&node.path) && edge.from.port == *port
+                    matches!(&edge.from.owner, EndpointOwner::Node(path) if path == &node.path)
+                        && edge.from.port == *port
                 });
                 if !wired {
                     self.bag.push(
@@ -1665,11 +1704,11 @@ impl Checker<'_, '_> {
     fn materialize_boundary_ports(&mut self, graph: &mut Graph) {
         let mut used = Vec::new();
         for edge in &graph.edges {
-            if edge.from.node.is_none() {
+            if matches!(&edge.from.owner, EndpointOwner::Graph(path) if path == &graph.path) {
                 used.push((edge.from.port.clone(), Direction::Input));
             }
             if let EdgeTarget::Port(target) = &edge.to
-                && target.node.is_none()
+                && matches!(&target.owner, EndpointOwner::Graph(path) if path == &graph.path)
             {
                 used.push((target.port.clone(), Direction::Output));
             }
@@ -1694,11 +1733,11 @@ impl Checker<'_, '_> {
     fn materialize_node_edge_ports(&mut self, graph: &mut Graph) {
         let mut used = Vec::new();
         for edge in &graph.edges {
-            if let Some(path) = &edge.from.node {
+            if let EndpointOwner::Node(path) = &edge.from.owner {
                 used.push((path.clone(), edge.from.port.clone(), Direction::Output));
             }
             if let EdgeTarget::Port(target) = &edge.to
-                && let Some(path) = &target.node
+                && let EndpointOwner::Node(path) = &target.owner
             {
                 used.push((path.clone(), target.port.clone(), Direction::Input));
             }
@@ -1733,10 +1772,11 @@ impl Checker<'_, '_> {
         };
         let mut successors = vec![Vec::new(); graph.nodes.len()];
         for edge in &graph.edges {
-            if let (Some(from), EdgeTarget::Port(to)) = (&edge.from.node, &edge.to)
+            if let (EndpointOwner::Node(from), EdgeTarget::Port(to)) = (&edge.from.owner, &edge.to)
+                && let EndpointOwner::Node(to) = &to.owner
                 && let (Some(from), Some(to)) = (
                     from.segments().first().and_then(|_| index_of(from)),
-                    to.node.as_ref().and_then(&index_of),
+                    index_of(to),
                 )
             {
                 successors[from].push(to);
@@ -1781,7 +1821,12 @@ impl Checker<'_, '_> {
     }
 
     fn push_node(&mut self, graph: &mut Graph, node: Node, span: Span) {
-        let name = node.path.to_string();
+        let name = node
+            .path
+            .segments()
+            .last()
+            .cloned()
+            .unwrap_or_else(|| node.path.to_string());
         if matches!(name.as_str(), "meta" | "data" | "sys" | "app" | "ext") {
             self.bag.push(
                 Diagnostic::new(
@@ -1802,10 +1847,13 @@ impl Checker<'_, '_> {
             "a node",
         ) {
             // The one naming policy spoke.
-        } else if graph
-            .nodes
-            .iter()
-            .any(|existing| existing.path == node.path)
+        } else if graph.nodes.iter().any(|existing| {
+            existing
+                .path
+                .segments()
+                .last()
+                .is_some_and(|part| part == &name)
+        }) || graph.graphs.iter().any(|existing| existing.name == name)
         {
             self.bag.push(
                 Diagnostic::new(
@@ -1818,6 +1866,31 @@ impl Checker<'_, '_> {
             );
         } else {
             graph.nodes.push(node);
+        }
+    }
+
+    fn push_graph(&mut self, graph: &mut Graph, nested: Graph, span: Span) {
+        let name = nested.name.clone();
+        if graph.graphs.iter().any(|existing| existing.name == name)
+            || graph.nodes.iter().any(|existing| {
+                existing
+                    .path
+                    .segments()
+                    .last()
+                    .is_some_and(|part| part == &name)
+            })
+        {
+            self.bag.push(
+                Diagnostic::new(
+                    E_DUP_NODE,
+                    Phase::Resolve,
+                    format!("the node name `{name}` is already declared in this graph"),
+                )
+                .with_span(span)
+                .with_field("name", name),
+            );
+        } else {
+            graph.graphs.push(nested);
         }
     }
 
@@ -2117,16 +2190,17 @@ impl Checker<'_, '_> {
             .collect();
         'pending: for pending in core::mem::take(&mut self.pending_instances) {
             let input_ports: Vec<crate::plan::PortDecl> = match &pending.owner {
-                InstanceOwner::Graph => graph
-                    .boundary
-                    .iter()
-                    .filter(|port| port.direction == Direction::Input)
-                    .cloned()
-                    .collect(),
-                InstanceOwner::Node(path) => graph
-                    .nodes
-                    .iter()
-                    .find(|candidate| candidate.path == *path)
+                InstanceOwner::Graph(path) => graph_at_path(graph, path)
+                    .map(|owner| {
+                        owner
+                            .boundary
+                            .iter()
+                            .filter(|port| port.direction == Direction::Input)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                InstanceOwner::Node(path) => node_at_path(graph, path)
                     .map(|node| {
                         node.ports
                             .iter()
@@ -2247,13 +2321,13 @@ impl Checker<'_, '_> {
                 closing,
             };
             match pending.owner {
-                InstanceOwner::Graph => graph.instance = Some(policy),
+                InstanceOwner::Graph(path) => {
+                    if let Some(owner) = graph_at_path_mut(graph, &path) {
+                        owner.instance = Some(policy);
+                    }
+                }
                 InstanceOwner::Node(path) => {
-                    if let Some(node) = graph
-                        .nodes
-                        .iter_mut()
-                        .find(|candidate| candidate.path == path)
-                    {
+                    if let Some(node) = node_at_path_mut(graph, &path) {
                         node.instance = Some(policy);
                     }
                 }
@@ -2366,6 +2440,7 @@ impl Checker<'_, '_> {
     fn operator(
         &mut self,
         decl: &OperatorDecl,
+        owner: &crate::plan::OwnerPath,
         graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
@@ -2380,7 +2455,7 @@ impl Checker<'_, '_> {
                 self.deferred("an operator alias or aspect", symbol.span);
             }
         }
-        let path = self.node_path(&decl.name.text, decl.name.span)?;
+        let path = self.node_path(owner, &decl.name.text, decl.name.span)?;
         let mut node = Node {
             path,
             role: NodeRole::Operator,
@@ -2407,6 +2482,7 @@ impl Checker<'_, '_> {
     fn connector(
         &mut self,
         decl: &ConnectorDecl,
+        owner: &crate::plan::OwnerPath,
         graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
@@ -2424,7 +2500,7 @@ impl Checker<'_, '_> {
         for aspect in symbols {
             self.deferred("a connector aspect", aspect.span);
         }
-        let path = self.node_path(&decl.name.text, decl.name.span)?;
+        let path = self.node_path(owner, &decl.name.text, decl.name.span)?;
         let mut node = Node {
             path,
             role: NodeRole::Connector {
@@ -2905,8 +2981,15 @@ impl Checker<'_, '_> {
         }
     }
 
-    fn node_path(&mut self, name: &str, span: Span) -> Option<node::Path> {
-        match node::Path::new([name]) {
+    fn node_path(
+        &mut self,
+        owner: &crate::plan::OwnerPath,
+        name: &str,
+        span: Span,
+    ) -> Option<node::Path> {
+        let mut segments = owner.segments().to_vec();
+        segments.push(name.to_string());
+        match node::Path::new(segments) {
             Ok(path) => Some(path),
             Err(invalid) => {
                 self.bag.push(
@@ -3676,7 +3759,7 @@ impl Checker<'_, '_> {
         node: &Node,
         consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Handler> {
-        let activation = match &decl.trigger {
+        let mut activation = match &decl.trigger {
             SynTrigger::Port(name) => {
                 let Some(direction) = self.node_port_direction(node, &name.text) else {
                     self.bag.push(
@@ -3714,9 +3797,52 @@ impl Checker<'_, '_> {
                 self.deferred("an aspect-qualified handler", aspect.span);
                 return None;
             }
-            SynTrigger::Join(_) => {
-                self.deferred("a join handler", decl.span);
-                return None;
+            SynTrigger::Join(names) => {
+                let mut ports = Vec::with_capacity(names.len());
+                let mut unique = BTreeSet::new();
+                for name in names {
+                    let Some(direction) = self.node_port_direction(node, &name.text) else {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_PORT_UNKNOWN,
+                                Phase::Check,
+                                format!("this node exposes no port named `{}`", name.text),
+                            )
+                            .with_span(name.span)
+                            .with_field("port", name.text.clone()),
+                        );
+                        return None;
+                    };
+                    if direction != Direction::Input {
+                        self.wrong_direction(
+                            name.span,
+                            &name.text,
+                            direction,
+                            "a join listens on input ports",
+                        );
+                        return None;
+                    }
+                    let Ok(port) = node::Port::new(name.text.clone()) else {
+                        return None;
+                    };
+                    if !unique.insert(port.clone()) {
+                        self.instance_refusal(
+                            name.span,
+                            "a join lists each input port exactly once",
+                        );
+                        return None;
+                    }
+                    ports.push(port);
+                }
+                if ports.len() < 2 {
+                    self.instance_refusal(decl.span, "a join requires at least two input ports");
+                    return None;
+                }
+                node::HandlerActivation::Join {
+                    ports,
+                    within_ns: None,
+                    last: None,
+                }
             }
         };
         // A source annotation or instantiated Connector contract on the
@@ -3726,6 +3852,7 @@ impl Checker<'_, '_> {
         // inferred effective type.
         let declared_data_type = match &activation {
             node::HandlerActivation::Port(port) => node_port_pin(node, port),
+            node::HandlerActivation::Join { .. } => None,
             node::HandlerActivation::Lifecycle(_) => {
                 let mut inputs = node
                     .ports
@@ -3750,11 +3877,28 @@ impl Checker<'_, '_> {
         // `declared_data_type` is what prevents that placeholder from being
         // mistaken for an explicit dynamic port constraint.
         let data_type = declared_data_type.clone().unwrap_or(DataType::Variant);
-        let mut signature = node_signature
-            .clone()
-            .with("data", data_type.clone())
-            .with("meta", DataType::Variant);
+        let mut signature = node_signature.clone();
+        match &activation {
+            node::HandlerActivation::Join { ports, .. } => {
+                for port in ports {
+                    signature = signature
+                        .with(port.name(), DataType::Variant)
+                        .with(
+                            format!("{}.data", port.name()),
+                            node_port_pin(node, port).unwrap_or(DataType::Variant),
+                        )
+                        .with_metadata(format!("{}.meta", port.name()));
+                }
+            }
+            _ => {
+                signature = signature
+                    .with("data", data_type.clone())
+                    .with("meta", DataType::Variant);
+            }
+        }
         let mut guard = None;
+        let mut join_within = None;
+        let mut join_last = None;
         for clause in &decl.guards {
             match clause {
                 crate::compiler::syntax::Guard::Where(expr) if guard.is_none() => {
@@ -3773,9 +3917,94 @@ impl Checker<'_, '_> {
                 crate::compiler::syntax::Guard::Where(expr) => {
                     self.deferred("a second where guard", expr.span);
                 }
-                _ => {
-                    self.deferred("a join guard clause", decl.span);
+                crate::compiler::syntax::Guard::Within(expr)
+                    if matches!(&activation, node::HandlerActivation::Join { .. })
+                        && join_within.is_none() =>
+                {
+                    let constant = self.constant(expr, node_signature, consts)?;
+                    let crate::value::Value::Duration(duration) = &constant.value else {
+                        self.instance_refusal(expr.span, "`within` requires a duration");
+                        return None;
+                    };
+                    if *duration <= 0 {
+                        self.instance_refusal(expr.span, "`within` must be positive");
+                        return None;
+                    }
+                    join_within = Some(constant);
                 }
+                crate::compiler::syntax::Guard::Last(count)
+                    if matches!(&activation, node::HandlerActivation::Join { .. })
+                        && join_last.is_none() =>
+                {
+                    let span = count.span;
+                    let Ok(count) = count.text.parse::<u32>() else {
+                        self.instance_refusal(count.span, "`last` must fit a positive u32");
+                        return None;
+                    };
+                    if count == 0 {
+                        self.instance_refusal(span, "`last` must be positive");
+                        return None;
+                    }
+                    join_last = Some(count);
+                }
+                crate::compiler::syntax::Guard::By(expr) => {
+                    self.instance_refusal(
+                        expr.span,
+                        "join `by` was removed; put the correlation expression in `instances = { key = ... }` on this Operator",
+                    );
+                }
+                crate::compiler::syntax::Guard::Having(expr) => {
+                    self.deferred("a join aggregate `having` clause", expr.span);
+                }
+                crate::compiler::syntax::Guard::Within(expr) => {
+                    self.instance_refusal(expr.span, "`within` is legal only once on a join");
+                }
+                crate::compiler::syntax::Guard::Last(count) => {
+                    self.instance_refusal(count.span, "`last` is legal only once on a join");
+                }
+            }
+        }
+        if matches!(&activation, node::HandlerActivation::Join { .. })
+            && guard.is_some()
+            && join_within.is_none()
+            && join_last.is_none()
+        {
+            self.instance_refusal(
+                decl.span,
+                "a content-predicate join requires `within` or `last` to bound retained candidates",
+            );
+            return None;
+        }
+        if let node::HandlerActivation::Join {
+            within_ns, last, ..
+        } = &mut activation
+        {
+            *within_ns = join_within.as_ref().and_then(|bound| match &bound.value {
+                crate::value::Value::Duration(duration) => Some(*duration),
+                _ => None,
+            });
+            *last = join_last;
+        }
+        if matches!(
+            &activation,
+            node::HandlerActivation::Join {
+                within_ns: Some(_),
+                ..
+            } | node::HandlerActivation::Join { last: Some(_), .. }
+        ) {
+            let Ok(expiry) = node::Port::new("expired") else {
+                return None;
+            };
+            let expected = node::join_expired_type().ok();
+            let declared = node.ports.iter().find(|port| port.port == expiry);
+            if !declared.is_some_and(|port| {
+                port.direction == Direction::Output && port.ty.as_ref() == expected.as_ref()
+            }) {
+                self.instance_refusal(
+                    decl.span,
+                    "a bounded join declares `output expired` with the one-case `JoinExpired` tagged-union type",
+                );
+                return None;
             }
         }
         let Some(body) = &decl.body else {
@@ -3900,6 +4129,15 @@ impl Checker<'_, '_> {
                         name.span,
                         port.name(),
                     ) {
+                        if matches!(&activation, node::HandlerActivation::Join { .. })
+                            && matches!(&emit, EmitValue::Identity)
+                        {
+                            self.instance_refusal(
+                                name.span,
+                                "`out = .` is ambiguous under a join; select a named input explicitly",
+                            );
+                            continue;
+                        }
                         // A pinned output holds its emissions to the
                         // contract — ONE conformance notion, every
                         // EmitValue form.
@@ -3940,6 +4178,7 @@ impl Checker<'_, '_> {
         }
         Some(Handler {
             activation,
+            join_within,
             guard,
             body: statements,
         })
@@ -5091,16 +5330,27 @@ impl Checker<'_, '_> {
     /// verified against the sealed schema once inference closes.
     /// A DYNAMIC meta access (`meta["…"]`) refuses on the spot: the
     /// grid only holds if the checker sees every key.
-    fn collect_meta_reads(&mut self, expr: &expr::Expr, span: Span) {
+    fn collect_meta_reads(&mut self, expr: &expr::Expr, span: Span, signature: &expr::Signature) {
+        let metadata_path = |segments: &[String]| {
+            (1..=segments.len()).rev().find_map(|length| {
+                signature
+                    .is_metadata_root(&segments[..length].join("."))
+                    .then(|| {
+                        core::iter::once(String::from("meta"))
+                            .chain(segments[length..].iter().cloned())
+                            .collect::<Vec<_>>()
+                    })
+            })
+        };
         match expr {
             expr::Expr::Path(segments) => {
-                if segments.first().is_some_and(|root| root == "meta") {
-                    self.meta_reads.push((segments.clone(), span));
+                if let Some(path) = metadata_path(segments) {
+                    self.meta_reads.push((path, span));
                 }
             }
             expr::Expr::Index { base, index } => {
                 if matches!(&**base, expr::Expr::Path(segments)
-                    if segments.first().is_some_and(|root| root == "meta"))
+                    if metadata_path(segments).is_some())
                 {
                     self.meta_zone_refusal(
                         span,
@@ -5108,43 +5358,43 @@ impl Checker<'_, '_> {
                         "dynamic metadata access defeats the static grid — spell the key",
                     );
                 }
-                self.collect_meta_reads(base, span);
-                self.collect_meta_reads(index, span);
+                self.collect_meta_reads(base, span, signature);
+                self.collect_meta_reads(index, span, signature);
             }
             expr::Expr::Unary { expr, .. }
             | expr::Expr::Is { expr, .. }
-            | expr::Expr::As { expr, .. } => self.collect_meta_reads(expr, span),
+            | expr::Expr::As { expr, .. } => self.collect_meta_reads(expr, span, signature),
             expr::Expr::Binary { left, right, .. } => {
-                self.collect_meta_reads(left, span);
-                self.collect_meta_reads(right, span);
+                self.collect_meta_reads(left, span, signature);
+                self.collect_meta_reads(right, span, signature);
             }
             expr::Expr::Ternary {
                 cond,
                 then,
                 otherwise,
             } => {
-                self.collect_meta_reads(cond, span);
-                self.collect_meta_reads(then, span);
-                self.collect_meta_reads(otherwise, span);
+                self.collect_meta_reads(cond, span, signature);
+                self.collect_meta_reads(then, span, signature);
+                self.collect_meta_reads(otherwise, span, signature);
             }
             expr::Expr::Call { args, .. } => {
                 for arg in args {
-                    self.collect_meta_reads(arg, span);
+                    self.collect_meta_reads(arg, span, signature);
                 }
             }
             expr::Expr::List(items) => {
                 for item in items {
-                    self.collect_meta_reads(item, span);
+                    self.collect_meta_reads(item, span, signature);
                 }
             }
             expr::Expr::MapLit(pairs) => {
                 for (_, value) in pairs {
-                    self.collect_meta_reads(value, span);
+                    self.collect_meta_reads(value, span, signature);
                 }
             }
             expr::Expr::Struct(fields) | expr::Expr::Tagged { fields, .. } => {
                 for (_, value) in fields {
-                    self.collect_meta_reads(value, span);
+                    self.collect_meta_reads(value, span, signature);
                 }
             }
             expr::Expr::Literal(_) | expr::Expr::Asset(_) => {}
@@ -6147,16 +6397,24 @@ impl Checker<'_, '_> {
                     name.text.as_str()
                 }
             };
-            return node::Port::new(port_name)
-                .ok()
-                .map(|port| Endpoint { node: None, port });
+            return node::Port::new(port_name).ok().map(|port| Endpoint {
+                owner: EndpointOwner::Graph(graph.path.clone()),
+                port,
+            });
         }
         let node_name = &reference.segments[0];
-        let Some(target) = graph
-            .nodes
+        let target_node = graph.nodes.iter().find(|candidate| {
+            candidate
+                .path
+                .segments()
+                .last()
+                .is_some_and(|part| part == &node_name.text)
+        });
+        let target_graph = graph
+            .graphs
             .iter()
-            .find(|candidate| candidate.path.segments()[0] == node_name.text)
-        else {
+            .find(|candidate| candidate.name == node_name.text);
+        if target_node.is_none() && target_graph.is_none() {
             self.bag.push(
                 Diagnostic::new(
                     E_RESOLVE_UNKNOWN,
@@ -6167,7 +6425,7 @@ impl Checker<'_, '_> {
                 .with_field("name", node_name.text.clone()),
             );
             return None;
-        };
+        }
         let port_name = match reference.segments.len() {
             1 => {
                 if is_source {
@@ -6185,21 +6443,37 @@ impl Checker<'_, '_> {
         // B7 makes the conventional terminal output executable beside the
         // ordinary in/out/err ports. Further contract-specific ports remain
         // transported-but-deferred until their adapter slice exists.
-        if target.connector_trait().is_some() && !matches!(port_name, "in" | "out" | "err" | "exit")
+        if target_node.is_some_and(|target| target.connector_trait().is_some())
+            && !matches!(port_name, "in" | "out" | "err" | "exit")
         {
             self.deferred("a connector edge beyond the default trio", reference.span);
             return None;
         }
-        let direction = self.node_port_direction(target, port_name).or_else(|| {
-            if target.connector_trait().is_some() {
-                return None;
-            }
-            match port_name {
-                "in" => Some(Direction::Input),
-                "out" | "err" => Some(Direction::Output),
-                _ => None,
-            }
-        });
+        let direction = if let Some(target) = target_node {
+            self.node_port_direction(target, port_name).or_else(|| {
+                if target.connector_trait().is_some() {
+                    return None;
+                }
+                match port_name {
+                    "in" => Some(Direction::Input),
+                    "out" | "err" => Some(Direction::Output),
+                    _ => None,
+                }
+            })
+        } else {
+            target_graph.and_then(|target| {
+                target
+                    .boundary
+                    .iter()
+                    .find(|decl| decl.port.name() == port_name)
+                    .map(|decl| decl.direction)
+                    .or(match port_name {
+                        "in" => Some(Direction::Input),
+                        "out" | "err" => Some(Direction::Output),
+                        _ => None,
+                    })
+            })
+        };
         let Some(direction) = direction else {
             self.bag.push(
                 Diagnostic::new(
@@ -6226,11 +6500,70 @@ impl Checker<'_, '_> {
             self.wrong_direction(reference.span, port_name, direction, required);
             return None;
         }
-        node::Port::new(port_name).ok().map(|port| Endpoint {
-            node: Some(target.path.clone()),
-            port,
-        })
+        let owner = target_node.map_or_else(
+            || target_graph.map(|target| EndpointOwner::Graph(target.path.clone())),
+            |target| Some(EndpointOwner::Node(target.path.clone())),
+        )?;
+        node::Port::new(port_name)
+            .ok()
+            .map(|port| Endpoint { owner, port })
     }
+}
+
+fn graph_at_path<'graph>(
+    graph: &'graph Graph,
+    path: &crate::plan::OwnerPath,
+) -> Option<&'graph Graph> {
+    if &graph.path == path {
+        return Some(graph);
+    }
+    graph
+        .graphs
+        .iter()
+        .find_map(|nested| graph_at_path(nested, path))
+}
+
+fn graph_at_path_mut<'graph>(
+    graph: &'graph mut Graph,
+    path: &crate::plan::OwnerPath,
+) -> Option<&'graph mut Graph> {
+    if &graph.path == path {
+        return Some(graph);
+    }
+    graph
+        .graphs
+        .iter_mut()
+        .find_map(|nested| graph_at_path_mut(nested, path))
+}
+
+fn node_at_path<'graph>(graph: &'graph Graph, path: &node::Path) -> Option<&'graph Node> {
+    graph
+        .nodes
+        .iter()
+        .find(|candidate| &candidate.path == path)
+        .or_else(|| {
+            graph
+                .graphs
+                .iter()
+                .find_map(|nested| node_at_path(nested, path))
+        })
+}
+
+fn node_at_path_mut<'graph>(
+    graph: &'graph mut Graph,
+    path: &node::Path,
+) -> Option<&'graph mut Node> {
+    if let Some(index) = graph
+        .nodes
+        .iter()
+        .position(|candidate| &candidate.path == path)
+    {
+        return graph.nodes.get_mut(index);
+    }
+    graph
+        .graphs
+        .iter_mut()
+        .find_map(|nested| node_at_path_mut(nested, path))
 }
 
 /// Where a builder's data construction starts — the two contexts a
@@ -6269,26 +6602,25 @@ fn node_port_pin(node: &Node, port: &node::Port) -> Option<DataType> {
 /// included), or a declared boundary port. An unannotated conventional or
 /// named port answers `None` here and is closed by validated-plan inference.
 fn endpoint_pinned_type(endpoint: &Endpoint, graph: &Graph) -> Option<DataType> {
-    match &endpoint.node {
-        None => graph
+    match &endpoint.owner {
+        EndpointOwner::Graph(path) => graph_at_path(graph, path)?
             .boundary
             .iter()
             .find(|decl| decl.port == endpoint.port)
             .and_then(|decl| decl.ty.clone()),
-        Some(path) => graph
-            .nodes
-            .iter()
-            .find(|node| &node.path == path)
-            .and_then(|node| node_port_pin(node, &endpoint.port)),
+        EndpointOwner::Node(path) => {
+            node_at_path(graph, path).and_then(|node| node_port_pin(node, &endpoint.port))
+        }
     }
 }
 
 /// The canonical text of one checked edge — the human face of
 /// E-DUP-EDGE, mirroring the plan's rendering.
 fn edge_display(edge: &Edge) -> String {
-    let end = |endpoint: &Endpoint| match &endpoint.node {
-        Some(path) => format!("{path}.{}", endpoint.port),
-        None => format!(".{}", endpoint.port),
+    let end = |endpoint: &Endpoint| match &endpoint.owner {
+        EndpointOwner::Node(path) => format!("{path}.{}", endpoint.port),
+        EndpointOwner::Graph(path) if path.is_root() => format!(".{}", endpoint.port),
+        EndpointOwner::Graph(path) => format!("{path}.{}", endpoint.port),
     };
     let to = match &edge.to {
         EdgeTarget::Port(endpoint) => end(endpoint),
@@ -6410,6 +6742,9 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
             expr(&mut val.value.tree.root, remap);
         }
         for handler in &mut node.handlers {
+            if let Some(within) = &mut handler.join_within {
+                expr(&mut within.tree.root, remap);
+            }
             if let Some(guard) = &mut handler.guard {
                 expr(&mut guard.root, remap);
             }
@@ -6835,17 +7170,20 @@ graph m0_probe : App {
         let hir = check_clean(M0_PROBE);
         let edges = &hir.app.edges;
         assert_eq!(edges.len(), 3);
-        assert_eq!(edges[0].from.node, None);
+        assert!(matches!(
+            &edges[0].from.owner,
+            EndpointOwner::Graph(path) if path.is_root()
+        ));
         assert_eq!(edges[0].from.port.name(), "in");
         let EdgeTarget::Port(to) = &edges[0].to else {
             panic!("expected a port target");
         };
-        assert_eq!(to.node.as_ref().unwrap().to_string(), "shout");
+        assert!(matches!(&to.owner, EndpointOwner::Node(path) if path.to_string() == "shout"));
         assert_eq!(to.port.name(), "in");
         let EdgeTarget::Port(last) = &edges[2].to else {
             panic!("expected a port target");
         };
-        assert_eq!(last.node, None);
+        assert!(matches!(&last.owner, EndpointOwner::Graph(path) if path.is_root()));
         assert_eq!(last.port.name(), "out");
     }
 

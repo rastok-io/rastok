@@ -198,6 +198,42 @@ fn int_submission(value: i64) -> InboundSubmission {
     }
 }
 
+fn port_int_submission(port: &str, value: i64) -> InboundSubmission {
+    InboundSubmission {
+        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        port: rastok::node::Port::new(port).unwrap(),
+        draft: Draft {
+            data: Data::materialized(Value::Int(value)),
+            ext: Namespace::new(),
+        },
+        sequence: SubmissionSequence::Next,
+    }
+}
+
+fn encoded_submission(
+    port: &str,
+    encoding: Encoding,
+    bytes: &'static [u8],
+    content_type: &str,
+) -> InboundSubmission {
+    let mut ext = Namespace::new();
+    ext.insert(
+        String::from("content_type"),
+        rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(String::from(
+            content_type,
+        ))),
+    );
+    InboundSubmission {
+        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        port: rastok::node::Port::new(port).unwrap(),
+        draft: Draft {
+            data: Data::encoded(encoding, bytes),
+            ext,
+        },
+        sequence: SubmissionSequence::Next,
+    }
+}
+
 fn tenant_submission(tenant: &str, user: i64) -> InboundSubmission {
     InboundSubmission {
         authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
@@ -428,6 +464,694 @@ graph nested : App {
             .collect::<Vec<_>>(),
         [1, 2, 1],
         "the inner key is namespaced by the enclosing Graph key"
+    );
+}
+
+#[test]
+fn nested_graph_source_routes_through_its_owner_before_the_child_node() {
+    let source = r#"
+graph nested : App {
+  input in: text
+  output out: text
+  val prefix = "hello "
+
+  graph sessions {
+    input in: text
+    output out: text
+    instances = { key = data }
+
+    operator greet {
+      input in: text
+      output out: text
+      on in { out = prefix + data }
+    }
+    . -> greet -> .
+  }
+
+  . -> sessions -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the public nested Graph source compiles");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(&mut journal, text_submission("alice")).unwrap();
+    vm.drain(&mut journal).unwrap();
+
+    assert_eq!(vm.outputs().len(), 1);
+    assert_eq!(
+        vm.outputs()[0].envelope.data(),
+        &Data::materialized(Value::Text(String::from("hello alice")))
+    );
+    assert!(journal.records().iter().any(|record| matches!(
+        record,
+        Record::Transaction(transaction)
+            if transaction.owner_path.to_string() == "sessions"
+                && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start)
+    )));
+    let transaction = journal
+        .records()
+        .iter()
+        .find_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.owner_path.to_string() == "sessions.greet"
+                    && matches!(transaction.trigger, node::Trigger::Port(_)) =>
+            {
+                Some(transaction)
+            }
+            _ => None,
+        })
+        .expect("the child handler fires");
+    let session = OwnerPath::new(["sessions"]).expect("valid Graph owner");
+    let expected = InstanceAddress::new(
+        &OwnerPath::new(["sessions", "greet"]).expect("valid child owner"),
+        &[InstanceFrame::SelectedKey {
+            owner: session,
+            ty: rastok::datatype::DataType::Text,
+            value: Value::Text(String::from("alice")),
+        }],
+    )
+    .expect("the selected text key is canonical");
+    assert_eq!(transaction.instance.address(), &expected);
+}
+
+const JOIN_PROBE: &str = r#"
+type JoinExpiry = union { JoinExpired {} }
+graph joined : App {
+  input left: int
+  input right: int
+  output out: struct { left: int, right: int }
+  output expired: JoinExpiry
+
+  operator pair {
+    input left: int
+    input right: int
+    output out: struct { left: int, right: int }
+    output expired: JoinExpiry
+    on (left, right) last 2 {
+      out = { left = left.data ; right = right.data }
+    }
+  }
+
+  .left -> pair.left
+  .right -> pair.right
+  pair.out -> .out
+  pair.expired -> .expired
+}
+"#;
+
+#[test]
+fn a_public_join_consumes_one_presence_set_in_declared_port_order() {
+    let compilation = compile(
+        &[JOIN_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the public join source compiles");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+
+    vm.inject(&mut journal, port_int_submission("left", 10))
+        .unwrap();
+    vm.drain(&mut journal).unwrap();
+    assert!(
+        vm.outputs().is_empty(),
+        "an incomplete presence emits nothing"
+    );
+    vm.inject(&mut journal, port_int_submission("right", 20))
+        .unwrap();
+    vm.drain(&mut journal).unwrap();
+
+    let output = vm
+        .outputs()
+        .iter()
+        .find(|output| output.port.name() == "out")
+        .expect("presence completion emits once");
+    assert_eq!(
+        output.envelope.data(),
+        &Data::materialized(Value::Struct(vec![
+            (String::from("left"), Value::Int(10)),
+            (String::from("right"), Value::Int(20)),
+        ]))
+    );
+    let transaction = journal
+        .records()
+        .iter()
+        .find_map(|record| match record {
+            Record::Transaction(transaction) if transaction.join_inputs.len() == 2 => {
+                Some(transaction)
+            }
+            _ => None,
+        })
+        .expect("the join transaction carries both contribution roots");
+    assert_eq!(transaction.trigger.to_string(), "p:right");
+    assert_eq!(transaction.consumed.len(), 2);
+    assert_eq!(
+        transaction.join_inputs,
+        vec![
+            journal
+                .records()
+                .iter()
+                .find_map(|record| match record {
+                    Record::Inbound(inbound) if inbound.port.name() == "left" => {
+                        Some(inbound.envelope.meta().sys().id())
+                    }
+                    _ => None,
+                })
+                .unwrap(),
+            journal
+                .records()
+                .iter()
+                .find_map(|record| match record {
+                    Record::Inbound(inbound) if inbound.port.name() == "right" => {
+                        Some(inbound.envelope.meta().sys().id())
+                    }
+                    _ => None,
+                })
+                .unwrap(),
+        ],
+        "contributions follow source-declared port order, not arrival sorting"
+    );
+}
+
+#[test]
+fn a_presence_join_uses_arrival_only_for_the_trigger_not_tuple_order() {
+    let compilation = compile(
+        &[JOIN_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the public join source compiles");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+
+    vm.inject(&mut journal, port_int_submission("right", 20))
+        .unwrap();
+    vm.drain(&mut journal).unwrap();
+    assert!(vm.is_stable(), "retained partial presence is quiescent");
+    vm.inject(&mut journal, port_int_submission("left", 10))
+        .unwrap();
+    vm.drain(&mut journal).unwrap();
+
+    let transaction = journal
+        .records()
+        .iter()
+        .find_map(|record| match record {
+            Record::Transaction(transaction) if transaction.join_inputs.len() == 2 => {
+                Some(transaction)
+            }
+            _ => None,
+        })
+        .expect("the join fires");
+    let inbound_id = |port: &str| {
+        journal
+            .records()
+            .iter()
+            .find_map(|record| match record {
+                Record::Inbound(inbound) if inbound.port.name() == port => {
+                    Some(inbound.envelope.meta().sys().id())
+                }
+                _ => None,
+            })
+            .expect("the named ingress exists")
+    };
+    assert_eq!(transaction.trigger.to_string(), "p:left");
+    assert_eq!(
+        transaction.join_inputs,
+        [inbound_id("left"), inbound_id("right")],
+        "the declaration fixes tuple identity even when right arrived first"
+    );
+}
+
+const THETA_JOIN_PROBE: &str = r#"
+type JoinExpiry = union { JoinExpired {} }
+graph selected : App {
+  input left: int
+  input right: int
+  output out: struct { left: int, right: int }
+  output expired: JoinExpiry
+
+  operator pair {
+    input left: int
+    input right: int
+    output out: struct { left: int, right: int }
+    output expired: JoinExpiry
+    on (left, right) where left.data == right.data last 2 {
+      out = { left = left.data ; right = right.data }
+    }
+  }
+
+  .left -> pair.left
+  .right -> pair.right
+  pair.out -> .out
+  pair.expired -> .expired
+}
+"#;
+
+#[test]
+fn a_theta_join_refines_fifo_candidates_without_consuming_a_false_pair() {
+    let compilation = compile(
+        &[THETA_JOIN_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the bounded theta join compiles");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    for (port, value) in [("left", 1), ("left", 2), ("right", 2)] {
+        vm.inject(&mut journal, port_int_submission(port, value))
+            .unwrap();
+        vm.drain(&mut journal).unwrap();
+    }
+
+    let output = vm
+        .outputs()
+        .iter()
+        .find(|output| output.port.name() == "out")
+        .expect("the second left candidate matches right");
+    assert_eq!(
+        output.envelope.data(),
+        &Data::materialized(Value::Struct(vec![
+            (String::from("left"), Value::Int(2)),
+            (String::from("right"), Value::Int(2)),
+        ]))
+    );
+    assert!(
+        vm.is_stable(),
+        "left=1 remains as a retained partial presence, not runnable work"
+    );
+}
+
+#[test]
+fn last_evicts_the_oldest_candidate_before_correlating_new_work() {
+    let compilation = compile(
+        &[JOIN_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the last-bounded join compiles");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    for value in [1, 2, 3] {
+        vm.inject(&mut journal, port_int_submission("left", value))
+            .unwrap();
+        vm.drain(&mut journal).unwrap();
+    }
+
+    let expiry = vm
+        .outputs()
+        .iter()
+        .find(|output| output.port.name() == "expired")
+        .expect("overflow is an explicit typed outcome");
+    assert!(matches!(
+        expiry.envelope.data(),
+        Data::Materialized(Value::TaggedUnion(value)) if value.case == "JoinExpired"
+    ));
+    vm.inject(&mut journal, port_int_submission("right", 9))
+        .unwrap();
+    vm.drain(&mut journal).unwrap();
+    let joined = vm
+        .outputs()
+        .iter()
+        .find(|output| output.port.name() == "out")
+        .expect("the next FIFO candidate remains available");
+    assert_eq!(
+        joined.envelope.data(),
+        &Data::materialized(Value::Struct(vec![
+            (String::from("left"), Value::Int(2)),
+            (String::from("right"), Value::Int(9)),
+        ]))
+    );
+    assert!(journal.records().iter().any(|record| matches!(
+        record,
+        Record::Transaction(transaction)
+            if transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Evict)
+                && transaction.cause.is_some()
+    )));
+}
+
+const WITHIN_JOIN_PROBE: &str = r#"
+type JoinExpiry = union { JoinExpired {} }
+graph timed : App {
+  input left: int
+  input right: int
+  output out: int
+  output expired: JoinExpiry
+
+  operator pair {
+    input left: int
+    input right: int
+    output out: int
+    output expired: JoinExpiry
+    on (left, right) within duration("1s") { out = left.data + right.data }
+  }
+
+  .left -> pair.left
+  .right -> pair.right
+  pair.out -> .out
+  pair.expired -> .expired
+}
+"#;
+
+#[test]
+fn within_evicts_only_a_still_buffered_candidate() {
+    let compilation = compile(
+        &[WITHIN_JOIN_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the within-bounded join compiles");
+
+    let mut expired_journal = MemJournal::new(GraphVersion(1));
+    let mut expired = Vm::boot(&compilation.plan, GraphVersion(1));
+    expired
+        .inject(&mut expired_journal, port_int_submission("left", 4))
+        .unwrap();
+    expired.drain(&mut expired_journal).unwrap();
+    expired
+        .advance(
+            &mut expired_journal,
+            &mut EchoWorld::default(),
+            1_000_000_000,
+        )
+        .unwrap();
+    assert!(
+        expired
+            .outputs()
+            .iter()
+            .any(|output| output.port.name() == "expired")
+    );
+
+    let mut joined_journal = MemJournal::new(GraphVersion(1));
+    let mut joined = Vm::boot(&compilation.plan, GraphVersion(1));
+    joined
+        .inject(&mut joined_journal, port_int_submission("left", 4))
+        .unwrap();
+    joined.drain(&mut joined_journal).unwrap();
+    joined
+        .inject(&mut joined_journal, port_int_submission("right", 5))
+        .unwrap();
+    joined.drain(&mut joined_journal).unwrap();
+    joined
+        .advance(
+            &mut joined_journal,
+            &mut EchoWorld::default(),
+            1_000_000_000,
+        )
+        .unwrap();
+    assert_eq!(
+        joined
+            .outputs()
+            .iter()
+            .filter(|output| output.port.name() == "out")
+            .count(),
+        1
+    );
+    assert!(
+        joined
+            .outputs()
+            .iter()
+            .all(|output| output.port.name() != "expired"),
+        "the stale timer cannot evict a contribution already committed"
+    );
+}
+
+const KEYED_JOIN_PROBE: &str = r#"
+type JoinExpiry = union { JoinExpired {} }
+graph keyed_join : App {
+  input left: int
+  input right: int
+  output out: int
+  output expired: JoinExpiry
+
+  operator pair {
+    instances = { key = data }
+    input left: int
+    input right: int
+    output out: int
+    output expired: JoinExpiry
+    on (left, right) last 2 { out = left.data }
+  }
+
+  .left -> pair.left
+  .right -> pair.right
+  pair.out -> .out
+  pair.expired -> .expired
+}
+"#;
+
+#[test]
+fn a_join_correlates_only_inside_its_owning_operator_instance() {
+    let compilation = compile(
+        &[KEYED_JOIN_PROBE],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the keyed join compiles");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+
+    for (port, value) in [("left", 1), ("right", 2)] {
+        vm.inject(&mut journal, port_int_submission(port, value))
+            .unwrap();
+        vm.drain(&mut journal).unwrap();
+    }
+    assert!(
+        vm.outputs().is_empty(),
+        "different instance addresses never form one presence set"
+    );
+    vm.inject(&mut journal, port_int_submission("right", 1))
+        .unwrap();
+    vm.drain(&mut journal).unwrap();
+
+    let transaction = journal
+        .records()
+        .iter()
+        .find_map(|record| match record {
+            Record::Transaction(transaction) if transaction.join_inputs.len() == 2 => {
+                Some(transaction)
+            }
+            _ => None,
+        })
+        .expect("equal keys complete one presence set");
+    assert_eq!(transaction.instance.address(), &int_address("pair", 1));
+    assert_eq!(
+        vm.outputs()
+            .iter()
+            .filter(|output| output.port.name() == "out")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_join_can_pick_one_named_input_metadata_value_explicitly() {
+    let source = r#"
+type JoinExpiry = union { JoinExpired {} }
+graph attributed : App {
+  input left: int
+  input right: int
+  output out: variant
+
+  operator mark_left {
+    input in: int
+    output out: int
+    on in { out = { meta.app.token = data } }
+  }
+  operator mark_right {
+    input in: int
+    output out: int
+    on in { out = { meta.app.token = data } }
+  }
+  operator pair {
+    input left: int
+    input right: int
+    output out: int
+    output expired: JoinExpiry
+    on (left, right) last 2 {
+      out = { data = left.data ; meta.app.token = right.meta.app.token }
+    }
+  }
+  operator read_pick {
+    input in: int
+    output out: variant
+    on in { out = meta.app.token }
+  }
+
+  .left -> mark_left -> pair.left
+  .right -> mark_right -> pair.right
+  pair.out -> read_pick -> .out
+  pair.expired -> nothing
+}
+
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("named join metadata follows the same sealed grid as bare meta");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(&mut journal, port_int_submission("left", 1))
+        .unwrap();
+    vm.drain(&mut journal).unwrap();
+    vm.inject(&mut journal, port_int_submission("right", 2))
+        .unwrap();
+    vm.drain(&mut journal).unwrap();
+
+    assert_eq!(
+        vm.outputs()
+            .iter()
+            .find(|output| output.port.name() == "out")
+            .expect("the explicit attribution survives the join")
+            .envelope
+            .data(),
+        &Data::materialized(Value::Int(2))
+    );
+}
+
+#[test]
+fn common_or_absent_ignores_missing_contributions_and_not_input_order() {
+    let source = r#"
+graph attributed : App {
+  input left: int
+  input right: int
+  output out: int
+
+  operator mark_right {
+    input in: int
+    output out: int
+    on in { out = { meta.app.token = data } }
+  }
+  operator pair {
+    input left: int
+    input right: int
+    output out: int
+    on (left, right) { out = left.data }
+  }
+
+  .left -> pair.left
+  .right -> mark_right -> pair.right
+  pair.out -> .out
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an unused optional join field is legal");
+
+    for arrivals in [[("left", 1), ("right", 2)], [("right", 2), ("left", 1)]] {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        for (port, value) in arrivals {
+            vm.inject(&mut journal, port_int_submission(port, value))
+                .unwrap();
+            vm.drain(&mut journal).unwrap();
+        }
+        assert_eq!(
+            vm.outputs()[0].envelope.meta().app().get("token"),
+            Some(&rastok::envelope::MetaValue::Scalar(
+                rastok::envelope::Scalar::Int(2)
+            )),
+            "one present value survives regardless of which input triggers"
+        );
+    }
+}
+
+#[test]
+fn join_payload_laziness_is_keyed_by_declared_input() {
+    let compile_join = |body: &str, output_type: &str| {
+        let source = format!(
+            r#"
+graph lazy_join : App {{
+  input left: variant
+  input right: variant
+  output out: {output_type}
+  operator pair {{
+    input left: variant
+    input right: variant
+    output out: {output_type}
+    on (left, right) {{ out = {body} }}
+  }}
+  .left -> pair.left
+  .right -> pair.right
+  pair.out -> .out
+}}
+"#
+        );
+        compile(
+            &[source.as_str()],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the lazy join checks")
+    };
+
+    let carried = compile_join("left.data", "variant");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&carried.plan, GraphVersion(1));
+    vm.inject(
+        &mut journal,
+        encoded_submission(
+            "left",
+            Encoding::Avro,
+            b"left-opaque",
+            "application/avro-left",
+        ),
+    )
+    .unwrap();
+    vm.drain(&mut journal).unwrap();
+    vm.inject(
+        &mut journal,
+        encoded_submission(
+            "right",
+            Encoding::Avro,
+            b"right-opaque",
+            "application/avro-right",
+        ),
+    )
+    .unwrap();
+    vm.drain(&mut journal)
+        .expect("carrying left never asks either opaque decoder");
+    let output = &vm.outputs()[0].envelope;
+    assert!(matches!(
+        output.data(),
+        Data::Encoded { encoding: Encoding::Avro, bytes, .. }
+            if bytes.as_slice() == b"left-opaque"
+    ));
+    assert_eq!(
+        output.meta().ext().get("content_type"),
+        Some(&rastok::envelope::MetaValue::Scalar(
+            rastok::envelope::Scalar::Text(String::from("application/avro-left"))
+        )),
+        "the selected payload, not the causal trigger, decides content_type"
+    );
+
+    let inspected = compile_join("size(left.data)", "int");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&inspected.plan, GraphVersion(1));
+    vm.inject(
+        &mut journal,
+        encoded_submission("right", Encoding::Avro, b"never-read", "application/avro"),
+    )
+    .unwrap();
+    vm.drain(&mut journal).unwrap();
+    vm.inject(
+        &mut journal,
+        encoded_submission("left", Encoding::Raw, b"abc", "text/plain"),
+    )
+    .unwrap();
+    vm.drain(&mut journal)
+        .expect("only the structurally inspected left payload decodes");
+    assert_eq!(
+        vm.outputs()[0].envelope.data(),
+        &Data::materialized(Value::Int(3))
+    );
+    assert!(
+        vm.outputs()[0]
+            .envelope
+            .meta()
+            .ext()
+            .get("content_type")
+            .is_none(),
+        "a computed payload is fresh"
     );
 }
 
@@ -1114,6 +1838,128 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
         "a late reply is observable but non-causal"
     );
     assert_eq!(root_exit_cases(&vm), ["OutcomeUnknown"]);
+}
+
+#[test]
+fn bounded_closing_interleavings_are_model_checked() {
+    #[derive(Clone, Copy, Debug)]
+    enum ReplyAt {
+        BeforeDrain,
+        DuringSettlement,
+        OnCancel,
+        AfterSettlement,
+        Never,
+    }
+
+    let compilation = compile(
+        &[CLOSING_PROCESS],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the explicit policy closes every schedule in bounded time");
+    for reply_at in [
+        ReplyAt::BeforeDrain,
+        ReplyAt::DuringSettlement,
+        ReplyAt::OnCancel,
+        ReplyAt::AfterSettlement,
+        ReplyAt::Never,
+    ] {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = ClosingWorld {
+            confirm_cancel: matches!(reply_at, ReplyAt::OnCancel),
+            ..ClosingWorld::default()
+        };
+        vm.inject(&mut journal, text_submission("one")).unwrap();
+        vm.drain(&mut journal).unwrap();
+        vm.pump(&mut journal, &mut world).unwrap();
+        let call = world.started[0];
+        let reply = || Response {
+            call_ref: call,
+            completion: Completion::process(
+                vec![],
+                vec![],
+                ProcessExit::Exited {
+                    exit_code: 0,
+                    signal: None,
+                },
+            ),
+        };
+
+        // t=1 requests Closing; t=2 ends drain and requests cancel;
+        // t=3 ends settlement. Reply placement is the model dimension.
+        vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+        if matches!(reply_at, ReplyAt::BeforeDrain) {
+            world.answers.push(reply());
+            vm.pump(&mut journal, &mut world).unwrap();
+            vm.drain(&mut journal).unwrap();
+        }
+        vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+        if matches!(reply_at, ReplyAt::DuringSettlement) {
+            world.answers.push(reply());
+            vm.pump(&mut journal, &mut world).unwrap();
+            vm.drain(&mut journal).unwrap();
+        }
+        vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
+        let late = if matches!(reply_at, ReplyAt::AfterSettlement) {
+            world.answers.push(reply());
+            vm.pump(&mut journal, &mut world).unwrap()
+        } else {
+            Default::default()
+        };
+        vm.drain(&mut journal).unwrap();
+
+        let expected = if matches!(
+            reply_at,
+            ReplyAt::BeforeDrain | ReplyAt::DuringSettlement | ReplyAt::OnCancel
+        ) {
+            "Exited"
+        } else {
+            "OutcomeUnknown"
+        };
+        assert_eq!(root_exit_cases(&vm), [expected], "schedule {reply_at:?}");
+        assert_eq!(
+            journal
+                .records()
+                .iter()
+                .filter(|record| matches!(
+                    record,
+                    Record::Outbound(outbound) if outbound.intent.call_ref == call
+                ))
+                .count(),
+            2,
+            "open plus exactly one terminal journal fact for {reply_at:?}"
+        );
+        let exit_at = journal
+            .records()
+            .iter()
+            .position(|record| matches!(
+                record,
+                Record::Transaction(transaction)
+                    if transaction.emissions.iter().any(|emission| emission.port.name() == "exit")
+            ))
+            .expect("one call-terminal transaction");
+        let stop_at = journal
+            .records()
+            .iter()
+            .position(|record| {
+                matches!(
+                    record,
+                    Record::Transaction(transaction)
+                        if transaction.owner_path.is_root()
+                            && transaction.trigger
+                                == node::Trigger::Lifecycle(node::Lifecycle::Stop)
+                )
+            })
+            .expect("bounded Closing reaches stop");
+        assert!(
+            exit_at < stop_at,
+            "exit precedes reclamation for {reply_at:?}"
+        );
+        assert!(vm.is_stable(), "schedule {reply_at:?} reaches rest");
+        if matches!(reply_at, ReplyAt::AfterSettlement) {
+            assert_eq!(late.discarded.len(), 1, "the late reply is observable");
+        }
+    }
 }
 
 #[test]

@@ -31,8 +31,8 @@ use crate::plan::{
     OwnerKind, OwnerPath, OwnerSlot, Slot, ValidatedExecutionPlan,
 };
 use crate::runtime::{
-    DataSlot, Delivery, Fault, InstanceState, LifecycleFiring, Mailboxes, TransactionExecutor,
-    eval_lazy, meta_value, resolve_payload,
+    DataSlot, Delivery, Fault, InstanceState, JoinCandidate, LifecycleFiring, Mailboxes,
+    TransactionExecutor, eval_lazy, meta_value, resolve_payload,
 };
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -338,6 +338,34 @@ struct PreparedEmissions {
     candidates: BTreeMap<InstanceRef, InstanceCandidate>,
 }
 
+/// One Operator activation selected without removing mailbox work. Join
+/// inputs remain ordinary durable routed deliveries until their transaction
+/// commits; an eviction follows the same reserve/commit/remove discipline.
+#[derive(Debug, Clone)]
+enum OperatorWork {
+    Single(Delivery),
+    Join {
+        activation: node::HandlerActivation,
+        trigger: Delivery,
+        inputs: Vec<Delivery>,
+    },
+    Evict(Delivery),
+}
+
+fn consider_operator_work(
+    best: &mut Option<(usize, u8, OperatorWork)>,
+    at: usize,
+    rank: u8,
+    work: OperatorWork,
+) {
+    if best
+        .as_ref()
+        .is_none_or(|(current, current_rank, _)| (at, rank) < (*current, *current_rank))
+    {
+        *best = Some((at, rank, work));
+    }
+}
+
 /// The plan-backed gate for one atomic boundary completion.
 ///
 /// Format v9 retains the exact `ProcessExit` union in the resolved port
@@ -508,6 +536,9 @@ pub struct Vm<'plan> {
     /// Plan-derived owner chains, indexed once so route selection allocates
     /// only the dynamic reference chain it must commit.
     owner_chains: Vec<Option<Vec<OwnerSlot>>>,
+    /// Whether any activation can retain a partial presence set. The common
+    /// no-join plan can keep FIFO dispatch on its original direct path.
+    has_join_activations: bool,
     graph_version: GraphVersion,
     scheduler: Scheduler,
     state: InstanceState,
@@ -565,6 +596,10 @@ impl<'plan> Vm<'plan> {
         Self {
             plan,
             owner_chains,
+            has_join_activations: plan
+                .handlers
+                .iter()
+                .any(|handler| matches!(&handler.activation, node::HandlerActivation::Join { .. })),
             graph_version,
             scheduler: Scheduler::new(1024),
             state: InstanceState::new(),
@@ -704,33 +739,119 @@ impl<'plan> Vm<'plan> {
             self.settle_next(journal, index)?;
             return Ok(true);
         }
-        let instances = &self.instances;
-        let Some((slot, key, delivery)) =
-            self.scheduler.mailboxes.peek_next_where(|_, reference| {
-                match instances.get(reference) {
-                    Some(Instance {
-                        phase: InstancePhase::Open,
-                        ..
-                    })
-                    | Some(Instance {
-                        phase:
-                            InstancePhase::Closing {
+        // Preserve the direct FIFO dispatcher for the overwhelmingly common
+        // plan with no joins. R6's wider scan exists solely because a partial
+        // join head may let later independent work run; paying for it on
+        // every ordinary relay was a measured Cortex-M33 regression.
+        if !self.has_join_activations {
+            let instances = &self.instances;
+            let Some((slot, instance, delivery)) =
+                self.scheduler.mailboxes.peek_next_where(|_, reference| {
+                    matches!(
+                        instances.get(reference),
+                        Some(Instance {
+                            phase: InstancePhase::Open,
+                            ..
+                        }) | Some(Instance {
+                            phase: InstancePhase::Closing {
                                 stage: ClosingStage::Draining,
                                 ..
                             },
-                        ..
-                    }) => true,
-                    Some(_) | None => false,
-                }
-            })
-        else {
-            return Ok(false);
-        };
-        match &self.plan.nodes[slot.index()].kind {
-            NodeKind::Operator => self.fire_operator(journal, slot, &key, &delivery)?,
-            NodeKind::Connector(_) => self.open_call(journal, slot, &key, &delivery)?,
+                            ..
+                        })
+                    )
+                })
+            else {
+                return Ok(false);
+            };
+            match &self.plan.nodes[slot.index()].kind {
+                NodeKind::Operator => self.fire_operator(journal, slot, &instance, &delivery)?,
+                NodeKind::Connector(_) => self.open_call(journal, slot, &instance, &delivery)?,
+            }
+            return Ok(true);
         }
-        Ok(true)
+        self.step_join_mailboxes(journal)
+    }
+
+    // Keep join reservation state out of the ordinary relay's stack frame.
+    // This boundary is measured on Cortex-M33: inlining the wider candidate
+    // scan made a plan with no joins miss the established relay budget even
+    // though its branch was never taken.
+    #[inline(never)]
+    fn step_join_mailboxes(&mut self, journal: &mut dyn Journal) -> Result<bool, VmError> {
+        let mut after = None;
+        while let Some((slot, instance, delivery)) =
+            self.scheduler
+                .mailboxes
+                .next_runnable_key(after.as_ref(), |_, reference| {
+                    matches!(
+                        self.instances.get(reference),
+                        Some(Instance {
+                            phase: InstancePhase::Open,
+                            ..
+                        }) | Some(Instance {
+                            phase: InstancePhase::Closing {
+                                stage: ClosingStage::Draining,
+                                ..
+                            },
+                            ..
+                        })
+                    )
+                })
+        {
+            after = Some((slot, instance.clone()));
+            match &self.plan.nodes[slot.index()].kind {
+                NodeKind::Connector(_) => {
+                    self.open_call(journal, slot, &instance, &delivery)?;
+                    return Ok(true);
+                }
+                NodeKind::Operator => {
+                    // An ordinary FIFO head necessarily precedes any work a
+                    // later delivery could make runnable. Only a join-owned
+                    // head can be partial and require the wider candidate
+                    // scan, so the common single-port path stays allocation
+                    // free.
+                    let join_owned = self.plan.handlers.iter().any(|handler| {
+                        handler.node == slot
+                            && matches!(
+                                &handler.activation,
+                                node::HandlerActivation::Join { ports, .. }
+                                    if ports.contains(&delivery.port)
+                            )
+                    });
+                    let work = if join_owned {
+                        let Some(work) = self.operator_work(slot, &instance)? else {
+                            continue;
+                        };
+                        work
+                    } else {
+                        OperatorWork::Single(delivery)
+                    };
+                    match work {
+                        OperatorWork::Single(delivery) => {
+                            self.fire_operator(journal, slot, &instance, &delivery)?
+                        }
+                        OperatorWork::Join {
+                            activation,
+                            trigger,
+                            inputs,
+                        } => self.fire_join_operator(
+                            journal,
+                            slot,
+                            &instance,
+                            &activation,
+                            &trigger,
+                            &inputs,
+                        )?,
+                        OperatorWork::Evict(delivery) => {
+                            self.evict_join_delivery(journal, slot, &instance, &delivery)?
+                        }
+                    }
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Runs every ready transaction: settled closures and unclaimed
@@ -893,6 +1014,23 @@ impl<'plan> Vm<'plan> {
                 delivery,
                 instance,
             } => (connector, edge, delivery, instance),
+            DatedPayload::JoinWithin {
+                operator,
+                edge,
+                delivery,
+                instance,
+            } => {
+                let slot = self.slot_of(&operator);
+                let buffered = self
+                    .scheduler
+                    .mailboxes
+                    .find_by_ref(slot, &instance, &edge, delivery)
+                    .cloned();
+                if let Some(buffered) = buffered {
+                    self.evict_join_delivery(journal, slot, &instance, &buffered)?;
+                }
+                return Ok(());
+            }
             DatedPayload::InstanceLifetime {
                 owner,
                 instance,
@@ -1170,14 +1308,55 @@ impl<'plan> Vm<'plan> {
         &self.observed
     }
 
-    /// Whether the machine is stable: nothing queued, nothing
-    /// settled-but-uncommitted, no open call held.
+    /// Whether the machine is stable: no activation can run, no completion
+    /// waits to commit, and no call is open. A partial join is retained
+    /// mailbox state, not runnable work; it is therefore quiescent until a
+    /// matching arrival or its dated/count eviction makes progress possible.
     #[must_use]
     pub fn is_stable(&self) -> bool {
-        self.scheduler.mailboxes.is_empty()
-            && self.lifecycle.is_empty()
-            && self.settled.is_empty()
-            && self.pending.is_empty()
+        if !self.lifecycle.is_empty() || !self.settled.is_empty() || !self.pending.is_empty() {
+            return false;
+        }
+        if !self.has_join_activations {
+            return self.scheduler.mailboxes.is_empty();
+        }
+        let mut after = None;
+        while let Some((slot, instance, delivery)) =
+            self.scheduler
+                .mailboxes
+                .next_runnable_key(after.as_ref(), |_, reference| {
+                    matches!(
+                        self.instances.get(reference),
+                        Some(Instance {
+                            phase: InstancePhase::Open,
+                            ..
+                        }) | Some(Instance {
+                            phase: InstancePhase::Closing {
+                                stage: ClosingStage::Draining,
+                                ..
+                            },
+                            ..
+                        })
+                    )
+                })
+        {
+            if !matches!(self.plan.nodes[slot.index()].kind, NodeKind::Operator) {
+                return false;
+            }
+            let join_owned = self.plan.handlers.iter().any(|handler| {
+                handler.node == slot
+                    && matches!(
+                        &handler.activation,
+                        node::HandlerActivation::Join { ports, .. }
+                            if ports.contains(&delivery.port)
+                    )
+            });
+            if !join_owned || !matches!(self.operator_work(slot, &instance), Ok(None)) {
+                return false;
+            }
+            after = Some((slot, instance));
+        }
+        true
     }
 
     /// Whether calls are open against the world — work [`Self::drain`]
@@ -1308,6 +1487,7 @@ impl<'plan> Vm<'plan> {
             trigger: node::Trigger::Lifecycle(node::Lifecycle::Closing),
             cause: Some(cause.meta().sys().id()),
             consumed: vec![],
+            join_inputs: vec![],
             state_delta: vec![],
             emissions: vec![],
             routes: vec![],
@@ -1565,6 +1745,7 @@ impl<'plan> Vm<'plan> {
                     trigger: node::Trigger::Lifecycle(work.lifecycle),
                     cause: Some(work.cause.meta().sys().id()),
                     consumed: vec![],
+                    join_inputs: vec![],
                     state_delta: vec![],
                     emissions: vec![],
                     routes: vec![],
@@ -1835,6 +2016,167 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
+    /// Selects the earliest runnable fact in one Operator mailbox. Partial
+    /// join arrivals are logically buffered and therefore do not block a
+    /// later ready activation; ordering is by the arrival that made the work
+    /// runnable, never by map or handler declaration order.
+    fn operator_work(
+        &self,
+        slot: Slot,
+        instance: &InstanceRef,
+    ) -> Result<Option<OperatorWork>, VmError> {
+        let Some(queue) = self.scheduler.mailboxes.queued(slot, instance) else {
+            return Ok(None);
+        };
+        let handlers: Vec<_> = self
+            .plan
+            .handlers
+            .iter()
+            .filter(|handler| handler.node == slot)
+            .collect();
+        let join_owns = |port: &node::Port| {
+            handlers.iter().any(|handler| {
+                matches!(
+                    &handler.activation,
+                    node::HandlerActivation::Join { ports, .. } if ports.contains(port)
+                )
+            })
+        };
+        let mut best: Option<(usize, u8, OperatorWork)> = None;
+
+        for (index, delivery) in queue.iter().enumerate() {
+            let has_single = handlers.iter().any(|handler| {
+                matches!(
+                    &handler.activation,
+                    node::HandlerActivation::Port(port) if port == &delivery.port
+                )
+            });
+            if has_single || !join_owns(&delivery.port) {
+                consider_operator_work(&mut best, index, 2, OperatorWork::Single(delivery.clone()));
+                break;
+            }
+        }
+
+        let executor = TransactionExecutor::new(self.plan, self.graph_version);
+        let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
+        let values = self
+            .instances
+            .get(instance)
+            .map(|bundle| &bundle.values)
+            .ok_or_else(|| VmError::PlanInvariant {
+                node: self.plan.nodes[slot.index()].path.clone(),
+                reason: "a mailbox references an instance without a bundle",
+            })?;
+
+        for handler in handlers {
+            let node::HandlerActivation::Join { ports, last, .. } = &handler.activation else {
+                continue;
+            };
+
+            if let Some(limit) = last {
+                for port in ports {
+                    let candidates: Vec<_> = queue
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, delivery)| &delivery.port == port)
+                        .collect();
+                    if candidates.len() > *limit as usize {
+                        let overflow_at = candidates[*limit as usize].0;
+                        consider_operator_work(
+                            &mut best,
+                            overflow_at,
+                            0,
+                            OperatorWork::Evict(candidates[0].1.clone()),
+                        );
+                    }
+                }
+            }
+
+            for (trigger_index, trigger) in queue.iter().enumerate() {
+                let Some(trigger_port) = ports.iter().position(|port| port == &trigger.port) else {
+                    continue;
+                };
+                let mut options: Vec<Vec<Delivery>> = Vec::with_capacity(ports.len());
+                for (port_index, port) in ports.iter().enumerate() {
+                    let candidates = if port_index == trigger_port {
+                        vec![trigger.clone()]
+                    } else {
+                        queue
+                            .iter()
+                            .take(trigger_index)
+                            .filter(|delivery| &delivery.port == port)
+                            .cloned()
+                            .collect()
+                    };
+                    if candidates.is_empty() {
+                        options.clear();
+                        break;
+                    }
+                    options.push(candidates);
+                }
+                if options.len() != ports.len() {
+                    continue;
+                }
+
+                // Declared port order is the tuple order. This mixed-radix
+                // walk visits FIFO choices lexicographically and stops at the
+                // first predicate match for this presence-completing arrival.
+                let mut choice = vec![0usize; options.len()];
+                loop {
+                    let inputs: Vec<Delivery> = options
+                        .iter()
+                        .zip(&choice)
+                        .map(|(candidates, index)| candidates[*index].clone())
+                        .collect();
+                    if executor
+                        .join_matches(
+                            slot,
+                            JoinCandidate {
+                                activation: &handler.activation,
+                                trigger,
+                                inputs: &inputs,
+                            },
+                            &state,
+                            values,
+                        )
+                        .map_err(VmError::Fault)?
+                    {
+                        consider_operator_work(
+                            &mut best,
+                            trigger_index,
+                            1,
+                            OperatorWork::Join {
+                                activation: handler.activation.clone(),
+                                trigger: trigger.clone(),
+                                inputs,
+                            },
+                        );
+                        break;
+                    }
+                    let mut digit = choice.len();
+                    while digit > 0 {
+                        digit -= 1;
+                        choice[digit] += 1;
+                        if choice[digit] < options[digit].len() {
+                            break;
+                        }
+                        choice[digit] = 0;
+                    }
+                    if digit == 0 && choice[0] == 0 {
+                        break;
+                    }
+                }
+                if best
+                    .as_ref()
+                    .is_some_and(|(at, rank, _)| (*at, *rank) <= (trigger_index, 1))
+                {
+                    break;
+                }
+            }
+        }
+        Ok(best.map(|(_, _, work)| work))
+    }
+
     fn fire_operator(
         &mut self,
         journal: &mut dyn Journal,
@@ -1879,6 +2221,119 @@ impl<'plan> Vm<'plan> {
         if let Some(scope) = close_request {
             self.activate_close(&scope, delivery.envelope.clone());
             self.arm_closing_deadlines(&scope, delivery.envelope.meta().sys().id());
+        }
+        self.route_emissions(slot, instance, prepared);
+        self.progress_closures();
+        Ok(())
+    }
+
+    fn fire_join_operator(
+        &mut self,
+        journal: &mut dyn Journal,
+        slot: Slot,
+        instance: &InstanceRef,
+        activation: &node::HandlerActivation,
+        trigger: &Delivery,
+        inputs: &[Delivery],
+    ) -> Result<(), VmError> {
+        let executor = TransactionExecutor::new(self.plan, self.graph_version);
+        let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
+        let values = self
+            .instances
+            .get(instance)
+            .map(|bundle| &bundle.values)
+            .ok_or_else(|| VmError::PlanInvariant {
+                node: self.plan.nodes[slot.index()].path.clone(),
+                reason: "a join mailbox references an instance without a bundle",
+            })?;
+        let mut outcome = executor
+            .fire_join(
+                slot,
+                instance,
+                JoinCandidate {
+                    activation,
+                    trigger,
+                    inputs,
+                },
+                &state,
+                values,
+            )
+            .map_err(VmError::Fault)?;
+        let close_request = outcome.record.close_scope.clone();
+        if let Some(scope) = &close_request {
+            outcome.record.timers.extend(self.closing_timers(scope));
+        }
+        let prepared =
+            self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
+        outcome.record.routes = self.routed_deliveries(&prepared);
+        journal
+            .commit(outcome.record.clone())
+            .map_err(VmError::Journal)?;
+        for delivery in inputs {
+            if self
+                .scheduler
+                .mailboxes
+                .remove_by_ref(
+                    slot,
+                    instance,
+                    &delivery.edge,
+                    delivery.envelope.meta().sys().id(),
+                )
+                .is_none()
+            {
+                return Err(VmError::PlanInvariant {
+                    node: self.plan.nodes[slot.index()].path.clone(),
+                    reason: "a committed join input disappeared before cursor removal",
+                });
+            }
+        }
+        self.state.apply_unchecked(
+            self.plan.plan(),
+            slot,
+            instance,
+            &outcome.record.state_delta,
+        );
+        if let Some(scope) = close_request {
+            self.activate_close(&scope, trigger.envelope.clone());
+            self.arm_closing_deadlines(&scope, trigger.envelope.meta().sys().id());
+        }
+        self.route_emissions(slot, instance, prepared);
+        self.progress_closures();
+        Ok(())
+    }
+
+    fn evict_join_delivery(
+        &mut self,
+        journal: &mut dyn Journal,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+    ) -> Result<(), VmError> {
+        let executor = TransactionExecutor::new(self.plan, self.graph_version);
+        let mut outcome = executor
+            .join_expired(slot, instance, delivery)
+            .map_err(VmError::Fault)?;
+        let prepared =
+            self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
+        outcome.record.routes = self.routed_deliveries(&prepared);
+        journal
+            .commit(outcome.record.clone())
+            .map_err(VmError::Journal)?;
+        if self
+            .scheduler
+            .mailboxes
+            .remove_by_ref(
+                slot,
+                instance,
+                &delivery.edge,
+                delivery.envelope.meta().sys().id(),
+            )
+            .is_none()
+        {
+            return Err(VmError::PlanInvariant {
+                node: self.plan.nodes[slot.index()].path.clone(),
+                reason: "a committed join eviction lost its buffered delivery",
+            });
         }
         self.route_emissions(slot, instance, prepared);
         self.progress_closures();
@@ -2761,6 +3216,27 @@ impl<'plan> Vm<'plan> {
                             .unwrap_or_else(|_| {
                                 unreachable!("capacity was reserved before the commit")
                             });
+                        let join_within = self.plan.handlers.iter().find_map(|handler| {
+                            (handler.node == target)
+                                .then_some(&handler.activation)
+                                .and_then(|activation| match activation {
+                                    node::HandlerActivation::Join {
+                                        ports, within_ns, ..
+                                    } if ports.contains(&to.port) => *within_ns,
+                                    _ => None,
+                                })
+                        });
+                        if let Some(within) = join_within {
+                            self.scheduler.arm(
+                                self.now.saturating_add(within),
+                                DatedPayload::JoinWithin {
+                                    operator: self.plan.nodes[target.index()].path.clone(),
+                                    edge: self.plan.edge_text(&edge),
+                                    delivery: envelope.meta().sys().id(),
+                                    instance: prepared.reference.clone(),
+                                },
+                            );
+                        }
                         self.observed.push(Observed {
                             node: Some(self.plan.nodes[target.index()].path.clone()),
                             port: to.port.clone(),

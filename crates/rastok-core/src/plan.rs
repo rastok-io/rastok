@@ -289,6 +289,24 @@ impl OwnerPath {
     pub fn is_root(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Enclosing lexical Graph path. The root has no parent.
+    #[must_use]
+    pub fn parent(&self) -> Option<Self> {
+        (!self.0.is_empty()).then(|| Self(self.0[..self.0.len() - 1].to_vec()))
+    }
+
+    /// Deepest lexical path shared by both owners.
+    #[must_use]
+    pub fn common_ancestor(&self, other: &Self) -> Self {
+        let length = self
+            .0
+            .iter()
+            .zip(&other.0)
+            .take_while(|(left, right)| left == right)
+            .count();
+        Self(self.0[..length].to_vec())
+    }
 }
 
 impl From<&node::Path> for OwnerPath {

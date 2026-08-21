@@ -248,6 +248,16 @@ expect "charged exactly once" ledger.in count == 1 …       // optional label, 
   runtime instance context are not directly assertable — the golden trace (§6) sees
   everything anyway, and scenarios stay robust to internal refactorings.
 
+**M1.4 R6 evidence.** Public scenarios exercise all five lifetime profiles,
+fresh generations, nested Graph closure, instance-local join correlation, and
+typed join expiry through ordinary App ports; they never inspect a mailbox,
+key, generation, or private `var`. A partial join is stable retained state, so
+an expectation window may close with no output until a matching injection or
+`advance` makes its `within` obligation runnable. The canonical trace remains
+the independent structural witness: transaction key 31 exposes the selected
+instance reference and key 34 exposes join contributions in declared-port
+order.
+
 ### 5.3 Civil time in scenarios — `origin`
 
 Virtual time is relative ; `Calendar` (cron) needs an absolute anchor. A

@@ -141,6 +141,104 @@ graph g : App {
 }
 
 #[test]
+fn a_nested_keyed_graph_crosses_the_whole_public_compiler_path() {
+    let source = r#"
+graph g : App {
+  input in: text
+  output out: text
+  val prefix = "hello "
+
+  graph sessions {
+    input in: text
+    output out: text
+    instances = { key = data }
+
+    operator greet {
+      input in: text
+      output out: text
+      on in { out = prefix + data }
+    }
+
+    . -> greet -> .
+  }
+
+  . -> sessions -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the nested keyed graph checks");
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, hash) = plan::decode(&bytes).expect("the nested package opens");
+    assert_eq!(decoded, compilation.plan);
+    assert_eq!(hash, compilation.hash);
+
+    let plan = decoded.plan();
+    assert!(
+        plan.owners
+            .iter()
+            .any(|owner| owner.path.to_string() == "sessions")
+    );
+    assert!(
+        plan.nodes
+            .iter()
+            .any(|node| node.path.to_string() == "sessions.greet")
+    );
+    assert_eq!(plan.edges.len(), 2, "the two composite seams flatten away");
+    assert!(
+        plan.edges
+            .iter()
+            .all(|edge| plan.owners[edge.scope.index()].path.is_root())
+    );
+}
+
+#[test]
+fn v9_round_trips_a_bounded_join_activation_without_a_second_key_authority() {
+    let source = r#"
+type JoinExpiry = union { JoinExpired {} }
+graph g : App {
+  input left: int
+  input right: int
+  output out: int
+  output expired: JoinExpiry
+  operator pair {
+    instances = { key = data }
+    input left: int
+    input right: int
+    output out: int
+    output expired: JoinExpiry
+    on (left, right) where left.data == right.data within duration("2s") last 3 {
+      out = left.data
+    }
+  }
+  .left -> pair.left
+  .right -> pair.right
+  pair.out -> .out
+  pair.expired -> .expired
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the public bounded join checks");
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, hash) = plan::decode(&bytes).expect("the bounded join package opens");
+    assert_eq!(decoded, compilation.plan);
+    assert_eq!(hash, compilation.hash);
+    assert!(matches!(
+        &decoded.plan().handlers[0].activation,
+        rastok::node::HandlerActivation::Join {
+            ports,
+            within_ns: Some(2_000_000_000),
+            last: Some(3),
+        } if ports.iter().map(|port| port.name()).collect::<Vec<_>>() == ["left", "right"]
+    ));
+}
+
+#[test]
 fn the_example_package_matches_its_golden() {
     // M1.3 final review removes the lowering-only Operator runtime-fault
     // `err` row. The source hash is intentionally unchanged: that invented

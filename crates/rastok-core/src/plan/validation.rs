@@ -5,6 +5,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::datatype::{DataType, TypeError};
@@ -103,6 +104,13 @@ pub enum PlanValidationError {
         /// The repeated path.
         path: node::Path,
     },
+    /// Flattening lexical Graph boundaries exposed a cycle between executable
+    /// Nodes. The shipped spatial graph is always a DAG, independently of how
+    /// many composition seams the source crossed.
+    WiringCycle {
+        /// One Node on the cycle.
+        node: node::Path,
+    },
     /// One node declares a port twice.
     DuplicatePort {
         /// The declaring node.
@@ -169,6 +177,43 @@ pub enum PlanValidationError {
         /// The doubled activation — carried whole, so a future join
         /// activation changes nothing about this variant's shape.
         activation: node::HandlerActivation,
+    },
+    /// A join activation has fewer than two distinct input ports.
+    InvalidJoinActivation {
+        /// The declaring node.
+        node: node::Path,
+    },
+    /// One input port participates in more than one activation. Dispatch must
+    /// never guess whether an arrival is a single-port firing or join input.
+    AmbiguousInputActivation {
+        /// The declaring node.
+        node: node::Path,
+        /// The multiply-owned input port.
+        port: node::Port,
+    },
+    /// A join retention bound is zero or otherwise outside its closed domain.
+    InvalidJoinBound {
+        /// The declaring node.
+        node: node::Path,
+    },
+    /// A bounded join lacks the conventional typed eviction output.
+    MissingJoinExpiryPort {
+        /// The declaring node.
+        node: node::Path,
+    },
+    /// Identity emission has no unique input envelope under a join.
+    AmbiguousJoinIdentity {
+        /// The declaring node.
+        node: node::Path,
+    },
+    /// A required metadata read can observe a field removed by a preceding
+    /// join's CommonOrAbsent merge. An explicit write must select the value
+    /// before the field becomes required again.
+    AmbiguousJoinMetadataRead {
+        /// The owner whose expression performs the required read.
+        owner: String,
+        /// The complete `meta.app.*` or `meta.ext.*` path.
+        field: String,
     },
     /// A lifecycle activation belongs to a later executable slice. Format v9
     /// can represent the closed registry without silently enabling it.
@@ -514,6 +559,10 @@ impl core::fmt::Display for PlanValidationError {
             Self::DuplicateNodePath { path } => {
                 write!(f, "invalid plan: duplicate node path `{path}`")
             }
+            Self::WiringCycle { node } => write!(
+                f,
+                "invalid plan: the wiring cycles through `{node}`; executable edges form a DAG"
+            ),
             Self::UnknownMetaField { zone, field } => write!(
                 f,
                 "invalid plan: a `meta.{zone}.{field}` write outside the travelling schema"
@@ -592,6 +641,31 @@ impl core::fmt::Display for PlanValidationError {
                     "invalid plan: `{node}` declares two handlers on `{activation}`"
                 )
             }
+            Self::InvalidJoinActivation { node } => {
+                write!(
+                    f,
+                    "`{node}` declares a join without two distinct input ports"
+                )
+            }
+            Self::AmbiguousInputActivation { node, port } => write!(
+                f,
+                "input `{node}.{port}` participates in more than one handler activation"
+            ),
+            Self::InvalidJoinBound { node } => {
+                write!(f, "`{node}` declares a non-positive join retention bound")
+            }
+            Self::MissingJoinExpiryPort { node } => write!(
+                f,
+                "bounded join `{node}` requires `expired` with the canonical JoinExpired type"
+            ),
+            Self::AmbiguousJoinIdentity { node } => write!(
+                f,
+                "join `{node}` cannot use identity emission because it has no single input"
+            ),
+            Self::AmbiguousJoinMetadataRead { owner, field } => write!(
+                f,
+                "required read of `{field}` on `{owner}` may be absent after a join; select one named input with an explicit metadata write first"
+            ),
             Self::UnsupportedLifecycleHandler { node, lifecycle } => write!(
                 f,
                 "invalid plan: `{node}` declares the unsupported lifecycle handler `l:{lifecycle}`"
@@ -878,28 +952,49 @@ fn verify_instance_key_types(
         let reads_data = super::type_resolution::expression_reads_data(&key.root);
         let resolved = if reads_data {
             let mut resolved: Option<DataType> = None;
-            let inputs: alloc::vec::Vec<_> = match kind {
+            let inputs: alloc::vec::Vec<DataType> = match kind {
                 OwnerKind::Node(slot) => ports
                     .node(slot)
                     .unwrap_or(&[])
                     .iter()
                     .filter(|port| port.direction() == node::Direction::Input)
+                    .map(|port| port.ty().clone())
                     .collect(),
                 OwnerKind::Graph if index == 0 => ports
                     .boundary()
                     .iter()
                     .filter(|port| port.direction() == node::Direction::Input)
+                    .map(|port| port.ty().clone())
                     .collect(),
                 // Nested Graph admission types are closed by the compiler from
                 // the scoped crossing routes before transport. The owner tree
                 // preserves the boundary even though the spatial DAG is flat.
-                OwnerKind::Graph => alloc::vec::Vec::new(),
+                OwnerKind::Graph => {
+                    let owner = OwnerSlot::new(u32::try_from(index).map_err(|_| {
+                        PlanValidationError::OwnerOutOfBounds {
+                            owner: OwnerSlot::new(u32::MAX),
+                            owner_count: plan.owners.len(),
+                        }
+                    })?);
+                    plan.edges
+                        .iter()
+                        .filter_map(|edge| {
+                            let target = edge.to.as_ref()?;
+                            let target_owner = plan.nodes.get(target.node?.index())?.owner;
+                            (owner_contains(plan, owner, target_owner)
+                                && edge.scope != owner
+                                && owner_contains(plan, edge.scope, owner))
+                            .then(|| ports.endpoint_type(target).cloned())
+                            .flatten()
+                        })
+                        .collect()
+                }
             };
             if inputs.is_empty() {
                 return Err(PlanValidationError::UnresolvedInstanceAdmission { owner: owner_name });
             }
             for input in inputs {
-                let signature = instance_key_signature(plan, index, input.ty().clone());
+                let signature = instance_key_signature(plan, index, input);
                 let Some(candidate) = expr::rederive_type(&key.root, &signature) else {
                     return Err(PlanValidationError::InvalidInstanceKey {
                         owner: owner_name,
@@ -2228,6 +2323,44 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             endpoint_ok(to, node::Direction::Input)?;
         }
     }
+    // Graph boundaries are compile-time composition seams. A cycle may cross
+    // one seam without appearing in either source Graph's local edge list, so
+    // the Registry-free plan boundary proves the invariant again on the
+    // flattened executable Nodes. Iterative three-state DFS keeps the check
+    // bounded by the already-validated plan size and avoids recursion.
+    let mut successors = vec![Vec::new(); plan.nodes.len()];
+    for edge in &plan.edges {
+        if let (Some(from), Some(to)) = (edge.from.node, edge.to.as_ref().and_then(|to| to.node)) {
+            successors[from.index()].push(to.index());
+        }
+    }
+    let mut state = vec![0u8; plan.nodes.len()];
+    for start in 0..plan.nodes.len() {
+        if state[start] != 0 {
+            continue;
+        }
+        let mut stack = vec![(start, 0usize)];
+        state[start] = 1;
+        while let Some((current, next_child)) = stack.pop() {
+            if let Some(&child) = successors[current].get(next_child) {
+                stack.push((current, next_child + 1));
+                match state[child] {
+                    0 => {
+                        state[child] = 1;
+                        stack.push((child, 0));
+                    }
+                    1 => {
+                        return Err(PlanValidationError::WiringCycle {
+                            node: plan.nodes[child].path.clone(),
+                        });
+                    }
+                    _ => {}
+                }
+            } else {
+                state[current] = 2;
+            }
+        }
+    }
     // Two PINNED edge ends must agree — the same rule the checker
     // holds the surface to; endpoint slots are proven above, so the
     // lookups dereference safely.
@@ -2272,6 +2405,22 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             collection: "edges",
         });
     }
+    // Uniqueness precedes every local judgement: a repeated activation is
+    // one trigger fired twice, whereas sharing one input between two
+    // DIFFERENT activations is the distinct AmbiguousInputActivation defect.
+    let handler_key =
+        |handler: &crate::plan::Handler| (handler.node.index(), handler.activation.canonical_key());
+    let mut activations = BTreeSet::new();
+    for handler in &plan.handlers {
+        if !activations.insert(handler_key(handler)) {
+            return Err(PlanValidationError::DuplicateHandler {
+                node: node_at(handler.node)?.path.clone(),
+                activation: handler.activation.clone(),
+            });
+        }
+    }
+
+    let mut activated_inputs = BTreeSet::new();
     for handler in &plan.handlers {
         let node = node_at(handler.node)?;
         match &handler.activation {
@@ -2282,6 +2431,63 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         port: port.clone(),
                         expected: node::Direction::Input,
                     });
+                }
+                if !activated_inputs.insert((handler.node, port.clone())) {
+                    return Err(PlanValidationError::AmbiguousInputActivation {
+                        node: node.path.clone(),
+                        port: port.clone(),
+                    });
+                }
+            }
+            node::HandlerActivation::Join {
+                ports,
+                within_ns,
+                last,
+            } => {
+                let distinct: BTreeSet<_> = ports.iter().cloned().collect();
+                if ports.len() < 2 || distinct.len() != ports.len() {
+                    return Err(PlanValidationError::InvalidJoinActivation {
+                        node: node.path.clone(),
+                    });
+                }
+                if within_ns.is_some_and(|duration| duration <= 0)
+                    || last.is_some_and(|count| count == 0)
+                {
+                    return Err(PlanValidationError::InvalidJoinBound {
+                        node: node.path.clone(),
+                    });
+                }
+                for port in ports {
+                    if !has_port(node, port, node::Direction::Input) {
+                        return Err(PlanValidationError::WrongPortDirection {
+                            node: Some(node.path.clone()),
+                            port: port.clone(),
+                            expected: node::Direction::Input,
+                        });
+                    }
+                    if !activated_inputs.insert((handler.node, port.clone())) {
+                        return Err(PlanValidationError::AmbiguousInputActivation {
+                            node: node.path.clone(),
+                            port: port.clone(),
+                        });
+                    }
+                }
+                if within_ns.is_some() || last.is_some() {
+                    let expected = node::join_expired_type().map_err(|_| {
+                        PlanValidationError::InvalidJoinActivation {
+                            node: node.path.clone(),
+                        }
+                    })?;
+                    let valid_expiry = node.ports.iter().any(|port| {
+                        port.port.name() == "expired"
+                            && port.direction == node::Direction::Output
+                            && port.ty.as_ref() == Some(&expected)
+                    });
+                    if !valid_expiry {
+                        return Err(PlanValidationError::MissingJoinExpiryPort {
+                            node: node.path.clone(),
+                        });
+                    }
                 }
             }
             node::HandlerActivation::Lifecycle(
@@ -2332,6 +2538,13 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         }
                         Emission::Identity | Emission::Nothing => {}
                     }
+                    if matches!(value, Emission::Identity)
+                        && matches!(handler.activation, node::HandlerActivation::Join { .. })
+                    {
+                        return Err(PlanValidationError::AmbiguousJoinIdentity {
+                            node: node.path.clone(),
+                        });
+                    }
                 }
                 Step::SetVar { name, expr } => {
                     if !node.vars.iter().any(|var| var.name == *name) {
@@ -2358,29 +2571,357 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // Handler order is canonical — (slot, activation key), the same
     // key the lowering and the hash sort by, because declaration
     // order between handlers carries neither semantics nor identity.
-    // A repeated activation is one trigger fired twice: dispatch
-    // would silently shadow the second, so it refuses by name —
-    // globally first, like every other uniqueness. Slot bounds are
-    // already proven above.
-    let key =
-        |handler: &crate::plan::Handler| (handler.node.index(), handler.activation.canonical_key());
-    let mut activations = BTreeSet::new();
-    for handler in &plan.handlers {
-        if !activations.insert(key(handler)) {
-            return Err(PlanValidationError::DuplicateHandler {
-                node: node_at(handler.node)?.path.clone(),
-                activation: handler.activation.clone(),
-            });
-        }
-    }
+    // Slot bounds and uniqueness are already proven above.
     for pair in plan.handlers.windows(2) {
-        if key(&pair[0]) >= key(&pair[1]) {
+        if handler_key(&pair[0]) >= handler_key(&pair[1]) {
             return Err(PlanValidationError::NonCanonicalOrder {
                 collection: "handlers",
             });
         }
     }
+    join_metadata_presence_holds(plan)?;
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum WritableMetaField {
+    App(String),
+    Ext(String),
+}
+
+impl WritableMetaField {
+    fn path(&self) -> String {
+        match self {
+            Self::App(field) => format!("meta.app.{field}"),
+            Self::Ext(field) => format!("meta.ext.{field}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum WritableMetaRead {
+    Field(WritableMetaField),
+    AppZone,
+    ExtZone,
+    All,
+}
+
+type MetaPresence = BTreeSet<WritableMetaField>;
+type EndpointPresence = BTreeMap<(Option<Slot>, node::Port), MetaPresence>;
+
+/// Proves the static half of CommonOrAbsent. A join is allowed to discard a
+/// conflicting field silently; only a later required read is illegal. The
+/// analysis is a monotone flow over the flattened DAG and is re-derived from
+/// plan facts, so a forged package cannot turn the runtime's absent-field
+/// defense into ordinary execution.
+fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    let all_fields: MetaPresence = plan
+        .app_schema
+        .iter()
+        .map(|(field, _)| WritableMetaField::App(field.clone()))
+        .chain(
+            plan.ext_schema
+                .iter()
+                .map(|(field, _)| WritableMetaField::Ext(field.clone())),
+        )
+        .chain(core::iter::once(WritableMetaField::Ext(String::from(
+            "content_type",
+        ))))
+        .collect();
+    if all_fields.is_empty() {
+        return Ok(());
+    }
+
+    let mut inputs = EndpointPresence::new();
+    let mut outputs = EndpointPresence::new();
+    loop {
+        let mut changed = false;
+        for edge in &plan.edges {
+            let Some(to) = &edge.to else { continue };
+            let propagated = outputs
+                .get(&(edge.from.node, edge.from.port.clone()))
+                .cloned()
+                .unwrap_or_default();
+            changed |= extend_presence(
+                inputs.entry((to.node, to.port.clone())).or_default(),
+                &propagated,
+            );
+        }
+
+        for handler in &plan.handlers {
+            let base = activation_presence(handler, &inputs, &all_fields);
+            for step in &handler.body {
+                let Step::Emit { port, value } = step else {
+                    continue;
+                };
+                if matches!(value, Emission::Nothing) {
+                    continue;
+                }
+                let mut emitted = base.clone();
+                for field in emission_meta_writes(value) {
+                    emitted.remove(&field);
+                }
+                changed |= extend_presence(
+                    outputs
+                        .entry((Some(handler.node), port.clone()))
+                        .or_default(),
+                    &emitted,
+                );
+            }
+
+            // Join eviction carries one retained candidate, not the merged
+            // join context. It therefore propagates the union of the input
+            // risks without manufacturing a fresh ambiguity.
+            if matches!(
+                handler.activation,
+                node::HandlerActivation::Join {
+                    within_ns: Some(_),
+                    ..
+                } | node::HandlerActivation::Join { last: Some(_), .. }
+            ) {
+                let inherited = node_input_presence(plan, handler.node, &inputs);
+                let expired = node::Port::new("expired").map_err(|_| {
+                    PlanValidationError::InvalidJoinActivation {
+                        node: plan.nodes[handler.node.index()].path.clone(),
+                    }
+                })?;
+                changed |= extend_presence(
+                    outputs.entry((Some(handler.node), expired)).or_default(),
+                    &inherited,
+                );
+            }
+        }
+
+        for (slot_index, planned) in plan.nodes.iter().enumerate() {
+            if !matches!(planned.kind, NodeKind::Connector(_)) {
+                continue;
+            }
+            let slot = Slot::new(slot_index as u32);
+            let inherited = node_input_presence(plan, slot, &inputs);
+            for port in planned
+                .ports
+                .iter()
+                .filter(|port| port.direction == node::Direction::Output)
+            {
+                changed |= extend_presence(
+                    outputs.entry((Some(slot), port.port.clone())).or_default(),
+                    &inherited,
+                );
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    for handler in &plan.handlers {
+        let base = activation_presence(handler, &inputs, &all_fields);
+        let owner = &plan.nodes[handler.node.index()].path.to_string();
+        if let Some(guard) = &handler.guard {
+            required_meta_reads_hold(&guard.root, &base, owner)?;
+        }
+        for step in &handler.body {
+            match step {
+                Step::Let { expr, .. } | Step::SetVar { expr, .. } => {
+                    required_meta_reads_hold(&expr.root, &base, owner)?;
+                }
+                Step::Emit { value, .. } => {
+                    for expression in emission_expressions(value) {
+                        required_meta_reads_hold(expression, &base, owner)?;
+                    }
+                }
+                Step::Stop => {}
+            }
+        }
+    }
+
+    for (slot_index, planned) in plan.nodes.iter().enumerate() {
+        let slot = Slot::new(slot_index as u32);
+        let base = node_input_presence(plan, slot, &inputs);
+        if base.is_empty() {
+            continue;
+        }
+        let owner = planned.path.to_string();
+        if let NodeKind::Connector(spec) = &planned.kind {
+            for (_, setting) in &spec.attributes {
+                if let crate::plan::AttrSetting::Expr { expr, .. } = setting {
+                    required_meta_reads_hold(&expr.root, &base, &owner)?;
+                }
+            }
+        }
+        let lexical_owner = &plan.owners[planned.owner.index()];
+        if let Some(key) = &lexical_owner.instance.key {
+            required_meta_reads_hold(&key.root, &base, &owner)?;
+        }
+        for value in &lexical_owner.vals {
+            required_meta_reads_hold(&value.expr.root, &base, &owner)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn extend_presence(target: &mut MetaPresence, source: &MetaPresence) -> bool {
+    let before = target.len();
+    target.extend(source.iter().cloned());
+    target.len() != before
+}
+
+fn node_input_presence(
+    plan: &ExecutionPlan,
+    slot: Slot,
+    inputs: &EndpointPresence,
+) -> MetaPresence {
+    plan.nodes[slot.index()]
+        .ports
+        .iter()
+        .filter(|port| port.direction == node::Direction::Input)
+        .filter_map(|port| inputs.get(&(Some(slot), port.port.clone())))
+        .flat_map(BTreeSet::iter)
+        .cloned()
+        .collect()
+}
+
+fn activation_presence(
+    handler: &crate::plan::Handler,
+    inputs: &EndpointPresence,
+    all_fields: &MetaPresence,
+) -> MetaPresence {
+    match &handler.activation {
+        node::HandlerActivation::Port(port) => inputs
+            .get(&(Some(handler.node), port.clone()))
+            .cloned()
+            .unwrap_or_default(),
+        node::HandlerActivation::Join { .. } => all_fields.clone(),
+        node::HandlerActivation::Lifecycle(_) => inputs
+            .iter()
+            .filter(|((slot, _), _)| *slot == Some(handler.node))
+            .flat_map(|(_, fields)| fields)
+            .cloned()
+            .collect(),
+    }
+}
+
+fn emission_meta_writes(emission: &Emission) -> MetaPresence {
+    match emission {
+        Emission::Patch(writes) | Emission::Replace(writes) => writes
+            .iter()
+            .filter_map(|write| match &write.target {
+                crate::envelope::WriteTarget::App(field) => {
+                    Some(WritableMetaField::App(field.clone()))
+                }
+                crate::envelope::WriteTarget::Ext(field) => {
+                    Some(WritableMetaField::Ext(field.clone()))
+                }
+                crate::envelope::WriteTarget::Data(_) => None,
+            })
+            .collect(),
+        Emission::Identity | Emission::Data(_) | Emission::Nothing => MetaPresence::new(),
+    }
+}
+
+fn emission_expressions(emission: &Emission) -> Vec<&expr::Expr> {
+    match emission {
+        Emission::Data(tree) => alloc::vec![&tree.root],
+        Emission::Patch(writes) | Emission::Replace(writes) => {
+            writes.iter().map(|write| &write.expr.root).collect()
+        }
+        Emission::Identity | Emission::Nothing => Vec::new(),
+    }
+}
+
+fn required_meta_reads_hold(
+    expression: &expr::Expr,
+    ambiguous: &MetaPresence,
+    owner: &str,
+) -> Result<(), PlanValidationError> {
+    let mut reads = BTreeSet::new();
+    collect_writable_meta_reads(expression, &mut reads);
+    let offending = reads.into_iter().find_map(|read| match read {
+        WritableMetaRead::Field(field) if ambiguous.contains(&field) => Some(field),
+        WritableMetaRead::AppZone => ambiguous
+            .iter()
+            .find(|field| matches!(field, WritableMetaField::App(_)))
+            .cloned(),
+        WritableMetaRead::ExtZone => ambiguous
+            .iter()
+            .find(|field| matches!(field, WritableMetaField::Ext(_)))
+            .cloned(),
+        WritableMetaRead::All => ambiguous.iter().next().cloned(),
+        WritableMetaRead::Field(_) => None,
+    });
+    if let Some(field) = offending {
+        Err(PlanValidationError::AmbiguousJoinMetadataRead {
+            owner: owner.to_string(),
+            field: field.path(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn collect_writable_meta_reads(expression: &expr::Expr, reads: &mut BTreeSet<WritableMetaRead>) {
+    let inspect = |child, reads: &mut BTreeSet<WritableMetaRead>| {
+        collect_writable_meta_reads(child, reads);
+    };
+    match expression {
+        expr::Expr::Literal(_) | expr::Expr::Asset(_) => {}
+        expr::Expr::Path(segments) => match segments.as_slice() {
+            [meta] if meta == "meta" => {
+                reads.insert(WritableMetaRead::All);
+            }
+            [meta, zone] if meta == "meta" && zone == "app" => {
+                reads.insert(WritableMetaRead::AppZone);
+            }
+            [meta, zone] if meta == "meta" && zone == "ext" => {
+                reads.insert(WritableMetaRead::ExtZone);
+            }
+            [meta, zone, field @ ..] if meta == "meta" && zone == "app" => {
+                reads.insert(WritableMetaRead::Field(WritableMetaField::App(
+                    field.join("."),
+                )));
+            }
+            [meta, zone, field @ ..] if meta == "meta" && zone == "ext" => {
+                reads.insert(WritableMetaRead::Field(WritableMetaField::Ext(
+                    field.join("."),
+                )));
+            }
+            _ => {}
+        },
+        expr::Expr::Unary { expr, .. }
+        | expr::Expr::Is { expr, .. }
+        | expr::Expr::As { expr, .. } => inspect(expr, reads),
+        expr::Expr::Binary { left, right, .. } => {
+            inspect(left, reads);
+            inspect(right, reads);
+        }
+        expr::Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            inspect(cond, reads);
+            inspect(then, reads);
+            inspect(otherwise, reads);
+        }
+        expr::Expr::Index { base, index } => {
+            inspect(base, reads);
+            inspect(index, reads);
+        }
+        expr::Expr::Call { args, .. } | expr::Expr::List(args) => {
+            for argument in args {
+                inspect(argument, reads);
+            }
+        }
+        expr::Expr::MapLit(fields)
+        | expr::Expr::Struct(fields)
+        | expr::Expr::Tagged { fields, .. } => {
+            for (_, value) in fields {
+                inspect(value, reads);
+            }
+        }
+    }
 }
 
 /// The complete materialized-value gate. Runtime-only laziness witnesses are

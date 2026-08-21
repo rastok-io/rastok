@@ -894,7 +894,9 @@ OR across ports is expressed as **separate handlers** (`on a { }` /
 `on b { }`) — there is no `||` in a trigger.
 
 **Refinements.** `where <pred>` is a predicate over the matched
-envelopes' content; `having count(p) >= k` is a quorum (k-of-n).
+envelopes' content; `having count(p) >= k` is the reserved quorum (k-of-n)
+form. M1.4 R6 executes `where`, `within`, and `last`; `having` remains a named
+future gate rather than an inert accepted clause.
 
 **Join key = owner instance.** Every envelope reaches one logical instance of
 the Operator before it can enter the join buffer, so `on (a, b)` correlates in
@@ -908,13 +910,21 @@ same request-id instance.
 bounded by edge backpressure. A join whose `where` *correlates the
 content* of several ports is a θ-join and must declare an explicit
 bound: `last N` (count — the static memory guarantee, clock-free)
-and/or `within D` (staleness — ksqlDB's `WITHIN`). A candidate that
+and/or `within D` (staleness — ksqlDB's `WITHIN`). Candidate tuples retain
+the handler's declared port order and use per-port FIFO choices; a false
+predicate consumes nothing. A candidate that
 leaves the join unmatched emits **`JoinExpired`** on a declared typed
-output such as `expired` — routed and observable like any other fact, never a silent
+output (exactly `expired` in the M1.4 surface) — routed and observable like any other fact, never a silent
 drop, never a background timer. The exact tier classification, bound
 composition and lazy-eviction rules are normative in
 [execution-model.md](docs/spec/execution-model.md) §7 and
 [grammar.md](docs/spec/grammar.md).
+
+Each join input is a named complete envelope (`a.data`, `a.meta`) with its own
+lazy payload witness. Writable metadata merges by CommonOrAbsent; a required
+downstream read that could observe absence is rejected until an explicit
+write chooses one named contribution. There is no bare current `data` and no
+implicit `out = .` selection under a join.
 
 **Uniform typed ports.** A transaction may emit on any declared output,
 including `err`, `exit`, `expired` or application-specific names. Each
@@ -2678,6 +2688,13 @@ under review, a minimal Rust workspace, and reference graphs and
 simulations designed to become executable evidence as the runtime
 lands. The current evidence gates are listed in
 [ROADMAP.md](ROADMAP.md).
+
+As of M1.4 R6, the one-worker reference executes canonical keyed/lifetime
+instances, bounded Closing, nested Graph composition, and instance-local
+bounded joins from source through package validation and public Lab scenarios.
+This is milestone evidence, not a production-readiness claim; distributed
+Host/Worker ownership remains a later physical implementation of the same
+logical addresses.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

@@ -40,6 +40,9 @@ pub use crate::node::Direction;
 pub struct Graph {
     /// The graph's declared name; excluded from descendant identity.
     pub name: String,
+    /// Root-relative lexical owner path. The App owns the empty path; nested
+    /// Graphs append their declared name to their parent's path.
+    pub path: crate::plan::OwnerPath,
     /// Boundary ports declared on the graph itself; the defaults `in`
     /// and `out` exist implicitly. Identity material.
     pub boundary: Vec<crate::plan::PortDecl>,
@@ -47,6 +50,8 @@ pub struct Graph {
     pub vals: Vec<Val>,
     /// The graph's nodes, in declaration order.
     pub nodes: Vec<Node>,
+    /// Lexically nested Graph owners, in declaration order.
+    pub graphs: Vec<Graph>,
     /// The wiring, desugared to explicit endpoint pairs.
     pub edges: Vec<Edge>,
     /// Graph-owned instance addressing and lifetime. Absence means the
@@ -216,6 +221,10 @@ pub struct Handler {
     /// The declared activation pattern — not the causal trigger a
     /// transaction records; see [`node::HandlerActivation`].
     pub activation: node::HandlerActivation,
+    /// Exact source expression of a join's `within` bound. The reduced
+    /// nanoseconds travel in the activation; this tree preserves semantic
+    /// identity just like every other constant position.
+    pub join_within: Option<Const>,
     /// The compiled `where` guard, when present.
     pub guard: Option<expr::Tree>,
     /// The body, in text order — the order that fixes emission
@@ -293,7 +302,7 @@ pub struct Edge {
 }
 
 /// The receiving end of an edge.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EdgeTarget {
     /// A node or boundary port.
     Port(Endpoint),
@@ -302,12 +311,22 @@ pub enum EdgeTarget {
 }
 
 /// One end of an edge, default ports made explicit.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Endpoint {
-    /// The node, or `None` for the graph's own boundary.
-    pub node: Option<node::Path>,
+    /// The executable Node or transparent Graph boundary named by this end.
+    pub owner: EndpointOwner,
     /// The port.
     pub port: node::Port,
+}
+
+/// What owns one checked edge endpoint. Graph boundaries survive checking so
+/// lowering can compose nested wiring without inventing a runtime pseudo-node.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EndpointOwner {
+    /// One executable Operator or Connector.
+    Node(node::Path),
+    /// One Graph's input/output boundary, including the root App boundary.
+    Graph(crate::plan::OwnerPath),
 }
 
 /// One checked lab: the simulation corpus bound to the App sharing

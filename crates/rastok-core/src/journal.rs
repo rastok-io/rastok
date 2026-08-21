@@ -258,6 +258,11 @@ pub struct TransactionRecord {
     pub cause: Option<crate::envelope::Id>,
     /// The consumed input positions; canonically sorted at commit.
     pub consumed: Vec<ConsumedPosition>,
+    /// Envelope ids contributing to a presence-completing join, in the
+    /// handler's declared port order. Empty for every non-join firing. This
+    /// preserves the non-trigger roots without pretending an envelope has
+    /// more than one parent.
+    pub join_inputs: Vec<crate::envelope::Id>,
     /// The state changes; canonically sorted by field at commit.
     pub state_delta: Vec<(String, Value)>,
     /// The emissions, in text/emission-index order.
@@ -1218,6 +1223,7 @@ mod tests {
             trigger: node::Trigger::Lifecycle(lifecycle),
             cause: None,
             consumed: vec![],
+            join_inputs: vec![],
             state_delta: vec![],
             emissions: vec![],
             routes: vec![],
@@ -1709,6 +1715,7 @@ mod tests {
                         seq: 2,
                     },
                 ],
+                join_inputs: vec![],
                 state_delta: vec![
                     (String::from("z"), Value::Int(1)),
                     (String::from("a"), Value::Int(2)),
@@ -1750,6 +1757,7 @@ mod tests {
                     source: instance("root", 0),
                     seq: 0,
                 }],
+                join_inputs: vec![],
                 state_delta: vec![(String::from("count"), Value::Int(1))],
                 emissions: vec![Emission {
                     port: node::Port::new("out").unwrap(),

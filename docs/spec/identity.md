@@ -128,6 +128,16 @@ When Closing executes, transaction key 49 and timer kinds 6/7 make its new
 causal facts visible; no existing non-closing golden gains those optional
 fields.
 
+**M1.4 R6 join checkpoint (2026-08-22).** A join activation seals its ports in
+source-declared order; `(a, b)` and `(b, a)` are different programs. Optional
+`within` and `last` bounds are identity, while declaration order between
+distinct handlers remains erased by canonical activation-key sorting. These
+bytes occur only for a join or a newly public nested Graph, so every existing
+semantic hash, package, and causal trace remains fixed. When a join fires,
+transaction key 34 records exactly one contributing envelope id per declared
+port in that same order; key 33 independently remains canonically sorted by
+cursor.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -276,7 +286,7 @@ execution-model §1) — keys `30–39`, `48`, and `49` :
 | 31 | instance_ref | array | `[instance_address (bytes), generation (uint)]`, mandatory for every firing; generation is the zero-based journal-derived `l:start` ordinal for that address |
 | 32 | trigger | text | namespaced `p:<port>` / `l:<lifecycle>` (envelope.md §3 ; closed `l:` registry) |
 | 33 | consumed | array | the consumed input **positions** — each a fixed tuple `[edge (text), source_instance_ref, seq (uint)]` (the cursor key, delivery-semantics §2 — per `(graph-edge × source instance reference)`, NOT per port: several edges feed one port, so `(port, seq)` is not injective); **array sorted by canonical `(edge, source_instance_ref, seq)`** |
-| 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16) ; **sorted by the trigger's port order then id** ; omitted otherwise |
+| 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16), **in the handler's declared port order**; this array is deliberately not lexicographically re-sorted, because tuple order is identity; omitted otherwise |
 | 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
 | 37 | timers | array | dated obligations armed by this firing — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`, `6 = instance drain`, `7 = instance settlement`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind so the two Closing phases cannot collide. The due µs is NOT sealed (derivable and re-armed by the fold). |

@@ -91,7 +91,7 @@ The repository opens publicly with this milestone (15 October 2026).
   `var`, hierarchical logical addresses, and independently shardable keyed
   boundaries. The ordered R0–R7 gates in the
   [M1.4 instance backlog](docs/architecture/m1.4-instances-backlog.md) now
-  realign compiler/transport/runtime before implementing finite Closing. M1
+  realign compiler/transport/runtime through public composition and joins. M1
   keeps the synchronous one-worker reference engine; the same addresses are
   designed for future concurrent Workers and Coordinator/child-Worker
   deployment without placing physical facts in causal identity. Its first R2
@@ -110,7 +110,12 @@ The repository opens publicly with this milestone (15 October 2026).
   every finite effectful instance one explicit bounded Closing contract:
   durable close admission, drain, canonical cancel, settlement to an observed
   exit or `OutcomeUnknown`, descendant closure, `on stop`, reclamation, then
-  successor-generation admission.
+  successor-generation admission. R6 closes the public nested-Graph and Lab
+  path and executes joins in the owning Operator instance, with FIFO
+  candidate selection, `within`/`last` eviction, typed `JoinExpired`, lazy
+  named inputs, and static CommonOrAbsent presence checks. Existing program
+  identity and causal goldens remain fixed; R7 is the remaining M1.4
+  cluster-readiness/closure audit.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

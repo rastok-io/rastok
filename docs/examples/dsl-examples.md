@@ -18,16 +18,15 @@ when no alias fits.
 The parser is a forward lexeme stream. Categorical plan-package v9 retains
 the complete v7 M1.3 type/value/expression registry and now carries lexical
 owners, Node-owned instance policy, scoped edges, and phased immutable
-expressions. As of 2026-08-21,
+expressions. As of 2026-08-22,
 `Process(mode = job)` with `lines`/`jsonl`/`bytes`, multiport completion,
 the three metadata zones, `IDENT!` frontends, structural and tagged types,
 typed narrowing, and all five Graph/Node lifetime profiles execute. The former
 named-partition P0-P3 implementation is superseded by the
-`instances`/`lifetime` model. Hierarchical routing and Graph lifecycle facts
-execute; Graph lifecycle-handler lowering, explicit bounded closing,
-HTTP/File adapters,
-Dispatch, joins, Loop, Process service mode, and guest engines are still
-pending or guarded. Thus
+`instances`/`lifetime` model. Hierarchical routing, keyed/nested Graph
+dispatch, Graph lifecycle facts, explicit bounded closing, and bounded
+presence joins execute. Graph lifecycle-handler lowering, HTTP/File adapters,
+Loop, Process service mode, and guest engines are still pending or guarded. Thus
 these are parser- and design-reference snippets, not a claim that every
 section runs today. The small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.
@@ -446,10 +445,10 @@ Four things visible here :
   intra-transaction semantics; the RHS is a Rastok expression, structural
   reshaping goes in a `jq! { … }` block).
 - `on in { … }` is the single-port handler. The handler forms
-  (`on start`, `on <port>`, the `on (a, b)` join with optional
-  `where` / `having` / `within` / `last` clauses, `on stop`) cover
+  (`on start`, `on <port>`, the `on (a, b)` join with executable
+  `where` / `within` / `last` clauses, and `on stop`) cover
   everything. No `on tick` — time-based behavior wires a
-  `Clock` to an input.
+  `Clock` to an input. The parsed quorum clause `having` remains a named gate.
 - `mock weather_api { on in where … { out = … } }` replaces the real
   `HttpClient` Connector at simulation time, without touching the
   graph itself (mock bodies are ordinary handler grammar —
@@ -641,7 +640,7 @@ read falls back to `FALLBACK_LIMIT` via `.?` + `.orValue()`.
 | State field | `var <name>: <type> [= <default>]`; private to its declaring Node and serialized by that Node's logical instance mailbox |
 | Connector attribute | `<name> = <value>` |
 | Composite attribute | `<name> = { ... }` (`restart = { ... }`, `Loop.backoff = { curve = exponential, ... }`) |
-| Handler | `on <trigger> [where … having … within … last …] { ... }` (`on (a, b)` join, `on start`, `on stop`) |
+| Handler | `on <trigger> [where … within … last …] { ... }` (`on (a, b)` join, `on start`, `on stop`; parsed `having` is deferred) |
 | State read (inside jq) | `$<name>` (bare `<name>` in DSL) |
 | State write | `<name> = <expr>` |
 | Local binding | `val <name> = <expr>` |

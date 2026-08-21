@@ -543,6 +543,21 @@ fn handler_tree(handler: &Handler) -> Cbor {
         node::HandlerActivation::Port(port) => {
             Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(port.name().to_string())])
         }
+        node::HandlerActivation::Join {
+            ports,
+            within_ns,
+            last,
+        } => Cbor::Array(vec![
+            Cbor::Uint(3),
+            Cbor::Array(
+                ports
+                    .iter()
+                    .map(|port| Cbor::Text(port.name().to_string()))
+                    .collect(),
+            ),
+            within_ns.map_or(Cbor::Null, signed_tree),
+            last.map_or(Cbor::Null, |count| Cbor::Uint(u64::from(count))),
+        ]),
         node::HandlerActivation::Lifecycle(lifecycle) => {
             Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(lifecycle_tag(*lifecycle))])
         }
@@ -1675,6 +1690,24 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
                 _ => return Err(err("activation lifecycle")),
             })
         }
+        [Cbor::Uint(3), ports, within, last] => node::HandlerActivation::Join {
+            ports: array_of(ports, "join ports")?
+                .iter()
+                .map(|port| match port {
+                    Cbor::Text(port) => node::Port::new(port.clone()).map_err(|_| err("join port")),
+                    _ => Err(err("join port")),
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            within_ns: match within {
+                Cbor::Null => None,
+                value => Some(signed_from(value)?),
+            },
+            last: match last {
+                Cbor::Null => None,
+                Cbor::Uint(value) => Some(u32::try_from(*value).map_err(|_| err("join last"))?),
+                _ => return Err(err("join last")),
+            },
+        },
         _ => return Err(err("activation")),
     };
     let guard = match find(pairs, 3) {

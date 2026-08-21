@@ -9,7 +9,9 @@
 > `lifetime`; the superseded `partition` / `per` draft is not a compatibility
 > surface. `persistent`, `idle`, `fixed`, `single_pass`, and processing-time
 > `tumbling` execute on Graph and Node owners. The exact bounded `closing`
-> sheet and bare `stop` execute through M1.4 R5.
+> sheet and bare `stop` execute through M1.4 R5. R6 executes nested Graph
+> composition and instance-local `on (a, b, …)` joins with `where`, `within`,
+> and `last`; `having` remains a named gate.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -1516,9 +1518,13 @@ trigger           ::= "start"
                     | "(" IDENT ( "," IDENT )* ")"                   // join : presence of all named ports
                     | IDENT                                          // single port
 guard_clause      ::= "where" expr                                   // content predicate (Tier 1 = 1 port, Tier 2 = ≥2)
-                    | "having" expr                                  // aggregate predicate (quorum, e.g. count(p) >= k)
-                    | "within" expr                                  // join time window (optional ; constant, duration-typed)
+                    | "having" expr                                  // aggregate predicate (quorum, e.g. count(p) >= k) — parsed, named-deferred in R6
+                    | "within" expr                                  // join time window (optional ; positive constant duration)
                     | "last" INT                                     // join count bound — a Tier-2 θ-join requires AT LEAST ONE bound (within or last) ; presence joins may use either or none
+                    // Join ports are distinct declared inputs. Their source order fixes bindings and identity.
+                    // A bounded join declares `output expired: union { JoinExpired {} }` exactly in R6.
+                    // Join expressions use `<port>.data` / `<port>.meta`; bare `data` and `out = .` refuse.
+                    // `by` is removed: another correlation domain is another `instances.key` owner.
                     // A `where` clause on any selected outcome input may define the Loop base case when the enclosing node carries `: Loop` — see loop.md §3.
 handler_body      ::= "{" ( val_decl | statement )* "}"
 statement         ::= "(" lvalue ( "," lvalue )* ")" "=" tuple_or_broadcast   // atomic multi-emit — `(` decides ; tuple = explicit per-port ; broadcast = same value everywhere (`Fanout` is not a surface alias)

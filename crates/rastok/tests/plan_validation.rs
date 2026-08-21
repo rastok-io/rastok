@@ -12,7 +12,7 @@ use rastok::compiler::compile;
 use rastok::contract::Registry;
 use rastok::datatype::{DataType, StructType, TaggedCase, TaggedUnionType};
 use rastok::expr;
-use rastok::node::{Direction, Port};
+use rastok::node::{self, Direction, Port};
 use rastok::plan::{
     self, Edge, EndpointRef, ExecutionPlan, PlanValidationError, Slot, Step, ValidatedExecutionPlan,
 };
@@ -43,6 +43,49 @@ fn raw_probe() -> ExecutionPlan {
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan")
+    .plan
+    .into_inner()
+}
+
+fn raw_join(bounded: bool) -> ExecutionPlan {
+    let expiry_type = "type JoinExpiry = union { JoinExpired {} }\n";
+    let expiry_ports = if bounded {
+        "output expired: JoinExpiry"
+    } else {
+        ""
+    };
+    let bound = if bounded { "last 2" } else { "" };
+    let expiry_edge = if bounded {
+        "pair.expired -> .expired"
+    } else {
+        ""
+    };
+    let source = format!(
+        r#"
+{expiry_type}graph joined : App {{
+  input left: int
+  input right: int
+  output out: int
+  {expiry_ports}
+  operator pair {{
+    input left: int
+    input right: int
+    output out: int
+    {expiry_ports}
+    on (left, right) {bound} {{ out = left.data }}
+  }}
+  .left -> pair.left
+  .right -> pair.right
+  pair.out -> .out
+  {expiry_edge}
+}}
+"#
+    );
+    compile(
+        &[source.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the join fixture is valid")
     .plan
     .into_inner()
 }
@@ -1438,9 +1481,8 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
 #[test]
 fn handler_declaration_order_is_not_identity() {
     // identity.md: declaration order is insensitive; only statements
-    // INSIDE a handler (and, later, ports inside a join) are order-
-    // sensitive. Swapping two handlers must change neither the hash
-    // nor the plan.
+    // INSIDE a handler and ports inside a join are order-sensitive.
+    // Swapping two handlers must change neither the hash nor the plan.
     let swapped = TWO_TRIGGERS.replacen(
         "on a { out = data }\n    on b { out = data }",
         "on b { out = data }\n    on a { out = data }",
@@ -1461,6 +1503,55 @@ fn handler_declaration_order_is_not_identity() {
 }
 
 #[test]
+fn join_port_order_and_retention_bounds_are_identity() {
+    let source = r#"
+type JoinExpiry = union { JoinExpired {} }
+graph joined : App {
+  input left: int
+  input right: int
+  output out: int
+  output expired: JoinExpiry
+  operator pair {
+    input left: int
+    input right: int
+    output out: int
+    output expired: JoinExpiry
+    on (left, right) within duration("1s") last 2 { out = left.data }
+  }
+  .left -> pair.left
+  .right -> pair.right
+  pair.out -> .out
+  pair.expired -> .expired
+}
+"#;
+    let registry = Registry::try_m0().expect("the standard catalogue holds");
+    let original = compile(&[source], &registry).expect("the join compiles");
+    let reversed_source = source.replace("on (left, right)", "on (right, left)");
+    let reversed = compile(&[reversed_source.as_str()], &registry).expect("the reverse compiles");
+    let wider_count_source = source.replace("last 2", "last 3");
+    let wider_count =
+        compile(&[wider_count_source.as_str()], &registry).expect("the count bound compiles");
+    let wider_time_source = source.replace("duration(\"1s\")", "duration(\"2s\")");
+    let wider_time =
+        compile(&[wider_time_source.as_str()], &registry).expect("the time bound compiles");
+
+    assert_ne!(
+        original.hash, reversed.hash,
+        "declared join order is meaning"
+    );
+    assert_ne!(original.hash, wider_count.hash, "`last` is meaning");
+    assert_ne!(original.hash, wider_time.hash, "`within` is meaning");
+    let node::HandlerActivation::Join { ports, .. } = &original.plan.handlers[0].activation else {
+        panic!("the fixture carries one join")
+    };
+    assert_eq!(
+        ports.iter().map(Port::name).collect::<Vec<_>>(),
+        ["left", "right"],
+        "the plan preserves declared order rather than sorting names"
+    );
+}
+
+#[test]
 fn a_duplicated_handler_refuses() {
     // Two handlers for one (node, activation): dispatch would fire
     // the first and silently shadow the second — refused by name.
@@ -1474,6 +1565,173 @@ fn a_duplicated_handler_refuses() {
             activation: rastok::node::HandlerActivation::Port(port("in")),
         }
     );
+}
+
+#[test]
+fn a_forged_executable_cycle_never_earns_the_validated_type() {
+    let mut plan = raw_probe();
+    let relay = plan
+        .nodes
+        .iter()
+        .position(|node| node.path.to_string() == "relay")
+        .map(|index| Slot::new(u32::try_from(index).unwrap()))
+        .expect("the fixture has relay");
+    let shell = plan
+        .nodes
+        .iter()
+        .position(|node| node.path.to_string() == "shell")
+        .map(|index| Slot::new(u32::try_from(index).unwrap()))
+        .expect("the fixture has shell");
+    let back_edge = plan
+        .edges
+        .iter_mut()
+        .find(|edge| {
+            edge.from.node == Some(shell) && edge.to.as_ref().is_some_and(|to| to.node.is_none())
+        })
+        .expect("the fixture routes shell to the boundary");
+    back_edge.to = Some(EndpointRef {
+        node: Some(relay),
+        port: Port::new("in").unwrap(),
+    });
+
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(plan).unwrap_err(),
+        PlanValidationError::WiringCycle { node } if node.to_string() == "relay"
+    ));
+}
+
+#[test]
+fn a_foreign_plan_cannot_smuggle_malformed_join_activation_or_bounds() {
+    let mut duplicate_port = raw_join(true);
+    let rastok::node::HandlerActivation::Join { ports, .. } =
+        &mut duplicate_port.handlers[0].activation
+    else {
+        panic!("the fixture carries a join")
+    };
+    ports[1] = ports[0].clone();
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(duplicate_port).unwrap_err(),
+        PlanValidationError::InvalidJoinActivation { node } if node.to_string() == "pair"
+    ));
+
+    let mut zero_bound = raw_join(true);
+    let rastok::node::HandlerActivation::Join { last, .. } = &mut zero_bound.handlers[0].activation
+    else {
+        panic!("the fixture carries a join")
+    };
+    *last = Some(0);
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(zero_bound).unwrap_err(),
+        PlanValidationError::InvalidJoinBound { node } if node.to_string() == "pair"
+    ));
+}
+
+#[test]
+fn a_bounded_join_never_invents_an_untyped_or_missing_expiry_channel() {
+    let mut missing = raw_join(false);
+    let rastok::node::HandlerActivation::Join { last, .. } = &mut missing.handlers[0].activation
+    else {
+        panic!("the fixture carries a join")
+    };
+    *last = Some(1);
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(missing).unwrap_err(),
+        PlanValidationError::MissingJoinExpiryPort { node } if node.to_string() == "pair"
+    ));
+
+    let mut identity = raw_join(false);
+    let Step::Emit { value, .. } = &mut identity.handlers[0].body[0] else {
+        panic!("the fixture emits")
+    };
+    *value = plan::Emission::Identity;
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(identity).unwrap_err(),
+        PlanValidationError::AmbiguousJoinIdentity { node } if node.to_string() == "pair"
+    ));
+}
+
+#[test]
+fn a_required_metadata_read_after_a_join_needs_an_explicit_pick() {
+    let without_pick = r#"
+graph attributed : App {
+  input left: int
+  input right: int
+  output out: variant
+
+  operator mark_left {
+    input in: int
+    output out: int
+    on in { out = { meta.app.token = data } }
+  }
+  operator mark_right {
+    input in: int
+    output out: int
+    on in { out = { meta.app.token = data } }
+  }
+  operator pair {
+    input left: int
+    input right: int
+    output out: int
+    on (left, right) { out = left.data }
+  }
+  operator read_pick {
+    input in: int
+    output out: variant
+    on in { out = meta.app.token }
+  }
+
+  .left -> mark_left -> pair.left
+  .right -> mark_right -> pair.right
+  pair.out -> read_pick -> .out
+}
+"#;
+    let bag = compile(
+        &[without_pick],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect_err("CommonOrAbsent cannot satisfy a required downstream read");
+    assert!(
+        bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code().as_str() == "E-META-ZONE"
+                && diagnostic
+                    .fields()
+                    .iter()
+                    .any(|(name, value)| *name == "field" && value == "meta.app.token")
+        }),
+        "{bag:?}"
+    );
+
+    let with_pick = without_pick.replace(
+        "on (left, right) { out = left.data }",
+        "on (left, right) { out = { data = left.data ; meta.app.token = right.meta.app.token } }",
+    );
+    let mut forged = compile(
+        &[with_pick.as_str()],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an explicit named-input pick resolves presence")
+    .plan
+    .into_inner();
+    let pair = forged
+        .handlers
+        .iter_mut()
+        .find(|handler| forged.nodes[handler.node.index()].path.to_string() == "pair")
+        .expect("the join handler");
+    let Step::Emit {
+        value: plan::Emission::Replace(writes),
+        ..
+    } = &mut pair.body[0]
+    else {
+        panic!("the explicit record builder lowers as Replace")
+    };
+    writes.retain(|write| {
+        !matches!(write.target, rastok::envelope::WriteTarget::App(ref field) if field == "token")
+    });
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(forged).unwrap_err(),
+        PlanValidationError::AmbiguousJoinMetadataRead { owner, field }
+            if owner == "read_pick" && field == "meta.app.token"
+    ));
 }
 
 #[test]

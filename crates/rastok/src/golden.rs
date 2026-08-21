@@ -384,6 +384,18 @@ fn record_tree(record: &Record) -> Cbor {
                         .collect(),
                 ),
             );
+            if !transaction.join_inputs.is_empty() {
+                pairs.insert(
+                    34,
+                    Cbor::Array(
+                        transaction
+                            .join_inputs
+                            .iter()
+                            .map(|id| Cbor::Bytes(id.as_bytes().to_vec()))
+                            .collect(),
+                    ),
+                );
+            }
             if !transaction.state_delta.is_empty() {
                 let mut delta: Vec<_> = transaction.state_delta.iter().collect();
                 delta.sort_by(|a, b| a.0.cmp(&b.0));

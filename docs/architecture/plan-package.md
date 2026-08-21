@@ -44,7 +44,11 @@
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
 > processing-time `tumbling` on Graph and Node owners. R5 adds the optional
 > exact bounded `closing` row and the `stop` step under the same categorical
-> v9; sliding/event-time remain named gates.
+> v9; sliding/event-time remain named gates. R6 completes the already
+> categorical handler registry with join activation tag 3 and makes nested
+> Graph composition public. Existing packages do not move: the new activation
+> row occurs only in newly executable join programs, while nested Graph source
+> already maps to the owner/edge tables v9 was designed to carry.
 > A decoded key type is re-derived and compared; unlike
 > compiler lowering, package validation never normalizes the claim.
 >
@@ -95,9 +99,9 @@
 > recursive value forms (maps compose through the MapLit expression;
 > a non-empty struct inside a map is INEXPRESSIBLE in v1 and defers
 > by name, so no new expression form was needed). Nothing was ever
-> published between the freezes. The `JoinMetaPlan` ops land with
-> the joins slice under a LATER version — this reader's re-encoding
-> check refuses unknown keys, so nothing can ride v5 silently.
+> published between the freezes. The proposed travelling `JoinMetaPlan` never
+> landed: R6 derives static metadata-presence facts from v9's canonical schema,
+> topology, activation, and explicit-write rows, avoiding a duplicate claim.
 > Identity stays where it always was — the semantic hash over the
 > canonical HIR; the package merely carries a plan and proves it intact.
 
@@ -345,6 +349,11 @@ handler    := {1: slot (uint), 2: activation, 3: guard (tree)?, 4: [step*]}
               // slot names the owning executable Operator or Connector
 activation := [1, port (text)]
             | [2, lifecycle]
+            | [3, [port (text)+], within_ns (signed) | null,
+                  last (positive uint32) | null]
+              // join ports stay in source-declared order; >=2 and distinct.
+              // A bound requires exact typed output `expired`; `where` lives
+              // in handler key 3 and no second correlation key is transported.
 lifecycle  := uint: 1 start · 2 stop · 3 compensate · 4 next ·
                     5 timeout · 6 evict · 7 recover · 8 closing
               // registry is closed and extend-only; M1.4 instance lifecycle

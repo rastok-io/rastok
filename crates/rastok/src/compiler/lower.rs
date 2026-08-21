@@ -11,8 +11,8 @@
 //! values.
 
 use crate::compiler::hir::{
-    AttrValue, Direction, EdgeTarget, EmitValue, Hir, InstanceLifetime, InstancePolicy,
-    Node as HirNode, NodeRole, Statement as HirStatement,
+    AttrValue, Direction, EdgeTarget, EmitValue, EndpointOwner, Graph as HirGraph, Hir,
+    InstanceLifetime, InstancePolicy, Node as HirNode, NodeRole, Statement as HirStatement,
 };
 use crate::datatype::{
     BinaryType, DataType, DateUnit, FloatType, IntegerType, IntegerWidth, IntervalUnit,
@@ -70,15 +70,53 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     for (text, _) in edges {
         writer.str(&text);
     }
+    let nested_graphs: Vec<_> = sorted_graphs(hir)
+        .into_iter()
+        .filter(|graph| !graph.path.is_root())
+        .collect();
+    if !nested_graphs.is_empty() {
+        writer.str("rastok.graph.owners.r1");
+        writer.count(nested_graphs.len());
+        for graph in &nested_graphs {
+            writer.str(&graph.path.to_string());
+            let mut boundary = graph.boundary.clone();
+            boundary.sort_by(|left, right| left.key().cmp(&right.key()));
+            writer.count(boundary.len());
+            for decl in boundary {
+                writer.str(decl.port.name());
+                writer.direction(decl.direction);
+                match decl.ty {
+                    None => writer.tag(0),
+                    Some(ty) => {
+                        writer.tag(1);
+                        writer.ty(&ty);
+                    }
+                }
+            }
+            let mut vals: Vec<_> = graph.vals.iter().collect();
+            vals.sort_by(|left, right| left.name.cmp(&right.name));
+            writer.count(vals.len());
+            for val in vals {
+                writer.str(&val.name);
+                writer.expr(&val.value.tree.root);
+            }
+        }
+    }
     // Extend identity only when the new source declares non-default instance
     // semantics. The persistent singleton still feeds the exact M1.3 stream.
     let configured: Vec<_> = sorted_nodes(hir)
         .into_iter()
         .filter_map(|node| node.instance.as_ref().map(|instance| (node, instance)))
         .collect();
-    if hir.app.instance.is_some() || !configured.is_empty() {
+    let configured_graphs: Vec<_> = nested_graphs
+        .iter()
+        .filter_map(|graph| graph.instance.as_ref().map(|instance| (*graph, instance)))
+        .collect();
+    if hir.app.instance.is_some() || !configured.is_empty() || !configured_graphs.is_empty() {
         writer.str("rastok.instances.r1");
-        writer.count(configured.len() + usize::from(hir.app.instance.is_some()));
+        writer.count(
+            configured.len() + configured_graphs.len() + usize::from(hir.app.instance.is_some()),
+        );
         if let Some(instance) = &hir.app.instance {
             writer.tag(1);
             writer.str(&hir.app.name);
@@ -87,6 +125,11 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
         for (node, instance) in configured {
             writer.tag(2);
             writer.str(&node.path.to_string());
+            writer.instance(instance);
+        }
+        for (graph, instance) in configured_graphs {
+            writer.tag(3);
+            writer.str(&graph.path.to_string());
             writer.instance(instance);
         }
     }
@@ -103,9 +146,25 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
         .instance
         .as_ref()
         .and_then(|instance| instance.closing.as_ref());
-    if app_closing.is_some() || !configured_closing.is_empty() {
+    let configured_graph_closing: Vec<_> = nested_graphs
+        .iter()
+        .filter_map(|graph| {
+            graph
+                .instance
+                .as_ref()
+                .and_then(|instance| instance.closing.as_ref().map(|closing| (*graph, closing)))
+        })
+        .collect();
+    if app_closing.is_some()
+        || !configured_closing.is_empty()
+        || !configured_graph_closing.is_empty()
+    {
         writer.str("rastok.closing.r1");
-        writer.count(configured_closing.len() + usize::from(app_closing.is_some()));
+        writer.count(
+            configured_closing.len()
+                + configured_graph_closing.len()
+                + usize::from(app_closing.is_some()),
+        );
         if let Some(closing) = app_closing {
             writer.tag(1);
             writer.str(&hir.app.name);
@@ -115,6 +174,12 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
         for (node, closing) in configured_closing {
             writer.tag(2);
             writer.str(&node.path.to_string());
+            writer.tree(&closing.drain_for.tree);
+            writer.tree(&closing.settle_for.tree);
+        }
+        for (graph, closing) in configured_graph_closing {
+            writer.tag(3);
+            writer.str(&graph.path.to_string());
             writer.tree(&closing.drain_for.tree);
             writer.tree(&closing.settle_for.tree);
         }
@@ -132,23 +197,123 @@ fn sorted_boundary(hir: &Hir) -> Vec<crate::plan::PortDecl> {
     boundary
 }
 
-/// Edges in canonical order, keyed by their endpoint rendering — the
-/// one order both the hash and the shipped plan use.
-fn sorted_edges(hir: &Hir) -> Vec<(String, &crate::compiler::hir::Edge)> {
-    let mut edges: Vec<_> = hir
-        .app
-        .edges
-        .iter()
-        .map(|edge| {
-            let to = match &edge.to {
-                EdgeTarget::Port(endpoint) => endpoint_text(endpoint),
-                EdgeTarget::Discard => String::from("!discard"),
-            };
-            (format!("{}>{to}", endpoint_text(&edge.from)), edge)
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FlatEdge {
+    scope: crate::plan::OwnerPath,
+    from: crate::compiler::hir::Endpoint,
+    to: EdgeTarget,
+}
+
+/// Graph boundaries are compile-time composition seams. The categorical plan
+/// carries their owner rows, but executable routes connect the first concrete
+/// producer to the first concrete consumer (or the root App boundary).
+fn sorted_edges(hir: &Hir) -> Vec<(String, FlatEdge)> {
+    let mut adjacency: std::collections::BTreeMap<crate::compiler::hir::Endpoint, Vec<EdgeTarget>> =
+        std::collections::BTreeMap::new();
+    collect_edge_adjacency(&hir.app, &mut adjacency);
+    for targets in adjacency.values_mut() {
+        targets.sort_by_key(edge_target_text);
+    }
+
+    let mut flattened = Vec::new();
+    let starts: Vec<_> = adjacency
+        .keys()
+        .filter(|endpoint| match &endpoint.owner {
+            EndpointOwner::Node(_) => true,
+            EndpointOwner::Graph(path) => path.is_root(),
         })
+        .cloned()
         .collect();
-    edges.sort_by(|a, b| a.0.cmp(&b.0));
-    edges
+    for start in starts {
+        let mut visiting = std::collections::BTreeSet::new();
+        flatten_from(&start, &start, &adjacency, &mut visiting, &mut flattened);
+    }
+    flattened.sort_by_key(flat_edge_text);
+    flattened.dedup();
+    flattened
+        .into_iter()
+        .map(|edge| (flat_edge_text(&edge), edge))
+        .collect()
+}
+
+fn collect_edge_adjacency(
+    graph: &HirGraph,
+    adjacency: &mut std::collections::BTreeMap<crate::compiler::hir::Endpoint, Vec<EdgeTarget>>,
+) {
+    for edge in &graph.edges {
+        adjacency
+            .entry(edge.from.clone())
+            .or_default()
+            .push(edge.to.clone());
+    }
+    for nested in &graph.graphs {
+        collect_edge_adjacency(nested, adjacency);
+    }
+}
+
+fn flatten_from(
+    origin: &crate::compiler::hir::Endpoint,
+    current: &crate::compiler::hir::Endpoint,
+    adjacency: &std::collections::BTreeMap<crate::compiler::hir::Endpoint, Vec<EdgeTarget>>,
+    visiting: &mut std::collections::BTreeSet<crate::compiler::hir::Endpoint>,
+    flattened: &mut Vec<FlatEdge>,
+) {
+    if !visiting.insert(current.clone()) {
+        return;
+    }
+    for target in adjacency.get(current).into_iter().flatten() {
+        match target {
+            EdgeTarget::Discard => flattened.push(FlatEdge {
+                scope: endpoint_scope(origin),
+                from: origin.clone(),
+                to: EdgeTarget::Discard,
+            }),
+            EdgeTarget::Port(endpoint) => match &endpoint.owner {
+                EndpointOwner::Graph(path) if !path.is_root() => {
+                    flatten_from(origin, endpoint, adjacency, visiting, flattened);
+                }
+                EndpointOwner::Node(_) | EndpointOwner::Graph(_) => {
+                    flattened.push(FlatEdge {
+                        scope: common_graph_scope(origin, endpoint),
+                        from: origin.clone(),
+                        to: EdgeTarget::Port(endpoint.clone()),
+                    });
+                }
+            },
+        }
+    }
+    visiting.remove(current);
+}
+
+fn endpoint_scope(endpoint: &crate::compiler::hir::Endpoint) -> crate::plan::OwnerPath {
+    match &endpoint.owner {
+        EndpointOwner::Node(path) => crate::plan::OwnerPath::from(path)
+            .parent()
+            .unwrap_or_else(crate::plan::OwnerPath::root),
+        EndpointOwner::Graph(path) => path.clone(),
+    }
+}
+
+fn common_graph_scope(
+    left: &crate::compiler::hir::Endpoint,
+    right: &crate::compiler::hir::Endpoint,
+) -> crate::plan::OwnerPath {
+    endpoint_scope(left).common_ancestor(&endpoint_scope(right))
+}
+
+fn edge_target_text(target: &EdgeTarget) -> String {
+    match target {
+        EdgeTarget::Port(endpoint) => endpoint_text(endpoint),
+        EdgeTarget::Discard => String::from("!discard"),
+    }
+}
+
+fn flat_edge_text(edge: &FlatEdge) -> String {
+    format!(
+        "{}>{}",
+        endpoint_text(&edge.from),
+        edge_target_text(&edge.to)
+    )
 }
 
 /// Lowers a checked graph into the shipped plan and its symbol table.
@@ -178,53 +343,78 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         ext_schema: hir.ext_schema.clone(),
         assets: hir.assets.clone(),
     };
-    let app_consts: std::collections::BTreeMap<String, crate::value::Value> = hir
-        .app
-        .vals
-        .iter()
-        .map(|val| (val.name.clone(), val.value.value.clone()))
+    enum CheckedOwner<'hir> {
+        Graph(&'hir HirGraph),
+        Node(&'hir HirNode),
+    }
+    let mut checked_owners: Vec<(OwnerPath, CheckedOwner<'_>)> = sorted_graphs(hir)
+        .into_iter()
+        .map(|graph| (graph.path.clone(), CheckedOwner::Graph(graph)))
         .collect();
-    plan.owners.push(Owner {
-        path: OwnerPath::root(),
-        parent: None,
-        kind: OwnerKind::Graph,
-        instance: lower_instance(hir.app.instance.as_ref(), &app_consts, &hir.app.name)?,
-        vals: lower_owner_values(&hir.app.vals),
-    });
-    let mut owner_nodes = nodes.clone();
-    owner_nodes.sort_by(|left, right| left.path.cmp(&right.path));
+    checked_owners.extend(
+        nodes
+            .iter()
+            .map(|node| (OwnerPath::from(&node.path), CheckedOwner::Node(node))),
+    );
+    checked_owners.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut owner_slots = std::collections::BTreeMap::new();
     let mut node_owners = std::collections::BTreeMap::new();
-    for (index, hir_node) in owner_nodes.iter().enumerate() {
-        let node_slot = slot_of(&hir_node.path);
-        let owner_index = u32::try_from(index.saturating_add(1)).map_err(|_| LowerError {
-            owner: hir_node.path.to_string(),
+    for (index, (path, checked)) in checked_owners.into_iter().enumerate() {
+        let owner_index = u32::try_from(index).map_err(|_| LowerError {
+            owner: path.to_string(),
             detail: "the owner table exceeds its u32 slot domain",
         })?;
         let owner_slot = OwnerSlot::new(owner_index);
-        let mut constants = app_consts.clone();
-        constants.extend(
-            hir_node
-                .vals
-                .iter()
-                .map(|val| (val.name.clone(), val.value.value.clone())),
-        );
+        let parent_path = path.parent();
+        let parent = match parent_path.as_ref() {
+            None => None,
+            Some(parent_path) => Some(*owner_slots.get(parent_path).ok_or_else(|| LowerError {
+                owner: path.to_string(),
+                detail: "the checked owner tree lost its lexical parent",
+            })?),
+        };
+        let graph_path = match &checked {
+            CheckedOwner::Graph(graph) => graph.path.clone(),
+            CheckedOwner::Node(node) => {
+                OwnerPath::from(&node.path)
+                    .parent()
+                    .ok_or_else(|| LowerError {
+                        owner: node.path.to_string(),
+                        detail: "an executable Node cannot own the root Graph path",
+                    })?
+            }
+        };
+        let mut constants = graph_constant_environment(hir, &graph_path);
+        let (kind, instance, vals) = match checked {
+            CheckedOwner::Graph(graph) => (
+                OwnerKind::Graph,
+                lower_instance(graph.instance.as_ref(), &constants, &graph.path.to_string())?,
+                lower_owner_values(&graph.vals),
+            ),
+            CheckedOwner::Node(node) => {
+                constants.extend(
+                    node.vals
+                        .iter()
+                        .map(|value| (value.name.clone(), value.value.value.clone())),
+                );
+                let slot = slot_of(&node.path);
+                node_owners.insert(node.path.clone(), owner_slot);
+                (
+                    OwnerKind::Node(slot),
+                    lower_instance(node.instance.as_ref(), &constants, &node.path.to_string())?,
+                    lower_owner_values(&node.vals),
+                )
+            }
+        };
         plan.owners.push(Owner {
-            path: OwnerPath::new(hir_node.path.segments().iter().cloned()).map_err(|_| {
-                LowerError {
-                    owner: hir_node.path.to_string(),
-                    detail: "the checked Node path is not a valid owner path",
-                }
-            })?,
-            parent: Some(OwnerSlot::new(0)),
-            kind: OwnerKind::Node(node_slot),
-            instance: lower_instance(
-                hir_node.instance.as_ref(),
-                &constants,
-                &hir_node.path.to_string(),
-            )?,
-            vals: lower_owner_values(&hir_node.vals),
+            path: path.clone(),
+            parent,
+            kind,
+            instance,
+            vals,
         });
-        node_owners.insert(hir_node.path.clone(), owner_slot);
+        owner_slots.insert(path, owner_slot);
     }
     let mut symbols = SymbolTable { nodes: Vec::new() };
     for hir_node in &nodes {
@@ -284,12 +474,13 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         // The plan must carry its whole semantics: every constant a
         // handler references is substituted into the shipped trees, so
         // no binding is left behind in the compiler.
-        let mut consts: std::collections::BTreeMap<String, crate::value::Value> = hir
-            .app
-            .vals
-            .iter()
-            .map(|val| (val.name.clone(), val.value.value.clone()))
-            .collect();
+        let graph_path = OwnerPath::from(&hir_node.path)
+            .parent()
+            .ok_or_else(|| LowerError {
+                owner: hir_node.path.to_string(),
+                detail: "an executable Node cannot own the root Graph path",
+            })?;
+        let mut consts = graph_constant_environment(hir, &graph_path);
         for val in &hir_node.vals {
             consts.insert(val.name.clone(), val.value.value.clone());
         }
@@ -327,15 +518,31 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         }
     }
     for (_, edge) in sorted_edges(hir) {
-        let endpoint = |end: &crate::compiler::hir::Endpoint| EndpointRef {
-            node: end.node.as_ref().map(&slot_of),
-            port: end.port.clone(),
+        let endpoint = |end: &crate::compiler::hir::Endpoint| -> Result<EndpointRef, LowerError> {
+            let node = match &end.owner {
+                EndpointOwner::Node(path) => Some(slot_of(path)),
+                EndpointOwner::Graph(path) if path.is_root() => None,
+                EndpointOwner::Graph(path) => {
+                    return Err(LowerError {
+                        owner: path.to_string(),
+                        detail: "a nested Graph boundary survived composition lowering",
+                    });
+                }
+            };
+            Ok(EndpointRef {
+                node,
+                port: end.port.clone(),
+            })
         };
+        let scope = *owner_slots.get(&edge.scope).ok_or_else(|| LowerError {
+            owner: edge.scope.to_string(),
+            detail: "a lowered edge lost its lexical Graph scope",
+        })?;
         plan.edges.push(Edge {
-            scope: OwnerSlot::new(0),
-            from: endpoint(&edge.from),
+            scope,
+            from: endpoint(&edge.from)?,
             to: match &edge.to {
-                EdgeTarget::Port(end) => Some(endpoint(end)),
+                EdgeTarget::Port(end) => Some(endpoint(end)?),
                 EdgeTarget::Discard => None,
             },
         });
@@ -543,9 +750,67 @@ fn substitute(
 /// Nodes in canonical order: (kind, path), per `identity.md` §1's
 /// sorted top-level declarations. Slots index this order.
 fn sorted_nodes(hir: &Hir) -> Vec<&HirNode> {
-    let mut nodes: Vec<_> = hir.app.nodes.iter().collect();
+    fn collect<'hir>(graph: &'hir HirGraph, nodes: &mut Vec<&'hir HirNode>) {
+        nodes.extend(&graph.nodes);
+        for nested in &graph.graphs {
+            collect(nested, nodes);
+        }
+    }
+    let mut nodes = Vec::new();
+    collect(&hir.app, &mut nodes);
     nodes.sort_by_key(|node| (kind_rank(node.category()), node.path.to_string()));
     nodes
+}
+
+fn sorted_graphs(hir: &Hir) -> Vec<&HirGraph> {
+    fn collect<'hir>(graph: &'hir HirGraph, graphs: &mut Vec<&'hir HirGraph>) {
+        graphs.push(graph);
+        for nested in &graph.graphs {
+            collect(nested, graphs);
+        }
+    }
+    let mut graphs = Vec::new();
+    collect(&hir.app, &mut graphs);
+    graphs.sort_by(|left, right| left.path.cmp(&right.path));
+    graphs
+}
+
+fn graph_for_path<'hir>(
+    graph: &'hir HirGraph,
+    path: &crate::plan::OwnerPath,
+) -> Option<&'hir HirGraph> {
+    if &graph.path == path {
+        return Some(graph);
+    }
+    graph
+        .graphs
+        .iter()
+        .find_map(|nested| graph_for_path(nested, path))
+}
+
+fn graph_constant_environment(
+    hir: &Hir,
+    path: &crate::plan::OwnerPath,
+) -> std::collections::BTreeMap<String, crate::value::Value> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut cursor = Some(path.clone());
+    let mut chain = Vec::new();
+    while let Some(path) = cursor {
+        chain.push(path.clone());
+        cursor = path.parent();
+    }
+    chain.reverse();
+    for path in chain {
+        if let Some(graph) = graph_for_path(&hir.app, &path) {
+            values.extend(
+                graph
+                    .vals
+                    .iter()
+                    .map(|value| (value.name.clone(), value.value.value.clone())),
+            );
+        }
+    }
+    values
 }
 
 /// The checker guarantees the mandatory axes exist with valid words
@@ -587,9 +852,10 @@ fn kind_rank(kind: node::Kind) -> u8 {
 }
 
 fn endpoint_text(endpoint: &crate::compiler::hir::Endpoint) -> String {
-    match &endpoint.node {
-        Some(path) => format!("{path}.{}", endpoint.port),
-        None => format!(".{}", endpoint.port),
+    match &endpoint.owner {
+        EndpointOwner::Node(path) => format!("{path}.{}", endpoint.port),
+        EndpointOwner::Graph(path) if path.is_root() => format!(".{}", endpoint.port),
+        EndpointOwner::Graph(path) => format!("{path}.{}", endpoint.port),
     }
 }
 
@@ -906,6 +1172,24 @@ impl Writer<'_> {
             // pre-activation encoding; Display is presentation and
             // free to move.
             self.str(&handler.activation.canonical_key());
+            if let node::HandlerActivation::Join { last, .. } = &handler.activation {
+                self.str("rastok.join.bounds.r1");
+                self.tag(1);
+                match &handler.join_within {
+                    None => self.tag(0),
+                    Some(within) => {
+                        self.tag(1);
+                        self.tree(&within.tree);
+                    }
+                }
+                match last {
+                    None => self.tag(0),
+                    Some(count) => {
+                        self.tag(1);
+                        self.u32(*count);
+                    }
+                }
+            }
             match &handler.guard {
                 None => self.tag(0),
                 Some(guard) => {

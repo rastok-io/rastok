@@ -155,7 +155,9 @@ pub fn compile_with_assets(
             | PlanValidationError::InvalidInstanceKey { .. }
             | PlanValidationError::ConflictingInstanceKeyTypes { .. }
             | PlanValidationError::UnresolvedInstanceAdmission { .. }
-            | PlanValidationError::MissingClosingPolicy { .. }),
+            | PlanValidationError::MissingClosingPolicy { .. }
+            | PlanValidationError::AmbiguousJoinMetadataRead { .. }
+            | PlanValidationError::WiringCycle { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
             return Err(bag);
@@ -271,6 +273,21 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
             "detail",
             format!("Process `{connector}` can remain open during closure"),
         ),
+        PlanValidationError::AmbiguousJoinMetadataRead { owner, field } => Diagnostic::new(
+            check::E_META_ZONE,
+            Phase::Check,
+            format!(
+                "`{field}` may be absent on `{owner}` after a join; choose one named input with an explicit metadata write before reading it"
+            ),
+        )
+        .with_field("field", field)
+        .with_field("detail", "required metadata read after CommonOrAbsent"),
+        PlanValidationError::WiringCycle { node } => Diagnostic::new(
+            check::E_GRAPH_CYCLE,
+            Phase::Check,
+            format!("the wiring cycles through `{node}`; executable edges form a DAG"),
+        )
+        .with_field("node", node.to_string()),
         _ => internal_plan_diagnostic(error),
     }
 }

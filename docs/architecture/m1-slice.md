@@ -131,10 +131,10 @@ step touches `vm.rs` once.
    both pinned: the five-field spine with `mime` relocated to
    `meta.ext.content_type`, and trees sealing `[type, root]` so
    `json! [1]` and `[1]` are distinct programs. B4 later restored
-   scalar JSON behind the unambiguous bang. Deferred WITH their
-   reasons: `JoinMetaPlan` execution and the static presence
-   analysis (they land with the joins slice — reserved format keys
-   announced), `Encoding::Json` lazy decode (v1 decodes structured
+   scalar JSON behind the unambiguous bang. R6 later lands join execution and
+   static presence without a travelling `JoinMetaPlan`: the v9 validator
+   derives the verdict from canonical schemas and topology. Still deferred
+   WITH their reasons: `Encoding::Json` lazy decode (v1 decodes structured
    bodies eagerly at the frontier), guest meta writes (guests read
    only), the 64 KiB canonical-type-byte budget (with composite
    pins), and the embedded asset-refusal gate (the loader's line —
@@ -292,11 +292,15 @@ step touches `vm.rs` once.
    typed `exit`, then run `on stop` and reclaim. D-2026-08-18-1 is the
    authority; the ordered
    [M1.4 instance backlog](m1.4-instances-backlog.md) realigns the private
-   P0–P3 draft; R0–R5 are landed, while public nested-Graph/Lab evidence and
-   cluster-readiness proof remain R6–R7.
+   P0–P3 draft; R0–R6 are landed, while the cluster-readiness/closure proof
+   remains R7 (some dynamic owner values and Graph handlers stay named R1
+   frontend gates).
 5. **Joins — `on (a, b)` bounded by `within …` / `last N`** —
-   correlation windows and the static metadata merge of
-   D-2026-08-10-2; the last language lift of the milestone. Here
+   **LANDED with M1.4 R6 (2026-08-22)**: correlation windows and the static
+   metadata merge of D-2026-08-10-2, inside the owning Operator instance.
+   Candidate tuples use declared-port order and FIFO choices; false `where`
+   predicates retain inputs, and `within` / `last` publish typed
+   `JoinExpired` rather than dropping. Here
    `last N` is the existing count bound. There is deliberately no
    journal-querying `last(…)` operator:
    values that must survive are copied explicitly into `meta.app`.
@@ -311,9 +315,10 @@ step touches `vm.rs` once.
    join sensitive), while the order BETWEEN handlers stays
    insensitive and canonically sorted by that key. Identity-form
    note (D-2026-08-09-1): under a join, `out = .` is AMBIGUOUS —
-   two input envelopes, no single "current" one — so the joins
-   slice must refuse it until a normative base rule names the
-   re-emitted envelope; never a silent pick.
+   two input envelopes, no single "current" one — R6 refuses it and requires
+   a named input; never a silent pick. Named payload witnesses remain
+   independently lazy, and Registry-free presence validation forces an
+   explicit metadata pick before a required downstream read.
 6. **`File` connector** — the first new adapter on the conformance
    harness: the half-day claim gets its first real measurement, with
    no network in the way. OPENS WITH the global binder decision
