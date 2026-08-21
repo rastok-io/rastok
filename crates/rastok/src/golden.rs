@@ -306,6 +306,7 @@ fn key_name(key: u64) -> String {
         46 => "edge_cursor",
         47 => "edge",
         48 => "parent_instance_ref",
+        49 => "close_scope_ref",
         _ => return format!("key {key}"),
     };
     format!("{name}({key})")
@@ -358,6 +359,9 @@ fn record_tree(record: &Record) -> Cbor {
             pairs.insert(31, transaction.instance.tree());
             if let Some(parent) = &transaction.parent_instance {
                 pairs.insert(48, parent.tree());
+            }
+            if let Some(scope) = &transaction.close_scope {
+                pairs.insert(49, scope.tree());
             }
             if let Some(cause) = transaction.cause {
                 pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));

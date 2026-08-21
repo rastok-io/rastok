@@ -18,8 +18,8 @@
 //! the commit, nothing can fail.
 
 use crate::boundary::{
-    BoundaryEvent, CallRef, Completion, DatedPayload, Dispatcher, InboundSubmission,
-    InstanceDeadline, Intent, Partner, ProcessExit, Response,
+    BoundaryEvent, CallRef, ClosingDeadline, Completion, DatedPayload, Dispatcher,
+    InboundSubmission, InstanceDeadline, Intent, Partner, ProcessExit, Response,
 };
 use crate::datatype::DataType;
 use crate::envelope::{Data, Envelope, Id};
@@ -207,6 +207,15 @@ pub struct PumpReport {
     pub rejected: Vec<(Response, String)>,
 }
 
+impl PumpReport {
+    fn append(&mut self, mut other: Self) {
+        self.settled = self.settled.saturating_add(other.settled);
+        self.discarded.append(&mut other.discarded);
+        self.uncorrelated.append(&mut other.uncorrelated);
+        self.rejected.append(&mut other.rejected);
+    }
+}
+
 /// One held request: the delivery whose cursor the completion
 /// transaction will consume. A budget obligation resolves against
 /// its reference — the canonical edge and the envelope id, both on
@@ -228,6 +237,9 @@ struct Instance {
     settings: BTreeMap<String, crate::value::Value>,
     created_by: Envelope,
     last_activity: Envelope,
+    /// Deliveries discarded only after the drain budget expired. Their cursor
+    /// positions are sealed by this instance's eventual `l:stop`.
+    residual: Vec<Delivery>,
     phase: InstancePhase,
 }
 
@@ -236,8 +248,21 @@ struct Instance {
 #[derive(Debug, Clone)]
 enum InstancePhase {
     Open,
-    Closing { cause: Envelope, scope: InstanceRef },
-    Stopping { cause: Envelope, scope: InstanceRef },
+    Closing {
+        cause: Envelope,
+        scope: InstanceRef,
+        stage: ClosingStage,
+    },
+    Stopping {
+        cause: Envelope,
+        scope: InstanceRef,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClosingStage {
+    Draining,
+    Settling,
 }
 
 /// Pure instance construction. Installation happens only after the producer
@@ -253,6 +278,18 @@ struct InstanceCandidate {
     /// Root admission claimed by a single-pass owner. Reuse is legal only for
     /// fan-out of this exact envelope inside the same atomic preparation.
     single_pass_root: Option<Id>,
+}
+
+/// A successor-generation bundle selected and journaled while its previous
+/// generation is still Closing. Deliveries wait in the ordinary bounded
+/// mailbox; this map carries only the immutable instance bundle needed when
+/// the journal fold allows `l:start`.
+#[derive(Debug, Clone)]
+struct WaitingInstance {
+    candidate: InstanceCandidate,
+    created_by: Envelope,
+    last_activity: Envelope,
+    last_activity_at: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -481,6 +518,8 @@ pub struct Vm<'plan> {
     pending: BTreeMap<CallRef, PendingCall>,
     /// Live keyed/singleton instances whose lifecycle is observable.
     instances: BTreeMap<InstanceRef, Instance>,
+    /// Selected successor generations not yet allowed to start.
+    waiting: BTreeMap<InstanceRef, WaitingInstance>,
     /// Rebuildable index of instances that have won a close request but have
     /// not yet queued `l:stop`. `InstancePhase` remains the authority; this
     /// set keeps open-only traffic off the closure scan.
@@ -492,6 +531,9 @@ pub struct Vm<'plan> {
     /// Won closures awaiting their completion transaction — replayable:
     /// an entry leaves this queue only when its transaction commits.
     settled: VecDeque<SettledEntry>,
+    /// Non-causal observations collected by internal boundary polls between
+    /// drain and settlement deadlines. The next public pump returns them.
+    buffered_pump: PumpReport,
     /// The machine's virtual date, in nanoseconds; only
     /// [`Self::advance`] moves it, discretely.
     now: i64,
@@ -529,9 +571,11 @@ impl<'plan> Vm<'plan> {
             dispatcher: Dispatcher::new(),
             pending: BTreeMap::new(),
             instances: BTreeMap::new(),
+            waiting: BTreeMap::new(),
             closing: BTreeSet::new(),
             lifecycle: VecDeque::new(),
             settled: VecDeque::new(),
+            buffered_pump: PumpReport::default(),
             now: 0,
             outputs: Vec::new(),
             errors: Vec::new(),
@@ -652,11 +696,34 @@ impl<'plan> Vm<'plan> {
             self.fire_lifecycle_next(journal)?;
             return Ok(true);
         }
-        if !self.settled.is_empty() {
-            self.settle_next(journal)?;
+        if let Some(index) = self.settled.iter().position(|entry| {
+            self.pending
+                .get(&entry.event.call_ref)
+                .is_some_and(|pending| self.instances.contains_key(&pending.instance))
+        }) {
+            self.settle_next(journal, index)?;
             return Ok(true);
         }
-        let Some((slot, key, delivery)) = self.scheduler.mailboxes.peek_next() else {
+        let instances = &self.instances;
+        let Some((slot, key, delivery)) =
+            self.scheduler.mailboxes.peek_next_where(|_, reference| {
+                match instances.get(reference) {
+                    Some(Instance {
+                        phase: InstancePhase::Open,
+                        ..
+                    })
+                    | Some(Instance {
+                        phase:
+                            InstancePhase::Closing {
+                                stage: ClosingStage::Draining,
+                                ..
+                            },
+                        ..
+                    }) => true,
+                    Some(_) | None => false,
+                }
+            })
+        else {
             return Ok(false);
         };
         match &self.plan.nodes[slot.index()].kind {
@@ -688,6 +755,16 @@ impl<'plan> Vm<'plan> {
     ///
     /// Dispatcher integrity faults propagate.
     pub fn pump(
+        &mut self,
+        journal: &mut dyn Journal,
+        partner: &mut dyn Partner,
+    ) -> Result<PumpReport, VmError> {
+        let mut report = core::mem::take(&mut self.buffered_pump);
+        report.append(self.poll_partner(journal, partner)?);
+        Ok(report)
+    }
+
+    fn poll_partner(
         &mut self,
         journal: &mut dyn Journal,
         partner: &mut dyn Partner,
@@ -740,6 +817,26 @@ impl<'plan> Vm<'plan> {
         self.drain(journal)?;
         while let Some((key, payload)) = self.scheduler.peek_due(target) {
             self.now = key.0;
+            let mut polled_at_settlement = false;
+            if matches!(
+                &payload,
+                DatedPayload::InstanceClosing {
+                    deadline: ClosingDeadline::Settlement,
+                    ..
+                }
+            ) {
+                let report = self.poll_partner(journal, partner)?;
+                self.buffered_pump.append(report);
+                self.drain(journal)?;
+                polled_at_settlement = true;
+            }
+            let mut saw_drain = matches!(
+                &payload,
+                DatedPayload::InstanceClosing {
+                    deadline: ClosingDeadline::Drain,
+                    ..
+                }
+            );
             // Every expiry OF THIS INSTANT fires before the machine
             // drains: the drain happens between jumps of the clock,
             // never between simultaneous events — a same-instant
@@ -748,8 +845,33 @@ impl<'plan> Vm<'plan> {
             self.expire(journal, partner, payload)?;
             self.scheduler.ack(key);
             while let Some((sibling_key, sibling)) = self.scheduler.peek_due(key.0) {
+                if !polled_at_settlement
+                    && matches!(
+                        &sibling,
+                        DatedPayload::InstanceClosing {
+                            deadline: ClosingDeadline::Settlement,
+                            ..
+                        }
+                    )
+                {
+                    let report = self.poll_partner(journal, partner)?;
+                    self.buffered_pump.append(report);
+                    self.drain(journal)?;
+                    polled_at_settlement = true;
+                }
+                saw_drain |= matches!(
+                    &sibling,
+                    DatedPayload::InstanceClosing {
+                        deadline: ClosingDeadline::Drain,
+                        ..
+                    }
+                );
                 self.expire(journal, partner, sibling)?;
                 self.scheduler.ack(sibling_key);
+            }
+            if saw_drain {
+                let report = self.poll_partner(journal, partner)?;
+                self.buffered_pump.append(report);
             }
             self.drain(journal)?;
         }
@@ -777,7 +899,15 @@ impl<'plan> Vm<'plan> {
                 cause,
                 deadline,
             } => {
-                self.expire_instance(owner, instance, cause, deadline);
+                self.expire_instance(journal, owner, instance, cause, deadline)?;
+                return Ok(());
+            }
+            DatedPayload::InstanceClosing {
+                instance,
+                cause,
+                deadline,
+            } => {
+                self.expire_closing(journal, partner, &instance, cause, deadline)?;
                 return Ok(());
             }
         };
@@ -855,11 +985,16 @@ impl<'plan> Vm<'plan> {
                     let instance_settings = self
                         .instances
                         .get(&instance)
+                        .map(|bundle| &bundle.settings)
+                        .or_else(|| {
+                            self.waiting
+                                .get(&instance)
+                                .map(|waiting| &waiting.candidate.settings)
+                        })
                         .ok_or_else(|| VmError::PlanInvariant {
                             node: planned.path.clone(),
-                            reason: "a queued call lost its installed instance bundle",
+                            reason: "a queued call lost its selected instance bundle",
                         })?
-                        .settings
                         .clone();
                     let emitting_id = queued.envelope.meta().sys().id();
                     Some(Intent {
@@ -978,11 +1113,12 @@ impl<'plan> Vm<'plan> {
     /// their creating start/box. Missing references are stale observations.
     fn expire_instance(
         &mut self,
+        journal: &mut dyn Journal,
         owner: OwnerSlot,
         reference: InstanceRef,
         cause: Id,
         deadline: InstanceDeadline,
-    ) {
+    ) -> Result<(), VmError> {
         let current = self.instances.get(&reference).filter(|instance| {
             instance.owner == owner
                 && matches!(instance.phase, InstancePhase::Open)
@@ -997,10 +1133,11 @@ impl<'plan> Vm<'plan> {
             InstanceDeadline::Idle => instance.last_activity.clone(),
             InstanceDeadline::Fixed | InstanceDeadline::Tumbling => instance.created_by.clone(),
         }) else {
-            return;
+            return Ok(());
         };
-        self.request_close(&reference, cause);
+        self.request_close(journal, &reference, cause)?;
         self.progress_closures();
+        Ok(())
     }
 
     /// The machine's virtual date, in nanoseconds.
@@ -1098,10 +1235,94 @@ impl<'plan> Vm<'plan> {
         })
     }
 
+    fn closing_timers(&self, reference: &InstanceRef) -> Vec<(u8, Id)> {
+        let Some(instance) = self.instances.get(reference) else {
+            return Vec::new();
+        };
+        let Some(_) = self.plan.owners[instance.owner.index()].instance.closing else {
+            return Vec::new();
+        };
+        vec![
+            (
+                crate::journal::timer_kind::INSTANCE_DRAIN,
+                ids::instance_closing_ref(reference, crate::journal::timer_kind::INSTANCE_DRAIN),
+            ),
+            (
+                crate::journal::timer_kind::INSTANCE_SETTLEMENT,
+                ids::instance_closing_ref(
+                    reference,
+                    crate::journal::timer_kind::INSTANCE_SETTLEMENT,
+                ),
+            ),
+        ]
+    }
+
+    fn arm_closing_deadlines(&mut self, reference: &InstanceRef, cause: Id) {
+        let Some(instance) = self.instances.get(reference) else {
+            return;
+        };
+        let Some(policy) = self.plan.owners[instance.owner.index()].instance.closing else {
+            return;
+        };
+        let drain_at = self.now.saturating_add(policy.drain_for);
+        self.scheduler.arm(
+            drain_at,
+            DatedPayload::InstanceClosing {
+                instance: reference.clone(),
+                cause,
+                deadline: ClosingDeadline::Drain,
+            },
+        );
+        self.scheduler.arm(
+            drain_at.saturating_add(policy.settle_for),
+            DatedPayload::InstanceClosing {
+                instance: reference.clone(),
+                cause,
+                deadline: ClosingDeadline::Settlement,
+            },
+        );
+    }
+
+    /// Commits the close request before changing admission. Expiry and
+    /// single-pass use this path; an explicit `stop` carries the same
+    /// `close_scope` in its already-committed handler transaction.
+    fn request_close(
+        &mut self,
+        journal: &mut dyn Journal,
+        reference: &InstanceRef,
+        cause: Envelope,
+    ) -> Result<(), VmError> {
+        if !self
+            .instances
+            .get(reference)
+            .is_some_and(|instance| matches!(instance.phase, InstancePhase::Open))
+        {
+            return Ok(());
+        }
+        let owner = self.instances[reference].owner;
+        let record = crate::journal::TransactionRecord {
+            owner_path: self.plan.owners[owner.index()].path.clone(),
+            instance: reference.clone(),
+            parent_instance: None,
+            close_scope: Some(reference.clone()),
+            trigger: node::Trigger::Lifecycle(node::Lifecycle::Closing),
+            cause: Some(cause.meta().sys().id()),
+            consumed: vec![],
+            state_delta: vec![],
+            emissions: vec![],
+            routes: vec![],
+            timers: self.closing_timers(reference),
+        };
+        journal.commit(record).map_err(VmError::Journal)?;
+        self.activate_close(reference, cause.clone());
+        self.arm_closing_deadlines(reference, cause.meta().sys().id());
+        Ok(())
+    }
+
     /// The first close request wins causally. A Graph request marks every live
     /// descendant, but reclamation remains inner-first: the parent cannot
     /// queue `l:stop` while a child bundle or child stop fact is outstanding.
-    fn request_close(&mut self, reference: &InstanceRef, cause: Envelope) {
+    fn activate_close(&mut self, reference: &InstanceRef, cause: Envelope) {
         let closes_subtree = self.instances.get(reference).is_some_and(|instance| {
             self.plan.owners[instance.owner.index()].kind == OwnerKind::Graph
         });
@@ -1115,14 +1336,32 @@ impl<'plan> Vm<'plan> {
             .cloned()
             .collect();
         for target in targets {
-            if let Some(instance) = self.instances.get_mut(&target)
-                && matches!(instance.phase, InstancePhase::Open)
-            {
-                instance.phase = InstancePhase::Closing {
-                    cause: cause.clone(),
-                    scope: reference.clone(),
-                };
-                self.closing.insert(target);
+            let widen = self
+                .instances
+                .get(&target)
+                .and_then(|instance| match &instance.phase {
+                    InstancePhase::Closing { scope, .. }
+                        if self.is_within_instance(scope, reference) =>
+                    {
+                        Some(true)
+                    }
+                    _ => None,
+                });
+            if let Some(instance) = self.instances.get_mut(&target) {
+                match &mut instance.phase {
+                    InstancePhase::Open => {
+                        instance.phase = InstancePhase::Closing {
+                            cause: cause.clone(),
+                            scope: reference.clone(),
+                            stage: ClosingStage::Draining,
+                        };
+                        self.closing.insert(target);
+                    }
+                    InstancePhase::Closing { scope, .. } if widen == Some(true) => {
+                        *scope = reference.clone();
+                    }
+                    InstancePhase::Closing { .. } | InstancePhase::Stopping { .. } => {}
+                }
             }
         }
     }
@@ -1140,7 +1379,12 @@ impl<'plan> Vm<'plan> {
                     .map(|instance| (reference, instance))
             })
             .filter(|(reference, _)| {
-                !self.instance_has_direct_work(reference)
+                let scope = match &self.instances[*reference].phase {
+                    InstancePhase::Closing { scope, .. } => scope,
+                    _ => return false,
+                };
+                !self.scope_has_work(scope)
+                    && !self.instance_has_direct_work(reference)
                     && !self.instance_has_descendants(reference)
             })
             .map(|(reference, instance)| {
@@ -1159,11 +1403,129 @@ impl<'plan> Vm<'plan> {
         }
     }
 
+    fn scope_has_work(&self, scope: &InstanceRef) -> bool {
+        self.instances.keys().any(|reference| {
+            self.is_within_instance(reference, scope) && self.instance_has_direct_work(reference)
+        })
+    }
+
+    fn residualize_scope(&mut self, scope: &InstanceRef) {
+        let targets: Vec<(Slot, InstanceRef)> = self
+            .instances
+            .iter()
+            .filter(|(reference, _)| self.is_within_instance(reference, scope))
+            .filter_map(|(reference, instance)| {
+                match self.plan.owners[instance.owner.index()].kind {
+                    OwnerKind::Graph => None,
+                    OwnerKind::Node(slot) => Some((slot, reference.clone())),
+                }
+            })
+            .collect();
+        for (slot, reference) in targets {
+            let residual = self.scheduler.mailboxes.take_all(slot, &reference);
+            if let Some(instance) = self.instances.get_mut(&reference) {
+                instance.residual.extend(residual);
+            }
+        }
+    }
+
+    fn expire_closing(
+        &mut self,
+        journal: &mut dyn Journal,
+        partner: &mut dyn Partner,
+        reference: &InstanceRef,
+        cause: Id,
+        deadline: ClosingDeadline,
+    ) -> Result<(), VmError> {
+        let current = self
+            .instances
+            .get(reference)
+            .and_then(|instance| match &instance.phase {
+                InstancePhase::Closing {
+                    cause: current_cause,
+                    scope,
+                    stage,
+                } if scope == reference && current_cause.meta().sys().id() == cause => Some(*stage),
+                InstancePhase::Open
+                | InstancePhase::Closing { .. }
+                | InstancePhase::Stopping { .. } => None,
+            });
+        let Some(stage) = current else {
+            return Ok(());
+        };
+        match deadline {
+            ClosingDeadline::Drain if stage == ClosingStage::Draining => {
+                self.residualize_scope(reference);
+                let targets: Vec<InstanceRef> = self
+                    .instances
+                    .keys()
+                    .filter(|candidate| self.is_within_instance(candidate, reference))
+                    .cloned()
+                    .collect();
+                for target in targets {
+                    if let Some(instance) = self.instances.get_mut(&target)
+                        && let InstancePhase::Closing { stage, .. } = &mut instance.phase
+                    {
+                        *stage = ClosingStage::Settling;
+                    }
+                }
+                let calls: Vec<CallRef> = self
+                    .pending
+                    .iter()
+                    .filter(|(_, pending)| self.is_within_instance(&pending.instance, reference))
+                    .map(|(call_ref, _)| *call_ref)
+                    .collect();
+                for call_ref in calls {
+                    partner.cancel(&call_ref);
+                }
+            }
+            ClosingDeadline::Settlement => {
+                self.residualize_scope(reference);
+                let calls: Vec<CallRef> = self
+                    .pending
+                    .iter()
+                    .filter(|(_, pending)| self.is_within_instance(&pending.instance, reference))
+                    .map(|(call_ref, _)| *call_ref)
+                    .collect();
+                for call_ref in calls {
+                    match journal
+                        .abandon_outbound(&call_ref)
+                        .map_err(VmError::Journal)?
+                    {
+                        crate::journal::CloseVerdict::AlreadyClosed => {}
+                        crate::journal::CloseVerdict::Won => {
+                            let pending = self
+                                .pending
+                                .get(&call_ref)
+                                .ok_or(VmError::MissingPending(call_ref))?;
+                            self.settled.push_back(SettledEntry {
+                                event: BoundaryEvent {
+                                    call_ref,
+                                    connector_path: self.plan.nodes[pending.slot.index()]
+                                        .path
+                                        .clone(),
+                                    emitting_id: pending.delivery.envelope.meta().sys().id(),
+                                    completion: Completion::process_exit(
+                                        ProcessExit::OutcomeUnknown,
+                                    ),
+                                },
+                                trigger: node::Trigger::Lifecycle(node::Lifecycle::Recover),
+                            });
+                        }
+                    }
+                }
+            }
+            ClosingDeadline::Drain => {}
+        }
+        self.progress_closures();
+        Ok(())
+    }
+
     fn begin_stop(&mut self, reference: &InstanceRef) {
         let Some(bundle) = self.instances.get_mut(reference) else {
             return;
         };
-        let InstancePhase::Closing { cause, scope } = &bundle.phase else {
+        let InstancePhase::Closing { cause, scope, .. } = &bundle.phase else {
             return;
         };
         let cause = cause.clone();
@@ -1199,6 +1561,7 @@ impl<'plan> Vm<'plan> {
                     owner_path: owner.path.clone(),
                     instance: work.instance.clone(),
                     parent_instance: parent_instance.cloned(),
+                    close_scope: None,
                     trigger: node::Trigger::Lifecycle(work.lifecycle),
                     cause: Some(work.cause.meta().sys().id()),
                     consumed: vec![],
@@ -1247,6 +1610,22 @@ impl<'plan> Vm<'plan> {
         if let Some(prepared) = &prepared {
             record.routes = self.routed_deliveries(prepared);
         }
+        if work.lifecycle == node::Lifecycle::Stop
+            && let Some(bundle) = self.instances.get(&work.instance)
+        {
+            record
+                .consumed
+                .extend(
+                    bundle
+                        .residual
+                        .iter()
+                        .map(|delivery| crate::journal::ConsumedPosition {
+                            edge: delivery.edge.clone(),
+                            source: delivery.source_instance.clone(),
+                            seq: delivery.seq,
+                        }),
+                );
+        }
         if work.lifecycle == node::Lifecycle::Start
             && matches!(
                 owner.instance.lifetime,
@@ -1272,6 +1651,9 @@ impl<'plan> Vm<'plan> {
                 );
             }
             self.arm_start_deadline(&work);
+            if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass) {
+                self.request_close(journal, &work.instance, work.cause.clone())?;
+            }
         }
         if let (Some(slot), Some(prepared)) = (node_slot, prepared) {
             self.route_emissions(slot, &work.instance, prepared);
@@ -1282,9 +1664,82 @@ impl<'plan> Vm<'plan> {
                     .take_unchecked(self.plan.plan(), slot, &work.instance);
             }
             self.instances.remove(&work.instance);
+            self.promote_waiting(journal)?;
         }
         self.progress_closures();
         Ok(())
+    }
+
+    fn promote_waiting(&mut self, journal: &dyn Journal) -> Result<(), VmError> {
+        loop {
+            let mut ready = Vec::new();
+            for (reference, waiting) in &self.waiting {
+                let predecessor_is_live = self
+                    .instances
+                    .keys()
+                    .any(|live| live.address() == reference.address());
+                let parent_is_ready = waiting
+                    .candidate
+                    .parent
+                    .as_ref()
+                    .is_none_or(|parent| self.instances.contains_key(parent));
+                if predecessor_is_live || !parent_is_ready {
+                    continue;
+                }
+                let expected = journal
+                    .instance_ref_for_admission(reference.address())
+                    .map_err(VmError::Journal)?;
+                if expected == *reference {
+                    ready.push((
+                        self.plan.owners[waiting.candidate.owner.index()]
+                            .path
+                            .segments()
+                            .len(),
+                        reference.clone(),
+                    ));
+                }
+            }
+            ready.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+            let Some((_, reference)) = ready.into_iter().next() else {
+                return Ok(());
+            };
+            let Some(waiting) = self.waiting.remove(&reference) else {
+                return Ok(());
+            };
+            let owner = waiting.candidate.owner;
+            self.instances.insert(
+                reference.clone(),
+                Instance {
+                    owner,
+                    parent: waiting.candidate.parent.clone(),
+                    frames: waiting.candidate.frames,
+                    values: waiting.candidate.values,
+                    settings: waiting.candidate.settings,
+                    created_by: waiting.created_by.clone(),
+                    last_activity: waiting.last_activity.clone(),
+                    residual: Vec::new(),
+                    phase: InstancePhase::Open,
+                },
+            );
+            self.lifecycle.push_back(LifecycleWork {
+                owner,
+                instance: reference.clone(),
+                parent_instance: waiting.candidate.parent,
+                lifecycle: node::Lifecycle::Start,
+                cause: waiting.created_by,
+            });
+            if let InstanceLifetime::Idle(ttl) = self.plan.owners[owner.index()].instance.lifetime {
+                self.scheduler.arm(
+                    waiting.last_activity_at.saturating_add(ttl),
+                    DatedPayload::InstanceLifetime {
+                        owner,
+                        instance: reference,
+                        cause: waiting.last_activity.meta().sys().id(),
+                        deadline: InstanceDeadline::Idle,
+                    },
+                );
+            }
+        }
     }
 
     fn arm_start_deadline(&mut self, work: &LifecycleWork) {
@@ -1325,10 +1780,10 @@ impl<'plan> Vm<'plan> {
     /// One won closure becomes the connector's completion transaction.
     /// The event leaves the queue only after its commit; every
     /// integrity check happens before.
-    fn settle_next(&mut self, journal: &mut dyn Journal) -> Result<(), VmError> {
+    fn settle_next(&mut self, journal: &mut dyn Journal, index: usize) -> Result<(), VmError> {
         let SettledEntry { event, trigger } = self
             .settled
-            .front()
+            .get(index)
             .cloned()
             .unwrap_or_else(|| unreachable!("guarded by the caller"));
         let slot = self.slot_of(&event.connector_path);
@@ -1366,7 +1821,7 @@ impl<'plan> Vm<'plan> {
         journal
             .commit(outcome.record.clone())
             .map_err(VmError::Journal)?;
-        self.settled.pop_front();
+        self.settled.remove(index);
         self.pending.remove(&event.call_ref);
         let instance_still_open = self
             .pending
@@ -1404,6 +1859,10 @@ impl<'plan> Vm<'plan> {
         let mut outcome = executor
             .fire_with_bindings(slot, instance, delivery, &state, values)
             .map_err(VmError::Fault)?;
+        let close_request = outcome.record.close_scope.clone();
+        if let Some(scope) = &close_request {
+            outcome.record.timers.extend(self.closing_timers(scope));
+        }
         let prepared =
             self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
         outcome.record.routes = self.routed_deliveries(&prepared);
@@ -1417,6 +1876,10 @@ impl<'plan> Vm<'plan> {
             instance,
             &outcome.record.state_delta,
         );
+        if let Some(scope) = close_request {
+            self.activate_close(&scope, delivery.envelope.clone());
+            self.arm_closing_deadlines(&scope, delivery.envelope.meta().sys().id());
+        }
         self.route_emissions(slot, instance, prepared);
         self.progress_closures();
         Ok(())
@@ -1798,9 +2261,20 @@ impl<'plan> Vm<'plan> {
                 if accepts {
                     return Ok(reference.clone());
                 }
-                return Err(VmError::InstanceClosing {
-                    owner: owner.path.clone(),
-                });
+                // External admission after the close fact reserves the next
+                // journal generation and waits in its ordinary mailbox.
+            }
+            if let Some(waiting) = self.waiting.values().find(|waiting| {
+                waiting.candidate.owner == owner_slot && waiting.candidate.parent.as_ref() == parent
+            }) {
+                if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                    && waiting.candidate.single_pass_root != Some(envelope.meta().sys().id())
+                {
+                    return Err(VmError::InstanceClosing {
+                        owner: owner.path.clone(),
+                    });
+                }
+                return Ok(waiting.candidate.reference.clone());
             }
             if let Some(candidate) = candidates.values().find(|candidate| {
                 candidate.owner == owner_slot && candidate.parent.as_ref() == parent
@@ -1820,6 +2294,11 @@ impl<'plan> Vm<'plan> {
             Some(reference) => {
                 if let Some(instance) = self.instances.get(reference) {
                     (instance.values.clone(), instance.frames.clone())
+                } else if let Some(waiting) = self.waiting.get(reference) {
+                    (
+                        waiting.candidate.values.clone(),
+                        waiting.candidate.frames.clone(),
+                    )
                 } else if let Some(candidate) = candidates.get(reference) {
                     (candidate.values.clone(), candidate.frames.clone())
                 } else {
@@ -1907,6 +2386,16 @@ impl<'plan> Vm<'plan> {
             return Err(VmError::InstanceClosing {
                 owner: owner.path.clone(),
             });
+        }
+        if let Some(waiting) = self.waiting.get(&reference) {
+            if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                && waiting.candidate.single_pass_root != Some(envelope.meta().sys().id())
+            {
+                return Err(VmError::InstanceClosing {
+                    owner: owner.path.clone(),
+                });
+            }
+            return Ok(waiting.candidate.reference.clone());
         }
         if let Some(candidate) = candidates.get(&reference) {
             if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
@@ -2284,8 +2773,17 @@ impl<'plan> Vm<'plan> {
                         let dynamic_budget = prepared
                             .chain
                             .last()
-                            .and_then(|reference| self.instances.get(reference))
-                            .and_then(|instance| instance.settings.get("timeout"))
+                            .and_then(|reference| {
+                                self.instances
+                                    .get(reference)
+                                    .map(|instance| &instance.settings)
+                                    .or_else(|| {
+                                        self.waiting
+                                            .get(reference)
+                                            .map(|waiting| &waiting.candidate.settings)
+                                    })
+                            })
+                            .and_then(|settings| settings.get("timeout"))
                             .and_then(|value| match value {
                                 crate::value::Value::Duration(budget) => Some(*budget),
                                 _ => None,
@@ -2337,36 +2835,61 @@ impl<'plan> Vm<'plan> {
                     instance.owner
                 }
                 None => {
+                    if let Some(waiting) = self.waiting.get_mut(reference) {
+                        if admitted
+                            && waiting.last_activity.meta().sys().id() != envelope.meta().sys().id()
+                        {
+                            waiting.last_activity = envelope.clone();
+                            waiting.last_activity_at = self.now;
+                        }
+                        continue;
+                    }
                     let candidate = candidates.get(reference).unwrap_or_else(|| {
                         unreachable!("a new selected reference keeps its candidate bundle")
                     });
+                    let predecessor_is_live = self
+                        .instances
+                        .keys()
+                        .any(|live| live.address() == reference.address() && live != reference);
+                    let parent_is_ready = candidate
+                        .parent
+                        .as_ref()
+                        .is_none_or(|parent| self.instances.contains_key(parent));
+                    if predecessor_is_live || !parent_is_ready {
+                        self.waiting.insert(
+                            reference.clone(),
+                            WaitingInstance {
+                                candidate: candidate.clone(),
+                                created_by: envelope.clone(),
+                                last_activity: envelope.clone(),
+                                last_activity_at: self.now,
+                            },
+                        );
+                        continue;
+                    }
                     let inherited_close = candidate.parent.as_ref().and_then(|parent| {
                         self.instances
                             .get(parent)
                             .and_then(|instance| match &instance.phase {
                                 InstancePhase::Open => None,
-                                InstancePhase::Closing { cause, scope }
-                                | InstancePhase::Stopping { cause, scope } => {
-                                    Some((cause.clone(), scope.clone()))
+                                InstancePhase::Closing {
+                                    cause,
+                                    scope,
+                                    stage,
+                                } => Some((cause.clone(), scope.clone(), *stage)),
+                                InstancePhase::Stopping { cause, scope } => {
+                                    Some((cause.clone(), scope.clone(), ClosingStage::Settling))
                                 }
                             })
                     });
-                    let phase = inherited_close.map_or_else(
-                        || {
-                            if matches!(
-                                self.plan.owners[candidate.owner.index()].instance.lifetime,
-                                InstanceLifetime::SinglePass
-                            ) {
-                                InstancePhase::Closing {
-                                    cause: envelope.clone(),
-                                    scope: reference.clone(),
-                                }
-                            } else {
-                                InstancePhase::Open
+                    let phase =
+                        inherited_close.map_or(InstancePhase::Open, |(cause, scope, stage)| {
+                            InstancePhase::Closing {
+                                cause,
+                                scope,
+                                stage,
                             }
-                        },
-                        |(cause, scope)| InstancePhase::Closing { cause, scope },
-                    );
+                        });
                     let is_closing = matches!(phase, InstancePhase::Closing { .. });
                     self.instances.insert(
                         reference.clone(),
@@ -2378,6 +2901,7 @@ impl<'plan> Vm<'plan> {
                             settings: candidate.settings.clone(),
                             created_by: envelope.clone(),
                             last_activity: envelope.clone(),
+                            residual: Vec::new(),
                             phase,
                         },
                     );

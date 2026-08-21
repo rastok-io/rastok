@@ -290,6 +290,7 @@ single-stepping and future journal-relative inspection structural.
 | **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
 | **Boundary completion** | one correlated completion closes an invocation and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically | completion drafts → one transaction of routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md) | M1.3 B7 |
+| **Instance Closing** | durable close-scope arbitration; successor-generation admission; bounded drain, canonical cancellation and settlement; residual cursor retirement; inner-first stop and state reclamation | `closing` policy + lifecycle cause + journal fold → terminal exits and `l:stop` | [instances.md §7](../spec/instances.md); [execution-model.md §2.1](../spec/execution-model.md) | M1.4 R5 |
 | **`GuestExecutor`** | the existing runtime seam future guest engines implement: `run(&[u8], value, budget)` — pure, deterministic, budgeted, inside the node transaction; the bytes become a typed/versioned `GuestProgram` only when that slice lands | opaque program bytes → value or typed error | [stdlib.md §5](../spec/stdlib.md) | seam only; no engine/program type yet |
 | **`BootBindings`** | future `env()` / `secret()` resolution at boot; a missing or ill-typed binding will be a typed refusal, never a default; `Secret<T>` remains a design requirement, not a current type | plan + deployment profile → bound constants | [grammar.md](../spec/grammar.md) initializer positions | guarded / later |
 
@@ -328,7 +329,7 @@ Ownership rules that the types must make unrepresentable:
 
 - a partner **answers or stays silent** — it never returns a timeout
   (the scheduler's dated event decides that) and never returns
-  `OutcomeUnknown` (only recovery mints it, §3.6);
+  `OutcomeUnknown` (recovery or bounded Closing supervision mints it);
 - call identity is the internal `CallRef` — a **deterministic
   derivation of the canonical call fields**, never a new serialized
   causal field; the business/idempotency key names the *operation* for
@@ -348,9 +349,9 @@ Ownership rules that the types must make unrepresentable:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `prepare_inbound` mints the final root envelope without consuming its sequence; `commit_inbound` atomically advances that sequence with producer-sealed routes; `instance_ref_for_admission` folds lifecycle history; `commit(Transaction)` verifies firing/parent/route generations; `open_outbound` is journal-before-effect; `close_outbound → Won \| AlreadyClosed` arbitrates closure | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §2, §5](../spec/envelope.md); [instances.md](../spec/instances.md) | M0 base; M1.4 R3 instance authority |
+| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `prepare_inbound` mints the final root envelope without consuming its sequence; `commit_inbound` atomically advances that sequence with producer-sealed routes; `instance_ref_for_admission` folds lifecycle history; `commit(Transaction)` verifies firing/parent/route/closing generations; `open_outbound` is journal-before-effect; `close_outbound` and `abandon_outbound` return `Won \| AlreadyClosed` | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §2, §5](../spec/envelope.md); [instances.md](../spec/instances.md) | M0 base; M1.4 R5 closing authority |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
-| **`RecoveryFold`** | journal → state, dated obligations, open-effect triage — the **only** place `OutcomeUnknown` is minted and an open OUTBOUND becomes `Abandoned`; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
+| **`RecoveryFold`** | journal → state, dated obligations, open-effect triage; at recovery it may use the same `OutcomeUnknown`/`Abandoned` operation already exercised by bounded Closing; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
 | *(golden projection)* | moved to its own `golden` module as built — see §3.6b | | | |
 
 ### 3.6b The golden evidence (`golden`)
@@ -555,10 +556,10 @@ The chronological detail and commit evidence remain in
   transport with Node-owned `instances.key`, independent `lifetime`, private
   Node state, hierarchical logical addresses, and journal-derived instance
   references. R1 checking, categorical v9 owner transport, R3
-  hierarchical routing/mailbox/state/cursor proofs, and R4's five lifecycle
-  profiles have landed. The reference VM remains synchronous and
+  hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
+  profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.
-- **Next:** bounded Closing, keyed Lab
-  observability, Dispatch, joins, new adapters, Loop, counters, and `--watch`
+- **Next:** keyed Lab observability, Dispatch, joins, new adapters, Loop,
+  counters, and `--watch`
   remain guarded in the order recorded by the
   [M1.4 backlog](m1.4-instances-backlog.md).

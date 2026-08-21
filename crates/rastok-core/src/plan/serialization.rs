@@ -29,10 +29,10 @@ use crate::expr;
 use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, EvaluationSite, ExecutionPlan,
-    FieldWrite, Handler, InstanceLifetime, InstanceSpec, Node, NodeKind, Owner, OwnerKind,
-    OwnerPath, OwnerSlot, OwnerValue, PlanValidationError, PortDecl, SemanticHash, Slot, Step,
-    ValidatedExecutionPlan, VarCell,
+    AttrSetting, ClosingPolicy, ConnectorSpec, Edge, Emission, EndpointRef, EvaluationSite,
+    ExecutionPlan, FieldWrite, Handler, InstanceLifetime, InstanceSpec, Node, NodeKind, Owner,
+    OwnerKind, OwnerPath, OwnerSlot, OwnerValue, PlanValidationError, PortDecl, SemanticHash, Slot,
+    Step, ValidatedExecutionPlan, VarCell,
 };
 use crate::value::Value;
 
@@ -404,6 +404,15 @@ fn instance_tree(instance: &InstanceSpec) -> Cbor {
     if let Some(key) = &instance.key {
         fields.insert(1, tree_tree(key));
     }
+    if let Some(closing) = instance.closing {
+        fields.insert(
+            3,
+            Cbor::Array(vec![
+                signed_tree(closing.drain_for),
+                signed_tree(closing.settle_for),
+            ]),
+        );
+    }
     Cbor::Map(fields)
 }
 
@@ -558,6 +567,7 @@ const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
         node::Lifecycle::Timeout => 5,
         node::Lifecycle::Evict => 6,
         node::Lifecycle::Recover => 7,
+        node::Lifecycle::Closing => 8,
     }
 }
 
@@ -578,6 +588,7 @@ fn step_tree(step: &Step) -> Cbor {
             Cbor::Text(name.clone()),
             tree_tree(expr),
         ]),
+        Step::Stop => Cbor::Array(vec![Cbor::Uint(4)]),
     }
 }
 
@@ -1003,6 +1014,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             max = max.max(5);
             match step {
                 Step::Let { expr, .. } | Step::SetVar { expr, .. } => tree(expr, 6, &mut stack),
+                Step::Stop => {}
                 Step::Emit { value, .. } => match value {
                     // emission array at 5, its tag at 6.
                     Emission::Identity | Emission::Nothing => max = max.max(6),
@@ -1470,7 +1482,18 @@ fn instance_from(tree: &Cbor) -> Result<InstanceSpec, DecodeError> {
     Ok(InstanceSpec {
         key: find(fields, 1).map(tree_from).transpose()?,
         lifetime: lifetime_from(get(fields, 2, "instance lifetime")?)?,
+        closing: find(fields, 3).map(closing_from).transpose()?,
     })
+}
+
+fn closing_from(tree: &Cbor) -> Result<ClosingPolicy, DecodeError> {
+    match array_of(tree, "instance closing")? {
+        [drain_for, settle_for] => Ok(ClosingPolicy {
+            drain_for: signed_from(drain_for)?,
+            settle_for: signed_from(settle_for)?,
+        }),
+        _ => Err(err("instance closing")),
+    }
 }
 
 fn lifetime_from(tree: &Cbor) -> Result<InstanceLifetime, DecodeError> {
@@ -1648,6 +1671,7 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
                 5 => node::Lifecycle::Timeout,
                 6 => node::Lifecycle::Evict,
                 7 => node::Lifecycle::Recover,
+                8 => node::Lifecycle::Closing,
                 _ => return Err(err("activation lifecycle")),
             })
         }
@@ -1683,6 +1707,7 @@ fn step_from(tree: &Cbor) -> Result<Step, DecodeError> {
             name: name.clone(),
             expr: tree_from(expr)?,
         }),
+        [Cbor::Uint(4)] => Ok(Step::Stop),
         _ => Err(err("step")),
     }
 }
@@ -2304,6 +2329,7 @@ mod tests {
             instance: InstanceSpec {
                 key: None,
                 lifetime: InstanceLifetime::Persistent,
+                closing: None,
             },
             vals: vec![],
         }
@@ -2317,6 +2343,7 @@ mod tests {
             instance: InstanceSpec {
                 key: None,
                 lifetime: InstanceLifetime::Persistent,
+                closing: None,
             },
             vals: vec![],
         }
@@ -2330,6 +2357,7 @@ mod tests {
                 ty: DataType::Text,
             }),
             lifetime: InstanceLifetime::Idle(10),
+            closing: None,
         };
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
             owners: vec![root_owner(), instance_owner],
@@ -2400,6 +2428,18 @@ mod tests {
         for lifetime in lifetimes {
             assert_eq!(lifetime_from(&lifetime_tree(&lifetime)).unwrap(), lifetime);
         }
+        let closing = ClosingPolicy {
+            drain_for: 5,
+            settle_for: 7,
+        };
+        assert_eq!(
+            closing_from(&Cbor::Array(vec![
+                signed_tree(closing.drain_for),
+                signed_tree(closing.settle_for),
+            ]))
+            .unwrap(),
+            closing
+        );
 
         for site in [
             EvaluationSite::Plan,
@@ -2429,6 +2469,7 @@ mod tests {
                     ty: DataType::Text,
                 }),
                 lifetime: InstanceLifetime::Fixed(30),
+                closing: Some(closing),
             },
             vals: vec![OwnerValue {
                 name: text("cwd"),
@@ -2487,6 +2528,16 @@ mod tests {
         assert_eq!(
             decode(&zero_lifetime).unwrap_err(),
             DecodeError::Invalid(PlanValidationError::InvalidInstanceLifetime {
+                owner: text("worker"),
+            })
+        );
+
+        let zero_closing = mutate_package_body(&package, |body| {
+            instance_mut(body).insert(3, Cbor::Array(vec![signed_tree(0), signed_tree(1)]));
+        });
+        assert_eq!(
+            decode(&zero_closing).unwrap_err(),
+            DecodeError::Invalid(PlanValidationError::InvalidClosingPolicy {
                 owner: text("worker"),
             })
         );
@@ -2645,6 +2696,7 @@ mod tests {
                             expr: tree(expr::Expr::Literal(Value::Duration(5))),
                         }]),
                     },
+                    Step::Stop,
                 ],
             }],
             app_schema: vec![(text("m.dotted"), DataType::Variant)],

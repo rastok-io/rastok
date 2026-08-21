@@ -26,7 +26,7 @@ use crate::identity::{InstanceAddress, InstanceRef};
 use crate::node;
 use crate::plan::{GraphVersion, OwnerPath};
 use crate::value::Value;
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -50,6 +50,8 @@ pub mod ids {
     /// Domain tag of an instance-lifetime obligation. Outside envelope-id
     /// domains; the reference couples address and journal-derived generation.
     const INSTANCE_LIFETIME: u8 = 0x21;
+    /// Domain tag of one bounded Closing phase reference.
+    const INSTANCE_CLOSING: u8 = 0x22;
 
     /// The root id of an inbound envelope:
     /// `blake3(connector_path ‖ inbound_seq)`. The single-process
@@ -113,6 +115,21 @@ pub mod ids {
         )
     }
 
+    /// Stable reference of one bounded Closing phase. `phase` is the
+    /// extend-only timer-kind number (drain or settlement), so the two
+    /// obligations of one generation cannot collide.
+    #[must_use]
+    pub fn instance_closing_ref(instance: &InstanceRef, phase: u8) -> Id {
+        Id::derive(
+            INSTANCE_CLOSING,
+            &[
+                instance.address().as_bytes(),
+                &instance.generation().to_le_bytes(),
+                &[phase],
+            ],
+        )
+    }
+
     /// The internal identity of an outbound call (envelope.md §2):
     /// one delivery carrying one prepared request — derived from the
     /// delivery reference and the digest of the exact prepared bytes,
@@ -138,6 +155,10 @@ pub mod timer_kind {
     pub const SAGA_TIMEOUT: u8 = 4;
     /// One Loop backoff wakeup (reserved until Loop execution).
     pub const LOOP_BACKOFF: u8 = 5;
+    /// End of an instance's admitted-work drain interval.
+    pub const INSTANCE_DRAIN: u8 = 6;
+    /// End of an instance's cancellation settlement interval.
+    pub const INSTANCE_SETTLEMENT: u8 = 7;
 }
 
 /// One causal record.
@@ -225,6 +246,10 @@ pub struct TransactionRecord {
     /// The address carries ancestor key frames but deliberately not ancestor
     /// generations; recovery needs this explicit causal edge.
     pub parent_instance: Option<InstanceRef>,
+    /// A close request won atomically with this firing. The reference is the
+    /// root of the closing scope; descendants may finish already-admitted
+    /// work, while later external routes reserve the successor generation.
+    pub close_scope: Option<InstanceRef>,
     /// What fired it.
     pub trigger: node::Trigger,
     /// Causal envelope for a lifecycle transaction that consumes no mailbox
@@ -280,7 +305,8 @@ pub enum OutboundStatus {
     Open,
     /// The single causal closure.
     Closed(Closure),
-    /// Resolved by the recovery fold — the fold is its only minter.
+    /// Resolved when recovery or bounded Closing can no longer establish a
+    /// terminal observation. The open fact remains byte-identical.
     Abandoned,
 }
 
@@ -395,6 +421,26 @@ pub enum Error {
         /// Parent generation that must remain active.
         parent: InstanceRef,
     },
+    /// A close request did not name the firing generation itself.
+    InvalidCloseScope {
+        /// Firing generation.
+        instance: InstanceRef,
+        /// Transported close root.
+        scope: InstanceRef,
+    },
+    /// A second close request tried to govern a generation already covered by
+    /// an active durable close root. The first causal request is authoritative.
+    InstanceAlreadyClosing {
+        /// Generation named by the losing request.
+        instance: InstanceRef,
+        /// Existing root whose Closing scope already covers it.
+        scope: InstanceRef,
+    },
+    /// `l:stop` was attempted before a durable close request existed.
+    StopWithoutClose {
+        /// Generation whose lifecycle was truncated.
+        instance: InstanceRef,
+    },
     /// A call ref matching no journaled call.
     UnknownCall,
     /// An intent whose call ref is already journaled.
@@ -448,6 +494,22 @@ impl fmt::Display for Error {
                 "instance generation {} for owner `{}` still has active children",
                 parent.generation(),
                 parent.address().owner()
+            ),
+            Self::InvalidCloseScope { instance, scope } => write!(
+                f,
+                "instance {:?} cannot close unrelated scope {:?}",
+                instance, scope
+            ),
+            Self::InstanceAlreadyClosing { instance, scope } => write!(
+                f,
+                "instance {:?} is already governed by Closing scope {:?}",
+                instance, scope
+            ),
+            Self::StopWithoutClose { instance } => write!(
+                f,
+                "instance generation {} for owner `{}` cannot stop before Closing was requested",
+                instance.generation(),
+                instance.address().owner()
             ),
             Self::UnknownCall => f.write_str("no outbound record for this call"),
             Self::DuplicateOpen => f.write_str("this call is already journaled"),
@@ -554,6 +616,11 @@ pub trait Journal {
         closure: Closure,
     ) -> Result<CloseVerdict, Error>;
 
+    /// Declares that bounded Closing could not establish an observed
+    /// terminal outcome. This participates in the same close-once race as a
+    /// response or timeout and appends an `abandoned` fact on success.
+    fn abandon_outbound(&mut self, call_ref: &CallRef) -> Result<CloseVerdict, Error>;
+
     /// The envelope carrying `id`, wherever the history recorded it.
     fn find_envelope(&self, id: Id) -> Option<Envelope>;
 
@@ -576,12 +643,17 @@ pub struct MemJournal {
     /// Replay-derived lifecycle fold, maintained atomically with `records`.
     /// It is an index over causal facts, never a second generation authority.
     instance_lifecycles: BTreeMap<InstanceAddress, InstanceLifecycle>,
+    /// Active durable close roots. The set is a replay-derived fast rejection:
+    /// ordinary admission never walks an owner chain when no close fact exists.
+    active_close_roots: BTreeSet<InstanceRef>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct InstanceLifecycle {
     starts: u64,
     active: bool,
+    parent: Option<InstanceRef>,
+    closing: bool,
 }
 
 impl MemJournal {
@@ -595,6 +667,7 @@ impl MemJournal {
             records: Vec::new(),
             next_seq: BTreeMap::new(),
             instance_lifecycles: BTreeMap::new(),
+            active_close_roots: BTreeSet::new(),
         }
     }
 
@@ -619,34 +692,92 @@ impl MemJournal {
     /// `starts` is also the next generation ordinal whenever no generation is
     /// active. A durable implementation rebuilds the same projection while
     /// replaying `l:start`/`l:stop`; no Worker-local counter participates.
-    fn instance_lifecycle(&self, address: &InstanceAddress) -> Result<(u64, bool), Error> {
-        let lifecycle = self
-            .instance_lifecycles
+    fn instance_lifecycle(&self, address: &InstanceAddress) -> InstanceLifecycle {
+        self.instance_lifecycles
             .get(address)
-            .copied()
-            .unwrap_or_default();
-        Ok((lifecycle.starts, lifecycle.active))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn active_instance_ref(&self, address: &InstanceAddress) -> Option<InstanceRef> {
+        let lifecycle = self.instance_lifecycle(address);
+        lifecycle
+            .active
+            .then(|| InstanceRef::new(address.clone(), lifecycle.starts.saturating_sub(1)))
+    }
+
+    fn instance_is_within(&self, child: &InstanceRef, ancestor: &InstanceRef) -> bool {
+        let mut cursor = Some(child.clone());
+        while let Some(reference) = cursor {
+            if reference == *ancestor {
+                return true;
+            }
+            let lifecycle = self.instance_lifecycle(reference.address());
+            if !lifecycle.active || lifecycle.starts.saturating_sub(1) != reference.generation() {
+                return false;
+            }
+            cursor = lifecycle.parent;
+        }
+        false
+    }
+
+    /// Outermost durable close root governing this active generation.
+    fn closing_scope(&self, instance: &InstanceRef) -> Option<InstanceRef> {
+        if self.active_close_roots.is_empty() {
+            return None;
+        }
+        let mut cursor = Some(instance.clone());
+        let mut found = None;
+        while let Some(reference) = cursor {
+            let lifecycle = self.instance_lifecycle(reference.address());
+            if !lifecycle.active || lifecycle.starts.saturating_sub(1) != reference.generation() {
+                return found;
+            }
+            if lifecycle.closing {
+                found = Some(reference.clone());
+            }
+            cursor = lifecycle.parent;
+        }
+        found
+    }
+
+    fn route_generation_is_valid(
+        &self,
+        source: Option<&InstanceRef>,
+        target: &InstanceRef,
+    ) -> Result<bool, Error> {
+        let admission = self.instance_ref_for_admission(target.address())?;
+        if target == &admission {
+            return Ok(true);
+        }
+        let Some(source) = source else {
+            return Ok(false);
+        };
+        let Some(scope) = self.closing_scope(source) else {
+            return Ok(false);
+        };
+        Ok(
+            self.active_instance_ref(target.address()).as_ref() == Some(target)
+                && self.instance_is_within(source, &scope)
+                && self.instance_is_within(target, &scope),
+        )
     }
 
     fn has_active_children(&self, parent: &InstanceRef) -> bool {
-        let mut active: BTreeMap<InstanceRef, InstanceRef> = BTreeMap::new();
-        for record in &self.records {
-            let Record::Transaction(transaction) = record else {
-                continue;
-            };
-            match transaction.trigger {
-                node::Trigger::Lifecycle(node::Lifecycle::Start) => {
-                    if let Some(parent) = &transaction.parent_instance {
-                        active.insert(transaction.instance.clone(), parent.clone());
-                    }
-                }
-                node::Trigger::Lifecycle(node::Lifecycle::Stop) => {
-                    active.remove(&transaction.instance);
-                }
-                _ => {}
-            }
-        }
-        active.values().any(|candidate| candidate == parent)
+        self.instance_lifecycles
+            .values()
+            .any(|lifecycle| lifecycle.active && lifecycle.parent.as_ref() == Some(parent))
+    }
+
+    fn route_was_reserved(&self, target: &InstanceRef) -> bool {
+        self.records.iter().any(|record| match record {
+            Record::Inbound(inbound) => inbound.routes.iter().any(|route| &route.target == target),
+            Record::Transaction(transaction) => transaction
+                .routes
+                .iter()
+                .any(|route| &route.target == target),
+            Record::Outbound(_) => false,
+        })
     }
 }
 
@@ -736,40 +867,56 @@ impl Journal for MemJournal {
                 got: transaction.owner_path,
             });
         }
-        let expected = self.instance_ref_for_admission(transaction.instance.address())?;
+        let is_start = matches!(
+            transaction.trigger,
+            node::Trigger::Lifecycle(node::Lifecycle::Start)
+        );
+        let is_stop = matches!(
+            transaction.trigger,
+            node::Trigger::Lifecycle(node::Lifecycle::Stop)
+        );
+        let mut lifecycle = self.instance_lifecycle(transaction.instance.address());
+        let expected = if is_start {
+            InstanceRef::new(transaction.instance.address().clone(), lifecycle.starts)
+        } else {
+            InstanceRef::new(
+                transaction.instance.address().clone(),
+                lifecycle.starts.saturating_sub(1),
+            )
+        };
         if transaction.instance != expected {
             return Err(Error::InstanceGenerationMismatch {
                 expected,
                 got: transaction.instance,
             });
         }
-        let (starts, active) = self.instance_lifecycle(transaction.instance.address())?;
-        match transaction.trigger {
-            node::Trigger::Lifecycle(node::Lifecycle::Start) if active => {
-                return Err(Error::InvalidInstanceLifecycle {
-                    instance: transaction.instance,
-                    active,
-                });
-            }
-            node::Trigger::Lifecycle(node::Lifecycle::Stop) if !active => {
-                return Err(Error::InvalidInstanceLifecycle {
-                    instance: transaction.instance,
-                    active,
-                });
-            }
-            node::Trigger::Lifecycle(node::Lifecycle::Start) => {}
-            _ if !active => {
-                return Err(Error::InvalidInstanceLifecycle {
-                    instance: transaction.instance,
-                    active,
-                });
-            }
-            _ => {}
+        if (is_start && lifecycle.active) || (!is_start && !lifecycle.active) {
+            return Err(Error::InvalidInstanceLifecycle {
+                instance: transaction.instance,
+                active: lifecycle.active,
+            });
         }
-        let is_start = matches!(
-            transaction.trigger,
-            node::Trigger::Lifecycle(node::Lifecycle::Start)
-        );
+        if let Some(scope) = &transaction.close_scope
+            && (is_start || is_stop || scope != &transaction.instance)
+        {
+            return Err(Error::InvalidCloseScope {
+                instance: transaction.instance,
+                scope: scope.clone(),
+            });
+        }
+        if transaction.close_scope.is_some()
+            && let Some(scope) = self.closing_scope(&transaction.instance)
+        {
+            return Err(Error::InstanceAlreadyClosing {
+                instance: transaction.instance,
+                scope,
+            });
+        }
+        if is_stop && self.closing_scope(&transaction.instance).is_none() {
+            return Err(Error::StopWithoutClose {
+                instance: transaction.instance,
+            });
+        }
         let child_owner = transaction.instance.address().owner();
         let valid_parent = match (
             &transaction.parent_instance,
@@ -791,15 +938,21 @@ impl Journal for MemJournal {
             });
         }
         if let Some(parent) = &transaction.parent_instance {
-            let expected_parent = self.instance_ref_for_admission(parent.address())?;
+            let Some(expected_parent) = self.active_instance_ref(parent.address()) else {
+                return Err(Error::InvalidParentInstance {
+                    instance: transaction.instance,
+                    parent: transaction.parent_instance,
+                });
+            };
             if parent != &expected_parent {
                 return Err(Error::InstanceGenerationMismatch {
                     expected: expected_parent,
                     got: parent.clone(),
                 });
             }
-            let (_, parent_active) = self.instance_lifecycle(parent.address())?;
-            if !parent_active {
+            if self.closing_scope(parent).is_some()
+                && !self.route_was_reserved(&transaction.instance)
+            {
                 return Err(Error::InvalidParentInstance {
                     instance: transaction.instance,
                     parent: transaction.parent_instance,
@@ -816,8 +969,8 @@ impl Journal for MemJournal {
             });
         }
         for route in &transaction.routes {
-            let expected = self.instance_ref_for_admission(route.target.address())?;
-            if route.target != expected {
+            if !self.route_generation_is_valid(Some(&transaction.instance), &route.target)? {
+                let expected = self.instance_ref_for_admission(route.target.address())?;
                 return Err(Error::InstanceGenerationMismatch {
                     expected,
                     got: route.target.clone(),
@@ -830,31 +983,43 @@ impl Journal for MemJournal {
         transaction.state_delta.sort_by(|a, b| a.0.cmp(&b.0));
         transaction.routes.sort();
         transaction.timers.sort();
-        let lifecycle_transition = match transaction.trigger {
-            node::Trigger::Lifecycle(node::Lifecycle::Start) => Some(InstanceLifecycle {
-                starts: starts.checked_add(1).ok_or(Error::SequenceOverflow)?,
-                active: true,
-            }),
-            node::Trigger::Lifecycle(node::Lifecycle::Stop) => Some(InstanceLifecycle {
-                starts,
-                active: false,
-            }),
-            _ => None,
-        };
+        if is_start {
+            lifecycle.starts = lifecycle
+                .starts
+                .checked_add(1)
+                .ok_or(Error::SequenceOverflow)?;
+            lifecycle.active = true;
+            lifecycle.parent = transaction.parent_instance.clone();
+            lifecycle.closing = false;
+        } else if is_stop {
+            self.active_close_roots.remove(&transaction.instance);
+            lifecycle.active = false;
+            lifecycle.parent = None;
+            lifecycle.closing = false;
+        } else if transaction.close_scope.is_some() {
+            self.active_close_roots.insert(transaction.instance.clone());
+            lifecycle.closing = true;
+        }
         let address = transaction.instance.address().clone();
         self.records.push(Record::Transaction(transaction));
-        if let Some(lifecycle) = lifecycle_transition {
-            self.instance_lifecycles.insert(address, lifecycle);
-        }
+        self.instance_lifecycles.insert(address, lifecycle);
         Ok(())
     }
 
     fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error> {
-        let (starts, active) = self.instance_lifecycle(address)?;
-        let generation = if active {
-            starts.saturating_sub(1)
+        let lifecycle = self.instance_lifecycle(address);
+        let closing = lifecycle.active
+            && !self.active_close_roots.is_empty()
+            && self
+                .closing_scope(&InstanceRef::new(
+                    address.clone(),
+                    lifecycle.starts.saturating_sub(1),
+                ))
+                .is_some();
+        let generation = if lifecycle.active && !closing {
+            lifecycle.starts.saturating_sub(1)
         } else {
-            starts
+            lifecycle.starts
         };
         Ok(InstanceRef::new(address.clone(), generation))
     }
@@ -907,6 +1072,32 @@ impl Journal for MemJournal {
         self.records.push(Record::Outbound(OutboundRecord {
             intent,
             status: OutboundStatus::Closed(closure),
+        }));
+        Ok(CloseVerdict::Won)
+    }
+
+    fn abandon_outbound(&mut self, call_ref: &CallRef) -> Result<CloseVerdict, Error> {
+        let mut intent = None;
+        for record in &self.records {
+            let Record::Outbound(outbound) = record else {
+                continue;
+            };
+            if outbound.intent.call_ref != *call_ref {
+                continue;
+            }
+            match outbound.status {
+                OutboundStatus::Open => intent = Some(outbound.intent.clone()),
+                OutboundStatus::Closed(_) | OutboundStatus::Abandoned => {
+                    return Ok(CloseVerdict::AlreadyClosed);
+                }
+            }
+        }
+        let Some(intent) = intent else {
+            return Err(Error::UnknownCall);
+        };
+        self.records.push(Record::Outbound(OutboundRecord {
+            intent,
+            status: OutboundStatus::Abandoned,
         }));
         Ok(CloseVerdict::Won)
     }
@@ -1023,6 +1214,7 @@ mod tests {
             owner_path: instance.address().owner().clone(),
             instance,
             parent_instance,
+            close_scope: None,
             trigger: node::Trigger::Lifecycle(lifecycle),
             cause: None,
             consumed: vec![],
@@ -1048,6 +1240,12 @@ mod tests {
         journal
             .commit(lifecycle_transaction(reference, node::Lifecycle::Start))
             .expect("the child lifecycle starts under the root");
+    }
+
+    fn request_close(journal: &mut MemJournal, reference: InstanceRef) {
+        let mut record = lifecycle_transaction(reference.clone(), node::Lifecycle::Closing);
+        record.close_scope = Some(reference);
+        journal.commit(record).expect("Closing is durable");
     }
 
     #[test]
@@ -1087,6 +1285,27 @@ mod tests {
             InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
             0,
         );
+        request_close(&mut journal, root.clone());
+        let mut duplicate_close = lifecycle_transaction(root.clone(), node::Lifecycle::Closing);
+        duplicate_close.close_scope = Some(root.clone());
+        assert_eq!(
+            journal.commit(duplicate_close).unwrap_err(),
+            Error::InstanceAlreadyClosing {
+                instance: root.clone(),
+                scope: root.clone(),
+            },
+            "the first durable close request is the only lifecycle transition"
+        );
+        let mut nested_close = lifecycle_transaction(first.clone(), node::Lifecycle::Closing);
+        nested_close.close_scope = Some(first.clone());
+        assert_eq!(
+            journal.commit(nested_close).unwrap_err(),
+            Error::InstanceAlreadyClosing {
+                instance: first.clone(),
+                scope: root.clone(),
+            },
+            "a descendant cannot create a second root inside an active close scope"
+        );
         assert_eq!(
             journal
                 .commit(lifecycle_transaction(root.clone(), node::Lifecycle::Stop))
@@ -1096,44 +1315,63 @@ mod tests {
             },
             "the journal, not scheduler choreography, enforces inner-first stop"
         );
-        assert_eq!(journal.instance_ref_for_admission(&address).unwrap(), first);
+        let second = InstanceRef::new(address.clone(), 1);
+        assert_eq!(
+            journal.instance_ref_for_admission(&address).unwrap(),
+            second,
+            "a close request reserves the clean successor before reclamation"
+        );
         assert_eq!(
             journal
                 .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Start))
                 .unwrap_err(),
-            Error::InvalidInstanceLifecycle {
-                instance: first.clone(),
-                active: true,
-            }
+            Error::InstanceGenerationMismatch {
+                expected: second.clone(),
+                got: first.clone(),
+            },
+            "Closing reserves the successor generation before the current one stops"
         );
 
         journal
             .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Stop))
             .unwrap();
-        let second = InstanceRef::new(address.clone(), 1);
         assert_eq!(
             journal.instance_ref_for_admission(&address).unwrap(),
             second
         );
-        assert!(matches!(
-            journal.commit(lifecycle_transaction(first, node::Lifecycle::Stop)),
-            Err(Error::InstanceGenerationMismatch { expected, .. }) if expected == second
-        ));
+        assert_eq!(
+            journal
+                .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Stop))
+                .unwrap_err(),
+            Error::InvalidInstanceLifecycle {
+                instance: first,
+                active: false,
+            }
+        );
+        journal
+            .commit(lifecycle_transaction(root.clone(), node::Lifecycle::Stop))
+            .unwrap();
+        let second_root = InstanceRef::new(root.address().clone(), 1);
         journal
             .commit(lifecycle_transaction(
-                second.clone(),
+                second_root.clone(),
                 node::Lifecycle::Start,
             ))
             .unwrap();
+        let mut second_start = lifecycle_transaction(second.clone(), node::Lifecycle::Start);
+        second_start.parent_instance = Some(second_root.clone());
+        journal.commit(second_start).unwrap();
         assert_eq!(
             journal.instance_ref_for_admission(&address).unwrap(),
             second
         );
+        request_close(&mut journal, second.clone());
         journal
             .commit(lifecycle_transaction(second, node::Lifecycle::Stop))
             .unwrap();
+        request_close(&mut journal, second_root.clone());
         journal
-            .commit(lifecycle_transaction(root, node::Lifecycle::Stop))
+            .commit(lifecycle_transaction(second_root, node::Lifecycle::Stop))
             .unwrap();
     }
 
@@ -1367,9 +1605,9 @@ mod tests {
     #[test]
     fn closing_appends_a_fact_and_never_rewrites_the_open() {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let intent = intent("echo", 7);
-        let call = intent.call_ref;
-        journal.open_outbound(intent.clone()).unwrap();
+        let echo_intent = intent("echo", 7);
+        let call = echo_intent.call_ref;
+        journal.open_outbound(echo_intent.clone()).unwrap();
         let open_before = journal.records()[0].clone();
         assert_eq!(
             journal.close_outbound(&call, Closure::Timeout).unwrap(),
@@ -1405,6 +1643,32 @@ mod tests {
             journal.close_outbound(&ghost, Closure::Timeout),
             Err(Error::UnknownCall)
         );
+
+        let abandoned_intent = intent("slow", 8);
+        let abandoned = abandoned_intent.call_ref;
+        journal.open_outbound(abandoned_intent).unwrap();
+        assert_eq!(
+            journal.abandon_outbound(&abandoned).unwrap(),
+            CloseVerdict::Won
+        );
+        assert_eq!(
+            journal
+                .close_outbound(&abandoned, Closure::Timeout)
+                .unwrap(),
+            CloseVerdict::AlreadyClosed,
+            "an observed response or timeout cannot supersede abandonment"
+        );
+        assert_eq!(
+            journal.abandon_outbound(&abandoned).unwrap(),
+            CloseVerdict::AlreadyClosed
+        );
+        assert!(matches!(
+            journal.records().last(),
+            Some(Record::Outbound(OutboundRecord {
+                status: OutboundStatus::Abandoned,
+                ..
+            }))
+        ));
     }
 
     #[test]
@@ -1430,6 +1694,7 @@ mod tests {
                 owner_path: OwnerPath::new(["shout"]).unwrap(),
                 instance: instance("shout", 0),
                 parent_instance: None,
+                close_scope: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![
@@ -1477,6 +1742,7 @@ mod tests {
                 owner_path: OwnerPath::new(["shout"]).unwrap(),
                 instance: instance("shout", 0),
                 parent_instance: None,
+                close_scope: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![ConsumedPosition {

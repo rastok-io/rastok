@@ -1028,12 +1028,14 @@ impl Partner for Process<'_> {
     }
 
     fn cancel(&mut self, call_ref: &crate::boundary::CallRef) {
-        if let Some(position) = self.runs.iter().position(|run| &run.call_ref == call_ref) {
-            let mut run = self.runs.swap_remove(position);
+        if let Some(run) = self.runs.iter_mut().find(|run| &run.call_ref == call_ref) {
             // The whole process GROUP dies: descendants inherited the
-            // pipes with the group, and the group takes them down —
-            // the pump threads then see EOF and exit.
+            // pipes with the group, and the group takes them down. Keep the
+            // run until wait+EOF produce the ordinary observed Exited fact;
+            // bounded Closing, not cancellation itself, decides whether that
+            // observation arrived in time.
             kill_group(&mut run.child);
+            run.group_killed = true;
         }
     }
 }
@@ -1389,6 +1391,49 @@ graph mute : App {
             record,
             Record::Outbound(o)
                 if matches!(o.status, OutboundStatus::Closed(crate::journal::Closure::Timeout))
+        )));
+    }
+
+    #[test]
+    fn bounded_closing_observes_the_real_process_exit_after_cancel() {
+        let source = r#"
+graph closing : App {
+  lifetime = { kind = fixed ; after = duration("50ms") }
+  closing = { drain_for = duration("50ms") ; settle_for = duration("2s") }
+
+  connector hang : Process {
+    mode = job ; command = "sh"
+    args = ["-c", "sleep 30"]
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  operator shout {
+    input in: struct { text: text }
+    on in { out = data.text }
+  }
+
+  . -> shout -> hang -> .
+}
+"#;
+        let started = std::time::Instant::now();
+        let (journal, outputs, errors, observed) = run(source, "salut");
+        assert!(outputs.is_empty());
+        assert!(errors.is_empty());
+        let exit = one_exit(&observed, "Exited");
+        assert_eq!(exit[0], (String::from("exit_code"), Value::Int(-1)));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the instance drain cancelled the real process group"
+        );
+        assert!(journal.records().iter().any(|record| matches!(
+            record,
+            Record::Outbound(outbound)
+                if matches!(outbound.status, OutboundStatus::Closed(crate::journal::Closure::Response(_)))
+        )));
+        assert!(journal.records().iter().all(|record| !matches!(
+            record,
+            Record::Outbound(outbound) if outbound.status == OutboundStatus::Abandoned
         )));
     }
 

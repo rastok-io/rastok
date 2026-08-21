@@ -279,7 +279,7 @@ impl<'plan> Solver<'plan> {
                                 });
                             }
                         }
-                        Step::Let { .. } => {}
+                        Step::Let { .. } | Step::Stop => {}
                     }
                 }
             }

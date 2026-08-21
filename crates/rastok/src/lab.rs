@@ -465,6 +465,12 @@ impl MockPartner<'_> {
                         }
                     }
                 }
+                Statement::Stop => {
+                    self.faults.push(String::from(
+                        "a mock cannot supervise instance Closing in this build",
+                    ));
+                    return None;
+                }
             }
         }
         if outputs.is_empty() {

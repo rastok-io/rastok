@@ -1,6 +1,6 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.3 B9.** B5 removed the
+> **Status: normative and executable through M1.4 R5.** B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
@@ -202,6 +202,7 @@ type ProcessExit = union {
   TimeoutExpired
   DecodeFailed   { message: text, line: text? }
   CaptureFailed
+  OutcomeUnknown
   OutputOverflow { limit: uint64, reason: enum { budget, capacity } }
 }
 ```
@@ -215,6 +216,15 @@ the exit case and decides whether to retry, alert, discard or continue.
 `run_id`, call identity and causal lineage remain runtime
 identity/provenance rather than fields invented inside stderr or every exit
 payload.
+
+`OutcomeUnknown` is empty and closed. It is emitted only by supervision when
+no terminal partner outcome can be established: recovery triage of an open
+OUTBOUND, or expiry of an instance's explicit Closing settlement budget. In
+both cases the OUTBOUND closes `abandoned`, the envelope uses `l:recover`, and
+causal provenance explains the reason instead of a racing string payload. A
+confirmed close-time kill remains the observed `Exited` result. A late partner
+answer after abandonment is a discarded observation and cannot create a
+second exit.
 
 Framing and publication are orthogonal. `codec` frames stdin/stdout;
 `err_codec` frames stderr independently. `lines` yields one `text` value per

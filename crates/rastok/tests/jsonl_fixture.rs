@@ -62,7 +62,10 @@ fn compilation() -> rastok::compiler::Compilation {
 // remain fixed; only the causal trace moves.
 // R3 REVIEW CLOSURE: owner paths are sealed as segment arrays instead of
 // dotted display text. The same trace moves again; hash and package do not.
-const JSONL_HASH: &str = "9e66e62cbe17c17d6394e3692ed074e3416782ac3a3ea569a53af9edea54c29b";
+// DELIBERATE MOVE 2026-08-21 (M1.4 R5): bounded Closing may have to settle an
+// unconfirmed cancellation, so ProcessExit gains the empty OutcomeUnknown
+// case. The closed port type is source identity; existing traces do not move.
+const JSONL_HASH: &str = "a058f1aa752f924c1814035e67ea12bde915db6781a69c76b89645a0689d3d8f";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

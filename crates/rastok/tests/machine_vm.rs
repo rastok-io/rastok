@@ -66,6 +66,66 @@ struct EchoWorld {
     fail_next: bool,
 }
 
+/// A boundary seam that records deterministic cancellation order. It can
+/// either confirm each cancellation with an observed normal exit or remain
+/// silent so bounded settlement has to mint `OutcomeUnknown`.
+#[derive(Default)]
+struct ClosingWorld {
+    started: Vec<rastok::boundary::CallRef>,
+    cancelled: Vec<rastok::boundary::CallRef>,
+    answers: Vec<Response>,
+    confirm_cancel: bool,
+}
+
+impl Partner for ClosingWorld {
+    fn start(&mut self, intent: &Intent, _: &Envelope) {
+        self.started.push(intent.call_ref);
+    }
+
+    fn cancel(&mut self, call_ref: &rastok::boundary::CallRef) {
+        self.cancelled.push(*call_ref);
+        if self.confirm_cancel {
+            self.answers.push(Response {
+                call_ref: *call_ref,
+                completion: Completion::process(
+                    vec![],
+                    vec![],
+                    ProcessExit::Exited {
+                        exit_code: -1,
+                        signal: Some(15),
+                    },
+                ),
+            });
+        }
+    }
+
+    fn events(&mut self) -> Vec<Response> {
+        core::mem::take(&mut self.answers)
+    }
+}
+
+const CLOSING_PROCESS: &str = r#"
+graph bounded_closing : App {
+  input in: text
+  output exit
+  lifetime = { kind = fixed ; after = duration("1s") }
+  closing = { drain_for = duration("1s") ; settle_for = duration("1s") }
+
+  connector shell : Process {
+    mode = job
+    command = "cat"
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
+  }
+
+  . -> shell
+  shell.out -> nothing
+  shell.err -> nothing
+  shell.exit -> .exit
+}
+"#;
+
 impl Partner for EchoWorld {
     fn start(&mut self, intent: &Intent, request: &Envelope) {
         let _ = request;
@@ -750,6 +810,18 @@ graph lifecycle : App {
                 Some(root),
             ),
             (
+                node::Trigger::Lifecycle(node::Lifecycle::Closing),
+                Some(second),
+                seven.clone(),
+                None,
+            ),
+            (
+                node::Trigger::Lifecycle(node::Lifecycle::Closing),
+                Some(other),
+                nine.clone(),
+                None,
+            ),
+            (
                 node::Trigger::Lifecycle(node::Lifecycle::Stop),
                 Some(second),
                 seven,
@@ -810,6 +882,7 @@ graph nested_lifetimes : App {
   connector shell : Process {
     instances = { key = data }
     lifetime = { kind = idle ; after = duration("1s") }
+    closing = { drain_for = duration("1s") ; settle_for = duration("1s") }
     mode = job
     command = "cat"
     codec = lines
@@ -858,22 +931,26 @@ graph nested_lifetimes : App {
             _ => None,
         })
         .collect();
-    assert_eq!(shell_transactions.len(), 3);
+    assert_eq!(shell_transactions.len(), 4);
     assert_eq!(
         shell_transactions[0].trigger,
         node::Trigger::Lifecycle(node::Lifecycle::Start)
     );
+    assert_eq!(
+        shell_transactions[1].trigger,
+        node::Trigger::Lifecycle(node::Lifecycle::Closing)
+    );
     assert!(
-        shell_transactions[1]
+        shell_transactions[2]
             .emissions
             .iter()
             .any(|emission| emission.port.name() == "exit")
     );
     assert_eq!(
-        shell_transactions[2].trigger,
+        shell_transactions[3].trigger,
         node::Trigger::Lifecycle(node::Lifecycle::Stop)
     );
-    assert_eq!(shell_transactions[2].cause, Some(cause));
+    assert_eq!(shell_transactions[3].cause, Some(cause));
 }
 
 #[test]
@@ -883,6 +960,7 @@ graph draining : App {
   input in: text
   output out: text
   lifetime = { kind = fixed ; after = duration("1s") }
+  closing = { drain_for = duration("1s") ; settle_for = duration("1s") }
 
   operator seed { on in { out = . } }
   connector shell : Process {
@@ -932,6 +1010,244 @@ graph draining : App {
             if transaction.owner_path.is_root()
                 && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop)
     )));
+}
+
+#[test]
+fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
+    let compilation = compile(
+        &[CLOSING_PROCESS],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the explicit closing policy bounds the open Process call");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = ClosingWorld {
+        confirm_cancel: true,
+        ..ClosingWorld::default()
+    };
+
+    vm.inject(&mut journal, text_submission("salut")).unwrap();
+    vm.drain(&mut journal).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(world.started.len(), 1);
+
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+    assert!(
+        world.cancelled.is_empty(),
+        "Closing first offers the drain budget"
+    );
+    vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+
+    assert_eq!(world.cancelled, world.started);
+    assert_eq!(root_exit_cases(&vm), ["Exited"]);
+    assert!(journal.records().iter().any(|record| matches!(
+        record,
+        Record::Outbound(outbound)
+            if matches!(outbound.status, OutboundStatus::Closed(_))
+    )));
+    assert!(journal.records().iter().all(|record| !matches!(
+        record,
+        Record::Outbound(outbound) if outbound.status == OutboundStatus::Abandoned
+    )));
+}
+
+#[test]
+fn silent_cancel_becomes_one_unknown_only_after_settlement() {
+    let compilation = compile(
+        &[CLOSING_PROCESS],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the explicit closing policy bounds the open Process call");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = ClosingWorld::default();
+
+    vm.inject(&mut journal, text_submission("salut")).unwrap();
+    vm.drain(&mut journal).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+    assert_eq!(world.cancelled.len(), 1);
+    assert!(root_exit_cases(&vm).is_empty());
+    assert!(
+        vm.has_open_obligations(),
+        "settlement is a real grace interval"
+    );
+
+    vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
+    assert_eq!(root_exit_cases(&vm), ["OutcomeUnknown"]);
+    assert_eq!(
+        journal
+            .records()
+            .iter()
+            .filter(|record| matches!(
+                record,
+                Record::Outbound(outbound) if outbound.status == OutboundStatus::Abandoned
+            ))
+            .count(),
+        1,
+        "the close-once winner appends one abandonment fact"
+    );
+    assert!(journal.open_calls().is_empty());
+    assert!(
+        journal.records().iter().any(|record| matches!(
+            record,
+            Record::Transaction(transaction)
+                if transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop)
+        )),
+        "the invocation exit precedes lifecycle reclamation"
+    );
+    world.answers.push(Response {
+        call_ref: world.started[0],
+        completion: Completion::process(
+            vec![],
+            vec![],
+            ProcessExit::Exited {
+                exit_code: 0,
+                signal: None,
+            },
+        ),
+    });
+    let report = vm.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(
+        report.discarded.len(),
+        1,
+        "a late reply is observable but non-causal"
+    );
+    assert_eq!(root_exit_cases(&vm), ["OutcomeUnknown"]);
+}
+
+#[test]
+fn external_arrival_waits_for_the_clean_successor_generation() {
+    let compilation = compile(
+        &[CLOSING_PROCESS],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the explicit closing policy bounds the open Process call");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = ClosingWorld {
+        confirm_cancel: true,
+        ..ClosingWorld::default()
+    };
+
+    vm.inject(&mut journal, text_submission("first")).unwrap();
+    vm.drain(&mut journal).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+    let second = vm
+        .inject(&mut journal, text_submission("second"))
+        .expect("Closing reserves a successor instead of refusing the arrival");
+    assert!(
+        journal.records().iter().all(|record| !matches!(
+            record,
+            Record::Transaction(transaction) if transaction.cause == Some(second)
+        )),
+        "the committed arrival has not executed in the closing generation"
+    );
+
+    vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+    let root_lifecycle: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.owner_path.is_root()
+                    && matches!(transaction.trigger, node::Trigger::Lifecycle(_)) =>
+            {
+                Some((
+                    transaction.trigger.clone(),
+                    transaction.instance.generation(),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        root_lifecycle,
+        [
+            (node::Trigger::Lifecycle(node::Lifecycle::Start), 0),
+            (node::Trigger::Lifecycle(node::Lifecycle::Closing), 0),
+            (node::Trigger::Lifecycle(node::Lifecycle::Stop), 0),
+            (node::Trigger::Lifecycle(node::Lifecycle::Start), 1),
+        ],
+        "the old stop is durable before the clean successor starts"
+    );
+    assert!(
+        journal.records().iter().any(|record| matches!(
+            record,
+            Record::Transaction(transaction) if transaction.cause == Some(second)
+        )),
+        "the waiting delivery runs only after generation one starts"
+    );
+}
+
+#[test]
+fn drain_residuals_are_sealed_by_stop_and_cancels_are_call_ref_ordered() {
+    let source = r#"
+graph two_calls : App {
+  input in: text
+  lifetime = { kind = fixed ; after = duration("1s") }
+  closing = { drain_for = duration("1s") ; settle_for = duration("1s") }
+
+  connector a : Process {
+    mode = job ; command = "cat" ; codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+  connector b : Process {
+    mode = job ; command = "cat" ; codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+
+  . -> a
+  . -> b
+  a.out -> nothing ; a.err -> nothing ; a.exit -> nothing
+  b.out -> nothing ; b.err -> nothing ; b.exit -> nothing
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("one root policy bounds both Process descendants");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = ClosingWorld::default();
+
+    vm.inject(&mut journal, text_submission("first")).unwrap();
+    vm.inject(&mut journal, text_submission("queued")).unwrap();
+    vm.drain(&mut journal).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(
+        world.started.len(),
+        2,
+        "one call per claimed connector starts"
+    );
+    vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+    let mut sorted = world.cancelled.clone();
+    sorted.sort();
+    assert_eq!(
+        world.cancelled, sorted,
+        "cancels follow canonical CallRef order"
+    );
+    vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
+
+    let residual_count: usize = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop) =>
+            {
+                Some(transaction.consumed.len())
+            }
+            _ => None,
+        })
+        .sum();
+    assert_eq!(
+        residual_count, 2,
+        "the second ingress left one admitted-but-unconsumed delivery per connector"
+    );
+    assert!(root_exit_cases(&vm).is_empty());
 }
 
 #[test]
@@ -1123,7 +1439,7 @@ graph keyed_fixed : App {
 }
 
 #[test]
-fn a_single_pass_rejects_a_second_root_until_its_first_generation_stops() {
+fn a_single_pass_successor_waits_until_its_first_generation_stops() {
     let source = r#"
 graph one : App {
   input in: int
@@ -1144,14 +1460,97 @@ graph one : App {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
 
     vm.inject(&mut journal, int_submission(1)).unwrap();
-    assert!(matches!(
-        vm.inject(&mut journal, int_submission(2)),
-        Err(VmError::InstanceClosing { owner }) if owner.to_string() == "relay"
-    ));
+    while !journal.records().iter().any(|record| {
+        matches!(
+            record,
+            Record::Transaction(transaction) if transaction.close_scope.is_some()
+        )
+    }) {
+        assert!(
+            vm.step(&mut journal).unwrap(),
+            "the first root reaches Closing"
+        );
+    }
+    let second = vm.inject(&mut journal, int_submission(2)).unwrap();
+    assert!(
+        matches!(
+            vm.inject(&mut journal, int_submission(3)),
+            Err(VmError::InstanceClosing { owner }) if owner.to_string() == "relay"
+        ),
+        "one exact successor generation is already reserved"
+    );
+    assert!(
+        journal.records().iter().all(|record| !matches!(
+            record,
+            Record::Transaction(transaction) if transaction.cause == Some(second)
+        )),
+        "the successor delivery waits in its ordinary mailbox"
+    );
+    vm.drain(&mut journal).unwrap();
+    assert_eq!(vm.outputs().len(), 2);
+    let generations: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.owner_path.to_string() == "relay"
+                    && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start) =>
+            {
+                Some(transaction.instance.generation())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(generations, [0, 1]);
+}
+
+#[test]
+fn bare_stop_closes_exactly_the_current_owner_generation() {
+    let source = r#"
+graph explicit_stop : App {
+  input in: int
+  output out: int
+  operator relay {
+    input in: int
+    output out: int
+    on in { out = . ; stop }
+  }
+  . -> relay -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("bare stop names the current owner without a target language");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(&mut journal, int_submission(1)).unwrap();
     vm.drain(&mut journal).unwrap();
     vm.inject(&mut journal, int_submission(2)).unwrap();
     vm.drain(&mut journal).unwrap();
-    assert_eq!(vm.outputs().len(), 2);
+
+    assert_eq!(
+        vm.outputs()
+            .iter()
+            .map(|output| output.envelope.data().clone())
+            .collect::<Vec<_>>(),
+        [
+            Data::materialized(Value::Int(1)),
+            Data::materialized(Value::Int(2)),
+        ]
+    );
+    let close_requests: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction) if transaction.close_scope.is_some() => {
+                Some(transaction.instance.generation())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(close_requests, [0, 1]);
 }
 
 #[test]
@@ -1581,6 +1980,15 @@ impl Journal for FlakyJournal {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
         }
         self.inner.close_outbound(call_ref, closure)
+    }
+    fn abandon_outbound(
+        &mut self,
+        call_ref: &rastok::boundary::CallRef,
+    ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
+        if self.refuse_closes {
+            return Err(rastok::journal::Error::Storage(String::from("scripted")));
+        }
+        self.inner.abandon_outbound(call_ref)
     }
     fn find_envelope(&self, id: rastok::envelope::Id) -> Option<Envelope> {
         self.inner.find_envelope(id)

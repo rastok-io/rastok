@@ -21,10 +21,10 @@ use crate::datatype::{
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, EvaluationSite, ExecutionPlan,
-    FieldWrite, Handler, InstanceLifetime as PlanInstanceLifetime, InstanceSpec, Node, NodeKind,
-    Owner, OwnerKind, OwnerPath, OwnerSlot, OwnerValue, SemanticHash, Slot, Step, SymbolTable,
-    VarCell,
+    AttrSetting, ClosingPolicy as PlanClosingPolicy, ConnectorSpec, Edge, Emission, EndpointRef,
+    EvaluationSite, ExecutionPlan, FieldWrite, Handler, InstanceLifetime as PlanInstanceLifetime,
+    InstanceSpec, Node, NodeKind, Owner, OwnerKind, OwnerPath, OwnerSlot, OwnerValue, SemanticHash,
+    Slot, Step, SymbolTable, VarCell,
 };
 
 /// Computes the semantic hash of a checked graph.
@@ -88,6 +88,35 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
             writer.tag(2);
             writer.str(&node.path.to_string());
             writer.instance(instance);
+        }
+    }
+    let configured_closing: Vec<_> = sorted_nodes(hir)
+        .into_iter()
+        .filter_map(|node| {
+            node.instance
+                .as_ref()
+                .and_then(|instance| instance.closing.as_ref().map(|closing| (node, closing)))
+        })
+        .collect();
+    let app_closing = hir
+        .app
+        .instance
+        .as_ref()
+        .and_then(|instance| instance.closing.as_ref());
+    if app_closing.is_some() || !configured_closing.is_empty() {
+        writer.str("rastok.closing.r1");
+        writer.count(configured_closing.len() + usize::from(app_closing.is_some()));
+        if let Some(closing) = app_closing {
+            writer.tag(1);
+            writer.str(&hir.app.name);
+            writer.tree(&closing.drain_for.tree);
+            writer.tree(&closing.settle_for.tree);
+        }
+        for (node, closing) in configured_closing {
+            writer.tag(2);
+            writer.str(&node.path.to_string());
+            writer.tree(&closing.drain_for.tree);
+            writer.tree(&closing.settle_for.tree);
         }
     }
     let mut bytes = [0u8; 32];
@@ -291,6 +320,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                             port: port.clone(),
                             value: lower_emission(value, &subst),
                         },
+                        HirStatement::Stop => Step::Stop,
                     })
                     .collect(),
             });
@@ -336,6 +366,7 @@ fn lower_instance(
         return Ok(InstanceSpec {
             key: None,
             lifetime: PlanInstanceLifetime::Persistent,
+            closing: None,
         });
     };
     let duration = |value: &crate::compiler::hir::Const| match &value.value {
@@ -358,6 +389,13 @@ fn lower_instance(
             .as_ref()
             .map(|key| substitute_tree(key, constants)),
         lifetime,
+        closing: match &policy.closing {
+            None => None,
+            Some(closing) => Some(PlanClosingPolicy {
+                drain_for: duration(&closing.drain_for)?,
+                settle_for: duration(&closing.settle_for)?,
+            }),
+        },
     })
 }
 
@@ -893,6 +931,7 @@ impl Writer<'_> {
                         self.str(name);
                         self.tree(value);
                     }
+                    HirStatement::Stop => self.tag(4),
                 }
             }
         }
@@ -1485,7 +1524,7 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "d9b1c9562a4ec2dfea611e2c267c2b30660db10e0f44e728ffbd78d18e734898"
+            "29c69b70dcf686a9122647d22d61a788c39672936df9a4ed76470e4e68f19a9d"
         );
     }
 

@@ -155,7 +155,7 @@ pub fn compile_with_assets(
             | PlanValidationError::InvalidInstanceKey { .. }
             | PlanValidationError::ConflictingInstanceKeyTypes { .. }
             | PlanValidationError::UnresolvedInstanceAdmission { .. }
-            | PlanValidationError::UnboundedLifetimeConnector { .. }),
+            | PlanValidationError::MissingClosingPolicy { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
             return Err(bag);
@@ -259,17 +259,17 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
         )
         .with_field("name", owner)
         .with_field("detail", "missing resolved admission signature"),
-        PlanValidationError::UnboundedLifetimeConnector { connector, owner } => Diagnostic::new(
+        PlanValidationError::MissingClosingPolicy { connector, owner } => Diagnostic::new(
             check::E_INSTANCE,
             Phase::Check,
             format!(
-                "finite owner `{owner}` needs Process `{connector}` to have a finite `timeout` until the explicit Closing policy lands"
+                "finite owner `{owner}` contains Process `{connector}` and therefore requires `closing = {{ drain_for = <duration>; settle_for = <duration> }}`"
             ),
         )
         .with_field("name", owner)
         .with_field(
             "detail",
-            format!("Process `{connector}` has no finite invocation timeout"),
+            format!("Process `{connector}` can remain open during closure"),
         ),
         _ => internal_plan_diagnostic(error),
     }
@@ -343,7 +343,7 @@ graph inferred_instance : App {
     }
 
     #[test]
-    fn an_idle_process_without_a_finite_call_budget_refuses_at_check() {
+    fn an_idle_process_without_explicit_closing_refuses_at_check() {
         let source = r#"
 graph g : App {
   input in: text
@@ -362,10 +362,10 @@ graph g : App {
             &[source],
             &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
         )
-        .expect_err("idle cannot hide an unbounded open Process invocation");
+        .expect_err("idle cannot invent a drain or cancellation policy");
         assert!(bag.diagnostics().iter().any(|diagnostic| {
             diagnostic.code() == check::E_INSTANCE
-                && diagnostic.message().contains("finite `timeout`")
+                && diagnostic.message().contains("requires `closing")
         }));
     }
 

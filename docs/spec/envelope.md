@@ -134,6 +134,9 @@ domain_tag = 0x01 (root, 2 fields)          |  0x02 (emission, 5 fields)
              0x20 (delivery reference, 2 fields : canonical_edge_text, envelope_id)
              0x21 (instance lifetime, 2 fields : canonical instance-address bytes,
                                                     generation u64 little-endian)
+             0x22 (instance Closing phase, 3 fields : canonical instance-address
+                                                    bytes, generation u64 LE,
+                                                    timer kind byte)
 id         = first 128 bits of blake3(input)
 encodings  : paths/triggers/ports = UTF-8 ; parent_id = its 16 raw bytes ;
              inbound_seq = u64 LE ; emission_index = u32 LE
@@ -159,8 +162,8 @@ The five components :
   - `p:<port>` — the arrival port that triggered the transaction. For a join
     `on (a, b)`, the port of the **triggering** envelope (the one that
     completed presence under mailbox-FIFO order).
-  - `l:<lifecycle>` — `l:start`, `l:stop`, `l:compensate`, `l:next`,
-    `l:timeout`, `l:evict`, `l:recover` for transactions not triggered by a
+  - `l:<lifecycle>` — `l:start`, `l:closing`, `l:stop`, `l:compensate`,
+    `l:next`, `l:timeout`, `l:evict`, `l:recover` for transactions not triggered by a
     port arrival
     (§3.1 ; the last two are defined by
     [execution-model.md](execution-model.md) §6-§7).
@@ -347,6 +350,7 @@ transactions that no port arrival triggers :
 | Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
 |---|---|---|---|
 | `on start` | `l:start` | the envelope whose admission created the Node instance | the node itself |
+| Instance close request | `l:closing` | the envelope whose handler requested `stop`, or the envelope that armed the winning lifetime deadline | the closing owner itself |
 | `on stop` via the `stop` action | `l:stop` | the envelope being processed when `stop` ran | the node itself |
 | `on stop` via lifetime expiry | `l:stop` | **the envelope that armed the deadline** — the last admitted envelope (`idle`), creator (`fixed`), or creating admission of the processing-time box (`tumbling`). Always exists; there is no phantom tick | the node itself |
 | Loop re-injection | `l:next` | the previous call's output — the chain *is* the iteration history | **the `: Loop`-carrying node** |

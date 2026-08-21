@@ -247,6 +247,7 @@ pub fn process_exit_type() -> Result<DataType, TypeError> {
         ])?,
     )?;
     let capture_failed = TaggedCase::new("CaptureFailed", empty()?)?;
+    let outcome_unknown = TaggedCase::new("OutcomeUnknown", empty()?)?;
     let reason = DataType::Enum(EnumType::new(alloc::vec![
         String::from("budget"),
         String::from("capacity"),
@@ -264,6 +265,7 @@ pub fn process_exit_type() -> Result<DataType, TypeError> {
         timeout_expired,
         decode_failed,
         capture_failed,
+        outcome_unknown,
         output_overflow,
     ])?))
 }
@@ -299,6 +301,9 @@ pub enum ProcessExit {
     },
     /// A pipe or status capture could not be completed.
     CaptureFailed,
+    /// Cancellation was requested, but no terminal observation arrived
+    /// within the instance's explicit settlement budget.
+    OutcomeUnknown,
     /// The aggregate capture bound or representable host capacity was hit.
     OutputOverflow {
         /// Declared aggregate byte limit.
@@ -366,6 +371,7 @@ impl ProcessExit {
                 ],
             ),
             Self::CaptureFailed => ("CaptureFailed", Vec::new()),
+            Self::OutcomeUnknown => ("OutcomeUnknown", Vec::new()),
             Self::OutputOverflow { limit, reason } => (
                 "OutputOverflow",
                 alloc::vec![
@@ -782,6 +788,25 @@ pub enum DatedPayload {
         /// Which profile determines the stale-event rule.
         deadline: InstanceDeadline,
     },
+    /// One phase boundary of the explicit bounded Closing protocol.
+    InstanceClosing {
+        /// Root generation whose policy owns the whole closing subtree.
+        instance: InstanceRef,
+        /// Envelope that won the close request.
+        cause: envelope::Id,
+        /// Drain or settlement deadline.
+        deadline: ClosingDeadline,
+    },
+}
+
+/// Scheduler-owned stages of bounded instance Closing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosingDeadline {
+    /// Stop executing admitted ordinary work and request cancellation.
+    Drain,
+    /// Stop waiting for cancellation observations; unresolved calls become
+    /// `OutcomeUnknown` and their outbound records become `abandoned`.
+    Settlement,
 }
 
 /// Scheduler semantics of a finite dated instance lifetime.

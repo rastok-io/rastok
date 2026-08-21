@@ -104,10 +104,13 @@ The repository opens publicly with this milestone (15 October 2026).
   are sticky across descendant traffic; candidate bindings fail before
   ingress/effect; and a stable virtual-shard seam proves placement neutrality.
   This deliberately moved causal traces, including singleton traces, without
-  moving semantic hashes or plan-package bodies. R4 now executes all five
-  lifetime profiles with journal-derived generations, deterministic deadlines,
-  parent/child lifecycle fencing, and inner-first natural closure. Explicitly
-  bounded drain/cancel/settlement remains R5.
+  moving semantic hashes or plan-package bodies. R4 executes all five lifetime
+  profiles with journal-derived generations, deterministic deadlines,
+  parent/child lifecycle fencing, and inner-first natural closure. R5 now gives
+  every finite effectful instance one explicit bounded Closing contract:
+  durable close admission, drain, canonical cancel, settlement to an observed
+  exit or `OutcomeUnknown`, descendant closure, `on stop`, reclamation, then
+  successor-generation admission.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

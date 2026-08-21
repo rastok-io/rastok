@@ -8,10 +8,11 @@
 > instance references; those references index routes, transactions,
 > mailboxes, state, calls, timers, lifecycle, and cursors. R4 executes all five
 > closed lifetime profiles on Graph and Node owners, including global
-> temporal singletons and inner-first Graph closure. Source production of
-> some dynamic settings/values, nested Graph syntax, and Graph handlers remain
-> named R1 gaps; explicit bounded Closing remains the R5 gate. This document
-> is the single authority for logical
+> temporal singletons. R5 executes bounded Closing, successor-generation
+> admission, cancellation, settlement, terminal `OutcomeUnknown`, inner-first
+> Graph closure, and bare `stop`. Source production of some dynamic
+> settings/values, nested Graph syntax, and Graph handlers remain named R1
+> gaps. This document is the single authority for logical
 > instance addressing, key selection, Node-local state, lifetime, and the
 > semantic boundary with future sharding.
 
@@ -45,7 +46,7 @@ operator counter {
 }
 ```
 
-`instances`, `lifetime`, and the future `closing` policy are separate common
+`instances`, `lifetime`, and `closing` are separate common
 Node attributes:
 
 ```rastok
@@ -59,9 +60,10 @@ graph conversations {
     after = duration("2h")
   }
 
-  // The exact bounded drain/cancel fields land at M1.4 R5. No partial
-  // spelling or hidden default is admitted before that gate.
-  closing = { ... }
+  closing = {
+    drain_for  = duration("30s")
+    settle_for = duration("5s")
+  }
 
   ...
 }
@@ -71,9 +73,11 @@ Their absence has one meaning each:
 
 - no `instances` means one singleton instance in the enclosing scope;
 - no `lifetime` means that instance is persistent;
-- no `closing` does not invent a kill, grace, or settlement policy. R5 must
-  settle requiredness and defaults before a Node able to hold external calls
-  can execute a bounded close.
+- no `closing` means no drain/cancel/settlement budget is invented. Every
+  finite owner whose subtree contains a `Process` must declare it; an owner
+  without such calls may omit it and closes at natural quiescence. A persistent
+  owner may declare it for explicit `stop`. Both durations are positive and
+  required; there are no action fields or defaults.
 
 There is no `partition` declaration, named or inline, and no `per` binding.
 The owner declares its key once. A declaration site never reselects another
@@ -395,15 +399,13 @@ Idle measures admission silence. An armed call, Loop backoff, or other dated
 obligation does not silently rewrite that definition. If the idle deadline
 wins, the instance enters Closing; its outstanding obligations are then
 drained, cancelled, settled, or retained according to their own protocol and
-the R5 closing contract. Expiry itself never suppresses a Connector's terminal
+the closing contract. Expiry itself never suppresses a Connector's terminal
 `exit` or a Saga compensation.
 
-Until R5 supplies finite drain/cancel/settle policy, every `Process` in the
-subtree of any finite owner is executable only with a positive plan-resolved
-invocation `timeout`. That existing call budget guarantees that an obligation
-delaying natural stop cannot remain open forever. This is a temporary
-admission guard, not a hidden Closing default; R5 replaces the restriction
-with the explicit policy.
+Every `Process` in the subtree of a finite owner requires an explicit
+`closing` policy on that owner. Its per-call `timeout` remains independent and
+optional: it bounds an individual invocation during normal operation, while
+`closing` bounds how the whole instance retires all admitted work.
 
 ### 6.3 Fixed
 
@@ -414,11 +416,10 @@ a later generation at the same address.
 
 ### 6.4 Single pass
 
-One root admission creates the instance. Further root admissions wait for a
-later generation. The instance closes after the admitted root's immediate DAG
-work is quiescent and its admitted obligations have settled. R4 implements
-that natural-quiescence rule; R5 replaces the interim wait with the explicit
-bounded closing contract where external calls are possible.
+One root admission creates the instance and durably requests Closing. Further
+root admissions reserve the exact successor generation and wait in its normal
+bounded mailbox. The current generation drains its admitted work under the
+same explicit closing contract as every other finite lifetime.
 
 ### 6.5 Tumbling
 
@@ -470,39 +471,81 @@ has an active direct ancestor, this enforces the whole inner-first tree.
 
 A child creation racing with parent close is decided by the journal:
 
-- admitted before `CloseRequested`: it exists and joins the close cascade;
-- observed after: it is not created under the closed generation and remains
-  subject to normal mailbox backpressure for a later generation.
+- admitted before the durable `l:closing` fact: it exists and joins the close
+  cascade;
+- observed after: it cannot start under the closing parent generation and is
+  routed, subject to ordinary bounded-mailbox capacity, to the exact successor
+  generation.
 
 The same close-once arbitration governs every route. **Admission** means the
 producer has reserved destination capacity and atomically committed the route
 with the returned instance reference; it is not the later instant at which a
-worker happens to poll the mailbox. A route admitted before `CloseRequested`
+worker happens to poll the mailbox. A route admitted before `l:closing`
 names that generation, counts as work in its drain, and can never be delivered
-to its successor. A route attempted after the close won remains upstream under
-backpressure and is not journaled as admitted; after reclamation, the first
-successful admission reserves and starts a clean generation. This distinction
-also prevents a delayed inter-shard transport from reopening an expired
-tumbling box.
+to its successor. A route attempted after the close won reserves the exact
+successor generation and commits into that generation's ordinary bounded
+mailbox; it becomes runnable only after the predecessor's `l:stop` commits and
+state is reclaimed. No second waiting queue exists. This distinction also
+prevents a delayed inter-shard transport from reopening an expired tumbling
+box. A `single_pass` generation can reserve only its immediate successor; a
+further root admission receives ordinary backpressure until that successor
+starts, because generation numbers are journal facts rather than speculative
+RAM counters.
 
-### 7.1 Closing remains a separate R5 contract
+### 7.1 The bounded Closing contract
 
-Closing closes external admission, drains already admitted internal work,
-settles or cancels open calls without suppressing their typed `exit`, runs
-`on stop` after every required terminal fact, then reclaims state. Loop wakeups
-are generation-bound; Saga compensation obligations are journal-bound and
-survive instance closure.
+The complete sheet is:
 
-R5 must freeze finite budgets, cancellation, settlement, residual internal
-deliveries, and the exact `closing = { ... }` sheet before implementation.
-No hidden timeout or process-killing default is authorized by this document.
+```rastok
+closing = {
+  drain_for  = duration("30s")
+  settle_for = duration("5s")
+}
+```
 
-R4's executable interim is deliberately smaller: the first close cause wins,
-external admission stops, already causal work inside the same Graph closing
-scope may finish, and stops commit one at a time in canonical inner-first
-order after natural quiescence. No cancellation is synthesized. The positive
-`Process.timeout` rule above makes that interim finite for the only live
-external-call adapter.
+Both fields are required positive constant durations. `drain_for` is measured
+from the committed close request. `settle_for` starts when that drain interval
+ends. The runtime actions are fixed by this contract; authors do not select
+`kill`, `wait`, or `otherwise` branches, and omission never creates hidden
+budgets.
+
+The first causal close request wins once in the journal. The committed
+`l:closing` transaction names the root instance reference of the closing
+scope, seals the two dated obligations, and closes external admission to that
+generation. A Graph scope includes every currently live descendant. Its one
+policy bounds the whole subtree; child policies govern independent child
+closure, not a parent cascade, so nested budgets neither add nor silently
+extend the parent's bound.
+
+Closing then follows this sequence:
+
+1. During `drain_for`, already admitted deliveries and completions inside the
+   scope continue. New external deliveries go to the successor generation.
+2. At the drain deadline, unconsumed internal deliveries become residuals of
+   the closing generation. Their consumed cursor positions are sealed by its
+   final stop transaction, so they are visible and cannot leak into the
+   successor. Open calls are cancelled in canonical `CallRef` order.
+3. During `settle_for`, an observed completion still wins the ordinary
+   close-once race and publishes its normal typed `exit`.
+4. At the settlement deadline, each call still open is atomically marked
+   `abandoned` and publishes the Connector contract's empty
+   `OutcomeUnknown` case on its ordinary `exit` port with trigger
+   `l:recover`. A later partner response is a discarded observation, never a
+   second causal result.
+5. Descendants commit `l:stop` inner-first. Each `on stop` runs only after the
+   last required call exit and residual decision in its scope. State and the
+   instance bundle are reclaimed only after that stop commits; the waiting
+   successor may then start with clean state.
+
+An observed cancellation result is not rewritten as `OutcomeUnknown`: for
+`Process`, a confirmed kill normally yields `Exited { ... }`. The unknown case
+means only that no terminal outcome was confirmed before settlement expired.
+It has no `reason` payload; its causal trigger and the abandoned OUTBOUND fact
+carry the provenance.
+
+Loop wakeups and backoffs are generation-bound and die with their instance.
+Saga compensation debt is journal-bound and survives instance closure; saga
+state remains a fold of ordinary journal facts, never a second ledger.
 
 ## 8. Joins
 

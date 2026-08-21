@@ -282,10 +282,24 @@ impl Mailboxes {
     /// the reservation: nothing is removed until [`Self::pop`].
     #[must_use]
     pub fn peek_next(&self) -> Option<(Slot, InstanceRef, Delivery)> {
+        self.peek_next_where(|_, _| true)
+    }
+
+    /// The first unclaimed non-empty mailbox whose instance is currently
+    /// runnable. Successor-generation deliveries may already be committed
+    /// while their predecessor closes; they remain in these same bounded
+    /// queues but are not executable until their bundle is installed.
+    #[must_use]
+    pub fn peek_next_where(
+        &self,
+        ready: impl Fn(Slot, &InstanceRef) -> bool,
+    ) -> Option<(Slot, InstanceRef, Delivery)> {
         self.queues
             .iter()
             .find(|((slot, key), queue)| {
-                !queue.is_empty() && !self.claimed.contains(&(*slot, key.clone()))
+                !queue.is_empty()
+                    && !self.claimed.contains(&(*slot, key.clone()))
+                    && ready(*slot, key)
             })
             .and_then(|((slot, key), queue)| {
                 queue.front().map(|head| (*slot, key.clone(), head.clone()))
@@ -391,6 +405,14 @@ impl Mailboxes {
     /// Releases a claim after the call settled.
     pub fn release(&mut self, slot: Slot, instance: &InstanceRef) {
         self.claimed.remove(&(slot, instance.clone()));
+    }
+
+    /// Removes every queued delivery for one mailbox in FIFO order. Bounded
+    /// Closing records these positions on `l:stop`; this is not a silent drop.
+    pub fn take_all(&mut self, slot: Slot, instance: &InstanceRef) -> Vec<Delivery> {
+        self.queues
+            .remove(&(slot, instance.clone()))
+            .map_or_else(Vec::new, |queue| queue.into_iter().collect())
     }
 
     /// Whether any delivery is waiting anywhere.
@@ -606,6 +628,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     owner_path: crate::plan::OwnerPath::from(&node.path),
                     instance: instance.clone(),
                     parent_instance: parent_instance.cloned(),
+                    close_scope: None,
                     trigger: trigger.clone(),
                     cause,
                     consumed,
@@ -660,6 +683,7 @@ impl<'plan> TransactionExecutor<'plan> {
                             owner_path: crate::plan::OwnerPath::from(&node.path),
                             instance: instance.clone(),
                             parent_instance: parent_instance.cloned(),
+                            close_scope: None,
                             trigger: trigger.clone(),
                             cause,
                             consumed,
@@ -678,6 +702,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 }
             }
         }
+        let mut close_requested = false;
         for step in &handler.body {
             match step {
                 Step::Let { name, expr } => {
@@ -766,6 +791,7 @@ impl<'plan> TransactionExecutor<'plan> {
                         });
                     }
                 }
+                Step::Stop => close_requested = true,
             }
         }
         // The delta is what actually changed.
@@ -781,6 +807,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 owner_path: crate::plan::OwnerPath::from(&node.path),
                 instance: instance.clone(),
                 parent_instance: parent_instance.cloned(),
+                close_scope: close_requested.then(|| instance.clone()),
                 trigger: trigger.clone(),
                 cause,
                 consumed,
@@ -887,6 +914,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 owner_path: crate::plan::OwnerPath::from(connector_path),
                 instance: instance.clone(),
                 parent_instance: None,
+                close_scope: None,
                 trigger: trigger.clone(),
                 cause: None,
                 consumed: vec![ConsumedPosition {

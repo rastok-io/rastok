@@ -14,7 +14,9 @@
 > executable and moved trace goldens without changing semantic hashes or plan
 > packages. R4 executes every lifetime profile on those facts and deliberately
 > adds universal owner lifecycle records without changing a semantic hash or
-> plan package. D-2026-08-14-1
+> plan package. R5 adds bounded Closing facts and the empty
+> `ProcessExit::OutcomeUnknown`; existing non-closing traces stay fixed while
+> Process semantic hashes/packages move deliberately. D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
 > from the plan constraints and requires exact agreement with the transported
@@ -113,6 +115,18 @@ This deliberate pre-public move changes echo/spike to `514d4ab7…`, JSONL to
 `18dda78c…`, and the compiler probe to `fa5abd79…`; connector-free gauge stays
 `0d3ad43d…`. Package goldens move because the body adds the resolved table and
 complete type constructors even when the graph's semantic hash is unchanged.
+
+**M1.4 R5 Closing checkpoint (2026-08-21).** An explicit `closing` policy is
+semantic identity: its ordered `drain_for` and `settle_for` expression trees
+are sealed under the `rastok.closing.r1` extension, while absence contributes
+no bytes and cannot collide with a written policy. Adding the empty
+`OutcomeUnknown` case to `ProcessExit` moves every Process graph once:
+compiler probe `29c69b70…`, JSONL `a058f1aa…`, and echo/spike `419a52a1…`.
+Their v9 package bodies move with the exact tagged union; connector-free gauge
+remains `0d3ad43d…`. Existing traces do not move merely because a type grew.
+When Closing executes, transaction key 49 and timer kinds 6/7 make its new
+causal facts visible; no existing non-closing golden gains those optional
+fields.
 
 ## 2. `graph_version` and the manifest
 
@@ -254,7 +268,7 @@ timer fields.
 
 **TRANSACTION** (kind 2 — one Node firing or one Graph-owner lifecycle fact;
 the commit packet of
-execution-model §1) — keys `30–39` and `48` :
+execution-model §1) — keys `30–39`, `48`, and `49` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -265,10 +279,11 @@ execution-model §1) — keys `30–39` and `48` :
 | 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16) ; **sorted by the trigger's port order then id** ; omitted otherwise |
 | 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
-| 37 | timers | array | dated obligations armed by this firing — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`. Kind 3 uses `blake3-derive(0x21, instance_address || u64_le(generation))`. The due µs is NOT sealed (derivable and re-armed by the fold). |
+| 37 | timers | array | dated obligations armed by this firing — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`, `6 = instance drain`, `7 = instance settlement`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind so the two Closing phases cannot collide. The due µs is NOT sealed (derivable and re-armed by the fold). |
 | 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instances.key` and never substitutes a later generation. |
 | 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction with no consumed mailbox cursor (`l:start`, `l:stop`, later `l:evict`); omitted when key 33 already identifies the cause. This keeps an empty lifecycle hook causally autonomous rather than relying on record order. |
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
+| 49 | close_scope_ref | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
 
 **OUTBOUND** (kind 3 — one external call's WAL record ;
 delivery-semantics §4) — keys `40–47` :
@@ -374,7 +389,7 @@ cannot diverge on bytes for the same journal :
   that address; the target reserves it before producer commit and the
   corresponding `l:start` record carries it in key 31. Instance refs, not bare
   addresses, identify live mailbox/state/lifecycle ownership and occur in
-  record keys 25/31/33/38/46/48. The address bytes alone remain the stable
+  record keys 25/31/33/38/46/48/49. The address bytes alone remain the stable
   shard hash input; generation changes neither placement nor call identity.
 - **The `encoding_tag` registry** — EXACTLY the fixed internal
   representations of envelope.md §5, `raw | avro | arrow-ipc`,
@@ -396,10 +411,14 @@ cannot diverge on bytes for the same journal :
   a `tagged_value` (per the registry above).
 - **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,
   `timer_kind` from `1 = call_timeout · 2 = join_within ·
-  3 = instance_lifetime · 4 = saga_timeout · 5 = loop_backoff`
+  `3 = instance_lifetime · 4 = saga_timeout · 5 = loop_backoff ·
+  6 = instance_drain · 7 = instance_settlement`
   (extend-only), `ref` = the obligation's derived 16-byte identity —
   for a call budget, the `delivery_ref` of the arming delivery
-  (envelope.md §2) ; the due µs is never sealed (annotation).
+  (envelope.md §2); kind 3 derives under domain `0x21` from
+  `(instance_address, generation)`, while kinds 6/7 derive under domain
+  `0x22` from `(instance_address, generation, timer_kind)`. The due µs is never
+  sealed (annotation).
 - **`closure` (OUTBOUND key 45) — the EXACT byteshapes.**
   The rule is « one call = exactly one closure ». The SEALED
   causal `status` (key 44) is exactly `1 open · 2 closed · 4 abandoned`
@@ -416,9 +435,9 @@ cannot diverge on bytes for the same journal :
     array — no second element, never `[2, null]` ; `l:timeout` emits
     `TimeoutExpired` as its own TRANSACTION).
   - `status = 4 abandoned` → `[]` (the **empty** array — present but
-    zero-length ; the §4.4 triage resolved `OutcomeUnknown`, whose
-    envelope is `l:recover`'s TRANSACTION emission). The ONE home of
-    `OutcomeUnknown`.
+    zero-length ; recovery triage or bounded Closing resolved
+    `OutcomeUnknown`, whose envelope is an `l:recover` TRANSACTION emission).
+    These are the two supervision paths that may mint that declared case.
   - `discarded` (a LATE response arriving AFTER closure —
     delivery-semantics §4 / execution-model §6.3, **graph-invisible**) is
     **NOT a sealed OUTBOUND status** : it is a separate

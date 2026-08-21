@@ -42,8 +42,9 @@
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
-> processing-time `tumbling` on Graph and Node owners. Sliding/event-time and
-> the R5 `closing` contract remain named gates.
+> processing-time `tumbling` on Graph and Node owners. R5 adds the optional
+> exact bounded `closing` row and the `stop` step under the same categorical
+> v9; sliding/event-time remain named gates.
 > A decoded key type is re-derived and compared; unlike
 > compiler lowering, package validation never normalizes the claim.
 >
@@ -252,7 +253,7 @@ owner_kind := [1]                                 — graph
               // preceding Graph owner and the direct lexical path prefix.
               // Graphs retain scope/lifecycle without becoming VM Nodes.
 
-instance   := {1: key (tree)?, 2: lifetime}
+instance   := {1: key (tree)?, 2: lifetime, 3: closing?}
               // key's tree already contains its inferred DataType. Absent =
               // singleton inside the parent instance. Validation checks the
               // expression under every effective admitting input, one total
@@ -267,8 +268,12 @@ lifetime   := [1]                                 — persistent
             | [5, nanoseconds (int)]              — tumbling(every), > 0
               // Persistent is explicit in the categorical plan even though
               // omitted and explicitly persistent source spellings share one
-              // HIR identity. R4 executes every row above. `closing` remains
-              // absent until R5.
+              // HIR identity. R4 executes every row above.
+closing    := [drain_for_ns (int), settle_for_ns (int)]
+              // Both durations are positive. Absence is not a hidden default;
+              // validation requires the row on a finite owner whose subtree
+              // contains Process. This optional key preserves all existing
+              // owner bytes when no closing policy is written.
 
 owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
                4: tagged_value?}
@@ -341,13 +346,14 @@ handler    := {1: slot (uint), 2: activation, 3: guard (tree)?, 4: [step*]}
 activation := [1, port (text)]
             | [2, lifecycle]
 lifecycle  := uint: 1 start · 2 stop · 3 compensate · 4 next ·
-                    5 timeout · 6 evict · 7 recover
+                    5 timeout · 6 evict · 7 recover · 8 closing
               // registry is closed and extend-only; M1.4 instance lifecycle
               // activates start/stop, while aspect/supervision rows remain
               // governed by their own feature gates
 step       := [1, name (text), tree]              — let
             | [2, port (text), emission]          — emit
             | [3, name (text), tree]              — set var
+            | [4]                                 — stop current instance
 emission   := [1] | [2, [write*]] | [3, [write*]] | [4, tree] | [5]
               identity · patch · replace · data · nothing
 write      := [target, tree]

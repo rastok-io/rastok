@@ -106,9 +106,9 @@ descendant instances. Child start/stop relations are runtime journal facts,
 not application state. A non-root child's `l:start` carries its parent
 instance reference because ancestor generations are deliberately absent from
 the logical address; the fold can therefore support the same cascade across
-future shards. The exact finite `closing = { ... }` sheet, drain,
-cancellation, settlement, and residual-delivery rules remain the next P4
-decision. No hidden default is authorized meanwhile.
+future shards. The R5 amendment below freezes the finite `closing` sheet,
+drain, cancellation, settlement, successor-admission, and residual-delivery
+rules. No hidden default is authorized.
 
 **One correlation model.** A join correlates within its owning Operator's
 logical instance. `where` refines candidates and `within`/`last` bound them;
@@ -293,6 +293,56 @@ misreported as relay samples. The unchanged 927-byte package decodes in
 allocator-tracked peak is 104 124 bytes, and `.text + .rodata` is 462 516
 bytes. All four written thresholds remain green; the relay margin is reported
 honestly as 1.007×.
+
+**R5 bounded-Closing amendment (2026-08-21).** The complete source sheet is
+`closing = { drain_for = <positive constant duration>; settle_for = <positive
+constant duration> }`. Both fields are required. There is no action field and
+no default. Every finite owner whose subtree contains a `Process` requires the
+sheet; another owner may omit it and close at natural quiescence. A persistent
+owner may declare it to govern bare `stop`. `Process.timeout` remains the
+orthogonal per-call budget and is no longer a substitute for bounded instance
+closure.
+
+The first causal close request is a committed `l:closing` transaction carrying
+the root `InstanceRef` of the closing scope and the two dated obligations.
+That journal fact, not a VM flag, closes admission to the current generation.
+For a Graph it covers all currently live descendants, and its two budgets clip
+the entire subtree; child policies apply only when a child closes
+independently. Existing descendants finish inner-first. New external routes
+reserve the exact successor generation and wait in its ordinary bounded
+mailbox; no second queue or speculative generation counter exists. A route
+already sealed to the old generation remains old-generation drain work.
+
+During `drain_for`, admitted internal deliveries and Connector completions may
+run. At the deadline, remaining internal deliveries become residual cursor
+consumption of the eventual stop transaction and open calls are cancelled in
+canonical `CallRef` order. During the following `settle_for`, a confirmed
+completion wins close-once and publishes its ordinary typed `exit`. At the
+settlement deadline, every still-open OUTBOUND is atomically closed
+`abandoned` and publishes the Connector contract's empty `OutcomeUnknown`
+case with trigger `l:recover`. A later reply is a non-causal discarded
+observation. A confirmed `Process` cancellation normally yields `Exited`; it
+is never rewritten as unknown. `on stop` runs after the final required exit,
+then `l:stop` commits, state is reclaimed, and the waiting generation becomes
+runnable. Loop wakeups die with their generation; Saga compensation debt
+survives as a journal fold.
+
+Bare `stop` is one ordinary statement that requests this protocol for the
+current owner generation after its handler transaction commits. It has no
+target operand and is rejected recursively inside `on stop`. The plan carries
+it as an ordinary step and transports optional Closing at owner-instance map
+key 3 under categorical v9. The causal record gains transaction key 49
+`close_scope_ref`; timer kinds 6 and 7 name drain and settlement, and domain
+`0x22` derives their distinct references. These are extend-only additions.
+
+Adding empty `OutcomeUnknown` to `ProcessExit` is a deliberate semantic
+identity move for every Process graph: compiler probe `29c69b70…`, JSONL
+`a058f1aa…`, and echo/spike `419a52a1…`. The connector-free gauge remains
+`0d3ad43d…`, proving the scope. Their v9 package bodies move with the exact
+union; existing non-closing causal traces do not move. A source that writes an
+explicit `closing` policy additionally hashes its two expression trees under
+the `rastok.closing.r1` extension; omission cannot collide with an explicit
+policy.
 
 ## D-2026-08-16-1 — A partition key is a journaled routing decision
 

@@ -19,8 +19,9 @@ references shared by routes, transactions, mailboxes, state, calls, timers,
 lifecycle and cursors. The causal trace moved deliberately while semantic
 hashes and v9 package bodies remained fixed. R4 executes persistent, idle,
 fixed, single-pass, and processing-time tumbling lifetimes, including
-generation fences and inner-first Graph closure. R5 retains explicitly bounded
-Closing, cancellation, and call settlement.
+generation fences and inner-first Graph closure. R5 executes explicitly bounded
+Closing, cancellation and call settlement, redirects new arrivals to the
+bounded successor mailbox, then runs `on stop` and reclaims state.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -291,7 +292,8 @@ step touches `vm.rs` once.
    typed `exit`, then run `on stop` and reclaim. D-2026-08-18-1 is the
    authority; the ordered
    [M1.4 instance backlog](m1.4-instances-backlog.md) realigns the private
-   P0–P3 draft before finite Closing and cluster-readiness proof.
+   P0–P3 draft; R0–R5 are landed, while public nested-Graph/Lab evidence and
+   cluster-readiness proof remain R6–R7.
 5. **Joins — `on (a, b)` bounded by `within …` / `last N`** —
    correlation windows and the static metadata merge of
    D-2026-08-10-2; the last language lift of the milestone. Here

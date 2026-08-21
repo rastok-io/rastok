@@ -255,6 +255,9 @@ pub enum Lifecycle {
     Start,
     /// Instance stop.
     Stop,
+    /// Durable request that enters bounded Closing. This is an internal
+    /// runtime trigger, never a source handler activation.
+    Closing,
     /// Saga compensation transaction.
     Compensate,
     /// Loop continuation transaction.
@@ -272,6 +275,7 @@ impl fmt::Display for Lifecycle {
         f.write_str(match self {
             Self::Start => "start",
             Self::Stop => "stop",
+            Self::Closing => "closing",
             Self::Compensate => "compensate",
             Self::Next => "next",
             Self::Timeout => "timeout",

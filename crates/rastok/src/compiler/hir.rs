@@ -151,6 +151,18 @@ pub struct InstancePolicy {
     pub key: Option<expr::Tree>,
     /// Checked lifetime with source expressions retained for identity.
     pub lifetime: InstanceLifetime,
+    /// Explicit finite Closing budgets, when this owner can hold calls.
+    pub closing: Option<ClosingPolicy>,
+}
+
+/// Checked bounded Closing policy. Constants retain their source expression
+/// because exact spelling is semantic identity at this frontier.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosingPolicy {
+    /// Drain budget.
+    pub drain_for: Const,
+    /// Settlement budget after cancellation.
+    pub settle_for: Const,
 }
 
 /// Checked Node-instance lifetime.
@@ -235,6 +247,8 @@ pub enum Statement {
         /// The compiled expression.
         value: expr::Tree,
     },
+    /// Bare `stop`: close this Node's current logical instance.
+    Stop,
 }
 
 /// What an emission builds.

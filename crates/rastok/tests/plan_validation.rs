@@ -57,6 +57,7 @@ fn bare_operator_plan() -> ExecutionPlan {
                 instance: plan::InstanceSpec {
                     key: None,
                     lifetime: plan::InstanceLifetime::Persistent,
+                    closing: None,
                 },
                 vals: vec![],
             },
@@ -67,6 +68,7 @@ fn bare_operator_plan() -> ExecutionPlan {
                 instance: plan::InstanceSpec {
                     key: None,
                     lifetime: plan::InstanceLifetime::Persistent,
+                    closing: None,
                 },
                 vals: vec![],
             },
@@ -286,6 +288,7 @@ fn a_raw_instance_requires_a_canonical_key_type() {
             ty: DataType::Variant,
         }),
         lifetime: plan::InstanceLifetime::Persistent,
+        closing: None,
     };
 
     assert_eq!(
@@ -311,6 +314,7 @@ fn every_duration_lifetime_requires_a_positive_value() {
                 ty: DataType::INT,
             }),
             lifetime,
+            closing: None,
         };
 
         assert_eq!(
@@ -416,12 +420,12 @@ fn instance_key_type_is_a_derived_fact_not_a_package_claim() {
 }
 
 #[test]
-fn every_finite_scope_requires_a_finite_process_call_budget_before_closing_lands() {
+fn every_finite_scope_with_a_process_requires_explicit_closing() {
     let mut raw = raw_probe();
     owner_mut(&mut raw, "shell").instance.lifetime = plan::InstanceLifetime::Idle(1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::UnboundedLifetimeConnector {
+        PlanValidationError::MissingClosingPolicy {
             connector: String::from("shell"),
             owner: String::from("shell"),
         }
@@ -431,11 +435,56 @@ fn every_finite_scope_requires_a_finite_process_call_budget_before_closing_lands
     graph.owners[0].instance.lifetime = plan::InstanceLifetime::Fixed(1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(graph).unwrap_err(),
-        PlanValidationError::UnboundedLifetimeConnector {
+        PlanValidationError::MissingClosingPolicy {
             connector: String::from("shell"),
             owner: String::new(),
         },
-        "a finite Graph is bounded by every Process in its subtree"
+        "a finite Graph owns Closing for every Process in its subtree"
+    );
+
+    let mut bounded = raw_probe();
+    let shell = owner_mut(&mut bounded, "shell");
+    shell.instance.lifetime = plan::InstanceLifetime::Idle(1);
+    shell.instance.closing = Some(plan::ClosingPolicy {
+        drain_for: 2,
+        settle_for: 3,
+    });
+    ValidatedExecutionPlan::try_new(bounded)
+        .expect("explicit positive Closing budgets bound the Process call");
+}
+
+#[test]
+fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
+    let mut invalid = bare_operator_plan();
+    invalid.owners[1].instance.closing = Some(plan::ClosingPolicy {
+        drain_for: 0,
+        settle_for: 1,
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(invalid).unwrap_err(),
+        PlanValidationError::InvalidClosingPolicy {
+            owner: String::from("worker"),
+        }
+    );
+
+    let mut recursive = bare_operator_plan();
+    recursive.nodes[0].ports.push(plan::PortDecl {
+        port: port("in"),
+        direction: Direction::Input,
+        unwired: plan::UnwiredPolicy::RequireWire,
+        ty: Some(DataType::INT),
+    });
+    recursive.handlers.push(plan::Handler {
+        node: Slot::new(0),
+        activation: rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Stop),
+        guard: None,
+        body: vec![Step::Stop],
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(recursive).unwrap_err(),
+        PlanValidationError::RecursiveStop {
+            node: rastok::node::Path::new(["worker"]).unwrap(),
+        }
     );
 }
 
@@ -764,6 +813,7 @@ fn a_raw_instance_key_admits_sys_but_not_destination_context() {
             ty: DataType::Text,
         }),
         lifetime: plan::InstanceLifetime::Persistent,
+        closing: None,
     };
 
     ValidatedExecutionPlan::try_new(raw.clone())

@@ -8,8 +8,8 @@
 > The current parser/checker uses the Node attributes `instances` and
 > `lifetime`; the superseded `partition` / `per` draft is not a compatibility
 > surface. `persistent`, `idle`, `fixed`, `single_pass`, and processing-time
-> `tumbling` execute on Graph and Node owners. The exact `closing` sheet
-> remains a named R5 gate.
+> `tumbling` execute on Graph and Node owners. The exact bounded `closing`
+> sheet and bare `stop` execute through M1.4 R5.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -106,6 +106,7 @@ graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly o
   graph sessions {                   // a graph DECLARES → it IS a composite Node
     instances = { key = meta.app.session_key }
     lifetime  = { kind = idle ; after = duration("2h") }
+    closing   = { drain_for = duration("30s") ; settle_for = duration("5s") }
     connector codex : Process { mode = service ; command = "codex" ; args = ["app-server"]
                                 codec = jsonl ; correlate = data.id
                                 effect = idempotent ; behavior = probabilistic }
@@ -264,6 +265,7 @@ family, not a special construct :
 graph sessions {
   instances = { key = meta.app.session_key }
   lifetime  = { kind = idle ; after = duration("2h") }
+  closing   = { drain_for = duration("30s") ; settle_for = duration("5s") }
 
   // Per-session immutable context derives from the selected local key.
   val codex_home = "/var/codex/" + instance.key
@@ -499,6 +501,11 @@ operator session_counter {
     after = duration("2h")
   }
 
+  closing = {
+    drain_for = duration("30s")
+    settle_for = duration("5s")
+  }
+
   var count: int = 0
 
   on msg {
@@ -539,7 +546,24 @@ lifetime = { kind = tumbling   ; every = duration("5m") }
 Every row above produces a validated executable plan. Sliding and event-time
 windowing remain named deferrals rather than partial lifetime spellings.
 
-`instances`, `lifetime`, `kind`, `key`, `after`, and `every` are contract
+The Closing sheet is one closed composite:
+
+```rastok
+closing = {
+  drain_for  = duration("30s")
+  settle_for = duration("5s")
+}
+```
+
+Both fields are required positive constant durations. Unknown, duplicate,
+missing, nested, or non-duration fields refuse. There are no action fields and
+no defaults. A finite owner whose subtree contains `Process` must declare the
+sheet; elsewhere it is optional. Bare `stop` in a handler closes that current
+owner generation after the handler transaction commits. A target operand and
+`stop` inside `on stop` both refuse.
+
+`instances`, `lifetime`, `closing`, `kind`, `key`, `after`, `every`,
+`drain_for`, and `settle_for` are contract
 attribute/field names, not structural keywords. The parser sees the ordinary
 `attribute = value` production; the checker judges the closed common Node
 sheet. `meta.sys` remains read-only but is readable by the key expression.

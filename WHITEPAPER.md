@@ -1626,8 +1626,18 @@ transaction commits; it has no target operand. Closing stops external
 admission, continues already admitted internal work for a finite drain,
 cancels and settles remaining calls without suppressing their typed `exit`,
 runs `on stop` after the last required terminal fact, then reclaims state.
-The exact finite `closing = { ... }` sheet is frozen by the M1.4 Closing gate;
-no hidden kill or timeout default is implied before then.
+The exact policy is
+`closing = { drain_for = <positive duration>; settle_for = <positive duration> }`.
+Both fields are required whenever a finite owner's subtree can hold a Process
+call; there is no hidden action, kill, grace period, or timeout default.
+The first close request is a durable `l:closing` fact. Arrivals from outside
+that closing scope reserve the exact successor generation in its ordinary
+bounded mailbox; no second queue exists. At the drain deadline, remaining
+internal deliveries are recorded as consumed by the eventual stop and calls
+are cancelled in canonical reference order. A completion observed before the
+settlement deadline publishes its ordinary typed exit. Otherwise the outbound
+record closes `abandoned`, an empty `OutcomeUnknown` exit is emitted, and a
+later reply is a non-causal discarded observation.
 
 Stopping a Graph also closes every live descendant created in that Graph
 generation, inner-first. This is a durable lifecycle relationship, not shared

@@ -8,8 +8,9 @@
 //! codes; `meta.sys` writes are the canonical example.
 
 use crate::compiler::hir::{
-    AttrValue, Attribute, Const, Direction, Edge, EdgeTarget, EmitValue, Endpoint, FieldWrite,
-    Graph, Handler, Hir, InstanceLifetime, InstancePolicy, Node, NodeRole, Statement, Val, Var,
+    AttrValue, Attribute, ClosingPolicy, Const, Direction, Edge, EdgeTarget, EmitValue, Endpoint,
+    FieldWrite, Graph, Handler, Hir, InstanceLifetime, InstancePolicy, Node, NodeRole, Statement,
+    Val, Var,
 };
 use crate::compiler::syntax::{
     Attribute as SynAttribute, BaseType, ConnectorDecl, EdgeDecl, EdgeEndpoint, ExprSource,
@@ -419,9 +420,18 @@ struct PendingInstance {
     owner: InstanceOwner,
     key: Option<SynValue>,
     lifetime: InstanceLifetimeSource,
+    closing: Option<ClosingSource>,
     signature: expr::Signature,
     consts: BTreeMap<String, crate::value::Value>,
     span: Span,
+}
+
+#[derive(Clone)]
+struct ClosingSource {
+    drain_for: SynValue,
+    drain_span: Span,
+    settle_for: SynValue,
+    settle_span: Span,
 }
 
 #[derive(Clone)]
@@ -1821,6 +1831,7 @@ impl Checker<'_, '_> {
     ) {
         let mut instances = None;
         let mut lifetime = None;
+        let mut closing = None;
         for attribute in attributes {
             let Some(name) = common_node_attribute_name(attribute) else {
                 continue;
@@ -1841,7 +1852,9 @@ impl Checker<'_, '_> {
                 "lifetime" if lifetime.replace(attribute).is_some() => {
                     self.instance_refusal(attribute.span, "`lifetime` is declared twice");
                 }
-                "closing" => self.deferred("the bounded `closing` contract", attribute.span),
+                "closing" if closing.replace(attribute).is_some() => {
+                    self.instance_refusal(attribute.span, "`closing` is declared twice");
+                }
                 _ => {}
             }
         }
@@ -1860,17 +1873,81 @@ impl Checker<'_, '_> {
             },
             None => InstanceLifetimeSource::Persistent,
         };
-        if key.is_none() && matches!(lifetime, InstanceLifetimeSource::Persistent) {
+        let closing = match closing {
+            Some(attribute) => match self.instance_closing_source(attribute) {
+                Some(closing) => Some(closing),
+                None => return,
+            },
+            None => None,
+        };
+        if key.is_none()
+            && matches!(lifetime, InstanceLifetimeSource::Persistent)
+            && closing.is_none()
+        {
             return;
         }
         self.pending_instances.push(PendingInstance {
             owner,
             key,
             lifetime,
+            closing,
             signature: signature.clone(),
             consts: consts.clone(),
             span,
         });
+    }
+
+    fn instance_closing_source(&mut self, attribute: &SynAttribute) -> Option<ClosingSource> {
+        let SynValue::Braced(body) = &attribute.value else {
+            self.instance_refusal(
+                attribute.span,
+                "`closing` must be `closing = { drain_for = <duration>; settle_for = <duration> }`",
+            );
+            return None;
+        };
+        let mut fields: BTreeMap<String, (&SynValue, Span)> = BTreeMap::new();
+        for entry in &body.entries {
+            let StructEntry::Field { key, value } = entry else {
+                self.instance_refusal(
+                    attribute.span,
+                    "`closing` admits fields, not nested configuration blocks",
+                );
+                return None;
+            };
+            if key.segments.len() != 1 {
+                self.instance_refusal(
+                    key.span,
+                    "closing fields are single names inside one atomic composite",
+                );
+                return None;
+            }
+            let name = key.segments[0].text.clone();
+            if fields.insert(name.clone(), (value, key.span)).is_some() {
+                self.instance_refusal(key.span, &format!("`closing.{name}` is declared twice"));
+                return None;
+            }
+        }
+        let Some((drain_for, drain_span)) = fields.remove("drain_for") else {
+            self.instance_refusal(attribute.span, "`closing` requires `drain_for`");
+            return None;
+        };
+        let Some((settle_for, settle_span)) = fields.remove("settle_for") else {
+            self.instance_refusal(attribute.span, "`closing` requires `settle_for`");
+            return None;
+        };
+        if let Some((unexpected, (_, span))) = fields.into_iter().next() {
+            self.instance_refusal(span, &format!("`closing` has no `{unexpected}` field"));
+            return None;
+        }
+        if matches!(drain_for, SynValue::Error(_)) || matches!(settle_for, SynValue::Error(_)) {
+            return None;
+        }
+        Some(ClosingSource {
+            drain_for: drain_for.clone(),
+            drain_span,
+            settle_for: settle_for.clone(),
+            settle_span,
+        })
     }
 
     fn instance_key_source(&mut self, attribute: &SynAttribute) -> Option<SynValue> {
@@ -2155,7 +2232,20 @@ impl Checker<'_, '_> {
                 Some(lifetime) => lifetime,
                 None => continue,
             };
-            let policy = InstancePolicy { key, lifetime };
+            let closing = match pending.closing.as_ref() {
+                Some(source) => {
+                    match self.resolve_closing(source, &pending.signature, &pending.consts) {
+                        Some(closing) => Some(closing),
+                        None => continue,
+                    }
+                }
+                None => None,
+            };
+            let policy = InstancePolicy {
+                key,
+                lifetime,
+                closing,
+            };
             match pending.owner {
                 InstanceOwner::Graph => graph.instance = Some(policy),
                 InstanceOwner::Node(path) => {
@@ -2206,6 +2296,35 @@ impl Checker<'_, '_> {
             InstanceLifetimeSource::Tumbling { every, span } => {
                 InstanceLifetime::Tumbling(duration(self, every, *span)?)
             }
+        })
+    }
+
+    fn resolve_closing(
+        &mut self,
+        source: &ClosingSource,
+        signature: &expr::Signature,
+        consts: &BTreeMap<String, crate::value::Value>,
+    ) -> Option<ClosingPolicy> {
+        let duration = |checker: &mut Self, value: &SynValue, span: Span, name: &str| {
+            let tree = checker.typed_value_tree(
+                value,
+                signature,
+                Some(&DataType::DURATION),
+                span,
+                name,
+            )?;
+            let constant = checker.reduce_constant(tree, span, consts)?;
+            match constant.value {
+                crate::value::Value::Duration(nanos) if nanos > 0 => Some(constant),
+                _ => {
+                    checker.instance_refusal(span, &format!("`closing.{name}` must be positive"));
+                    None
+                }
+            }
+        };
+        Some(ClosingPolicy {
+            drain_for: duration(self, &source.drain_for, source.drain_span, "drain_for")?,
+            settle_for: duration(self, &source.settle_for, source.settle_span, "settle_for")?,
         })
     }
 
@@ -3803,7 +3922,19 @@ impl Checker<'_, '_> {
                     let span = targets.first().map_or(decl.span, |target| target.span);
                     self.deferred("an atomic multi-emit", span);
                 }
-                SynStatement::Stop(_) => self.deferred("a stop action", decl.span),
+                SynStatement::Stop(Some(target)) => {
+                    self.deferred("a targeted stop action", target.span)
+                }
+                SynStatement::Stop(None) => {
+                    if activation == node::HandlerActivation::Lifecycle(node::Lifecycle::Stop) {
+                        self.instance_refusal(
+                            decl.span,
+                            "an `on stop` handler cannot request closure again",
+                        );
+                    } else {
+                        statements.push(Statement::Stop);
+                    }
+                }
                 SynStatement::Error(_) => {}
             }
         }
@@ -6263,6 +6394,10 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
             | InstanceLifetime::Tumbling(value) => expr(&mut value.tree.root, remap),
             InstanceLifetime::Persistent | InstanceLifetime::SinglePass => {}
         }
+        if let Some(closing) = &mut policy.closing {
+            expr(&mut closing.drain_for.tree.root, remap);
+            expr(&mut closing.settle_for.tree.root, remap);
+        }
     }
     if let Some(policy) = &mut graph.instance {
         instance(policy, remap);
@@ -6284,6 +6419,7 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
                         expr(&mut value.root, remap);
                     }
                     Statement::Emit { value, .. } => emit(value, remap),
+                    Statement::Stop => {}
                 }
             }
         }
@@ -7557,6 +7693,58 @@ graph g : App {
     }
 
     #[test]
+    fn closing_is_one_explicit_policy_and_stop_closes_the_current_instance() {
+        let source = r#"
+graph g : App {
+  input in: int
+  output out: int
+  operator relay {
+    input in: int
+    output out: int
+    closing = { drain_for = duration("2s") ; settle_for = duration("3s") }
+    on in { out = . ; stop }
+  }
+  . -> relay -> .
+}
+"#;
+        let hir = check_clean(source);
+        let policy = hir.app.nodes[0]
+            .instance
+            .as_ref()
+            .expect("the explicit closing policy is retained");
+        let closing = policy.closing.as_ref().expect("Closing is explicit");
+        assert_eq!(
+            closing.drain_for.value,
+            crate::value::Value::Duration(2_000_000_000)
+        );
+        assert_eq!(
+            closing.settle_for.value,
+            crate::value::Value::Duration(3_000_000_000)
+        );
+        assert!(matches!(
+            hir.app.nodes[0].handlers[0].body.last(),
+            Some(Statement::Stop)
+        ));
+
+        let (_, targeted) = check_source(&source.replace("stop }", "stop other }"));
+        assert!(targeted.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == E_CHECK_DEFERRED && diagnostic.message().contains("targeted stop")
+        }));
+        let recursive = source.replace("on in { out = . ; stop }", "on stop { stop }");
+        let (_, recursive) = check_source(&recursive);
+        assert!(
+            recursive.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code() == E_INSTANCE
+                    && diagnostic
+                        .message()
+                        .contains("cannot request closure again")
+            }),
+            "got {:#?}",
+            recursive.diagnostics()
+        );
+    }
+
+    #[test]
     fn one_key_projection_may_cross_different_input_records() {
         let source = r#"
 graph g : App {
@@ -7620,6 +7808,19 @@ graph g : App {
                 "must be positive",
             ),
             ("lifetime = { kind = mystery }", "unknown lifetime kind"),
+            ("closing = {}", "requires `drain_for`"),
+            (
+                "closing = { drain_for = duration(\"1s\") }",
+                "requires `settle_for`",
+            ),
+            (
+                "closing = { drain_for = duration(\"0s\") ; settle_for = duration(\"1s\") }",
+                "`closing.drain_for` must be positive",
+            ),
+            (
+                "closing = { drain_for = duration(\"1s\") ; settle_for = duration(\"1s\") ; magic = 1 }",
+                "has no `magic` field",
+            ),
             ("instances = { key = data }", "canonical scalar/enum leaves"),
         ];
         for (attribute, expected) in cases {

@@ -336,6 +336,20 @@ pub struct InstanceSpec {
     pub key: Option<expr::Tree>,
     /// When the selected instance closes automatically.
     pub lifetime: InstanceLifetime,
+    /// Finite drain and settlement budgets. Absence is valid only when this
+    /// owner's closure can never hold an external invocation open.
+    pub closing: Option<ClosingPolicy>,
+}
+
+/// The one bounded Closing protocol. Actions are fixed by the runtime:
+/// drain admitted work, cancel calls, settle observed exits, then abandon
+/// every still-unknown outcome. Only the two explicit budgets are policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClosingPolicy {
+    /// Nanoseconds available to drain already-admitted work.
+    pub drain_for: i64,
+    /// Nanoseconds available for cancelled calls to publish an observed exit.
+    pub settle_for: i64,
 }
 
 /// Closed transport vocabulary for lifetime policies. The scheduler admits
@@ -486,6 +500,9 @@ pub enum Step {
         /// The expression.
         expr: expr::Tree,
     },
+    /// Request closure of the current logical Node instance. The request is
+    /// committed atomically with this handler transaction.
+    Stop,
 }
 
 /// What an emission builds.

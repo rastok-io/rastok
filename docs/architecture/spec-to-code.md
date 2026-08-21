@@ -1,10 +1,10 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-21 for the M1.4 R4 lifetime
+> Planning aid — non-normative. **Updated 2026-08-21 for the M1.4 R5 Closing
 > checkpoint.** The former named-partition P1-P3 implementation is superseded.
 > Categorical v9 owner transport and hierarchical route/journal instance
-> references are executable; all five lifetime profiles execute, while
-> explicitly bounded Closing remains R5.
+> references are executable; all five lifetime profiles and explicitly bounded
+> Closing execute.
 > The table first preserves the M0 evidence;
 > the M1 extension below records which normative owners gained new
 > executable responsibility. Where implementation surfaced a semantic
@@ -53,6 +53,7 @@ they are not promised crate names.
 | M1.3 B9 closure | Strict JSON Schema, Avro and Arrow profiles project/reverse exactly or refuse by path and reason; physical union selectors stay outside logical identity; `variant` structure requires narrowing; retired v6 subset/refusal scaffolding is absent | `schema_projection::{json_schema,avro,arrow}`, `expr`, `plan::validation`, compiler fixtures | projection matrices and selector preservation, exact `UnboundAssetCall`, narrowing negatives, cross-layer Process/Lab/JSONL/opaque-data corpus, all portability gates |
 | M1.4 R0–R3 instance rebase and routing | D-2026-08-18-1 supersedes named partitions and `per`. Any Node may own one `instances.key`; `lifetime` is independent; private state, immutable per-instance bindings, mailbox, calls and cursors are indexed by `(hierarchical logical address, journal-derived generation)`; Connector contracts bound the latest evaluation site and effective rows carry the earliest actual site. R3 evaluates the complete owner chain before producer commit, records each route reference, and uses it throughout the VM; the address alone maps stably to a virtual shard. | `contract`, `compiler::{check,hir,lower}`, `plan::{serialization,validation,type_resolution}`, `identity::{InstanceAddress,InstanceRef}`, `runtime::{Mailboxes,InstanceState,vm}`, `journal`, `golden` | [`m1.4-instances-backlog.md`](m1.4-instances-backlog.md): key-domain/package sabotage; exact address bytes; nested-key isolation/FIFO; sticky Graph routing; pre-effect bundle refusal; lifecycle generation/parent assertions; virtual-shard mapping; separate trace move; three `no_std` ISAs and Cortex-M33 spike |
 | M1.4 R4 lifetime execution | Every Graph and Node owner starts lazily; persistent arms nothing, idle follows admitted-boundary silence, fixed is anchored to start, single-pass closes after one root admission reaches quiescence, and tumbling routes into epoch-aligned processing-time boxes. Full instance refs fence stale events; the journal enforces active parent/child lifecycle, and Graph closure retires descendants inner-first. Finite owners containing Process require a positive plan-resolved call timeout until R5 supplies explicit Closing. | `boundary::{InstanceLifetime,InstanceDeadline,DatedPayload}`, `journal::{MemJournal,timer_kind}`, `runtime::vm`, plan validation, compiler lifetime checker | keyed/unkeyed lifetime matrix, clean-state re-entry, stale-deadline no-op, closed-box no-reopen, equal-date ordering, persistent no-deadline, Graph/Process drain and direct journal lifecycle refusals; trace-only rebaseline |
+| M1.4 R5 bounded Closing | A committed `l:closing` closes external admission for one generation and redirects later arrivals to its bounded successor mailbox. The explicit owner policy bounds drain and settlement for the entire Graph subtree; calls cancel in canonical order, publish their observed typed exit or empty `OutcomeUnknown`, descendants stop inner-first, `on stop` runs last, and state is reclaimed only after the stop fact. | `plan::ClosingPolicy`, `boundary::{ClosingDeadline,ProcessExit}`, `journal::{MemJournal,timer_kind}`, `runtime::vm`, `connectors::Process`, compiler closing checker | exact-sheet and foreign-package refusals; confirmed and silent cancellation; abandonment and late reply; residual cursor and cancel ordering; successor backpressure; Graph drain; bare stop; real killed child; deliberate Process identity/package move with unchanged traces and gauge witness |
 
 ## M1.3 foundation (landed in ordered gates)
 

@@ -169,7 +169,7 @@ closure (the call-closed rule, execution-model §6.3) :
    outbound record :
      open       { call, idempotency_key, request digest, t }     ← BEFORE the call
      closed     (response completion)  XOR  (timeout — the l:timeout event)
-                XOR  (abandoned — written when the §4.4 triage resolves by
+                XOR  (abandoned — written when recovery triage or bounded Closing resolves by
                       OutcomeUnknown : the call is closed-as-unknown)
      discarded  (late response after closure — observability-visible, graph-invisible)
 ```
@@ -177,6 +177,12 @@ closure (the call-closed rule, execution-model §6.3) :
 One call = exactly one closure. The recall rows of §4.4 need no new closure
 kind — a recall is *the same call* re-attempted, and its reply (or timeout)
 closes it through the normal rule.
+
+Bounded instance Closing uses the same close-once operation, not a parallel
+record state. At its settlement deadline an OUTBOUND still `open` becomes
+`abandoned`; the Connector emits its declared empty `OutcomeUnknown` case with
+trigger `l:recover`. A response that won first keeps its ordinary completion.
+One arriving later is a discarded observation.
 
 A response closure seals the ordered `(port, data)` drafts that won the race;
 they have no envelope identities yet. The following Connector transaction
@@ -240,6 +246,13 @@ At restart, `open` outbound records without closure = the set of unknowns :
 | open + `effect = idempotent` | recall, blindly (safe by declaration) |
 | open + `idempotency_key` present | recall with the **byte-same key** (§4.3) |
 | open + `compensable`, **no key** | do NOT guess: emit **`OutcomeUnknown`** on the Connector contract's typed invocation-exit port (normally `exit`; trigger **`l:recover`**, parent = request) and close the record as `abandoned` — no eternal re-triage, no duplicate case. The graph/saga decides: verify, compensate, or park; a deliberate retry is a NEW call. |
+
+The same empty case is the last resort of explicit bounded Closing when
+cancellation produced no confirmed terminal outcome before `settle_for`.
+Closing does not run the recovery recall table: it first cancels, allows the
+ordinary response race to settle, then abandons only what remains open. The
+OUTBOUND state and `l:recover` envelope are identical facts in both paths, so
+replay and compensation need no second unknown-outcome protocol.
 
 **The general principle: recovery rebuilds the dated-events
 queue by the same fold that rebuilds state.** Every dated obligation is

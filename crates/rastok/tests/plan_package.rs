@@ -147,6 +147,8 @@ fn the_example_package_matches_its_golden() {
     // row never belonged to canonical HIR identity. M1.4 R2 then moves only
     // the package to categorical v9: the root/Node owner table and scoped
     // edges are derived plan structure, not a semantic change to this graph.
+    // M1.4 R5 deliberately moves both hash and package because the exact
+    // ProcessExit union gains the empty OutcomeUnknown settlement case.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");

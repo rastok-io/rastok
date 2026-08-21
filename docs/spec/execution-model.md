@@ -7,8 +7,9 @@
 > one hierarchical instance reference shared by journal, mailbox, state,
 > calls, timers, lifecycle, and cursors. R4 executes persistent, idle, fixed,
 > single-pass, and processing-time tumbling lifetimes with journal-derived
-> generations and inner-first Graph closure. Explicit bounded Closing remains
-> the R5 gate.
+> generations. R5 executes explicit bounded Closing, successor-generation
+> admission, cancellation, settlement, terminal `OutcomeUnknown`, and
+> inner-first Graph closure.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -140,29 +141,29 @@ Admission of a delivery into an absent address starts a new **instance**:
 6. treat an event carrying an older generation as a harmless stale
    observation.
 
-An effective expiry requests Closing for that instance. New external
-admission stops; already admitted internal work and Connector-call obligations
-remain old-generation work. R4 waits for their natural quiescence, requiring a
-positive plan-resolved timeout on every `Process` in a finite owner subtree so
-that this interim has no unbounded external call. R5 replaces that restriction
-with the explicit bounded drain/cancel/settle protocol. Every admitted
+An effective expiry requests Closing for that instance. Every finite owner
+whose subtree contains `Process` carries an explicit positive
+`closing = { drain_for, settle_for }` policy. New external admission is routed
+to the exact successor generation; already admitted internal work and
+Connector-call obligations remain old-generation work. Every admitted
 Connector call retains its terminal `exit`, and `on stop` runs only after
 every required terminal fact. State is reclaimed only after the stop
-transaction commits. A later delivery to the same address starts a clean
-generation and cannot see the closed state.
+transaction commits. The waiting successor then starts with clean state and
+cannot see the closed generation.
 
 Mailbox reservation plus the producer's route commit is the admission point.
 Reservation returns the instance reference that the route seals. A route that
-wins before `CloseRequested` remains old-generation drain work even if an
-inter-shard transport arrives physically later. A post-close attempt does not
-commit and waits under backpressure for the next generation. Scheduler or
-network order can therefore never leak an old delivery into new state.
+wins before the committed `l:closing` fact remains old-generation drain work
+even if an inter-shard transport arrives physically later. A post-close route
+commits to the successor's ordinary bounded mailbox and waits there until the
+predecessor stops. Scheduler or network order can therefore never leak an old
+delivery into new state, and no second waiting queue exists.
 
 A committed reservation consumes the referenced generation even if no worker
 ever polls its envelope. Recovery must complete the corresponding `l:start`,
-or R5 must close and retire that generation while recording the residual
-delivery; it may never recycle the ordinal while a committed route still
-names it. In a future cross-shard implementation, reservation and route
+or bounded Closing must retire that generation while sealing the residual
+delivery's consumed cursor in its stop transaction; it may never recycle the
+ordinal while a committed route still names it. In a future cross-shard implementation, reservation and route
 publication may use a protocol, but a crash may not expose one without a
 recoverable path to the other.
 
@@ -175,9 +176,39 @@ created in that Graph generation. A non-root child's `l:start` record carries
 its enclosing Graph's complete instance reference, so the lifecycle fold
 distinguishes two successive parents at the same logical address. The journal
 refuses a start under an inactive parent and a parent stop with an active
-child. The exact closing sheet, drain/cancel/settle sequence, and residual-
-delivery rules remain the R5 gate; this document supplies no hidden timeout or
-kill default.
+child. The close request itself is a durable transaction carrying the root
+instance reference of the scope. The journal therefore enforces the same
+parent/child and generation rules on replay; Closing is not VM-only
+choreography.
+
+### 2.1 Bounded Closing sequence
+
+`closing = { drain_for = <positive duration>; settle_for = <positive
+duration> }` carries two explicit budgets and no action/default field. It is
+required on every finite owner whose subtree contains a `Process`, and may be
+declared on a persistent owner for explicit `stop`.
+
+The first causal close request commits `l:closing` and wins once. For a Graph,
+that reference defines one closing subtree and one clipped budget; live
+descendants close inner-first. The phases are:
+
+1. close external admission to the current generation and route later arrivals
+   to its bounded successor mailbox;
+2. drain already admitted work, including internal deliveries and call
+   completions, for `drain_for`;
+3. seal remaining internal deliveries as residual cursor consumption and
+   cancel open calls in canonical `CallRef` order;
+4. settle for `settle_for`; an observed completion still publishes its normal
+   typed exit and wins close-once;
+5. mark every still-open OUTBOUND `abandoned`, publish one empty
+   `OutcomeUnknown` on its typed exit port with trigger `l:recover`, then
+   discard any late partner response as a non-causal observation;
+6. run `on stop` after the last required exit, commit `l:stop` inner-first,
+   reclaim state, and make the waiting successor runnable.
+
+`Process` cancellation that confirms normally produces `Exited`; it is never
+rewritten as unknown. A Loop wakeup is generation-scoped and dies on close.
+Saga compensation debt is journal-scoped and survives it.
 
 
 ## 3. Ordering — what is guaranteed, what is journaled
@@ -474,11 +505,11 @@ a window per key.
 | **Tumbling** | epoch-aligned boxes | 1 box | `lifetime = { kind = tumbling; every = duration("5m") }` | executable R4 |
 | **Sliding** | fixed, overlapping | **N boxes** | no accepted spelling yet | deferred |
 
-The table describes the executable R4 lifetime semantics. Persistent,
-idle, fixed, single-pass, and tumbling validate on Graph and Node owners.
-Before R5, every `Process` inside any finite owner must already carry a finite
-plan-resolved invocation timeout, so waiting for its terminal exit cannot
-become an implicit unbounded close.
+The table describes the executable lifetime semantics. Persistent, idle,
+fixed, single-pass, and tumbling validate on Graph and Node owners. Every
+finite owner containing a `Process` must carry the explicit Closing policy of
+§2.1. A Connector's optional per-call `timeout` remains an independent normal-
+operation budget rather than an implicit close grace period.
 
 The processing-time tumbling contract has four rules:
 

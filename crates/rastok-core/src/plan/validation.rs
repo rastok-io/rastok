@@ -420,13 +420,23 @@ pub enum PlanValidationError {
         /// The owner path; empty denotes the root App Graph.
         owner: String,
     },
-    /// A finite owner could wait forever for an unbudgeted Process call
-    /// before the explicit R5 cancellation/settlement policy exists.
-    UnboundedLifetimeConnector {
-        /// The Process owner path.
-        connector: String,
-        /// The finite owner whose closure would wait for it.
+    /// A Closing budget is zero or negative.
+    InvalidClosingPolicy {
+        /// The owner path; empty denotes the root App Graph.
         owner: String,
+    },
+    /// A finite owner can close while its subtree contains external calls,
+    /// but no explicit drain/settlement policy was transported.
+    MissingClosingPolicy {
+        /// The Process owner proving that cancellation may be required.
+        connector: String,
+        /// The finite owner whose close governs the subtree.
+        owner: String,
+    },
+    /// An `on stop` handler recursively requests the same close.
+    RecursiveStop {
+        /// The offending node.
+        node: node::Path,
     },
     /// A collection the plan documents as canonically ordered is not.
     NonCanonicalOrder {
@@ -714,9 +724,17 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: the instance lifetime on `{owner}` is not positive"
             ),
-            Self::UnboundedLifetimeConnector { connector, owner } => write!(
+            Self::InvalidClosingPolicy { owner } => write!(
                 f,
-                "invalid plan: finite owner `{owner}` contains Process `{connector}` without a positive plan-resolved timeout before finite Closing exists"
+                "invalid plan: the Closing budgets on `{owner}` must both be positive"
+            ),
+            Self::MissingClosingPolicy { connector, owner } => write!(
+                f,
+                "invalid plan: finite owner `{owner}` contains Process `{connector}` but declares no bounded Closing policy"
+            ),
+            Self::RecursiveStop { node } => write!(
+                f,
+                "invalid plan: `on stop` for `{node}` cannot request closure again"
             ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
@@ -1301,6 +1319,7 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
             match step {
                 Step::Let { expr, .. } => tree_type_at(expr, location("let expression"))?,
                 Step::SetVar { expr, .. } => tree_type_at(expr, location("state expression"))?,
+                Step::Stop => {}
                 Step::Emit { value, .. } => match value {
                     Emission::Identity | Emission::Nothing => {}
                     Emission::Data(tree) => tree_type_at(tree, location("data emission"))?,
@@ -1674,26 +1693,27 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         if duration.is_some_and(|value| value <= 0) {
             return Err(PlanValidationError::InvalidInstanceLifetime { owner: path });
         }
+        if owner
+            .instance
+            .closing
+            .is_some_and(|closing| closing.drain_for <= 0 || closing.settle_for <= 0)
+        {
+            return Err(PlanValidationError::InvalidClosingPolicy { owner: path });
+        }
         if owner.instance.lifetime != InstanceLifetime::Persistent {
             for node in &plan.nodes {
                 let Some(spec) = node.connector() else {
                     continue;
                 };
-                if spec.contract != "Process"
-                    || !owner_contains(plan, slot, node.owner)
-                    || matches!(
-                        spec.attribute("timeout"),
-                        Some(crate::plan::AttrSetting::Value(
-                            crate::value::Value::Duration(value)
-                        )) if *value > 0
-                    )
-                {
+                if spec.contract != "Process" || !owner_contains(plan, slot, node.owner) {
                     continue;
                 }
-                return Err(PlanValidationError::UnboundedLifetimeConnector {
-                    connector: node.path.to_string(),
-                    owner: path,
-                });
+                if owner.instance.closing.is_none() {
+                    return Err(PlanValidationError::MissingClosingPolicy {
+                        connector: node.path.to_string(),
+                        owner: path,
+                    });
+                }
             }
         }
         if let Some(key) = &owner.instance.key {
@@ -2323,6 +2343,15 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     expr_canonical(&expr.root)?;
                 }
                 Step::Let { expr, .. } => expr_canonical(&expr.root)?,
+                Step::Stop => {
+                    if handler.activation
+                        == node::HandlerActivation::Lifecycle(node::Lifecycle::Stop)
+                    {
+                        return Err(PlanValidationError::RecursiveStop {
+                            node: node.path.clone(),
+                        });
+                    }
+                }
             }
         }
     }

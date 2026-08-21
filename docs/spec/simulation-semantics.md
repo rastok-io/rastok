@@ -345,10 +345,11 @@ outcome surface of an app is **statically enumerable** :
   completion combinations form a finite declared set where the type is
   closed;
 - the lifecycle events are a **closed registry** → `l:timeout`, `l:evict`,
-  `l:recover`… applicable per node, listable ;
-- effects are **declared** → every **unkeyed `compensable`** has its
-  `OutcomeUnknown` case (an `irreversible` is always keyed and
-  resolves by recall), every `compensable` its failing-compensation case,
+  `l:closing`, `l:recover`… applicable per node, listable ;
+- effects are **declared** → every unconfirmed compensable recovery or
+  bounded-Closing cancellation has its typed `OutcomeUnknown` case (an
+  `irreversible` is always keyed and resolves by recall), every `compensable`
+  its failing-compensation case,
   every retry Loop its `LoopExhausted`, every saga its `rollback_failed` ;
 - the expression checker already emits its **residual obligations** (bare
   `meta.app` reads, `.orValue()` branches, fallible narrows).

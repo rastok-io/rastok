@@ -47,7 +47,8 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
   superloop, minus real peripherals. Since R4 gives every selected owner a
   lazy lifecycle transaction, the harness identifies the exact `relay` / `in`
   transaction from the journal actor and trigger; lifecycle turns execute but
-  are not mislabeled as relay samples.
+  are not mislabeled as relay samples. R5's bounded-Closing machinery is linked
+  and decoded even though this persistent echo run never requests a close.
 - Target: `thumbv8m.main-none-eabihf` on QEMU `mps2-an505`
   (Cortex-M33), secure memory aliases, semihosting console,
   `-icount shift=0` for deterministic instruction-proportional
@@ -79,20 +80,20 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (927-byte v9 lexical-owner package; re-measured after M1.4 R4 on 2026-08-21) | 15 345 | 767 k | 5.12 ms |
+| `plan::decode` (961-byte v9 package with the R5 `ProcessExit` union; re-measured after M1.4 R5 on 2026-08-21) | 15 957 | 798 k | 5.32 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-21 after R4) | 2 767 (min 2 660 / max 2 979) | **138 k avg / 149 k max** | **0.92 ms avg / 0.99 ms max** |
+| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-21 after R5) | 2 776 (min 2 695 / max 2 993) | **139 k avg / 149.7 k max** | **0.93 ms avg / 0.998 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.8 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-21 after R4) | 104 124 B (101.7 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 417 492 + 45 024 = 462 516 B (451.7 KiB; re-measured 2026-08-21 after R4) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-21 after R5) | 104 716 B (102.3 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 427 188 + 45 348 = 472 536 B (461.5 KiB; re-measured 2026-08-21 after R5) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
 
-- The slowest measured relay transaction meets its criterion with a **1.007× margin**,
+- The slowest measured relay transaction meets its criterion with a **1.002× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
 - Package decode grew from v1's 1 468 ticks to 15 334 across the
@@ -187,28 +188,38 @@ Notes the numbers carry:
   owner lifecycle facts push the in-memory journal across its next `Vec`
   capacity step. Linked lifetime machinery adds 15 580 B. No package byte or
   semantic hash moves.
-- Flash grew from 193 KiB to 451.7 KiB (`.text` 417 492 B +
-  `.rodata` 45 024 B, re-measured 2026-08-21): the consolidated
+- R5 adds the empty `OutcomeUnknown` branch to `ProcessExit`, so the embedded
+  package grows 927 B → 961 B and its semantic hash moves deliberately. Decode
+  adds 612 ticks, the measured persistent relay adds 9 ticks on average and 14
+  at maximum, the heap peak adds 592 B, and linked Closing machinery adds
+  10 020 B. The first measurement put the maximum at 3 014 ticks, just outside
+  the historic relay threshold: ordinary admission was needlessly walking the
+  owner chain to prove that no durable close existed. A replay-derived set of
+  active close roots now rejects that slow path before any walk; no semantic
+  check was removed, and the final maximum is 2 993 ticks.
+- Flash grew from 193 KiB to 461.5 KiB (`.text` 427 188 B +
+  `.rodata` 45 348 B, re-measured after R5 on 2026-08-21): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
   complete logical-type algebra, inference solver and validator link into
   the kernel even for a `lines` plan — the core is one crate, and dead-code
   elimination keeps what the plan decoder can reach. The 1 MiB criterion holds with a
-  2.49× margin; trimming by feature gate is noted, not needed.
-- The true high-water mark (101.7 KiB) sits above the old sampled
+  2.22× margin; trimming by feature gate is noted, not needed.
+- The true high-water mark (102.3 KiB) sits above the old sampled
   figure (57.2 KiB), as a real peak must; the first M1 lift added
   the ingress port to every inbound record (+688 B over 32 rounds),
   and the consolidated reform's five-field spine and ext zone
   roughly cancelled out.
 - The semantic hash printed by the emulated kernel is byte-identical
-  to the host's: `514d4ab7…` — the identity function is the same
-  function everywhere. (Six declared identity moves so far: with
+  to the host's: `419a52a1…` — the identity function is the same
+  function everywhere. (Seven declared identity moves so far: with
   D-2026-08-10-7 — a compiled tree seals its static type with its
   root — then twice on 2026-08-12 with D-2026-08-12-1: the default
   injection made the EFFECTIVE sheet identity, and the Process
   error set gained `CaptureFailed`; then B5 retired that temporary set in
   favor of complete resolved port rows and materialized `err_codec`; B7 made
   Process framing and atomic typed completion part of executable identity;
-  B8 sealed complete resolved types and removed the last transport bridges.)
+  B8 sealed complete resolved types and removed the last transport bridges;
+  R5 added the typed `OutcomeUnknown` settlement case to `ProcessExit`.)
 - The journal-growth incident of the first run stands: with a
   128 KiB arena, a ~44 KiB `Vec` doubling of the in-memory journal
   dies around round 60 — linear history growth, as designed; a
@@ -240,13 +251,13 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-21 after M1.4 R4.**
+instrumentation and last re-measured 2026-08-21 after M1.4 R5.**
 These measurements price complete hierarchical routing, causal instance
-references, and the executable lifetime machine; bounded Closing remains a
-separate R5 measurement. All four criteria of record hold: no patched
-dependencies, 149 k instructions for the slowest measured relay transaction
-against the 150 k bound (1.007×), a 101.7 KiB true high-water mark against
-128 KiB, and 451.7 KiB of flash against 1 MiB. The
+references, the executable lifetime machine, and bounded Closing. All four
+criteria of record hold: no patched dependencies, 149.7 k instructions for
+the slowest measured relay transaction against the 150 k bound (1.002×), a
+102.3 KiB true high-water mark against 128 KiB, and 461.5 KiB of flash against
+1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as
 planned — no embedded chantier opens. Silicon confirmation (volet B)
