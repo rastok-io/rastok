@@ -56,7 +56,7 @@ impl InstanceFrame {
     fn tree(&self) -> Cbor {
         match self {
             Self::SelectedKey { owner, ty, value } => Cbor::Array(vec![
-                Cbor::Text(owner.to_string()),
+                owner_path_tree(owner),
                 Cbor::Uint(1),
                 Cbor::Array(vec![
                     crate::plan::type_tree(ty),
@@ -64,7 +64,7 @@ impl InstanceFrame {
                 ]),
             ]),
             Self::ProcessingTimeBox { owner, start_ns } => Cbor::Array(vec![
-                Cbor::Text(owner.to_string()),
+                owner_path_tree(owner),
                 Cbor::Uint(2),
                 signed(*start_ns),
             ]),
@@ -163,7 +163,7 @@ impl fmt::Debug for InstanceAddress {
 impl InstanceAddress {
     fn seal(owner: &OwnerPath, frames: &[InstanceFrame]) -> Self {
         let tree = Cbor::Array(vec![
-            Cbor::Text(owner.to_string()),
+            owner_path_tree(owner),
             Cbor::Array(frames.iter().map(InstanceFrame::tree).collect()),
         ]);
         Self {
@@ -249,6 +249,10 @@ impl InstanceAddress {
         // mathematically within u32 without a host-width assumption.
         shard as u32
     }
+}
+
+fn owner_path_tree(owner: &OwnerPath) -> Cbor {
+    Cbor::Array(owner.segments().iter().cloned().map(Cbor::Text).collect())
 }
 
 /// Complete reference to one live generation of a logical address.
@@ -337,7 +341,7 @@ mod tests {
                 .expect("same address")
                 .as_bytes()
         );
-        assert_eq!(address.virtual_shard(NonZeroU32::new(257).unwrap()), 212);
+        assert_eq!(address.virtual_shard(NonZeroU32::new(257).unwrap()), 117);
         assert_eq!(InstanceRef::new(address, 7).generation(), 7);
     }
 
@@ -357,8 +361,22 @@ mod tests {
         assert_eq!(
             address.as_bytes(),
             &[
-                0x82, 0x64, b'n', b'o', b'd', b'e', 0x81, 0x83, 0x64, b'n', b'o', b'd', b'e', 0x01,
-                0x82, 0x07, 0x82, 0x08, 0x65, b'a', b'l', b'i', b'c', b'e',
+                0x82, 0x81, 0x64, b'n', b'o', b'd', b'e', 0x81, 0x83, 0x81, 0x64, b'n', b'o', b'd',
+                b'e', 0x01, 0x82, 0x07, 0x82, 0x08, 0x65, b'a', b'l', b'i', b'c', b'e',
+            ]
+        );
+    }
+
+    #[test]
+    fn owner_segments_are_structural_address_identity() {
+        let owner = OwnerPath::new(["outer", "inner"]).expect("valid nested owner");
+        let address = InstanceAddress::singleton(&owner);
+
+        assert_eq!(
+            address.as_bytes(),
+            &[
+                0x82, 0x82, 0x65, b'o', b'u', b't', b'e', b'r', 0x65, b'i', b'n', b'n', b'e', b'r',
+                0x80,
             ]
         );
     }

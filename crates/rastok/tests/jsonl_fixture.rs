@@ -60,6 +60,8 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE TRACE MOVE 2026-08-21 (M1.4 R3): singleton routes and
 // transactions now carry complete instance references. The package and hash
 // remain fixed; only the causal trace moves.
+// R3 REVIEW CLOSURE: owner paths are sealed as segment arrays instead of
+// dotted display text. The same trace moves again; hash and package do not.
 const JSONL_HASH: &str = "9e66e62cbe17c17d6394e3692ed074e3416782ac3a3ea569a53af9edea54c29b";
 
 #[test]

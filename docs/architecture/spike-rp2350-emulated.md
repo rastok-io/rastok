@@ -76,20 +76,20 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (927-byte v9 lexical-owner package; re-measured after M1.4 R3 on 2026-08-21) | 15 344 | 767 k | 5.11 ms |
+| `plan::decode` (927-byte v9 lexical-owner package; re-measured after M1.4 R3 review closure on 2026-08-21) | 15 345 | 767 k | 5.12 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32; re-measured 2026-08-21 after R3 hierarchical routing) | 2 726 (min 2 671 / max 2 889) | **136 k avg / 144 k max** | **0.91 ms avg / 0.96 ms max** |
+| relay transaction (avg of 32; re-measured 2026-08-21 after the R3 review closure) | 2 737 (min 2 671 / max 2 945) | **137 k avg / 147 k max** | **0.91 ms avg / 0.98 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.8 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-21 after R3) | 79 116 B (77.3 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 402 236 + 44 724 = 446 960 B (436.5 KiB; re-measured 2026-08-21 after R3) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-21 after the R3 review closure) | 79 124 B (77.3 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 402 212 + 44 724 = 446 936 B (436.5 KiB; re-measured 2026-08-21 after the R3 review closure) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
 
-- The slowest measured relay transaction meets its criterion with a **1.04× margin**,
+- The slowest measured relay transaction meets its criterion with a **1.02× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
 - Package decode grew from v1's 1 468 ticks to 15 334 across the
@@ -163,14 +163,16 @@ Notes the numbers carry:
 - R3 leaves the 927-byte package and semantic hash fixed, but deliberately
   moves causal traces: every route, firing and consumed cursor now carries a
   complete hierarchical instance reference. Relative to reviewed R2, decode
-  adds 10 ticks, relay adds 302 ticks on average, heap peak adds 8 548 B, and
-  linked flash adds 25 684 B. The first direct implementation exceeded the
-  relay criterion (3 764 ticks): the measured fix keeps the generation index
+  adds 11 ticks, relay adds 313 ticks on average, heap peak adds 8 556 B, and
+  linked flash adds 25 660 B. The review closure changes the address spelling
+  from dotted owner text to structural segment arrays. The first direct
+  implementation exceeded the relay criterion (3 764 ticks): the measured fix
+  keeps the generation index
   as a replay-derived journal projection, shares immutable canonical address
   bytes across references, transports only lightweight references for live
   bundles, and indexes static owner chains once. No semantic shortcut was
-  taken; the final maximum is 2 889 ticks.
-- Flash grew from 193 KiB to 436.5 KiB (`.text` 402 236 B +
+  taken; the final maximum is 2 945 ticks.
+- Flash grew from 193 KiB to 436.5 KiB (`.text` 402 212 B +
   `.rodata` 44 724 B, re-measured 2026-08-21): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
   complete logical-type algebra, inference solver and validator link into
@@ -226,8 +228,8 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 instrumentation and last re-measured 2026-08-21 after M1.4 R3.**
 These measurements price complete hierarchical routing and causal instance
 references; later lifetime and Closing gates will be measured separately. All four
-criteria of record hold: no patched dependencies, 144 k instructions for the
-slowest measured relay transaction against the 150 k bound (1.04×), a 77.3 KiB true
+criteria of record hold: no patched dependencies, 147 k instructions for the
+slowest measured relay transaction against the 150 k bound (1.02×), a 77.3 KiB true
 high-water mark against 128 KiB, 436.5 KiB of flash against 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as

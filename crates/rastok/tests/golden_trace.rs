@@ -6,6 +6,8 @@
 //! a new golden after an intentional behavior change — the diff in
 //! the failure message names what moved, so blessing is a reviewed
 //! decision, never a reflex.
+//! M1.4 R3 introduced instance references; its review closure deliberately
+//! moves these traces once more by sealing owner paths as segment arrays.
 
 use rastok::boundary::{
     Completion, Draft, InboundSubmission, IngressAuthority, Intent, Partner, ProcessExit, Response,

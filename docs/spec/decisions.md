@@ -223,6 +223,14 @@ routes carry full target references at key 38, and nested `l:start` may carry
 key 48. No semantic hash or `.rkp` body moves. The connector-free `gauge`
 hash remains the scope witness.
 
+**R3 review closure (2026-08-21).** The owner path in the address and in
+every frame is sealed as an array of UTF-8 path segments, never as dotted
+display text. This makes segment boundaries structural identity instead of
+depending forever on the current lexical exclusion of `.` from a segment.
+The first, unreleased R3 address spelling is superseded. This correction moves
+the same four causal trace fixtures once more; semantic hashes and `.rkp`
+bodies remain unchanged.
+
 The one-worker VM executes Graph-owned persistent routing, nested Graph/Node
 addresses, sticky ancestor selection across metadata rewrites, isolated
 state/cursors, journal-derived fresh generations, pre-effect instance bundles,

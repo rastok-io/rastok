@@ -1856,6 +1856,9 @@ impl<'plan> Vm<'plan> {
             }
         }
         for ((target, key), count) in &needed {
+            // `has_room` includes the route being admitted now. `needed`
+            // counts every route in this prepared batch, so only its
+            // additional siblings are passed as reservations.
             if !self
                 .scheduler
                 .mailboxes

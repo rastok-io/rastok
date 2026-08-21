@@ -352,9 +352,11 @@ cannot diverge on bytes for the same journal :
   `tagged_value` bytes. All temporal logical types share the Arrow
   nanosecond convention — no µs anywhere in the seal.)
 - **`instance_address`** is the canonical CBOR
-  bytes of `[owner_path (text), frames (array)]`. `frames` is ordered from
+  bytes of `[owner_path (array<text segment>), frames (array)]`. Segment
+  boundaries are identity: no dotted display rendering is ever sealed.
+  `frames` is ordered from
   outermost to innermost owner. Each frame is
-  `[frame_owner_path (text), frame_kind (uint), payload]`, with the
+  `[frame_owner_path (array<text segment>), frame_kind (uint), payload]`, with the
   extend-only kinds `1 = selected_key` (payload = `[resolved_key_type,
   tagged_value]`, using the plan's canonical `DataType` sub-form and the value
   registry above) and `2 = processing_time_box` (payload = the epoch-aligned
