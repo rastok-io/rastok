@@ -108,7 +108,24 @@ pub fn compile_with_assets(
         return Err(bag);
     }
     let hash = lower::semantic_hash(&hir);
-    let (plan, symbols) = lower::lower(&hir);
+    let (plan, symbols) = match lower::lower(&hir) {
+        Ok(lowered) => lowered,
+        Err(error) => {
+            bag.push(
+                Diagnostic::new(
+                    check::E_CHECK_DEFERRED,
+                    Phase::Plan,
+                    format!(
+                        "the instance policy on `{}` is checked but cannot ship yet: {}",
+                        error.owner, error.detail
+                    ),
+                )
+                .with_field("construct", "M1.4 R2 instance transport")
+                .with_field("owner", error.owner),
+            );
+            return Err(bag);
+        }
+    };
     // A lowering that emits an invalid plan is a compiler bug — but a
     // bug with a controlled error path, not a vanished process: the
     // validator exists precisely to catch this disagreement.
@@ -207,10 +224,10 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
         .with_field("expected", expected.to_string())
         .with_field("found", found.to_string()),
         PlanValidationError::InvalidPartitionKey { node, ty } => Diagnostic::new(
-            check::E_PARTITION,
+            check::E_INSTANCE,
             Phase::Check,
             format!(
-                "the partition key on `{node}` resolves to {ty}; partition keys use the canonical scalar/enum key domain"
+                "the instance key on `{node}` resolves to {ty}; instance keys use canonical scalar/enum leaves or a closed struct of those leaves"
             ),
         )
         .with_field("name", node.to_string())
@@ -220,10 +237,10 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
             expected,
             found,
         } => Diagnostic::new(
-            check::E_PARTITION,
+            check::E_INSTANCE,
             Phase::Check,
             format!(
-                "the partition key on `{node}` has no single type: it resolves to {expected} and {found} across its inputs"
+                "the instance key on `{node}` has no single type: it resolves to {expected} and {found} across its inputs"
             ),
         )
         .with_field("name", node.to_string())
@@ -272,12 +289,13 @@ mod tests {
     }
 
     #[test]
-    fn a_partition_key_uses_the_graphs_resolved_input_type() {
+    fn an_instance_key_uses_the_graphs_resolved_input_type() {
         let source = r#"
 graph inferred_partition : App {
   input in: int
   output out: int
-  operator relay per (key = data, lifetime = persistent) {
+  operator relay {
+    instances = { key = data }
     on in { out = . }
   }
   . -> relay -> .
@@ -292,7 +310,7 @@ graph inferred_partition : App {
             compilation.plan.nodes[0]
                 .partition
                 .as_ref()
-                .expect("the node is partitioned")
+                .expect("the node is keyed")
                 .key
                 .ty,
             crate::datatype::DataType::INT
@@ -300,12 +318,77 @@ graph inferred_partition : App {
     }
 
     #[test]
-    fn a_resolved_variant_cannot_become_a_partition_key() {
+    fn an_inferred_composite_key_closes_after_port_resolution() {
+        let source = r#"
+graph inferred_composite : App {
+  input in: struct { tenant: text, order: long }
+  output out: struct { tenant: text, order: long }
+  operator relay {
+    instances = { key = { payload = data } }
+    on in { out = . }
+  }
+  . -> relay -> .
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the resolved input closes every composite-key leaf");
+        let key = &compilation.plan.nodes[0]
+            .partition
+            .as_ref()
+            .expect("the node is keyed")
+            .key;
+        assert!(key.ty.is_instance_key());
+        assert!(matches!(key.ty, crate::datatype::DataType::Struct(_)));
+    }
+
+    #[test]
+    fn checked_policies_never_disappear_when_transport_is_not_ready() {
+        let sources = [
+            r#"
+graph keyed_graph : App {
+  input in: text
+  instances = { key = data }
+  operator relay { on in { out = . } }
+  . -> relay -> nothing
+}
+"#,
+            r#"
+graph finite_singleton : App {
+  operator relay {
+    lifetime = { kind = fixed ; after = duration("30s") }
+    on in { out = . }
+  }
+  . -> relay -> nothing
+}
+"#,
+        ];
+        for source in sources {
+            let bag = compile(
+                &[source],
+                &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+            )
+            .expect_err("a checked policy must wait for its named transport/runtime gate");
+            assert!(bag.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code() == check::E_CHECK_DEFERRED
+                    && diagnostic
+                        .fields()
+                        .iter()
+                        .any(|(name, value)| *name == "construct" && value.contains("M1.4 R2"))
+            }));
+        }
+    }
+
+    #[test]
+    fn a_resolved_variant_cannot_become_an_instance_key() {
         let source = r#"
 graph dynamic_partition : App {
   input in: variant
   output out: variant
-  operator relay per (key = data, lifetime = persistent) {
+  operator relay {
+    instances = { key = data }
     on in { out = . }
   }
   . -> relay -> .
@@ -315,23 +398,24 @@ graph dynamic_partition : App {
             &[source],
             &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
         )
-        .expect_err("a resolved dynamic value has no canonical partition identity");
+        .expect_err("a resolved dynamic value has no canonical instance identity");
         assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == check::E_PARTITION
+            diagnostic.code() == check::E_INSTANCE
                 && diagnostic
                     .message()
-                    .contains("canonical scalar/enum key domain")
+                    .contains("canonical scalar/enum leaves")
         }));
     }
 
     #[test]
-    fn one_partition_expression_requires_one_type_across_input_ports() {
+    fn one_instance_expression_requires_one_type_across_input_ports() {
         let source = r#"
 graph conflicting_partition : App {
   input alpha: int
   input beta: text
   output out: int
-  operator relay per (key = data, lifetime = persistent) {
+  operator relay {
+    instances = { key = data }
     input a: int
     input b: text
     output out: int
@@ -349,7 +433,7 @@ graph conflicting_partition : App {
         )
         .expect_err("one key expression cannot change logical type by input port");
         assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == check::E_PARTITION
+            diagnostic.code() == check::E_INSTANCE
                 && diagnostic.message().contains("has no single type")
         }));
     }

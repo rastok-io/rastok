@@ -11,8 +11,8 @@
 //! values.
 
 use crate::compiler::hir::{
-    AttrValue, Direction, EdgeTarget, EmitValue, Hir, Node as HirNode, NodeRole,
-    Statement as HirStatement,
+    AttrValue, Direction, EdgeTarget, EmitValue, Hir, InstanceLifetime, InstancePolicy,
+    Node as HirNode, NodeRole, Statement as HirStatement,
 };
 use crate::datatype::{
     BinaryType, DataType, DateUnit, FloatType, IntegerType, IntegerWidth, IntervalUnit,
@@ -69,20 +69,24 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     for (text, _) in edges {
         writer.str(&text);
     }
-    // Extend the old identity as an OPTIONAL suffix. A graph without `per`
-    // feeds byte-for-byte the pre-M1.4 stream (the gauge witness); a keyed
-    // graph adds one explicitly domain-separated table after every old
-    // field, so absence needs no new tag and cannot move old identities.
-    let partitioned: Vec<_> = sorted_nodes(hir)
+    // Extend identity only when the new source declares non-default instance
+    // semantics. The persistent singleton still feeds the exact M1.3 stream.
+    let configured: Vec<_> = sorted_nodes(hir)
         .into_iter()
-        .filter_map(|node| node.partition.as_ref().map(|partition| (node, partition)))
+        .filter_map(|node| node.instance.as_ref().map(|instance| (node, instance)))
         .collect();
-    if !partitioned.is_empty() {
-        writer.str("rastok.partition.v1");
-        writer.count(partitioned.len());
-        for (node, partition) in partitioned {
+    if hir.app.instance.is_some() || !configured.is_empty() {
+        writer.str("rastok.instances.r1");
+        writer.count(configured.len() + usize::from(hir.app.instance.is_some()));
+        if let Some(instance) = &hir.app.instance {
+            writer.tag(1);
+            writer.str(&hir.app.name);
+            writer.instance(instance);
+        }
+        for (node, instance) in configured {
+            writer.tag(2);
             writer.str(&node.path.to_string());
-            writer.partition(partition);
+            writer.instance(instance);
         }
     }
     let mut bytes = [0u8; 32];
@@ -118,8 +122,13 @@ fn sorted_edges(hir: &Hir) -> Vec<(String, &crate::compiler::hir::Edge)> {
 }
 
 /// Lowers a checked graph into the shipped plan and its symbol table.
-#[must_use]
-pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
+pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
+    if hir.app.instance.is_some() {
+        return Err(LowerError {
+            owner: hir.app.name.clone(),
+            detail: "Graph owners require the parent-linked R2 owner table",
+        });
+    }
     let nodes = sorted_nodes(hir);
     let slot_of = |path: &node::Path| {
         Slot::new(
@@ -183,22 +192,42 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
         for val in &hir_node.vals {
             partition_consts.insert(val.name.clone(), val.value.value.clone());
         }
-        let partition = hir_node.partition.as_ref().map(|partition| PartitionSpec {
-            name: partition.name.clone(),
-            key: substitute_tree(&partition.key, &partition_consts),
-            lifetime: match &partition.lifetime {
-                crate::compiler::hir::PartitionLifetime::Persistent => {
-                    PlanPartitionLifetime::Persistent
-                }
-                crate::compiler::hir::PartitionLifetime::IdleTtl(value) => {
-                    let nanos = match value.value {
-                        crate::value::Value::Duration(nanos) => nanos,
-                        _ => 0,
-                    };
-                    PlanPartitionLifetime::IdleTtl(nanos)
-                }
-            },
-        });
+        let partition = match &hir_node.instance {
+            None => None,
+            Some(instance) => {
+                let Some(key) = &instance.key else {
+                    return Err(LowerError {
+                        owner: hir_node.path.to_string(),
+                        detail: "a finite singleton lifetime requires the R2 instance transport",
+                    });
+                };
+                let lifetime = match &instance.lifetime {
+                    InstanceLifetime::Persistent => PlanPartitionLifetime::Persistent,
+                    InstanceLifetime::Idle(value) => {
+                        let crate::value::Value::Duration(nanos) = value.value else {
+                            return Err(LowerError {
+                                owner: hir_node.path.to_string(),
+                                detail: "the checked idle duration lost its duration carrier",
+                            });
+                        };
+                        PlanPartitionLifetime::IdleTtl(nanos)
+                    }
+                    InstanceLifetime::Fixed(_)
+                    | InstanceLifetime::SinglePass
+                    | InstanceLifetime::Tumbling(_) => {
+                        return Err(LowerError {
+                            owner: hir_node.path.to_string(),
+                            detail: "this lifetime profile requires the R2 transport and R4 scheduler",
+                        });
+                    }
+                };
+                Some(PartitionSpec {
+                    name: None,
+                    key: substitute_tree(key, &partition_consts),
+                    lifetime,
+                })
+            }
+        };
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
             kind: match &hir_node.role {
@@ -274,7 +303,17 @@ pub fn lower(hir: &Hir) -> (ExecutionPlan, SymbolTable) {
             },
         });
     }
-    (plan, symbols)
+    Ok((plan, symbols))
+}
+
+/// A checked R1 instance policy which the superseded P0-P3 plan body cannot
+/// represent without changing its meaning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LowerError {
+    /// Source owner whose checked policy cannot ship yet.
+    pub owner: String,
+    /// Named missing transport/runtime gate.
+    pub detail: &'static str,
 }
 
 fn lower_emission(value: &EmitValue, subst: &impl Fn(&expr::Tree) -> expr::Tree) -> Emission {
@@ -803,19 +842,27 @@ impl Writer<'_> {
         }
     }
 
-    fn partition(&mut self, partition: &crate::compiler::hir::Partition) {
-        match &partition.name {
+    fn instance(&mut self, instance: &InstancePolicy) {
+        match &instance.key {
             None => self.tag(0),
-            Some(name) => {
+            Some(key) => {
                 self.tag(1);
-                self.str(name);
+                self.tree(key);
             }
         }
-        self.tree(&partition.key);
-        match &partition.lifetime {
-            crate::compiler::hir::PartitionLifetime::Persistent => self.tag(1),
-            crate::compiler::hir::PartitionLifetime::IdleTtl(value) => {
+        match &instance.lifetime {
+            InstanceLifetime::Persistent => self.tag(1),
+            InstanceLifetime::Idle(value) => {
                 self.tag(2);
+                self.tree(&value.tree);
+            }
+            InstanceLifetime::Fixed(value) => {
+                self.tag(3);
+                self.tree(&value.tree);
+            }
+            InstanceLifetime::SinglePass => self.tag(4),
+            InstanceLifetime::Tumbling(value) => {
+                self.tag(5);
                 self.tree(&value.tree);
             }
         }

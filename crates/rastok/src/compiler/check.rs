@@ -9,13 +9,13 @@
 
 use crate::compiler::hir::{
     AttrValue, Attribute, Const, Direction, Edge, EdgeTarget, EmitValue, Endpoint, FieldWrite,
-    Graph, Handler, Hir, Node, NodeRole, Partition, PartitionLifetime, Statement, Val, Var,
+    Graph, Handler, Hir, InstanceLifetime, InstancePolicy, Node, NodeRole, Statement, Val, Var,
 };
 use crate::compiler::syntax::{
-    BaseType, ConnectorDecl, EdgeDecl, EdgeEndpoint, ExprSource, GraphDecl, GraphItem,
-    LifetimeValue, OperatorDecl, OperatorItem, PartitionDecl, PartitionField, PerClause, PortRef,
-    ScalarType, Statement as SynStatement, StructBody, StructEntry, SyntaxTree, TopDecl,
-    Trigger as SynTrigger, TypeRef, ValDecl, Value as SynValue, VarDecl,
+    Attribute as SynAttribute, BaseType, ConnectorDecl, EdgeDecl, EdgeEndpoint, ExprSource,
+    GraphDecl, GraphItem, OperatorDecl, OperatorItem, PortRef, ScalarType,
+    Statement as SynStatement, StructBody, StructEntry, SyntaxTree, TopDecl, Trigger as SynTrigger,
+    TypeRef, ValDecl, Value as SynValue, VarDecl,
 };
 use crate::contract;
 use crate::datatype::{
@@ -122,9 +122,9 @@ pub const E_PORT_CONFLICT: Code = Code::new("E-PORT-CONFLICT");
 /// emission, an injection, or the two ends of an edge disagreeing.
 pub const E_PORT_TYPE: Code = Code::new("E-PORT-TYPE");
 
-/// A `partition`/`per` binding is incomplete, ambiguous, unknown or has a key
-/// outside the canonical-key domain.
-pub const E_PARTITION: Code = Code::new("E-PARTITION");
+/// A Node's `instances` or `lifetime` attribute is malformed, duplicated, or
+/// has no canonical instance-key type.
+pub const E_INSTANCE: Code = Code::new("E-INSTANCE");
 
 /// A braced value mixing ordinary data fields with reserved envelope
 /// roots — the classification is one or the other, never a silent
@@ -219,7 +219,7 @@ pub fn check(
         type_decls: BTreeMap::new(),
         resolved_types: BTreeMap::new(),
         type_stack: Vec::new(),
-        pending_partitions: Vec::new(),
+        pending_instances: Vec::new(),
     };
     // No top-level declaration is silently ignored, and none is
     // silently dropped either: until unit composition and a real
@@ -288,7 +288,7 @@ pub fn check(
     // writes alone. Everything the Lab compiles below is checked
     // against it and can extend nothing (D-2026-08-10-1).
     checker.seal_app_schema();
-    checker.resolve_pending_partitions(&mut checked_app);
+    checker.resolve_pending_instances(&mut checked_app);
     checker.in_lab = true;
     // A lab is a logical corpus: fragments sharing a name merge into
     // one; a duplicate simulation name inside the merged corpus
@@ -402,20 +402,35 @@ struct Checker<'bag, 'registry> {
     resolved_types: BTreeMap<String, DataType>,
     /// The expansion stack — a name on it twice is a cycle.
     type_stack: Vec<String>,
-    /// `per` bindings are type-checked after the production metadata schema
-    /// has been sealed. That makes `meta.app.<leaf>` precise without a second
-    /// type system or a runtime-only guess.
-    pending_partitions: Vec<PendingPartition>,
+    /// Node-owned instance keys are type-checked after the production
+    /// metadata schema has been sealed. That makes `meta.app.<leaf>` precise
+    /// without a second type system or a runtime-only guess.
+    pending_instances: Vec<PendingInstance>,
 }
 
 #[derive(Clone)]
-struct PendingPartition {
-    node: node::Path,
-    name: Option<String>,
-    fields: Vec<PartitionField>,
+enum InstanceOwner {
+    Graph,
+    Node(node::Path),
+}
+
+#[derive(Clone)]
+struct PendingInstance {
+    owner: InstanceOwner,
+    key: Option<SynValue>,
+    lifetime: InstanceLifetimeSource,
     signature: expr::Signature,
     consts: BTreeMap<String, crate::value::Value>,
     span: Span,
+}
+
+#[derive(Clone)]
+enum InstanceLifetimeSource {
+    Persistent,
+    Idle { after: SynValue, span: Span },
+    Fixed { after: SynValue, span: Span },
+    SinglePass,
+    Tumbling { every: SynValue, span: Span },
 }
 
 impl Checker<'_, '_> {
@@ -1375,7 +1390,10 @@ impl Checker<'_, '_> {
             }
         }
         if decl.per.is_some() {
-            self.deferred("a keyed graph (per)", decl.span);
+            self.instance_refusal(
+                decl.span,
+                "`per` was the unpublished partition-binding syntax; write `instances = { key = <expr> }` inside the Graph",
+            );
         }
         let mut graph = Graph {
             name: decl.name.text.clone(),
@@ -1383,42 +1401,22 @@ impl Checker<'_, '_> {
             vals: Vec::new(),
             nodes: Vec::new(),
             edges: Vec::new(),
+            instance: None,
         };
         let mut consts = BTreeMap::new();
         let mut signature = expr::Signature::new();
         let mut edges = Vec::new();
         let mut redeclared_defaults = std::collections::BTreeSet::new();
-        // Partition declarations are graph-scoped names, not source-order
-        // bindings. Collect them before checking nodes so `per session` is
-        // equally valid before or after the declaration.
-        let mut partitions: BTreeMap<String, PartitionDecl> = BTreeMap::new();
-        for item in &decl.body {
-            let GraphItem::Partition(partition) = item else {
-                continue;
-            };
-            if !self.guard_binding_name(&partition.name, "a partition") {
-                continue;
-            }
-            match partitions.entry(partition.name.text.clone()) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(partition.clone());
-                }
-                std::collections::btree_map::Entry::Occupied(_) => {
-                    self.bag.push(
-                        Diagnostic::new(
-                            E_PARTITION,
-                            Phase::Resolve,
-                            format!(
-                                "the partition `{}` is already declared in this graph",
-                                partition.name.text
-                            ),
-                        )
-                        .with_span(partition.name.span)
-                        .with_field("name", partition.name.text.clone()),
-                    );
-                }
-            }
-        }
+        self.queue_instance_attributes(
+            InstanceOwner::Graph,
+            decl.body.iter().filter_map(|item| match item {
+                GraphItem::Attribute(attribute) => Some(attribute),
+                _ => None,
+            }),
+            &signature,
+            &consts,
+            decl.span,
+        );
         for item in &decl.body {
             match item {
                 GraphItem::Port(port) => {
@@ -1545,36 +1543,25 @@ impl Checker<'_, '_> {
                 }
                 GraphItem::Operator(operator) => {
                     if let Some(node) = self.operator(operator, &signature, &consts) {
-                        self.queue_partition(
-                            &node.path,
-                            operator.per.as_ref(),
-                            &partitions,
-                            &signature,
-                            &consts,
-                            operator.span,
-                        );
                         self.push_node(&mut graph, node, operator.name.span);
                     }
                 }
                 GraphItem::Connector(connector) => {
                     if let Some(node) = self.connector(connector, &signature, &consts) {
-                        self.queue_partition(
-                            &node.path,
-                            connector.per.as_ref(),
-                            &partitions,
-                            &signature,
-                            &consts,
-                            connector.span,
-                        );
                         self.push_node(&mut graph, node, connector.name.span);
                     }
                 }
                 GraphItem::Edge(edge) => edges.push(edge),
-                GraphItem::Partition(_) => {}
+                GraphItem::Partition(partition) => self.instance_refusal(
+                    partition.span,
+                    "`partition` was unpublished syntax; declare `instances` and `lifetime` on the Node that owns them",
+                ),
                 GraphItem::Graph(nested) => self.deferred("a nested graph", nested.span),
                 GraphItem::Defaults(_) => self.deferred("a defaults block", decl.span),
                 GraphItem::Attribute(attribute) => {
-                    self.deferred("a graph attribute", attribute.span);
+                    if !is_common_node_attribute(attribute) {
+                        self.deferred("a graph attribute", attribute.span);
+                    }
                 }
                 GraphItem::Handler(handler) => self.deferred("a graph handler", handler.span),
                 GraphItem::Error(_) => {}
@@ -1824,219 +1811,402 @@ impl Checker<'_, '_> {
         }
     }
 
-    fn queue_partition(
+    fn queue_instance_attributes<'source>(
         &mut self,
-        node: &node::Path,
-        clause: Option<&PerClause>,
-        declarations: &BTreeMap<String, PartitionDecl>,
+        owner: InstanceOwner,
+        attributes: impl Iterator<Item = &'source SynAttribute>,
         signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
         span: Span,
     ) {
-        let Some(clause) = clause else { return };
-        let (name, fields) = match clause {
-            PerClause::Named(names) if names.len() == 1 => {
-                let name = &names[0];
-                let Some(declaration) = declarations.get(&name.text) else {
-                    self.bag.push(
-                        Diagnostic::new(
-                            E_PARTITION,
-                            Phase::Resolve,
-                            format!("`{}` is not a partition declared in this graph", name.text),
-                        )
-                        .with_span(name.span)
-                        .with_field("name", name.text.clone()),
-                    );
-                    return;
-                };
-                (Some(name.text.clone()), declaration.fields.clone())
+        let mut instances = None;
+        let mut lifetime = None;
+        for attribute in attributes {
+            let Some(name) = common_node_attribute_name(attribute) else {
+                continue;
+            };
+            if attribute.target.segments.len() != 1 {
+                self.instance_refusal(
+                    attribute.span,
+                    &format!(
+                        "`{name}` is one atomic composite attribute; write `{name} = {{ ... }}`"
+                    ),
+                );
+                continue;
             }
-            PerClause::Named(names) => {
-                let at = names.first().map_or(span, |name| name.span);
-                self.deferred("a composite partition key", at);
-                return;
+            match name {
+                "instances" if instances.replace(attribute).is_some() => {
+                    self.instance_refusal(attribute.span, "`instances` is declared twice");
+                }
+                "lifetime" if lifetime.replace(attribute).is_some() => {
+                    self.instance_refusal(attribute.span, "`lifetime` is declared twice");
+                }
+                "closing" => self.deferred("the bounded `closing` contract", attribute.span),
+                _ => {}
             }
-            PerClause::Inline(fields) => (None, fields.clone()),
+        }
+
+        let key = match instances {
+            Some(attribute) => match self.instance_key_source(attribute) {
+                Some(key) => Some(key),
+                None => return,
+            },
+            None => None,
         };
-        self.pending_partitions.push(PendingPartition {
-            node: node.clone(),
-            name,
-            fields,
+        let lifetime = match lifetime {
+            Some(attribute) => match self.instance_lifetime_source(attribute) {
+                Some(lifetime) => lifetime,
+                None => return,
+            },
+            None => InstanceLifetimeSource::Persistent,
+        };
+        if key.is_none() && matches!(lifetime, InstanceLifetimeSource::Persistent) {
+            return;
+        }
+        self.pending_instances.push(PendingInstance {
+            owner,
+            key,
+            lifetime,
             signature: signature.clone(),
             consts: consts.clone(),
             span,
         });
     }
 
-    /// Finishes `per` after metadata writes have sealed `meta.app`'s exact
-    /// leaf types. The source expression is still compiled once and enters
-    /// HIR identity; only its timing in the checker is deferred.
-    fn resolve_pending_partitions(&mut self, graph: &mut Graph) {
+    fn instance_key_source(&mut self, attribute: &SynAttribute) -> Option<SynValue> {
+        let SynValue::Braced(body) = &attribute.value else {
+            self.instance_refusal(
+                attribute.span,
+                "`instances` must be a composite attribute: `instances = { key = <expr> }`",
+            );
+            return None;
+        };
+        let mut key = None;
+        for entry in &body.entries {
+            let StructEntry::Field { key: field, value } = entry else {
+                self.instance_refusal(
+                    attribute.span,
+                    "`instances` admits only the field `key = <expr>`",
+                );
+                return None;
+            };
+            if field.segments.len() != 1 || field.segments[0].text != "key" {
+                self.instance_refusal(
+                    field.span,
+                    "`instances` admits only the field `key = <expr>`",
+                );
+                return None;
+            }
+            if key.replace(value.clone()).is_some() {
+                self.instance_refusal(field.span, "`instances.key` is declared twice");
+                return None;
+            }
+        }
+        match key {
+            Some(SynValue::Error(_)) => None,
+            Some(key) => Some(key),
+            None => {
+                self.instance_refusal(
+                    attribute.span,
+                    "`instances` requires exactly one `key` expression",
+                );
+                None
+            }
+        }
+    }
+
+    fn instance_lifetime_source(
+        &mut self,
+        attribute: &SynAttribute,
+    ) -> Option<InstanceLifetimeSource> {
+        let SynValue::Braced(body) = &attribute.value else {
+            self.instance_refusal(
+                attribute.span,
+                "`lifetime` must be a composite attribute with a `kind` field",
+            );
+            return None;
+        };
+        let mut fields: BTreeMap<String, (&SynValue, Span)> = BTreeMap::new();
+        for entry in &body.entries {
+            let StructEntry::Field { key, value } = entry else {
+                self.instance_refusal(
+                    attribute.span,
+                    "`lifetime` admits fields, not nested configuration blocks",
+                );
+                return None;
+            };
+            if key.segments.len() != 1 {
+                self.instance_refusal(
+                    key.span,
+                    "lifetime fields are single names inside one atomic composite",
+                );
+                return None;
+            }
+            let name = key.segments[0].text.clone();
+            if fields.insert(name.clone(), (value, key.span)).is_some() {
+                self.instance_refusal(key.span, &format!("`lifetime.{name}` is declared twice"));
+                return None;
+            }
+        }
+        let Some((kind, kind_span)) = fields.remove("kind") else {
+            self.instance_refusal(attribute.span, "`lifetime` requires exactly one `kind`");
+            return None;
+        };
+        let SynValue::Expr(kind) = kind else {
+            self.instance_refusal(kind_span, "`lifetime.kind` is a bare choice word");
+            return None;
+        };
+        if !is_bare_word(&kind.text) {
+            self.instance_refusal(kind.span, "`lifetime.kind` is a bare choice word");
+            return None;
+        }
+        let duration = |fields: &mut BTreeMap<String, (&SynValue, Span)>, name: &str| {
+            fields
+                .remove(name)
+                .map(|(value, span)| (value.clone(), span))
+        };
+        let source = match kind.text.as_str() {
+            "persistent" => InstanceLifetimeSource::Persistent,
+            "idle" => {
+                let Some((after, span)) = duration(&mut fields, "after") else {
+                    self.instance_refusal(
+                        attribute.span,
+                        "`lifetime(kind = idle)` requires `after`",
+                    );
+                    return None;
+                };
+                InstanceLifetimeSource::Idle { after, span }
+            }
+            "fixed" => {
+                let Some((after, span)) = duration(&mut fields, "after") else {
+                    self.instance_refusal(
+                        attribute.span,
+                        "`lifetime(kind = fixed)` requires `after`",
+                    );
+                    return None;
+                };
+                InstanceLifetimeSource::Fixed { after, span }
+            }
+            "single_pass" => InstanceLifetimeSource::SinglePass,
+            "tumbling" => {
+                let Some((every, span)) = duration(&mut fields, "every") else {
+                    self.instance_refusal(
+                        attribute.span,
+                        "`lifetime(kind = tumbling)` requires `every`",
+                    );
+                    return None;
+                };
+                InstanceLifetimeSource::Tumbling { every, span }
+            }
+            "sliding" => {
+                self.deferred("a sliding lifetime", kind.span);
+                return None;
+            }
+            "event_time" => {
+                self.deferred("an event-time lifetime", kind.span);
+                return None;
+            }
+            other => {
+                self.instance_refusal(
+                    kind.span,
+                    &format!(
+                        "unknown lifetime kind `{other}`; expected persistent, idle, fixed, single_pass, or tumbling"
+                    ),
+                );
+                return None;
+            }
+        };
+        if let Some((unexpected, (_, span))) = fields.into_iter().next() {
+            self.instance_refusal(
+                span,
+                &format!(
+                    "`lifetime(kind = {})` has no `{unexpected}` field",
+                    kind.text
+                ),
+            );
+            return None;
+        }
+        Some(source)
+    }
+
+    /// Finishes Node-owned addressing after metadata writes have sealed
+    /// `meta.app`'s exact leaf types. The expression is still compiled once
+    /// and enters HIR identity; only its timing in the checker is deferred.
+    fn resolve_pending_instances(&mut self, graph: &mut Graph) {
         let app_fields: Vec<(String, DataType)> = self
             .app_schema
             .iter()
             .map(|(name, ty)| (name.clone(), ty.clone()))
             .collect();
-        for pending in core::mem::take(&mut self.pending_partitions) {
-            let Some(node_index) = graph
-                .nodes
-                .iter()
-                .position(|candidate| candidate.path == pending.node)
-            else {
-                continue;
-            };
-            let mut key = None;
-            let mut lifetime = None;
-            for field in &pending.fields {
-                match field {
-                    PartitionField::Key(source) if key.is_none() => key = Some(source.clone()),
-                    PartitionField::Lifetime(value) if lifetime.is_none() => {
-                        lifetime = Some(value.clone())
-                    }
-                    PartitionField::Key(source) => {
-                        self.partition_refusal(
-                            source.span,
-                            pending.name.as_deref(),
-                            "`key` is declared twice",
-                        );
-                    }
-                    PartitionField::Lifetime(_) => {
-                        self.partition_refusal(
-                            pending.span,
-                            pending.name.as_deref(),
-                            "`lifetime` is declared twice",
-                        );
-                    }
-                }
-            }
-            let Some(key_source) = key else {
-                self.partition_refusal(
-                    pending.span,
-                    pending.name.as_deref(),
-                    "a partition requires exactly one `key` expression",
-                );
-                continue;
-            };
-            let Some(lifetime_source) = lifetime else {
-                self.partition_refusal(
-                    pending.span,
-                    pending.name.as_deref(),
-                    "a partition requires exactly one `lifetime`",
-                );
-                continue;
-            };
-
-            let (input_type, input_awaits_inference, input_conflict) = {
-                let input_ports: Vec<&crate::plan::PortDecl> = graph.nodes[node_index]
-                    .ports
+        'pending: for pending in core::mem::take(&mut self.pending_instances) {
+            let input_ports: Vec<crate::plan::PortDecl> = match &pending.owner {
+                InstanceOwner::Graph => graph
+                    .boundary
                     .iter()
                     .filter(|port| port.direction == Direction::Input)
-                    .collect();
-                let awaits_inference = input_ports.iter().any(|port| port.ty.is_none());
-                let inputs: Vec<&DataType> = input_ports
+                    .cloned()
+                    .collect(),
+                InstanceOwner::Node(path) => graph
+                    .nodes
                     .iter()
-                    .filter_map(|port| port.ty.as_ref())
+                    .find(|candidate| candidate.path == *path)
+                    .map(|node| {
+                        node.ports
+                            .iter()
+                            .filter(|port| port.direction == Direction::Input)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            let (input_type, input_awaits_inference, known_input_types) = {
+                let awaits_inference = input_ports.iter().any(|port| port.ty.is_none());
+                let inputs: Vec<DataType> = input_ports
+                    .iter()
+                    .filter_map(|port| port.ty.clone())
                     .collect();
-                let (ty, conflict) = match inputs.split_first() {
-                    Some((first, rest)) => {
-                        match rest.iter().find(|candidate| *candidate != first) {
-                            Some(found) => (
-                                DataType::Variant,
-                                Some(((*first).clone(), (**found).clone())),
-                            ),
-                            None => ((*first).clone(), None),
-                        }
-                    }
-                    None => (DataType::Variant, None),
+                let ty = if awaits_inference {
+                    DataType::Variant
+                } else {
+                    inputs.first().cloned().unwrap_or(DataType::Variant)
                 };
-                (ty, awaits_inference, conflict)
+                (ty, awaits_inference, inputs)
             };
-            // Routing is reserved before an inbound record commits. `data`,
-            // `app`, and `ext` already exist on the draft; `sys` is minted by
-            // that commit and therefore cannot be routing input without a
-            // prepare/commit journal protocol. Keeping it out makes the
-            // pre-commit decision exact instead of speculative.
-            let mut signature = pending
-                .signature
-                .clone()
-                .with("data", input_type)
-                .with("meta", DataType::Variant)
-                .with("meta.ext.content_type", DataType::Text);
-            for (field, ty) in &app_fields {
-                signature = signature.with(format!("meta.app.{field}"), ty.clone());
-            }
-            for (field, ty) in &self.ext_schema_snapshot() {
-                signature = signature.with(format!("meta.ext.{field}"), ty.clone());
-            }
-            let Some(key_tree) = self.expr(&key_source, &signature) else {
-                continue;
+            let ext_fields = self.ext_schema_snapshot();
+            let signature_for = |data_type: DataType| {
+                let mut signature = pending
+                    .signature
+                    .clone()
+                    .with("data", data_type)
+                    .with("meta", DataType::Variant)
+                    // These are the current handler-facing carriers. R2
+                    // transports the exact envelope schema beside the key.
+                    .with("meta.sys.id", DataType::Text)
+                    .with("meta.sys.parent_id", DataType::Variant)
+                    .with("meta.sys.origin_id", DataType::Text)
+                    .with("meta.sys.role", DataType::Text)
+                    .with("meta.sys.graph_version", DataType::INT)
+                    .with("meta.ext.content_type", DataType::Text);
+                for (field, ty) in &app_fields {
+                    signature = signature.with(format!("meta.app.{field}"), ty.clone());
+                }
+                for (field, ty) in &ext_fields {
+                    signature = signature.with(format!("meta.ext.{field}"), ty.clone());
+                }
+                signature
             };
-            let reads_data = expression_reads_data(&key_tree.root);
-            if let Some((expected, found)) = input_conflict
-                && reads_data
-            {
-                self.partition_refusal(
-                    key_source.span,
-                    pending.name.as_deref(),
-                    &format!(
-                        "the key resolves to both {expected} and {found}; one partition expression has no single type across input ports"
-                    ),
-                );
-                continue;
-            }
-            let awaits_port_inference =
-                input_awaits_inference && key_tree.ty == DataType::Variant && reads_data;
-            if !key_tree.ty.is_instance_key() && !awaits_port_inference {
-                self.partition_refusal(
-                    key_source.span,
-                    pending.name.as_deref(),
-                    &format!(
-                        "the key has type {}; instance keys use canonical scalar/enum leaves or a closed struct of those leaves",
-                        key_tree.ty
-                    ),
-                );
-                continue;
-            }
-            let lifetime = match lifetime_source {
-                LifetimeValue::Persistent(_) => PartitionLifetime::Persistent,
-                LifetimeValue::Expr(source) => {
-                    let Some(value) = self.constant(&source, &pending.signature, &pending.consts)
-                    else {
+            let key = match &pending.key {
+                Some(source) => {
+                    let signature = signature_for(input_type);
+                    let Some(key_tree) = self.typed_value_tree(
+                        source,
+                        &signature,
+                        None,
+                        pending.span,
+                        "instances.key",
+                    ) else {
                         continue;
                     };
-                    match value.value {
-                        crate::value::Value::Duration(nanos) if nanos > 0 => {
-                            PartitionLifetime::IdleTtl(value)
-                        }
-                        _ => {
-                            self.partition_refusal(
-                                source.span,
-                                pending.name.as_deref(),
-                                "a bare lifetime is a positive constant duration",
-                            );
-                            continue;
+                    let reads_data = expression_reads_data(&key_tree.root);
+                    if reads_data && !input_awaits_inference {
+                        let expected = key_tree.ty.clone();
+                        for input in known_input_types.iter().skip(1) {
+                            let Some(candidate) = self.typed_value_tree(
+                                source,
+                                &signature_for(input.clone()),
+                                None,
+                                pending.span,
+                                "instances.key",
+                            ) else {
+                                continue 'pending;
+                            };
+                            if candidate.ty != expected {
+                                self.instance_refusal(
+                                    pending.span,
+                                    &format!(
+                                        "the key resolves to both {expected} and {}; one instance expression has no single type across input ports",
+                                        candidate.ty
+                                    ),
+                                );
+                                continue 'pending;
+                            }
                         }
                     }
+                    let awaits_port_inference = input_awaits_inference && reads_data;
+                    if !key_tree.ty.is_instance_key() && !awaits_port_inference {
+                        self.instance_refusal(
+                            pending.span,
+                            &format!(
+                                "the key has type {}; instance keys use canonical scalar/enum leaves or a closed struct of those leaves",
+                                key_tree.ty
+                            ),
+                        );
+                        continue;
+                    }
+                    Some(key_tree)
                 }
-                LifetimeValue::SinglePass(span) => {
-                    self.deferred("a single-pass partition lifetime", span);
-                    continue;
-                }
-                LifetimeValue::Fixed(source) => {
-                    self.deferred("a fixed partition lifetime", source.span);
-                    continue;
-                }
-                LifetimeValue::Window { duration, .. } => {
-                    self.deferred("a window partition lifetime", duration.span);
-                    continue;
-                }
+                None => None,
             };
-            graph.nodes[node_index].partition = Some(Partition {
-                name: pending.name,
-                key: key_tree,
-                lifetime,
-            });
+            let lifetime = match self.resolve_instance_lifetime(
+                &pending.lifetime,
+                &pending.signature,
+                &pending.consts,
+            ) {
+                Some(lifetime) => lifetime,
+                None => continue,
+            };
+            let policy = InstancePolicy { key, lifetime };
+            match pending.owner {
+                InstanceOwner::Graph => graph.instance = Some(policy),
+                InstanceOwner::Node(path) => {
+                    if let Some(node) = graph
+                        .nodes
+                        .iter_mut()
+                        .find(|candidate| candidate.path == path)
+                    {
+                        node.instance = Some(policy);
+                    }
+                }
+            }
         }
+    }
+
+    fn resolve_instance_lifetime(
+        &mut self,
+        source: &InstanceLifetimeSource,
+        signature: &expr::Signature,
+        consts: &BTreeMap<String, crate::value::Value>,
+    ) -> Option<InstanceLifetime> {
+        let duration = |checker: &mut Self, value: &SynValue, span: Span| {
+            let tree = checker.typed_value_tree(
+                value,
+                signature,
+                Some(&DataType::DURATION),
+                span,
+                "lifetime duration",
+            )?;
+            let constant = checker.reduce_constant(tree, span, consts)?;
+            match constant.value {
+                crate::value::Value::Duration(nanos) if nanos > 0 => Some(constant),
+                _ => {
+                    checker.instance_refusal(span, "a lifetime duration must be positive");
+                    None
+                }
+            }
+        };
+        Some(match source {
+            InstanceLifetimeSource::Persistent => InstanceLifetime::Persistent,
+            InstanceLifetimeSource::Idle { after, span } => {
+                InstanceLifetime::Idle(duration(self, after, *span)?)
+            }
+            InstanceLifetimeSource::Fixed { after, span } => {
+                InstanceLifetime::Fixed(duration(self, after, *span)?)
+            }
+            InstanceLifetimeSource::SinglePass => InstanceLifetime::SinglePass,
+            InstanceLifetimeSource::Tumbling { every, span } => {
+                InstanceLifetime::Tumbling(duration(self, every, *span)?)
+            }
+        })
     }
 
     fn ext_schema_snapshot(&self) -> Vec<(String, DataType)> {
@@ -2046,11 +2216,10 @@ impl Checker<'_, '_> {
             .collect()
     }
 
-    fn partition_refusal(&mut self, span: Span, name: Option<&str>, detail: &str) {
+    fn instance_refusal(&mut self, span: Span, detail: &str) {
         self.bag.push(
-            Diagnostic::new(E_PARTITION, Phase::Check, detail)
+            Diagnostic::new(E_INSTANCE, Phase::Check, detail)
                 .with_span(span)
-                .with_field("name", name.unwrap_or("<inline>"))
                 .with_field("detail", detail),
         );
     }
@@ -2081,6 +2250,12 @@ impl Checker<'_, '_> {
         graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
+        if decl.per.is_some() {
+            self.instance_refusal(
+                decl.span,
+                "`per` was unpublished syntax; write `instances = { key = <expr> }` inside the Operator",
+            );
+        }
         if let Some(annotation) = &decl.annotation {
             for symbol in &annotation.symbols {
                 self.deferred("an operator alias or aspect", symbol.span);
@@ -2094,9 +2269,19 @@ impl Checker<'_, '_> {
             vars: Vec::new(),
             ports: Vec::new(),
             handlers: Vec::new(),
-            partition: None,
+            instance: None,
         };
         self.node_body(&decl.body, &mut node, graph_signature, graph_consts, false);
+        self.queue_instance_attributes(
+            InstanceOwner::Node(node.path.clone()),
+            decl.body.iter().filter_map(|item| match item {
+                OperatorItem::Attribute(attribute) => Some(attribute),
+                _ => None,
+            }),
+            graph_signature,
+            graph_consts,
+            decl.span,
+        );
         Some(node)
     }
 
@@ -2106,6 +2291,12 @@ impl Checker<'_, '_> {
         graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
+        if decl.per.is_some() {
+            self.instance_refusal(
+                decl.span,
+                "`per` was unpublished syntax; write `instances = { key = <expr> }` inside the Connector",
+            );
+        }
         let mut symbols = decl.annotation.symbols.iter();
         let trait_name = symbols
             .next()
@@ -2125,10 +2316,20 @@ impl Checker<'_, '_> {
             vars: Vec::new(),
             ports: Vec::new(),
             handlers: Vec::new(),
-            partition: None,
+            instance: None,
         };
         self.node_body(&decl.body, &mut node, graph_signature, graph_consts, true);
         self.contract(&mut node, decl);
+        self.queue_instance_attributes(
+            InstanceOwner::Node(node.path.clone()),
+            decl.body.iter().filter_map(|item| match item {
+                OperatorItem::Attribute(attribute) => Some(attribute),
+                _ => None,
+            }),
+            graph_signature,
+            graph_consts,
+            decl.span,
+        );
         Some(node)
     }
 
@@ -2233,7 +2434,7 @@ impl Checker<'_, '_> {
             .body
             .iter()
             .filter_map(|item| match item {
-                OperatorItem::Attribute(attribute) => Some(
+                OperatorItem::Attribute(attribute) if !is_common_node_attribute(attribute) => Some(
                     attribute
                         .target
                         .segments
@@ -2338,6 +2539,9 @@ impl Checker<'_, '_> {
             let OperatorItem::Attribute(attribute) = item else {
                 continue;
             };
+            if is_common_node_attribute(attribute) {
+                continue;
+            }
             let name = attribute
                 .target
                 .segments
@@ -2687,6 +2891,9 @@ impl Checker<'_, '_> {
                     }
                 }
                 OperatorItem::Attribute(attribute) => {
+                    if is_common_node_attribute(attribute) {
+                        continue;
+                    }
                     let name = attribute
                         .target
                         .segments
@@ -3400,13 +3607,9 @@ impl Checker<'_, '_> {
                     .iter()
                     .filter(|port| port.direction == Direction::Input);
                 let Some(first) = inputs.next() else {
-                    self.bag.push(
-                        Diagnostic::new(
-                            E_PARTITION,
-                            Phase::Check,
-                            "a lifecycle handler requires an input envelope to cause the instance",
-                        )
-                        .with_span(decl.span),
+                    self.instance_refusal(
+                        decl.span,
+                        "a lifecycle handler requires an input envelope to cause the instance",
                     );
                     return None;
                 };
@@ -5957,6 +6160,15 @@ fn edge_display(edge: &Edge) -> String {
     format!("{}>{to}", end(&edge.from))
 }
 
+fn common_node_attribute_name(attribute: &SynAttribute) -> Option<&str> {
+    let name = attribute.target.segments.first()?.text.as_str();
+    matches!(name, "instances" | "lifetime" | "closing").then_some(name)
+}
+
+fn is_common_node_attribute(attribute: &SynAttribute) -> bool {
+    common_node_attribute_name(attribute).is_some()
+}
+
 fn is_bare_word(text: &str) -> bool {
     !text.is_empty()
         && text
@@ -6035,7 +6247,24 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
             EmitValue::Identity | EmitValue::Nothing => {}
         }
     }
+    fn instance(policy: &mut InstancePolicy, remap: &[u32]) {
+        if let Some(key) = &mut policy.key {
+            expr(&mut key.root, remap);
+        }
+        match &mut policy.lifetime {
+            InstanceLifetime::Idle(value)
+            | InstanceLifetime::Fixed(value)
+            | InstanceLifetime::Tumbling(value) => expr(&mut value.tree.root, remap),
+            InstanceLifetime::Persistent | InstanceLifetime::SinglePass => {}
+        }
+    }
+    if let Some(policy) = &mut graph.instance {
+        instance(policy, remap);
+    }
     for node in &mut graph.nodes {
+        if let Some(policy) = &mut node.instance {
+            instance(policy, remap);
+        }
         for val in &mut node.vals {
             expr(&mut val.value.tree.root, remap);
         }
@@ -6880,7 +7109,7 @@ graph g : App {
         let source = "graph g : App {\n  operator source {\n    output out: int\n    on start { out = 1 }\n  }\n  source -> .\n}\n";
         let (_, bag) = check_source(source);
         assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_PARTITION
+            diagnostic.code() == E_INSTANCE
                 && diagnostic.message().contains("requires an input envelope")
         }));
     }
@@ -7192,112 +7421,221 @@ graph g : App {
     }
 
     #[test]
-    fn guarded_constructs_defer_explicitly() {
-        let source = "graph g : App {\n  partition first { key = 1 ; lifetime = persistent }\n  partition second { key = 2 ; lifetime = persistent }\n  operator o per first, second {\n    on (a, b) { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(source);
-        let constructs: Vec<&str> = bag
-            .diagnostics()
-            .iter()
-            .filter(|diagnostic| diagnostic.code() == E_CHECK_DEFERRED)
-            .map(|diagnostic| diagnostic.fields()[0].1.as_str())
-            .collect();
-        assert!(constructs.contains(&"a composite partition key"));
-        assert!(constructs.contains(&"a join handler"));
+    fn key_and_lifetime_are_orthogonal_in_all_four_combinations() {
+        let policies = [
+            ("", false, "persistent"),
+            ("instances = { key = data }", true, "persistent"),
+            (
+                "lifetime = { kind = idle ; after = duration(\"30s\") }",
+                false,
+                "idle",
+            ),
+            (
+                "instances = { key = data }\n    lifetime = { kind = idle ; after = duration(\"30s\") }",
+                true,
+                "idle",
+            ),
+        ];
+        for (attributes, keyed, lifetime) in policies {
+            let source = format!(
+                "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    input in: text\n    output out: text\n    {attributes}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
+            );
+            let hir = check_clean(&source);
+            let policy = &hir.app.nodes[0].instance;
+            if attributes.is_empty() {
+                assert!(policy.is_none(), "omission is the persistent singleton");
+                continue;
+            }
+            let policy = policy.as_ref().expect("a non-default policy is retained");
+            assert_eq!(policy.key.is_some(), keyed);
+            match (&policy.lifetime, lifetime) {
+                (InstanceLifetime::Persistent, "persistent") => {}
+                (InstanceLifetime::Idle(value), "idle") => {
+                    assert_eq!(value.value, crate::value::Value::Duration(30_000_000_000))
+                }
+                (actual, expected) => panic!("expected {expected}, got {actual:?}"),
+            }
+        }
     }
 
     #[test]
-    fn a_named_partition_checks_into_the_node_contract() {
+    fn omitted_and_explicit_persistent_lifetimes_share_one_identity() {
+        let source = |attribute: &str| {
+            format!(
+                "graph g : App {{\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
+            )
+        };
+        let omitted = check_clean(&source(""));
+        let explicit = check_clean(&source("lifetime = { kind = persistent }"));
+        assert_eq!(
+            crate::compiler::lower::semantic_hash(&omitted),
+            crate::compiler::lower::semantic_hash(&explicit)
+        );
+        assert_eq!(omitted.app.nodes[0].instance, None);
+        assert_eq!(explicit.app.nodes[0].instance, None);
+    }
+
+    #[test]
+    fn every_node_family_uses_the_same_instance_sheet() {
         let source = r#"
 graph g : App {
   input in: text
   output out: text
-  partition tenant { key = data ; lifetime = duration("30s") }
-  operator relay per tenant {
-    input in: text
-    output out: text
-    on in { out = . }
+  instances = { key = data }
+  lifetime = { kind = fixed ; after = duration("5m") }
+
+  connector shell : Process {
+    instances = { key = data }
+    lifetime = { kind = single_pass }
+    command = "cat"
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
   }
-  . -> relay -> .
+  . -> shell -> .
 }
 "#;
         let hir = check_clean(source);
-        let partition = hir.app.nodes[0]
-            .partition
+        let graph = hir.app.instance.as_ref().expect("the Graph owns a policy");
+        assert!(graph.key.is_some());
+        assert!(matches!(graph.lifetime, InstanceLifetime::Fixed(_)));
+        let connector = hir.app.nodes[0]
+            .instance
             .as_ref()
-            .expect("the checked node is keyed");
-        assert_eq!(partition.name.as_deref(), Some("tenant"));
-        assert_eq!(partition.key.ty, DataType::Text);
-        let PartitionLifetime::IdleTtl(ttl) = &partition.lifetime else {
-            panic!("the bare duration is an idle ttl");
-        };
-        assert_eq!(ttl.value, crate::value::Value::Duration(30_000_000_000));
+            .expect("the Connector owns the same sheet");
+        assert!(connector.key.is_some());
+        assert_eq!(connector.lifetime, InstanceLifetime::SinglePass);
     }
 
     #[test]
-    fn an_inline_persistent_partition_has_no_phantom_name() {
-        let source = r#"
-graph g : App {
-  input in: int
-  output out: int
-  operator relay per (key = data, lifetime = persistent) {
-    input in: int
-    output out: int
-    on in { out = . }
-  }
-  . -> relay -> .
-}
-"#;
-        let hir = check_clean(source);
-        let partition = hir.app.nodes[0]
-            .partition
-            .as_ref()
-            .expect("the checked node is keyed");
-        assert_eq!(partition.name, None);
-        assert_eq!(partition.key.ty, DataType::INT);
-        assert!(matches!(partition.lifetime, PartitionLifetime::Persistent));
-    }
-
-    #[test]
-    fn partition_contracts_refuse_before_lowering() {
+    fn every_closed_lifetime_profile_reaches_hir() {
         let cases = [
             (
-                "partition p { key = data ; lifetime = persistent }\n  operator o per missing",
-                "not a partition declared",
+                "lifetime = { kind = fixed ; after = duration(\"30s\") }",
+                "fixed",
             ),
+            ("lifetime = { kind = single_pass }", "single_pass"),
             (
-                "partition p { key = 1 ; lifetime = duration(\"0s\") }\n  operator o per p",
-                "positive constant duration",
-            ),
-            (
-                "partition p { key = 1 ; key = 2 ; lifetime = persistent }\n  operator o per p",
-                "declared twice",
-            ),
-            (
-                "partition p { key = 1 ; lifetime = persistent }\n  partition p { key = 2 ; lifetime = persistent }\n  operator o per p",
-                "already declared",
+                "lifetime = { kind = tumbling ; every = duration(\"5m\") }",
+                "tumbling",
             ),
         ];
-        for (declarations, expected) in cases {
+        for (attribute, expected) in cases {
             let source = format!(
-                "graph g : App {{\n  input in: variant\n  output out: variant\n  {declarations} {{ on in {{ out = . }} }}\n  . -> o -> .\n}}\n"
+                "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
+            );
+            let hir = check_clean(&source);
+            let lifetime = &hir.app.nodes[0]
+                .instance
+                .as_ref()
+                .expect("the finite lifetime is retained")
+                .lifetime;
+            assert!(
+                matches!(
+                    (lifetime, expected),
+                    (InstanceLifetime::Fixed(_), "fixed")
+                        | (InstanceLifetime::SinglePass, "single_pass")
+                        | (InstanceLifetime::Tumbling(_), "tumbling")
+                ),
+                "expected {expected}, got {lifetime:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_key_projection_may_cross_different_input_records() {
+        let source = r#"
+graph g : App {
+  input alpha: struct { tenant: text, amount: int }
+  input beta: struct { tenant: text, note: text }
+  output out: text
+  operator relay {
+    input a: struct { tenant: text, amount: int }
+    input b: struct { tenant: text, note: text }
+    output out: text
+    instances = { key = data.tenant }
+    on a { out = data.tenant }
+    on b { out = data.tenant }
+  }
+  .alpha -> relay.a
+  .beta -> relay.b
+  relay -> .
+}
+"#;
+        let hir = check_clean(source);
+        let key = hir.app.nodes[0]
+            .instance
+            .as_ref()
+            .and_then(|policy| policy.key.as_ref())
+            .expect("the common projection is total on both ports");
+        assert_eq!(key.ty, DataType::Text);
+    }
+
+    #[test]
+    fn composite_and_sys_keys_use_the_positive_surface() {
+        let source = r#"
+graph g : App {
+  input in: text
+  output out: text
+  operator relay {
+    input in: text
+    output out: text
+    instances = { key = { request = meta.sys.id ; tenant = data } }
+    on in { out = . }
+  }
+  . -> relay -> .
+}
+"#;
+        let hir = check_clean(source);
+        let key = hir.app.nodes[0]
+            .instance
+            .as_ref()
+            .and_then(|policy| policy.key.as_ref())
+            .expect("the composite key checks");
+        assert!(key.ty.is_instance_key());
+        assert!(!key.ty.is_canonical_key());
+    }
+
+    #[test]
+    fn instance_sheets_refuse_malformed_values_before_lowering() {
+        let cases = [
+            ("instances = {}", "requires exactly one `key`"),
+            ("instances = { key = 1 ; key = 2 }", "declared twice"),
+            (
+                "lifetime = { kind = idle ; after = duration(\"0s\") }",
+                "must be positive",
+            ),
+            ("lifetime = { kind = mystery }", "unknown lifetime kind"),
+            ("instances = { key = data }", "canonical scalar/enum leaves"),
+        ];
+        for (attribute, expected) in cases {
+            let source = format!(
+                "graph g : App {{\n  input in: variant\n  output out: variant\n  operator o {{\n    input in: variant\n    output out: variant\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> o -> .\n}}\n"
             );
             let (_, bag) = check_source(&source);
             assert!(
                 bag.diagnostics().iter().any(|diagnostic| {
-                    diagnostic.code() == E_PARTITION && diagnostic.message().contains(expected)
+                    diagnostic.code() == E_INSTANCE && diagnostic.message().contains(expected)
                 }),
                 "expected `{expected}` for {source:?}, got {:#?}",
                 bag.diagnostics()
             );
         }
+    }
 
-        let explicit_variant = "graph g : App {\n  input in: variant\n  output out: variant\n  partition p { key = data ; lifetime = persistent }\n  operator o per p {\n    input in: variant\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
-        let (_, bag) = check_source(explicit_variant);
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_PARTITION
-                && diagnostic
-                    .message()
-                    .contains("canonical scalar/enum leaves")
-        }));
+    #[test]
+    fn superseded_partition_spellings_have_migration_diagnostics() {
+        let sources = [
+            "graph g : App { partition p { key = 1 ; lifetime = persistent } operator o { on in { out = . } } . -> o -> . }",
+            "graph g : App { operator o per (key = 1, lifetime = persistent) { on in { out = . } } . -> o -> . }",
+        ];
+        for source in sources {
+            let (_, bag) = check_source(source);
+            assert!(bag.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code() == E_INSTANCE
+                    && (diagnostic.message().contains("`partition`")
+                        || diagnostic.message().contains("`per`"))
+            }));
+        }
     }
 }

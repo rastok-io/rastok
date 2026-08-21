@@ -93,13 +93,14 @@ graph g : App {
 }
 
 #[test]
-fn v8_round_trips_the_resolved_partition_contract() {
+fn v8_round_trips_the_transitional_instance_contract() {
     let source = r#"
 graph g : App {
   input in: text
   output out: text
-  partition tenant { key = data ; lifetime = duration("30s") }
-  operator relay per tenant {
+  operator relay {
+    instances = { key = data }
+    lifetime = { kind = idle ; after = duration("30s") }
     input in: text
     output out: text
     var visits: int = 0
@@ -119,7 +120,10 @@ graph g : App {
         .partition
         .as_ref()
         .expect("the lowered node is keyed");
-    assert_eq!(before.name.as_deref(), Some("tenant"));
+    assert_eq!(
+        before.name, None,
+        "the positive surface carries no partition name"
+    );
     assert_eq!(before.key.ty, rastok::datatype::DataType::Text);
     assert!(matches!(
         before.lifetime,

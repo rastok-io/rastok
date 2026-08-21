@@ -527,7 +527,7 @@ pub(crate) fn canonical_value_bytes(value: &Value) -> Vec<u8> {
 }
 
 impl Value {
-    /// Canonical tagged bytes for a value admitted as a map or partition key.
+    /// Canonical tagged bytes for a value admitted as a map or instance key.
     ///
     /// Callers first prove the corresponding [`crate::datatype::DataType`]
     /// is a canonical-key type. Keeping the encoder here prevents routing,

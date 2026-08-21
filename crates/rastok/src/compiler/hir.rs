@@ -49,6 +49,10 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     /// The wiring, desugared to explicit endpoint pairs.
     pub edges: Vec<Edge>,
+    /// Graph-owned instance addressing and lifetime. Absence means the
+    /// persistent singleton and is canonically identical to an explicitly
+    /// written persistent lifetime.
+    pub instance: Option<InstancePolicy>,
 }
 
 /// A constant position: the expression it was written as — the
@@ -105,8 +109,9 @@ pub struct Node {
     pub ports: Vec<crate::plan::PortDecl>,
     /// Checked handlers, in declaration order.
     pub handlers: Vec<Handler>,
-    /// Resolved keyed-instance descriptor; absent means singleton.
-    pub partition: Option<Partition>,
+    /// Node-owned instance addressing and lifetime. Absence means the
+    /// persistent singleton in the enclosing Graph instance.
+    pub instance: Option<InstancePolicy>,
 }
 
 impl Node {
@@ -138,24 +143,29 @@ impl Node {
     }
 }
 
-/// One checked `per` binding.
+/// One checked Node-instance policy.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Partition {
-    /// Name of a referenced graph-level declaration, or none for inline.
-    pub name: Option<String>,
-    /// The canonical-key expression.
-    pub key: expr::Tree,
-    /// Checked lifetime with source expression retained for identity.
-    pub lifetime: PartitionLifetime,
+pub struct InstancePolicy {
+    /// The canonical-key expression; absence means one singleton address in
+    /// the enclosing Graph instance.
+    pub key: Option<expr::Tree>,
+    /// Checked lifetime with source expressions retained for identity.
+    pub lifetime: InstanceLifetime,
 }
 
-/// Checked partition lifetime.
+/// Checked Node-instance lifetime.
 #[derive(Debug, Clone, PartialEq)]
-pub enum PartitionLifetime {
+pub enum InstanceLifetime {
     /// No automatic expiry.
     Persistent,
-    /// Bare duration, interpreted as idle TTL.
-    IdleTtl(Const),
+    /// Expire after this admission-silence duration.
+    Idle(Const),
+    /// Expire this duration after the instance starts.
+    Fixed(Const),
+    /// Admit one root delivery, then close after its work quiesces.
+    SinglePass,
+    /// One epoch-aligned processing-time box of this duration.
+    Tumbling(Const),
 }
 
 /// One checked attribute.

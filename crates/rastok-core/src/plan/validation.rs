@@ -306,20 +306,20 @@ pub enum PlanValidationError {
         /// The expression's resolved type.
         ty: DataType,
     },
-    /// A transported partition expression reads outside the envelope facts
-    /// available before its receiving record commits.
+    /// A transported instance expression reads outside the complete immutable
+    /// entering envelope available before routing commits.
     InvalidPartitionBinding {
         /// The keyed node.
         node: node::Path,
         /// The forbidden resolved path.
         path: String,
     },
-    /// A resolved named partition carries no usable source/tooling name.
+    /// The transitional v8 row carries an empty superseded partition name.
     InvalidPartitionName {
         /// The keyed node.
         node: node::Path,
     },
-    /// Different input ports make one data-dependent partition expression
+    /// Different input ports make one data-dependent instance expression
     /// resolve to different logical key types.
     ConflictingPartitionKeyTypes {
         /// The keyed node.
@@ -329,7 +329,7 @@ pub enum PlanValidationError {
         /// Incompatible type resolved for another input family.
         found: DataType,
     },
-    /// A transported partition lifetime is not executable.
+    /// A transported transitional instance lifetime is not executable.
     InvalidPartitionLifetime {
         /// The keyed node.
         node: node::Path,
@@ -541,15 +541,15 @@ impl core::fmt::Display for PlanValidationError {
             ),
             Self::InvalidPartitionKey { node, ty } => write!(
                 f,
-                "invalid plan: the partition key on `{node}` has non-canonical key type {ty}"
+                "invalid plan: the instance key on `{node}` has non-canonical key type {ty}"
             ),
             Self::InvalidPartitionBinding { node, path } => write!(
                 f,
-                "invalid plan: the partition key on `{node}` reads `{path}`; only `data`, `meta.app`, and `meta.ext` exist before routing commits"
+                "invalid plan: the instance key on `{node}` reads `{path}`; only `data` and the complete immutable `meta` envelope exist before routing commits"
             ),
             Self::InvalidPartitionName { node } => write!(
                 f,
-                "invalid plan: the named partition on `{node}` has an empty name"
+                "invalid plan: the superseded named-partition row on `{node}` has an empty name"
             ),
             Self::ConflictingPartitionKeyTypes {
                 node,
@@ -557,11 +557,11 @@ impl core::fmt::Display for PlanValidationError {
                 found,
             } => write!(
                 f,
-                "invalid plan: the partition key on `{node}` resolves to both {expected} and {found} across its input ports"
+                "invalid plan: the instance key on `{node}` resolves to both {expected} and {found} across its input ports"
             ),
             Self::InvalidPartitionLifetime { node } => write!(
                 f,
-                "invalid plan: the partition lifetime on `{node}` is not positive"
+                "invalid plan: the instance lifetime on `{node}` is not positive"
             ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
@@ -664,10 +664,10 @@ impl core::ops::Deref for ValidatedExecutionPlan {
     }
 }
 
-/// Closes the one type variable a partition expression may still carry after
-/// source checking: `data` on an unannotated input port. The general port
-/// solver remains the sole inference authority; this pass merely projects its
-/// total result through the already-compiled expression and materializes the
+/// Closes the input type variable an instance expression may still carry after
+/// source checking, including inside a structured key. The general port solver
+/// remains the sole inference authority; this pass merely projects its total
+/// result through the already-compiled expression and materializes the
 /// effective key type in the validated plan.
 fn resolve_partition_key_types(
     plan: &mut ExecutionPlan,
@@ -996,7 +996,7 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
     }
     for node in &plan.nodes {
         if let Some(partition) = &node.partition {
-            tree_type_at(&partition.key, format!("partition key on `{}`", node.path))?;
+            tree_type_at(&partition.key, format!("instance key on `{}`", node.path))?;
         }
         for decl in &node.ports {
             if let Some(ty) = &decl.ty {
@@ -1113,7 +1113,14 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     node: node.path.clone(),
                 });
             }
-            if partition.key.ty != DataType::Variant && !partition.key.ty.is_instance_key() {
+            // A data-dependent raw expression may still contain the M1.3
+            // solver's open input variable inside a structured result. The
+            // post-solver pass below re-types the complete tree under every
+            // effective input and admits only the closed instance-key
+            // domain; a data-independent non-key has no such excuse.
+            if !partition.key.ty.is_instance_key()
+                && !super::type_resolution::expression_reads_data(&partition.key.root)
+            {
                 return Err(PlanValidationError::InvalidPartitionKey {
                     node: node.path.clone(),
                     ty: partition.key.ty.clone(),
@@ -1666,9 +1673,8 @@ fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
 
 /// Proves the pre-commit routing boundary independently of the source
 /// checker. Graph and node constants have already been substituted by
-/// lowering, so every surviving path must come from the delivered envelope.
-/// `meta.sys` is intentionally absent: the receiving record mints that spine
-/// only after the route decision has been sealed by its producer.
+/// lowering, so every surviving path must come from the complete immutable
+/// entering envelope. Destination facts have no expression binding.
 fn partition_bindings_available(
     expr: &expr::Expr,
     node: &node::Path,
@@ -1679,7 +1685,7 @@ fn partition_bindings_available(
         expr::Expr::Path(segments) => {
             let available = matches!(segments.as_slice(), [root, ..] if root == "data")
                 || matches!(segments.as_slice(), [meta, zone, _, ..]
-                    if meta == "meta" && matches!(zone.as_str(), "app" | "ext"));
+                    if meta == "meta" && matches!(zone.as_str(), "sys" | "app" | "ext"));
             if available {
                 Ok(())
             } else {

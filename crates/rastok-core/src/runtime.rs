@@ -114,7 +114,7 @@ impl PartitionKey {
             )));
         }
         value.validate().map_err(Fault::InvalidValue)?;
-        if let Some(violation) = ty.violation("partition key", value) {
+        if let Some(violation) = ty.violation("instance key", value) {
             return Err(Fault::Unrepresentable(violation.to_string()));
         }
         Ok(Self(value.canonical_key_bytes()))

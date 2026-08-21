@@ -1,10 +1,13 @@
 # Instances, keys, lifetime, and placement
 
-> **Status:** normative M1.4 target, adopted by D-2026-08-18-1. The current
-> P0–P3 implementation still carries the superseded named-`partition` / `per`
-> draft and must be realigned before M1.4 resumes. This document is the single
-> authority for logical instance addressing, key selection, Node-local state,
-> lifetime, and the semantic boundary with future sharding.
+> **Status:** normative M1.4 target, adopted by D-2026-08-18-1. The compiler
+> accepts and checks the R1 `instances` / `lifetime` surface; keyed persistent
+> and idle Nodes temporarily lower through the superseded private v8 row.
+> Graph owners, finite singleton lifetimes, and the other checked profiles wait
+> for the categorical R2 transport and R4 scheduler and refuse by those names
+> rather than disappearing. This document is the single authority for logical
+> instance addressing, key selection, Node-local state, lifetime, and the
+> semantic boundary with future sharding.
 
 Rastok separates three concerns that the former `partition` declaration
 combined:

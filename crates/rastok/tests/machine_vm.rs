@@ -218,7 +218,8 @@ graph keyed : App {
   input in: int
   output out: int
 
-  operator counter per (key = data, lifetime = persistent) {
+  operator counter {
+    instances = { key = data }
     input in: int
     output out: int
     var count: int = 0
@@ -228,7 +229,8 @@ graph keyed : App {
     }
   }
 
-  operator sink per (key = data, lifetime = persistent) {
+  operator sink {
+    instances = { key = data }
     input in: int
     output out: int
     on in { out = . }
@@ -349,8 +351,9 @@ graph lifecycle : App {
   output out: int
   output stopped: int
 
-  partition tenant { key = data ; lifetime = duration("1s") }
-  operator counter per tenant {
+  operator counter {
+    instances = { key = data }
+    lifetime = { kind = idle ; after = duration("1s") }
     input in: int
     output out: int
     output stopped: int
@@ -460,8 +463,9 @@ graph nested_lifetimes : App {
   output out: text
   output exit
 
-  partition request { key = data ; lifetime = duration("1s") }
-  connector shell : Process per request {
+  connector shell : Process {
+    instances = { key = data }
+    lifetime = { kind = idle ; after = duration("1s") }
     mode = job
     command = "cat"
     codec = lines

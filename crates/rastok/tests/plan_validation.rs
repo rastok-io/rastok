@@ -294,7 +294,7 @@ fn a_raw_named_partition_requires_a_nonempty_name() {
 }
 
 #[test]
-fn a_raw_partition_cannot_route_from_commit_minted_metadata() {
+fn a_raw_instance_key_admits_sys_but_not_destination_context() {
     let mut raw = raw_probe();
     let relay = raw
         .nodes
@@ -314,11 +314,23 @@ fn a_raw_partition_cannot_route_from_commit_minted_metadata() {
         lifetime: plan::PartitionLifetime::Persistent,
     });
 
+    ValidatedExecutionPlan::try_new(raw.clone())
+        .expect("the complete entering envelope includes meta.sys");
+
+    raw.nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "relay")
+        .and_then(|node| node.partition.as_mut())
+        .expect("the instance descriptor remains present")
+        .key = expr::Tree {
+        root: expr::Expr::Path(vec![String::from("instance"), String::from("key")]),
+        ty: DataType::Text,
+    };
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
         PlanValidationError::InvalidPartitionBinding {
             node: rastok::node::Path::new(["relay"]).unwrap(),
-            path: String::from("meta.sys.id"),
+            path: String::from("instance.key"),
         }
     );
 }
