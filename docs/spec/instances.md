@@ -5,9 +5,11 @@
 > now carries the categorical parent-linked owner table, scoped routes,
 > independent instance policy, immutable owner expressions, and phased
 > Connector settings. Keyed persistent and idle Nodes lower through that v9
-> form; Graph-owned routing, source production of dynamic settings and values,
-> finite lifetimes, and hierarchical instance references remain their named
-> R1/R3/R4 gates rather than disappearing. This document is the single authority for logical
+> form. The grammar and v9 reader recognize the other closed lifetime forms,
+> but validation refuses them by name until R4; Graph-owned routing, source
+> production of dynamic settings and values, finite lifetimes, and
+> hierarchical instance references remain their named R1/R3/R4 gates rather
+> than disappearing. This document is the single authority for logical
 > instance addressing, key selection, Node-local state, lifetime, and the
 > semantic boundary with future sharding.
 
@@ -103,6 +105,14 @@ engine. For an inbound source that creates an instance directly from an
 accepted world envelope, the Connector contract's resolved ingress-produced
 envelope type is the admission signature and is checked by the same rule; the
 absence of a graph input port is not an untyped escape.
+
+The type stored beside the key is never trusted or silently repaired. Source
+lowering has one explicit privilege: after total port inference it materializes
+the type of a key that reads `data`. A free raw plan and a decoded package must
+already carry the exact type re-derived from the expression, every admitting
+input, the transported `app`/`ext` schemas, the fixed `sys` spine, and visible
+ancestor `val`s. A different claim is a validation error even when both types
+belong to the legal key domain.
 
 The selected value is canonicalized before target mailbox capacity is
 reserved and before the producing transaction commits. Reservation returns
@@ -361,6 +371,12 @@ lifetime = { kind = tumbling   ; every = duration("5m") }
 Omission is canonically equivalent to `kind = persistent`; lowering removes
 the spelling difference before semantic identity.
 
+The table is the closed target vocabulary, not a silent capability claim.
+The current executable gate admits `persistent` and `idle` on Node owners.
+`fixed`, `single_pass`, and `tumbling` are recognized and transported by the
+v9 grammar/reader but refuse before a validated executable plan until R4.
+Graph-owned lifetime and addressing wait for the R3 Graph router.
+
 ### 6.1 Persistent
 
 No deadline is armed. Explicit stop, deployment shutdown, or supervision may
@@ -369,8 +385,10 @@ still request closure under the bounded closing contract.
 ### 6.2 Idle
 
 Mailbox admission is activity. Admission records the causing envelope and
-arms `last_admission + after` with the current generation. A later admission
-replaces both. A stale generation is a harmless observation.
+arms `last_admission + after`. In the complete model the dated event carries
+the current journal-derived generation. Before R3, the Node-only reference VM
+uses the unique causal last-admission id as its stale-event fence; it does not
+invent a RAM generation. A later admission supersedes the earlier cause.
 
 Idle measures admission silence. An armed call, Loop backoff, or other dated
 obligation does not silently rewrite that definition. If the idle deadline
@@ -378,6 +396,12 @@ wins, the instance enters Closing; its outstanding obligations are then
 drained, cancelled, settled, or retained according to their own protocol and
 the R5 closing contract. Expiry itself never suppresses a Connector's terminal
 `exit` or a Saga compensation.
+
+Until R5 supplies finite drain/cancel/settle policy, an idle `Process` owner
+is executable only with a positive plan-resolved invocation `timeout`. That
+existing call budget guarantees that an obligation delaying idle stop cannot
+remain open forever. This is a temporary admission guard, not a hidden
+Closing default; R5 replaces the restriction with the explicit policy.
 
 ### 6.3 Fixed
 

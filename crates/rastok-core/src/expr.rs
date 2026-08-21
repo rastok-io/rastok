@@ -2060,6 +2060,13 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
     }
 }
 
+/// Re-derives the result type of an already parsed expression against an
+/// explicit immutable environment. Transport validation uses this rather
+/// than trusting [`Tree::ty`]; diagnostics remain the source compiler's job.
+pub(crate) fn rederive_type(expr: &Expr, signature: &Signature) -> Option<DataType> {
+    check(expr, signature, "transported expression").ok()
+}
+
 fn check_narrowing_compatibility(source: &DataType, target: &NarrowTarget) -> Result<(), String> {
     match target {
         NarrowTarget::Case { name, .. } => match source {

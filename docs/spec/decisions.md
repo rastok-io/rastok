@@ -166,6 +166,25 @@ Connector settings, nested Graph lowering, and the mandatory canonical
 last item is still the separately declared R3 causal-trace move; it must not be
 smuggled into this package rebaseline.
 
+**R2 validation hardening (2026-08-21).** A closed transport vocabulary is
+not an execution promise. V9 can parse every allocated lifetime discriminant,
+but `ValidatedExecutionPlan` currently admits only `persistent` and `idle`;
+the checker names `fixed`, `single_pass`, and `tumbling` as R4 deferrals and a
+foreign plan receives the matching typed refusal. Graph-owned key/lifetime
+routing likewise refuses until R3 instead of running as an inert singleton.
+
+The key result type is a derived fact, not a normalizable package claim. The
+source lowering boundary may close its single data-input inference variable
+from the total resolved port table. Every freely constructed or decoded plan
+must already carry exactly the type re-derived from its expression, resolved
+inputs, the transported metadata schemas, and enclosing immutable values; a
+mismatch refuses rather than being overwritten. Before finite R5 Closing,
+an `idle` Process owner additionally requires a positive plan-resolved call
+`timeout`: otherwise one open invocation could turn expiry into an unbounded
+implicit grace period, which this decision explicitly forbids. Idle dated
+events in the R2 VM are fenced by their causal last-admission id; they do not
+fabricate the journal-derived instance generation that R3 must introduce.
+
 ## D-2026-08-16-1 — A partition key is a journaled routing decision
 
 > **Superseded in full by D-2026-08-18-1 before public release.** The key and

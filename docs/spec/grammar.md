@@ -5,10 +5,12 @@
 > regions; the superseded bare spellings are not a compatibility
 > surface. Frontends whose compiler is not in this build remain admitted
 > by their registered framer and refuse with named `E-CHECK-DEFERRED`.
-> The current P0–P3 parser/checker still carries the superseded `partition` /
-> `per` draft; it is not a compatibility surface and must be realigned before
-> R5. The target surface below uses Node attributes `instances` and
-> `lifetime`; the exact `closing` sheet remains a named R5 gate.
+> The current parser/checker uses the Node attributes `instances` and
+> `lifetime`; the superseded `partition` / `per` draft is not a compatibility
+> surface. `persistent` and `idle` are executable on Node owners. The closed
+> `fixed`, `single_pass`, and `tumbling` spellings are recognized but refuse
+> as named R4 gates, Graph-owned routing waits for R3, and the exact `closing`
+> sheet remains a named R5 gate.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -534,6 +536,10 @@ lifetime = { kind = fixed      ; after = duration("30s") }
 lifetime = { kind = single_pass }
 lifetime = { kind = tumbling   ; every = duration("5m") }
 ```
+
+“Admitted” here means the checker owns the spelling and can issue one named
+diagnostic. At the current runtime gate only `persistent` and Node-owned
+`idle` produce a validated plan; the other three forms refuse as R4 features.
 
 `instances`, `lifetime`, `kind`, `key`, `after`, and `every` are contract
 attribute/field names, not structural keywords. The parser sees the ordinary

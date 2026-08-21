@@ -405,9 +405,38 @@ pub enum PlanValidationError {
         /// The keyed owner path; empty denotes the root App Graph.
         owner: String,
     },
+    /// A transported key's claimed result type differs from the type
+    /// re-derived from its expression and immutable admission signature.
+    InstanceKeyTypeMismatch {
+        /// The keyed owner path; empty denotes the root App Graph.
+        owner: String,
+        /// Type derived from the transported expression.
+        expected: DataType,
+        /// Type claimed by the transported expression tree.
+        found: DataType,
+    },
     /// A transported instance lifetime with a duration is not positive.
     InvalidInstanceLifetime {
         /// The owner path; empty denotes the root App Graph.
+        owner: String,
+    },
+    /// A closed lifetime spelling belongs to a later scheduler gate.
+    UnsupportedInstanceLifetime {
+        /// The owner path; empty denotes the root App Graph.
+        owner: String,
+        /// The policy this runtime cannot yet execute faithfully.
+        lifetime: InstanceLifetime,
+    },
+    /// Graph-owned routing/lifecycle is transported for R3 but is not yet an
+    /// executable VM address.
+    UnsupportedGraphInstance {
+        /// The Graph owner path; empty denotes the root App Graph.
+        owner: String,
+    },
+    /// An idle Process instance could retain an open invocation forever
+    /// before finite Closing exists.
+    UnboundedIdleConnector {
+        /// The Process owner path.
         owner: String,
     },
     /// A collection the plan documents as canonically ordered is not.
@@ -684,9 +713,29 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: the data-dependent instance key on `{owner}` has no resolved admission signature"
             ),
+            Self::InstanceKeyTypeMismatch {
+                owner,
+                expected,
+                found,
+            } => write!(
+                f,
+                "invalid plan: the instance key on `{owner}` claims {found}, but its admission expression resolves to {expected}"
+            ),
             Self::InvalidInstanceLifetime { owner } => write!(
                 f,
                 "invalid plan: the instance lifetime on `{owner}` is not positive"
+            ),
+            Self::UnsupportedInstanceLifetime { owner, lifetime } => write!(
+                f,
+                "invalid plan: the instance lifetime {lifetime:?} on `{owner}` requires the M1.4 R4 scheduler"
+            ),
+            Self::UnsupportedGraphInstance { owner } => write!(
+                f,
+                "invalid plan: Graph-owned instance routing on `{owner}` requires the M1.4 R3 scheduler"
+            ),
+            Self::UnboundedIdleConnector { owner } => write!(
+                f,
+                "invalid plan: idle Process instance `{owner}` has no finite invocation timeout before Closing exists"
             ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
@@ -729,10 +778,26 @@ impl ValidatedExecutionPlan {
     /// # Errors
     ///
     /// The first violated invariant, named.
-    pub fn try_new(mut plan: ExecutionPlan) -> Result<Self, PlanValidationError> {
+    pub fn try_new(plan: ExecutionPlan) -> Result<Self, PlanValidationError> {
+        Self::try_new_with_key_mode(plan, InstanceKeyTypeMode::Verify)
+    }
+
+    /// Closes the one inference variable intentionally left by source
+    /// lowering: a data-dependent instance key whose input port type is
+    /// solved by the core port resolver. Alternative frontends may use this
+    /// boundary; package decoding and freely constructed plans must use
+    /// [`Self::try_new`] so transported type claims are never normalized.
+    pub fn try_from_lowered(plan: ExecutionPlan) -> Result<Self, PlanValidationError> {
+        Self::try_new_with_key_mode(plan, InstanceKeyTypeMode::Materialize)
+    }
+
+    fn try_new_with_key_mode(
+        mut plan: ExecutionPlan,
+        key_mode: InstanceKeyTypeMode,
+    ) -> Result<Self, PlanValidationError> {
         validate(&plan)?;
         let resolved_ports = super::type_resolution::resolve(&plan)?;
-        resolve_instance_key_types(&mut plan, &resolved_ports)?;
+        verify_instance_key_types(&mut plan, &resolved_ports, key_mode)?;
         let depth = super::serialization::deepest_level_with_resolved(&plan, &resolved_ports);
         if depth >= crate::canonical_cbor::MAX_NESTING {
             return Err(PlanValidationError::NestingBudgetExceeded {
@@ -770,6 +835,12 @@ impl ValidatedExecutionPlan {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstanceKeyTypeMode {
+    Verify,
+    Materialize,
+}
+
 impl TryFrom<ExecutionPlan> for ValidatedExecutionPlan {
     type Error = PlanValidationError;
 
@@ -789,14 +860,15 @@ impl core::ops::Deref for ValidatedExecutionPlan {
     }
 }
 
-/// Closes the input type variable an instance expression may still carry after
-/// source checking, including inside a structured key. The general port solver
-/// remains the sole inference authority; this pass merely projects its total
-/// result through the already-compiled expression and materializes the
-/// effective key type in the validated plan.
-fn resolve_instance_key_types(
+/// Re-derives every instance-key type from the immutable admission signature.
+/// Strict validation compares that fact with the transported claim. The
+/// source-lowering mode may additionally close its exact data-input
+/// placeholder, including inside a structured key; the general port solver
+/// remains the sole inference authority.
+fn verify_instance_key_types(
     plan: &mut ExecutionPlan,
     ports: &super::type_resolution::ResolvedPortTable,
+    mode: InstanceKeyTypeMode,
 ) -> Result<(), PlanValidationError> {
     for index in 0..plan.owners.len() {
         let Some(key) = plan.owners[index].instance.key.as_ref() else {
@@ -804,7 +876,8 @@ fn resolve_instance_key_types(
         };
         let owner_name = plan.owners[index].path.to_string();
         let kind = plan.owners[index].kind.clone();
-        let resolved = if super::type_resolution::expression_reads_data(&key.root) {
+        let reads_data = super::type_resolution::expression_reads_data(&key.root);
+        let resolved = if reads_data {
             let mut resolved: Option<DataType> = None;
             let inputs: alloc::vec::Vec<_> = match kind {
                 OwnerKind::Node(slot) => ports
@@ -827,9 +900,8 @@ fn resolve_instance_key_types(
                 return Err(PlanValidationError::UnresolvedInstanceAdmission { owner: owner_name });
             }
             for input in inputs {
-                let Some(candidate) =
-                    super::type_resolution::resolved_expression_type(&key.root, input.ty())
-                else {
+                let signature = instance_key_signature(plan, index, input.ty().clone());
+                let Some(candidate) = expr::rederive_type(&key.root, &signature) else {
                     return Err(PlanValidationError::InvalidInstanceKey {
                         owner: owner_name,
                         ty: DataType::Variant,
@@ -851,7 +923,13 @@ fn resolve_instance_key_types(
                 owner: owner_name.clone(),
             })?
         } else {
-            key.ty.clone()
+            let signature = instance_key_signature(plan, index, DataType::Variant);
+            expr::rederive_type(&key.root, &signature).ok_or_else(|| {
+                PlanValidationError::InvalidInstanceKey {
+                    owner: owner_name.clone(),
+                    ty: DataType::Variant,
+                }
+            })?
         };
         if !resolved.is_instance_key() {
             return Err(PlanValidationError::InvalidInstanceKey {
@@ -859,11 +937,80 @@ fn resolve_instance_key_types(
                 ty: resolved,
             });
         }
-        if let Some(key) = plan.owners[index].instance.key.as_mut() {
-            key.ty = resolved;
+        if key.ty != resolved {
+            match mode {
+                InstanceKeyTypeMode::Verify => {
+                    return Err(PlanValidationError::InstanceKeyTypeMismatch {
+                        owner: owner_name,
+                        expected: resolved,
+                        found: key.ty.clone(),
+                    });
+                }
+                InstanceKeyTypeMode::Materialize if reads_data => {
+                    let unresolved = expr::rederive_type(
+                        &key.root,
+                        &instance_key_signature(plan, index, DataType::Variant),
+                    )
+                    .unwrap_or(DataType::Variant);
+                    if key.ty != unresolved {
+                        return Err(PlanValidationError::InstanceKeyTypeMismatch {
+                            owner: owner_name,
+                            expected: resolved,
+                            found: key.ty.clone(),
+                        });
+                    }
+                    if let Some(key) = plan.owners[index].instance.key.as_mut() {
+                        key.ty = resolved;
+                    }
+                }
+                InstanceKeyTypeMode::Materialize => {
+                    return Err(PlanValidationError::InstanceKeyTypeMismatch {
+                        owner: owner_name,
+                        expected: resolved,
+                        found: key.ty.clone(),
+                    });
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn instance_key_signature(
+    plan: &ExecutionPlan,
+    owner_index: usize,
+    input: DataType,
+) -> expr::Signature {
+    let mut signature = expr::Signature::new()
+        .with("data", input)
+        .with("meta.sys.id", DataType::Text)
+        .with("meta.sys.parent_id", DataType::Variant)
+        .with("meta.sys.origin_id", DataType::Text)
+        .with("meta.sys.role", DataType::Text)
+        .with("meta.sys.graph_version", DataType::INT)
+        .with("meta.ext.content_type", DataType::Text);
+    for (field, ty) in &plan.app_schema {
+        signature = signature.with(format!("meta.app.{field}"), ty.clone());
+    }
+    for (field, ty) in &plan.ext_schema {
+        signature = signature.with(format!("meta.ext.{field}"), ty.clone());
+    }
+
+    let mut lineage = Vec::new();
+    let mut cursor = plan.owners.get(owner_index).and_then(|owner| owner.parent);
+    while let Some(parent) = cursor {
+        let Some(owner) = plan.owners.get(parent.index()) else {
+            break;
+        };
+        lineage.push(owner);
+        cursor = owner.parent;
+    }
+    for owner in lineage.into_iter().rev() {
+        for value in &owner.vals {
+            signature = signature.with(value.name.clone(), value.expr.ty.clone());
+        }
+    }
+    signature
 }
 
 /// The node ordering the lowering emits: operators before
@@ -1545,6 +1692,35 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         };
         if duration.is_some_and(|value| value <= 0) {
             return Err(PlanValidationError::InvalidInstanceLifetime { owner: path });
+        }
+        if matches!(
+            owner.instance.lifetime,
+            InstanceLifetime::Fixed(_)
+                | InstanceLifetime::SinglePass
+                | InstanceLifetime::Tumbling(_)
+        ) {
+            return Err(PlanValidationError::UnsupportedInstanceLifetime {
+                owner: path,
+                lifetime: owner.instance.lifetime.clone(),
+            });
+        }
+        if owner.kind == OwnerKind::Graph
+            && (owner.instance.key.is_some()
+                || owner.instance.lifetime != InstanceLifetime::Persistent)
+        {
+            return Err(PlanValidationError::UnsupportedGraphInstance { owner: path });
+        }
+        if matches!(owner.instance.lifetime, InstanceLifetime::Idle(_))
+            && let OwnerKind::Node(node_slot) = owner.kind
+            && let Some(spec) = plan.nodes[node_slot.index()].connector()
+            && spec.contract == "Process"
+            && !matches!(
+                spec.attribute("timeout"),
+                Some(crate::plan::AttrSetting::Value(crate::value::Value::Duration(value)))
+                    if *value > 0
+            )
+        {
+            return Err(PlanValidationError::UnboundedIdleConnector { owner: path });
         }
         if let Some(key) = &owner.instance.key {
             if !key.ty.is_instance_key()

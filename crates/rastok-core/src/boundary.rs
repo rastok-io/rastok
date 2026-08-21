@@ -759,17 +759,16 @@ pub enum DatedPayload {
         /// id.
         delivery: envelope::Id,
     },
-    /// One idle partition incarnation reached the deadline armed by its most
-    /// recent admitted envelope. Generation and cause make older queued
-    /// expiries harmless without deleting them from the ordered clock queue.
+    /// One idle Node instance reached the deadline armed by its most recent
+    /// admitted envelope. The causal envelope id makes older queued expiries
+    /// harmless without impersonating the journal-derived instance generation
+    /// that lands at R3.
     PartitionIdle {
         /// The partitioned node.
         node: node::Path,
         /// Canonical instance key bytes (empty for an explicitly managed
         /// singleton lifecycle).
         partition_key: Vec<u8>,
-        /// Monotone activity generation within this live incarnation.
-        generation: u64,
         /// Envelope whose arrival armed this deadline and causes `l:stop`.
         cause: envelope::Id,
     },

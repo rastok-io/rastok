@@ -39,6 +39,12 @@
 > containers and checksums; unchanged source keeps its semantic hash and
 > causal trace.
 >
+> The allocated lifetime rows are a closed transport registry, not automatic
+> runtime enablement: v9 validation currently admits `persistent` and
+> Node-owned `idle`, and refuses the R4 lifetime rows or Graph-owned instance
+> policy by typed gate. A decoded key type is re-derived and compared; unlike
+> compiler lowering, package validation never normalizes the claim.
+>
 > Format v7 (D-2026-08-14-1, landed 2026-08-15) was the one categorical
 > M1.3 B8 publication: the complete canonical
 > `DataType` constructor registry, all materialized value tags allocated in
@@ -248,7 +254,8 @@ instance   := {1: key (tree)?, 2: lifetime}
               // key's tree already contains its inferred DataType. Absent =
               // singleton inside the parent instance. Validation checks the
               // expression under every effective admitting input, one total
-              // key type, the canonical key domain, and lexical availability.
+              // key type EXACTLY equal to the transported tree type, the
+              // canonical key domain, metadata schema, and lexical availability.
               // A data-dependent key with no resolved admission input refuses;
               // its transported result type is never trusted as a fallback.
 lifetime   := [1]                                 — persistent
@@ -258,7 +265,8 @@ lifetime   := [1]                                 — persistent
             | [5, nanoseconds (int)]              — tumbling(every), > 0
               // Persistent is explicit in the categorical plan even though
               // omitted and explicitly persistent source spellings share one
-              // HIR identity. `closing` remains absent until R5 freezes it.
+              // HIR identity. Rows 3–5 parse but cannot inhabit a validated
+              // executable plan before R4. `closing` remains absent until R5.
 
 owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
                4: tagged_value?}

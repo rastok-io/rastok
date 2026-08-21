@@ -469,6 +469,7 @@ graph nested_lifetimes : App {
     mode = job
     command = "cat"
     codec = lines
+    timeout = duration("10s")
     effect = idempotent
     behavior = deterministic
   }

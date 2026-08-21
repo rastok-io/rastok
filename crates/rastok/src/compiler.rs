@@ -129,7 +129,7 @@ pub fn compile_with_assets(
     // A lowering that emits an invalid plan is a compiler bug — but a
     // bug with a controlled error path, not a vanished process: the
     // validator exists precisely to catch this disagreement.
-    let plan = match ValidatedExecutionPlan::try_new(plan) {
+    let plan = match ValidatedExecutionPlan::try_from_lowered(plan) {
         Ok(plan) => plan,
         // The one validation refusal a USER causes: a program deep
         // enough that its plan would outgrow the format reader's
@@ -154,7 +154,8 @@ pub fn compile_with_assets(
             | PlanValidationError::MismatchedEdgePins { .. }
             | PlanValidationError::InvalidInstanceKey { .. }
             | PlanValidationError::ConflictingInstanceKeyTypes { .. }
-            | PlanValidationError::UnresolvedInstanceAdmission { .. }),
+            | PlanValidationError::UnresolvedInstanceAdmission { .. }
+            | PlanValidationError::UnboundedIdleConnector { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
             return Err(bag);
@@ -258,6 +259,15 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
         )
         .with_field("name", owner)
         .with_field("detail", "missing resolved admission signature"),
+        PlanValidationError::UnboundedIdleConnector { owner } => Diagnostic::new(
+            check::E_INSTANCE,
+            Phase::Check,
+            format!(
+                "idle Process instance `{owner}` needs a finite `timeout` until the explicit Closing policy lands"
+            ),
+        )
+        .with_field("name", owner)
+        .with_field("detail", "idle Process without a finite invocation timeout"),
         _ => internal_plan_diagnostic(error),
     }
 }
@@ -330,6 +340,33 @@ graph inferred_partition : App {
     }
 
     #[test]
+    fn an_idle_process_without_a_finite_call_budget_refuses_at_check() {
+        let source = r#"
+graph g : App {
+  input in: text
+  connector shell : Process {
+    instances = { key = data }
+    lifetime = { kind = idle ; after = duration("1s") }
+    command = "cat"
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
+  }
+  . -> shell -> nothing
+}
+"#;
+        let bag = compile(
+            &[source],
+            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("idle cannot hide an unbounded open Process invocation");
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == check::E_INSTANCE
+                && diagnostic.message().contains("finite `timeout`")
+        }));
+    }
+
+    #[test]
     fn an_inferred_composite_key_closes_after_port_resolution() {
         let source = r#"
 graph inferred_composite : App {
@@ -361,7 +398,8 @@ graph inferred_composite : App {
     #[test]
     fn checked_policies_never_disappear_when_transport_is_not_ready() {
         let sources = [
-            r#"
+            (
+                r#"
 graph keyed_graph : App {
   input in: text
   instances = { key = data }
@@ -369,7 +407,10 @@ graph keyed_graph : App {
   . -> relay -> nothing
 }
 "#,
-            r#"
+                "M1.4 R2 instance transport",
+            ),
+            (
+                r#"
 graph finite_singleton : App {
   operator relay {
     lifetime = { kind = fixed ; after = duration("30s") }
@@ -378,8 +419,10 @@ graph finite_singleton : App {
   . -> relay -> nothing
 }
 "#,
+                "a fixed instance lifetime",
+            ),
         ];
-        for source in sources {
+        for (source, construct) in sources {
             let bag = compile(
                 &[source],
                 &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
@@ -390,7 +433,7 @@ graph finite_singleton : App {
                     && diagnostic
                         .fields()
                         .iter()
-                        .any(|(name, value)| *name == "construct" && value.contains("M1.4 R2"))
+                        .any(|(name, value)| *name == "construct" && value == construct)
             }));
         }
     }

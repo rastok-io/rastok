@@ -463,6 +463,13 @@ a window per key.
 | **Tumbling** | epoch-aligned boxes | 1 box | `lifetime = { kind = tumbling; every = duration("5m") }` | normative target |
 | **Sliding** | fixed, overlapping | **N boxes** | no accepted spelling yet | deferred |
 
+The table describes the normative lifetime semantics. At the current R2
+execution gate, only persistent and Node-owned idle instances validate;
+fixed/tumbling (and the single-pass profile from instances.md) refuse until
+R4, rather than inheriting persistent behavior. Graph-owned routing waits for
+R3. Before R5, an idle Process must already carry a finite invocation timeout
+so waiting for its terminal exit cannot become an implicit unbounded close.
+
 The processing-time tumbling contract has four rules:
 
 1. an envelope belongs to the box open at mailbox admission;

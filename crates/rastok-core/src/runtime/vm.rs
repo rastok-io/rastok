@@ -145,18 +145,18 @@ struct PendingCall {
     partition_key: PartitionKey,
 }
 
-/// One live incarnation of `(node, partition_key)`. The generation changes
-/// on every admitted envelope, so dated idle events never need deletion.
+/// One live R2 instance of `(node, partition_key)`. Its causal last-activity
+/// id fences stale idle events; the journal-derived generation is a distinct
+/// R3 fact and deliberately has no RAM surrogate here.
 #[derive(Debug, Clone)]
 struct Instance {
-    generation: u64,
     last_activity: Envelope,
     expiry_pending: bool,
 }
 
 /// Lifecycle work owns its causal envelope. Stop work additionally owns the
-/// detached state snapshot of the closing incarnation, allowing a following
-/// incarnation of the same key to start without sharing cells.
+/// detached state snapshot of the closing generation, allowing a following
+/// generation of the same key to start without sharing cells.
 #[derive(Debug, Clone)]
 struct LifecycleWork {
     slot: Slot,
@@ -362,11 +362,11 @@ pub struct Vm<'plan> {
     /// settles: the completion transaction consumes this cursor, and the
     /// connector's mailbox stays claimed the whole time.
     pending: BTreeMap<CallRef, PendingCall>,
-    /// Live keyed/singleton incarnations whose lifecycle is observable.
+    /// Live keyed/singleton instances whose lifecycle is observable.
     instances: BTreeMap<(Slot, PartitionKey), Instance>,
     /// Journal-before-next-work lifecycle transitions. This queue outranks
     /// ordinary deliveries so `l:start` precedes the creating arrival and a
-    /// detached `l:stop` precedes the following incarnation.
+    /// detached `l:stop` precedes the following generation.
     lifecycle: VecDeque<LifecycleWork>,
     /// Won closures awaiting their completion transaction — replayable:
     /// an entry leaves this queue only when its transaction commits.
@@ -637,10 +637,9 @@ impl<'plan> Vm<'plan> {
             DatedPayload::PartitionIdle {
                 node,
                 partition_key,
-                generation,
                 cause,
             } => {
-                self.expire_partition(node, partition_key, generation, cause);
+                self.expire_partition(node, partition_key, cause);
                 return Ok(());
             }
         };
@@ -824,25 +823,17 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    /// Resolves one idle deadline. A superseded generation is a harmless
-    /// clock observation. An open call postpones closure without losing the
-    /// request's terminal obligation; settlement queues the stop afterwards.
-    fn expire_partition(
-        &mut self,
-        path: node::Path,
-        partition_key: Vec<u8>,
-        generation: u64,
-        cause: Id,
-    ) {
+    /// Resolves one idle deadline. An event whose causal activity has been
+    /// superseded is a harmless clock observation. An open call postpones
+    /// closure without losing the request's terminal obligation; settlement
+    /// queues the stop afterwards.
+    fn expire_partition(&mut self, path: node::Path, partition_key: Vec<u8>, cause: Id) {
         let slot = self.slot_of(&path);
         let key = PartitionKey::from_recorded(partition_key);
         let current = self
             .instances
             .get(&(slot, key.clone()))
-            .filter(|instance| {
-                instance.generation == generation
-                    && instance.last_activity.meta().sys().id() == cause
-            })
+            .filter(|instance| instance.last_activity.meta().sys().id() == cause)
             .map(|instance| instance.last_activity.clone());
         let Some(cause) = current else {
             return;
@@ -925,18 +916,15 @@ impl<'plan> Vm<'plan> {
             return;
         }
         let instance_key = (slot, key.clone());
-        let generation = match self.instances.get_mut(&instance_key) {
+        match self.instances.get_mut(&instance_key) {
             Some(instance) => {
-                instance.generation = instance.generation.wrapping_add(1);
                 instance.last_activity = envelope.clone();
                 instance.expiry_pending = false;
-                instance.generation
             }
             None => {
                 self.instances.insert(
                     instance_key,
                     Instance {
-                        generation: 0,
                         last_activity: envelope.clone(),
                         expiry_pending: false,
                     },
@@ -948,9 +936,8 @@ impl<'plan> Vm<'plan> {
                     cause: envelope.clone(),
                     detached_state: None,
                 });
-                0
             }
-        };
+        }
         if let Some(crate::plan::InstanceLifetime::Idle(ttl)) = self
             .plan
             .node_instance(slot)
@@ -961,7 +948,6 @@ impl<'plan> Vm<'plan> {
                 DatedPayload::PartitionIdle {
                     node: self.plan.nodes[slot.index()].path.clone(),
                     partition_key: key.as_bytes().to_vec(),
-                    generation,
                     cause: envelope.meta().sys().id(),
                 },
             );
@@ -976,7 +962,7 @@ impl<'plan> Vm<'plan> {
                 .any(|pending| pending.slot == slot && pending.partition_key == *key)
     }
 
-    /// Detaches a closing incarnation before its stop transaction. New work
+    /// Detaches a closing generation before its stop transaction. New work
     /// for the same logical key can then create a fresh state cell, while the
     /// queued stop owns the old snapshot and remains retryable on refusal.
     fn begin_stop(&mut self, slot: Slot, key: &PartitionKey, cause: Envelope) {

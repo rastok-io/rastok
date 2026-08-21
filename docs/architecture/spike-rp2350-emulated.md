@@ -76,15 +76,15 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (927-byte v9 lexical-owner package; re-measured at M1.4 R2 on 2026-08-21) | 15 330 | 767 k | 5.11 ms |
+| `plan::decode` (927-byte v9 lexical-owner package; re-measured after the M1.4 R2 validation review on 2026-08-21) | 15 334 | 767 k | 5.11 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32; re-measured 2026-08-21 on v9 — deterministic average under this QEMU icount run) | 2 421 (min 2 350 / max 2 670) | **121 k** | **0.81 ms** |
+| relay transaction (avg of 32; re-measured 2026-08-21 on reviewed v9 — deterministic average under this QEMU icount run) | 2 424 (min 2 350 / max 2 671) | **121 k** | **0.81 ms** |
 | blake3 id, 64-byte frame (avg of 1000) | 90.8 | 4.5 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-21 on v9) | 71 080 B (69.4 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 368 348 + 41 224 = 409 572 B (400.0 KiB; re-measured 2026-08-21 on v9) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled rounds; re-measured 2026-08-21 on reviewed v9) | 70 568 B (68.9 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 378 140 + 43 136 = 421 276 B (411.4 KiB; re-measured 2026-08-21 after R2 validation review) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
@@ -92,7 +92,7 @@ Notes the numbers carry:
 - The relay transaction meets its criterion with a **1.24× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
-- Package decode grew from v1's 1 468 ticks to 15 330 across the
+- Package decode grew from v1's 1 468 ticks to 15 334 across the
   review campaign: structural validation of every announced
   invariant (directions, canonical orders, global uniqueness, the
   nesting budget, the domain-order audits) and the canonicity
@@ -154,14 +154,20 @@ Notes the numbers carry:
   23 192 B. The semantic hash and causal trace remain byte-identical: this is
   the declared package-only identity move. R7 will separately re-measure the
   executable lifecycle machinery when it lands.
-- Flash grew from 193 KiB to 400.0 KiB (`.text` 368 348 B +
-  `.rodata` 41 224 B, re-measured 2026-08-21): the consolidated
+- The R2 adversarial-validation closure leaves the 927-byte package, semantic
+  hash, and causal trace byte-identical. Re-deriving a key type from the full
+  immutable expression signature adds 4 decode ticks and links 11 704 B of
+  checker code; relay's +3-tick average/+1-tick max is code-layout jitter,
+  while removing the false RAM generation lowers the measured heap peak by
+  512 B.
+- Flash grew from 193 KiB to 411.4 KiB (`.text` 378 140 B +
+  `.rodata` 43 136 B, re-measured 2026-08-21): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
   complete logical-type algebra, inference solver and validator link into
   the kernel even for a `lines` plan — the core is one crate, and dead-code
   elimination keeps what the plan decoder can reach. The 1 MiB criterion holds with a
-  2.56× margin; trimming by feature gate is noted, not needed.
-- The true high-water mark (69.4 KiB) sits above the old sampled
+  2.49× margin; trimming by feature gate is noted, not needed.
+- The true high-water mark (68.9 KiB) sits above the old sampled
   figure (57.2 KiB), as a real peak must; the first M1 lift added
   the ingress port to every inbound record (+688 B over 32 rounds),
   and the consolidated reform's five-field spine and ext zone
@@ -211,8 +217,8 @@ instrumentation and last re-measured 2026-08-21 on the v9 R2 package.**
 These measurements price the rebased transport; R7 will separately price the
 remaining executable lifecycle machinery. All four
 criteria of record hold: no patched dependencies, 121 k instructions
-per relay transaction against the 150 k bound (1.24×), a 69.4 KiB true
-high-water mark against 128 KiB, 400.0 KiB of flash against 1 MiB. The
+per relay transaction against the 150 k bound (1.24×), a 68.9 KiB true
+high-water mark against 128 KiB, 411.4 KiB of flash against 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as
 planned — no embedded chantier opens. Silicon confirmation (volet B)

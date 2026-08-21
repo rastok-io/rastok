@@ -2323,17 +2323,23 @@ mod tests {
     }
 
     fn instance_package() -> Vec<u8> {
-        let mut root = root_owner();
-        root.instance = InstanceSpec {
+        let mut instance_owner = node_owner("worker", 0);
+        instance_owner.instance = InstanceSpec {
             key: Some(expr::Tree {
-                root: expr::Expr::Literal(Value::Int(7)),
-                ty: DataType::INT,
+                root: expr::Expr::Path(vec![text("meta"), text("sys"), text("id")]),
+                ty: DataType::Text,
             }),
             lifetime: InstanceLifetime::Idle(10),
         };
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
-            owners: vec![root],
-            nodes: vec![],
+            owners: vec![root_owner(), instance_owner],
+            nodes: vec![Node {
+                path: node::Path::new(["worker"]).unwrap(),
+                kind: NodeKind::Operator,
+                ports: vec![],
+                vars: vec![],
+                owner: OwnerSlot::new(1),
+            }],
             boundary: vec![],
             edges: vec![],
             handlers: vec![],
@@ -2369,14 +2375,14 @@ mod tests {
         bytes
     }
 
-    fn root_instance_mut(body: &mut BTreeMap<u64, Cbor>) -> &mut BTreeMap<u64, Cbor> {
+    fn instance_mut(body: &mut BTreeMap<u64, Cbor>) -> &mut BTreeMap<u64, Cbor> {
         let Cbor::Array(owners) = body.get_mut(&9).expect("owners") else {
             panic!("owner table");
         };
-        let Cbor::Map(root) = owners.first_mut().expect("root owner") else {
-            panic!("root owner row");
+        let Cbor::Map(owner) = owners.get_mut(1).expect("Node owner") else {
+            panic!("Node owner row");
         };
-        let Cbor::Map(instance) = root.get_mut(&4).expect("instance") else {
+        let Cbor::Map(instance) = owner.get_mut(&4).expect("instance") else {
             panic!("instance row");
         };
         instance
@@ -2442,19 +2448,23 @@ mod tests {
         let package = instance_package();
 
         let lying_key_type = mutate_package_body(&package, |body| {
-            let instance = root_instance_mut(body);
+            let instance = instance_mut(body);
             let Cbor::Array(tree) = instance.get_mut(&1).expect("key") else {
                 panic!("key tree");
             };
-            tree[0] = type_tree(&DataType::Text);
+            tree[0] = type_tree(&DataType::BYTES);
         });
         assert_eq!(
             decode(&lying_key_type).unwrap_err(),
-            DecodeError::Invalid(PlanValidationError::UnrepresentableConstant)
+            DecodeError::Invalid(PlanValidationError::InstanceKeyTypeMismatch {
+                owner: text("worker"),
+                expected: DataType::Text,
+                found: DataType::BYTES,
+            })
         );
 
         let non_key_domain = mutate_package_body(&package, |body| {
-            let instance = root_instance_mut(body);
+            let instance = instance_mut(body);
             instance.insert(
                 1,
                 tree_tree(&expr::Tree {
@@ -2466,18 +2476,18 @@ mod tests {
         assert_eq!(
             decode(&non_key_domain).unwrap_err(),
             DecodeError::Invalid(PlanValidationError::InvalidInstanceKey {
-                owner: String::new(),
+                owner: text("worker"),
                 ty: DataType::array(DataType::INT),
             })
         );
 
         let zero_lifetime = mutate_package_body(&package, |body| {
-            root_instance_mut(body).insert(2, lifetime_tree(&InstanceLifetime::Idle(0)));
+            instance_mut(body).insert(2, lifetime_tree(&InstanceLifetime::Idle(0)));
         });
         assert_eq!(
             decode(&zero_lifetime).unwrap_err(),
             DecodeError::Invalid(PlanValidationError::InvalidInstanceLifetime {
-                owner: String::new(),
+                owner: text("worker"),
             })
         );
     }

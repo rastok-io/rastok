@@ -428,9 +428,9 @@ struct PendingInstance {
 enum InstanceLifetimeSource {
     Persistent,
     Idle { after: SynValue, span: Span },
-    Fixed { after: SynValue, span: Span },
-    SinglePass,
-    Tumbling { every: SynValue, span: Span },
+    Fixed { span: Span },
+    SinglePass { span: Span },
+    Tumbling { span: Span },
 }
 
 impl Checker<'_, '_> {
@@ -1978,25 +1978,25 @@ impl Checker<'_, '_> {
                 InstanceLifetimeSource::Idle { after, span }
             }
             "fixed" => {
-                let Some((after, span)) = duration(&mut fields, "after") else {
+                let Some((_after, span)) = duration(&mut fields, "after") else {
                     self.instance_refusal(
                         attribute.span,
                         "`lifetime(kind = fixed)` requires `after`",
                     );
                     return None;
                 };
-                InstanceLifetimeSource::Fixed { after, span }
+                InstanceLifetimeSource::Fixed { span }
             }
-            "single_pass" => InstanceLifetimeSource::SinglePass,
+            "single_pass" => InstanceLifetimeSource::SinglePass { span: kind.span },
             "tumbling" => {
-                let Some((every, span)) = duration(&mut fields, "every") else {
+                let Some((_every, span)) = duration(&mut fields, "every") else {
                     self.instance_refusal(
                         attribute.span,
                         "`lifetime(kind = tumbling)` requires `every`",
                     );
                     return None;
                 };
-                InstanceLifetimeSource::Tumbling { every, span }
+                InstanceLifetimeSource::Tumbling { span }
             }
             "sliding" => {
                 self.deferred("a sliding lifetime", kind.span);
@@ -2199,12 +2199,17 @@ impl Checker<'_, '_> {
             InstanceLifetimeSource::Idle { after, span } => {
                 InstanceLifetime::Idle(duration(self, after, *span)?)
             }
-            InstanceLifetimeSource::Fixed { after, span } => {
-                InstanceLifetime::Fixed(duration(self, after, *span)?)
+            InstanceLifetimeSource::Fixed { span } => {
+                self.deferred("a fixed instance lifetime", *span);
+                return None;
             }
-            InstanceLifetimeSource::SinglePass => InstanceLifetime::SinglePass,
-            InstanceLifetimeSource::Tumbling { every, span } => {
-                InstanceLifetime::Tumbling(duration(self, every, *span)?)
+            InstanceLifetimeSource::SinglePass { span } => {
+                self.deferred("a single-pass instance lifetime", *span);
+                return None;
+            }
+            InstanceLifetimeSource::Tumbling { span } => {
+                self.deferred("a tumbling instance lifetime", *span);
+                return None;
             }
         })
     }
@@ -7488,11 +7493,10 @@ graph g : App {
   input in: text
   output out: text
   instances = { key = data }
-  lifetime = { kind = fixed ; after = duration("5m") }
 
   connector shell : Process {
     instances = { key = data }
-    lifetime = { kind = single_pass }
+    lifetime = { kind = idle ; after = duration("5m") }
     command = "cat"
     codec = lines
     effect = idempotent
@@ -7504,47 +7508,43 @@ graph g : App {
         let hir = check_clean(source);
         let graph = hir.app.instance.as_ref().expect("the Graph owns a policy");
         assert!(graph.key.is_some());
-        assert!(matches!(graph.lifetime, InstanceLifetime::Fixed(_)));
+        assert_eq!(graph.lifetime, InstanceLifetime::Persistent);
         let connector = hir.app.nodes[0]
             .instance
             .as_ref()
             .expect("the Connector owns the same sheet");
         assert!(connector.key.is_some());
-        assert_eq!(connector.lifetime, InstanceLifetime::SinglePass);
+        assert!(matches!(connector.lifetime, InstanceLifetime::Idle(_)));
     }
 
     #[test]
-    fn every_closed_lifetime_profile_reaches_hir() {
+    fn every_scheduler_gated_lifetime_refuses_before_hir_can_ship() {
         let cases = [
             (
                 "lifetime = { kind = fixed ; after = duration(\"30s\") }",
-                "fixed",
+                "a fixed instance lifetime",
             ),
-            ("lifetime = { kind = single_pass }", "single_pass"),
+            (
+                "lifetime = { kind = single_pass }",
+                "a single-pass instance lifetime",
+            ),
             (
                 "lifetime = { kind = tumbling ; every = duration(\"5m\") }",
-                "tumbling",
+                "a tumbling instance lifetime",
             ),
         ];
-        for (attribute, expected) in cases {
+        for (attribute, construct) in cases {
             let source = format!(
                 "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
             );
-            let hir = check_clean(&source);
-            let lifetime = &hir.app.nodes[0]
-                .instance
-                .as_ref()
-                .expect("the finite lifetime is retained")
-                .lifetime;
-            assert!(
-                matches!(
-                    (lifetime, expected),
-                    (InstanceLifetime::Fixed(_), "fixed")
-                        | (InstanceLifetime::SinglePass, "single_pass")
-                        | (InstanceLifetime::Tumbling(_), "tumbling")
-                ),
-                "expected {expected}, got {lifetime:?}"
-            );
+            let (_, bag) = check_source(&source);
+            assert!(bag.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code() == E_CHECK_DEFERRED
+                    && diagnostic
+                        .fields()
+                        .iter()
+                        .any(|(_, value)| value == construct)
+            }));
         }
     }
 

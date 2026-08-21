@@ -47,6 +47,46 @@ fn raw_probe() -> ExecutionPlan {
     .into_inner()
 }
 
+fn bare_operator_plan() -> ExecutionPlan {
+    ExecutionPlan {
+        owners: vec![
+            plan::Owner {
+                path: plan::OwnerPath::root(),
+                parent: None,
+                kind: plan::OwnerKind::Graph,
+                instance: plan::InstanceSpec {
+                    key: None,
+                    lifetime: plan::InstanceLifetime::Persistent,
+                },
+                vals: vec![],
+            },
+            plan::Owner {
+                path: plan::OwnerPath::new(["worker"]).unwrap(),
+                parent: Some(plan::OwnerSlot::new(0)),
+                kind: plan::OwnerKind::Node(Slot::new(0)),
+                instance: plan::InstanceSpec {
+                    key: None,
+                    lifetime: plan::InstanceLifetime::Persistent,
+                },
+                vals: vec![],
+            },
+        ],
+        nodes: vec![plan::Node {
+            path: rastok::node::Path::new(["worker"]).unwrap(),
+            kind: plan::NodeKind::Operator,
+            ports: vec![],
+            vars: vec![],
+            owner: plan::OwnerSlot::new(1),
+        }],
+        boundary: vec![],
+        edges: vec![],
+        handlers: vec![],
+        app_schema: vec![],
+        ext_schema: vec![],
+        assets: vec![],
+    }
+}
+
 fn port(name: &str) -> Port {
     Port::new(name).unwrap()
 }
@@ -283,34 +323,117 @@ fn every_duration_lifetime_requires_a_positive_value() {
 }
 
 #[test]
+fn scheduler_gated_lifetimes_never_validate_as_persistent() {
+    for lifetime in [
+        plan::InstanceLifetime::Fixed(1),
+        plan::InstanceLifetime::SinglePass,
+        plan::InstanceLifetime::Tumbling(1),
+    ] {
+        let mut raw = bare_operator_plan();
+        raw.owners[1].instance.lifetime = lifetime.clone();
+        assert_eq!(
+            ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+            PlanValidationError::UnsupportedInstanceLifetime {
+                owner: String::from("worker"),
+                lifetime,
+            }
+        );
+    }
+}
+
+#[test]
+fn graph_owned_instances_wait_for_the_graph_router() {
+    let mut raw = bare_operator_plan();
+    raw.owners[0].instance.key = Some(expr::Tree {
+        root: expr::Expr::Path(vec![
+            String::from("meta"),
+            String::from("sys"),
+            String::from("id"),
+        ]),
+        ty: DataType::Text,
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::UnsupportedGraphInstance {
+            owner: String::new(),
+        }
+    );
+}
+
+#[test]
 fn a_data_key_without_an_admission_signature_never_trusts_its_claimed_type() {
-    let raw = ExecutionPlan {
-        owners: vec![plan::Owner {
-            path: plan::OwnerPath::root(),
-            parent: None,
-            kind: plan::OwnerKind::Graph,
-            instance: plan::InstanceSpec {
-                key: Some(expr::Tree {
-                    root: expr::Expr::Path(vec![String::from("data")]),
-                    ty: DataType::Text,
-                }),
-                lifetime: plan::InstanceLifetime::Persistent,
-            },
-            vals: vec![],
-        }],
-        nodes: vec![],
-        boundary: vec![],
-        edges: vec![],
-        handlers: vec![],
-        app_schema: vec![],
-        ext_schema: vec![],
-        assets: vec![],
-    };
+    let mut raw = bare_operator_plan();
+    raw.owners[1].instance.key = Some(expr::Tree {
+        root: expr::Expr::Path(vec![String::from("data")]),
+        ty: DataType::Text,
+    });
 
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
         PlanValidationError::UnresolvedInstanceAdmission {
-            owner: String::new(),
+            owner: String::from("worker"),
+        }
+    );
+}
+
+#[test]
+fn instance_key_type_is_a_derived_fact_not_a_package_claim() {
+    let mut metadata = bare_operator_plan();
+    metadata.owners[1].instance.key = Some(expr::Tree {
+        root: expr::Expr::Path(vec![
+            String::from("meta"),
+            String::from("sys"),
+            String::from("id"),
+        ]),
+        ty: DataType::BYTES,
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(metadata).unwrap_err(),
+        PlanValidationError::InstanceKeyTypeMismatch {
+            owner: String::from("worker"),
+            expected: DataType::Text,
+            found: DataType::BYTES,
+        }
+    );
+
+    let mut data = raw_probe();
+    owner_mut(&mut data, "relay").instance.key = Some(expr::Tree {
+        root: expr::Expr::Path(vec![String::from("data")]),
+        ty: DataType::BYTES,
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(data).unwrap_err(),
+        PlanValidationError::InstanceKeyTypeMismatch {
+            owner: String::from("relay"),
+            expected: DataType::Text,
+            found: DataType::BYTES,
+        }
+    );
+
+    let mut lowering_claim = raw_probe();
+    owner_mut(&mut lowering_claim, "relay").instance.key = Some(expr::Tree {
+        root: expr::Expr::Path(vec![String::from("data")]),
+        ty: DataType::BYTES,
+    });
+    assert_eq!(
+        ValidatedExecutionPlan::try_from_lowered(lowering_claim).unwrap_err(),
+        PlanValidationError::InstanceKeyTypeMismatch {
+            owner: String::from("relay"),
+            expected: DataType::Text,
+            found: DataType::BYTES,
+        },
+        "the compiler-only door closes only an actual inference placeholder"
+    );
+}
+
+#[test]
+fn idle_process_requires_a_finite_call_budget_before_closing_lands() {
+    let mut raw = raw_probe();
+    owner_mut(&mut raw, "shell").instance.lifetime = plan::InstanceLifetime::Idle(1);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::UnboundedIdleConnector {
+            owner: String::from("shell"),
         }
     );
 }
