@@ -2650,7 +2650,8 @@ impl Checker<'_, '_> {
                 (
                     contract::ValueDomain::Text
                     | contract::ValueDomain::TextList
-                    | contract::ValueDomain::Duration,
+                    | contract::ValueDomain::Duration
+                    | contract::ValueDomain::TextMap,
                     AttrValue::Word(word),
                 ) => Some(format!(
                     "expected a Rastok expression fitting the {:?} domain; `{word}` is a bare word",
@@ -3531,6 +3532,11 @@ impl Checker<'_, '_> {
                 Some(AttrValue::Word(expr.text.clone()))
             }
             SynValue::Expr(expr) => self.constant(expr, signature, consts).map(AttrValue::Const),
+            SynValue::BracedMap(entries) => {
+                let tree = self.map_value_tree(entries, signature, span)?;
+                self.reduce_constant(tree, span, consts)
+                    .map(AttrValue::Const)
+            }
             SynValue::Tagged { case, .. }
                 if crate::compiler::parser::is_dead_initializer_tag(&case.text) =>
             {

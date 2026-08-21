@@ -383,6 +383,36 @@ pub struct AttributeSpec {
     pub presence: Presence,
     /// The admitted value domain.
     pub domain: ValueDomain,
+    /// The latest phase at which this attribute may become a value.
+    /// Checking chooses the earliest phase where the written expression
+    /// closes; this is a ceiling, never a request to delay a constant.
+    pub latest_site: EvaluationSite,
+}
+
+/// Where an effective connector attribute is allowed to become a value.
+///
+/// The declaration order is semantic: dependencies only grow while moving
+/// from plan to invocation. A contract therefore admits an actual site when
+/// it is no later than its declared ceiling.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EvaluationSite {
+    /// Closed during compilation; required for anything shaping the plan.
+    Plan,
+    /// Bound once from deployment inputs such as `env()` or `secret()`.
+    Boot,
+    /// Bound once for each logical Node instance.
+    Instance,
+    /// Evaluated separately for each admitted invocation.
+    Invocation,
+}
+
+impl EvaluationSite {
+    /// Whether this contract ceiling admits one actual evaluation site.
+    #[must_use]
+    pub const fn admits(self, actual: Self) -> bool {
+        actual as u8 <= self as u8
+    }
 }
 
 /// The presence a contract demands in the source, and what absence
@@ -415,10 +445,10 @@ pub enum DefaultValue {
 
 /// The value domain of a contract attribute.
 ///
-/// The first five are implemented; the rest are DECLARED for
-/// deferred profiles (the sheet says exactly what it knows) and
-/// admitted only behind [`ProfileSupport::Deferred`] —
-/// [`validate_sheet`] holds that line.
+/// Implemented domains are admitted on available profiles; the rest are
+/// DECLARED for deferred profiles (the sheet says exactly what it knows) and
+/// admitted only behind [`ProfileSupport::Deferred`] — [`validate_sheet`]
+/// holds that line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueDomain {
     /// One of a closed set of bare words.
@@ -433,6 +463,8 @@ pub enum ValueDomain {
     /// [`byte_size`], the ONE parser the contract and the adapter
     /// share: what validates is what executes.
     ByteSize,
+    /// A text-keyed map whose values are all text.
+    TextMap,
     /// A Rastok expression path over runtime data (`correlate = data.id`) — not a
     /// boot-phase constant. Deferred-only.
     ExprPath,
@@ -450,7 +482,12 @@ impl ValueDomain {
     pub fn implemented(&self) -> bool {
         matches!(
             self,
-            Self::Choice(_) | Self::Text | Self::TextList | Self::Duration | Self::ByteSize
+            Self::Choice(_)
+                | Self::Text
+                | Self::TextList
+                | Self::Duration
+                | Self::ByteSize
+                | Self::TextMap
         )
     }
 
@@ -471,6 +508,12 @@ impl ValueDomain {
             Self::ByteSize => {
                 matches!(value, crate::value::Value::Text(text) if byte_size(text).is_some())
             }
+            Self::TextMap => match value {
+                crate::value::Value::Map(entries) => entries
+                    .values()
+                    .all(|value| matches!(value, crate::value::Value::Text(_))),
+                _ => false,
+            },
         }
     }
 }
@@ -537,6 +580,13 @@ pub enum SheetDefect {
         /// Port carrying the rule.
         port: &'static str,
         /// Missing or non-choice attribute.
+        attribute: &'static str,
+    },
+    /// A port-type selector was allowed to bind after plan construction.
+    LatePortTypeAttribute {
+        /// Port carrying the rule.
+        port: &'static str,
+        /// Attribute that must be plan-resolved.
         attribute: &'static str,
     },
     /// A selected port rule repeats or omits a choice arm.
@@ -611,6 +661,10 @@ impl core::fmt::Display for SheetDefect {
             Self::UnknownPortTypeAttribute { port, attribute } => write!(
                 f,
                 "port `{port}` selects its type from unknown/non-choice attribute `{attribute}`"
+            ),
+            Self::LatePortTypeAttribute { port, attribute } => write!(
+                f,
+                "port `{port}` selects its type from `{attribute}`, which must have `plan` as its latest evaluation site"
             ),
             Self::PortTypeChoiceMismatch { port, attribute } => write!(
                 f,
@@ -918,6 +972,17 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                         attribute,
                     });
                 };
+                if contract
+                    .common
+                    .iter()
+                    .find(|spec| spec.name == attribute)
+                    .is_some_and(|spec| spec.latest_site != EvaluationSite::Plan)
+                {
+                    return Err(SheetDefect::LatePortTypeAttribute {
+                        port: port.name,
+                        attribute,
+                    });
+                }
                 let mut arms = std::collections::BTreeSet::new();
                 for choice in choices {
                     if !arms.insert(choice.word) || !words.contains(&choice.word) {

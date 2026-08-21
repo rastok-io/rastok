@@ -29,6 +29,8 @@ use std::process::{Command, Stdio};
 struct ProcessSettings {
     command: String,
     args: Vec<String>,
+    cwd: Option<String>,
+    env: std::collections::BTreeMap<String, String>,
     codec: crate::boundary::RequestCodec,
     err_codec: crate::boundary::RequestCodec,
     max_output: u64,
@@ -50,6 +52,12 @@ pub enum ProcessSettingsError {
     CommandNotText,
     /// An argument is not text — nothing is dropped silently.
     ArgNotText(String),
+    /// `cwd` is present but is not text.
+    CwdNotText,
+    /// `env` is present but is not a text-keyed map.
+    EnvNotMap,
+    /// One environment entry is not text.
+    EnvValueNotText(String),
     /// A codec word outside the dispatch domain.
     UnknownCodec(String),
     /// `max_output` is not a declared byte size.
@@ -88,6 +96,11 @@ impl core::fmt::Display for ProcessSettingsError {
                 f,
                 "an argument is not text: {value} — nothing is dropped silently"
             ),
+            Self::CwdNotText => write!(f, "the cwd attribute is not text"),
+            Self::EnvNotMap => write!(f, "the env attribute is not a text-keyed map"),
+            Self::EnvValueNotText(name) => {
+                write!(f, "the env entry `{name}` is not text")
+            }
             Self::UnknownCodec(word) => {
                 write!(f, "`{word}` is outside the Process framing domains")
             }
@@ -185,6 +198,25 @@ impl ProcessSettings {
             }
             _ => return Err(E::Unresolved("args")),
         };
+        let cwd = match spec.attribute("cwd") {
+            Some(AttrSetting::Value(crate::value::Value::Text(cwd))) => Some(cwd.clone()),
+            Some(_) => return Err(E::CwdNotText),
+            None => None,
+        };
+        let env = match spec.attribute("env") {
+            Some(AttrSetting::Value(crate::value::Value::Map(entries))) => {
+                let mut env = std::collections::BTreeMap::new();
+                for (name, value) in entries {
+                    let crate::value::Value::Text(value) = value else {
+                        return Err(E::EnvValueNotText(name.clone()));
+                    };
+                    env.insert(name.clone(), value.clone());
+                }
+                env
+            }
+            Some(_) => return Err(E::EnvNotMap),
+            None => std::collections::BTreeMap::new(),
+        };
         // EXHAUSTIVE: the adapter never re-interprets an unknown or
         // missing codec as `lines` — the fallback lives nowhere on
         // this path.
@@ -244,6 +276,8 @@ impl ProcessSettings {
         Ok(Self {
             command: command.clone(),
             args,
+            cwd,
+            env,
             codec,
             err_codec,
             max_output,
@@ -580,6 +614,13 @@ impl<'plan> Process<'plan> {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if let Some(cwd) = &settings.cwd {
+            builder.current_dir(cwd);
+        }
+        // `env` is an explicit override map. The child keeps the host
+        // environment when the attribute is absent, matching Command's
+        // existing boundary behavior; written keys replace inherited ones.
+        builder.envs(&settings.env);
         // Its own process group: a kill reaches every descendant, so
         // no orphan can keep the pipes — or a pump thread — alive.
         #[cfg(unix)]
@@ -1112,6 +1153,33 @@ graph lines : App {
         assert_eq!(
             outputs[1].data(),
             &Data::materialized(Value::Text(String::from("second")))
+        );
+        one_exit(&observed, "Exited");
+    }
+
+    #[test]
+    fn process_applies_the_resolved_working_directory_and_environment() {
+        let source = r#"
+graph configured : App {
+  connector child : Process {
+    mode = job ; command = "sh"
+    args = ["-c", "printf '%s:%s\\n' \"$RASTOK_PROCESS_PROBE\" \"$PWD\""]
+    cwd = "/"
+    env = { "RASTOK_PROCESS_PROBE": "bound" }
+    codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> child -> .
+}
+"#;
+        let (_, outputs, errors, observed) = run_submission(
+            source,
+            submission_data(Data::materialized(Value::Text(String::from("unused")))),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            outputs[0].data(),
+            &Data::materialized(Value::Text(String::from("bound:/")))
         );
         one_exit(&observed, "Exited");
     }

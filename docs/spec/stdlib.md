@@ -165,10 +165,11 @@ spelling of a default are one identity (hash included). The plan
 carries the EFFECTIVE attributes; each contract row declares the latest
 permitted site, checking chooses the earliest site where the expression
 closes, and the adapter consumes resolved values or an explicitly transported
-boot/instance/invocation expression and never
-reintroduces a default. M1.4 R1 makes the evaluation-site column executable;
-until then the implementation's constant-only rows remain a named subset, not
-an alternate contract.
+boot/instance/invocation expression and never reintroduces a default. M1.4 R1
+now carries this ceiling in the executable sheet and rejects a non-plan port
+type selector. Plan-resolved `cwd` and `env` already bind through the real
+adapter; transport of their boot/instance expressions remains the categorical
+R2 step, never an adapter fallback.
 
 | Attribute | Profile | Domain | Latest evaluation site | Presence |
 |---|---|---|---|---|
@@ -180,7 +181,7 @@ an alternate contract.
 | `effect` | common | choice, typed | plan | **Required** |
 | `behavior` | common | choice, typed | plan | **Required** |
 | `timeout` | common | Rastok expression → `duration` | instance | Optional — a true optional: no budget declared, no budget |
-| `env` | common | `map<text,text>` | instance | Optional; canonical spelling `env = { "K": v }` |
+| `env` | common | `map<text,text>` | instance | Optional; canonical spelling `env = { "K": v }`; written entries override inherited host entries and unspecified entries remain inherited |
 | `max_output` | job | byte size: `<digits><unit>`, unit ∈ `B \| KiB \| MiB \| GiB` (explicit, required), ASCII whitespace tolerated around and between, ≤ 4 GiB (syntax bound; the adapter binding additionally proves the budget is REPRESENTABLE on this host — at most `isize::MAX` — while actual allocation is judged chunk by chunk at intake via `try_reserve`, surfacing as the typed overflow, never an abort) — one parser (`contract::byte_size`) judges at check AND enforces at run | plan | Defaulted(`"8MiB"`) |
 | `on_timeout` | job | choice `kill` (one word — "fixed to `kill`") | plan | Defaulted(`kill`) |
 | `correlate` | service | Rastok expression path over invocation data | invocation | Optional |

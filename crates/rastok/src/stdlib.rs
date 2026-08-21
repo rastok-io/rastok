@@ -11,9 +11,9 @@
 //! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
 
 use crate::contract::{
-    AttributeSpec, ConnectorContract, DefaultValue, FrontendContract, FrontendFraming,
-    FrontendReader, PortContract, PortDataType, PortTypeChoice, PortTypeRule, Presence, Profile,
-    ProfileSelector, ProfileSupport, Registry, ValueDomain,
+    AttributeSpec, ConnectorContract, DefaultValue, EvaluationSite, FrontendContract,
+    FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice, PortTypeRule,
+    Presence, Profile, ProfileSelector, ProfileSupport, Registry, ValueDomain,
 };
 use crate::node::Direction;
 use crate::plan::UnwiredPolicy;
@@ -102,11 +102,13 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             name: "args",
             presence: Presence::Defaulted(DefaultValue::Expression("[]")),
             domain: ValueDomain::TextList,
+            latest_site: EvaluationSite::Instance,
         },
         AttributeSpec {
             name: "behavior",
             presence: Presence::Required,
             domain: ValueDomain::Choice(&["deterministic", "probabilistic"]),
+            latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
             // The framing is the sheet's most semantic decision —
@@ -116,6 +118,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             name: "codec",
             presence: Presence::Required,
             domain: ValueDomain::Choice(&["bytes", "jsonl", "lines"]),
+            latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
             // stderr is an independent physical channel. It never inherits
@@ -123,16 +126,25 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             name: "err_codec",
             presence: Presence::Defaulted(DefaultValue::Choice("lines")),
             domain: ValueDomain::Choice(&["bytes", "lines"]),
+            latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
             name: "command",
             presence: Presence::Required,
             domain: ValueDomain::Text,
+            latest_site: EvaluationSite::Instance,
+        },
+        AttributeSpec {
+            name: "cwd",
+            presence: Presence::Optional,
+            domain: ValueDomain::Text,
+            latest_site: EvaluationSite::Instance,
         },
         AttributeSpec {
             name: "effect",
             presence: Presence::Required,
             domain: ValueDomain::Choice(&["idempotent", "compensable", "irreversible"]),
+            latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
             // A declared budget; absence means NO budget — a real
@@ -140,6 +152,13 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             name: "timeout",
             presence: Presence::Optional,
             domain: ValueDomain::Duration,
+            latest_site: EvaluationSite::Instance,
+        },
+        AttributeSpec {
+            name: "env",
+            presence: Presence::Optional,
+            domain: ValueDomain::TextMap,
+            latest_site: EvaluationSite::Instance,
         },
     ],
     selector: Some(ProfileSelector {
@@ -157,6 +176,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                         name: "max_output",
                         presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
                         domain: ValueDomain::ByteSize,
+                        latest_site: EvaluationSite::Plan,
                     },
                     AttributeSpec {
                         // Bypassing a detached one-shot is
@@ -165,6 +185,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                         name: "on_timeout",
                         presence: Presence::Defaulted(DefaultValue::Choice("kill")),
                         domain: ValueDomain::Choice(&["kill"]),
+                        latest_site: EvaluationSite::Plan,
                     },
                 ],
             },
@@ -178,6 +199,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                         name: "correlate",
                         presence: Presence::Optional,
                         domain: ValueDomain::ExprPath,
+                        latest_site: EvaluationSite::Invocation,
                     },
                     AttributeSpec {
                         // The restart policy struct (`{ backoff = …,
@@ -186,6 +208,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                         name: "restart",
                         presence: Presence::Optional,
                         domain: ValueDomain::Struct,
+                        latest_site: EvaluationSite::Instance,
                     },
                 ],
             },

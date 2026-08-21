@@ -8,9 +8,9 @@
 
 use rastok::compiler::compile;
 use rastok::contract::{
-    AttributeSpec, ConnectorContract, DefaultValue, FrontendContract, FrontendFraming,
-    FrontendReader, PortContract, PortDataType, PortTypeChoice, PortTypeRule, Presence, Profile,
-    ProfileSelector, ProfileSupport, Registry, SheetDefect, ValueDomain,
+    AttributeSpec, ConnectorContract, DefaultValue, EvaluationSite, FrontendContract,
+    FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice, PortTypeRule,
+    Presence, Profile, ProfileSelector, ProfileSupport, Registry, SheetDefect, ValueDomain,
 };
 use rastok::node::Direction;
 use rastok::plan::UnwiredPolicy;
@@ -79,11 +79,13 @@ fn a_duplicate_attribute_is_a_sheet_defect() {
             name: "x",
             presence: Presence::Optional,
             domain: ValueDomain::Text,
+            latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
             name: "x",
             presence: Presence::Optional,
             domain: ValueDomain::Text,
+            latest_site: EvaluationSite::Plan,
         },
     ];
     assert_eq!(
@@ -206,11 +208,13 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
         name: "shape",
         presence: Presence::Optional,
         domain: ValueDomain::Choice(&["text"]),
+        latest_site: EvaluationSite::Plan,
     }];
     const SHAPE_BYTES: &[AttributeSpec] = &[AttributeSpec {
         name: "shape",
         presence: Presence::Optional,
         domain: ValueDomain::Choice(&["bytes"]),
+        latest_site: EvaluationSite::Plan,
     }];
     const AMBIGUOUS: ConnectorContract = ConnectorContract {
         name: "Ambiguous",
@@ -250,6 +254,43 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
             .try_with(AMBIGUOUS)
             .unwrap_err(),
         SheetDefect::UnknownPortTypeAttribute {
+            port: "out",
+            attribute: "shape",
+        }
+    );
+}
+
+#[test]
+fn a_port_type_selector_is_structurally_plan_bound() {
+    const SHAPE: &[AttributeSpec] = &[AttributeSpec {
+        name: "shape",
+        presence: Presence::Required,
+        domain: ValueDomain::Choice(&["text"]),
+        latest_site: EvaluationSite::Instance,
+    }];
+    const LATE: ConnectorContract = ConnectorContract {
+        name: "Late",
+        ports: &[PortContract {
+            name: "out",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RequireWire,
+            ty: PortTypeRule::AttributeSelected {
+                attribute: "shape",
+                choices: &[PortTypeChoice {
+                    word: "text",
+                    ty: PortDataType::Text,
+                }],
+            },
+        }],
+        common: SHAPE,
+        selector: None,
+    };
+    assert_eq!(
+        Registry::try_m0()
+            .expect("the standard catalogue holds")
+            .try_with(LATE)
+            .unwrap_err(),
+        SheetDefect::LatePortTypeAttribute {
             port: "out",
             attribute: "shape",
         }
@@ -356,6 +397,7 @@ fn a_selector_colliding_with_an_attribute_is_a_sheet_defect() {
         name: "mode",
         presence: Presence::Optional,
         domain: ValueDomain::Text,
+        latest_site: EvaluationSite::Plan,
     }];
     const SELECTOR: ProfileSelector = ProfileSelector {
         attribute: "mode",
@@ -381,6 +423,7 @@ fn an_uncompilable_expression_default_is_a_sheet_defect() {
         name: "x",
         presence: Presence::Defaulted(DefaultValue::Expression("] not expr [")),
         domain: ValueDomain::Text,
+        latest_site: EvaluationSite::Plan,
     }];
     assert!(matches!(
         Registry::try_m0()
@@ -398,6 +441,7 @@ fn a_default_outside_its_domain_is_a_sheet_defect() {
         name: "x",
         presence: Presence::Defaulted(DefaultValue::Expression("1")),
         domain: ValueDomain::Text,
+        latest_site: EvaluationSite::Plan,
     }];
     assert!(matches!(
         Registry::try_m0()
@@ -411,6 +455,7 @@ fn a_default_outside_its_domain_is_a_sheet_defect() {
         name: "y",
         presence: Presence::Defaulted(DefaultValue::Choice("ghost")),
         domain: ValueDomain::Choice(&["real"]),
+        latest_site: EvaluationSite::Plan,
     }];
     assert!(matches!(
         Registry::try_m0()
@@ -427,6 +472,7 @@ fn a_duplicate_choice_word_is_a_sheet_defect() {
         name: "x",
         presence: Presence::Optional,
         domain: ValueDomain::Choice(&["a", "a"]),
+        latest_site: EvaluationSite::Plan,
     }];
     assert_eq!(
         Registry::try_m0()
@@ -443,6 +489,7 @@ fn a_deferred_only_domain_needs_a_deferred_profile() {
         name: "correlate",
         presence: Presence::Optional,
         domain: ValueDomain::ExprPath,
+        latest_site: EvaluationSite::Invocation,
     }];
     assert_eq!(
         Registry::try_m0()
@@ -708,6 +755,34 @@ fn the_binding_drops_no_argument_silently() {
 }
 
 #[test]
+fn the_binding_rechecks_optional_process_settings() {
+    let bad_cwd = bind_error(|spec| {
+        spec.attributes.push((
+            String::from("cwd"),
+            rastok::plan::AttrSetting::Value(rastok::value::Value::Int(7)),
+        ));
+        spec.attributes.sort_by(|a, b| a.0.cmp(&b.0));
+    });
+    assert!(bad_cwd.contains("cwd attribute is not text"), "{bad_cwd}");
+
+    let bad_env = bind_error(|spec| {
+        spec.attributes.push((
+            String::from("env"),
+            rastok::plan::AttrSetting::Value(rastok::value::Value::Map(
+                [(String::from("COUNT"), rastok::value::Value::Int(7))]
+                    .into_iter()
+                    .collect(),
+            )),
+        ));
+        spec.attributes.sort_by(|a, b| a.0.cmp(&b.0));
+    });
+    assert!(
+        bad_env.contains("env entry `COUNT` is not text"),
+        "{bad_env}"
+    );
+}
+
+#[test]
 fn a_callable_foreign_connector_refuses_at_bind() {
     // The review's blocker: in a single-Partner world, a CALLABLE
     // connector of another contract would receive its intents at
@@ -851,6 +926,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         name: "x",
         presence: Presence::Optional,
         domain: ValueDomain::Choice(&[]),
+        latest_site: EvaluationSite::Plan,
     }];
     assert_eq!(
         Registry::try_m0()
@@ -875,6 +951,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         name: "x",
         presence: Presence::Optional,
         domain: ValueDomain::Choice(&["nothing"]),
+        latest_site: EvaluationSite::Plan,
     }];
     assert_eq!(
         Registry::try_m0()
@@ -943,16 +1020,19 @@ fn tag_words_serve_as_choice_words_on_another_sheet() {
             name: "behavior",
             presence: Presence::Required,
             domain: ValueDomain::Choice(&["deterministic"]),
+            latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
             name: "effect",
             presence: Presence::Required,
             domain: ValueDomain::Choice(&["idempotent"]),
+            latest_site: EvaluationSite::Plan,
         },
         AttributeSpec {
             name: "framing",
             presence: Presence::Required,
             domain: ValueDomain::Choice(&["text", "json", "unbounded"]),
+            latest_site: EvaluationSite::Plan,
         },
     ];
     let registry = Registry::try_m0()
@@ -985,6 +1065,73 @@ fn max_output_is_judged_at_check_not_at_spawn() {
 }
 
 #[test]
+fn process_declares_the_phase_ceiling_of_every_setting() {
+    use rastok::stdlib::PROCESS;
+
+    for name in [
+        "codec",
+        "err_codec",
+        "effect",
+        "behavior",
+        "max_output",
+        "on_timeout",
+    ] {
+        assert_eq!(
+            PROCESS
+                .attribute(PROCESS.profile("job"), name)
+                .expect("the Process row")
+                .latest_site,
+            EvaluationSite::Plan,
+            "{name} shapes the plan"
+        );
+    }
+    for name in ["command", "args", "cwd", "timeout", "env"] {
+        assert_eq!(
+            PROCESS
+                .attribute(PROCESS.profile("job"), name)
+                .expect("the Process row")
+                .latest_site,
+            EvaluationSite::Instance,
+            "{name} may consume per-instance immutable context"
+        );
+    }
+    assert!(EvaluationSite::Instance.admits(EvaluationSite::Plan));
+    assert!(!EvaluationSite::Plan.admits(EvaluationSite::Instance));
+}
+
+#[test]
+fn constant_process_cwd_and_env_are_effective_plan_attributes() {
+    let source = process_graph(&format!(
+        "{FULL}\n    cwd = \"/\"\n    env = {{ \"RASTOK_PHASE_PROBE\": \"bound\" }}"
+    ));
+    let compilation = compile_one(&source).expect("constant operational settings compile");
+    let shell = compilation
+        .plan
+        .nodes
+        .iter()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the Process node");
+    let rastok::plan::NodeKind::Connector(spec) = &shell.kind else {
+        panic!("the Process node remains a connector")
+    };
+    assert_eq!(
+        spec.attribute("cwd"),
+        Some(&rastok::plan::AttrSetting::Value(
+            rastok::value::Value::Text(String::from("/"))
+        ))
+    );
+    assert!(matches!(
+        spec.attribute("env"),
+        Some(rastok::plan::AttrSetting::Value(rastok::value::Value::Map(entries)))
+            if entries.get("RASTOK_PHASE_PROBE")
+                == Some(&rastok::value::Value::Text(String::from("bound")))
+    ));
+
+    let invalid = process_graph(&format!("{FULL}\n    env = {{ \"COUNT\": 2 }}"));
+    refusal_with(&invalid, "E-CONTRACT-ATTR", "TextMap");
+}
+
+#[test]
 fn a_deferred_profile_still_owes_the_common_sheet() {
     // `mode = service` alone: the deferral speaks AND the common
     // Required attributes are still owed.
@@ -1008,6 +1155,7 @@ fn sibling_profiles_may_share_an_attribute_name() {
         name: "shared",
         presence: Presence::Optional,
         domain: ValueDomain::Text,
+        latest_site: EvaluationSite::Plan,
     };
     const SELECTOR: ProfileSelector = ProfileSelector {
         attribute: "mode",
@@ -1057,6 +1205,7 @@ fn an_inexpressible_sheet_name_is_a_sheet_defect() {
         name: "not a name",
         presence: Presence::Optional,
         domain: ValueDomain::Text,
+        latest_site: EvaluationSite::Plan,
     }];
     assert_eq!(
         Registry::try_m0()
@@ -1079,6 +1228,7 @@ fn a_deferred_domain_carries_no_default() {
                 name: "x",
                 presence: Presence::Defaulted(DefaultValue::Expression("[]")),
                 domain: ValueDomain::Struct,
+                latest_site: EvaluationSite::Instance,
             }],
         }],
     };

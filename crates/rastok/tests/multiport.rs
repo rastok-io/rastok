@@ -573,8 +573,8 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
 #[test]
 fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
     use rastok::contract::{
-        AttributeSpec, ConnectorContract, PortContract, PortDataType, PortTypeRule, Presence,
-        ValueDomain,
+        AttributeSpec, ConnectorContract, EvaluationSite, PortContract, PortDataType, PortTypeRule,
+        Presence, ValueDomain,
     };
     use rastok::node::Direction;
     use rastok::plan::UnwiredPolicy;
@@ -621,11 +621,13 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
                 name: "behavior",
                 presence: Presence::Required,
                 domain: ValueDomain::Choice(&["deterministic"]),
+                latest_site: EvaluationSite::Plan,
             },
             AttributeSpec {
                 name: "effect",
                 presence: Presence::Required,
                 domain: ValueDomain::Choice(&["idempotent"]),
+                latest_site: EvaluationSite::Plan,
             },
         ],
         selector: None,
@@ -649,8 +651,8 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
 #[test]
 fn a_named_connector_edge_defers_by_name() {
     use rastok::contract::{
-        AttributeSpec, ConnectorContract, PortContract, PortDataType, PortTypeRule, Presence,
-        ValueDomain,
+        AttributeSpec, ConnectorContract, EvaluationSite, PortContract, PortDataType, PortTypeRule,
+        Presence, ValueDomain,
     };
     use rastok::node::Direction;
     use rastok::plan::UnwiredPolicy;
@@ -693,11 +695,13 @@ fn a_named_connector_edge_defers_by_name() {
                 name: "behavior",
                 presence: Presence::Required,
                 domain: ValueDomain::Choice(&["deterministic"]),
+                latest_site: EvaluationSite::Plan,
             },
             AttributeSpec {
                 name: "effect",
                 presence: Presence::Required,
                 domain: ValueDomain::Choice(&["idempotent"]),
+                latest_site: EvaluationSite::Plan,
             },
         ],
         selector: None,
