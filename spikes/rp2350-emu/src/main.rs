@@ -22,9 +22,9 @@ use panic_semihosting as _;
 use rastok_core::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
 use rastok_core::envelope::{Data, Id, Namespace, Value};
 use rastok_core::journal;
-use rastok_core::journal::MemJournal;
-use rastok_core::node::Path;
-use rastok_core::plan::GraphVersion;
+use rastok_core::journal::{MemJournal, Record};
+use rastok_core::node::{Path, Port, Trigger};
+use rastok_core::plan::{GraphVersion, OwnerPath};
 use rastok_core::runtime::vm::Vm;
 
 /// The allocator, wrapped to record a true high-water mark: the
@@ -156,11 +156,15 @@ fn main() -> ! {
     hprintln!("semantic_hash: {}", hash);
     hprintln!("heap_after_open: {} bytes", HEAP.inner.used());
 
-    // 2. Boot and run: each round injects one envelope and steps the
-    //    relay transaction; the delivery to the connector then opens
-    //    its journaled call (round 1) or queues behind the claim.
+    // 2. Boot and run: each round injects one envelope and measures exactly
+    //    the relay's port transaction. R4 makes every selected owner emit a
+    //    lazy lifecycle transaction; those turns are real work but are not a
+    //    relay sample, so the journal actor/trigger identifies the measured
+    //    turn instead of assuming that one `step` has one static role.
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let relay_owner = OwnerPath::new(["relay"]).expect("the measured owner path is valid");
+    let relay_trigger = Trigger::Port(Port::new("in").expect("the measured port is valid"));
     let mut tx_ticks_total: u64 = 0;
     let mut tx_min = u64::MAX;
     let mut tx_max = 0u64;
@@ -168,11 +172,22 @@ fn main() -> ! {
     for round in 0..ROUNDS {
         vm.inject(&mut journal, submission("salut", round as u8))
             .expect("the submission lands");
-        let (t, stepped) = ticks.measure(|| vm.step(&mut journal));
-        assert!(stepped.expect("the relay fires"), "work was ready");
-        tx_ticks_total += t;
-        tx_min = tx_min.min(t);
-        tx_max = tx_max.max(t);
+        loop {
+            let (t, stepped) = ticks.measure(|| vm.step(&mut journal));
+            assert!(stepped.expect("ready work executes"), "work was ready");
+            let relay_fired = matches!(
+                journal.records().last(),
+                Some(Record::Transaction(transaction))
+                    if transaction.owner_path == relay_owner
+                        && transaction.trigger == relay_trigger
+            );
+            if relay_fired {
+                tx_ticks_total += t;
+                tx_min = tx_min.min(t);
+                tx_max = tx_max.max(t);
+                break;
+            }
+        }
     }
     hprintln!(
         "relay_tx over {} rounds: avg {} / min {} / max {} ticks",

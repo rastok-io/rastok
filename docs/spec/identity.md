@@ -9,10 +9,12 @@
 > inside categorical plan-package v9 and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
-> typed key/lifetime policy and phased immutable expressions. R3 has now made
+> typed key/lifetime policy and phased immutable expressions. R3 made
 > the separately declared mandatory `(address, generation)` causal facts
 > executable and moved trace goldens without changing semantic hashes or plan
-> packages. D-2026-08-14-1
+> packages. R4 executes every lifetime profile on those facts and deliberately
+> adds universal owner lifecycle records without changing a semantic hash or
+> plan package. D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
 > from the plan constraints and requires exact agreement with the transported
@@ -250,19 +252,20 @@ timer fields.
 | 24 | ingress_port | text | the graph input the envelope entered — a causal fact : replay re-routes from this port ; **omitted for the default `in`** (absent = omitted), so pre-multiport records are byte-identical (D-2026-08-08-2) |
 | 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INBOUND record. |
 
-**TRANSACTION** (kind 2 — one node firing ; the commit packet of
+**TRANSACTION** (kind 2 — one Node firing or one Graph-owner lifecycle fact;
+the commit packet of
 execution-model §1) — keys `30–39` and `48` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
-| 30 | node_path | text | the firing node, root-relative |
+| 30 | owner_path | text | the firing Node or lifecycle owner, root-relative. Ordinary Node transactions keep their former path bytes; Graph `l:start`/`l:stop` use the Graph owner path, including empty text for the root App Graph. |
 | 31 | instance_ref | array | `[instance_address (bytes), generation (uint)]`, mandatory for every firing; generation is the zero-based journal-derived `l:start` ordinal for that address |
 | 32 | trigger | text | namespaced `p:<port>` / `l:<lifecycle>` (envelope.md §3 ; closed `l:` registry) |
 | 33 | consumed | array | the consumed input **positions** — each a fixed tuple `[edge (text), source_instance_ref, seq (uint)]` (the cursor key, delivery-semantics §2 — per `(graph-edge × source instance reference)`, NOT per port: several edges feed one port, so `(port, seq)` is not injective); **array sorted by canonical `(edge, source_instance_ref, seq)`** |
 | 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16) ; **sorted by the trigger's port order then id** ; omitted otherwise |
 | 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
-| 37 | timers | array | dated obligations armed by this firing — each a fixed tuple `[kind (uint), ref (bytes)]` where `ref` identifies the obligation (call id / join / instance) ; **sorted by `(kind, ref)`** ; **the due µs is NOT sealed** (derivable and re-armed by the fold) |
+| 37 | timers | array | dated obligations armed by this firing — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`. Kind 3 uses `blake3-derive(0x21, instance_address || u64_le(generation))`. The due µs is NOT sealed (derivable and re-armed by the fold). |
 | 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instances.key` and never substitutes a later generation. |
 | 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction with no consumed mailbox cursor (`l:start`, `l:stop`, later `l:evict`); omitted when key 33 already identifies the cause. This keeps an empty lifecycle hook causally autonomous rather than relying on record order. |
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |

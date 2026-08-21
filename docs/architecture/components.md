@@ -1,7 +1,7 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-21 for the M1.4 R3 routing checkpoint. The
+> of the build; updated 2026-08-21 for the M1.4 R4 lifetime checkpoint. The
 > former named-partition P1-P3 implementation is superseded; categorical v9
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
@@ -10,7 +10,8 @@
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
 > distinguishes the retained v7 type/value/expression registry from the
-> categorical v9 instance transport and the R3 causal routing rows.
+> categorical v9 instance transport, R3 causal routing rows, and R4 lifetime
+> execution.
 
 This document refines the responsibility table of
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md) to the component level: the
@@ -158,7 +159,7 @@ data out, the governing spec, and current status.
 | **Lexer + parser** | one forward byte cursor and token lookahead in `Lexer`; complete host lexemes; byte-adjacent `IDENT!` frontend selection; specialized expression/JSON/verbatim/guest regions; spans and structural recovery | source bytes + frontend Registry → syntax tree + diagnostics | [grammar.md](../spec/grammar.md); D-2026-08-13-1; D-2026-08-14-1 | M1.3 B4 |
 | **Unit assembly** | the deployed unit: multi-file resolution, lab-fragment merge, exactly-one-App, wiring by name, no shadowing | syntax trees → one resolved `Unit` | [grammar.md](../spec/grammar.md) scope rules; [simulation-semantics.md §2](../spec/simulation-semantics.md) | M0 (single unit) |
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
-| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspects, Node-owned instance-key expressions and lifetime profiles | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.4 R1 surface plus v9 R2 transport; fixed/single-pass/tumbling, dynamic source values, and Graph-owned routing remain named gates |
+| **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspects, Node-owned instance-key expressions and lifetime profiles | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.4 R1 surface, v9 R2 transport, and R4 lifetime profiles; dynamic source values and nested Graph source syntax remain named gates |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
 | **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, handlers, expression trees, `Slot` resolution, schemas and assets; key types re-derived and structural/runtime capability validated before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | categorical v9 R2 checkpoint; compiler-only data-key inference is explicit, unsupported lifetimes/Graph routing/dynamic source rows refuse closed |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
@@ -553,11 +554,11 @@ The chronological detail and commit evidence remain in
 - **M1.4 rebase:** D-2026-08-18-1 replaces the unreleased P0-P3 surface and
   transport with Node-owned `instances.key`, independent `lifetime`, private
   Node state, hierarchical logical addresses, and journal-derived instance
-  references. R1 checking, categorical v9 owner transport, and R3
-  hierarchical routing/mailbox/state/cursor proofs have landed. Finite
-  lifecycle profiles remain R4. The reference VM remains synchronous and
+  references. R1 checking, categorical v9 owner transport, R3
+  hierarchical routing/mailbox/state/cursor proofs, and R4's five lifecycle
+  profiles have landed. The reference VM remains synchronous and
   one-worker.
-- **Next:** finite lifetime, bounded Closing, keyed Lab
+- **Next:** bounded Closing, keyed Lab
   observability, Dispatch, joins, new adapters, Loop, counters, and `--watch`
   remain guarded in the order recorded by the
   [M1.4 backlog](m1.4-instances-backlog.md).

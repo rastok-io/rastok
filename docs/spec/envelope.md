@@ -132,6 +132,8 @@ domain_tag = 0x01 (root, 2 fields)          |  0x02 (emission, 5 fields)
              0x04 (root + replica — RESERVED byte ; multi-host semantics are deferred)
              0x10 (call, 2 fields : delivery_ref, request_digest)
              0x20 (delivery reference, 2 fields : canonical_edge_text, envelope_id)
+             0x21 (instance lifetime, 2 fields : canonical instance-address bytes,
+                                                    generation u64 little-endian)
 id         = first 128 bits of blake3(input)
 encodings  : paths/triggers/ports = UTF-8 ; parent_id = its 16 raw bytes ;
              inbound_seq = u64 LE ; emission_index = u32 LE
@@ -188,6 +190,22 @@ lookups that resolve an expiry, and the derivation of the call
 identity below. A fan-out of one envelope to two edges is two
 deliveries, two references, two obligations — two ports of one
 connector included.
+
+**The instance-lifetime reference.** One lifetime obligation belongs to one
+complete instance reference, not merely to its reusable logical address:
+
+```
+instance_lifetime_ref = blake3-derive(
+  0x21,
+  canonical_instance_address_bytes ‖ u64_le(generation)
+)
+```
+
+The full instance reference is also carried by the dated event. The derived
+reference is the stable timer identity sealed in transaction key 37; the due
+time remains replay-derived. Re-arming idle within one generation therefore
+keeps one logical obligation while its causal envelope changes, and an event
+from a closed generation cannot target its successor.
 
 **The call identity.** An outbound call is caused by exactly one
 delivery carrying exactly one prepared request, and its internal
@@ -326,7 +344,7 @@ Composed cases :
 Every transaction has a **causal envelope** ; the `l:` trigger namespace covers the
 transactions that no port arrival triggers :
 
-| Transaction | `trigger` | `parent_id` (the cause) | Emitter (`node_path`) |
+| Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
 |---|---|---|---|
 | `on start` | `l:start` | the envelope whose admission created the Node instance | the node itself |
 | `on stop` via the `stop` action | `l:stop` | the envelope being processed when `stop` ran | the node itself |

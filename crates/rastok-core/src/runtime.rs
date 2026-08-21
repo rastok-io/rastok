@@ -603,7 +603,7 @@ impl<'plan> TransactionExecutor<'plan> {
             }
             return Ok(TransactionOutcome {
                 record: TransactionRecord {
-                    node_path: node.path.clone(),
+                    owner_path: crate::plan::OwnerPath::from(&node.path),
                     instance: instance.clone(),
                     parent_instance: parent_instance.cloned(),
                     trigger: trigger.clone(),
@@ -657,7 +657,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     // Filtered: consumed with no effect.
                     return Ok(TransactionOutcome {
                         record: TransactionRecord {
-                            node_path: node.path.clone(),
+                            owner_path: crate::plan::OwnerPath::from(&node.path),
                             instance: instance.clone(),
                             parent_instance: parent_instance.cloned(),
                             trigger: trigger.clone(),
@@ -778,7 +778,7 @@ impl<'plan> TransactionExecutor<'plan> {
         let timers = self.armed_budgets(slot, &emissions);
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                node_path: node.path.clone(),
+                owner_path: crate::plan::OwnerPath::from(&node.path),
                 instance: instance.clone(),
                 parent_instance: parent_instance.cloned(),
                 trigger: trigger.clone(),
@@ -814,7 +814,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     .is_some();
                 if budgeted {
                     timers.push((
-                        1,
+                        crate::journal::timer_kind::CALL_TIMEOUT,
                         ids::delivery_ref(
                             &self.plan.edge_text(edge),
                             emission.envelope.meta().sys().id(),
@@ -884,7 +884,7 @@ impl<'plan> TransactionExecutor<'plan> {
             .collect();
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                node_path: connector_path.clone(),
+                owner_path: crate::plan::OwnerPath::from(connector_path),
                 instance: instance.clone(),
                 parent_instance: None,
                 trigger: trigger.clone(),

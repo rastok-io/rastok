@@ -323,21 +323,15 @@ fn every_duration_lifetime_requires_a_positive_value() {
 }
 
 #[test]
-fn scheduler_gated_lifetimes_never_validate_as_persistent() {
+fn every_closed_lifetime_profile_validates_once_the_scheduler_supports_it() {
     for lifetime in [
         plan::InstanceLifetime::Fixed(1),
         plan::InstanceLifetime::SinglePass,
         plan::InstanceLifetime::Tumbling(1),
     ] {
         let mut raw = bare_operator_plan();
-        raw.owners[1].instance.lifetime = lifetime.clone();
-        assert_eq!(
-            ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-            PlanValidationError::UnsupportedInstanceLifetime {
-                owner: String::from("worker"),
-                lifetime,
-            }
-        );
+        raw.owners[1].instance.lifetime = lifetime;
+        ValidatedExecutionPlan::try_new(raw).expect("R4 executes every closed lifetime profile");
     }
 }
 
@@ -422,14 +416,26 @@ fn instance_key_type_is_a_derived_fact_not_a_package_claim() {
 }
 
 #[test]
-fn idle_process_requires_a_finite_call_budget_before_closing_lands() {
+fn every_finite_scope_requires_a_finite_process_call_budget_before_closing_lands() {
     let mut raw = raw_probe();
     owner_mut(&mut raw, "shell").instance.lifetime = plan::InstanceLifetime::Idle(1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::UnboundedIdleConnector {
+        PlanValidationError::UnboundedLifetimeConnector {
+            connector: String::from("shell"),
             owner: String::from("shell"),
         }
+    );
+
+    let mut graph = raw_probe();
+    graph.owners[0].instance.lifetime = plan::InstanceLifetime::Fixed(1);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(graph).unwrap_err(),
+        PlanValidationError::UnboundedLifetimeConnector {
+            connector: String::from("shell"),
+            owner: String::new(),
+        },
+        "a finite Graph is bounded by every Process in its subtree"
     );
 }
 

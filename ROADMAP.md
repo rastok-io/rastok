@@ -98,14 +98,16 @@ The repository opens publicly with this milestone (15 October 2026).
   checkpoint allocated categorical plan-package v9: lexical Graph/Node
   owners, scoped edges, typed key/lifetime policy, phased immutable values and
   dynamic Connector rows now travel and are revalidated independently of the
-  compiler Registry. R3 has now landed hierarchical routing: canonical
+  compiler Registry. R3 landed hierarchical routing: canonical
   `(address, generation)` references are sealed by producers and shared by
   journal, mailboxes, state, calls, timers, lifecycle and cursors; Graph keys
   are sticky across descendant traffic; candidate bindings fail before
   ingress/effect; and a stable virtual-shard seam proves placement neutrality.
   This deliberately moved causal traces, including singleton traces, without
-  moving semantic hashes or plan-package bodies. Finite lifetimes and bounded
-  Closing remain R4/R5.
+  moving semantic hashes or plan-package bodies. R4 now executes all five
+  lifetime profiles with journal-derived generations, deterministic deadlines,
+  parent/child lifecycle fencing, and inner-first natural closure. Explicitly
+  bounded drain/cancel/settlement remains R5.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

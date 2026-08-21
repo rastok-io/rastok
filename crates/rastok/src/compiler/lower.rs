@@ -348,14 +348,9 @@ fn lower_instance(
     let lifetime = match &policy.lifetime {
         InstanceLifetime::Persistent => PlanInstanceLifetime::Persistent,
         InstanceLifetime::Idle(value) => PlanInstanceLifetime::Idle(duration(value)?),
-        InstanceLifetime::Fixed(_)
-        | InstanceLifetime::SinglePass
-        | InstanceLifetime::Tumbling(_) => {
-            return Err(LowerError {
-                owner: owner.to_string(),
-                detail: "this lifetime profile requires the M1.4 R4 scheduler",
-            });
-        }
+        InstanceLifetime::Fixed(value) => PlanInstanceLifetime::Fixed(duration(value)?),
+        InstanceLifetime::SinglePass => PlanInstanceLifetime::SinglePass,
+        InstanceLifetime::Tumbling(value) => PlanInstanceLifetime::Tumbling(duration(value)?),
     };
     Ok(InstanceSpec {
         key: policy

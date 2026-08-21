@@ -14,11 +14,13 @@ or package contract; its mechanisms are being realigned behind Node-owned
 `instances.key`, independent `lifetime`, Node-private state, and hierarchical
 logical addresses. Its valid-program/golden evidence remains evidence, not a
 compatibility promise.
-R3 now executes those hierarchical addresses through producer-sealed instance
+R3 executes those hierarchical addresses through producer-sealed instance
 references shared by routes, transactions, mailboxes, state, calls, timers,
 lifecycle and cursors. The causal trace moved deliberately while semantic
-hashes and v9 package bodies remained fixed; R4/R5 retain finite lifetime and
-Closing.
+hashes and v9 package bodies remained fixed. R4 executes persistent, idle,
+fixed, single-pass, and processing-time tumbling lifetimes, including
+generation fences and inner-first Graph closure. R5 retains explicitly bounded
+Closing, cancellation, and call settlement.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now

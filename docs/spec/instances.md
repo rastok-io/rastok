@@ -4,14 +4,14 @@
 > accepts and checks the R1 `instances` / `lifetime` surface. Plan-package v9
 > now carries the categorical parent-linked owner table, scoped routes,
 > independent instance policy, immutable owner expressions, and phased
-> Connector settings. R3 now routes persistent Graphs and persistent/idle
-> executable Nodes through canonical hierarchical instance references; those
-> references index routes, transactions, mailboxes, state, calls, timers,
-> lifecycle, and cursors. The grammar and v9 reader recognize the other closed
-> lifetime forms, but validation refuses them by name until R4. Source
-> production of some dynamic settings/values and nested Graph syntax remain
-> named R1 gaps, while finite lifetimes and Closing remain R4/R5 gates rather
-> than disappearing. This document is the single authority for logical
+> Connector settings. R3 routes every owner through canonical hierarchical
+> instance references; those references index routes, transactions,
+> mailboxes, state, calls, timers, lifecycle, and cursors. R4 executes all five
+> closed lifetime profiles on Graph and Node owners, including global
+> temporal singletons and inner-first Graph closure. Source production of
+> some dynamic settings/values, nested Graph syntax, and Graph handlers remain
+> named R1 gaps; explicit bounded Closing remains the R5 gate. This document
+> is the single authority for logical
 > instance addressing, key selection, Node-local state, lifetime, and the
 > semantic boundary with future sharding.
 
@@ -373,13 +373,10 @@ lifetime = { kind = tumbling   ; every = duration("5m") }
 Omission is canonically equivalent to `kind = persistent`; lowering removes
 the spelling difference before semantic identity.
 
-The table is the closed target vocabulary, not a silent capability claim.
-The current executable gate admits `persistent` on Graph and Node owners and
-`idle` on executable Node owners.
-`fixed`, `single_pass`, and `tumbling` are recognized and transported by the
-v9 grammar/reader but refuse before a validated executable plan until R4.
-Finite Graph lifetime and Graph lifecycle wait for R4; persistent Graph-owned
-addressing is executable through the R3 router.
+The table is the closed executable R4 vocabulary, not merely a transport
+registry. Graph and Node owners execute all five profiles. Sliding and
+event-time windows remain named later gates rather than inheriting one of
+these meanings.
 
 ### 6.1 Persistent
 
@@ -401,23 +398,27 @@ drained, cancelled, settled, or retained according to their own protocol and
 the R5 closing contract. Expiry itself never suppresses a Connector's terminal
 `exit` or a Saga compensation.
 
-Until R5 supplies finite drain/cancel/settle policy, an idle `Process` owner
-is executable only with a positive plan-resolved invocation `timeout`. That
-existing call budget guarantees that an obligation delaying idle stop cannot
-remain open forever. This is a temporary admission guard, not a hidden
-Closing default; R5 replaces the restriction with the explicit policy.
+Until R5 supplies finite drain/cancel/settle policy, every `Process` in the
+subtree of any finite owner is executable only with a positive plan-resolved
+invocation `timeout`. That existing call budget guarantees that an obligation
+delaying natural stop cannot remain open forever. This is a temporary
+admission guard, not a hidden Closing default; R5 replaces the restriction
+with the explicit policy.
 
 ### 6.3 Fixed
 
 The creating admission arms `start + after`. Later traffic does not move the
-deadline. At expiry the instance enters Closing.
+deadline. At expiry the instance enters Closing. The dated event carries the
+complete generation-bearing instance reference, so an old event cannot close
+a later generation at the same address.
 
 ### 6.4 Single pass
 
 One root admission creates the instance. Further root admissions wait for a
 later generation. The instance closes after the admitted root's immediate DAG
-work is quiescent and its admitted obligations are handled by the closing
-contract. The exact executable quiescence proof lands with this named gate.
+work is quiescent and its admitted obligations have settled. R4 implements
+that natural-quiescence rule; R5 replaces the interim wait with the explicit
+bounded closing contract where external calls are possible.
 
 ### 6.5 Tumbling
 
@@ -428,6 +429,11 @@ its admission. A lifetime without `instances.key` is therefore a true temporal
 singleton in each enclosing Graph address, rather than a fake constant-key
 partition; it is App-global only when every ancestor is singleton.
 
+Each box address admits generation zero at most once in forward execution. A
+route committed before box closure remains old-box work and drains there; an
+attempt after closure cannot reopen that address as generation one or spill
+into the next box. The next epoch boundary creates a different address frame.
+
 Sliding windows remain a named deferred feature: overlap maps one envelope to
 several instances and therefore requires explicit one-to-many admission.
 Event-time and watermarks are a separate additive layer.
@@ -435,13 +441,17 @@ Event-time and watermarks are a separate additive layer.
 ## 7. Start, stop, and containment
 
 The first admission to an absent address reserves the next journal-derived
-generation. Before `l:start`, the runtime purely evaluates and validates that
-Node's per-instance `val`s and instance-bound Connector settings into a
+generation. Every selected Graph and Node owner records exactly one lazy
+`l:start`, including persistent singletons; persistent only means that no
+deadline is armed. Before `l:start`, the runtime purely evaluates and validates
+that owner's per-instance `val`s and instance-bound Connector settings into a
 candidate bundle. A failure leaves the delivery unconsumed, commits no
 `l:start`, and performs no adapter effect. Once the bundle is valid, the
 runtime commits the `l:start` lifecycle transaction before the port
 transaction or any external resource effect. `on start` and `on stop` are
-ordinary handlers owned by the Node and require a causal input envelope.
+ordinary handlers owned by the Node and require a causal input envelope;
+Graph lifecycle facts execute now, while Graph handler source/lowering remains
+the named R1 gap.
 
 Bare `stop` requests closure of the current Node instance after the current
 transaction commits. There is no `stop <partition>` form. Stopping a Graph
@@ -450,10 +460,13 @@ generation; children finish before the parent's `on stop`.
 
 Parent/child lifecycle is not shared memory. Each child `l:start` opens a
 runtime lifecycle obligation toward its parent generation by carrying that
-parent's complete instance reference; `l:stop` closes it. The logical child
+parent’s complete instance reference; `l:stop` closes it. The logical child
 address cannot substitute for this fact because it deliberately excludes
 ancestor generations. This relation is a fold of journal facts. It lets a
 future distributed parent enumerate children and send durable close requests.
+The journal refuses a child start under an inactive parent and refuses a
+parent stop while any direct child remains active; because every deeper child
+has an active direct ancestor, this enforces the whole inner-first tree.
 
 A child creation racing with parent close is decided by the journal:
 
@@ -483,6 +496,13 @@ survive instance closure.
 R5 must freeze finite budgets, cancellation, settlement, residual internal
 deliveries, and the exact `closing = { ... }` sheet before implementation.
 No hidden timeout or process-killing default is authorized by this document.
+
+R4's executable interim is deliberately smaller: the first close cause wins,
+external admission stops, already causal work inside the same Graph closing
+scope may finish, and stops commit one at a time in canonical inner-first
+order after natural quiescence. No cancellation is synthesized. The positive
+`Process.timeout` rule above makes that interim finite for the only live
+external-call adapter.
 
 ## 8. Joins
 

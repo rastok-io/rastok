@@ -665,7 +665,10 @@ fn the_connector_completion_matches_the_reference_trace() {
             &completion,
         )
         .expect("the validated connector slot settles");
-    assert_eq!(outcome.record.node_path, connector_path);
+    assert_eq!(
+        outcome.record.owner_path,
+        rastok_core::plan::OwnerPath::from(&connector_path)
+    );
     assert_eq!(outcome.record.trigger.to_string(), "p:in");
     assert_eq!(outcome.record.emissions.len(), 4);
     let ports_and_indexes: Vec<_> = outcome

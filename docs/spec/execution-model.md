@@ -3,10 +3,12 @@
 > **Status:** normative. The Node-owned instance model in
 > [instances.md](instances.md) supersedes the unreleased P0–P3
 > named-partition implementation. Categorical plan-package v9 now carries the
-> realigned owner tree and instance policies. R3 now routes every delivery
-> through one hierarchical instance reference shared by journal, mailbox,
-> state, calls, timers, lifecycle, and cursors. Finite lifetime and Closing
-> remain R4/R5 gates.
+> realigned owner tree and instance policies. R3 routes every delivery through
+> one hierarchical instance reference shared by journal, mailbox, state,
+> calls, timers, lifecycle, and cursors. R4 executes persistent, idle, fixed,
+> single-pass, and processing-time tumbling lifetimes with journal-derived
+> generations and inner-first Graph closure. Explicit bounded Closing remains
+> the R5 gate.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -140,11 +142,14 @@ Admission of a delivery into an absent address starts a new **instance**:
 
 An effective expiry requests Closing for that instance. New external
 admission stops; already admitted internal work and Connector-call obligations
-are handled by the bounded closing protocol. Every admitted Connector call
-retains its terminal `exit`, and `on stop` runs only after every required
-terminal fact. State is reclaimed only after the stop transaction commits. A
-later delivery to the same address starts a clean generation and cannot see
-the closed state.
+remain old-generation work. R4 waits for their natural quiescence, requiring a
+positive plan-resolved timeout on every `Process` in a finite owner subtree so
+that this interim has no unbounded external call. R5 replaces that restriction
+with the explicit bounded drain/cancel/settle protocol. Every admitted
+Connector call retains its terminal `exit`, and `on stop` runs only after
+every required terminal fact. State is reclaimed only after the stop
+transaction commits. A later delivery to the same address starts a clean
+generation and cannot see the closed state.
 
 Mailbox reservation plus the producer's route commit is the admission point.
 Reservation returns the instance reference that the route seals. A route that
@@ -161,14 +166,18 @@ names it. In a future cross-shard implementation, reservation and route
 publication may use a protocol, but a crash may not expose one without a
 recoverable path to the other.
 
-`on start` and `on stop` are ordinary handlers in the Node's handler table.
-They may read the causing envelope and emit ordinary typed outputs. A Graph
-close also requests inner-first closure of live descendants created in that
-Graph generation. A non-root child's `l:start` record carries its enclosing
-Graph's complete instance reference, so the lifecycle fold distinguishes two
-successive parents at the same logical address. The exact closing sheet,
-drain/cancel/settle sequence, and residual-delivery rules remain the R5 gate;
-this document supplies no hidden timeout or kill default.
+Every selected owner, persistent included, records one lazy `l:start` before
+its first port transaction. `on start` and `on stop` are ordinary handlers in
+an executable Node's handler table and may emit ordinary typed outputs; Graph
+lifecycle records execute at R4 while Graph handler lowering remains a named
+frontend gap. A Graph close requests inner-first closure of live descendants
+created in that Graph generation. A non-root child's `l:start` record carries
+its enclosing Graph's complete instance reference, so the lifecycle fold
+distinguishes two successive parents at the same logical address. The journal
+refuses a start under an inactive parent and a parent stop with an active
+child. The exact closing sheet, drain/cancel/settle sequence, and residual-
+delivery rules remain the R5 gate; this document supplies no hidden timeout or
+kill default.
 
 
 ## 3. Ordering — what is guaranteed, what is journaled
@@ -460,17 +469,16 @@ a window per key.
 
 | Family | Shape | One envelope belongs to | Rastok | Status |
 |---|---|---|---|---|
-| **Session** | elastic, closed by admission silence | 1 instance | `lifetime = { kind = idle; after = duration("2h") }` | normative target |
-| **Fixed** | age from instance start | 1 instance | `lifetime = { kind = fixed; after = duration("30s") }` | normative target |
-| **Tumbling** | epoch-aligned boxes | 1 box | `lifetime = { kind = tumbling; every = duration("5m") }` | normative target |
+| **Session** | elastic, closed by admission silence | 1 instance | `lifetime = { kind = idle; after = duration("2h") }` | executable R4 |
+| **Fixed** | age from instance start | 1 instance | `lifetime = { kind = fixed; after = duration("30s") }` | executable R4 |
+| **Tumbling** | epoch-aligned boxes | 1 box | `lifetime = { kind = tumbling; every = duration("5m") }` | executable R4 |
 | **Sliding** | fixed, overlapping | **N boxes** | no accepted spelling yet | deferred |
 
-The table describes the normative lifetime semantics. At the current R2
-execution gate, only persistent and Node-owned idle instances validate;
-fixed/tumbling (and the single-pass profile from instances.md) refuse until
-R4, rather than inheriting persistent behavior. Graph-owned routing waits for
-R3. Before R5, an idle Process must already carry a finite invocation timeout
-so waiting for its terminal exit cannot become an implicit unbounded close.
+The table describes the executable R4 lifetime semantics. Persistent,
+idle, fixed, single-pass, and tumbling validate on Graph and Node owners.
+Before R5, every `Process` inside any finite owner must already carry a finite
+plan-resolved invocation timeout, so waiting for its terminal exit cannot
+become an implicit unbounded close.
 
 The processing-time tumbling contract has four rules:
 
@@ -480,6 +488,11 @@ The processing-time tumbling contract has four rules:
    data fabricated by the author;
 4. box expiry follows the same Closing protocol and `on stop` ordering as any
    finite instance.
+
+The box-start frame is part of the logical address. One box address admits
+only generation zero in forward execution: a delayed pre-close route remains
+in that box, while a post-close route refuses until time selects the next box
+address. It never creates generation one for an expired box.
 
 In simulation, civil time is the scenario's `origin` plus the virtual offset
 (`origin` defaults to the epoch, simulation-semantics §5.3), so the same
@@ -493,7 +506,7 @@ select several instances and therefore requires explicit one-to-many routing.
 Two lifecycle triggers belong to the `l:` registry
 ([envelope.md](envelope.md) §1.1/§3.1):
 
-| Transaction | `trigger` | `parent_id` (the cause) | Emitter (`node_path`) |
+| Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
 |---|---|---|---|
 | Call-timeout expiry | `l:timeout` | the timed-out request envelope | the Connector node |
 | Join-buffer eviction | `l:evict` | the evicted envelope | the Operator node |

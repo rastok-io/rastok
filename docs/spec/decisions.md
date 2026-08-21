@@ -231,17 +231,68 @@ The first, unreleased R3 address spelling is superseded. This correction moves
 the same four causal trace fixtures once more; semantic hashes and `.rkp`
 bodies remain unchanged.
 
-The one-worker VM executes Graph-owned persistent routing, nested Graph/Node
-addresses, sticky ancestor selection across metadata rewrites, isolated
-state/cursors, journal-derived fresh generations, pre-effect instance bundles,
-and the architecture-neutral shard seam. Fixed, single-pass, tumbling, Graph
-lifecycle/cascade, finite Closing, and physical inter-shard transport remain
-their R4/R5/later gates. Source production of non-plan owner values and some
-dynamic rows remains an R1 frontend gap; R3 proves the runtime contract with
+At the R3 checkpoint, the one-worker VM executed Graph-owned persistent
+routing, nested Graph/Node addresses, sticky ancestor selection across
+metadata rewrites, isolated state/cursors, journal-derived fresh generations,
+pre-effect instance bundles, and the architecture-neutral shard seam. Fixed,
+single-pass, tumbling, and Graph lifecycle/cascade still belonged to R4 at
+that checkpoint. Source production of non-plan owner values and some dynamic
+rows remains an R1 frontend gap; R3 proves the runtime contract with
 validated-plan probes rather than pretending that missing source spelling is
 already public. Full crash recovery likewise remains an explicit
 `RecoveryFold`; the R3 journal rows are its authority and never trigger
 re-routing.
+
+**R4 lifetime checkpoint (2026-08-21).** Every selected owner now opens one
+lazy, journaled generation, including persistent singleton Graphs and Nodes.
+Persistent arms no deadline. Idle is anchored to the most recent boundary
+admission; fixed is anchored to `l:start`; single-pass admits exactly one root
+envelope and closes at natural quiescence; processing-time tumbling adds the
+epoch-aligned box start as an address frame and closes at the box end. A
+closed tumbling-box address has no second forward generation: a later attempt
+in that same box refuses rather than reopening or spilling into another box.
+
+Every dated lifetime event carries the complete `InstanceRef`. Its sealed
+timer reference derives under domain `0x21` from canonical address bytes and
+the little-endian generation. Idle also carries the last-admission id, while
+fixed and tumbling carry their creating cause. A stale event therefore cannot
+address a successor generation or win against newer idle activity. Equal-date
+events retain scheduler insertion order and lifecycle stops are selected by
+canonical inner-first instance order, so two executions record one order.
+
+Finite expiry closes external admission immediately. Work already causal
+inside the same Graph closing scope, including a previously admitted
+Connector completion, may finish through existing descendants. Before R5
+adds explicit drain/cancel/settle budgets, closure waits for natural
+quiescence and never invents a kill or grace period. To keep that interim
+wait bounded, every `Process` anywhere in a finite owner's subtree must carry
+a positive plan-resolved invocation `timeout`; validation proves this for
+foreign packages as well as checked source.
+
+Graph closure requests every live descendant and commits `l:stop`
+inner-first. The journal independently refuses a child start under an
+inactive parent and a parent stop while a child lifecycle remains active, so
+the ordering is a replayable fold rather than VM choreography. State is
+reclaimed only after the stop fact commits; re-entry at the same logical
+address receives the next journal generation and a clean Node-local cell.
+Graph-level lifecycle handlers remain the named R1 frontend/lowering gap, and
+the exact bounded `closing` sheet remains R5.
+
+R4 deliberately moves causal traces once more without moving source identity
+or plan transport. Transaction key 30 is now the lifecycle/transaction
+`owner_path`: ordinary Node firings retain their previous text, while Graph
+`l:start`/`l:stop` facts can use a lexical Graph path (the App root is the
+empty path). Universal lazy starts add lifecycle records to
+`gauge-roundtrip.trace`, `echo-roundtrip.trace`, `jsonl-roundtrip.trace`, and
+`m0-probe.trace`. No semantic hash or `.rkp` body changes.
+
+The Cortex-M33 spike now identifies the measured relay transaction by its
+journal actor/trigger so the new lifecycle turns are executed without being
+misreported as relay samples. The unchanged 927-byte package decodes in
+15 345 ticks; 32 exact relay samples average 2 767 ticks (maximum 2 979), the
+allocator-tracked peak is 104 124 bytes, and `.text + .rodata` is 462 516
+bytes. All four written thresholds remain green; the relay margin is reported
+honestly as 1.007×.
 
 ## D-2026-08-16-1 — A partition key is a journaled routing decision
 

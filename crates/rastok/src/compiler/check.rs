@@ -428,9 +428,9 @@ struct PendingInstance {
 enum InstanceLifetimeSource {
     Persistent,
     Idle { after: SynValue, span: Span },
-    Fixed { span: Span },
-    SinglePass { span: Span },
-    Tumbling { span: Span },
+    Fixed { after: SynValue, span: Span },
+    SinglePass,
+    Tumbling { every: SynValue, span: Span },
 }
 
 impl Checker<'_, '_> {
@@ -1978,25 +1978,25 @@ impl Checker<'_, '_> {
                 InstanceLifetimeSource::Idle { after, span }
             }
             "fixed" => {
-                let Some((_after, span)) = duration(&mut fields, "after") else {
+                let Some((after, span)) = duration(&mut fields, "after") else {
                     self.instance_refusal(
                         attribute.span,
                         "`lifetime(kind = fixed)` requires `after`",
                     );
                     return None;
                 };
-                InstanceLifetimeSource::Fixed { span }
+                InstanceLifetimeSource::Fixed { after, span }
             }
-            "single_pass" => InstanceLifetimeSource::SinglePass { span: kind.span },
+            "single_pass" => InstanceLifetimeSource::SinglePass,
             "tumbling" => {
-                let Some((_every, span)) = duration(&mut fields, "every") else {
+                let Some((every, span)) = duration(&mut fields, "every") else {
                     self.instance_refusal(
                         attribute.span,
                         "`lifetime(kind = tumbling)` requires `every`",
                     );
                     return None;
                 };
-                InstanceLifetimeSource::Tumbling { span }
+                InstanceLifetimeSource::Tumbling { every, span }
             }
             "sliding" => {
                 self.deferred("a sliding lifetime", kind.span);
@@ -2199,17 +2199,12 @@ impl Checker<'_, '_> {
             InstanceLifetimeSource::Idle { after, span } => {
                 InstanceLifetime::Idle(duration(self, after, *span)?)
             }
-            InstanceLifetimeSource::Fixed { span } => {
-                self.deferred("a fixed instance lifetime", *span);
-                return None;
+            InstanceLifetimeSource::Fixed { after, span } => {
+                InstanceLifetime::Fixed(duration(self, after, *span)?)
             }
-            InstanceLifetimeSource::SinglePass { span } => {
-                self.deferred("a single-pass instance lifetime", *span);
-                return None;
-            }
-            InstanceLifetimeSource::Tumbling { span } => {
-                self.deferred("a tumbling instance lifetime", *span);
-                return None;
+            InstanceLifetimeSource::SinglePass => InstanceLifetime::SinglePass,
+            InstanceLifetimeSource::Tumbling { every, span } => {
+                InstanceLifetime::Tumbling(duration(self, every, *span)?)
             }
         })
     }
@@ -7518,33 +7513,46 @@ graph g : App {
     }
 
     #[test]
-    fn every_scheduler_gated_lifetime_refuses_before_hir_can_ship() {
+    fn every_r4_lifetime_reaches_hir_with_its_duration() {
+        enum ExpectedLifetime {
+            Fixed,
+            SinglePass,
+            Tumbling,
+        }
+
         let cases = [
             (
                 "lifetime = { kind = fixed ; after = duration(\"30s\") }",
-                "a fixed instance lifetime",
+                ExpectedLifetime::Fixed,
             ),
             (
                 "lifetime = { kind = single_pass }",
-                "a single-pass instance lifetime",
+                ExpectedLifetime::SinglePass,
             ),
             (
                 "lifetime = { kind = tumbling ; every = duration(\"5m\") }",
-                "a tumbling instance lifetime",
+                ExpectedLifetime::Tumbling,
             ),
         ];
-        for (attribute, construct) in cases {
+        for (attribute, expected) in cases {
             let source = format!(
                 "graph g : App {{\n  input in: text\n  output out: text\n  operator relay {{\n    {attribute}\n    on in {{ out = . }}\n  }}\n  . -> relay -> .\n}}\n"
             );
-            let (_, bag) = check_source(&source);
-            assert!(bag.diagnostics().iter().any(|diagnostic| {
-                diagnostic.code() == E_CHECK_DEFERRED
-                    && diagnostic
-                        .fields()
-                        .iter()
-                        .any(|(_, value)| value == construct)
-            }));
+            let hir = check_clean(&source);
+            let lifetime = &hir.app.nodes[0]
+                .instance
+                .as_ref()
+                .expect("the explicit policy reaches HIR")
+                .lifetime;
+            assert!(match expected {
+                ExpectedLifetime::Fixed => matches!(lifetime, InstanceLifetime::Fixed(_)),
+                ExpectedLifetime::SinglePass => {
+                    matches!(lifetime, InstanceLifetime::SinglePass)
+                }
+                ExpectedLifetime::Tumbling => {
+                    matches!(lifetime, InstanceLifetime::Tumbling(_))
+                }
+            });
         }
     }
 

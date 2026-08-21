@@ -40,9 +40,10 @@
 > unchanged source kept its semantic hash and causal trace; R3 moves the trace
 > while keeping both semantic hash and package fixed.
 >
-> The allocated lifetime rows are a closed transport registry, not automatic
-> runtime enablement: v9 validation currently admits Graph/Node `persistent`
-> and Node-owned `idle`, and refuses the R4 finite-lifetime rows by typed gate.
+> The lifetime rows are one closed transport and executable registry: v9
+> validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
+> processing-time `tumbling` on Graph and Node owners. Sliding/event-time and
+> the R5 `closing` contract remain named gates.
 > A decoded key type is re-derived and compared; unlike
 > compiler lowering, package validation never normalizes the claim.
 >
@@ -266,8 +267,8 @@ lifetime   := [1]                                 — persistent
             | [5, nanoseconds (int)]              — tumbling(every), > 0
               // Persistent is explicit in the categorical plan even though
               // omitted and explicitly persistent source spellings share one
-              // HIR identity. Rows 3–5 parse but cannot inhabit a validated
-              // executable plan before R4. `closing` remains absent until R5.
+              // HIR identity. R4 executes every row above. `closing` remains
+              // absent until R5.
 
 owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
                4: tagged_value?}

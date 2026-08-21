@@ -291,6 +291,12 @@ impl OwnerPath {
     }
 }
 
+impl From<&node::Path> for OwnerPath {
+    fn from(path: &node::Path) -> Self {
+        Self(path.segments().to_vec())
+    }
+}
+
 impl fmt::Display for OwnerPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0.join("."))

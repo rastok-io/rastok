@@ -21,10 +21,11 @@ owners, Node-owned instance policy, scoped edges, and phased immutable
 expressions. As of 2026-08-21,
 `Process(mode = job)` with `lines`/`jsonl`/`bytes`, multiport completion,
 the three metadata zones, `IDENT!` frontends, structural and tagged types,
-typed narrowing, and keyed persistent/idle Node owners execute. The former
+typed narrowing, and all five Graph/Node lifetime profiles execute. The former
 named-partition P0-P3 implementation is superseded by the
-`instances`/`lifetime` model. Graph-owned and hierarchical routing,
-`fixed`/`single_pass`/`tumbling` profiles, closing, HTTP/File adapters,
+`instances`/`lifetime` model. Hierarchical routing and Graph lifecycle facts
+execute; Graph lifecycle-handler lowering, explicit bounded closing,
+HTTP/File adapters,
 Dispatch, joins, Loop, Process service mode, and guest engines are still
 pending or guarded. Thus
 these are parser- and design-reference snippets, not a claim that every

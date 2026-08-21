@@ -155,7 +155,7 @@ pub fn compile_with_assets(
             | PlanValidationError::InvalidInstanceKey { .. }
             | PlanValidationError::ConflictingInstanceKeyTypes { .. }
             | PlanValidationError::UnresolvedInstanceAdmission { .. }
-            | PlanValidationError::UnboundedIdleConnector { .. }),
+            | PlanValidationError::UnboundedLifetimeConnector { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
             return Err(bag);
@@ -259,15 +259,18 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
         )
         .with_field("name", owner)
         .with_field("detail", "missing resolved admission signature"),
-        PlanValidationError::UnboundedIdleConnector { owner } => Diagnostic::new(
+        PlanValidationError::UnboundedLifetimeConnector { connector, owner } => Diagnostic::new(
             check::E_INSTANCE,
             Phase::Check,
             format!(
-                "idle Process instance `{owner}` needs a finite `timeout` until the explicit Closing policy lands"
+                "finite owner `{owner}` needs Process `{connector}` to have a finite `timeout` until the explicit Closing policy lands"
             ),
         )
         .with_field("name", owner)
-        .with_field("detail", "idle Process without a finite invocation timeout"),
+        .with_field(
+            "detail",
+            format!("Process `{connector}` has no finite invocation timeout"),
+        ),
         _ => internal_plan_diagnostic(error),
     }
 }
@@ -396,7 +399,7 @@ graph inferred_composite : App {
     }
 
     #[test]
-    fn graph_routing_lands_before_finite_lifetimes() {
+    fn graph_routing_and_finite_lifetimes_share_the_r4_plan() {
         let keyed_graph = r#"
 graph keyed_graph : App {
   input in: text
@@ -413,6 +416,7 @@ graph keyed_graph : App {
 
         let finite = r#"
 graph finite_singleton : App {
+  input in: text
   operator relay {
     lifetime = { kind = fixed ; after = duration("30s") }
     on in { out = . }
@@ -420,17 +424,19 @@ graph finite_singleton : App {
   . -> relay -> nothing
 }
 "#;
-        let bag = compile(
+        let compilation = compile(
             &[finite],
             &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
         )
-        .expect_err("the finite policy must wait for its named R4 scheduler gate");
-        assert!(bag.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == check::E_CHECK_DEFERRED
-                && diagnostic.fields().iter().any(|(name, value)| {
-                    *name == "construct" && value == "a fixed instance lifetime"
-                })
-        }));
+        .expect("R4 executes a fixed owner lifetime");
+        assert_eq!(
+            compilation
+                .plan
+                .node_instance(crate::plan::Slot::new(0))
+                .expect("relay has one owner")
+                .lifetime,
+            crate::plan::InstanceLifetime::Fixed(30_000_000_000)
+        );
     }
 
     #[test]

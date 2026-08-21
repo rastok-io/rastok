@@ -191,22 +191,27 @@ fn the_m0_probe_runs_end_to_end() {
     // The whole mechanical chain, in causal order: birth, the
     // operator's transaction, the call's open and closure facts,
     // the connector's completion transaction.
-    let kinds: Vec<&str> = journal
+    let kinds: Vec<String> = journal
         .records()
         .iter()
         .map(|record| match record {
-            Record::Inbound(_) => "inbound",
+            Record::Inbound(_) => String::from("inbound"),
             Record::Transaction(t) => {
-                if t.node_path.to_string() == "shout" {
-                    "tx:shout"
+                let owner = if t.owner_path.is_root() {
+                    String::from("root")
                 } else {
-                    "tx:echo"
+                    t.owner_path.to_string()
+                };
+                if t.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start) {
+                    format!("start:{owner}")
+                } else {
+                    format!("tx:{owner}")
                 }
             }
             Record::Outbound(o) => match o.status {
-                OutboundStatus::Open => "outbound:open",
-                OutboundStatus::Closed(_) => "outbound:closed",
-                OutboundStatus::Abandoned => "outbound:abandoned",
+                OutboundStatus::Open => String::from("outbound:open"),
+                OutboundStatus::Closed(_) => String::from("outbound:closed"),
+                OutboundStatus::Abandoned => String::from("outbound:abandoned"),
             },
         })
         .collect();
@@ -214,7 +219,10 @@ fn the_m0_probe_runs_end_to_end() {
         kinds,
         [
             "inbound",
+            "start:root",
+            "start:shout",
             "tx:shout",
+            "start:echo",
             "outbound:open",
             "outbound:closed",
             "tx:echo"
@@ -298,7 +306,11 @@ graph rooted : App {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(transaction) => Some(transaction),
+            Record::Transaction(transaction)
+                if matches!(transaction.trigger, node::Trigger::Port(_)) =>
+            {
+                Some(transaction)
+            }
             _ => None,
         })
         .collect();
@@ -584,7 +596,7 @@ graph keyed : App {
         .iter()
         .copied()
         .filter(|transaction| {
-            transaction.node_path.to_string() == "counter"
+            transaction.owner_path.to_string() == "counter"
                 && matches!(transaction.trigger, node::Trigger::Port(_))
         })
         .collect();
@@ -600,7 +612,7 @@ graph keyed : App {
         .iter()
         .copied()
         .filter(|transaction| {
-            transaction.node_path.to_string() == "sink"
+            transaction.owner_path.to_string() == "sink"
                 && matches!(transaction.trigger, node::Trigger::Port(_))
         })
         .collect();
@@ -706,7 +718,7 @@ graph lifecycle : App {
         .iter()
         .filter_map(|record| match record {
             Record::Transaction(transaction)
-                if transaction.node_path.to_string() == "counter"
+                if transaction.owner_path.to_string() == "counter"
                     && matches!(transaction.trigger, node::Trigger::Lifecycle(_)) =>
             {
                 Some((
@@ -840,7 +852,7 @@ graph nested_lifetimes : App {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(transaction) if transaction.node_path.to_string() == "shell" => {
+            Record::Transaction(transaction) if transaction.owner_path.to_string() == "shell" => {
                 Some(transaction)
             }
             _ => None,
@@ -862,6 +874,511 @@ graph nested_lifetimes : App {
         node::Trigger::Lifecycle(node::Lifecycle::Stop)
     );
     assert_eq!(shell_transactions[2].cause, Some(cause));
+}
+
+#[test]
+fn a_graph_close_drains_a_previously_admitted_call_through_an_existing_descendant() {
+    let source = r#"
+graph draining : App {
+  input in: text
+  output out: text
+  lifetime = { kind = fixed ; after = duration("1s") }
+
+  operator seed { on in { out = . } }
+  connector shell : Process {
+    mode = job
+    command = "cat"
+    codec = lines
+    timeout = duration("10s")
+    effect = idempotent
+    behavior = deterministic
+  }
+  operator collect { on in { out = . } }
+
+  . -> seed -> collect -> .
+  . -> shell
+  shell.out -> collect
+  shell.exit -> nothing
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a bounded call may live inside a finite Graph");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
+
+    vm.inject(&mut journal, text_submission("salut")).unwrap();
+    vm.drain(&mut journal).unwrap();
+    assert!(vm.has_open_obligations());
+    assert_eq!(vm.outputs().len(), 1, "the seed creates collect first");
+
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.drain(&mut journal).unwrap();
+
+    assert_eq!(vm.outputs().len(), 2);
+    assert!(journal.records().iter().any(|record| matches!(
+        record,
+        Record::Transaction(transaction)
+            if transaction.owner_path.to_string() == "collect"
+                && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop)
+    )));
+    assert!(journal.records().iter().any(|record| matches!(
+        record,
+        Record::Transaction(transaction)
+            if transaction.owner_path.is_root()
+                && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop)
+    )));
+}
+
+#[test]
+fn fixed_and_single_pass_reenter_with_clean_state_and_the_next_generation() {
+    for (lifetime, needs_advance) in [
+        (
+            "lifetime = { kind = fixed ; after = duration(\"1s\") }",
+            true,
+        ),
+        ("lifetime = { kind = single_pass }", false),
+    ] {
+        let source = format!(
+            r#"
+graph finite : App {{
+  input in: int
+  output out: int
+
+  operator counter {{
+    {lifetime}
+    input in: int
+    output out: int
+    var count: int = 0
+    on in {{ count = count + 1 ; out = count }}
+  }}
+
+  . -> counter -> .
+}}
+"#
+        );
+        let compilation = compile(
+            &[&source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("R4 admits the finite profile");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut world = EchoWorld::default();
+
+        vm.inject(&mut journal, int_submission(1)).unwrap();
+        vm.drain(&mut journal).unwrap();
+        if needs_advance {
+            vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+        }
+        vm.inject(&mut journal, int_submission(2)).unwrap();
+        vm.drain(&mut journal).unwrap();
+
+        let values: Vec<i64> = vm
+            .outputs()
+            .iter()
+            .map(|output| match output.envelope.data() {
+                Data::Materialized(Value::Int(value)) => *value,
+                other => panic!("the counter emits ints, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(values, [1, 1], "a successor never inherits state");
+        let lifecycle: Vec<_> = journal
+            .records()
+            .iter()
+            .filter_map(|record| match record {
+                Record::Transaction(transaction)
+                    if transaction.owner_path.to_string() == "counter"
+                        && matches!(
+                            transaction.trigger,
+                            node::Trigger::Lifecycle(
+                                node::Lifecycle::Start | node::Lifecycle::Stop
+                            )
+                        ) =>
+                {
+                    Some((
+                        transaction.trigger.clone(),
+                        transaction.instance.generation(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut expected = vec![
+            (node::Trigger::Lifecycle(node::Lifecycle::Start), 0),
+            (node::Trigger::Lifecycle(node::Lifecycle::Stop), 0),
+            (node::Trigger::Lifecycle(node::Lifecycle::Start), 1),
+        ];
+        if !needs_advance {
+            expected.push((node::Trigger::Lifecycle(node::Lifecycle::Stop), 1));
+        }
+        assert_eq!(lifecycle, expected);
+    }
+}
+
+#[test]
+fn persistent_owners_start_once_and_arm_no_lifetime_deadline() {
+    let source = r#"
+graph persistent : App {
+  input in: int
+  output out: int
+  operator relay { on in { out = . } }
+  . -> relay -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("persistent is the executable omission default");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
+
+    vm.inject(&mut journal, int_submission(1)).unwrap();
+    vm.advance(&mut journal, &mut world, i64::MAX).unwrap();
+
+    let lifecycle: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if matches!(
+                    transaction.trigger,
+                    node::Trigger::Lifecycle(node::Lifecycle::Start | node::Lifecycle::Stop)
+                ) =>
+            {
+                Some((transaction.trigger.clone(), transaction.timers.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lifecycle.len(), 2, "root and relay start lazily once");
+    assert!(lifecycle.iter().all(|(trigger, timers)| {
+        *trigger == node::Trigger::Lifecycle(node::Lifecycle::Start) && timers.is_empty()
+    }));
+}
+
+#[test]
+fn keyed_fixed_instances_close_on_their_own_start_dates() {
+    let source = r#"
+graph keyed_fixed : App {
+  input in: int
+  output out: int
+  operator relay {
+    instances = { key = data }
+    lifetime = { kind = fixed ; after = duration("1s") }
+    on in { out = . }
+  }
+  . -> relay -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("key and fixed lifetime are orthogonal");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
+
+    vm.inject(&mut journal, int_submission(1)).unwrap();
+    vm.advance(&mut journal, &mut world, 500_000_000).unwrap();
+    vm.inject(&mut journal, int_submission(2)).unwrap();
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+
+    let stopped: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.owner_path.to_string() == "relay"
+                    && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop) =>
+            {
+                Some(transaction.instance.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stopped.len(), 1, "only the t=0 key reaches its deadline");
+
+    vm.advance(&mut journal, &mut world, 1_500_000_000).unwrap();
+    let stopped = journal
+        .records()
+        .iter()
+        .filter(|record| {
+            matches!(
+                record,
+                Record::Transaction(transaction)
+                    if transaction.owner_path.to_string() == "relay"
+                        && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop)
+            )
+        })
+        .count();
+    assert_eq!(stopped, 2);
+}
+
+#[test]
+fn a_single_pass_rejects_a_second_root_until_its_first_generation_stops() {
+    let source = r#"
+graph one : App {
+  input in: int
+  output out: int
+  operator relay {
+    lifetime = { kind = single_pass }
+    on in { out = . }
+  }
+  . -> relay -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("single-pass is executable");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+
+    vm.inject(&mut journal, int_submission(1)).unwrap();
+    assert!(matches!(
+        vm.inject(&mut journal, int_submission(2)),
+        Err(VmError::InstanceClosing { owner }) if owner.to_string() == "relay"
+    ));
+    vm.drain(&mut journal).unwrap();
+    vm.inject(&mut journal, int_submission(2)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    assert_eq!(vm.outputs().len(), 2);
+}
+
+#[test]
+fn a_tumbling_graph_is_a_real_global_window_and_closes_children_first() {
+    let source = r#"
+graph windows : App {
+  input in: int
+  output out: int
+  lifetime = { kind = tumbling ; every = duration("5s") }
+
+  operator counter {
+    var count: int = 0
+    on in { count = count + 1 ; out = count }
+  }
+
+  . -> counter -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("an unkeyed Graph can own a temporal window");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
+
+    vm.inject(&mut journal, int_submission(1)).unwrap();
+    vm.inject(&mut journal, int_submission(2)).unwrap();
+    vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
+    vm.inject(&mut journal, int_submission(3)).unwrap();
+    vm.drain(&mut journal).unwrap();
+
+    let values: Vec<i64> = vm
+        .outputs()
+        .iter()
+        .map(|output| match output.envelope.data() {
+            Data::Materialized(Value::Int(value)) => *value,
+            other => panic!("the counter emits ints, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(values, [1, 2, 1]);
+
+    let lifecycle: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if matches!(
+                    transaction.trigger,
+                    node::Trigger::Lifecycle(node::Lifecycle::Start | node::Lifecycle::Stop)
+                ) =>
+            {
+                Some((
+                    transaction.owner_path.to_string(),
+                    transaction.trigger.clone(),
+                    transaction.instance.clone(),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    let root_stops = lifecycle
+        .iter()
+        .position(|(owner, trigger, _)| {
+            owner.is_empty() && *trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop)
+        })
+        .expect("the first box closes");
+    let child_stops = lifecycle
+        .iter()
+        .position(|(owner, trigger, _)| {
+            owner == "counter" && *trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop)
+        })
+        .expect("the child closes");
+    assert!(child_stops < root_stops, "containment closes inner-first");
+
+    let root_starts: Vec<_> = lifecycle
+        .iter()
+        .filter(|(owner, trigger, _)| {
+            owner.is_empty() && *trigger == node::Trigger::Lifecycle(node::Lifecycle::Start)
+        })
+        .map(|(_, _, reference)| reference)
+        .collect();
+    assert_eq!(root_starts.len(), 2);
+    assert_eq!(root_starts[0].generation(), 0);
+    assert_eq!(root_starts[1].generation(), 0);
+    assert_ne!(root_starts[0].address(), root_starts[1].address());
+}
+
+#[test]
+fn a_closed_tumbling_box_never_reopens_as_a_second_generation() {
+    let source = r#"
+graph clipped : App {
+  input in: int
+  output out: int
+  lifetime = { kind = fixed ; after = duration("1s") }
+
+  operator window {
+    lifetime = { kind = tumbling ; every = duration("5s") }
+    on in { out = . }
+  }
+
+  . -> window -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("nested finite profiles are executable");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
+
+    vm.inject(&mut journal, int_submission(1)).unwrap();
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+    assert!(matches!(
+        vm.inject(&mut journal, int_submission(2)),
+        Err(VmError::ClosedTimeBox { owner, start_ns: 0 }) if owner.to_string() == "window"
+    ));
+    vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
+    vm.inject(&mut journal, int_submission(2)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    assert_eq!(vm.outputs().len(), 2);
+}
+
+#[test]
+fn a_stale_fixed_deadline_cannot_close_the_successor_generation() {
+    let source = r#"
+graph parent : App {
+  input in: int
+  output out: int
+  lifetime = { kind = fixed ; after = duration("1s") }
+
+  operator child {
+    lifetime = { kind = fixed ; after = duration("5s") }
+    on in { out = . }
+  }
+
+  . -> child -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("nested fixed generations are executable");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
+
+    vm.inject(&mut journal, int_submission(1)).unwrap();
+    vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+    vm.inject(&mut journal, int_submission(2)).unwrap();
+    vm.drain(&mut journal).unwrap();
+    vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+
+    let records_after_successor = journal.records().len();
+    vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
+
+    let child_stops: Vec<u64> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.owner_path.to_string() == "child"
+                    && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop) =>
+            {
+                Some(transaction.instance.generation())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(child_stops, [0, 1]);
+    assert_eq!(
+        journal.records().len(),
+        records_after_successor,
+        "the stale generation-0 deadline cannot append a fact after generation 1 closed"
+    );
+}
+
+#[test]
+fn equal_date_lifetimes_close_in_one_deterministic_order() {
+    let source = r#"
+graph ties : App {
+  input in: int
+  operator alpha {
+    lifetime = { kind = fixed ; after = duration("1s") }
+    on in { out = . }
+  }
+  operator beta {
+    lifetime = { kind = fixed ; after = duration("1s") }
+    on in { out = . }
+  }
+  . -> alpha -> nothing
+  . -> beta -> nothing
+}
+"#;
+    let run = || {
+        let compilation = compile(
+            &[source],
+            &Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("equal fixed deadlines are executable");
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        vm.inject(&mut journal, int_submission(1)).unwrap();
+        vm.advance(&mut journal, &mut EchoWorld::default(), 1_000_000_000)
+            .unwrap();
+        journal
+    };
+    let once = run();
+    let twice = run();
+    assert_eq!(once.records(), twice.records());
+    let stops: Vec<String> = once
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop) =>
+            {
+                Some(transaction.owner_path.to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stops, [String::from("alpha"), String::from("beta")]);
 }
 
 #[test]
@@ -986,10 +1503,11 @@ on in {
         .expect_err("a failed narrowing is a VM fault, not a domain result");
     assert!(matches!(error, VmError::Fault(_)), "{error:?}");
     assert!(
-        journal
-            .records()
-            .iter()
-            .all(|record| !matches!(record, Record::Transaction(_))),
+        journal.records().iter().all(|record| !matches!(
+            record,
+            Record::Transaction(transaction)
+                if matches!(transaction.trigger, node::Trigger::Port(_))
+        )),
         "the faulted transaction must not consume or emit"
     );
     assert!(vm.errors().is_empty(), "no implicit err output exists");
@@ -1439,7 +1957,16 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     // Drive only the wrap transaction, then expire the conforming
     // delivery while it is still queued. B2's ingress gate makes the
     // former unframeable-payload setup unreachable by construction.
-    vm.step(&mut journal).unwrap();
+    while !journal.inner.records().iter().any(|record| {
+        matches!(
+            record,
+            Record::Transaction(transaction)
+                if transaction.owner_path.to_string() == "wrap"
+                    && matches!(transaction.trigger, node::Trigger::Port(_))
+        )
+    }) {
+        assert!(vm.step(&mut journal).unwrap());
+    }
     let facts_before = journal.inner.records().len();
     journal.refuse_commits = true;
     assert!(vm.advance(&mut journal, &mut world, 5_000_000_000).is_err());
@@ -1462,7 +1989,11 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(t) if t.node_path.to_string() == "echo" => Some(t),
+            Record::Transaction(t)
+                if t.owner_path.to_string() == "echo" && !t.consumed.is_empty() =>
+            {
+                Some(t)
+            }
             _ => None,
         })
         .collect();

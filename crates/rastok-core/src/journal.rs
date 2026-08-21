@@ -24,7 +24,7 @@ use crate::boundary::{
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::identity::{InstanceAddress, InstanceRef};
 use crate::node;
-use crate::plan::GraphVersion;
+use crate::plan::{GraphVersion, OwnerPath};
 use crate::value::Value;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -34,7 +34,7 @@ use core::fmt;
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its domain tags.
 pub mod ids {
-    use super::{CallRef, Id, IngressAuthority, node};
+    use super::{CallRef, Id, IngressAuthority, InstanceRef, node};
     use alloc::string::ToString;
 
     /// Domain tag of a root derivation: 2 fields.
@@ -47,6 +47,9 @@ pub mod ids {
     const CALL: u8 = 0x10;
     /// Domain tag of a delivery reference.
     const DELIVERY: u8 = 0x20;
+    /// Domain tag of an instance-lifetime obligation. Outside envelope-id
+    /// domains; the reference couples address and journal-derived generation.
+    const INSTANCE_LIFETIME: u8 = 0x21;
 
     /// The root id of an inbound envelope:
     /// `blake3(connector_path ‖ inbound_seq)`. The single-process
@@ -98,6 +101,18 @@ pub mod ids {
         Id::derive(DELIVERY, &[edge.as_bytes(), delivery.as_bytes()])
     }
 
+    /// The stable 16-byte timer reference for one instance generation.
+    #[must_use]
+    pub fn instance_lifetime_ref(instance: &InstanceRef) -> Id {
+        Id::derive(
+            INSTANCE_LIFETIME,
+            &[
+                instance.address().as_bytes(),
+                &instance.generation().to_le_bytes(),
+            ],
+        )
+    }
+
     /// The internal identity of an outbound call (envelope.md §2):
     /// one delivery carrying one prepared request — derived from the
     /// delivery reference and the digest of the exact prepared bytes,
@@ -109,6 +124,20 @@ pub mod ids {
     pub fn call_ref(delivery_ref: Id, request_digest: &[u8; 32]) -> CallRef {
         CallRef::new(Id::derive(CALL, &[delivery_ref.as_bytes(), request_digest]))
     }
+}
+
+/// Extend-only timer-kind registry stored in transaction key 37.
+pub mod timer_kind {
+    /// One delivered Connector call budget.
+    pub const CALL_TIMEOUT: u8 = 1;
+    /// One join correlation bound (reserved until joins execute).
+    pub const JOIN_WITHIN: u8 = 2;
+    /// One logical instance generation lifetime.
+    pub const INSTANCE_LIFETIME: u8 = 3;
+    /// One Saga deadline (reserved until Saga execution).
+    pub const SAGA_TIMEOUT: u8 = 4;
+    /// One Loop backoff wakeup (reserved until Loop execution).
+    pub const LOOP_BACKOFF: u8 = 5;
 }
 
 /// One causal record.
@@ -185,8 +214,10 @@ pub struct Emission {
 /// given.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransactionRecord {
-    /// The firing node.
-    pub node_path: node::Path,
+    /// The firing lifecycle/transaction owner. Ordinary Node transactions
+    /// carry the same segments as their node path; Graph lifecycle records
+    /// use the preserved lexical Graph owner, including the empty root path.
+    pub owner_path: OwnerPath,
     /// Complete firing instance reference. It is mandatory even for a
     /// persistent singleton owner.
     pub instance: InstanceRef,
@@ -334,6 +365,14 @@ pub enum Error {
         /// The transported claim.
         got: InstanceRef,
     },
+    /// A transaction claims an actor other than the owner sealed into its
+    /// instance address.
+    InstanceOwnerMismatch {
+        /// Owner derived from the instance address.
+        expected: OwnerPath,
+        /// Owner transported by the transaction.
+        got: OwnerPath,
+    },
     /// `l:start` attempted to reopen an active generation, or `l:stop`
     /// attempted to close an address whose generation never started.
     InvalidInstanceLifecycle {
@@ -349,6 +388,12 @@ pub enum Error {
         instance: InstanceRef,
         /// The transported parent claim, if any.
         parent: Option<InstanceRef>,
+    },
+    /// A parent `l:stop` was attempted while at least one journaled child
+    /// lifecycle obligation remained open.
+    OpenChildInstances {
+        /// Parent generation that must remain active.
+        parent: InstanceRef,
     },
     /// A call ref matching no journaled call.
     UnknownCall,
@@ -377,6 +422,9 @@ impl fmt::Display for Error {
                 got.generation(),
                 got.address()
             ),
+            Self::InstanceOwnerMismatch { expected, got } => {
+                write!(f, "expected transaction owner `{expected}`, got `{got}`")
+            }
             Self::InvalidInstanceLifecycle { instance, active } => write!(
                 f,
                 "instance generation {} for address {:?} is {}",
@@ -394,6 +442,12 @@ impl fmt::Display for Error {
                 instance.generation(),
                 instance.address().owner(),
                 parent
+            ),
+            Self::OpenChildInstances { parent } => write!(
+                f,
+                "instance generation {} for owner `{}` still has active children",
+                parent.generation(),
+                parent.address().owner()
             ),
             Self::UnknownCall => f.write_str("no outbound record for this call"),
             Self::DuplicateOpen => f.write_str("this call is already journaled"),
@@ -573,6 +627,27 @@ impl MemJournal {
             .unwrap_or_default();
         Ok((lifecycle.starts, lifecycle.active))
     }
+
+    fn has_active_children(&self, parent: &InstanceRef) -> bool {
+        let mut active: BTreeMap<InstanceRef, InstanceRef> = BTreeMap::new();
+        for record in &self.records {
+            let Record::Transaction(transaction) = record else {
+                continue;
+            };
+            match transaction.trigger {
+                node::Trigger::Lifecycle(node::Lifecycle::Start) => {
+                    if let Some(parent) = &transaction.parent_instance {
+                        active.insert(transaction.instance.clone(), parent.clone());
+                    }
+                }
+                node::Trigger::Lifecycle(node::Lifecycle::Stop) => {
+                    active.remove(&transaction.instance);
+                }
+                _ => {}
+            }
+        }
+        active.values().any(|candidate| candidate == parent)
+    }
 }
 
 impl Journal for MemJournal {
@@ -654,6 +729,13 @@ impl Journal for MemJournal {
     }
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
+        let expected_owner = transaction.instance.address().owner();
+        if &transaction.owner_path != expected_owner {
+            return Err(Error::InstanceOwnerMismatch {
+                expected: expected_owner.clone(),
+                got: transaction.owner_path,
+            });
+        }
         let expected = self.instance_ref_for_admission(transaction.instance.address())?;
         if transaction.instance != expected {
             return Err(Error::InstanceGenerationMismatch {
@@ -670,6 +752,13 @@ impl Journal for MemJournal {
                 });
             }
             node::Trigger::Lifecycle(node::Lifecycle::Stop) if !active => {
+                return Err(Error::InvalidInstanceLifecycle {
+                    instance: transaction.instance,
+                    active,
+                });
+            }
+            node::Trigger::Lifecycle(node::Lifecycle::Start) => {}
+            _ if !active => {
                 return Err(Error::InvalidInstanceLifecycle {
                     instance: transaction.instance,
                     active,
@@ -709,6 +798,22 @@ impl Journal for MemJournal {
                     got: parent.clone(),
                 });
             }
+            let (_, parent_active) = self.instance_lifecycle(parent.address())?;
+            if !parent_active {
+                return Err(Error::InvalidParentInstance {
+                    instance: transaction.instance,
+                    parent: transaction.parent_instance,
+                });
+            }
+        }
+        if matches!(
+            transaction.trigger,
+            node::Trigger::Lifecycle(node::Lifecycle::Stop)
+        ) && self.has_active_children(&transaction.instance)
+        {
+            return Err(Error::OpenChildInstances {
+                parent: transaction.instance,
+            });
         }
         for route in &transaction.routes {
             let expected = self.instance_ref_for_admission(route.target.address())?;
@@ -724,6 +829,7 @@ impl Journal for MemJournal {
         transaction.consumed.sort();
         transaction.state_delta.sort_by(|a, b| a.0.cmp(&b.0));
         transaction.routes.sort();
+        transaction.timers.sort();
         let lifecycle_transition = match transaction.trigger {
             node::Trigger::Lifecycle(node::Lifecycle::Start) => Some(InstanceLifecycle {
                 starts: starts.checked_add(1).ok_or(Error::SequenceOverflow)?,
@@ -905,14 +1011,16 @@ mod tests {
         instance: InstanceRef,
         lifecycle: node::Lifecycle,
     ) -> TransactionRecord {
-        let parent_instance = (lifecycle == node::Lifecycle::Start).then(|| {
+        let parent_instance = (lifecycle == node::Lifecycle::Start
+            && !instance.address().owner().is_root())
+        .then(|| {
             InstanceRef::new(
                 InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
                 0,
             )
         });
         TransactionRecord {
-            node_path: node::Path::new(["worker"]).expect("valid node path"),
+            owner_path: instance.address().owner().clone(),
             instance,
             parent_instance,
             trigger: node::Trigger::Lifecycle(lifecycle),
@@ -925,6 +1033,23 @@ mod tests {
         }
     }
 
+    fn activate_root(journal: &mut MemJournal) {
+        let root = InstanceRef::new(
+            InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
+            0,
+        );
+        journal
+            .commit(lifecycle_transaction(root, node::Lifecycle::Start))
+            .expect("the root lifecycle starts");
+    }
+
+    fn activate(journal: &mut MemJournal, reference: InstanceRef) {
+        activate_root(journal);
+        journal
+            .commit(lifecycle_transaction(reference, node::Lifecycle::Start))
+            .expect("the child lifecycle starts under the root");
+    }
+
     #[test]
     fn generations_are_a_journal_fold_and_lifecycle_cannot_double_transition() {
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -933,6 +1058,17 @@ mod tests {
         );
         let first = InstanceRef::new(address.clone(), 0);
         assert_eq!(journal.instance_ref_for_admission(&address).unwrap(), first);
+        activate_root(&mut journal);
+
+        let mut wrong_owner = lifecycle_transaction(first.clone(), node::Lifecycle::Start);
+        wrong_owner.owner_path = OwnerPath::new(["other"]).unwrap();
+        assert_eq!(
+            journal.commit(wrong_owner).unwrap_err(),
+            Error::InstanceOwnerMismatch {
+                expected: OwnerPath::new(["worker"]).unwrap(),
+                got: OwnerPath::new(["other"]).unwrap(),
+            }
+        );
 
         let mut missing_parent = lifecycle_transaction(first.clone(), node::Lifecycle::Start);
         missing_parent.parent_instance = None;
@@ -947,6 +1083,19 @@ mod tests {
         journal
             .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Start))
             .unwrap();
+        let root = InstanceRef::new(
+            InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
+            0,
+        );
+        assert_eq!(
+            journal
+                .commit(lifecycle_transaction(root.clone(), node::Lifecycle::Stop))
+                .unwrap_err(),
+            Error::OpenChildInstances {
+                parent: root.clone(),
+            },
+            "the journal, not scheduler choreography, enforces inner-first stop"
+        );
         assert_eq!(journal.instance_ref_for_admission(&address).unwrap(), first);
         assert_eq!(
             journal
@@ -980,6 +1129,12 @@ mod tests {
             journal.instance_ref_for_admission(&address).unwrap(),
             second
         );
+        journal
+            .commit(lifecycle_transaction(second, node::Lifecycle::Stop))
+            .unwrap();
+        journal
+            .commit(lifecycle_transaction(root, node::Lifecycle::Stop))
+            .unwrap();
     }
 
     #[test]
@@ -989,6 +1144,7 @@ mod tests {
             &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
         let reserved = InstanceRef::new(address.clone(), 0);
+        activate_root(&mut journal);
         let prepared = journal
             .prepare_inbound(submission("inbound", SubmissionSequence::Next))
             .unwrap();
@@ -1056,6 +1212,20 @@ mod tests {
             reference.to_string(),
             "301cd0af333f760b8f5dc13738b821ec",
             "the pinned obligation identity"
+        );
+    }
+
+    #[test]
+    fn the_instance_lifetime_ref_seals_address_and_generation() {
+        let address = InstanceAddress::singleton(
+            &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
+        );
+        let first = ids::instance_lifetime_ref(&InstanceRef::new(address.clone(), 0));
+        let second = ids::instance_lifetime_ref(&InstanceRef::new(address, 1));
+        assert_eq!(first.to_string(), "d8977f984e5356cc4df3aca36c442642");
+        assert_ne!(
+            first, second,
+            "a stale generation has another obligation id"
         );
     }
 
@@ -1254,9 +1424,10 @@ mod tests {
     #[test]
     fn commit_canonicalizes_the_sorted_collections() {
         let mut journal = MemJournal::new(GraphVersion(1));
+        activate(&mut journal, instance("shout", 0));
         journal
             .commit(TransactionRecord {
-                node_path: node::Path::new(["shout"]).unwrap(),
+                owner_path: OwnerPath::new(["shout"]).unwrap(),
                 instance: instance("shout", 0),
                 parent_instance: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
@@ -1279,25 +1450,31 @@ mod tests {
                 ],
                 emissions: vec![],
                 routes: vec![],
-                timers: vec![],
+                timers: vec![
+                    (timer_kind::LOOP_BACKOFF, Id::from_bytes([2; 16])),
+                    (timer_kind::CALL_TIMEOUT, Id::from_bytes([1; 16])),
+                ],
             })
             .unwrap();
-        let Record::Transaction(transaction) = &journal.records()[0] else {
+        let Some(Record::Transaction(transaction)) = journal.records().last() else {
             panic!("expected the transaction");
         };
         assert_eq!(transaction.consumed[0].edge, "a");
         assert_eq!(transaction.state_delta[0].0, "a");
+        assert_eq!(transaction.timers[0].0, timer_kind::CALL_TIMEOUT);
     }
 
     #[test]
     fn records_keep_causal_order() {
         let mut journal = MemJournal::new(GraphVersion(1));
+        activate(&mut journal, instance("shout", 0));
+        let first_observed = journal.records().len();
         let committed = journal
             .append_inbound(submission("inbound", SubmissionSequence::Next))
             .unwrap();
         journal
             .commit(TransactionRecord {
-                node_path: node::Path::new(["shout"]).unwrap(),
+                owner_path: OwnerPath::new(["shout"]).unwrap(),
                 instance: instance("shout", 0),
                 parent_instance: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
@@ -1321,6 +1498,7 @@ mod tests {
         let kinds: Vec<u8> = journal
             .records()
             .iter()
+            .skip(first_observed)
             .map(|record| match record {
                 Record::Inbound(_) => 1,
                 Record::Transaction(_) => 2,

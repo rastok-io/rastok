@@ -16,6 +16,7 @@ use crate::envelope::{self, Envelope};
 use crate::identity::InstanceRef;
 use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
+use crate::plan::OwnerSlot;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -767,18 +768,31 @@ pub enum DatedPayload {
         /// Exact connector instance owning the mailbox/call obligation.
         instance: InstanceRef,
     },
-    /// One idle Node instance reached the deadline armed by its most recent
-    /// admitted envelope. The causal envelope id makes older queued expiries
-    /// harmless without impersonating the journal-derived instance generation
-    /// that lands at R3.
-    InstanceIdle {
-        /// The instance-owned node.
-        node: node::Path,
-        /// Exact generation whose admission silence is being observed.
+    /// One owner lifetime reached a scheduler-owned deadline. The complete
+    /// instance reference is the generation fence; idle additionally compares
+    /// the causal admission id, while fixed and tumbling never move after
+    /// `l:start`.
+    InstanceLifetime {
+        /// Plan owner whose policy armed the event.
+        owner: OwnerSlot,
+        /// Exact generation whose deadline is being observed.
         instance: InstanceRef,
         /// Envelope whose arrival armed this deadline and causes `l:stop`.
         cause: envelope::Id,
+        /// Which profile determines the stale-event rule.
+        deadline: InstanceDeadline,
     },
+}
+
+/// Scheduler semantics of a finite dated instance lifetime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceDeadline {
+    /// Superseded by any later admitted envelope in the same generation.
+    Idle,
+    /// Fixed relative to the creating `l:start`.
+    Fixed,
+    /// Fixed at the end of the address's epoch-aligned processing-time box.
+    Tumbling,
 }
 
 /// Boot, crash, or restart — supervision facts entering the run.

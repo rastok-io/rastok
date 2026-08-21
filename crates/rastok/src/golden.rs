@@ -352,7 +352,7 @@ fn record_tree(record: &Record) -> Cbor {
         Record::Transaction(transaction) => {
             let mut pairs = BTreeMap::from([
                 (10, Cbor::Uint(2)),
-                (30, Cbor::Text(transaction.node_path.to_string())),
+                (30, Cbor::Text(transaction.owner_path.to_string())),
                 (32, Cbor::Text(transaction.trigger.to_string())),
             ]);
             pairs.insert(31, transaction.instance.tree());

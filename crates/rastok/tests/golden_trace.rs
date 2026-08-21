@@ -237,7 +237,10 @@ fn an_intentional_change_is_named_by_the_diff() {
     let divergence = diff(&project(&records), &project(&changed)).expect("the behaviors differ");
     // The first divergence is semantic and located: the operator's
     // transaction, its state delta — not an opaque byte offset.
-    assert_eq!(divergence.record, 1, "the shout transaction");
+    assert_eq!(
+        divergence.record, 3,
+        "root and Node l:start facts precede the shout transaction"
+    );
     assert!(
         divergence.path.contains("state_delta"),
         "the diff names the changed table: {divergence}"

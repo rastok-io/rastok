@@ -420,23 +420,12 @@ pub enum PlanValidationError {
         /// The owner path; empty denotes the root App Graph.
         owner: String,
     },
-    /// A closed lifetime spelling belongs to a later scheduler gate.
-    UnsupportedInstanceLifetime {
-        /// The owner path; empty denotes the root App Graph.
-        owner: String,
-        /// The policy this runtime cannot yet execute faithfully.
-        lifetime: InstanceLifetime,
-    },
-    /// Graph-owned routing/lifecycle is transported for R3 but is not yet an
-    /// executable VM address.
-    UnsupportedGraphInstance {
-        /// The Graph owner path; empty denotes the root App Graph.
-        owner: String,
-    },
-    /// An idle Process instance could retain an open invocation forever
-    /// before finite Closing exists.
-    UnboundedIdleConnector {
+    /// A finite owner could wait forever for an unbudgeted Process call
+    /// before the explicit R5 cancellation/settlement policy exists.
+    UnboundedLifetimeConnector {
         /// The Process owner path.
+        connector: String,
+        /// The finite owner whose closure would wait for it.
         owner: String,
     },
     /// A collection the plan documents as canonically ordered is not.
@@ -725,17 +714,9 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: the instance lifetime on `{owner}` is not positive"
             ),
-            Self::UnsupportedInstanceLifetime { owner, lifetime } => write!(
+            Self::UnboundedLifetimeConnector { connector, owner } => write!(
                 f,
-                "invalid plan: the instance lifetime {lifetime:?} on `{owner}` requires the M1.4 R4 scheduler"
-            ),
-            Self::UnsupportedGraphInstance { owner } => write!(
-                f,
-                "invalid plan: Graph-owned instance routing on `{owner}` requires the M1.4 R3 scheduler"
-            ),
-            Self::UnboundedIdleConnector { owner } => write!(
-                f,
-                "invalid plan: idle Process instance `{owner}` has no finite invocation timeout before Closing exists"
+                "invalid plan: finite owner `{owner}` contains Process `{connector}` without a positive plan-resolved timeout before finite Closing exists"
             ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
@@ -1693,35 +1674,27 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         if duration.is_some_and(|value| value <= 0) {
             return Err(PlanValidationError::InvalidInstanceLifetime { owner: path });
         }
-        if matches!(
-            owner.instance.lifetime,
-            InstanceLifetime::Fixed(_)
-                | InstanceLifetime::SinglePass
-                | InstanceLifetime::Tumbling(_)
-        ) {
-            return Err(PlanValidationError::UnsupportedInstanceLifetime {
-                owner: path,
-                lifetime: owner.instance.lifetime.clone(),
-            });
-        }
-        // R3 routes through persistent Graph-owned address frames. Finite
-        // Graph lifetimes wait for the R4 closing scheduler: admitting them
-        // here would execute their expiry silently as persistent.
-        if owner.kind == OwnerKind::Graph && owner.instance.lifetime != InstanceLifetime::Persistent
-        {
-            return Err(PlanValidationError::UnsupportedGraphInstance { owner: path });
-        }
-        if matches!(owner.instance.lifetime, InstanceLifetime::Idle(_))
-            && let OwnerKind::Node(node_slot) = owner.kind
-            && let Some(spec) = plan.nodes[node_slot.index()].connector()
-            && spec.contract == "Process"
-            && !matches!(
-                spec.attribute("timeout"),
-                Some(crate::plan::AttrSetting::Value(crate::value::Value::Duration(value)))
-                    if *value > 0
-            )
-        {
-            return Err(PlanValidationError::UnboundedIdleConnector { owner: path });
+        if owner.instance.lifetime != InstanceLifetime::Persistent {
+            for node in &plan.nodes {
+                let Some(spec) = node.connector() else {
+                    continue;
+                };
+                if spec.contract != "Process"
+                    || !owner_contains(plan, slot, node.owner)
+                    || matches!(
+                        spec.attribute("timeout"),
+                        Some(crate::plan::AttrSetting::Value(
+                            crate::value::Value::Duration(value)
+                        )) if *value > 0
+                    )
+                {
+                    continue;
+                }
+                return Err(PlanValidationError::UnboundedLifetimeConnector {
+                    connector: node.path.to_string(),
+                    owner: path,
+                });
+            }
         }
         if let Some(key) = &owner.instance.key {
             if !key.ty.is_instance_key()
@@ -1843,6 +1816,20 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     }
     owner_values_well_formed(plan)?;
     Ok(())
+}
+
+fn owner_contains(plan: &ExecutionPlan, ancestor: OwnerSlot, child: OwnerSlot) -> bool {
+    let mut cursor = Some(child);
+    while let Some(owner) = cursor {
+        if owner == ancestor {
+            return true;
+        }
+        cursor = plan
+            .owners
+            .get(owner.index())
+            .and_then(|candidate| candidate.parent);
+    }
+    false
 }
 
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {

@@ -422,7 +422,7 @@ never doubling — a near-stateless dev router is legitimate).
 
 ## 9. Trigger vocabulary
 
-| Transaction | `trigger` | `parent_id` (the cause) | Emitter (`node_path`) |
+| Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
 |---|---|---|---|
 | Recovery resolution of an unknown outbound (no key) | `l:recover` | the request envelope whose outcome is unknown | the Connector node |
 

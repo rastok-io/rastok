@@ -18,8 +18,8 @@
 //! the commit, nothing can fail.
 
 use crate::boundary::{
-    BoundaryEvent, CallRef, Completion, DatedPayload, Dispatcher, InboundSubmission, Intent,
-    Partner, ProcessExit, Response,
+    BoundaryEvent, CallRef, Completion, DatedPayload, Dispatcher, InboundSubmission,
+    InstanceDeadline, Intent, Partner, ProcessExit, Response,
 };
 use crate::datatype::DataType;
 use crate::envelope::{Data, Envelope, Id};
@@ -27,15 +27,15 @@ use crate::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use crate::journal::{Journal, RouteTarget, RoutedDelivery, ids};
 use crate::node;
 use crate::plan::{
-    AttrSetting, Edge, EndpointRef, EvaluationSite, GraphVersion, NodeKind, OwnerKind, OwnerSlot,
-    Slot, ValidatedExecutionPlan,
+    AttrSetting, Edge, EndpointRef, EvaluationSite, GraphVersion, InstanceLifetime, NodeKind,
+    OwnerKind, OwnerPath, OwnerSlot, Slot, ValidatedExecutionPlan,
 };
 use crate::runtime::{
     DataSlot, Delivery, Fault, InstanceState, LifecycleFiring, Mailboxes, TransactionExecutor,
     eval_lazy, meta_value, resolve_payload,
 };
 use alloc::boxed::Box;
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -59,6 +59,21 @@ pub enum VmError {
     MailboxFull {
         /// The refusing node.
         node: node::Path,
+    },
+    /// A route reached an owner generation whose finite lifetime has already
+    /// won. The producer must retain normal backpressure; it cannot journal a
+    /// route into the closing generation.
+    InstanceClosing {
+        /// Owner refusing new external admission.
+        owner: OwnerPath,
+    },
+    /// A processing-time box has already closed. Its address has no second
+    /// forward generation, so retry cannot reopen or spill it.
+    ClosedTimeBox {
+        /// Tumbling owner whose box is closed.
+        owner: OwnerPath,
+        /// Canonical start of the closed box.
+        start_ns: i64,
     },
     /// A causal closure arrived for a call this machine holds no
     /// pending request for — an integrity breach, never a silence.
@@ -148,6 +163,13 @@ impl fmt::Display for VmError {
             Self::MailboxFull { node } => {
                 write!(f, "the mailbox of `{node}` is full")
             }
+            Self::InstanceClosing { owner } => {
+                write!(f, "instance owner `{owner}` is closing")
+            }
+            Self::ClosedTimeBox { owner, start_ns } => write!(
+                f,
+                "processing-time box {start_ns} of `{owner}` is already closed"
+            ),
             Self::MissingPending(_) => {
                 f.write_str("a closure settled a call with no pending request")
             }
@@ -204,8 +226,18 @@ struct Instance {
     frames: Vec<InstanceFrame>,
     values: BTreeMap<String, crate::value::Value>,
     settings: BTreeMap<String, crate::value::Value>,
+    created_by: Envelope,
     last_activity: Envelope,
-    expiry_pending: bool,
+    phase: InstancePhase,
+}
+
+/// Admission and closure are mutually exclusive states. The first close
+/// request owns the causal envelope; later expiries are stale observations.
+#[derive(Debug, Clone)]
+enum InstancePhase {
+    Open,
+    Closing { cause: Envelope, scope: InstanceRef },
+    Stopping { cause: Envelope, scope: InstanceRef },
 }
 
 /// Pure instance construction. Installation happens only after the producer
@@ -218,6 +250,9 @@ struct InstanceCandidate {
     frames: Vec<InstanceFrame>,
     values: BTreeMap<String, crate::value::Value>,
     settings: BTreeMap<String, crate::value::Value>,
+    /// Root admission claimed by a single-pass owner. Reuse is legal only for
+    /// fan-out of this exact envelope inside the same atomic preparation.
+    single_pass_root: Option<Id>,
 }
 
 #[derive(Debug, Clone)]
@@ -225,20 +260,21 @@ struct PreparedTarget {
     reference: InstanceRef,
     scope: InstanceRef,
     chain: Vec<InstanceRef>,
+    /// Owners whose boundary this route crosses. Sticky ancestors are not
+    /// re-admitted and therefore do not move an idle deadline.
+    admitted: Vec<InstanceRef>,
 }
 
-/// Lifecycle work owns its causal envelope. Stop work additionally owns the
-/// detached state snapshot of the closing generation, allowing a following
-/// generation of the same key to start without sharing cells.
+/// Lifecycle work owns its causal envelope and names the lexical owner. The
+/// live bundle remains installed through `l:stop` so stop emissions retain
+/// their complete source chain; reclamation follows the successful commit.
 #[derive(Debug, Clone)]
 struct LifecycleWork {
-    slot: Slot,
+    owner: OwnerSlot,
     instance: InstanceRef,
     parent_instance: Option<InstanceRef>,
     lifecycle: node::Lifecycle,
     cause: Envelope,
-    values: BTreeMap<String, crate::value::Value>,
-    detached_state: Option<BTreeMap<String, crate::value::Value>>,
 }
 
 /// One edge whose target instance was selected before the causing record
@@ -445,6 +481,10 @@ pub struct Vm<'plan> {
     pending: BTreeMap<CallRef, PendingCall>,
     /// Live keyed/singleton instances whose lifecycle is observable.
     instances: BTreeMap<InstanceRef, Instance>,
+    /// Rebuildable index of instances that have won a close request but have
+    /// not yet queued `l:stop`. `InstancePhase` remains the authority; this
+    /// set keeps open-only traffic off the closure scan.
+    closing: BTreeSet<InstanceRef>,
     /// Journal-before-next-work lifecycle transitions. This queue outranks
     /// ordinary deliveries so `l:start` precedes the creating arrival and a
     /// detached `l:stop` precedes the following generation.
@@ -489,6 +529,7 @@ impl<'plan> Vm<'plan> {
             dispatcher: Dispatcher::new(),
             pending: BTreeMap::new(),
             instances: BTreeMap::new(),
+            closing: BTreeSet::new(),
             lifecycle: VecDeque::new(),
             settled: VecDeque::new(),
             now: 0,
@@ -606,6 +647,7 @@ impl<'plan> Vm<'plan> {
     /// A fault leaves the machine exactly as it was — the failed step
     /// committed nothing, and its work stays reserved for a retry.
     pub fn step(&mut self, journal: &mut dyn Journal) -> Result<bool, VmError> {
+        self.progress_closures();
         if !self.lifecycle.is_empty() {
             self.fire_lifecycle_next(journal)?;
             return Ok(true);
@@ -729,12 +771,13 @@ impl<'plan> Vm<'plan> {
                 delivery,
                 instance,
             } => (connector, edge, delivery, instance),
-            DatedPayload::InstanceIdle {
-                node,
+            DatedPayload::InstanceLifetime {
+                owner,
                 instance,
                 cause,
+                deadline,
             } => {
-                self.expire_instance(node, instance, cause);
+                self.expire_instance(owner, instance, cause, deadline);
                 return Ok(());
             }
         };
@@ -877,7 +920,7 @@ impl<'plan> Vm<'plan> {
                     });
                 };
                 self.route_emissions(slot, &instance, prepared);
-                self.maybe_begin_pending_stop(slot, &instance);
+                self.progress_closures();
             }
             Some(intent) => {
                 let call_ref = intent.call_ref;
@@ -930,27 +973,34 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    /// Resolves one idle deadline. An event whose causal activity has been
-    /// superseded is a harmless clock observation. An open call postpones
-    /// closure without losing the request's terminal obligation; settlement
-    /// queues the stop afterwards.
-    fn expire_instance(&mut self, path: node::Path, reference: InstanceRef, cause: Id) {
-        let slot = self.slot_of(&path);
-        let current = self
-            .instances
-            .get(&reference)
-            .filter(|instance| instance.last_activity.meta().sys().id() == cause)
-            .map(|instance| instance.last_activity.clone());
-        let Some(cause) = current else {
+    /// Resolves one generation-fenced lifetime deadline. Only idle deadlines
+    /// are superseded by later admission; fixed and tumbling stay anchored to
+    /// their creating start/box. Missing references are stale observations.
+    fn expire_instance(
+        &mut self,
+        owner: OwnerSlot,
+        reference: InstanceRef,
+        cause: Id,
+        deadline: InstanceDeadline,
+    ) {
+        let current = self.instances.get(&reference).filter(|instance| {
+            instance.owner == owner
+                && matches!(instance.phase, InstancePhase::Open)
+                && match deadline {
+                    InstanceDeadline::Idle => instance.last_activity.meta().sys().id() == cause,
+                    InstanceDeadline::Fixed | InstanceDeadline::Tumbling => {
+                        instance.created_by.meta().sys().id() == cause
+                    }
+                }
+        });
+        let Some(cause) = current.map(|instance| match deadline {
+            InstanceDeadline::Idle => instance.last_activity.clone(),
+            InstanceDeadline::Fixed | InstanceDeadline::Tumbling => instance.created_by.clone(),
+        }) else {
             return;
         };
-        if self.instance_has_work(slot, &reference) {
-            if let Some(instance) = self.instances.get_mut(&reference) {
-                instance.expiry_pending = true;
-            }
-            return;
-        }
-        self.begin_stop(slot, &reference, cause);
+        self.request_close(&reference, cause);
+        self.progress_closures();
     }
 
     /// The machine's virtual date, in nanoseconds.
@@ -1000,109 +1050,276 @@ impl<'plan> Vm<'plan> {
         !self.pending.is_empty()
     }
 
-    fn lifecycle_managed(&self, slot: Slot) -> bool {
-        self.plan.node_instance(slot).is_some_and(|instance| {
-            instance.key.is_some() || instance.lifetime != crate::plan::InstanceLifetime::Persistent
-        }) || self.plan.handlers.iter().any(|handler| {
-            handler.node == slot
-                && matches!(
-                    handler.activation,
-                    node::HandlerActivation::Lifecycle(
-                        node::Lifecycle::Start | node::Lifecycle::Stop
-                    )
-                )
+    fn instance_has_direct_work(&self, reference: &InstanceRef) -> bool {
+        let Some(instance) = self.instances.get(reference) else {
+            return false;
+        };
+        let node_work = match self.plan.owners[instance.owner.index()].kind {
+            OwnerKind::Graph => false,
+            OwnerKind::Node(slot) => {
+                self.scheduler.mailboxes.has_work(slot, reference)
+                    || self
+                        .pending
+                        .values()
+                        .any(|pending| pending.slot == slot && pending.instance == *reference)
+            }
+        };
+        node_work
+            || self
+                .lifecycle
+                .iter()
+                .any(|work| work.instance == *reference)
+    }
+
+    fn is_descendant_instance(&self, child: &InstanceRef, ancestor: &InstanceRef) -> bool {
+        let mut cursor = self
+            .instances
+            .get(child)
+            .and_then(|instance| instance.parent.clone());
+        while let Some(reference) = cursor {
+            if reference == *ancestor {
+                return true;
+            }
+            cursor = self
+                .instances
+                .get(&reference)
+                .and_then(|instance| instance.parent.clone());
+        }
+        false
+    }
+
+    fn is_within_instance(&self, candidate: &InstanceRef, scope: &InstanceRef) -> bool {
+        candidate == scope || self.is_descendant_instance(candidate, scope)
+    }
+
+    fn instance_has_descendants(&self, reference: &InstanceRef) -> bool {
+        self.instances.keys().any(|candidate| {
+            candidate != reference && self.is_descendant_instance(candidate, reference)
         })
     }
 
-    fn instance_has_work(&self, slot: Slot, instance: &InstanceRef) -> bool {
-        self.scheduler.mailboxes.has_work(slot, instance)
-            || self
-                .pending
-                .values()
-                .any(|pending| pending.slot == slot && pending.instance == *instance)
-    }
-
-    /// Detaches a closing generation before its stop transaction. New work
-    /// for the same logical key can then create a fresh state cell, while the
-    /// queued stop owns the old snapshot and remains retryable on refusal.
-    fn begin_stop(&mut self, slot: Slot, instance: &InstanceRef, cause: Envelope) {
-        let Some(bundle) = self.instances.remove(instance) else {
-            return;
-        };
-        let detached_state = self.state.take_unchecked(self.plan.plan(), slot, instance);
-        self.lifecycle.push_back(LifecycleWork {
-            slot,
-            instance: instance.clone(),
-            parent_instance: bundle.parent,
-            lifecycle: node::Lifecycle::Stop,
-            cause,
-            values: bundle.values,
-            detached_state: Some(detached_state),
+    /// The first close request wins causally. A Graph request marks every live
+    /// descendant, but reclamation remains inner-first: the parent cannot
+    /// queue `l:stop` while a child bundle or child stop fact is outstanding.
+    fn request_close(&mut self, reference: &InstanceRef, cause: Envelope) {
+        let closes_subtree = self.instances.get(reference).is_some_and(|instance| {
+            self.plan.owners[instance.owner.index()].kind == OwnerKind::Graph
         });
-    }
-
-    fn maybe_begin_pending_stop(&mut self, slot: Slot, instance_ref: &InstanceRef) {
-        let cause = self
+        let targets: Vec<InstanceRef> = self
             .instances
-            .get(instance_ref)
-            .filter(|instance| instance.expiry_pending)
-            .map(|instance| instance.last_activity.clone());
-        if let Some(cause) = cause
-            && !self.instance_has_work(slot, instance_ref)
-        {
-            self.begin_stop(slot, instance_ref, cause);
+            .keys()
+            .filter(|candidate| {
+                *candidate == reference
+                    || (closes_subtree && self.is_descendant_instance(candidate, reference))
+            })
+            .cloned()
+            .collect();
+        for target in targets {
+            if let Some(instance) = self.instances.get_mut(&target)
+                && matches!(instance.phase, InstancePhase::Open)
+            {
+                instance.phase = InstancePhase::Closing {
+                    cause: cause.clone(),
+                    scope: reference.clone(),
+                };
+                self.closing.insert(target);
+            }
         }
     }
 
-    /// Commits exactly one queued lifecycle transition. Start state remains
-    /// live; stop state was detached when admission closed and is reclaimed
-    /// only by this successful commit.
+    fn progress_closures(&mut self) {
+        if self.closing.is_empty() {
+            return;
+        }
+        let mut ready: Vec<(usize, InstanceRef)> = self
+            .closing
+            .iter()
+            .filter_map(|reference| {
+                self.instances
+                    .get(reference)
+                    .map(|instance| (reference, instance))
+            })
+            .filter(|(reference, _)| {
+                !self.instance_has_direct_work(reference)
+                    && !self.instance_has_descendants(reference)
+            })
+            .map(|(reference, instance)| {
+                (
+                    self.plan.owners[instance.owner.index()]
+                        .path
+                        .segments()
+                        .len(),
+                    reference.clone(),
+                )
+            })
+            .collect();
+        ready.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+        if let Some((_, reference)) = ready.into_iter().next() {
+            self.begin_stop(&reference);
+        }
+    }
+
+    fn begin_stop(&mut self, reference: &InstanceRef) {
+        let Some(bundle) = self.instances.get_mut(reference) else {
+            return;
+        };
+        let InstancePhase::Closing { cause, scope } = &bundle.phase else {
+            return;
+        };
+        let cause = cause.clone();
+        let scope = scope.clone();
+        self.closing.remove(reference);
+        bundle.phase = InstancePhase::Stopping {
+            cause: cause.clone(),
+            scope,
+        };
+        self.lifecycle.push_back(LifecycleWork {
+            owner: bundle.owner,
+            instance: reference.clone(),
+            parent_instance: bundle.parent.clone(),
+            lifecycle: node::Lifecycle::Stop,
+            cause,
+        });
+    }
+
+    /// Commits exactly one queued lifecycle transition. The instance remains
+    /// installed through `l:stop`, so its handler can route from the exact
+    /// source chain; state and bundle are reclaimed only after the commit.
     fn fire_lifecycle_next(&mut self, journal: &mut dyn Journal) -> Result<(), VmError> {
         let Some(work) = self.lifecycle.front().cloned() else {
             return Ok(());
         };
-        let state = work.detached_state.clone().unwrap_or_else(|| {
-            self.state
-                .cell_unchecked(self.plan.plan(), work.slot, &work.instance)
-        });
-        let executor = TransactionExecutor::new(self.plan, self.graph_version);
         let parent_instance = (work.lifecycle == node::Lifecycle::Start)
             .then_some(work.parent_instance.as_ref())
             .flatten();
-        let mut outcome = executor
-            .fire_lifecycle(
-                work.slot,
-                work.lifecycle,
-                LifecycleFiring {
-                    instance: &work.instance,
-                    parent_instance,
-                    cause: &work.cause,
+        let owner = &self.plan.owners[work.owner.index()];
+        let (mut record, prepared, node_slot) = match owner.kind {
+            OwnerKind::Graph => (
+                crate::journal::TransactionRecord {
+                    owner_path: owner.path.clone(),
+                    instance: work.instance.clone(),
+                    parent_instance: parent_instance.cloned(),
+                    trigger: node::Trigger::Lifecycle(work.lifecycle),
+                    cause: Some(work.cause.meta().sys().id()),
+                    consumed: vec![],
+                    state_delta: vec![],
+                    emissions: vec![],
+                    routes: vec![],
+                    timers: vec![],
                 },
-                &state,
-                &work.values,
+                None,
+                None,
+            ),
+            OwnerKind::Node(slot) => {
+                let bundle =
+                    self.instances
+                        .get(&work.instance)
+                        .ok_or_else(|| VmError::PlanInvariant {
+                            node: self.plan.nodes[slot.index()].path.clone(),
+                            reason: "lifecycle work lost its installed instance bundle",
+                        })?;
+                let state = self
+                    .state
+                    .cell_unchecked(self.plan.plan(), slot, &work.instance);
+                let executor = TransactionExecutor::new(self.plan, self.graph_version);
+                let outcome = executor
+                    .fire_lifecycle(
+                        slot,
+                        work.lifecycle,
+                        LifecycleFiring {
+                            instance: &work.instance,
+                            parent_instance,
+                            cause: &work.cause,
+                        },
+                        &state,
+                        &bundle.values,
+                    )
+                    .map_err(VmError::Fault)?;
+                let prepared = self.validate_and_prepare_emissions(
+                    journal,
+                    slot,
+                    &work.instance,
+                    &outcome.record,
+                )?;
+                (outcome.record, Some(prepared), Some(slot))
+            }
+        };
+        if let Some(prepared) = &prepared {
+            record.routes = self.routed_deliveries(prepared);
+        }
+        if work.lifecycle == node::Lifecycle::Start
+            && matches!(
+                owner.instance.lifetime,
+                InstanceLifetime::Idle(_)
+                    | InstanceLifetime::Fixed(_)
+                    | InstanceLifetime::Tumbling(_)
             )
-            .map_err(VmError::Fault)?;
-        let prepared = self.validate_and_prepare_emissions(
-            journal,
-            work.slot,
-            &work.instance,
-            &outcome.record,
-        )?;
-        outcome.record.routes = self.routed_deliveries(&prepared);
-        journal
-            .commit(outcome.record.clone())
-            .map_err(VmError::Journal)?;
+        {
+            record.timers.push((
+                crate::journal::timer_kind::INSTANCE_LIFETIME,
+                ids::instance_lifetime_ref(&work.instance),
+            ));
+        }
+        journal.commit(record.clone()).map_err(VmError::Journal)?;
         self.lifecycle.pop_front();
         if work.lifecycle == node::Lifecycle::Start {
-            self.state.apply_unchecked(
-                self.plan.plan(),
-                work.slot,
-                &work.instance,
-                &outcome.record.state_delta,
-            );
+            if let Some(slot) = node_slot {
+                self.state.apply_unchecked(
+                    self.plan.plan(),
+                    slot,
+                    &work.instance,
+                    &record.state_delta,
+                );
+            }
+            self.arm_start_deadline(&work);
         }
-        self.route_emissions(work.slot, &work.instance, prepared);
+        if let (Some(slot), Some(prepared)) = (node_slot, prepared) {
+            self.route_emissions(slot, &work.instance, prepared);
+        }
+        if work.lifecycle == node::Lifecycle::Stop {
+            if let Some(slot) = node_slot {
+                self.state
+                    .take_unchecked(self.plan.plan(), slot, &work.instance);
+            }
+            self.instances.remove(&work.instance);
+        }
+        self.progress_closures();
         Ok(())
+    }
+
+    fn arm_start_deadline(&mut self, work: &LifecycleWork) {
+        let owner = &self.plan.owners[work.owner.index()];
+        let (at, deadline) = match owner.instance.lifetime {
+            InstanceLifetime::Fixed(after) => {
+                (self.now.saturating_add(after), InstanceDeadline::Fixed)
+            }
+            InstanceLifetime::Tumbling(every) => {
+                let Some(start) = self.instances.get(&work.instance).and_then(|instance| {
+                    instance.frames.iter().rev().find_map(|frame| match frame {
+                        InstanceFrame::ProcessingTimeBox {
+                            owner: framed,
+                            start_ns,
+                        } if framed == &owner.path => Some(*start_ns),
+                        _ => None,
+                    })
+                }) else {
+                    return;
+                };
+                (start.saturating_add(every), InstanceDeadline::Tumbling)
+            }
+            InstanceLifetime::Persistent
+            | InstanceLifetime::Idle(_)
+            | InstanceLifetime::SinglePass => return,
+        };
+        self.scheduler.arm(
+            at,
+            DatedPayload::InstanceLifetime {
+                owner: work.owner,
+                instance: work.instance.clone(),
+                cause: work.cause.meta().sys().id(),
+                deadline,
+            },
+        );
     }
 
     /// One won closure becomes the connector's completion transaction.
@@ -1159,7 +1376,7 @@ impl<'plan> Vm<'plan> {
             self.scheduler.mailboxes.release(slot, &request.instance);
         }
         self.route_emissions(slot, &request.instance, prepared);
-        self.maybe_begin_pending_stop(slot, &request.instance);
+        self.progress_closures();
         Ok(())
     }
 
@@ -1201,7 +1418,7 @@ impl<'plan> Vm<'plan> {
             &outcome.record.state_delta,
         );
         self.route_emissions(slot, instance, prepared);
-        self.maybe_begin_pending_stop(slot, instance);
+        self.progress_closures();
         Ok(())
     }
 
@@ -1258,7 +1475,7 @@ impl<'plan> Vm<'plan> {
                     .map_err(VmError::Journal)?;
                 self.scheduler.mailboxes.pop(slot, instance);
                 self.route_emissions(slot, instance, prepared);
-                self.maybe_begin_pending_stop(slot, instance);
+                self.progress_closures();
                 return Ok(());
             }
         };
@@ -1463,6 +1680,7 @@ impl<'plan> Vm<'plan> {
             });
         };
         let mut selected = Vec::with_capacity(chain.len());
+        let mut admitted = Vec::with_capacity(chain.len().saturating_sub(scope_index));
         for (index, owner_slot) in chain.iter().copied().enumerate() {
             if index <= scope_index
                 && let Some(reference) =
@@ -1471,8 +1689,16 @@ impl<'plan> Vm<'plan> {
                 selected.push(reference);
             } else {
                 let parent = selected.last();
-                selected
-                    .push(self.candidate_owner(journal, owner_slot, parent, envelope, candidates)?);
+                let reference = self.candidate_owner(
+                    journal,
+                    owner_slot,
+                    parent,
+                    source_instance,
+                    envelope,
+                    candidates,
+                )?;
+                admitted.push(reference.clone());
+                selected.push(reference);
             }
         }
         let reference = selected
@@ -1493,6 +1719,7 @@ impl<'plan> Vm<'plan> {
             reference,
             scope,
             chain: selected,
+            admitted,
         })
     }
 
@@ -1534,6 +1761,7 @@ impl<'plan> Vm<'plan> {
         journal: &dyn Journal,
         owner_slot: OwnerSlot,
         parent: Option<&InstanceRef>,
+        source: Option<&InstanceRef>,
         envelope: &Envelope,
         candidates: &mut BTreeMap<InstanceRef, InstanceCandidate>,
     ) -> Result<InstanceRef, VmError> {
@@ -1545,15 +1773,45 @@ impl<'plan> Vm<'plan> {
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
             })?;
-        if owner.instance.key.is_none() {
-            if let Some((reference, _)) = self.instances.iter().find(|(_, instance)| {
+        // An unkeyed non-tumbling owner keeps one address within the selected
+        // parent generation. Reuse that already-validated reference instead
+        // of rebuilding canonical address bytes and folding the journal on
+        // every delivery. Tumbling is excluded because virtual time selects a
+        // distinct address; a missing live entry still falls through to the
+        // journal-derived successor generation for idle/fixed/single-pass.
+        if owner.instance.key.is_none()
+            && !matches!(owner.instance.lifetime, InstanceLifetime::Tumbling(_))
+        {
+            if let Some((reference, instance)) = self.instances.iter().find(|(_, instance)| {
                 instance.owner == owner_slot && instance.parent.as_ref() == parent
             }) {
-                return Ok(reference.clone());
+                let accepts = match &instance.phase {
+                    InstancePhase::Open => {
+                        !matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                    }
+                    InstancePhase::Closing { scope, .. } => {
+                        source.is_some_and(|source| self.is_within_instance(source, scope))
+                            && !matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                    }
+                    InstancePhase::Stopping { .. } => false,
+                };
+                if accepts {
+                    return Ok(reference.clone());
+                }
+                return Err(VmError::InstanceClosing {
+                    owner: owner.path.clone(),
+                });
             }
             if let Some(candidate) = candidates.values().find(|candidate| {
                 candidate.owner == owner_slot && candidate.parent.as_ref() == parent
             }) {
+                if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                    && candidate.single_pass_root != Some(envelope.meta().sys().id())
+                {
+                    return Err(VmError::InstanceClosing {
+                        owner: owner.path.clone(),
+                    });
+                }
                 return Ok(candidate.reference.clone());
             }
         }
@@ -1600,15 +1858,64 @@ impl<'plan> Vm<'plan> {
                 Some(value)
             }
         };
+        let time_box_start = match owner.instance.lifetime {
+            InstanceLifetime::Tumbling(every) => {
+                let start = self
+                    .now
+                    .div_euclid(every)
+                    .checked_mul(every)
+                    .ok_or_else(|| VmError::PlanInvariant {
+                        node: node::Path::new(["instance"])
+                            .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                        reason: "a validated tumbling duration overflowed its epoch box",
+                    })?;
+                frames.push(InstanceFrame::ProcessingTimeBox {
+                    owner: owner.path.clone(),
+                    start_ns: start,
+                });
+                Some(start)
+            }
+            _ => None,
+        };
         let address = InstanceAddress::new(&owner.path, &frames)
             .map_err(|error| VmError::Fault(Fault::Unrepresentable(error.to_string())))?;
         let reference = journal
             .instance_ref_for_admission(&address)
             .map_err(VmError::Journal)?;
-        if self.instances.contains_key(&reference) {
-            return Ok(reference);
+        if let Some(start_ns) = time_box_start
+            && reference.generation() != 0
+        {
+            return Err(VmError::ClosedTimeBox {
+                owner: owner.path.clone(),
+                start_ns,
+            });
+        }
+        if let Some(instance) = self.instances.get(&reference) {
+            let accepts = match &instance.phase {
+                InstancePhase::Open => {
+                    !matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                }
+                InstancePhase::Closing { scope, .. } => {
+                    source.is_some_and(|source| self.is_within_instance(source, scope))
+                        && !matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                }
+                InstancePhase::Stopping { .. } => false,
+            };
+            if accepts {
+                return Ok(reference);
+            }
+            return Err(VmError::InstanceClosing {
+                owner: owner.path.clone(),
+            });
         }
         if let Some(candidate) = candidates.get(&reference) {
+            if matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                && candidate.single_pass_root != Some(envelope.meta().sys().id())
+            {
+                return Err(VmError::InstanceClosing {
+                    owner: owner.path.clone(),
+                });
+            }
             return Ok(candidate.reference.clone());
         }
         let mut values =
@@ -1625,6 +1932,8 @@ impl<'plan> Vm<'plan> {
             frames,
             values,
             settings,
+            single_pass_root: matches!(owner.instance.lifetime, InstanceLifetime::SinglePass)
+                .then_some(envelope.meta().sys().id()),
         };
         candidates.insert(reference.clone(), candidate);
         Ok(reference)
@@ -2015,16 +2324,50 @@ impl<'plan> Vm<'plan> {
         envelope: &Envelope,
     ) {
         for reference in &target.chain {
+            let admitted = target.admitted.contains(reference);
+            let mut arm_idle = false;
             let owner_slot = match self.instances.get_mut(reference) {
                 Some(instance) => {
-                    instance.last_activity = envelope.clone();
-                    instance.expiry_pending = false;
+                    if admitted
+                        && instance.last_activity.meta().sys().id() != envelope.meta().sys().id()
+                    {
+                        instance.last_activity = envelope.clone();
+                        arm_idle = true;
+                    }
                     instance.owner
                 }
                 None => {
                     let candidate = candidates.get(reference).unwrap_or_else(|| {
                         unreachable!("a new selected reference keeps its candidate bundle")
                     });
+                    let inherited_close = candidate.parent.as_ref().and_then(|parent| {
+                        self.instances
+                            .get(parent)
+                            .and_then(|instance| match &instance.phase {
+                                InstancePhase::Open => None,
+                                InstancePhase::Closing { cause, scope }
+                                | InstancePhase::Stopping { cause, scope } => {
+                                    Some((cause.clone(), scope.clone()))
+                                }
+                            })
+                    });
+                    let phase = inherited_close.map_or_else(
+                        || {
+                            if matches!(
+                                self.plan.owners[candidate.owner.index()].instance.lifetime,
+                                InstanceLifetime::SinglePass
+                            ) {
+                                InstancePhase::Closing {
+                                    cause: envelope.clone(),
+                                    scope: reference.clone(),
+                                }
+                            } else {
+                                InstancePhase::Open
+                            }
+                        },
+                        |(cause, scope)| InstancePhase::Closing { cause, scope },
+                    );
+                    let is_closing = matches!(phase, InstancePhase::Closing { .. });
                     self.instances.insert(
                         reference.clone(),
                         Instance {
@@ -2033,36 +2376,36 @@ impl<'plan> Vm<'plan> {
                             frames: candidate.frames.clone(),
                             values: candidate.values.clone(),
                             settings: candidate.settings.clone(),
+                            created_by: envelope.clone(),
                             last_activity: envelope.clone(),
-                            expiry_pending: false,
+                            phase,
                         },
                     );
-                    if let OwnerKind::Node(slot) = self.plan.owners[candidate.owner.index()].kind
-                        && self.lifecycle_managed(slot)
-                    {
-                        self.lifecycle.push_back(LifecycleWork {
-                            slot,
-                            instance: reference.clone(),
-                            parent_instance: candidate.parent.clone(),
-                            lifecycle: node::Lifecycle::Start,
-                            cause: envelope.clone(),
-                            values: candidate.values.clone(),
-                            detached_state: None,
-                        });
+                    if is_closing {
+                        self.closing.insert(reference.clone());
                     }
+                    self.lifecycle.push_back(LifecycleWork {
+                        owner: candidate.owner,
+                        instance: reference.clone(),
+                        parent_instance: candidate.parent.clone(),
+                        lifecycle: node::Lifecycle::Start,
+                        cause: envelope.clone(),
+                    });
+                    arm_idle = admitted;
                     candidate.owner
                 }
             };
-            if let crate::plan::InstanceLifetime::Idle(ttl) =
-                self.plan.owners[owner_slot.index()].instance.lifetime
-                && let OwnerKind::Node(slot) = self.plan.owners[owner_slot.index()].kind
+            if arm_idle
+                && let InstanceLifetime::Idle(ttl) =
+                    self.plan.owners[owner_slot.index()].instance.lifetime
             {
                 self.scheduler.arm(
                     self.now.saturating_add(ttl),
-                    DatedPayload::InstanceIdle {
-                        node: self.plan.nodes[slot.index()].path.clone(),
+                    DatedPayload::InstanceLifetime {
+                        owner: owner_slot,
                         instance: reference.clone(),
                         cause: envelope.meta().sys().id(),
+                        deadline: InstanceDeadline::Idle,
                     },
                 );
             }
