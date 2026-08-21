@@ -44,7 +44,7 @@ fn the_round_trip_preserves_the_plan_and_its_identity() {
 }
 
 #[test]
-fn v8_round_trips_tagged_structural_and_narrowing_expressions() {
+fn v9_round_trips_tagged_structural_and_narrowing_expressions() {
     let sources = [
         r#"
 type Failure = union { Broken { message: text } }
@@ -84,16 +84,16 @@ graph g : App {
             &[source],
             &Registry::try_m0().expect("the standard catalogue holds"),
         )
-        .expect("a valid v8 program");
+        .expect("a valid v9 program");
         let bytes = plan::encode(&compilation.plan, &compilation.hash);
-        let (decoded, hash) = plan::decode(&bytes).expect("the v8 package opens");
+        let (decoded, hash) = plan::decode(&bytes).expect("the v9 package opens");
         assert_eq!(decoded, compilation.plan);
         assert_eq!(hash, compilation.hash);
     }
 }
 
 #[test]
-fn v8_round_trips_the_transitional_instance_contract() {
+fn v9_round_trips_the_categorical_instance_contract() {
     let source = r#"
 graph g : App {
   input in: text
@@ -116,18 +116,18 @@ graph g : App {
         &Registry::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the keyed program checks");
-    let before = compilation.plan.plan().nodes[0]
-        .partition
-        .as_ref()
-        .expect("the lowered node is keyed");
+    let before = compilation
+        .plan
+        .plan()
+        .node_instance(rastok::plan::Slot::new(0))
+        .expect("the lowered node has an owner");
     assert_eq!(
-        before.name, None,
-        "the positive surface carries no partition name"
+        before.key.as_ref().expect("the node is keyed").ty,
+        rastok::datatype::DataType::Text
     );
-    assert_eq!(before.key.ty, rastok::datatype::DataType::Text);
     assert!(matches!(
         before.lifetime,
-        rastok::plan::PartitionLifetime::IdleTtl(30_000_000_000)
+        rastok::plan::InstanceLifetime::Idle(30_000_000_000)
     ));
     assert!(compilation.plan.plan().handlers.iter().any(|handler| {
         handler.activation
@@ -135,7 +135,7 @@ graph g : App {
     }));
 
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, hash) = plan::decode(&bytes).expect("the v8 package opens");
+    let (decoded, hash) = plan::decode(&bytes).expect("the v9 package opens");
     assert_eq!(decoded, compilation.plan);
     assert_eq!(hash, compilation.hash);
 }
@@ -144,7 +144,9 @@ graph g : App {
 fn the_example_package_matches_its_golden() {
     // M1.3 final review removes the lowering-only Operator runtime-fault
     // `err` row. The source hash is intentionally unchanged: that invented
-    // row never belonged to canonical HIR identity.
+    // row never belonged to canonical HIR identity. M1.4 R2 then moves only
+    // the package to categorical v9: the root/Node owner table and scoped
+    // edges are derived plan structure, not a semantic change to this graph.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
@@ -190,11 +192,10 @@ fn every_refusal_is_typed() {
         DecodeError::UnsupportedVersion(future)
     );
 
-    // The RETIRED draft versions — v2 lacked the typed port_decl,
-    // v3 the empty-struct literal, v4 the three-zone reform
-    // (D-2026-08-10-9), v5 the `decimal(…)` call (D-2026-08-13-1);
-    // each is refused by number, never migrated silently.
-    for draft in [2u64, 3, 4, 5, 6, 7] {
+    // Every earlier categorical body is refused by number, never migrated
+    // silently. In particular, v8 was the unreleased named-partition draft;
+    // v9 replaces it rather than assigning two meanings to one version.
+    for draft in [2u64, 3, 4, 5, 6, 7, 8] {
         let retired = reframe(&bytes, |pairs| {
             pairs.insert(1, Cbor::Uint(draft));
         });
@@ -363,7 +364,7 @@ fn a_non_canonical_envelope_refuses() {
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x08],
+        &[0xa4, 0x01, 0x09],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -383,11 +384,11 @@ fn a_non_canonical_envelope_refuses() {
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x08],
+        &[0xa4, 0x01, 0x09],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x08]);
+    widened.splice(6..7, [0x18, 0x09]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))

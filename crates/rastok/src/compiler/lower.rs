@@ -5,7 +5,7 @@
 //! formatting, file order, and declaration order — nodes, vals,
 //! attributes, vars, ports, and edges are sorted before hashing —
 //! sensitive to topology, statement order inside a handler, every Rastok expression
-//! expression as its canonical tree, and `var` defaults. Constants
+//! as its canonical tree, and `var` defaults. Constants
 //! hash as the expressions they were written as, before const-eval;
 //! spans never enter the bytes. The plan then ships the reduced
 //! values.
@@ -21,9 +21,10 @@ use crate::datatype::{
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
-    Node, NodeKind, PartitionLifetime as PlanPartitionLifetime, PartitionSpec, SemanticHash, Slot,
-    Step, SymbolTable, VarCell,
+    AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, EvaluationSite, ExecutionPlan,
+    FieldWrite, Handler, InstanceLifetime as PlanInstanceLifetime, InstanceSpec, Node, NodeKind,
+    Owner, OwnerKind, OwnerPath, OwnerSlot, OwnerValue, SemanticHash, Slot, Step, SymbolTable,
+    VarCell,
 };
 
 /// Computes the semantic hash of a checked graph.
@@ -126,7 +127,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     if hir.app.instance.is_some() {
         return Err(LowerError {
             owner: hir.app.name.clone(),
-            detail: "Graph owners require the parent-linked R2 owner table",
+            detail: "Graph-owner routing requires the M1.4 R3 instance scheduler",
         });
     }
     let nodes = sorted_nodes(hir);
@@ -142,6 +143,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         )
     };
     let mut plan = ExecutionPlan {
+        owners: Vec::new(),
         nodes: Vec::new(),
         boundary: sorted_boundary(hir),
         edges: Vec::new(),
@@ -153,8 +155,63 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         ext_schema: hir.ext_schema.clone(),
         assets: hir.assets.clone(),
     };
+    let app_consts: std::collections::BTreeMap<String, crate::value::Value> = hir
+        .app
+        .vals
+        .iter()
+        .map(|val| (val.name.clone(), val.value.value.clone()))
+        .collect();
+    plan.owners.push(Owner {
+        path: OwnerPath::root(),
+        parent: None,
+        kind: OwnerKind::Graph,
+        instance: lower_instance(hir.app.instance.as_ref(), &app_consts, &hir.app.name)?,
+        vals: lower_owner_values(&hir.app.vals),
+    });
+    let mut owner_nodes = nodes.clone();
+    owner_nodes.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut node_owners = std::collections::BTreeMap::new();
+    for (index, hir_node) in owner_nodes.iter().enumerate() {
+        let node_slot = slot_of(&hir_node.path);
+        let owner_index = u32::try_from(index.saturating_add(1)).map_err(|_| LowerError {
+            owner: hir_node.path.to_string(),
+            detail: "the owner table exceeds its u32 slot domain",
+        })?;
+        let owner_slot = OwnerSlot::new(owner_index);
+        let mut constants = app_consts.clone();
+        constants.extend(
+            hir_node
+                .vals
+                .iter()
+                .map(|val| (val.name.clone(), val.value.value.clone())),
+        );
+        plan.owners.push(Owner {
+            path: OwnerPath::new(hir_node.path.segments().iter().cloned()).map_err(|_| {
+                LowerError {
+                    owner: hir_node.path.to_string(),
+                    detail: "the checked Node path is not a valid owner path",
+                }
+            })?,
+            parent: Some(OwnerSlot::new(0)),
+            kind: OwnerKind::Node(node_slot),
+            instance: lower_instance(
+                hir_node.instance.as_ref(),
+                &constants,
+                &hir_node.path.to_string(),
+            )?,
+            vals: lower_owner_values(&hir_node.vals),
+        });
+        node_owners.insert(hir_node.path.clone(), owner_slot);
+    }
     let mut symbols = SymbolTable { nodes: Vec::new() };
     for hir_node in &nodes {
+        let owner = node_owners
+            .get(&hir_node.path)
+            .copied()
+            .ok_or_else(|| LowerError {
+                owner: hir_node.path.to_string(),
+                detail: "the canonical owner table omitted an executable Node",
+            })?;
         symbols.nodes.push(hir_node.path.to_string());
         // Declaratively unordered collections ship in canonical order,
         // so equal hashes always mean equal plans.
@@ -183,51 +240,6 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             })
             .collect();
         vars.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut partition_consts: std::collections::BTreeMap<String, crate::value::Value> = hir
-            .app
-            .vals
-            .iter()
-            .map(|val| (val.name.clone(), val.value.value.clone()))
-            .collect();
-        for val in &hir_node.vals {
-            partition_consts.insert(val.name.clone(), val.value.value.clone());
-        }
-        let partition = match &hir_node.instance {
-            None => None,
-            Some(instance) => {
-                let Some(key) = &instance.key else {
-                    return Err(LowerError {
-                        owner: hir_node.path.to_string(),
-                        detail: "a finite singleton lifetime requires the R2 instance transport",
-                    });
-                };
-                let lifetime = match &instance.lifetime {
-                    InstanceLifetime::Persistent => PlanPartitionLifetime::Persistent,
-                    InstanceLifetime::Idle(value) => {
-                        let crate::value::Value::Duration(nanos) = value.value else {
-                            return Err(LowerError {
-                                owner: hir_node.path.to_string(),
-                                detail: "the checked idle duration lost its duration carrier",
-                            });
-                        };
-                        PlanPartitionLifetime::IdleTtl(nanos)
-                    }
-                    InstanceLifetime::Fixed(_)
-                    | InstanceLifetime::SinglePass
-                    | InstanceLifetime::Tumbling(_) => {
-                        return Err(LowerError {
-                            owner: hir_node.path.to_string(),
-                            detail: "this lifetime profile requires the R2 transport and R4 scheduler",
-                        });
-                    }
-                };
-                Some(PartitionSpec {
-                    name: None,
-                    key: substitute_tree(key, &partition_consts),
-                    lifetime,
-                })
-            }
-        };
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
             kind: match &hir_node.role {
@@ -241,7 +253,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             },
             ports,
             vars,
-            partition,
+            owner,
         });
     }
     for hir_node in &nodes {
@@ -296,6 +308,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             port: end.port.clone(),
         };
         plan.edges.push(Edge {
+            scope: OwnerSlot::new(0),
             from: endpoint(&edge.from),
             to: match &edge.to {
                 EdgeTarget::Port(end) => Some(endpoint(end)),
@@ -306,8 +319,62 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     Ok((plan, symbols))
 }
 
-/// A checked R1 instance policy which the superseded P0-P3 plan body cannot
-/// represent without changing its meaning.
+fn lower_owner_values(values: &[crate::compiler::hir::Val]) -> Vec<OwnerValue> {
+    let mut lowered: Vec<_> = values
+        .iter()
+        .map(|value| OwnerValue {
+            name: value.name.clone(),
+            site: EvaluationSite::Plan,
+            expr: value.value.tree.clone(),
+            resolved: Some(value.value.value.clone()),
+        })
+        .collect();
+    lowered.sort_by(|left, right| left.name.cmp(&right.name));
+    lowered
+}
+
+fn lower_instance(
+    policy: Option<&InstancePolicy>,
+    constants: &std::collections::BTreeMap<String, crate::value::Value>,
+    owner: &str,
+) -> Result<InstanceSpec, LowerError> {
+    let Some(policy) = policy else {
+        return Ok(InstanceSpec {
+            key: None,
+            lifetime: PlanInstanceLifetime::Persistent,
+        });
+    };
+    let duration = |value: &crate::compiler::hir::Const| match &value.value {
+        crate::value::Value::Duration(nanos) => Ok(*nanos),
+        _ => Err(LowerError {
+            owner: owner.to_string(),
+            detail: "the checked instance lifetime lost its duration carrier",
+        }),
+    };
+    let lifetime = match &policy.lifetime {
+        InstanceLifetime::Persistent => PlanInstanceLifetime::Persistent,
+        InstanceLifetime::Idle(value) => PlanInstanceLifetime::Idle(duration(value)?),
+        InstanceLifetime::Fixed(_)
+        | InstanceLifetime::SinglePass
+        | InstanceLifetime::Tumbling(_) => {
+            return Err(LowerError {
+                owner: owner.to_string(),
+                detail: "this lifetime profile requires the M1.4 R4 scheduler",
+            });
+        }
+    };
+    Ok(InstanceSpec {
+        key: policy
+            .key
+            .as_ref()
+            .map(|key| substitute_tree(key, constants)),
+        lifetime,
+    })
+}
+
+/// A checked instance policy whose runtime profile is not executable at the
+/// current M1.4 gate. V9 can transport every closed profile; lowering refuses
+/// before packaging until the corresponding scheduler rule exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LowerError {
     /// Source owner whose checked policy cannot ship yet.

@@ -54,6 +54,9 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE CONTAINER MOVE 2026-08-16 (M1.4 P1): plan-package v8 adds
 // partition descriptors and lifecycle activations. This graph declares none,
 // so its semantic hash and trace remain fixed while its package checksum moves.
+// DELIBERATE CONTAINER MOVE 2026-08-21 (M1.4 R2 checkpoint): categorical
+// v9 replaces that draft with the root/Node owner table and scoped edges.
+// JSONL declares no instance semantics, so hash and trace remain fixed.
 const JSONL_HASH: &str = "9e66e62cbe17c17d6394e3692ed074e3416782ac3a3ea569a53af9edea54c29b";
 
 #[test]

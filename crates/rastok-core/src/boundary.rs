@@ -184,6 +184,35 @@ pub fn process_port_type(
     }
 }
 
+/// Latest evaluation site admitted by the currently executable `Process`
+/// contract for one attribute.
+///
+/// The compiler sheet owns the source-facing rule. This core mirror lets a
+/// package validator reject a forged late binding without linking the
+/// compiler Registry. Keep it in product agreement with the sheet, just like
+/// [`process_port_type`].
+#[must_use]
+pub fn process_attribute_site(
+    contract: &str,
+    attribute: &str,
+) -> Option<crate::plan::EvaluationSite> {
+    use crate::plan::EvaluationSite;
+
+    if contract != "Process" {
+        return None;
+    }
+    match attribute {
+        "mode" | "codec" | "err_codec" | "effect" | "behavior" | "max_output" | "on_timeout" => {
+            Some(EvaluationSite::Plan)
+        }
+        "args" | "command" | "cwd" | "timeout" | "env" | "restart" => {
+            Some(EvaluationSite::Instance)
+        }
+        "correlate" => Some(EvaluationSite::Invocation),
+        _ => None,
+    }
+}
+
 /// The canonical logical type of the conventional `Process.exit` port.
 ///
 /// B5 fixes the migration target beside the old boundary facts; v7 transports

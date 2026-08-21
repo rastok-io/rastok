@@ -1100,6 +1100,45 @@ fn process_declares_the_phase_ceiling_of_every_setting() {
 }
 
 #[test]
+fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
+    use rastok::stdlib::PROCESS;
+
+    for spec in PROCESS.common {
+        assert_eq!(
+            rastok::boundary::process_attribute_site("Process", spec.name),
+            Some(spec.latest_site),
+            "common attribute {}",
+            spec.name
+        );
+    }
+    let selector = PROCESS.selector.expect("Process has profiles");
+    assert_eq!(
+        rastok::boundary::process_attribute_site("Process", selector.attribute),
+        Some(EvaluationSite::Plan),
+        "the profile selector shapes the plan"
+    );
+    for profile in selector.profiles {
+        for spec in profile.attributes {
+            assert_eq!(
+                rastok::boundary::process_attribute_site("Process", spec.name),
+                Some(spec.latest_site),
+                "{} attribute {}",
+                profile.word,
+                spec.name
+            );
+        }
+    }
+    assert_eq!(
+        rastok::boundary::process_attribute_site("Process", "unknown"),
+        None
+    );
+    assert_eq!(
+        rastok::boundary::process_attribute_site("Other", "command"),
+        None
+    );
+}
+
+#[test]
 fn constant_process_cwd_and_env_are_effective_plan_attributes() {
     let source = process_graph(&format!(
         "{FULL}\n    cwd = \"/\"\n    env = {{ \"RASTOK_PHASE_PROBE\": \"bound\" }}"

@@ -94,7 +94,12 @@ The repository opens publicly with this milestone (15 October 2026).
   realign compiler/transport/runtime before implementing finite Closing. M1
   keeps the synchronous one-worker reference engine; the same addresses are
   designed for future concurrent Workers and Coordinator/child-Worker
-  deployment without placing physical facts in causal identity.
+  deployment without placing physical facts in causal identity. Its first R2
+  checkpoint has allocated categorical plan-package v9: lexical Graph/Node
+  owners, scoped edges, typed key/lifetime policy, phased immutable values and
+  dynamic Connector rows now travel and are revalidated independently of the
+  compiler Registry. Hierarchical instance references and their deliberate
+  causal-trace move remain R3, not part of that package-only rebaseline.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

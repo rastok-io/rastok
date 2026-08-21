@@ -122,15 +122,49 @@ cross-partition reads, `stop <partition>`, shared Graph `var`, and join `by`.
 It preserves P0–P3's canonical key bytes, pre-commit route decision,
 journaled replay authority, keyed mailbox/state/open-call isolation, causal
 start/stop, generation fences, and one-worker reference implementation. The
-unpublished v8 draft must be realigned categorically before P4; no deployed
-compatibility promise attaches to its old `PartitionSpec` spelling.
+unpublished v8 draft is categorically refused by v9; no deployed compatibility
+promise attaches to its old `PartitionSpec` spelling.
 
 This rebase declares two separate identity consequences. The categorical plan
 body moves once when the new owner/instance tables land; semantic graph hashes
 move only when the semantic plan changes. The causal trace format moves for
-every firing because `(address, generation)` becomes mandatory journal
-authority, including for singleton owners. Those trace and golden moves must
-be enumerated before R2 re-blesses them; they are not cleanup noise.
+every firing when `(address, generation)` becomes mandatory journal authority,
+including for singleton owners. Those R3 trace and golden moves must be
+enumerated before they are re-blessed; they are not cleanup noise.
+
+**R2 transport checkpoint (2026-08-21).** Plan-package v9 is the categorical
+owner transport and categorically refuses the unreleased v8 named-partition
+body. The body now has two deliberately distinct, reciprocally validated
+tables: every Graph, Operator, and Connector has one lexical `Owner` row,
+while only executable Operators and Connectors have a `Node` row and a VM
+`Slot`. The root App Graph is the unique parentless owner; every other owner
+names a preceding enclosing Graph, every Node points back to its exact owner,
+and every edge names its lexical Graph scope. Keeping these two domains
+separate preserves executable-slot stability without allowing spatial DAG
+flattening to erase lexical or lifecycle ownership.
+
+Each owner carries one explicit `InstanceSpec`: an optional checked key tree
+whose resolved `DataType` travels with the expression, plus one of the closed
+`persistent`, `idle`, `fixed`, `single_pass`, or `tumbling` lifetime forms.
+Owners also carry immutable typed expressions with their derived earliest
+evaluation site and, exactly at plan site, their independently reproducible
+reduction. Effective Connector attributes gain the corresponding dynamic
+expression row. Registry-free validation proves the owner tree and reciprocal
+links, key domain and input-wide type agreement, positive duration budgets,
+lexical binding availability, acyclic value dependencies, exact evaluation
+sites, and exact plan reductions. The active `Process` mirror additionally
+prevents any dynamic row from changing a plan-shaping attribute without the
+compiler Registry; a dynamic contract row with no core mirror refuses closed.
+
+This is intentionally a **package-only** identity move for existing programs.
+The `echo`, `gauge`, and `jsonl` package goldens and the embedded spike copy
+move because v9 always carries the root owner and owner references. Their
+semantic hashes and all causal traces remain byte-identical. R2 is not thereby
+declared complete: source production of non-plan owner values and dynamic
+Connector settings, nested Graph lowering, and the mandatory canonical
+`(address, generation)` route/journal sub-forms remain their named gates. The
+last item is still the separately declared R3 causal-trace move; it must not be
+smuggled into this package rebaseline.
 
 ## D-2026-08-16-1 — A partition key is a journaled routing decision
 

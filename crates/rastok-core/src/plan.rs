@@ -110,6 +110,11 @@ impl PortDecl {
 /// and handlers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionPlan {
+    /// Lexical lifecycle owners, in canonical preorder. Entry zero is the
+    /// root App Graph. Graph composition may flatten the spatial DAG, but it
+    /// never erases this table: instance addressing, immutable bindings and
+    /// future placement all attach here.
+    pub owners: Vec<Owner>,
     /// The nodes, in canonical order; [`Slot`]s index this table.
     pub nodes: Vec<Node>,
     /// Boundary ports declared on the graph, in canonical order.
@@ -149,6 +154,20 @@ pub struct AssetBlob {
 }
 
 impl ExecutionPlan {
+    /// Resolves one owner reference without trusting a freely constructed
+    /// [`OwnerSlot`].
+    #[must_use]
+    pub fn owner(&self, slot: OwnerSlot) -> Option<&Owner> {
+        self.owners.get(slot.index())
+    }
+
+    /// The instance policy owned by one executable Node.
+    #[must_use]
+    pub fn node_instance(&self, slot: Slot) -> Option<&InstanceSpec> {
+        let node = self.nodes.get(slot.index())?;
+        self.owner(node.owner).map(|owner| &owner.instance)
+    }
+
     /// The canonical text of one edge — the same rendering the
     /// consumed cursors and the budget obligations seal.
     #[must_use]
@@ -191,8 +210,9 @@ pub struct Node {
     /// Declared state cells with their boot-time defaults, in
     /// canonical order.
     pub vars: Vec<VarCell>,
-    /// Keyed-instance descriptor. Absence is the explicit singleton instance.
-    pub partition: Option<PartitionSpec>,
+    /// The owner row for this Node. Validation proves that the row is a
+    /// [`OwnerKind::Node`] carrying this exact Node slot.
+    pub owner: OwnerSlot,
 }
 
 impl Node {
@@ -206,25 +226,164 @@ impl Node {
     }
 }
 
-/// One resolved keyed-instance descriptor.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PartitionSpec {
-    /// Source name when the node references a graph-level declaration;
-    /// anonymous inline partitions carry none.
-    pub name: Option<String>,
-    /// Expression evaluated once against each envelope routed to this node.
-    pub key: expr::Tree,
-    /// Lifetime policy executable in this M1.4 gate.
-    pub lifetime: PartitionLifetime,
+/// Compile-time resolved owner reference. Like [`Slot`], the freely
+/// constructible value carries no validity claim until it sits in a
+/// [`ValidatedExecutionPlan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OwnerSlot(u32);
+
+impl OwnerSlot {
+    /// Wraps an owner-table index.
+    #[must_use]
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    /// The index inside [`ExecutionPlan::owners`].
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
 }
 
-/// Executable lifetime policies for a partition instance.
+/// Root-relative lexical owner path. The root App Graph is the empty path;
+/// every nested Graph or Node appends one non-empty segment. This differs
+/// deliberately from [`node::Path`], whose empty form is never a Node.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OwnerPath(Vec<String>);
+
+impl OwnerPath {
+    /// The root App Graph path.
+    #[must_use]
+    pub const fn root() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Builds a root-relative owner path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`node::InvalidName`] when a segment is empty or contains `.`.
+    pub fn new<I, S>(segments: I) -> Result<Self, node::InvalidName>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let segments: Vec<String> = segments.into_iter().map(Into::into).collect();
+        if segments.is_empty() {
+            return Ok(Self::root());
+        }
+        node::Path::new(segments.clone())?;
+        Ok(Self(segments))
+    }
+
+    /// The path segments, outermost first.
+    #[must_use]
+    pub fn segments(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Whether this is the root App Graph.
+    #[must_use]
+    pub fn is_root(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Display for OwnerPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0.join("."))
+    }
+}
+
+/// The declaration represented by one owner row.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PartitionLifetime {
+pub enum OwnerKind {
+    /// A lexical Graph scope. The root App Graph is the unique parentless row.
+    Graph,
+    /// An executable Operator or Connector.
+    Node(Slot),
+}
+
+/// One lexical lifecycle and instance owner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Owner {
+    /// Root-relative static owner path.
+    pub path: OwnerPath,
+    /// Enclosing Graph owner. Only the root App Graph has no parent.
+    pub parent: Option<OwnerSlot>,
+    /// The declaration this row preserves after DAG flattening.
+    pub kind: OwnerKind,
+    /// Orthogonal logical addressing and lifetime policy.
+    pub instance: InstanceSpec,
+    /// Immutable bindings owned by this scope, in canonical name order.
+    pub vals: Vec<OwnerValue>,
+}
+
+/// One owner's logical instance policy. A missing key selects the singleton
+/// address inside the parent instance; persistent remains an explicit value
+/// in the categorical plan even when its source spelling was omitted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstanceSpec {
+    /// Expression and inferred type of the selected key, when keyed.
+    pub key: Option<expr::Tree>,
+    /// When the selected instance closes automatically.
+    pub lifetime: InstanceLifetime,
+}
+
+/// Closed transport vocabulary for lifetime policies. The scheduler admits
+/// each profile only when its corresponding runtime gate has landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstanceLifetime {
     /// No automatic expiry.
     Persistent,
     /// Expire after this many nanoseconds without activity.
-    IdleTtl(i64),
+    Idle(i64),
+    /// Expire this many nanoseconds after `l:start`.
+    Fixed(i64),
+    /// Admit one root delivery, then close after its work quiesces.
+    SinglePass,
+    /// Epoch-aligned processing-time boxes of this many nanoseconds.
+    Tumbling(i64),
+}
+
+/// The point at which an immutable expression becomes a value. Ordering is
+/// semantic: later sites may depend on every earlier one.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EvaluationSite {
+    /// Reduced by the compiler.
+    Plan,
+    /// Bound once from deployment inputs.
+    Boot,
+    /// Bound once for each logical owner instance.
+    Instance,
+    /// Evaluated for each admitted invocation.
+    Invocation,
+}
+
+impl EvaluationSite {
+    /// Whether this ceiling admits the actual site.
+    #[must_use]
+    pub const fn admits(self, actual: Self) -> bool {
+        actual as u8 <= self as u8
+    }
+}
+
+/// One immutable binding preserved with its typed expression. Plan-reduced
+/// values still carry the source expression because that is semantic identity;
+/// their transported reduction lets later construction reuse the proven
+/// constant without evaluating the expression again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnerValue {
+    /// Lexical binding name.
+    pub name: String,
+    /// Earliest site at which the expression closes.
+    pub site: EvaluationSite,
+    /// Checked expression and result type.
+    pub expr: expr::Tree,
+    /// Present exactly for [`EvaluationSite::Plan`].
+    pub resolved: Option<Value>,
 }
 
 /// A connector's planned configuration.
@@ -237,8 +396,8 @@ pub struct ConnectorSpec {
     pub effect: node::Effect,
     /// The declared behavior, likewise typed.
     pub behavior: node::Behavior,
-    /// The remaining declared attributes, reduced; the typed axes
-    /// above are not repeated here.
+    /// The remaining effective attributes, either reduced or carrying their
+    /// checked evaluation phase; the typed axes above are not repeated here.
     pub attributes: Vec<(String, AttrSetting)>,
 }
 
@@ -253,13 +412,22 @@ impl ConnectorSpec {
     }
 }
 
-/// One reduced attribute setting.
+/// One effective attribute setting.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AttrSetting {
     /// A bare enum-like keyword.
     Word(String),
     /// A reduced constant.
     Value(Value),
+    /// A checked expression evaluated at the transported site. Plan-shaping
+    /// rows can never use this form; validation has enough information to
+    /// reject it without the compiler Registry.
+    Expr {
+        /// Earliest actual evaluation site.
+        site: EvaluationSite,
+        /// Checked expression and result type.
+        expr: expr::Tree,
+    },
 }
 
 /// One planned state cell.
@@ -340,6 +508,8 @@ pub struct FieldWrite {
 /// One planned edge.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
+    /// Lexical Graph owner in which this route was declared.
+    pub scope: OwnerSlot,
     /// The emitting end.
     pub from: EndpointRef,
     /// The receiving end; `None` is the explicit discard.

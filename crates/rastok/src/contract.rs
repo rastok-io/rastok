@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use crate::expr;
+pub use crate::plan::EvaluationSite;
 
 /// One closed logical type used by a real port contract today.
 ///
@@ -387,32 +388,6 @@ pub struct AttributeSpec {
     /// Checking chooses the earliest phase where the written expression
     /// closes; this is a ceiling, never a request to delay a constant.
     pub latest_site: EvaluationSite,
-}
-
-/// Where an effective connector attribute is allowed to become a value.
-///
-/// The declaration order is semantic: dependencies only grow while moving
-/// from plan to invocation. A contract therefore admits an actual site when
-/// it is no later than its declared ceiling.
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum EvaluationSite {
-    /// Closed during compilation; required for anything shaping the plan.
-    Plan,
-    /// Bound once from deployment inputs such as `env()` or `secret()`.
-    Boot,
-    /// Bound once for each logical Node instance.
-    Instance,
-    /// Evaluated separately for each admitted invocation.
-    Invocation,
-}
-
-impl EvaluationSite {
-    /// Whether this contract ceiling admits one actual evaluation site.
-    #[must_use]
-    pub const fn admits(self, actual: Self) -> bool {
-        actual as u8 <= self as u8
-    }
 }
 
 /// The presence a contract demands in the source, and what absence

@@ -3,8 +3,8 @@
 > **Status: normative and executable through M1.3 B9.** The
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as`, closed-struct and tagged-constructor trees execute, are
-> type-checked, and travel in published package v7 with their resolved targets.
-> The next categorical instance format retains that registry unchanged. The
+> type-checked, and travel in the v7 registry with their resolved targets.
+> Categorical package v9 retains that registry unchanged. The
 > `IDENT!` frontend surface and full JSON-value reader described below are
 > executable. A `variant` must be narrowed before member or index access.
 

@@ -11,10 +11,10 @@
 > structural-union and tagged-union targets is executable in memory. Tagged
 > constructors and contextual structural-union wrapping are checked,
 > executable and transported; `err` uses the same emission path as any port.
-> The categorical M1.4 transport retains v7's complete type/value/expression
-> registry and total effective port table, then adds the parent-linked Node
-> owner tree plus instance-key/lifetime descriptors without changing this
-> logical algebra. The unpublished named-partition v8
+> Categorical M1.4 plan-package v9 retains v7's complete
+> type/value/expression registry and total effective port table, then adds the
+> parent-linked lexical owner tree plus instance-key/lifetime descriptors
+> without changing this logical algebra. The unpublished named-partition v8
 > draft has no compatibility status. Standard-layer projection adapters implement the
 > exact external profiles, including physical union-selector mappings and
 > path-specific loss refusals. Unchecked structural access through `variant`
@@ -437,7 +437,7 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (v7 rejects older `.rkp` versions rather than
+- a package-format reader (the current v9 rejects older `.rkp` versions rather than
   translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.

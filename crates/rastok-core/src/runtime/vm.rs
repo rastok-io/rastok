@@ -189,7 +189,7 @@ struct PreparedEmissions(Vec<PreparedEmission>);
 
 /// The plan-backed gate for one atomic boundary completion.
 ///
-/// Format v8 retains the exact `ProcessExit` union in the resolved port
+/// Format v9 retains the exact `ProcessExit` union in the resolved port
 /// table. This gate judges that same type, so no malformed terminal fact can
 /// become causal.
 struct PlanGate<'plan> {
@@ -904,16 +904,17 @@ impl<'plan> Vm<'plan> {
     }
 
     fn lifecycle_managed(&self, slot: Slot) -> bool {
-        self.plan.nodes[slot.index()].partition.is_some()
-            || self.plan.handlers.iter().any(|handler| {
-                handler.node == slot
-                    && matches!(
-                        handler.activation,
-                        node::HandlerActivation::Lifecycle(
-                            node::Lifecycle::Start | node::Lifecycle::Stop
-                        )
+        self.plan.node_instance(slot).is_some_and(|instance| {
+            instance.key.is_some() || instance.lifetime != crate::plan::InstanceLifetime::Persistent
+        }) || self.plan.handlers.iter().any(|handler| {
+            handler.node == slot
+                && matches!(
+                    handler.activation,
+                    node::HandlerActivation::Lifecycle(
+                        node::Lifecycle::Start | node::Lifecycle::Stop
                     )
-            })
+                )
+        })
     }
 
     /// Records one admitted envelope as instance activity. This runs only
@@ -950,10 +951,10 @@ impl<'plan> Vm<'plan> {
                 0
             }
         };
-        if let Some(crate::plan::PartitionLifetime::IdleTtl(ttl)) = self.plan.nodes[slot.index()]
-            .partition
-            .as_ref()
-            .map(|partition| &partition.lifetime)
+        if let Some(crate::plan::InstanceLifetime::Idle(ttl)) = self
+            .plan
+            .node_instance(slot)
+            .map(|instance| &instance.lifetime)
         {
             self.scheduler.arm(
                 self.now.saturating_add(*ttl),
@@ -1336,7 +1337,11 @@ impl<'plan> Vm<'plan> {
     }
 
     fn partition_key(&self, target: Slot, envelope: &Envelope) -> Result<PartitionKey, VmError> {
-        let Some(partition) = &self.plan.nodes[target.index()].partition else {
+        let Some(key) = self
+            .plan
+            .node_instance(target)
+            .and_then(|instance| instance.key.as_ref())
+        else {
             return Ok(PartitionKey::singleton());
         };
         let mut bindings = BTreeMap::new();
@@ -1346,12 +1351,11 @@ impl<'plan> Vm<'plan> {
         );
         let data = DataSlot::new(envelope.data());
         let value = resolve_payload(
-            eval_lazy(&partition.key, &bindings, &data, &self.plan.assets)
-                .map_err(VmError::Fault)?,
+            eval_lazy(key, &bindings, &data, &self.plan.assets).map_err(VmError::Fault)?,
             &data,
         )
         .map_err(VmError::Fault)?;
-        PartitionKey::from_value(&partition.key.ty, &value).map_err(VmError::Fault)
+        PartitionKey::from_value(&key.ty, &value).map_err(VmError::Fault)
     }
 
     fn check_room_for_routes<'a>(

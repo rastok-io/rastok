@@ -1,11 +1,13 @@
 # Instances, keys, lifetime, and placement
 
 > **Status:** normative M1.4 target, adopted by D-2026-08-18-1. The compiler
-> accepts and checks the R1 `instances` / `lifetime` surface; keyed persistent
-> and idle Nodes temporarily lower through the superseded private v8 row.
-> Graph owners, finite singleton lifetimes, and the other checked profiles wait
-> for the categorical R2 transport and R4 scheduler and refuse by those names
-> rather than disappearing. This document is the single authority for logical
+> accepts and checks the R1 `instances` / `lifetime` surface. Plan-package v9
+> now carries the categorical parent-linked owner table, scoped routes,
+> independent instance policy, immutable owner expressions, and phased
+> Connector settings. Keyed persistent and idle Nodes lower through that v9
+> form; Graph-owned routing, source production of dynamic settings and values,
+> finite lifetimes, and hierarchical instance references remain their named
+> R1/R3/R4 gates rather than disappearing. This document is the single authority for logical
 > instance addressing, key selection, Node-local state, lifetime, and the
 > semantic boundary with future sharding.
 
@@ -524,9 +526,9 @@ The plan/package and journal vocabulary must be rewritten from
 `partition_key` / `target_partition` to logical instance addresses and
 generation-bearing references without renumbering already reserved
 extend-only journal keys merely for spelling.
-The plan format remains categorical; whether the unpublished v8 draft is
-replaced in place or refused in favor of v9 is an implementation gate, not a
-source semantic distinction. Making the instance reference mandatory in the
-causal journal core is likewise one declared categorical trace move: existing
-trace goldens move when R2 lands, including singleton graphs, while semantic
-graph hashes move only for actual semantic-plan changes.
+Plan-package v9 is now the categorical owner/instance transport and refuses
+the unpublished v8 draft. That package-only move leaves semantic hashes and
+causal traces unchanged. Making the instance reference mandatory in the
+causal journal core remains its own declared categorical trace move: existing
+trace goldens move at R3, including singleton graphs, while semantic graph
+hashes move only for actual semantic-plan changes.

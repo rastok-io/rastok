@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v8: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v9: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -29,20 +29,22 @@ use crate::expr;
 use crate::identity::encoding::value_tagged;
 use crate::node;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, ExecutionPlan, FieldWrite, Handler,
-    Node, NodeKind, PartitionLifetime, PartitionSpec, PlanValidationError, PortDecl, SemanticHash,
-    Slot, Step, ValidatedExecutionPlan, VarCell,
+    AttrSetting, ConnectorSpec, Edge, Emission, EndpointRef, EvaluationSite, ExecutionPlan,
+    FieldWrite, Handler, InstanceLifetime, InstanceSpec, Node, NodeKind, Owner, OwnerKind,
+    OwnerPath, OwnerSlot, OwnerValue, PlanValidationError, PortDecl, SemanticHash, Slot, Step,
+    ValidatedExecutionPlan, VarCell,
 };
 use crate::value::Value;
 
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
-/// The format version this module writes and reads. V7 publishes the complete
-/// logical type, materialized-value and expression registries together with
-/// the mandatory resolved-port table. A new format is a new version, and an
-/// old decoder refuses it by name, exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 8;
+/// The format version this module writes and reads. V9 retains v7's complete
+/// logical type, materialized-value and expression registries and adds the
+/// categorical lexical-owner table, scoped edges, instance policy and phased
+/// immutable expressions. A new format is a new version, and an old decoder
+/// refuses it by name, exactly as the format note promises.
+pub const FORMAT_VERSION: u32 = 9;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -241,6 +243,7 @@ fn plan_tree_with_resolved(
             4,
             Cbor::Array(plan.handlers.iter().map(handler_tree).collect()),
         ),
+        (9, Cbor::Array(plan.owners.iter().map(owner_tree).collect())),
     ]);
     // The travelling zone schemas (v5, D-2026-08-10-1): the
     // validator answers without a Registry. Absent = omitted key.
@@ -361,7 +364,7 @@ fn node_tree(node: &Node) -> Cbor {
         NodeKind::Operator => Cbor::Uint(1),
         NodeKind::Connector(spec) => Cbor::Array(vec![Cbor::Uint(2), spec_tree(spec)]),
     };
-    let mut fields = BTreeMap::from([
+    let fields = BTreeMap::from([
         (1, Cbor::Text(node.path.to_string())),
         (2, kind),
         (
@@ -369,27 +372,70 @@ fn node_tree(node: &Node) -> Cbor {
             Cbor::Array(node.ports.iter().map(port_decl_tree).collect()),
         ),
         (4, Cbor::Array(node.vars.iter().map(var_tree).collect())),
+        (5, Cbor::Uint(node.owner.index() as u64)),
     ]);
-    if let Some(partition) = &node.partition {
-        fields.insert(5, partition_tree(partition));
+    Cbor::Map(fields)
+}
+
+fn owner_tree(owner: &Owner) -> Cbor {
+    let kind = match owner.kind {
+        OwnerKind::Graph => Cbor::Array(vec![Cbor::Uint(1)]),
+        OwnerKind::Node(slot) => Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(slot.index() as u64)]),
+    };
+    Cbor::Map(BTreeMap::from([
+        (1, Cbor::Text(owner.path.to_string())),
+        (
+            2,
+            owner
+                .parent
+                .map_or(Cbor::Null, |slot| Cbor::Uint(slot.index() as u64)),
+        ),
+        (3, kind),
+        (4, instance_tree(&owner.instance)),
+        (
+            5,
+            Cbor::Array(owner.vals.iter().map(owner_value_tree).collect()),
+        ),
+    ]))
+}
+
+fn instance_tree(instance: &InstanceSpec) -> Cbor {
+    let mut fields = BTreeMap::from([(2, lifetime_tree(&instance.lifetime))]);
+    if let Some(key) = &instance.key {
+        fields.insert(1, tree_tree(key));
     }
     Cbor::Map(fields)
 }
 
-fn partition_tree(partition: &PartitionSpec) -> Cbor {
-    Cbor::Array(vec![
-        partition
-            .name
-            .as_ref()
-            .map_or(Cbor::Null, |name| Cbor::Text(name.clone())),
-        tree_tree(&partition.key),
-        match partition.lifetime {
-            PartitionLifetime::Persistent => Cbor::Array(vec![Cbor::Uint(1)]),
-            PartitionLifetime::IdleTtl(nanos) => {
-                Cbor::Array(vec![Cbor::Uint(2), signed_tree(nanos)])
-            }
-        },
-    ])
+fn lifetime_tree(lifetime: &InstanceLifetime) -> Cbor {
+    match lifetime {
+        InstanceLifetime::Persistent => Cbor::Array(vec![Cbor::Uint(1)]),
+        InstanceLifetime::Idle(nanos) => Cbor::Array(vec![Cbor::Uint(2), signed_tree(*nanos)]),
+        InstanceLifetime::Fixed(nanos) => Cbor::Array(vec![Cbor::Uint(3), signed_tree(*nanos)]),
+        InstanceLifetime::SinglePass => Cbor::Array(vec![Cbor::Uint(4)]),
+        InstanceLifetime::Tumbling(nanos) => Cbor::Array(vec![Cbor::Uint(5), signed_tree(*nanos)]),
+    }
+}
+
+fn site_tree(site: EvaluationSite) -> Cbor {
+    Cbor::Uint(match site {
+        EvaluationSite::Plan => 1,
+        EvaluationSite::Boot => 2,
+        EvaluationSite::Instance => 3,
+        EvaluationSite::Invocation => 4,
+    })
+}
+
+fn owner_value_tree(value: &OwnerValue) -> Cbor {
+    let mut fields = BTreeMap::from([
+        (1, Cbor::Text(value.name.clone())),
+        (2, site_tree(value.site)),
+        (3, tree_tree(&value.expr)),
+    ]);
+    if let Some(resolved) = &value.resolved {
+        fields.insert(4, value_tagged(resolved));
+    }
+    Cbor::Map(fields)
 }
 
 fn spec_tree(spec: &ConnectorSpec) -> Cbor {
@@ -430,6 +476,9 @@ fn attr_tree(setting: &AttrSetting) -> Cbor {
     match setting {
         AttrSetting::Word(word) => Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(word.clone())]),
         AttrSetting::Value(value) => Cbor::Array(vec![Cbor::Uint(2), value_tagged(value)]),
+        AttrSetting::Expr { site, expr } => {
+            Cbor::Array(vec![Cbor::Uint(3), site_tree(*site), tree_tree(expr)])
+        }
     }
 }
 
@@ -465,7 +514,11 @@ fn edge_tree(edge: &Edge) -> Cbor {
         Some(endpoint) => endpoint_tree(endpoint),
         None => Cbor::Null,
     };
-    Cbor::Array(vec![endpoint_tree(&edge.from), to])
+    Cbor::Array(vec![
+        Cbor::Uint(edge.scope.index() as u64),
+        endpoint_tree(&edge.from),
+        to,
+    ])
 }
 
 fn endpoint_tree(endpoint: &EndpointRef) -> Cbor {
@@ -869,7 +922,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         stack.push(Item::Ty(&tree.ty, level));
         stack.push(Item::Expr(&tree.root, level));
     }
-    // The root map's four table arrays sit at level 1 always.
+    // The root map's table arrays sit at level 1.
     let mut max = 1usize;
     let mut stack: Vec<Item<'_>> = Vec::new();
     for node in &plan.nodes {
@@ -885,8 +938,13 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 // entry array at 6, name and attr_tree at 7, the
                 // attr_tree's tag and payload at 8.
                 max = max.max(8);
-                if let AttrSetting::Value(value) = setting {
-                    stack.push(Item::Val(value, 8));
+                match setting {
+                    AttrSetting::Value(value) => stack.push(Item::Val(value, 8)),
+                    // The expression payload is a tree_tree rooted at level
+                    // 8; its type and expression children therefore start at
+                    // level 9.
+                    AttrSetting::Expr { expr, .. } => tree(expr, 9, &mut stack),
+                    AttrSetting::Word(_) => {}
                 }
             }
         }
@@ -906,11 +964,19 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 stack.push(Item::Val(init, 5));
             }
         }
-        if let Some(partition) = &node.partition {
-            // partition array at 3, name/key/lifetime roots at 4;
-            // tree_tree's expression and type roots sit at 5.
-            max = max.max(5);
-            tree(&partition.key, 5, &mut stack);
+    }
+    for owner in &plan.owners {
+        // owner map at 2, fields and instance map at 3, instance fields at 4.
+        max = max.max(5);
+        if let Some(key) = &owner.instance.key {
+            tree(key, 5, &mut stack);
+        }
+        for value in &owner.vals {
+            // owner-value map at 4, fields at 5, tree roots at 6.
+            tree(&value.expr, 6, &mut stack);
+            if let Some(resolved) = &value.resolved {
+                stack.push(Item::Val(resolved, 5));
+            }
         }
     }
     for decl in &plan.boundary {
@@ -1269,6 +1335,10 @@ fn err(detail: &str) -> DecodeError {
 
 fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
     let pairs = map_of(tree, "plan")?;
+    let owners = array_of(get(pairs, 9, "plan owners")?, "plan owners")?
+        .iter()
+        .map(owner_from)
+        .collect::<Result<Vec<_>, _>>()?;
     let nodes = array_of(get(pairs, 1, "plan nodes")?, "plan nodes")?
         .iter()
         .map(node_from)
@@ -1307,6 +1377,7 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         None => Vec::new(),
     };
     Ok(ExecutionPlan {
+        owners,
         nodes,
         boundary,
         edges,
@@ -1352,34 +1423,84 @@ fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
         .iter()
         .map(var_from)
         .collect::<Result<Vec<_>, _>>()?;
-    let partition = find(pairs, 5).map(partition_from).transpose()?;
+    let owner = OwnerSlot::new(u32_from(get(pairs, 5, "node owner")?, "node owner")?);
     Ok(Node {
         path,
         kind,
         ports,
         vars,
-        partition,
+        owner,
     })
 }
 
-fn partition_from(tree: &Cbor) -> Result<PartitionSpec, DecodeError> {
-    let [name, key, lifetime] = array_of(tree, "partition")? else {
-        return Err(err("partition"));
+fn owner_from(tree: &Cbor) -> Result<Owner, DecodeError> {
+    let fields = map_of(tree, "owner")?;
+    let path_text = text_of(get(fields, 1, "owner path")?, "owner path")?;
+    let segments = if path_text.is_empty() {
+        Vec::new()
+    } else {
+        path_text.split('.').map(ToString::to_string).collect()
     };
-    let name = match name {
+    let path = OwnerPath::new(segments).map_err(|_| err("owner path"))?;
+    let parent = match get(fields, 2, "owner parent")? {
         Cbor::Null => None,
-        Cbor::Text(name) if !name.is_empty() => Some(name.clone()),
-        _ => return Err(err("partition name")),
+        value => Some(OwnerSlot::new(u32_from(value, "owner parent")?)),
     };
-    let lifetime = match array_of(lifetime, "partition lifetime")? {
-        [Cbor::Uint(1)] => PartitionLifetime::Persistent,
-        [Cbor::Uint(2), nanos] => PartitionLifetime::IdleTtl(signed_from(nanos)?),
-        _ => return Err(err("partition lifetime")),
+    let kind = match array_of(get(fields, 3, "owner kind")?, "owner kind")? {
+        [Cbor::Uint(1)] => OwnerKind::Graph,
+        [Cbor::Uint(2), slot] => OwnerKind::Node(Slot::new(u32_from(slot, "owner node")?)),
+        _ => return Err(err("owner kind")),
     };
-    Ok(PartitionSpec {
-        name,
-        key: tree_from(key)?,
-        lifetime,
+    let instance = instance_from(get(fields, 4, "owner instance")?)?;
+    let vals = array_of(get(fields, 5, "owner vals")?, "owner vals")?
+        .iter()
+        .map(owner_value_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Owner {
+        path,
+        parent,
+        kind,
+        instance,
+        vals,
+    })
+}
+
+fn instance_from(tree: &Cbor) -> Result<InstanceSpec, DecodeError> {
+    let fields = map_of(tree, "instance")?;
+    Ok(InstanceSpec {
+        key: find(fields, 1).map(tree_from).transpose()?,
+        lifetime: lifetime_from(get(fields, 2, "instance lifetime")?)?,
+    })
+}
+
+fn lifetime_from(tree: &Cbor) -> Result<InstanceLifetime, DecodeError> {
+    match array_of(tree, "instance lifetime")? {
+        [Cbor::Uint(1)] => Ok(InstanceLifetime::Persistent),
+        [Cbor::Uint(2), nanos] => Ok(InstanceLifetime::Idle(signed_from(nanos)?)),
+        [Cbor::Uint(3), nanos] => Ok(InstanceLifetime::Fixed(signed_from(nanos)?)),
+        [Cbor::Uint(4)] => Ok(InstanceLifetime::SinglePass),
+        [Cbor::Uint(5), nanos] => Ok(InstanceLifetime::Tumbling(signed_from(nanos)?)),
+        _ => Err(err("instance lifetime")),
+    }
+}
+
+fn site_from(tree: &Cbor) -> Result<EvaluationSite, DecodeError> {
+    match tree {
+        Cbor::Uint(1) => Ok(EvaluationSite::Plan),
+        Cbor::Uint(2) => Ok(EvaluationSite::Boot),
+        Cbor::Uint(3) => Ok(EvaluationSite::Instance),
+        Cbor::Uint(4) => Ok(EvaluationSite::Invocation),
+        _ => Err(err("evaluation site")),
+    }
+}
+
+fn owner_value_from(tree: &Cbor) -> Result<OwnerValue, DecodeError> {
+    let fields = map_of(tree, "owner value")?;
+    Ok(OwnerValue {
+        name: text_of(get(fields, 1, "owner value name")?, "owner value name")?.to_string(),
+        site: site_from(get(fields, 2, "owner value site")?)?,
+        expr: tree_from(get(fields, 3, "owner value expression")?)?,
+        resolved: find(fields, 4).map(value_from).transpose()?,
     })
 }
 
@@ -1429,6 +1550,10 @@ fn attr_from(tree: &Cbor) -> Result<AttrSetting, DecodeError> {
     match array_of(tree, "attr setting")? {
         [Cbor::Uint(1), Cbor::Text(word)] => Ok(AttrSetting::Word(word.clone())),
         [Cbor::Uint(2), value] => Ok(AttrSetting::Value(value_from(value)?)),
+        [Cbor::Uint(3), site, expr] => Ok(AttrSetting::Expr {
+            site: site_from(site)?,
+            expr: tree_from(expr)?,
+        }),
         _ => Err(err("attr setting")),
     }
 }
@@ -1467,16 +1592,25 @@ fn var_from(tree: &Cbor) -> Result<VarCell, DecodeError> {
 
 fn edge_from(tree: &Cbor) -> Result<Edge, DecodeError> {
     match array_of(tree, "edge")? {
-        [from, Cbor::Null] => Ok(Edge {
+        [scope, from, Cbor::Null] => Ok(Edge {
+            scope: OwnerSlot::new(u32_from(scope, "edge scope")?),
             from: endpoint_from(from)?,
             to: None,
         }),
-        [from, to] => Ok(Edge {
+        [scope, from, to] => Ok(Edge {
+            scope: OwnerSlot::new(u32_from(scope, "edge scope")?),
             from: endpoint_from(from)?,
             to: Some(endpoint_from(to)?),
         }),
         _ => Err(err("edge")),
     }
+}
+
+fn u32_from(tree: &Cbor, detail: &str) -> Result<u32, DecodeError> {
+    let Cbor::Uint(value) = tree else {
+        return Err(err(detail));
+    };
+    u32::try_from(*value).map_err(|_| err(detail))
 }
 
 fn endpoint_from(tree: &Cbor) -> Result<EndpointRef, DecodeError> {
@@ -2162,6 +2296,192 @@ mod tests {
         }
     }
 
+    fn root_owner() -> Owner {
+        Owner {
+            path: OwnerPath::root(),
+            parent: None,
+            kind: OwnerKind::Graph,
+            instance: InstanceSpec {
+                key: None,
+                lifetime: InstanceLifetime::Persistent,
+            },
+            vals: vec![],
+        }
+    }
+
+    fn node_owner(name: &str, slot: u32) -> Owner {
+        Owner {
+            path: OwnerPath::new([name]).unwrap(),
+            parent: Some(OwnerSlot::new(0)),
+            kind: OwnerKind::Node(Slot::new(slot)),
+            instance: InstanceSpec {
+                key: None,
+                lifetime: InstanceLifetime::Persistent,
+            },
+            vals: vec![],
+        }
+    }
+
+    fn instance_package() -> Vec<u8> {
+        let mut root = root_owner();
+        root.instance = InstanceSpec {
+            key: Some(expr::Tree {
+                root: expr::Expr::Literal(Value::Int(7)),
+                ty: DataType::INT,
+            }),
+            lifetime: InstanceLifetime::Idle(10),
+        };
+        let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
+            owners: vec![root],
+            nodes: vec![],
+            boundary: vec![],
+            edges: vec![],
+            handlers: vec![],
+            app_schema: vec![],
+            ext_schema: vec![],
+            assets: vec![],
+        })
+        .expect("the instance probe validates");
+        encode(&validated, &SemanticHash::from_bytes([0; 32]))
+    }
+
+    fn mutate_package_body(package: &[u8], edit: impl FnOnce(&mut BTreeMap<u64, Cbor>)) -> Vec<u8> {
+        let (Cbor::Map(mut envelope), _) =
+            canonical_cbor::decode(&package[MAGIC.len()..]).expect("envelope")
+        else {
+            panic!("map envelope");
+        };
+        let Cbor::Bytes(body) = envelope.get(&3).expect("body field") else {
+            panic!("bytes body");
+        };
+        let (Cbor::Map(mut body), _) = canonical_cbor::decode(body).expect("plan body") else {
+            panic!("map body");
+        };
+        edit(&mut body);
+        let body = canonical_cbor::encode(&Cbor::Map(body));
+        envelope.insert(3, Cbor::Bytes(body.clone()));
+        envelope.insert(
+            4,
+            Cbor::Bytes(checksum(FORMAT_VERSION, &[0; 32], &body).to_vec()),
+        );
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope)));
+        bytes
+    }
+
+    fn root_instance_mut(body: &mut BTreeMap<u64, Cbor>) -> &mut BTreeMap<u64, Cbor> {
+        let Cbor::Array(owners) = body.get_mut(&9).expect("owners") else {
+            panic!("owner table");
+        };
+        let Cbor::Map(root) = owners.first_mut().expect("root owner") else {
+            panic!("root owner row");
+        };
+        let Cbor::Map(instance) = root.get_mut(&4).expect("instance") else {
+            panic!("instance row");
+        };
+        instance
+    }
+
+    #[test]
+    fn v9_owner_lifetimes_sites_and_dynamic_attributes_have_one_spelling() {
+        let lifetimes = [
+            InstanceLifetime::Persistent,
+            InstanceLifetime::Idle(1),
+            InstanceLifetime::Fixed(2),
+            InstanceLifetime::SinglePass,
+            InstanceLifetime::Tumbling(3),
+        ];
+        for lifetime in lifetimes {
+            assert_eq!(lifetime_from(&lifetime_tree(&lifetime)).unwrap(), lifetime);
+        }
+
+        for site in [
+            EvaluationSite::Plan,
+            EvaluationSite::Boot,
+            EvaluationSite::Instance,
+            EvaluationSite::Invocation,
+        ] {
+            assert_eq!(site_from(&site_tree(site)).unwrap(), site);
+        }
+
+        let setting = AttrSetting::Expr {
+            site: EvaluationSite::Instance,
+            expr: expr::Tree {
+                root: expr::Expr::Path(vec![text("instance"), text("key")]),
+                ty: DataType::Text,
+            },
+        };
+        assert_eq!(attr_from(&attr_tree(&setting)).unwrap(), setting);
+
+        let owner = Owner {
+            path: OwnerPath::new(["workspace"]).unwrap(),
+            parent: Some(OwnerSlot::new(0)),
+            kind: OwnerKind::Graph,
+            instance: InstanceSpec {
+                key: Some(expr::Tree {
+                    root: expr::Expr::Path(vec![text("meta"), text("app"), text("workspace")]),
+                    ty: DataType::Text,
+                }),
+                lifetime: InstanceLifetime::Fixed(30),
+            },
+            vals: vec![OwnerValue {
+                name: text("cwd"),
+                site: EvaluationSite::Instance,
+                expr: expr::Tree {
+                    root: expr::Expr::Path(vec![text("instance"), text("key")]),
+                    ty: DataType::Text,
+                },
+                resolved: None,
+            }],
+        };
+        assert_eq!(owner_from(&owner_tree(&owner)).unwrap(), owner);
+    }
+
+    #[test]
+    fn v9_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
+        let package = instance_package();
+
+        let lying_key_type = mutate_package_body(&package, |body| {
+            let instance = root_instance_mut(body);
+            let Cbor::Array(tree) = instance.get_mut(&1).expect("key") else {
+                panic!("key tree");
+            };
+            tree[0] = type_tree(&DataType::Text);
+        });
+        assert_eq!(
+            decode(&lying_key_type).unwrap_err(),
+            DecodeError::Invalid(PlanValidationError::UnrepresentableConstant)
+        );
+
+        let non_key_domain = mutate_package_body(&package, |body| {
+            let instance = root_instance_mut(body);
+            instance.insert(
+                1,
+                tree_tree(&expr::Tree {
+                    root: expr::Expr::List(vec![expr::Expr::Literal(Value::Int(7))]),
+                    ty: DataType::array(DataType::INT),
+                }),
+            );
+        });
+        assert_eq!(
+            decode(&non_key_domain).unwrap_err(),
+            DecodeError::Invalid(PlanValidationError::InvalidInstanceKey {
+                owner: String::new(),
+                ty: DataType::array(DataType::INT),
+            })
+        );
+
+        let zero_lifetime = mutate_package_body(&package, |body| {
+            root_instance_mut(body).insert(2, lifetime_tree(&InstanceLifetime::Idle(0)));
+        });
+        assert_eq!(
+            decode(&zero_lifetime).unwrap_err(),
+            DecodeError::Invalid(PlanValidationError::InvalidInstanceLifetime {
+                owner: String::new(),
+            })
+        );
+    }
+
     /// One plan exercising every construct the builders encode.
     fn rich_plan() -> ExecutionPlan {
         let map_value = {
@@ -2199,6 +2519,7 @@ mod tests {
             }),
         };
         ExecutionPlan {
+            owners: vec![root_owner(), node_owner("relay", 0), node_owner("shell", 1)],
             nodes: vec![
                 Node {
                     path: node::Path::new(["relay"]).unwrap(),
@@ -2217,7 +2538,7 @@ mod tests {
                         ty: DataType::text_map(DataType::array(DataType::INT)),
                         init: Some(map_value.clone()),
                     }],
-                    partition: None,
+                    owner: OwnerSlot::new(1),
                 },
                 Node {
                     path: node::Path::new(["shell"]).unwrap(),
@@ -2232,7 +2553,7 @@ mod tests {
                     }),
                     ports: vec![],
                     vars: vec![],
-                    partition: None,
+                    owner: OwnerSlot::new(2),
                 },
             ],
             boundary: vec![
@@ -2246,6 +2567,7 @@ mod tests {
             ],
             edges: vec![
                 Edge {
+                    scope: OwnerSlot::new(0),
                     from: EndpointRef {
                         node: None,
                         port: port("in"),
@@ -2256,6 +2578,7 @@ mod tests {
                     }),
                 },
                 Edge {
+                    scope: OwnerSlot::new(0),
                     from: EndpointRef {
                         node: Some(Slot::new(0)),
                         port: port("extra"),
@@ -2324,12 +2647,13 @@ mod tests {
     /// nested chains.
     fn one_step_plan(root: expr::Expr) -> ExecutionPlan {
         ExecutionPlan {
+            owners: vec![root_owner(), node_owner("o", 0)],
             nodes: vec![Node {
                 path: node::Path::new(["o"]).unwrap(),
                 kind: NodeKind::Operator,
                 ports: vec![],
                 vars: vec![],
-                partition: None,
+                owner: OwnerSlot::new(1),
             }],
             boundary: vec![],
             edges: vec![],
@@ -2674,6 +2998,7 @@ mod tests {
     #[test]
     fn the_resolved_table_is_mandatory_and_cannot_lie() {
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
+            owners: vec![root_owner()],
             nodes: vec![],
             boundary: vec![],
             edges: vec![],
@@ -2869,8 +3194,29 @@ mod tests {
                 }),
             },
         )]);
+        let mut categorical = rich_plan();
+        categorical.owners[0].instance.key = Some(tree(expr::Expr::Literal(Value::Int(7))));
+        categorical.owners[0].vals = vec![OwnerValue {
+            name: text("answer"),
+            site: EvaluationSite::Plan,
+            expr: tree(expr::Expr::Literal(Value::Int(42))),
+            resolved: Some(Value::Int(42)),
+        }];
+        let NodeKind::Connector(spec) = &mut categorical.nodes[1].kind else {
+            panic!("the rich plan's second node is a connector");
+        };
+        spec.attributes.push((
+            text("cwd"),
+            AttrSetting::Expr {
+                site: EvaluationSite::Instance,
+                expr: tree(expr::Expr::Path(vec![text("instance"), text("key")])),
+            },
+        ));
+        spec.attributes.sort_by(|left, right| left.0.cmp(&right.0));
+
         let plans = [
             ExecutionPlan {
+                owners: vec![root_owner()],
                 nodes: vec![],
                 boundary: vec![],
                 edges: vec![],
@@ -2879,7 +3225,7 @@ mod tests {
                 ext_schema: vec![],
                 assets: vec![],
             },
-            rich_plan(),
+            categorical,
             one_step_plan(nested_binary),
             one_step_plan(nested_maplit),
             one_step_plan(expr::Expr::Literal(nested_value)),
@@ -2896,6 +3242,7 @@ mod tests {
         }
 
         let resolved_plan = ExecutionPlan {
+            owners: vec![root_owner()],
             nodes: vec![],
             boundary: vec![PortDecl {
                 port: port("deep"),

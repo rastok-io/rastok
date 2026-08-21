@@ -352,7 +352,7 @@ fn resolved_exit_cases(
             .iter()
             .filter_map(|(name, setting)| match setting {
                 crate::plan::AttrSetting::Word(word) => Some((name.clone(), word.clone())),
-                crate::plan::AttrSetting::Value(_) => None,
+                crate::plan::AttrSetting::Value(_) | crate::plan::AttrSetting::Expr { .. } => None,
             })
             .collect();
         let ports = contract.resolve_ports(&words).map_err(|error| {

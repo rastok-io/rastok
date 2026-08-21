@@ -152,8 +152,9 @@ pub fn compile_with_assets(
             error @ (PlanValidationError::UnresolvedPortType { .. }
             | PlanValidationError::ConflictingPortTypes { .. }
             | PlanValidationError::MismatchedEdgePins { .. }
-            | PlanValidationError::InvalidPartitionKey { .. }
-            | PlanValidationError::ConflictingPartitionKeyTypes { .. }),
+            | PlanValidationError::InvalidInstanceKey { .. }
+            | PlanValidationError::ConflictingInstanceKeyTypes { .. }
+            | PlanValidationError::UnresolvedInstanceAdmission { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
             return Err(bag);
@@ -223,31 +224,40 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
         .with_field("port", port.name())
         .with_field("expected", expected.to_string())
         .with_field("found", found.to_string()),
-        PlanValidationError::InvalidPartitionKey { node, ty } => Diagnostic::new(
+        PlanValidationError::InvalidInstanceKey { owner, ty } => Diagnostic::new(
             check::E_INSTANCE,
             Phase::Check,
             format!(
-                "the instance key on `{node}` resolves to {ty}; instance keys use canonical scalar/enum leaves or a closed struct of those leaves"
+                "the instance key on `{owner}` resolves to {ty}; instance keys use canonical scalar/enum leaves or a closed struct of those leaves"
             ),
         )
-        .with_field("name", node.to_string())
+        .with_field("name", owner)
         .with_field("detail", format!("non-canonical key type {ty}")),
-        PlanValidationError::ConflictingPartitionKeyTypes {
-            node,
+        PlanValidationError::ConflictingInstanceKeyTypes {
+            owner,
             expected,
             found,
         } => Diagnostic::new(
             check::E_INSTANCE,
             Phase::Check,
             format!(
-                "the instance key on `{node}` has no single type: it resolves to {expected} and {found} across its inputs"
+                "the instance key on `{owner}` has no single type: it resolves to {expected} and {found} across its inputs"
             ),
         )
-        .with_field("name", node.to_string())
+        .with_field("name", owner)
         .with_field(
             "detail",
             format!("conflicting key types {expected} and {found}"),
         ),
+        PlanValidationError::UnresolvedInstanceAdmission { owner } => Diagnostic::new(
+            check::E_INSTANCE,
+            Phase::Check,
+            format!(
+                "the data-dependent instance key on `{owner}` has no resolved admission signature"
+            ),
+        )
+        .with_field("name", owner)
+        .with_field("detail", "missing resolved admission signature"),
         _ => internal_plan_diagnostic(error),
     }
 }
@@ -307,11 +317,13 @@ graph inferred_partition : App {
         )
         .expect("the graph supplies the omitted node-port type");
         assert_eq!(
-            compilation.plan.nodes[0]
-                .partition
+            compilation
+                .plan
+                .node_instance(crate::plan::Slot::new(0))
+                .expect("the node has an owner")
+                .key
                 .as_ref()
                 .expect("the node is keyed")
-                .key
                 .ty,
             crate::datatype::DataType::INT
         );
@@ -335,11 +347,13 @@ graph inferred_composite : App {
             &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
         )
         .expect("the resolved input closes every composite-key leaf");
-        let key = &compilation.plan.nodes[0]
-            .partition
+        let key = compilation
+            .plan
+            .node_instance(crate::plan::Slot::new(0))
+            .expect("the node has an owner")
+            .key
             .as_ref()
-            .expect("the node is keyed")
-            .key;
+            .expect("the node is keyed");
         assert!(key.ty.is_instance_key());
         assert!(matches!(key.ty, crate::datatype::DataType::Struct(_)));
     }

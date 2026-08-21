@@ -10,8 +10,8 @@ Runtime outcome cases (`JoinExpired`, `LoopExhausted`,
 ordinary typed port payloads, hashed through their resolved types and
 compared in the causal core. They live in their home specs, not here.
 
-The current `E-EXPR` and `IDENT!` rows describe the expression registry in
-published v7; the next categorical instance format retains it unchanged. New or
+The current `E-EXPR` and `IDENT!` rows describe the expression registry first
+published in v7; categorical package v9 retains it unchanged. New or
 renamed checks are registered only when their focused negative tests
 land, never pre-allocated by a planning pass.
 `E-EXPR` supersedes the unreleased `E-CEL-EXPR` spelling as part of B3;

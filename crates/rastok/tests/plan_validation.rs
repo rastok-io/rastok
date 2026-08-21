@@ -51,6 +51,26 @@ fn port(name: &str) -> Port {
     Port::new(name).unwrap()
 }
 
+fn owner_mut<'a>(plan: &'a mut ExecutionPlan, node: &str) -> &'a mut plan::Owner {
+    let owner = plan
+        .nodes
+        .iter()
+        .find(|candidate| candidate.path.to_string() == node)
+        .expect("the node exists")
+        .owner;
+    plan.owners
+        .get_mut(owner.index())
+        .expect("its owner exists")
+}
+
+fn owner_slot(plan: &ExecutionPlan, node: &str) -> plan::OwnerSlot {
+    plan.nodes
+        .iter()
+        .find(|candidate| candidate.path.to_string() == node)
+        .expect("the node exists")
+        .owner
+}
+
 #[test]
 fn a_declared_port_extends_the_conventional_ports() {
     // Source conventions need no declaration, while the checked HIR
@@ -154,7 +174,7 @@ graph g : App {
     assert_eq!(boundary.origin(), plan::TypeOrigin::Declared);
 
     let package = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, _) = plan::decode(&package).expect("the source pin survives v7");
+    let (decoded, _) = plan::decode(&package).expect("the source pin survives v9");
     assert_eq!(
         decoded
             .resolved_ports()
@@ -218,118 +238,421 @@ fn an_unconstrained_raw_port_never_becomes_variant() {
 }
 
 #[test]
-fn a_raw_partition_requires_a_canonical_key_type() {
+fn a_raw_instance_requires_a_canonical_key_type() {
     let mut raw = raw_probe();
-    let relay = raw
-        .nodes
-        .iter_mut()
-        .find(|node| node.path.to_string() == "relay")
-        .expect("the relay operator");
-    relay.partition = Some(plan::PartitionSpec {
-        name: Some(String::from("tenant")),
-        key: expr::Tree {
+    owner_mut(&mut raw, "relay").instance = plan::InstanceSpec {
+        key: Some(expr::Tree {
             root: expr::Expr::Literal(rastok::value::Value::Int(1)),
             ty: DataType::Variant,
-        },
-        lifetime: plan::PartitionLifetime::Persistent,
-    });
+        }),
+        lifetime: plan::InstanceLifetime::Persistent,
+    };
 
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::InvalidPartitionKey {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+        PlanValidationError::InvalidInstanceKey {
+            owner: String::from("relay"),
             ty: DataType::Variant,
         }
     );
 }
 
 #[test]
-fn a_raw_partition_requires_a_positive_idle_ttl() {
-    let mut raw = raw_probe();
-    let relay = raw
-        .nodes
-        .iter_mut()
-        .find(|node| node.path.to_string() == "relay")
-        .expect("the relay operator");
-    relay.partition = Some(plan::PartitionSpec {
-        name: None,
-        key: expr::Tree {
-            root: expr::Expr::Literal(rastok::value::Value::Int(1)),
-            ty: DataType::INT,
-        },
-        lifetime: plan::PartitionLifetime::IdleTtl(0),
-    });
+fn every_duration_lifetime_requires_a_positive_value() {
+    for lifetime in [
+        plan::InstanceLifetime::Idle(0),
+        plan::InstanceLifetime::Fixed(-1),
+        plan::InstanceLifetime::Tumbling(0),
+    ] {
+        let mut raw = raw_probe();
+        owner_mut(&mut raw, "relay").instance = plan::InstanceSpec {
+            key: Some(expr::Tree {
+                root: expr::Expr::Literal(rastok::value::Value::Int(1)),
+                ty: DataType::INT,
+            }),
+            lifetime,
+        };
+
+        assert_eq!(
+            ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+            PlanValidationError::InvalidInstanceLifetime {
+                owner: String::from("relay"),
+            }
+        );
+    }
+}
+
+#[test]
+fn a_data_key_without_an_admission_signature_never_trusts_its_claimed_type() {
+    let raw = ExecutionPlan {
+        owners: vec![plan::Owner {
+            path: plan::OwnerPath::root(),
+            parent: None,
+            kind: plan::OwnerKind::Graph,
+            instance: plan::InstanceSpec {
+                key: Some(expr::Tree {
+                    root: expr::Expr::Path(vec![String::from("data")]),
+                    ty: DataType::Text,
+                }),
+                lifetime: plan::InstanceLifetime::Persistent,
+            },
+            vals: vec![],
+        }],
+        nodes: vec![],
+        boundary: vec![],
+        edges: vec![],
+        handlers: vec![],
+        app_schema: vec![],
+        ext_schema: vec![],
+        assets: vec![],
+    };
 
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::InvalidPartitionLifetime {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+        PlanValidationError::UnresolvedInstanceAdmission {
+            owner: String::new(),
         }
     );
 }
 
 #[test]
-fn a_raw_named_partition_requires_a_nonempty_name() {
+fn a_raw_node_and_owner_must_point_to_each_other() {
     let mut raw = raw_probe();
-    let relay = raw
+    let relay_index = raw
         .nodes
-        .iter_mut()
-        .find(|node| node.path.to_string() == "relay")
-        .expect("the relay operator");
-    relay.partition = Some(plan::PartitionSpec {
-        name: Some(String::new()),
-        key: expr::Tree {
-            root: expr::Expr::Literal(rastok::value::Value::Int(1)),
-            ty: DataType::INT,
+        .iter()
+        .position(|node| node.path.to_string() == "relay")
+        .expect("the relay slot");
+    let relay_slot = Slot::new(u32::try_from(relay_index).expect("the plan is small"));
+    raw.nodes[relay_index].owner = plan::OwnerSlot::new(0);
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::OwnerNodeMismatch {
+            node: relay_slot,
+            owner: plan::OwnerSlot::new(1),
+        }
+    );
+}
+
+#[test]
+fn a_raw_plan_requires_one_unique_root_owner() {
+    let mut missing = raw_probe();
+    missing.owners.clear();
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(missing).unwrap_err(),
+        PlanValidationError::MissingRootOwner
+    );
+
+    let mut duplicate = raw_probe();
+    let relay = owner_slot(&duplicate, "relay");
+    let shell = owner_slot(&duplicate, "shell");
+    duplicate.owners[shell.index()].path = duplicate.owners[relay.index()].path.clone();
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(duplicate).unwrap_err(),
+        PlanValidationError::DuplicateOwnerPath {
+            path: String::from("relay"),
+        }
+    );
+}
+
+#[test]
+fn a_raw_owner_parent_must_be_an_enclosing_graph() {
+    let mut raw = raw_probe();
+    let relay = owner_slot(&raw, "relay");
+    let shell = owner_slot(&raw, "shell");
+    raw.owners[shell.index()].parent = Some(relay);
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::InvalidOwnerTree { owner: shell }
+    );
+}
+
+#[test]
+fn an_edge_scope_must_name_a_graph_owner() {
+    let mut raw = raw_probe();
+    let relay = owner_slot(&raw, "relay");
+    raw.edges[0].scope = relay;
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::InvalidEdgeScope { owner: relay }
+    );
+}
+
+#[test]
+fn an_owner_value_cannot_lie_about_its_evaluation_site() {
+    let mut raw = raw_probe();
+    let relay = owner_slot(&raw, "relay");
+    raw.owners[relay.index()].vals.push(plan::OwnerValue {
+        name: String::from("workdir"),
+        site: plan::EvaluationSite::Instance,
+        expr: expr::Tree {
+            root: expr::Expr::Literal(rastok::value::Value::Text(String::from("/tmp"))),
+            ty: DataType::Text,
         },
-        lifetime: plan::PartitionLifetime::Persistent,
+        resolved: Some(rastok::value::Value::Text(String::from("/tmp"))),
     });
 
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::InvalidPartitionName {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+        PlanValidationError::BindingSiteMismatch {
+            owner: String::from("relay"),
+            name: String::from("workdir"),
         }
     );
+}
+
+#[test]
+fn a_plan_owner_value_cannot_lie_about_its_reduction() {
+    let mut raw = raw_probe();
+    raw.owners[0].vals.push(plan::OwnerValue {
+        name: String::from("answer"),
+        site: plan::EvaluationSite::Plan,
+        expr: expr::Tree {
+            root: expr::Expr::Literal(rastok::value::Value::Int(41)),
+            ty: DataType::INT,
+        },
+        resolved: Some(rastok::value::Value::Int(42)),
+    });
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::OwnerValueResolutionMismatch {
+            owner: String::new(),
+            name: String::from("answer"),
+        }
+    );
+}
+
+#[test]
+fn an_owner_value_cannot_read_outside_its_lexical_environment() {
+    let mut raw = raw_probe();
+    raw.owners[0].vals.push(plan::OwnerValue {
+        name: String::from("answer"),
+        site: plan::EvaluationSite::Plan,
+        expr: expr::Tree {
+            root: expr::Expr::Path(vec![String::from("missing")]),
+            ty: DataType::INT,
+        },
+        resolved: Some(rastok::value::Value::Int(42)),
+    });
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::InvalidBinding {
+            owner: String::new(),
+            name: String::from("answer"),
+            path: String::from("missing"),
+        }
+    );
+}
+
+#[test]
+fn owner_value_dependencies_are_order_free_but_never_cyclic() {
+    let mut raw = raw_probe();
+    raw.owners[0].vals = vec![
+        plan::OwnerValue {
+            name: String::from("a"),
+            site: plan::EvaluationSite::Plan,
+            expr: expr::Tree {
+                root: expr::Expr::Binary {
+                    op: expr::BinaryOp::Add,
+                    left: Box::new(expr::Expr::Path(vec![String::from("b")])),
+                    right: Box::new(expr::Expr::Literal(rastok::value::Value::Int(1))),
+                },
+                ty: DataType::INT,
+            },
+            resolved: Some(rastok::value::Value::Int(2)),
+        },
+        plan::OwnerValue {
+            name: String::from("b"),
+            site: plan::EvaluationSite::Plan,
+            expr: expr::Tree {
+                root: expr::Expr::Literal(rastok::value::Value::Int(1)),
+                ty: DataType::INT,
+            },
+            resolved: Some(rastok::value::Value::Int(1)),
+        },
+    ];
+    ValidatedExecutionPlan::try_new(raw.clone())
+        .expect("a canonical dependency is independently reducible");
+
+    raw.owners[0].vals[1].expr.root = expr::Expr::Path(vec![String::from("a")]);
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::CyclicOwnerValue {
+            owner: String::new(),
+            name: String::from("a"),
+        }
+    );
+}
+
+#[test]
+fn an_owner_value_cannot_claim_a_later_phase_for_a_literal() {
+    let mut raw = raw_probe();
+    let relay = owner_slot(&raw, "relay");
+    raw.owners[relay.index()].vals.push(plan::OwnerValue {
+        name: String::from("workdir"),
+        site: plan::EvaluationSite::Instance,
+        expr: expr::Tree {
+            root: expr::Expr::Literal(rastok::value::Value::Text(String::from("/tmp"))),
+            ty: DataType::Text,
+        },
+        resolved: None,
+    });
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::BindingSiteMismatch {
+            owner: String::from("relay"),
+            name: String::from("workdir"),
+        }
+    );
+}
+
+#[test]
+fn a_dynamic_attribute_cannot_claim_a_later_phase_for_a_literal() {
+    let mut raw = raw_probe();
+    let shell = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the Process node");
+    let spec = match &mut shell.kind {
+        plan::NodeKind::Connector(spec) => spec,
+        plan::NodeKind::Operator => panic!("shell is a connector"),
+    };
+    let (_, command) = spec
+        .attributes
+        .iter_mut()
+        .find(|(name, _)| name == "command")
+        .expect("Process declares command");
+    *command = plan::AttrSetting::Expr {
+        site: plan::EvaluationSite::Instance,
+        expr: expr::Tree {
+            root: expr::Expr::Literal(rastok::value::Value::Text(String::from("cat"))),
+            ty: DataType::Text,
+        },
+    };
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::BindingSiteMismatch {
+            owner: String::from("shell"),
+            name: String::from("command"),
+        }
+    );
+}
+
+#[test]
+fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
+    let mut raw = raw_probe();
+    let shell = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the connector node");
+    let spec = match &mut shell.kind {
+        plan::NodeKind::Connector(spec) => spec,
+        plan::NodeKind::Operator => panic!("shell is a connector"),
+    };
+    spec.contract = String::from("Custom");
+    spec.attributes = vec![(
+        String::from("late"),
+        plan::AttrSetting::Expr {
+            site: plan::EvaluationSite::Instance,
+            expr: expr::Tree {
+                root: expr::Expr::Path(vec![String::from("instance"), String::from("key")]),
+                ty: DataType::Text,
+            },
+        },
+    )];
+    let owner = owner_slot(&raw, "shell");
+    raw.owners[owner.index()].instance.key = Some(expr::Tree {
+        root: expr::Expr::Literal(rastok::value::Value::Text(String::from("tenant"))),
+        ty: DataType::Text,
+    });
+
+    assert_eq!(
+        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
+        PlanValidationError::BindingSiteMismatch {
+            owner: String::from("shell"),
+            name: String::from("late"),
+        }
+    );
+}
+
+#[test]
+fn instance_values_and_authorized_connector_settings_share_one_phase_judge() {
+    let mut raw = raw_probe();
+    let shell_owner = owner_slot(&raw, "shell");
+    raw.owners[shell_owner.index()].instance.key = Some(expr::Tree {
+        root: expr::Expr::Literal(rastok::value::Value::Text(String::from("tenant"))),
+        ty: DataType::Text,
+    });
+    raw.owners[shell_owner.index()].vals.push(plan::OwnerValue {
+        name: String::from("workdir"),
+        site: plan::EvaluationSite::Instance,
+        expr: expr::Tree {
+            root: expr::Expr::Path(vec![String::from("instance"), String::from("key")]),
+            ty: DataType::Text,
+        },
+        resolved: None,
+    });
+    let shell = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the Process node");
+    let spec = match &mut shell.kind {
+        plan::NodeKind::Connector(spec) => spec,
+        plan::NodeKind::Operator => panic!("shell is a connector"),
+    };
+    let (_, command) = spec
+        .attributes
+        .iter_mut()
+        .find(|(name, _)| name == "command")
+        .expect("Process declares command");
+    *command = plan::AttrSetting::Expr {
+        site: plan::EvaluationSite::Instance,
+        expr: expr::Tree {
+            root: expr::Expr::Path(vec![String::from("workdir")]),
+            ty: DataType::Text,
+        },
+    };
+
+    ValidatedExecutionPlan::try_new(raw)
+        .expect("the owner value and Process setting both close at instance entry");
 }
 
 #[test]
 fn a_raw_instance_key_admits_sys_but_not_destination_context() {
     let mut raw = raw_probe();
-    let relay = raw
-        .nodes
-        .iter_mut()
-        .find(|node| node.path.to_string() == "relay")
-        .expect("the relay operator");
-    relay.partition = Some(plan::PartitionSpec {
-        name: Some(String::from("forged")),
-        key: expr::Tree {
+    owner_mut(&mut raw, "relay").instance = plan::InstanceSpec {
+        key: Some(expr::Tree {
             root: expr::Expr::Path(vec![
                 String::from("meta"),
                 String::from("sys"),
                 String::from("id"),
             ]),
             ty: DataType::Text,
-        },
-        lifetime: plan::PartitionLifetime::Persistent,
-    });
+        }),
+        lifetime: plan::InstanceLifetime::Persistent,
+    };
 
     ValidatedExecutionPlan::try_new(raw.clone())
         .expect("the complete entering envelope includes meta.sys");
 
-    raw.nodes
-        .iter_mut()
-        .find(|node| node.path.to_string() == "relay")
-        .and_then(|node| node.partition.as_mut())
-        .expect("the instance descriptor remains present")
-        .key = expr::Tree {
+    owner_mut(&mut raw, "relay").instance.key = Some(expr::Tree {
         root: expr::Expr::Path(vec![String::from("instance"), String::from("key")]),
         ty: DataType::Text,
-    };
+    });
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::InvalidPartitionBinding {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+        PlanValidationError::InvalidInstanceBinding {
+            owner: String::from("relay"),
             path: String::from("instance.key"),
         }
     );
@@ -515,6 +838,7 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     plan.boundary
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
+        scope: plan::OwnerSlot::new(0),
         from: EndpointRef {
             node: Some(Slot::new(0)),
             port: port("out"),
@@ -548,6 +872,7 @@ fn a_boundary_output_cannot_be_an_edge_source() {
     plan.boundary
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
+        scope: plan::OwnerSlot::new(0),
         from: EndpointRef {
             node: None,
             port: port("response"),
@@ -577,6 +902,7 @@ fn conventional_ports_hold_their_directions() {
     // inside the graph — refuses.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
+        scope: plan::OwnerSlot::new(0),
         from: EndpointRef {
             node: Some(Slot::new(0)),
             port: port("out"),
@@ -602,6 +928,7 @@ fn conventional_ports_hold_their_directions() {
     // Conventional `out` used as a SOURCE refuses likewise.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
+        scope: plan::OwnerSlot::new(0),
         from: EndpointRef {
             node: None,
             port: port("out"),
@@ -840,6 +1167,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     // — the reference is not usable in the required role.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
+        scope: plan::OwnerSlot::new(0),
         from: EndpointRef {
             node: Some(Slot::new(0)),
             port: port("ghost"),
@@ -858,6 +1186,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     // A boundary port that exists nowhere refuses by its own name.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
+        scope: plan::OwnerSlot::new(0),
         from: EndpointRef {
             node: None,
             port: port("ghost"),
@@ -974,7 +1303,7 @@ fn a_duplicated_handler_refuses() {
 }
 
 #[test]
-fn a_future_lifecycle_handler_cannot_enter_v8_early() {
+fn a_future_lifecycle_handler_cannot_enter_v9_early() {
     let mut plan = raw_probe();
     plan.handlers[0].activation =
         rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Compensate);

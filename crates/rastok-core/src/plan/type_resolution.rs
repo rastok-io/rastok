@@ -3,7 +3,7 @@
 //! Raw [`ExecutionPlan`] source pins remain `Option<DataType>`. This module is
 //! the semantic firewall in front of execution: inference variables live only
 //! while this function runs, and a [`ResolvedPortTable`] contains neither an
-//! option nor a recovery case. Format v8 carries that total result and checks
+//! option nor a recovery case. Format v9 carries that total result and checks
 //! it by deriving it again at decode.
 
 use alloc::collections::BTreeMap;

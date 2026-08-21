@@ -18,16 +18,26 @@
 > The package is a TRANSPORT format: versioned and free to evolve by
 > version bump; none of v1, v2, or v3 was ever published and no
 > decoder reads them — each refuses by its number.
-> **The unreleased v8 named-partition draft is superseded** by
-> D-2026-08-18-1. The next M1.4 implementation gate must choose categorically:
-> replace that private v8 body before publication or refuse it and allocate
-> v9. In either case the body below is the target: it extends the categorical
-> M1.3 v7 registry with a Node's resolved `instances.key`, independent
-> `lifetime`, and lifecycle handlers. A decoder transports and validates the
-> exact key expression and inferred key type without a compiler Registry; it
-> never guesses an instance descriptor for an older package. The container
-> move changes every package checksum, while semantic hash changes only when
-> the resolved Node semantics change.
+> **Format v9 (D-2026-08-18-1, R2 transport tranche, landed
+> 2026-08-21)** refuses the unreleased v8 named-partition draft and adds the
+> categorical lexical-owner table. The root App Graph, nested Graphs, and
+> executable Nodes retain parent-linked ownership; each Node points back to
+> its owner and each edge carries its lexical Graph scope. Owners transport
+> the exact `instances.key` tree and inferred type, independent lifetime, and
+> phased immutable values. Connector attributes may likewise transport a
+> checked boot/instance/invocation expression; a plan-shaping dynamic row
+> refuses without consulting the compiler Registry.
+>
+> Owner and execution tables are deliberately distinct. A Graph owns lexical
+> context and lifecycle but is not an executable VM Node; an Operator or
+> Connector has one row in each domain. Validation proves the reciprocal
+> references and the parent tree before either table is observable. This
+> preserves runtime `Slot` stability while preventing DAG flattening from
+> erasing Graph ownership. V9 does not smuggle in the later journal move:
+> mandatory `(address, generation)` route/transaction references land under
+> R3 as their own declared causal-trace change. This tranche moves package
+> containers and checksums; unchanged source keeps its semantic hash and
+> causal trace.
 >
 > Format v7 (D-2026-08-14-1, landed 2026-08-15) was the one categorical
 > M1.3 B8 publication: the complete canonical
@@ -104,8 +114,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (7 published; R2     │
-        │                                  allocates target)  │
+        │ 1 : format_version   uint      (9)                  │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -137,20 +146,24 @@ of the contract, in order:
 1. **Structural validation, carried by a type** — the parsed plan
    passes through `ValidatedExecutionPlan` (private field, no
    unverified constructor, no mutable access): every slot in bounds,
-   every referenced port declared with the right direction, every
-   handler owned by its node, activation on an input port, emission
-   on an output port, paths and names unique, every state write
-   resolvable. Well-shaped bytes naming impossible structure (an
+   every referenced port declared with the right direction, every Node and
+   owner row reciprocally linked, one root Graph and a parent-before-child
+   lexical tree, every edge scoped to a Graph, every handler owned by its
+   node, activation on an input port, emission on an output port, paths and
+   names unique, every state write resolvable. Well-shaped bytes naming impossible structure (an
    edge to slot 999) refuse typed — and the machine's `Vm::boot`
    accepts only the validated type, so no raw plan reaches it by
    any path. The compiler's lowering earns the same type once.
 2. **Domain canonicity, audited by the same type** — every collection
    the plan documents as canonically ordered actually is: owners in root-first
-   path order with a preceding Graph parent, owner port tables sorted and unique with
+   path order with a preceding Graph parent, Node port tables sorted and unique with
    untyped conventional rows omitted (a typed `in`/`out`/`err` row is a
    real source constraint), edges by their endpoint text,
    handlers by (slot, activation key) with one handler per
-   activation, immutable bindings, vars and attributes sorted — attributes are the
+   activation, immutable bindings, vars and attributes sorted. Immutable
+   owner expressions additionally have an acyclic lexical dependency graph,
+   one derived earliest phase, and (at Plan) one independently reproduced
+   reduction. Attributes are the
    EFFECTIVE sheet (D-2026-08-12-1): the checker injected every
    omitted contract default before lowering, and nothing of the
    metamodel itself (presence, defaults, profiles) is serialized —
@@ -186,7 +199,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (categorical M1.4 target)
+## Body tables (format v9)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -202,43 +215,59 @@ materialized struct family; the surrounding resolved `DataType` supplies its
 closed field contract, and validation checks conformance before encoding.
 
 ```text
-plan       := {1: [owner*], 2: [edge*], 3: [handler*],
-               4: app_schema?, 5: ext_schema?, 6: [asset_bytes*]?,
-               7: resolved_ports}
-                                                  // 4/5 : the travelling zone schemas —
+plan       := {1: [node*], 2: [port_decl*], 3: [edge*], 4: [handler*],
+               5: app_schema?, 6: ext_schema?, 7: [asset_bytes*]?,
+               8: resolved_ports, 9: [owner*]}
+                                                  // 2 is the App boundary
+                                                  // 5/6 are travelling zone schemas:
                                                   //   [[field (text), type]*], sorted, prefix-free
-                                                  //   (D-2026-08-10-1) ; absent = empty ; the ext
-                                                  //   standard leaf `content_type: text` is IMPLICIT,
-                                                  //   never serialized (D-2026-08-10-4)
-                                                  // 6 : the asset table — raw asset bytes in
-                                                  //   digest order ; digests are DERIVED at decode
-                                                  //   (and thereby verified) ; absent = none
-                                                  // 7 : mandatory total effective port table;
-                                                  //   validation re-solves and compares it exactly
+                                                  //   (D-2026-08-10-1); absent = empty; ext's
+                                                  //   content_type:text leaf is implicit
+                                                  // 7 is raw asset content in digest order
+                                                  // 8 is mandatory and re-derived at decode
+                                                  // 9 is mandatory, including the root Graph
 
-owner      := {1: path (text), 2: parent (slot)?, 3: kind,
-               4: [port_decl*], 5: [val*], 6: [var*],
-               7: instance_key?, 8: lifetime?}
-              // Every source Graph, Operator and Connector has one row.
-              // Canonical order is root-first path order; parent, when
-              // present, is a preceding Graph owner. The App Graph is the
-              // unique parentless row. Flattened DAG validation never erases
-              // this ownership/lifecycle tree.
-instance_key := [key_expr (tree), key_type (type)]
-              // absent = singleton in the enclosing Graph instance;
-              // validation checks the expression under every resolved input,
-              // one common inferred type, and the canonical key domain
-lifetime   := [2, nanoseconds (int)]             — idle(after), strictly positive
-            | [3, nanoseconds (int)]             — fixed(after), strictly positive
-            | [4]                                — single_pass
-            | [5, nanoseconds (int)]             — tumbling(every), strictly positive
-              // absent = persistent. Explicit `kind = persistent` lowers to
-              // absence before identity, so omission and spelling are equal.
-              // `closing` is deliberately absent until R5 freezes its one
-              // finite contract; no placeholder grants partial permission.
-kind       := 1                                   — graph
-            | 2                                   — operator
-            | [3, spec]                           — connector
+node       := {1: path (text), 2: node_kind, 3: [port_decl*],
+               4: [var*], 5: owner_slot}
+node_kind  := 1                                   — operator
+            | [2, spec]                           — connector
+              // Only Node rows are executable and they retain the established
+              // Slot namespace. Validation proves owner_slot names exactly
+              // one owner_kind=[2,this_node_slot] with the same path.
+
+owner      := {1: path (text), 2: parent_owner_slot | null,
+               3: owner_kind, 4: instance, 5: [owner_val*]}
+owner_kind := [1]                                 — graph
+            | [2, node_slot]                      — executable Node owner
+              // Canonical root-first path order. The root App Graph is the
+              // unique empty path, parentless Graph. Every other parent is a
+              // preceding Graph owner and the direct lexical path prefix.
+              // Graphs retain scope/lifecycle without becoming VM Nodes.
+
+instance   := {1: key (tree)?, 2: lifetime}
+              // key's tree already contains its inferred DataType. Absent =
+              // singleton inside the parent instance. Validation checks the
+              // expression under every effective admitting input, one total
+              // key type, the canonical key domain, and lexical availability.
+              // A data-dependent key with no resolved admission input refuses;
+              // its transported result type is never trusted as a fallback.
+lifetime   := [1]                                 — persistent
+            | [2, nanoseconds (int)]              — idle(after), > 0
+            | [3, nanoseconds (int)]              — fixed(after), > 0
+            | [4]                                 — single_pass
+            | [5, nanoseconds (int)]              — tumbling(every), > 0
+              // Persistent is explicit in the categorical plan even though
+              // omitted and explicitly persistent source spellings share one
+              // HIR identity. `closing` remains absent until R5 freezes it.
+
+owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
+               4: tagged_value?}
+              // Field 4 is present exactly at Plan. Validation derives the
+              // earliest site from lexical dependencies, rejects cycles and
+              // shadowing, re-evaluates Plan trees (including assets), and
+              // requires exact equality with the transported reduction.
+              // Invocation refuses for owner vals; invocation-local vals
+              // remain handler steps.
 spec       := {1: contract (text), 2: effect, 3: behavior (uint: 1 deterministic · 2 probabilistic),
                4: [[name (text), attr]*]}
               // key 5 (error_set) is RETIRED by B5 and never reused
@@ -250,8 +279,11 @@ attr       := [1, word (text)] | [2, tagged_value]
               // contract at the ACTUAL boot, instance, or invocation site;
               // the contract's latest permitted site stays compiler-side,
               // while this selected phase is plan data and is never recovered
-              // from the compiler Registry.
-evaluation_site := uint: 1 boot · 2 instance · 3 invocation
+              // from the compiler Registry. This checkpoint admits the row
+              // only when the core has an explicit contract mirror; an
+              // unknown contract or attribute refuses closed.
+              // Form 3 may not claim Plan: a plan result uses form 2.
+evaluation_site := uint: 1 plan · 2 boot · 3 instance · 4 invocation
 port_decl  := [name (text), mode, type?]
 mode       := uint: 1 input/require-wire · 2 output/require-wire ·
                     3 output/root-sink
@@ -273,34 +305,29 @@ mode       := uint: 1 input/require-wire · 2 output/require-wire ·
               — since B5, every Connector contract row is present and typed;
               Operator/Graph rows may still be source constraints; their
               mandatory effective type is carried by resolved_ports
-resolved_ports := [owner_resolved*]                // one row per owner Slot,
-                                                   // including every Graph
+resolved_ports := [boundary_resolved, [node_resolved*]]
+                                                   // one row per executable
+                                                   // Node Slot, not per owner
 resolved_port := [name (text), direction, type, origin]
 direction    := uint: 1 input · 2 output
 origin       := uint: 1 declared · 2 inferred
               // rows use the same canonical (name,direction) order as the
-              // derived table; resolved table length equals the owner table
-val        := [name (text), type, val_site, tree]
-val_site   := uint: 1 boot · 2 instance
-              // unit/App vals use boot; other owner vals use instance.
-              // Invocation is unrepresentable here; invocation locals belong
-              // to the handler/call expression table, never owner context.
-              // Handler-local vals remain step kind 1 below.
+              // derived table; node row count equals the Node table
 var        := {1: name (text), 2: type, 3: init (tagged_value)?}
 
-edge       := [scope (slot), endpoint, endpoint | null]
+edge       := [scope (owner_slot), endpoint, endpoint | null]
               // scope is the lexical Graph that owns the source edge;
               // null target = «-> nothing». The owner tree + scope derive
               // every Graph boundary entered/left by the route. The compiler
               // may bypass a passive composed-Graph port, but it may not erase
               // that Graph's owner row or key/lifecycle crossing.
-endpoint   := [slot (uint), port (text)]
-              // The App boundary is its explicit root Graph owner, never a
-              // null pseudo-node. Graph port direction is interpreted on the
-              // internal or external face determined by edge scope.
+endpoint   := [node_slot (uint) | null, port (text)]
+              // slot=null denotes the App boundary; otherwise it indexes the
+              // executable Node table. Edge scope independently preserves the
+              // lexical Graph whose boundary owns the route.
 
 handler    := {1: slot (uint), 2: activation, 3: guard (tree)?, 4: [step*]}
-              // slot names the owning Graph, Operator, or Connector
+              // slot names the owning executable Operator or Connector
 activation := [1, port (text)]
             | [2, lifecycle]
 lifecycle  := uint: 1 start · 2 stop · 3 compensate · 4 next ·

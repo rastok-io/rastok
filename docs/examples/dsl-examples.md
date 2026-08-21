@@ -15,16 +15,18 @@ these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
 the primitive `operator` / `connector` keywords stand on their own
 when no alias fits.
 
-The parser is a forward lexeme stream. The next categorical plan format retains
-the complete v7 M1.3 type/value/expression registry while adding Node-owned
-instance descriptors and lifecycle handlers. As of 2026-08-18,
+The parser is a forward lexeme stream. Categorical plan-package v9 retains
+the complete v7 M1.3 type/value/expression registry and now carries lexical
+owners, Node-owned instance policy, scoped edges, and phased immutable
+expressions. As of 2026-08-21,
 `Process(mode = job)` with `lines`/`jsonl`/`bytes`, multiport completion,
 the three metadata zones, `IDENT!` frontends, structural and tagged types,
-and typed narrowing execute. The former named-partition P0-P3 implementation is
-superseded by the `instances`/`lifetime` target and must be rebased before it is
-implementation evidence. HTTP/File adapters, keyed owners, lifetime and closing,
-Dispatch, joins, Loop, Process service
-mode, and guest engines are still pending or guarded. Thus
+typed narrowing, and keyed persistent/idle Node owners execute. The former
+named-partition P0-P3 implementation is superseded by the
+`instances`/`lifetime` model. Graph-owned and hierarchical routing,
+`fixed`/`single_pass`/`tumbling` profiles, closing, HTTP/File adapters,
+Dispatch, joins, Loop, Process service mode, and guest engines are still
+pending or guarded. Thus
 these are parser- and design-reference snippets, not a claim that every
 section runs today. The small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.

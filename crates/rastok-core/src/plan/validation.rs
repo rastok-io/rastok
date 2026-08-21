@@ -2,20 +2,95 @@
 //! the machine dereferences without checking and every canonical
 //! order the plan documents, held once, at a boundary, by a type.
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 use crate::datatype::{DataType, TypeError};
 use crate::expr;
 use crate::node;
-use crate::plan::{Emission, EndpointRef, ExecutionPlan, Node, NodeKind, Slot, Step};
+use crate::plan::{
+    Emission, EndpointRef, EvaluationSite, ExecutionPlan, InstanceLifetime, Node, NodeKind,
+    OwnerKind, OwnerSlot, Slot, Step,
+};
 
 /// Why a plan is not executable — one named invariant violation. The
 /// variants are semantic, not prose: a caller can match on the class
 /// of defect; `Display` renders the human diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanValidationError {
+    /// The categorical owner table is absent or has no root App Graph.
+    MissingRootOwner,
+    /// An owner reference indexes past the owner table.
+    OwnerOutOfBounds {
+        /// The impossible reference.
+        owner: OwnerSlot,
+        /// The table it missed.
+        owner_count: usize,
+    },
+    /// Two owners share one static lexical path.
+    DuplicateOwnerPath {
+        /// The repeated dotted path; empty denotes the root App Graph.
+        path: String,
+    },
+    /// One owner does not form a valid parent-linked lexical tree.
+    InvalidOwnerTree {
+        /// The malformed row.
+        owner: OwnerSlot,
+    },
+    /// A Node and its owner row do not point to one another.
+    OwnerNodeMismatch {
+        /// The Node slot.
+        node: Slot,
+        /// The claimed owner row.
+        owner: OwnerSlot,
+    },
+    /// An edge's lexical scope is absent or is not a Graph owner.
+    InvalidEdgeScope {
+        /// The claimed Graph owner.
+        owner: OwnerSlot,
+    },
+    /// One owner declares an immutable binding twice.
+    DuplicateOwnerValue {
+        /// The static owner path.
+        owner: String,
+        /// The repeated binding.
+        name: String,
+    },
+    /// An immutable value or Connector setting contradicts the phase derived
+    /// from its expression and lexical dependencies.
+    BindingSiteMismatch {
+        /// The static owner path.
+        owner: String,
+        /// The malformed binding.
+        name: String,
+    },
+    /// An immutable value or Connector setting reads outside its lexical
+    /// environment.
+    InvalidBinding {
+        /// The static owner path.
+        owner: String,
+        /// The binding being checked.
+        name: String,
+        /// The unavailable resolved path.
+        path: String,
+    },
+    /// Immutable bindings on one owner form a dependency cycle.
+    CyclicOwnerValue {
+        /// The static owner path.
+        owner: String,
+        /// One binding on the cycle.
+        name: String,
+    },
+    /// A plan-phase binding's transported reduction is not the result of its
+    /// transported expression.
+    OwnerValueResolutionMismatch {
+        /// The static owner path.
+        owner: String,
+        /// The lying binding.
+        name: String,
+    },
     /// A slot indexes past the node table.
     SlotOutOfBounds {
         /// The impossible reference.
@@ -95,7 +170,7 @@ pub enum PlanValidationError {
         /// activation changes nothing about this variant's shape.
         activation: node::HandlerActivation,
     },
-    /// A lifecycle activation belongs to a later executable slice. Format v8
+    /// A lifecycle activation belongs to a later executable slice. Format v9
     /// can represent the closed registry without silently enabling it.
     UnsupportedLifecycleHandler {
         /// The declaring node.
@@ -300,39 +375,40 @@ pub enum PlanValidationError {
     UnboundAssetCall,
     /// A transported instance-key expression does not yield a value in the
     /// canonical scalar/enum-or-struct key domain.
-    InvalidPartitionKey {
-        /// The keyed node.
-        node: node::Path,
+    InvalidInstanceKey {
+        /// The keyed owner path; empty denotes the root App Graph.
+        owner: String,
         /// The expression's resolved type.
         ty: DataType,
     },
     /// A transported instance expression reads outside the complete immutable
     /// entering envelope available before routing commits.
-    InvalidPartitionBinding {
-        /// The keyed node.
-        node: node::Path,
+    InvalidInstanceBinding {
+        /// The keyed owner path; empty denotes the root App Graph.
+        owner: String,
         /// The forbidden resolved path.
         path: String,
     },
-    /// The transitional v8 row carries an empty superseded partition name.
-    InvalidPartitionName {
-        /// The keyed node.
-        node: node::Path,
-    },
     /// Different input ports make one data-dependent instance expression
     /// resolve to different logical key types.
-    ConflictingPartitionKeyTypes {
-        /// The keyed node.
-        node: node::Path,
+    ConflictingInstanceKeyTypes {
+        /// The keyed owner path; empty denotes the root App Graph.
+        owner: String,
         /// Type resolved for the first input family.
         expected: DataType,
         /// Incompatible type resolved for another input family.
         found: DataType,
     },
-    /// A transported transitional instance lifetime is not executable.
-    InvalidPartitionLifetime {
-        /// The keyed node.
-        node: node::Path,
+    /// A data-dependent key has no resolved admission signature against which
+    /// the package validator can re-derive its type.
+    UnresolvedInstanceAdmission {
+        /// The keyed owner path; empty denotes the root App Graph.
+        owner: String,
+    },
+    /// A transported instance lifetime with a duration is not positive.
+    InvalidInstanceLifetime {
+        /// The owner path; empty denotes the root App Graph.
+        owner: String,
     },
     /// A collection the plan documents as canonically ordered is not.
     NonCanonicalOrder {
@@ -353,6 +429,55 @@ pub enum PlanValidationError {
 impl core::fmt::Display for PlanValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::MissingRootOwner => {
+                f.write_str("invalid plan: the owner table has no root App Graph")
+            }
+            Self::OwnerOutOfBounds { owner, owner_count } => write!(
+                f,
+                "invalid plan: owner {} of {owner_count} owners",
+                owner.index()
+            ),
+            Self::DuplicateOwnerPath { path } => write!(
+                f,
+                "invalid plan: duplicate owner path `{}`",
+                if path.is_empty() { "<root>" } else { path }
+            ),
+            Self::InvalidOwnerTree { owner } => write!(
+                f,
+                "invalid plan: owner {} does not form a canonical lexical tree",
+                owner.index()
+            ),
+            Self::OwnerNodeMismatch { node, owner } => write!(
+                f,
+                "invalid plan: node {} and owner {} do not refer to each other",
+                node.index(),
+                owner.index()
+            ),
+            Self::InvalidEdgeScope { owner } => write!(
+                f,
+                "invalid plan: edge scope {} is not a Graph owner",
+                owner.index()
+            ),
+            Self::DuplicateOwnerValue { owner, name } => write!(
+                f,
+                "invalid plan: owner `{owner}` declares immutable value `{name}` twice"
+            ),
+            Self::BindingSiteMismatch { owner, name } => write!(
+                f,
+                "invalid plan: immutable binding `{owner}.{name}` contradicts its evaluation site"
+            ),
+            Self::InvalidBinding { owner, name, path } => write!(
+                f,
+                "invalid plan: immutable binding `{owner}.{name}` cannot read `{path}` at its evaluation site"
+            ),
+            Self::CyclicOwnerValue { owner, name } => write!(
+                f,
+                "invalid plan: immutable value `{owner}.{name}` participates in a dependency cycle"
+            ),
+            Self::OwnerValueResolutionMismatch { owner, name } => write!(
+                f,
+                "invalid plan: immutable value `{owner}.{name}` does not reduce to its transported value"
+            ),
             Self::SlotOutOfBounds { slot, node_count } => write!(
                 f,
                 "invalid plan: slot {} of {node_count} nodes",
@@ -539,29 +664,29 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: an asset() call was not bound to the plan asset table"
             ),
-            Self::InvalidPartitionKey { node, ty } => write!(
+            Self::InvalidInstanceKey { owner, ty } => write!(
                 f,
-                "invalid plan: the instance key on `{node}` has non-canonical key type {ty}"
+                "invalid plan: the instance key on `{owner}` has non-canonical key type {ty}"
             ),
-            Self::InvalidPartitionBinding { node, path } => write!(
+            Self::InvalidInstanceBinding { owner, path } => write!(
                 f,
-                "invalid plan: the instance key on `{node}` reads `{path}`; only `data` and the complete immutable `meta` envelope exist before routing commits"
+                "invalid plan: the instance key on `{owner}` reads `{path}` outside its immutable admission context"
             ),
-            Self::InvalidPartitionName { node } => write!(
-                f,
-                "invalid plan: the superseded named-partition row on `{node}` has an empty name"
-            ),
-            Self::ConflictingPartitionKeyTypes {
-                node,
+            Self::ConflictingInstanceKeyTypes {
+                owner,
                 expected,
                 found,
             } => write!(
                 f,
-                "invalid plan: the instance key on `{node}` resolves to both {expected} and {found} across its input ports"
+                "invalid plan: the instance key on `{owner}` resolves to both {expected} and {found} across its input ports"
             ),
-            Self::InvalidPartitionLifetime { node } => write!(
+            Self::UnresolvedInstanceAdmission { owner } => write!(
                 f,
-                "invalid plan: the instance lifetime on `{node}` is not positive"
+                "invalid plan: the data-dependent instance key on `{owner}` has no resolved admission signature"
+            ),
+            Self::InvalidInstanceLifetime { owner } => write!(
+                f,
+                "invalid plan: the instance lifetime on `{owner}` is not positive"
             ),
             Self::NonCanonicalOrder { collection } => {
                 write!(f, "invalid plan: `{collection}` is not in canonical order")
@@ -607,7 +732,7 @@ impl ValidatedExecutionPlan {
     pub fn try_new(mut plan: ExecutionPlan) -> Result<Self, PlanValidationError> {
         validate(&plan)?;
         let resolved_ports = super::type_resolution::resolve(&plan)?;
-        resolve_partition_key_types(&mut plan, &resolved_ports)?;
+        resolve_instance_key_types(&mut plan, &resolved_ports)?;
         let depth = super::serialization::deepest_level_with_resolved(&plan, &resolved_ports);
         if depth >= crate::canonical_cbor::MAX_NESTING {
             return Err(PlanValidationError::NestingBudgetExceeded {
@@ -630,7 +755,7 @@ impl ValidatedExecutionPlan {
     /// Effective logical types of every graph-boundary and node port.
     ///
     /// Unlike raw source declarations, this table contains no inference
-    /// variable and no recovery hole. Format v8 carries it and the decoder
+    /// variable and no recovery hole. Format v9 carries it and the decoder
     /// derives it again from the raw constraints before requiring equality.
     #[must_use]
     pub const fn resolved_ports(&self) -> &super::type_resolution::ResolvedPortTable {
@@ -669,36 +794,51 @@ impl core::ops::Deref for ValidatedExecutionPlan {
 /// remains the sole inference authority; this pass merely projects its total
 /// result through the already-compiled expression and materializes the
 /// effective key type in the validated plan.
-fn resolve_partition_key_types(
+fn resolve_instance_key_types(
     plan: &mut ExecutionPlan,
     ports: &super::type_resolution::ResolvedPortTable,
 ) -> Result<(), PlanValidationError> {
-    for index in 0..plan.nodes.len() {
-        let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
-        let Some(partition) = plan.nodes[index].partition.as_ref() else {
+    for index in 0..plan.owners.len() {
+        let Some(key) = plan.owners[index].instance.key.as_ref() else {
             continue;
         };
-        let resolved = if super::type_resolution::expression_reads_data(&partition.key.root) {
+        let owner_name = plan.owners[index].path.to_string();
+        let kind = plan.owners[index].kind.clone();
+        let resolved = if super::type_resolution::expression_reads_data(&key.root) {
             let mut resolved: Option<DataType> = None;
-            for input in ports
-                .node(slot)
-                .unwrap_or(&[])
-                .iter()
-                .filter(|port| port.direction() == node::Direction::Input)
-            {
-                let Some(candidate) = super::type_resolution::resolved_expression_type(
-                    &partition.key.root,
-                    input.ty(),
-                ) else {
-                    return Err(PlanValidationError::InvalidPartitionKey {
-                        node: plan.nodes[index].path.clone(),
+            let inputs: alloc::vec::Vec<_> = match kind {
+                OwnerKind::Node(slot) => ports
+                    .node(slot)
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter(|port| port.direction() == node::Direction::Input)
+                    .collect(),
+                OwnerKind::Graph if index == 0 => ports
+                    .boundary()
+                    .iter()
+                    .filter(|port| port.direction() == node::Direction::Input)
+                    .collect(),
+                // Nested Graph admission types are closed by the compiler from
+                // the scoped crossing routes before transport. The owner tree
+                // preserves the boundary even though the spatial DAG is flat.
+                OwnerKind::Graph => alloc::vec::Vec::new(),
+            };
+            if inputs.is_empty() {
+                return Err(PlanValidationError::UnresolvedInstanceAdmission { owner: owner_name });
+            }
+            for input in inputs {
+                let Some(candidate) =
+                    super::type_resolution::resolved_expression_type(&key.root, input.ty())
+                else {
+                    return Err(PlanValidationError::InvalidInstanceKey {
+                        owner: owner_name,
                         ty: DataType::Variant,
                     });
                 };
                 match &resolved {
                     Some(previous) if previous != &candidate => {
-                        return Err(PlanValidationError::ConflictingPartitionKeyTypes {
-                            node: plan.nodes[index].path.clone(),
+                        return Err(PlanValidationError::ConflictingInstanceKeyTypes {
+                            owner: owner_name,
                             expected: previous.clone(),
                             found: candidate,
                         });
@@ -707,18 +847,20 @@ fn resolve_partition_key_types(
                     None => resolved = Some(candidate),
                 }
             }
-            resolved.unwrap_or(DataType::Variant)
+            resolved.ok_or_else(|| PlanValidationError::UnresolvedInstanceAdmission {
+                owner: owner_name.clone(),
+            })?
         } else {
-            partition.key.ty.clone()
+            key.ty.clone()
         };
         if !resolved.is_instance_key() {
-            return Err(PlanValidationError::InvalidPartitionKey {
-                node: plan.nodes[index].path.clone(),
+            return Err(PlanValidationError::InvalidInstanceKey {
+                owner: owner_name,
                 ty: resolved,
             });
         }
-        if let Some(partition) = plan.nodes[index].partition.as_mut() {
-            partition.key.ty = resolved;
+        if let Some(key) = plan.owners[index].instance.key.as_mut() {
+            key.ty = resolved;
         }
     }
     Ok(())
@@ -981,7 +1123,7 @@ fn tree_type_at(tree: &expr::Tree, location: String) -> Result<(), PlanValidatio
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
-/// v8 encoder can observe the plan.
+/// v9 encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -994,9 +1136,24 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
             data_type_at(ty, format!("boundary port `{}`", decl.port))?;
         }
     }
+    for owner in &plan.owners {
+        if let Some(key) = &owner.instance.key {
+            tree_type_at(key, format!("instance key on `{}`", owner.path))?;
+        }
+        for value in &owner.vals {
+            tree_type_at(
+                &value.expr,
+                format!("immutable value `{}.{}`", owner.path, value.name),
+            )?;
+        }
+    }
     for node in &plan.nodes {
-        if let Some(partition) = &node.partition {
-            tree_type_at(&partition.key, format!("instance key on `{}`", node.path))?;
+        if let NodeKind::Connector(spec) = &node.kind {
+            for (name, setting) in &spec.attributes {
+                if let crate::plan::AttrSetting::Expr { expr, .. } = setting {
+                    tree_type_at(expr, format!("attribute `{}.{name}`", node.path))?;
+                }
+            }
         }
         for decl in &node.ports {
             if let Some(ty) = &decl.ty {
@@ -1036,6 +1193,455 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct ImmutableBinding {
+    site: EvaluationSite,
+    resolved: Option<crate::value::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindingVisit {
+    New,
+    Visiting,
+    Done,
+}
+
+struct PlanValueBindings<'a> {
+    values: &'a BTreeMap<String, ImmutableBinding>,
+    assets: &'a [crate::plan::AssetBlob],
+}
+
+impl expr::Bindings for PlanValueBindings<'_> {
+    fn get(&self, name: &str) -> Option<expr::EvalValue> {
+        self.values
+            .get(name)
+            .and_then(|binding| binding.resolved.clone())
+            .map(expr::EvalValue::from)
+    }
+
+    fn asset(&self, index: u32) -> Result<expr::EvalValue, expr::Error> {
+        self.assets
+            .get(index as usize)
+            .map(|blob| expr::EvalValue::Bytes(blob.bytes.clone()))
+            .ok_or_else(|| expr::Error {
+                kind: expr::ErrorKind::Evaluation,
+                message: format!("asset {index} is outside the validated table"),
+            })
+    }
+}
+
+fn expression_site(
+    expression: &expr::Expr,
+    owner: &crate::plan::Owner,
+    inherited: &BTreeMap<String, ImmutableBinding>,
+    local: &BTreeMap<&str, usize>,
+    visits: &mut [BindingVisit],
+    sites: &mut [Option<EvaluationSite>],
+) -> Result<EvaluationSite, PlanValidationError> {
+    let owner_name = owner.path.to_string();
+    let combine = |left: EvaluationSite, right: EvaluationSite| left.max(right);
+    let child_site = |child, visits: &mut [BindingVisit], sites: &mut [Option<EvaluationSite>]| {
+        expression_site(child, owner, inherited, local, visits, sites)
+    };
+    match expression {
+        expr::Expr::Literal(_) | expr::Expr::Asset(_) => Ok(EvaluationSite::Plan),
+        expr::Expr::Path(segments) => {
+            let Some(root) = segments.first() else {
+                return Err(PlanValidationError::UnrepresentableConstant);
+            };
+            if let Some(index) = local.get(root.as_str()) {
+                return owner_value_site(*index, owner, inherited, local, visits, sites);
+            }
+            if let Some(binding) = inherited.get(root) {
+                return Ok(binding.site);
+            }
+            if matches!(segments.as_slice(), [instance, key, ..]
+                if instance == "instance" && key == "key")
+                && owner.instance.key.is_some()
+            {
+                return Ok(EvaluationSite::Instance);
+            }
+            if matches!(root.as_str(), "data" | "meta") {
+                return Ok(EvaluationSite::Invocation);
+            }
+            Err(PlanValidationError::InvalidBinding {
+                owner: owner_name,
+                name: String::new(),
+                path: segments.join("."),
+            })
+        }
+        expr::Expr::Unary { expr, .. }
+        | expr::Expr::Is { expr, .. }
+        | expr::Expr::As { expr, .. } => child_site(expr, visits, sites),
+        expr::Expr::Binary { left, right, .. }
+        | expr::Expr::Index {
+            base: left,
+            index: right,
+        } => {
+            let left = child_site(left, visits, sites)?;
+            let right = child_site(right, visits, sites)?;
+            Ok(combine(left, right))
+        }
+        expr::Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            let cond = child_site(cond, visits, sites)?;
+            let then = child_site(then, visits, sites)?;
+            let otherwise = child_site(otherwise, visits, sites)?;
+            Ok(combine(combine(cond, then), otherwise))
+        }
+        expr::Expr::Call { args, .. } | expr::Expr::List(args) => {
+            let mut site = EvaluationSite::Plan;
+            for child in args {
+                site = combine(site, child_site(child, visits, sites)?);
+            }
+            Ok(site)
+        }
+        expr::Expr::MapLit(fields)
+        | expr::Expr::Struct(fields)
+        | expr::Expr::Tagged { fields, .. } => {
+            let mut site = EvaluationSite::Plan;
+            for (_, child) in fields {
+                site = combine(site, child_site(child, visits, sites)?);
+            }
+            Ok(site)
+        }
+    }
+}
+
+fn owner_value_site(
+    index: usize,
+    owner: &crate::plan::Owner,
+    inherited: &BTreeMap<String, ImmutableBinding>,
+    local: &BTreeMap<&str, usize>,
+    visits: &mut [BindingVisit],
+    sites: &mut [Option<EvaluationSite>],
+) -> Result<EvaluationSite, PlanValidationError> {
+    if let Some(site) = sites[index] {
+        return Ok(site);
+    }
+    match visits[index] {
+        BindingVisit::Visiting => {
+            return Err(PlanValidationError::CyclicOwnerValue {
+                owner: owner.path.to_string(),
+                name: owner.vals[index].name.clone(),
+            });
+        }
+        BindingVisit::Done => {
+            return sites[index].ok_or_else(|| PlanValidationError::CyclicOwnerValue {
+                owner: owner.path.to_string(),
+                name: owner.vals[index].name.clone(),
+            });
+        }
+        BindingVisit::New => {}
+    }
+    visits[index] = BindingVisit::Visiting;
+    let site = expression_site(
+        &owner.vals[index].expr.root,
+        owner,
+        inherited,
+        local,
+        visits,
+        sites,
+    )
+    .map_err(|error| match error {
+        PlanValidationError::InvalidBinding {
+            owner: owner_path,
+            name: _,
+            path,
+        } => PlanValidationError::InvalidBinding {
+            owner: owner_path,
+            name: owner.vals[index].name.clone(),
+            path,
+        },
+        other => other,
+    })?;
+    visits[index] = BindingVisit::Done;
+    sites[index] = Some(site);
+    Ok(site)
+}
+
+/// Proves that the phase and reduction transported beside every immutable
+/// owner expression are derived facts, not claims. This walk also rejects
+/// lexical shadowing and cycles, so evaluation never depends on declaration
+/// order that canonical transport deliberately erases.
+fn owner_values_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    let mut environments: Vec<BTreeMap<String, ImmutableBinding>> = Vec::new();
+    for owner in &plan.owners {
+        let inherited = owner
+            .parent
+            .and_then(|parent| environments.get(parent.index()))
+            .cloned()
+            .unwrap_or_default();
+        for value in &owner.vals {
+            if inherited.contains_key(&value.name) {
+                return Err(PlanValidationError::DuplicateOwnerValue {
+                    owner: owner.path.to_string(),
+                    name: value.name.clone(),
+                });
+            }
+        }
+
+        let local: BTreeMap<&str, usize> = owner
+            .vals
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (value.name.as_str(), index))
+            .collect();
+        let mut visits = alloc::vec![BindingVisit::New; owner.vals.len()];
+        let mut sites = alloc::vec![None; owner.vals.len()];
+        for index in 0..owner.vals.len() {
+            let actual =
+                owner_value_site(index, owner, &inherited, &local, &mut visits, &mut sites)?;
+            let value = &owner.vals[index];
+            if value.site != actual
+                || (actual == EvaluationSite::Plan) != value.resolved.is_some()
+                || actual == EvaluationSite::Invocation
+            {
+                return Err(PlanValidationError::BindingSiteMismatch {
+                    owner: owner.path.to_string(),
+                    name: value.name.clone(),
+                });
+            }
+        }
+
+        let mut environment = inherited;
+        for value in &owner.vals {
+            environment.insert(
+                value.name.clone(),
+                ImmutableBinding {
+                    site: value.site,
+                    resolved: value.resolved.clone(),
+                },
+            );
+        }
+        let bindings = PlanValueBindings {
+            values: &environment,
+            assets: &plan.assets,
+        };
+        for value in &owner.vals {
+            let Some(claimed) = &value.resolved else {
+                continue;
+            };
+            let actual = expr::eval(&value.expr, &bindings)
+                .and_then(expr::EvalValue::into_value)
+                .map_err(|_| PlanValidationError::OwnerValueResolutionMismatch {
+                    owner: owner.path.to_string(),
+                    name: value.name.clone(),
+                })?;
+            if &actual != claimed {
+                return Err(PlanValidationError::OwnerValueResolutionMismatch {
+                    owner: owner.path.to_string(),
+                    name: value.name.clone(),
+                });
+            }
+        }
+        if let OwnerKind::Node(slot) = owner.kind
+            && let Some(NodeKind::Connector(spec)) =
+                plan.nodes.get(slot.index()).map(|node| &node.kind)
+        {
+            for (name, setting) in &spec.attributes {
+                let crate::plan::AttrSetting::Expr { site, expr } = setting else {
+                    continue;
+                };
+                let actual = expression_site(
+                    &expr.root,
+                    owner,
+                    &environment,
+                    &local,
+                    &mut visits,
+                    &mut sites,
+                )
+                .map_err(|error| match error {
+                    PlanValidationError::InvalidBinding {
+                        owner,
+                        name: _,
+                        path,
+                    } => PlanValidationError::InvalidBinding {
+                        owner,
+                        name: name.clone(),
+                        path,
+                    },
+                    other => other,
+                })?;
+                if actual != *site || actual == EvaluationSite::Plan {
+                    return Err(PlanValidationError::BindingSiteMismatch {
+                        owner: owner.path.to_string(),
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
+        environments.push(environment);
+    }
+    Ok(())
+}
+
+fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    let Some(root) = plan.owners.first() else {
+        return Err(PlanValidationError::MissingRootOwner);
+    };
+    if !root.path.is_root() || root.parent.is_some() || root.kind != OwnerKind::Graph {
+        return Err(PlanValidationError::MissingRootOwner);
+    }
+
+    let mut paths = BTreeSet::new();
+    let mut owned_nodes = BTreeSet::new();
+    for (index, owner) in plan.owners.iter().enumerate() {
+        let slot = OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        let path = owner.path.to_string();
+        if !paths.insert(path.clone()) {
+            return Err(PlanValidationError::DuplicateOwnerPath { path });
+        }
+        if index > 0 {
+            let Some(parent_slot) = owner.parent else {
+                return Err(PlanValidationError::InvalidOwnerTree { owner: slot });
+            };
+            if parent_slot.index() >= index {
+                return Err(PlanValidationError::InvalidOwnerTree { owner: slot });
+            }
+            let Some(parent) = plan.owners.get(parent_slot.index()) else {
+                return Err(PlanValidationError::OwnerOutOfBounds {
+                    owner: parent_slot,
+                    owner_count: plan.owners.len(),
+                });
+            };
+            if parent.kind != OwnerKind::Graph
+                || owner.path.segments().len() != parent.path.segments().len() + 1
+                || !owner.path.segments().starts_with(parent.path.segments())
+            {
+                return Err(PlanValidationError::InvalidOwnerTree { owner: slot });
+            }
+        }
+
+        if let OwnerKind::Node(node_slot) = owner.kind {
+            let Some(node) = plan.nodes.get(node_slot.index()) else {
+                return Err(PlanValidationError::SlotOutOfBounds {
+                    slot: node_slot,
+                    node_count: plan.nodes.len(),
+                });
+            };
+            if node.owner != slot || node.path.segments() != owner.path.segments() {
+                return Err(PlanValidationError::OwnerNodeMismatch {
+                    node: node_slot,
+                    owner: slot,
+                });
+            }
+            if !owned_nodes.insert(node_slot) {
+                return Err(PlanValidationError::OwnerNodeMismatch {
+                    node: node_slot,
+                    owner: slot,
+                });
+            }
+        }
+
+        let duration = match owner.instance.lifetime {
+            InstanceLifetime::Persistent | InstanceLifetime::SinglePass => None,
+            InstanceLifetime::Idle(value)
+            | InstanceLifetime::Fixed(value)
+            | InstanceLifetime::Tumbling(value) => Some(value),
+        };
+        if duration.is_some_and(|value| value <= 0) {
+            return Err(PlanValidationError::InvalidInstanceLifetime { owner: path });
+        }
+        if let Some(key) = &owner.instance.key {
+            if !key.ty.is_instance_key()
+                && !super::type_resolution::expression_reads_data(&key.root)
+            {
+                return Err(PlanValidationError::InvalidInstanceKey {
+                    owner: path.clone(),
+                    ty: key.ty.clone(),
+                });
+            }
+            expr_canonical(&key.root)?;
+            asset_indexes_bound(plan, &key.root)?;
+            let mut enclosing = BTreeSet::new();
+            let mut cursor = owner.parent;
+            while let Some(parent) = cursor {
+                let Some(ancestor) = plan.owners.get(parent.index()) else {
+                    return Err(PlanValidationError::OwnerOutOfBounds {
+                        owner: parent,
+                        owner_count: plan.owners.len(),
+                    });
+                };
+                enclosing.extend(ancestor.vals.iter().map(|value| value.name.as_str()));
+                cursor = ancestor.parent;
+            }
+            instance_bindings_available(&key.root, &path, &enclosing)?;
+        }
+
+        let mut names = BTreeSet::new();
+        for value in &owner.vals {
+            if !names.insert(value.name.as_str()) {
+                return Err(PlanValidationError::DuplicateOwnerValue {
+                    owner: path.clone(),
+                    name: value.name.clone(),
+                });
+            }
+            if (value.site == EvaluationSite::Plan) != value.resolved.is_some() {
+                return Err(PlanValidationError::BindingSiteMismatch {
+                    owner: path.clone(),
+                    name: value.name.clone(),
+                });
+            }
+            if value.site == EvaluationSite::Invocation {
+                return Err(PlanValidationError::BindingSiteMismatch {
+                    owner: path.clone(),
+                    name: value.name.clone(),
+                });
+            }
+            if let Some(resolved) = &value.resolved {
+                value_expressible(resolved)?;
+                if !value.expr.ty.accepts(resolved) {
+                    return Err(PlanValidationError::UnrepresentableConstant);
+                }
+            }
+            expr_canonical(&value.expr.root)?;
+            asset_indexes_bound(plan, &value.expr.root)?;
+        }
+        for pair in owner.vals.windows(2) {
+            if pair[0].name >= pair[1].name {
+                return Err(PlanValidationError::NonCanonicalOrder {
+                    collection: "owner values",
+                });
+            }
+        }
+    }
+    for pair in plan.owners.windows(2) {
+        if pair[0].path >= pair[1].path {
+            return Err(PlanValidationError::NonCanonicalOrder {
+                collection: "owners",
+            });
+        }
+    }
+    if owned_nodes.len() != plan.nodes.len() {
+        let missing = (0..plan.nodes.len())
+            .map(|index| Slot::new(u32::try_from(index).unwrap_or(u32::MAX)))
+            .find(|slot| !owned_nodes.contains(slot))
+            .unwrap_or_else(|| Slot::new(u32::MAX));
+        let owner = plan
+            .nodes
+            .get(missing.index())
+            .map_or(OwnerSlot::new(u32::MAX), |node| node.owner);
+        return Err(PlanValidationError::OwnerNodeMismatch {
+            node: missing,
+            owner,
+        });
+    }
+    for edge in &plan.edges {
+        if !matches!(
+            plan.owner(edge.scope).map(|owner| &owner.kind),
+            Some(OwnerKind::Graph)
+        ) {
+            return Err(PlanValidationError::InvalidEdgeScope { owner: edge.scope });
+        }
+    }
+    owner_values_well_formed(plan)?;
+    Ok(())
+}
+
 fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     data_types_well_formed(plan)?;
     schema_well_formed("app", &plan.app_schema)?;
@@ -1066,6 +1672,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             });
         }
     }
+    owners_well_formed(plan)?;
     let mut boundary_ports = BTreeSet::new();
     for decl in &plan.boundary {
         if !boundary_ports.insert(&decl.port) {
@@ -1107,35 +1714,6 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         });
     }
     for (node_index, node) in plan.nodes.iter().enumerate() {
-        if let Some(partition) = &node.partition {
-            if partition.name.as_ref().is_some_and(String::is_empty) {
-                return Err(PlanValidationError::InvalidPartitionName {
-                    node: node.path.clone(),
-                });
-            }
-            // A data-dependent raw expression may still contain the M1.3
-            // solver's open input variable inside a structured result. The
-            // post-solver pass below re-types the complete tree under every
-            // effective input and admits only the closed instance-key
-            // domain; a data-independent non-key has no such excuse.
-            if !partition.key.ty.is_instance_key()
-                && !super::type_resolution::expression_reads_data(&partition.key.root)
-            {
-                return Err(PlanValidationError::InvalidPartitionKey {
-                    node: node.path.clone(),
-                    ty: partition.key.ty.clone(),
-                });
-            }
-            if matches!(partition.lifetime, crate::plan::PartitionLifetime::IdleTtl(nanos) if nanos <= 0)
-            {
-                return Err(PlanValidationError::InvalidPartitionLifetime {
-                    node: node.path.clone(),
-                });
-            }
-            expr_canonical(&partition.key.root)?;
-            asset_indexes_bound(plan, &partition.key.root)?;
-            partition_bindings_available(&partition.key.root, &node.path)?;
-        }
         if let Some((decl, expected)) = node.ports.iter().find_map(|decl| {
             conventional_direction(&decl.port)
                 .filter(|expected| decl.direction != *expected)
@@ -1193,9 +1771,25 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
         }
         if let NodeKind::Connector(spec) = &node.kind {
-            for (_, setting) in &spec.attributes {
-                if let crate::plan::AttrSetting::Value(value) = setting {
-                    value_expressible(value)?;
+            for (name, setting) in &spec.attributes {
+                match setting {
+                    crate::plan::AttrSetting::Value(value) => value_expressible(value)?,
+                    crate::plan::AttrSetting::Expr { site, expr } => {
+                        let admitted =
+                            crate::boundary::process_attribute_site(&spec.contract, name)
+                                .is_some_and(|latest| {
+                                    latest != EvaluationSite::Plan && latest.admits(*site)
+                                });
+                        if *site == EvaluationSite::Plan || !admitted {
+                            return Err(PlanValidationError::BindingSiteMismatch {
+                                owner: node.path.to_string(),
+                                name: name.clone(),
+                            });
+                        }
+                        expr_canonical(&expr.root)?;
+                        asset_indexes_bound(plan, &expr.root)?;
+                    }
+                    crate::plan::AttrSetting::Word(_) => {}
                 }
             }
             // The codec rule is the PROCESS contract's, not the
@@ -1592,7 +2186,8 @@ fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
         // the walk that owns the plan (`meta_target_known`'s
         // sibling); canonical here.
         expr::Expr::Asset(_) => Ok(()),
-        expr::Expr::Path(_) => Ok(()),
+        expr::Expr::Path(segments) if !segments.is_empty() => Ok(()),
+        expr::Expr::Path(_) => Err(PlanValidationError::UnrepresentableConstant),
         expr::Expr::Unary { expr, .. } => expr_canonical(expr),
         expr::Expr::Binary { left, right, .. } => {
             expr_canonical(left)?;
@@ -1672,25 +2267,28 @@ fn expr_canonical(expr: &expr::Expr) -> Result<(), PlanValidationError> {
 }
 
 /// Proves the pre-commit routing boundary independently of the source
-/// checker. Graph and node constants have already been substituted by
-/// lowering, so every surviving path must come from the complete immutable
-/// entering envelope. Destination facts have no expression binding.
-fn partition_bindings_available(
+/// checker. A key sees the entering envelope and immutable values of lexical
+/// ancestors, never its own not-yet-created instance or destination facts.
+fn instance_bindings_available(
     expr: &expr::Expr,
-    node: &node::Path,
+    owner: &str,
+    enclosing: &BTreeSet<&str>,
 ) -> Result<(), PlanValidationError> {
-    let inspect = |child| partition_bindings_available(child, node);
+    let inspect = |child| instance_bindings_available(child, owner, enclosing);
     match expr {
         expr::Expr::Literal(_) | expr::Expr::Asset(_) => Ok(()),
         expr::Expr::Path(segments) => {
             let available = matches!(segments.as_slice(), [root, ..] if root == "data")
                 || matches!(segments.as_slice(), [meta, zone, _, ..]
-                    if meta == "meta" && matches!(zone.as_str(), "sys" | "app" | "ext"));
+                    if meta == "meta" && matches!(zone.as_str(), "sys" | "app" | "ext"))
+                || segments
+                    .first()
+                    .is_some_and(|root| enclosing.contains(root.as_str()));
             if available {
                 Ok(())
             } else {
-                Err(PlanValidationError::InvalidPartitionBinding {
-                    node: node.clone(),
+                Err(PlanValidationError::InvalidInstanceBinding {
+                    owner: owner.to_string(),
                     path: segments.join("."),
                 })
             }

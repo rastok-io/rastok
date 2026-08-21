@@ -1986,6 +1986,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
         .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
+        scope: rastok::plan::OwnerSlot::new(0),
         from: EndpointRef {
             node: None,
             port: rastok::node::Port::new("in").unwrap(),

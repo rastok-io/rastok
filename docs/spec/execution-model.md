@@ -2,8 +2,9 @@
 
 > **Status:** normative. The Node-owned instance model in
 > [instances.md](instances.md) supersedes the unreleased P0–P3
-> named-partition implementation; that implementation must be realigned before
-> execution work resumes.
+> named-partition implementation. Categorical plan-package v9 now carries the
+> realigned owner tree and instance policies; hierarchical route/mailbox/state
+> references remain the R3 execution gate.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the

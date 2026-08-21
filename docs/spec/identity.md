@@ -6,10 +6,12 @@
 > journal records.
 >
 > The registry below retains the executable v7 type/value/expression registry
-> and specifies the categorical M1.4 instance-address extension under
-> D-2026-08-18-1. The old unpublished v8 named-partition draft is superseded;
-> implementation must either replace it categorically before publication or
-> refuse it in favor of the next version. D-2026-08-14-1
+> inside categorical plan-package v9 and specifies the M1.4 instance-address
+> extension under D-2026-08-18-1. V9 refuses the old unpublished v8
+> named-partition draft and carries the parent-linked owner tree, scoped edges,
+> typed key/lifetime policy and phased immutable expressions. Mandatory
+> `(address, generation)` facts remain the separately declared R3 causal-trace
+> move. D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
 > from the plan constraints and requires exact agreement with the transported
