@@ -124,12 +124,6 @@ fn sorted_edges(hir: &Hir) -> Vec<(String, &crate::compiler::hir::Edge)> {
 
 /// Lowers a checked graph into the shipped plan and its symbol table.
 pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
-    if hir.app.instance.is_some() {
-        return Err(LowerError {
-            owner: hir.app.name.clone(),
-            detail: "Graph-owner routing requires the M1.4 R3 instance scheduler",
-        });
-    }
     let nodes = sorted_nodes(hir);
     let slot_of = |path: &node::Path| {
         Slot::new(

@@ -3,8 +3,10 @@
 > **Status:** normative. The Node-owned instance model in
 > [instances.md](instances.md) supersedes the unreleased P0–P3
 > named-partition implementation. Categorical plan-package v9 now carries the
-> realigned owner tree and instance policies; hierarchical route/mailbox/state
-> references remain the R3 execution gate.
+> realigned owner tree and instance policies. R3 now routes every delivery
+> through one hierarchical instance reference shared by journal, mailbox,
+> state, calls, timers, lifecycle, and cursors. Finite lifetime and Closing
+> remain R4/R5 gates.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the

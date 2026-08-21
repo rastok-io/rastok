@@ -33,16 +33,17 @@
 > Connector has one row in each domain. Validation proves the reciprocal
 > references and the parent tree before either table is observable. This
 > preserves runtime `Slot` stability while preventing DAG flattening from
-> erasing Graph ownership. V9 does not smuggle in the later journal move:
-> mandatory `(address, generation)` route/transaction references land under
-> R3 as their own declared causal-trace change. This tranche moves package
-> containers and checksums; unchanged source keeps its semantic hash and
-> causal trace.
+> erasing Graph ownership. V9 did not smuggle in the later journal move: R3
+> has since landed mandatory `(address, generation)` route/transaction
+> references as their own declared causal-trace change. That change touches
+> no package byte. The R2 tranche moved package containers and checksums while
+> unchanged source kept its semantic hash and causal trace; R3 moves the trace
+> while keeping both semantic hash and package fixed.
 >
 > The allocated lifetime rows are a closed transport registry, not automatic
-> runtime enablement: v9 validation currently admits `persistent` and
-> Node-owned `idle`, and refuses the R4 lifetime rows or Graph-owned instance
-> policy by typed gate. A decoded key type is re-derived and compared; unlike
+> runtime enablement: v9 validation currently admits Graph/Node `persistent`
+> and Node-owned `idle`, and refuses the R4 finite-lifetime rows by typed gate.
+> A decoded key type is re-derived and compared; unlike
 > compiler lowering, package validation never normalizes the claim.
 >
 > Format v7 (D-2026-08-14-1, landed 2026-08-15) was the one categorical

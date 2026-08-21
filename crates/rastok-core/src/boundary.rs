@@ -13,6 +13,7 @@ use crate::datatype::{
     DataType, EnumType, StructType, TaggedCase, TaggedUnionType, TypeError, TypeField,
 };
 use crate::envelope::{self, Envelope};
+use crate::identity::InstanceRef;
 use crate::journal::{CloseVerdict, Closure, Journal};
 use crate::node;
 use alloc::collections::BTreeSet;
@@ -504,6 +505,11 @@ pub struct Intent {
     pub idempotency_key: Option<String>,
     /// The declared effect class of the call.
     pub effect: node::EffectClass,
+    /// Effective Connector attributes evaluated once in the selected
+    /// instance bundle. They are derived from the sealed plan and instance
+    /// context; adapters consume them but never choose defaults or evaluate
+    /// expressions.
+    pub instance_settings: alloc::collections::BTreeMap<String, crate::value::Value>,
 }
 
 impl Intent {
@@ -758,17 +764,18 @@ pub enum DatedPayload {
         /// The other half of the reference: the delivered envelope's
         /// id.
         delivery: envelope::Id,
+        /// Exact connector instance owning the mailbox/call obligation.
+        instance: InstanceRef,
     },
     /// One idle Node instance reached the deadline armed by its most recent
     /// admitted envelope. The causal envelope id makes older queued expiries
     /// harmless without impersonating the journal-derived instance generation
     /// that lands at R3.
-    PartitionIdle {
-        /// The partitioned node.
+    InstanceIdle {
+        /// The instance-owned node.
         node: node::Path,
-        /// Canonical instance key bytes (empty for an explicitly managed
-        /// singleton lifecycle).
-        partition_key: Vec<u8>,
+        /// Exact generation whose admission silence is being observed.
+        instance: InstanceRef,
         /// Envelope whose arrival armed this deadline and causes `l:stop`.
         cause: envelope::Id,
     },
@@ -1076,6 +1083,7 @@ mod tests {
             prepared,
             idempotency_key: None,
             effect: node::EffectClass::Idempotent,
+            instance_settings: alloc::collections::BTreeMap::new(),
         };
         journal.open_outbound(intent.clone()).unwrap();
         (journal, intent)

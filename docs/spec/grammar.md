@@ -7,10 +7,10 @@
 > by their registered framer and refuse with named `E-CHECK-DEFERRED`.
 > The current parser/checker uses the Node attributes `instances` and
 > `lifetime`; the superseded `partition` / `per` draft is not a compatibility
-> surface. `persistent` and `idle` are executable on Node owners. The closed
+> surface. `persistent` is executable on Graph and Node owners; `idle` is
+> executable on executable Node owners. The closed
 > `fixed`, `single_pass`, and `tumbling` spellings are recognized but refuse
-> as named R4 gates, Graph-owned routing waits for R3, and the exact `closing`
-> sheet remains a named R5 gate.
+> as named R4 gates, while the exact `closing` sheet remains a named R5 gate.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >

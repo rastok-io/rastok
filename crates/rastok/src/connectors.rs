@@ -25,7 +25,7 @@ use std::process::{Command, Stdio};
 /// its domain — the codec exhaustively, with NO fallback — and
 /// nothing is silently dropped or re-defaulted. The adapter
 /// consumes THIS, never the raw attribute table.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ProcessSettings {
     command: String,
     args: Vec<String>,
@@ -34,6 +34,75 @@ struct ProcessSettings {
     codec: crate::boundary::RequestCodec,
     err_codec: crate::boundary::RequestCodec,
     max_output: u64,
+}
+
+/// The plan-side half of one Process binding. A fully static connector keeps
+/// its resolved settings directly. An instance-bound connector keeps the
+/// validated travelling sheet and resolves only the rows whose expressions
+/// the VM has already evaluated into the intent.
+#[derive(Debug)]
+struct ProcessBinding {
+    spec: rastok_core::plan::ConnectorSpec,
+    static_settings: Option<ProcessSettings>,
+}
+
+impl ProcessBinding {
+    fn try_from(spec: &rastok_core::plan::ConnectorSpec) -> Result<Self, ProcessSettingsError> {
+        let dynamic = spec
+            .attributes
+            .iter()
+            .any(|(_, setting)| matches!(setting, AttrSetting::Expr { .. }));
+        if !dynamic {
+            return Ok(Self {
+                spec: spec.clone(),
+                static_settings: Some(ProcessSettings::try_from(spec)?),
+            });
+        }
+
+        // Binding still proves every plan-bound row before effects exist. The
+        // placeholders carry no runtime meaning: they only let the same
+        // exhaustive Process conversion judge the surrounding static sheet.
+        // Core validation has already proved each Expr's declared domain and
+        // phase; the actual value is judged again below when the intent binds.
+        let mut shape = spec.clone();
+        for (name, setting) in &mut shape.attributes {
+            if !matches!(setting, AttrSetting::Expr { .. }) {
+                continue;
+            }
+            let value = match name.as_str() {
+                "command" | "cwd" => Value::Text(String::new()),
+                "args" => Value::Array(Vec::new()),
+                "env" => Value::Map(std::collections::BTreeMap::new()),
+                "timeout" => Value::Duration(1),
+                _ => return Err(ProcessSettingsError::Unresolved("dynamic attribute")),
+            };
+            *setting = AttrSetting::Value(value);
+        }
+        ProcessSettings::try_from(&shape)?;
+        Ok(Self {
+            spec: spec.clone(),
+            static_settings: None,
+        })
+    }
+
+    fn resolve(
+        &self,
+        values: &std::collections::BTreeMap<String, Value>,
+    ) -> Result<ProcessSettings, ProcessSettingsError> {
+        if let Some(settings) = &self.static_settings {
+            return Ok(settings.clone());
+        }
+        let mut effective = self.spec.clone();
+        for (name, setting) in &mut effective.attributes {
+            if matches!(setting, AttrSetting::Expr { .. }) {
+                let Some(value) = values.get(name) else {
+                    return Err(ProcessSettingsError::Unresolved("instance attribute"));
+                };
+                *setting = AttrSetting::Value(value.clone());
+            }
+        }
+        ProcessSettings::try_from(&effective)
+    }
 }
 
 /// A violated `Process` invariant — typed, so the refusal names the
@@ -306,10 +375,10 @@ pub struct Process<'plan> {
     /// binding, and the proof may not be dropped or replaced while
     /// children fly.
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
-    /// Every Process connector's settings, resolved ONCE at binding
-    /// — before any journaled open, so a configuration defect is a
-    /// bind error, never a `SpawnFailed` impersonating the OS.
-    settings: std::collections::BTreeMap<crate::node::Path, ProcessSettings>,
+    /// Every Process connector's binding. Plan rows resolve before the
+    /// journal exists; instance rows arrive as already-evaluated values on the
+    /// intent and are converted once per logical instance.
+    bindings: std::collections::BTreeMap<crate::node::Path, ProcessBinding>,
     runs: Vec<Run>,
     answers: Vec<Response>,
 }
@@ -530,7 +599,7 @@ impl<'plan> Process<'plan> {
     pub fn try_new(
         plan: &'plan crate::plan::ValidatedExecutionPlan,
     ) -> Result<Self, ProcessBindError> {
-        let mut settings = std::collections::BTreeMap::new();
+        let mut bindings = std::collections::BTreeMap::new();
         for node in &plan.plan().nodes {
             if let NodeKind::Connector(spec) = &node.kind {
                 // A SPECIALIZED adapter — but the world it serves
@@ -570,9 +639,9 @@ impl<'plan> Process<'plan> {
                     }
                     continue;
                 }
-                match ProcessSettings::try_from(spec) {
+                match ProcessBinding::try_from(spec) {
                     Ok(resolved) => {
-                        settings.insert(node.path.clone(), resolved);
+                        bindings.insert(node.path.clone(), resolved);
                     }
                     Err(reason) => {
                         return Err(ProcessBindError {
@@ -585,17 +654,14 @@ impl<'plan> Process<'plan> {
         }
         Ok(Self {
             _plan: plan,
-            settings,
+            bindings,
             runs: Vec::new(),
             answers: Vec::new(),
         })
     }
 
     fn launch(&mut self, intent: &Intent, request: &Envelope) -> Result<Run, Completion> {
-        // Settings were resolved ONCE at binding; an unknown path
-        // here is an integrity breach of the intent, not a config
-        // fault.
-        let Some(settings) = self.settings.get(&intent.connector_path) else {
+        let Some(binding) = self.bindings.get(&intent.connector_path) else {
             return Err(ProcessFailure::SpawnFailed {
                 message: "no Process binding serves this connector (unknown path, or another \
                           contract this specialized adapter does not carry)"
@@ -603,6 +669,17 @@ impl<'plan> Process<'plan> {
             }
             .into_completion());
         };
+        // The VM evaluates and type-checks instance rows before `l:start`.
+        // This conversion is the adapter's typed belt: it never evaluates an
+        // expression or supplies a default.
+        let settings = binding
+            .resolve(&intent.instance_settings)
+            .map_err(|error| {
+                ProcessFailure::SpawnFailed {
+                    message: format!("a validated Process instance setting refused: {error}"),
+                }
+                .into_completion()
+            })?;
         // The machine prepared and sealed the bytes; the adapter
         // TRANSPORTS them — recomputing would reopen the gap between
         // sealed and sent.

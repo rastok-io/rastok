@@ -484,7 +484,7 @@ impl core::fmt::Display for PlanValidationError {
             ),
             Self::InvalidEdgeScope { owner } => write!(
                 f,
-                "invalid plan: edge scope {} is not a Graph owner",
+                "invalid plan: edge scope {} is not a Graph owner shared by both endpoints",
                 owner.index()
             ),
             Self::DuplicateOwnerValue { owner, name } => write!(
@@ -1704,9 +1704,10 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 lifetime: owner.instance.lifetime.clone(),
             });
         }
-        if owner.kind == OwnerKind::Graph
-            && (owner.instance.key.is_some()
-                || owner.instance.lifetime != InstanceLifetime::Persistent)
+        // R3 routes through persistent Graph-owned address frames. Finite
+        // Graph lifetimes wait for the R4 closing scheduler: admitting them
+        // here would execute their expiry silently as persistent.
+        if owner.kind == OwnerKind::Graph && owner.instance.lifetime != InstanceLifetime::Persistent
         {
             return Err(PlanValidationError::UnsupportedGraphInstance { owner: path });
         }
@@ -1806,11 +1807,37 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             owner,
         });
     }
+    let is_descendant = |mut owner: OwnerSlot, ancestor: OwnerSlot| {
+        loop {
+            if owner == ancestor {
+                return true;
+            }
+            let Some(row) = plan.owner(owner) else {
+                return false;
+            };
+            let Some(parent) = row.parent else {
+                return false;
+            };
+            owner = parent;
+        }
+    };
     for edge in &plan.edges {
         if !matches!(
             plan.owner(edge.scope).map(|owner| &owner.kind),
             Some(OwnerKind::Graph)
         ) {
+            return Err(PlanValidationError::InvalidEdgeScope { owner: edge.scope });
+        }
+        let endpoint_is_scoped = |endpoint: &EndpointRef| {
+            endpoint.node.is_none_or(|slot| {
+                plan.nodes
+                    .get(slot.index())
+                    .is_some_and(|node| is_descendant(node.owner, edge.scope))
+            })
+        };
+        if !endpoint_is_scoped(&edge.from)
+            || edge.to.as_ref().is_some_and(|to| !endpoint_is_scoped(to))
+        {
             return Err(PlanValidationError::InvalidEdgeScope { owner: edge.scope });
         }
     }

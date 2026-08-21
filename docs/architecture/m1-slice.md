@@ -6,7 +6,7 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-18): items 1, 2 and the replacement item 3 are landed, as are
+**Current checkpoint (2026-08-21): items 1, 2 and the replacement item 3 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 M1.4 has been normatively rebased by D-2026-08-18-1 before public release.
 The executable P0–P3 named-`partition` / `per` draft is not the target source
@@ -14,6 +14,11 @@ or package contract; its mechanisms are being realigned behind Node-owned
 `instances.key`, independent `lifetime`, Node-private state, and hierarchical
 logical addresses. Its valid-program/golden evidence remains evidence, not a
 compatibility promise.
+R3 now executes those hierarchical addresses through producer-sealed instance
+references shared by routes, transactions, mailboxes, state, calls, timers,
+lifecycle and cursors. The causal trace moved deliberately while semantic
+hashes and v9 package bodies remained fixed; R4/R5 retain finite lifetime and
+Closing.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now

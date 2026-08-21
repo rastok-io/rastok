@@ -261,7 +261,7 @@ pub enum Lifecycle {
     Next,
     /// Expired per-call timeout budget.
     Timeout,
-    /// Partition-state eviction.
+    /// Instance-state eviction.
     Evict,
     /// Post-crash recovery transaction.
     Recover,
@@ -325,7 +325,7 @@ impl fmt::Display for Trigger {
 pub enum HandlerActivation {
     /// Arrival on a single port.
     Port(Port),
-    /// One partition-instance lifecycle transition.
+    /// One lexical-owner instance lifecycle transition.
     Lifecycle(Lifecycle),
 }
 

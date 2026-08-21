@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.4 R2 transport, 2026-08-21)
+title Rastok — bird's-eye module overview (M1.4 R3 routing, 2026-08-21)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -108,7 +108,11 @@ package "canonical_cbor — bounded canonical byte discipline" as P_CBOR {
   CBOR_Error : typed malformed, non-canonical, or over-budget input
 }
 
-package "identity::encoding — shared tagged-value registry" as P_IDENT {
+package "identity — canonical identities and tagged values" as P_IDENT {
+  class InstanceAddress <<struct>>
+  InstanceAddress : owner path plus outer-to-inner canonical frames
+  class InstanceRef <<struct>>
+  InstanceRef : logical address plus journal-derived generation
   class "value_tagged / meta_tagged" as IDENT_API <<mod>>
   IDENT_API : one extend-only value alphabet for plans and traces
 }
@@ -288,10 +292,6 @@ package "runtime — deterministic execution machinery" as P_RT {
   TransactionExecutor : atomic node-transaction executor
   class InstanceState <<struct>>
   InstanceState : private Node state cells indexed by instance reference
-  class InstanceAddress <<struct>>
-  InstanceAddress : owner path plus outer-to-inner canonical frames
-  class InstanceRef <<struct>>
-  InstanceRef : logical address plus journal-derived generation
   class EmissionBuffer <<struct>>
   EmissionBuffer : ordered per-port emissions
   class Observed <<struct>>
@@ -407,12 +407,14 @@ P_IDENT ..> P_DATA : tags core values
 P_PLAN ..> P_CBOR : encodes / decodes
 P_PLAN ..> P_IDENT : tagged values
 P_PLAN ..> P_DATA : carries types / values
+P_RT ..> P_IDENT : addresses work
 P_RT ..> P_PLAN : uses
 P_RT ..> P_BND : uses
 P_RT ..> P_J : uses
 P_RT ..> P_EXPR : uses
 P_BND ..> P_JSON : jsonl framing
 P_BND ..> P_J : uses
+P_J ..> P_IDENT : seals instance references
 P_GOLD ..> P_J : projects
 P_GOLD ..> P_CBOR : encodes / decodes
 P_GOLD ..> P_IDENT : tagged values

@@ -9,10 +9,12 @@
 
 use rastok::boundary::{InboundSubmission, Intent, Partner};
 use rastok::envelope::{Data, Envelope};
+use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use rastok::journal::Journal;
 use rastok::node;
-use rastok::plan::GraphVersion;
-use rastok::runtime::PartitionKey;
+use rastok::plan::{
+    AttrSetting, EvaluationSite, GraphVersion, OwnerPath, OwnerValue, ValidatedExecutionPlan,
+};
 use rastok::runtime::vm::{Vm, VmError};
 
 use rastok::boundary::{
@@ -22,6 +24,19 @@ use rastok::compiler::compile;
 use rastok::contract::Registry;
 use rastok::envelope::{Encoding, Namespace, Value};
 use rastok::journal::{MemJournal, OutboundStatus, Record};
+
+fn int_address(owner: &str, value: i64) -> InstanceAddress {
+    let owner = OwnerPath::new([owner]).expect("valid owner path");
+    InstanceAddress::new(
+        &owner,
+        &[InstanceFrame::SelectedKey {
+            owner: owner.clone(),
+            ty: rastok::datatype::DataType::INT,
+            value: Value::Int(value),
+        }],
+    )
+    .expect("int is a canonical instance key")
+}
 
 const M0_PROBE: &str = r#"
 graph m0_probe : App {
@@ -123,6 +138,21 @@ fn int_submission(value: i64) -> InboundSubmission {
     }
 }
 
+fn tenant_submission(tenant: &str, user: i64) -> InboundSubmission {
+    InboundSubmission {
+        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        port: rastok::node::Port::new("in").unwrap(),
+        draft: Draft {
+            data: Data::materialized(Value::Struct(vec![
+                (String::from("tenant"), Value::Text(String::from(tenant))),
+                (String::from("user"), Value::Int(user)),
+            ])),
+            ext: Namespace::new(),
+        },
+        sequence: SubmissionSequence::Next,
+    }
+}
+
 fn root_exit_cases<'a>(vm: &'a Vm<'_>) -> Vec<&'a str> {
     vm.observations()
         .iter()
@@ -212,6 +242,269 @@ fn two_runs_produce_identical_journals() {
 }
 
 #[test]
+fn a_graph_key_is_selected_once_and_metadata_rewrites_cannot_migrate_it() {
+    let source = r#"
+graph rooted : App {
+  input in: int
+  output out: int
+  instances = { key = meta.sys.id }
+
+  operator first {
+    input in: int
+    output out: int
+    on in { out = . }
+  }
+  operator second {
+    input in: int
+    output out: int
+    on in { out = . }
+  }
+
+  . -> first -> second -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("R3 admits a persistent Graph-owned key");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    vm.inject(&mut journal, int_submission(7)).unwrap();
+    vm.drain(&mut journal).unwrap();
+
+    let Record::Inbound(inbound) = &journal.records()[0] else {
+        panic!("the first fact is ingress");
+    };
+    let root_id = inbound.envelope.meta().sys().id();
+    let frame = InstanceFrame::SelectedKey {
+        owner: OwnerPath::root(),
+        ty: rastok::datatype::DataType::Text,
+        value: Value::Text(root_id.to_string()),
+    };
+    let expected = |node: &str| {
+        InstanceRef::new(
+            InstanceAddress::new(
+                &OwnerPath::new([node]).expect("valid owner path"),
+                core::slice::from_ref(&frame),
+            )
+            .expect("the root frame belongs to each child"),
+            0,
+        )
+    };
+    assert_eq!(inbound.routes[0].target, expected("first"));
+
+    let transactions: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Transaction(transaction) => Some(transaction),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(transactions[0].instance, expected("first"));
+    assert_eq!(transactions[0].routes[0].target, expected("second"));
+    assert_eq!(transactions[1].instance, expected("second"));
+    assert_ne!(
+        transactions[0].emissions[0].envelope.meta().sys().id(),
+        root_id,
+        "the first hop really minted different meta.sys"
+    );
+}
+
+#[test]
+fn nested_graph_and_node_keys_form_one_state_address() {
+    let source = r#"
+graph nested : App {
+  input in: struct { tenant: text, user: int }
+  output out: int
+  instances = { key = data.tenant }
+
+  operator counter {
+    instances = { key = data.user }
+    input in: struct { tenant: text, user: int }
+    output out: int
+    var count: int = 0
+    on in {
+      count = count + 1
+      out = count
+    }
+  }
+
+  . -> counter -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the two key dimensions are type-closed");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    for (tenant, user) in [("acme", 7), ("acme", 7), ("other", 7)] {
+        vm.inject(&mut journal, tenant_submission(tenant, user))
+            .unwrap();
+        vm.drain(&mut journal).unwrap();
+    }
+    assert_eq!(
+        vm.outputs()
+            .iter()
+            .map(|output| match output.envelope.data() {
+                Data::Materialized(Value::Int(value)) => *value,
+                other => panic!("the counter emits ints, got {other:?}"),
+            })
+            .collect::<Vec<_>>(),
+        [1, 2, 1],
+        "the inner key is namespaced by the enclosing Graph key"
+    );
+}
+
+#[test]
+fn a_graph_instance_value_binds_process_before_the_first_effect() {
+    let source = r#"
+graph dynamic_binding : App {
+  input in: text
+  output out: text
+
+  connector shell : Process {
+    mode = job
+    command = "cat"
+    codec = lines
+    effect = idempotent
+    behavior = deterministic
+  }
+
+  . -> shell
+  shell.out -> .out
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the static spelling supplies a valid plan skeleton");
+    let mut raw = compilation.plan.into_inner();
+    raw.owners[0].instance.key = Some(rastok::expr::Tree {
+        root: rastok::expr::Expr::Literal(Value::Text(String::from("cat"))),
+        ty: rastok::datatype::DataType::Text,
+    });
+    raw.owners[0].vals.push(OwnerValue {
+        name: String::from("selected_command"),
+        site: EvaluationSite::Instance,
+        expr: rastok::expr::Tree {
+            root: rastok::expr::Expr::Path(vec![String::from("instance"), String::from("key")]),
+            ty: rastok::datatype::DataType::Text,
+        },
+        resolved: None,
+    });
+    let shell = raw
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "shell")
+        .expect("the Process node exists");
+    let rastok::plan::NodeKind::Connector(spec) = &mut shell.kind else {
+        panic!("shell is a connector")
+    };
+    let (_, command) = spec
+        .attributes
+        .iter_mut()
+        .find(|(name, _)| name == "command")
+        .expect("Process declares command");
+    *command = AttrSetting::Expr {
+        site: EvaluationSite::Instance,
+        expr: rastok::expr::Tree {
+            root: rastok::expr::Expr::Path(vec![String::from("selected_command")]),
+            ty: rastok::datatype::DataType::Text,
+        },
+    };
+    let plan = ValidatedExecutionPlan::try_new(raw)
+        .expect("the Graph value and Process setting close at instance entry");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut process = rastok::connectors::Process::try_new(&plan)
+        .expect("the adapter accepts a validated instance-bound sheet");
+    vm.inject(&mut journal, text_submission("salut")).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        vm.drain(&mut journal).unwrap();
+        vm.pump(&mut journal, &mut process).unwrap();
+        vm.drain(&mut journal).unwrap();
+        if vm.is_stable() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the instance-bound Process did not settle"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        vm.outputs()
+            .iter()
+            .filter(|output| output.port.name() == "out")
+            .map(|output| output.envelope.data().clone())
+            .collect::<Vec<_>>(),
+        [Data::materialized(Value::Text(String::from("salut")))],
+        "the adapter ran the command selected by the parent Graph instance"
+    );
+}
+
+#[test]
+fn a_failed_instance_bundle_commits_no_ingress_start_or_effect() {
+    let source = r#"
+graph failing_bundle : App {
+  input in: int
+  output out: int
+  instances = { key = data }
+
+  operator relay {
+    input in: int
+    output out: int
+    on in { out = . }
+  }
+
+  . -> relay -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &Registry::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the keyed plan checks");
+    let mut raw = compilation.plan.into_inner();
+    raw.owners[0].vals.push(OwnerValue {
+        name: String::from("broken"),
+        site: EvaluationSite::Instance,
+        expr: rastok::expr::Tree {
+            root: rastok::expr::Expr::Binary {
+                op: rastok::expr::BinaryOp::Div,
+                left: Box::new(rastok::expr::Expr::Path(vec![
+                    String::from("instance"),
+                    String::from("key"),
+                ])),
+                right: Box::new(rastok::expr::Expr::Literal(Value::Int(0))),
+            },
+            ty: rastok::datatype::DataType::INT,
+        },
+        resolved: None,
+    });
+    let plan = ValidatedExecutionPlan::try_new(raw)
+        .expect("division is a well-typed instance expression even when this value faults");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&plan, GraphVersion(1));
+
+    assert!(matches!(
+        vm.inject(&mut journal, int_submission(7)),
+        Err(VmError::Fault(_))
+    ));
+    assert!(
+        journal.records().is_empty(),
+        "candidate evaluation precedes ingress, lifecycle, and adapter effects"
+    );
+    assert!(vm.is_stable(), "the failed candidate installed no work");
+}
+
+#[test]
 fn keyed_instances_isolate_state_and_own_their_edge_cursors() {
     let source = r#"
 graph keyed : App {
@@ -262,21 +555,21 @@ graph keyed : App {
         .collect();
     assert_eq!(output_values, [1, 1, 2], "each key owns its state cell");
 
-    let key7 = PartitionKey::from_value(&rastok::datatype::DataType::INT, &Value::Int(7)).unwrap();
-    let key9 = PartitionKey::from_value(&rastok::datatype::DataType::INT, &Value::Int(9)).unwrap();
-    let key1 = PartitionKey::from_value(&rastok::datatype::DataType::INT, &Value::Int(1)).unwrap();
-    let key2 = PartitionKey::from_value(&rastok::datatype::DataType::INT, &Value::Int(2)).unwrap();
+    let key7 = int_address("counter", 7);
+    let key9 = int_address("counter", 9);
+    let key1 = int_address("sink", 1);
+    let key2 = int_address("sink", 2);
     let inbound_routes: Vec<_> = journal
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Inbound(inbound) => Some(inbound.routes[0].target_partition.as_slice()),
+            Record::Inbound(inbound) => Some(inbound.routes[0].target.address().clone()),
             _ => None,
         })
         .collect();
     assert_eq!(
         inbound_routes,
-        [key7.as_bytes(), key9.as_bytes(), key7.as_bytes()],
+        [key7.clone(), key9.clone(), key7.clone()],
         "the ingress fact seals the selected target before delivery"
     );
     let transactions: Vec<_> = journal
@@ -298,9 +591,9 @@ graph keyed : App {
     assert_eq!(
         counters
             .iter()
-            .map(|transaction| transaction.partition_key.as_slice())
+            .map(|transaction| transaction.instance.address().clone())
             .collect::<Vec<_>>(),
-        [key7.as_bytes(), key9.as_bytes(), key7.as_bytes()],
+        [key7.clone(), key9.clone(), key7.clone()],
         "the chosen target key is a causal transaction field"
     );
     let sinks: Vec<_> = transactions
@@ -314,32 +607,28 @@ graph keyed : App {
     assert_eq!(
         sinks
             .iter()
-            .map(|transaction| transaction.partition_key.as_slice())
+            .map(|transaction| transaction.instance.address().clone())
             .collect::<Vec<_>>(),
-        [key1.as_bytes(), key1.as_bytes(), key2.as_bytes()]
+        [key1.clone(), key1.clone(), key2.clone()]
     );
     assert_eq!(
         counters
             .iter()
-            .map(|transaction| transaction.routes[0].target_partition.as_slice())
+            .map(|transaction| transaction.routes[0].target.address().clone())
             .collect::<Vec<_>>(),
-        [key1.as_bytes(), key1.as_bytes(), key2.as_bytes()],
+        [key1.clone(), key1.clone(), key2.clone()],
         "the emitting fact seals each downstream target before delivery"
     );
     assert_eq!(
         sinks
             .iter()
             .map(|transaction| (
-                transaction.consumed[0].source_partition.as_slice(),
+                transaction.consumed[0].source.address().clone(),
                 transaction.consumed[0].seq,
             ))
             .collect::<Vec<_>>(),
-        [
-            (key7.as_bytes(), 1),
-            (key9.as_bytes(), 1),
-            (key7.as_bytes(), 2)
-        ],
-        "the cursor advances per edge and source partition"
+        [(key7.clone(), 1), (key9, 1), (key7, 2)],
+        "the cursor advances per edge and source instance reference"
     );
 }
 
@@ -420,43 +709,86 @@ graph lifecycle : App {
                 if transaction.node_path.to_string() == "counter"
                     && matches!(transaction.trigger, node::Trigger::Lifecycle(_)) =>
             {
-                Some((transaction.trigger.clone(), transaction.cause))
+                Some((
+                    transaction.trigger.clone(),
+                    transaction.cause,
+                    transaction.instance.clone(),
+                    transaction.parent_instance.clone(),
+                ))
             }
             _ => None,
         })
         .collect();
+    let root = InstanceRef::new(InstanceAddress::singleton(&OwnerPath::root()), 0);
+    let seven = InstanceRef::new(int_address("counter", 7), 0);
+    let nine = InstanceRef::new(int_address("counter", 9), 0);
     assert_eq!(
         lifecycle,
         [
             (
                 node::Trigger::Lifecycle(node::Lifecycle::Start),
                 Some(first),
+                seven.clone(),
+                Some(root.clone()),
             ),
             (
                 node::Trigger::Lifecycle(node::Lifecycle::Start),
                 Some(other),
+                nine.clone(),
+                Some(root),
             ),
             (
                 node::Trigger::Lifecycle(node::Lifecycle::Stop),
                 Some(second),
+                seven,
+                None,
             ),
-            (node::Trigger::Lifecycle(node::Lifecycle::Stop), Some(other),),
+            (
+                node::Trigger::Lifecycle(node::Lifecycle::Stop),
+                Some(other),
+                nine,
+                None,
+            ),
         ]
     );
 
-    vm.inject(&mut journal, int_submission(7)).unwrap();
+    let next = vm.inject(&mut journal, int_submission(7)).unwrap();
     vm.drain(&mut journal).unwrap();
     let last = vm
         .outputs()
         .iter()
         .rev()
         .find(|output| output.port.name() == "out")
-        .expect("the new incarnation emits");
+        .expect("the new generation emits");
     assert_eq!(last.envelope.data(), &Data::materialized(Value::Int(101)));
+    let restarted = journal
+        .records()
+        .iter()
+        .find_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.cause == Some(next)
+                    && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start) =>
+            {
+                Some(transaction)
+            }
+            _ => None,
+        })
+        .expect("the repeated key starts a fresh generation");
+    assert_eq!(restarted.instance.generation(), 1);
+    assert_eq!(
+        journal.records().iter().find_map(|record| match record {
+            Record::Inbound(inbound) if inbound.envelope.meta().sys().id() == next => {
+                Some(inbound.routes[0].target.generation())
+            }
+            _ => None,
+        }),
+        Some(1),
+        "routing seals the journal-derived generation before delivery"
+    );
 }
 
 #[test]
-fn idle_partition_stop_waits_for_each_connector_invocation_exit() {
+fn idle_instance_stop_waits_for_each_connector_invocation_exit() {
     let source = r#"
 graph nested_lifetimes : App {
   input in: text
@@ -499,7 +831,7 @@ graph nested_lifetimes : App {
                 if transaction.trigger
                     == node::Trigger::Lifecycle(node::Lifecycle::Stop)
         )),
-        "partition expiry cannot replace an open call's terminal fact"
+        "instance expiry cannot replace an open call's terminal fact"
     );
 
     vm.pump(&mut journal, &mut world).unwrap();
@@ -688,12 +1020,24 @@ impl FlakyJournal {
 }
 
 impl Journal for FlakyJournal {
-    fn append_inbound_routed(
-        &mut self,
+    fn prepare_inbound(
+        &self,
         submission: InboundSubmission,
+    ) -> Result<rastok::journal::PreparedInbound, rastok::journal::Error> {
+        self.inner.prepare_inbound(submission)
+    }
+    fn commit_inbound(
+        &mut self,
+        prepared: rastok::journal::PreparedInbound,
         routes: Vec<rastok::journal::RouteTarget>,
     ) -> Result<rastok::journal::CommittedInbound, rastok::journal::Error> {
-        self.inner.append_inbound_routed(submission, routes)
+        self.inner.commit_inbound(prepared, routes)
+    }
+    fn instance_ref_for_admission(
+        &self,
+        address: &InstanceAddress,
+    ) -> Result<InstanceRef, rastok::journal::Error> {
+        self.inner.instance_ref_for_admission(address)
     }
     fn commit(
         &mut self,

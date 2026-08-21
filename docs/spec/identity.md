@@ -9,9 +9,10 @@
 > inside categorical plan-package v9 and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
-> typed key/lifetime policy and phased immutable expressions. Mandatory
-> `(address, generation)` facts remain the separately declared R3 causal-trace
-> move. D-2026-08-14-1
+> typed key/lifetime policy and phased immutable expressions. R3 has now made
+> the separately declared mandatory `(address, generation)` causal facts
+> executable and moved trace goldens without changing semantic hashes or plan
+> packages. D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
 > from the plan constraints and requires exact agreement with the transported

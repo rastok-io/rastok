@@ -4,11 +4,13 @@
 > accepts and checks the R1 `instances` / `lifetime` surface. Plan-package v9
 > now carries the categorical parent-linked owner table, scoped routes,
 > independent instance policy, immutable owner expressions, and phased
-> Connector settings. Keyed persistent and idle Nodes lower through that v9
-> form. The grammar and v9 reader recognize the other closed lifetime forms,
-> but validation refuses them by name until R4; Graph-owned routing, source
-> production of dynamic settings and values, finite lifetimes, and
-> hierarchical instance references remain their named R1/R3/R4 gates rather
+> Connector settings. R3 now routes persistent Graphs and persistent/idle
+> executable Nodes through canonical hierarchical instance references; those
+> references index routes, transactions, mailboxes, state, calls, timers,
+> lifecycle, and cursors. The grammar and v9 reader recognize the other closed
+> lifetime forms, but validation refuses them by name until R4. Source
+> production of some dynamic settings/values and nested Graph syntax remain
+> named R1 gaps, while finite lifetimes and Closing remain R4/R5 gates rather
 > than disappearing. This document is the single authority for logical
 > instance addressing, key selection, Node-local state, lifetime, and the
 > semantic boundary with future sharding.
@@ -372,10 +374,12 @@ Omission is canonically equivalent to `kind = persistent`; lowering removes
 the spelling difference before semantic identity.
 
 The table is the closed target vocabulary, not a silent capability claim.
-The current executable gate admits `persistent` and `idle` on Node owners.
+The current executable gate admits `persistent` on Graph and Node owners and
+`idle` on executable Node owners.
 `fixed`, `single_pass`, and `tumbling` are recognized and transported by the
 v9 grammar/reader but refuse before a validated executable plan until R4.
-Graph-owned lifetime and addressing wait for the R3 Graph router.
+Finite Graph lifetime and Graph lifecycle wait for R4; persistent Graph-owned
+addressing is executable through the R3 router.
 
 ### 6.1 Persistent
 
@@ -385,10 +389,10 @@ still request closure under the bounded closing contract.
 ### 6.2 Idle
 
 Mailbox admission is activity. Admission records the causing envelope and
-arms `last_admission + after`. In the complete model the dated event carries
-the current journal-derived generation. Before R3, the Node-only reference VM
-uses the unique causal last-admission id as its stale-event fence; it does not
-invent a RAM generation. A later admission supersedes the earlier cause.
+arms `last_admission + after` with the current journal-derived instance
+reference. The unique causal last-admission id additionally fences a deadline
+superseded within that generation. A later admission supersedes the earlier
+cause; a later generation cannot be mistaken for the expired one.
 
 Idle measures admission silence. An armed call, Loop backoff, or other dated
 obligation does not silently rewrite that definition. If the idle deadline
@@ -512,6 +516,11 @@ logical instance address
         -> current Worker owner
 ```
 
+The current proof seam hashes the exact canonical address bytes with BLAKE3,
+interprets the first eight digest bytes as an unsigned big-endian integer,
+and reduces it modulo the fixed non-zero virtual-shard count. This mapping is
+architecture-neutral: it never hashes a Rust enum or host-sized integer.
+
 The virtual shard count is stable and independent of Worker count. Adding or
 removing Workers changes only shard assignment. Changing the virtual shard
 count is an explicit reshard migration. Worker, Host, lease, and leader epoch
@@ -546,13 +555,13 @@ It preserves the useful invariants already proved by the P0–P3 draft:
 - generation-fenced dated events;
 - one synchronous Worker as a valid embedded/reference implementation.
 
-The plan/package and journal vocabulary must be rewritten from
-`partition_key` / `target_partition` to logical instance addresses and
+The plan/package and journal vocabulary has been rewritten from the draft
+`partition_key` / `target_partition` names to logical instance addresses and
 generation-bearing references without renumbering already reserved
 extend-only journal keys merely for spelling.
 Plan-package v9 is now the categorical owner/instance transport and refuses
 the unpublished v8 draft. That package-only move leaves semantic hashes and
-causal traces unchanged. Making the instance reference mandatory in the
-causal journal core remains its own declared categorical trace move: existing
-trace goldens move at R3, including singleton graphs, while semantic graph
-hashes move only for actual semantic-plan changes.
+causal traces unchanged at R2. R3 has now made the instance reference
+mandatory in the causal journal core as its own declared trace move: existing
+trace goldens move, including singleton graphs, while semantic graph hashes
+and plan-package bodies remain unchanged.

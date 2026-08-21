@@ -22,6 +22,7 @@ use crate::boundary::{
     CallRef, Completion, InboundSubmission, IngressAuthority, Intent, SubmissionSequence,
 };
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
+use crate::identity::{InstanceAddress, InstanceRef};
 use crate::node;
 use crate::plan::GraphVersion;
 use crate::value::Value;
@@ -138,8 +139,9 @@ pub struct InboundRecord {
     pub seq: u64,
     /// The envelope born here.
     pub envelope: Envelope,
-    /// Non-singleton target instances selected before this inbound fact
-    /// committed. Empty-key routes are derivable from the plan and omitted.
+    /// Every target instance selected before this inbound fact committed.
+    /// Singleton owners are explicit because generation is never derivable
+    /// from a route's static endpoint alone.
     pub routes: Vec<RouteTarget>,
 }
 
@@ -148,21 +150,19 @@ pub struct InboundRecord {
 pub struct RouteTarget {
     /// Canonical edge text carrying the envelope.
     pub edge: String,
-    /// Canonical target partition key bytes. This is never empty: the
-    /// singleton case is derivable and therefore omitted from the record.
-    pub target_partition: Vec<u8>,
+    /// Complete target instance reference returned by destination admission.
+    pub target: InstanceRef,
 }
 
 /// One consumed input position — the cursor is per
-/// `(graph edge × source partition)`, not per port: several edges can
+/// `(graph edge × source instance reference)`, not per port: several edges can
 /// feed one port.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsumedPosition {
     /// The graph edge the input arrived on, canonically rendered.
     pub edge: String,
-    /// Canonical key bytes of the upstream node instance. Empty denotes an
-    /// unpartitioned source.
-    pub source_partition: Vec<u8>,
+    /// Complete upstream instance reference which owns this edge cursor.
+    pub source: InstanceRef,
     /// The position on that edge.
     pub seq: u64,
 }
@@ -187,9 +187,13 @@ pub struct Emission {
 pub struct TransactionRecord {
     /// The firing node.
     pub node_path: node::Path,
-    /// Canonical key bytes of the firing node instance. Empty denotes an
-    /// unpartitioned node and is omitted by the canonical projection.
-    pub partition_key: Vec<u8>,
+    /// Complete firing instance reference. It is mandatory even for a
+    /// persistent singleton owner.
+    pub instance: InstanceRef,
+    /// Enclosing Graph generation, present on a nested owner's `l:start`.
+    /// The address carries ancestor key frames but deliberately not ancestor
+    /// generations; recovery needs this explicit causal edge.
+    pub parent_instance: Option<InstanceRef>,
     /// What fired it.
     pub trigger: node::Trigger,
     /// Causal envelope for a lifecycle transaction that consumes no mailbox
@@ -222,8 +226,8 @@ pub struct RoutedDelivery {
     pub delivery: crate::envelope::Id,
     /// Canonical edge text carrying it.
     pub edge: String,
-    /// Canonical target partition key bytes; never empty.
-    pub target_partition: Vec<u8>,
+    /// Complete target instance reference selected before producer commit.
+    pub target: InstanceRef,
 }
 
 /// One fact of a call's WAL (`delivery-semantics.md` §4): the open
@@ -281,6 +285,33 @@ pub struct CommittedInbound {
     pub record: InboundRecord,
 }
 
+/// A complete ingress envelope whose causal identity is fixed but whose
+/// accepting record has not committed yet.
+///
+/// This token lets routing evaluate `meta.sys` without either inventing a
+/// provisional identity or mutating the journal before destination admission
+/// succeeds. [`Journal::commit_inbound`] revalidates the sequence atomically.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedInbound {
+    submission: InboundSubmission,
+    seq: u64,
+    envelope: Envelope,
+}
+
+impl PreparedInbound {
+    /// The sequence reserved by the current journal view.
+    #[must_use]
+    pub const fn seq(&self) -> u64 {
+        self.seq
+    }
+
+    /// The immutable complete envelope visible to route-key expressions.
+    #[must_use]
+    pub const fn envelope(&self) -> &Envelope {
+        &self.envelope
+    }
+}
+
 /// A journal fault.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -295,6 +326,30 @@ pub enum Error {
     /// A per-authority sequence exhausted its range; monotonicity
     /// cannot continue.
     SequenceOverflow,
+    /// A route or transaction named a generation other than the one derived
+    /// from the journal's lifecycle fold for that address.
+    InstanceGenerationMismatch {
+        /// The journal-derived reference.
+        expected: InstanceRef,
+        /// The transported claim.
+        got: InstanceRef,
+    },
+    /// `l:start` attempted to reopen an active generation, or `l:stop`
+    /// attempted to close an address whose generation never started.
+    InvalidInstanceLifecycle {
+        /// The addressed generation.
+        instance: InstanceRef,
+        /// Whether the journal fold was active before the transition.
+        active: bool,
+    },
+    /// The parent reference is missing, unexpected, or does not name an
+    /// enclosing owner. It belongs exactly on a non-root owner's `l:start`.
+    InvalidParentInstance {
+        /// The child lifecycle reference.
+        instance: InstanceRef,
+        /// The transported parent claim, if any.
+        parent: Option<InstanceRef>,
+    },
     /// A call ref matching no journaled call.
     UnknownCall,
     /// An intent whose call ref is already journaled.
@@ -314,6 +369,32 @@ impl fmt::Display for Error {
                 write!(f, "expected inbound seq {expected}, got {got}")
             }
             Self::SequenceOverflow => f.write_str("the inbound sequence range is exhausted"),
+            Self::InstanceGenerationMismatch { expected, got } => write!(
+                f,
+                "expected instance generation {} for address {:?}, got {} for {:?}",
+                expected.generation(),
+                expected.address(),
+                got.generation(),
+                got.address()
+            ),
+            Self::InvalidInstanceLifecycle { instance, active } => write!(
+                f,
+                "instance generation {} for address {:?} is {}",
+                instance.generation(),
+                instance.address(),
+                if *active {
+                    "already active"
+                } else {
+                    "not active"
+                }
+            ),
+            Self::InvalidParentInstance { instance, parent } => write!(
+                f,
+                "instance generation {} for owner `{}` has invalid lifecycle parent {:?}",
+                instance.generation(),
+                instance.address().owner(),
+                parent
+            ),
             Self::UnknownCall => f.write_str("no outbound record for this call"),
             Self::DuplicateOpen => f.write_str("this call is already journaled"),
             Self::CorruptIntent => {
@@ -330,6 +411,28 @@ impl core::error::Error for Error {}
 /// no exposure of a physical record layout: a durable implementation
 /// may hold anything on disk as long as it answers these questions.
 pub trait Journal {
+    /// Mints the complete ingress envelope without committing it. The result
+    /// is a read-only reservation: only [`Self::commit_inbound`] consumes the
+    /// sequence.
+    ///
+    /// # Errors
+    ///
+    /// Sequence mismatch or exhaustion, as for [`Self::append_inbound`].
+    fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error>;
+
+    /// Atomically commits one prepared ingress and its destination routes.
+    /// A durable implementation must compare-and-advance the prepared
+    /// sequence in the same transaction as the record.
+    ///
+    /// # Errors
+    ///
+    /// A stale sequence, a forged instance generation, or storage failure.
+    fn commit_inbound(
+        &mut self,
+        prepared: PreparedInbound,
+        routes: Vec<RouteTarget>,
+    ) -> Result<CommittedInbound, Error>;
+
     /// The one accepting transaction of an inbound submission:
     /// allocate or validate the sequence, derive the root id, mint
     /// `meta.sys` (no parent; the envelope is its own origin), build
@@ -353,7 +456,15 @@ pub trait Journal {
         &mut self,
         submission: InboundSubmission,
         routes: Vec<RouteTarget>,
-    ) -> Result<CommittedInbound, Error>;
+    ) -> Result<CommittedInbound, Error> {
+        let prepared = self.prepare_inbound(submission)?;
+        self.commit_inbound(prepared, routes)
+    }
+
+    /// Returns the generation a route committing now must seal for this
+    /// address. The value is a pure fold of journaled `l:start`/`l:stop`
+    /// transactions; no Worker-local counter participates.
+    fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error>;
 
     /// Commits one atomic transaction record, canonicalizing its
     /// sorted collections. Durable-before-delivered: a failed commit
@@ -408,6 +519,15 @@ pub struct MemJournal {
     graph_version: GraphVersion,
     records: Vec<Record>,
     next_seq: BTreeMap<IngressAuthority, u64>,
+    /// Replay-derived lifecycle fold, maintained atomically with `records`.
+    /// It is an index over causal facts, never a second generation authority.
+    instance_lifecycles: BTreeMap<InstanceAddress, InstanceLifecycle>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct InstanceLifecycle {
+    starts: u64,
+    active: bool,
 }
 
 impl MemJournal {
@@ -420,6 +540,7 @@ impl MemJournal {
             graph_version,
             records: Vec::new(),
             next_seq: BTreeMap::new(),
+            instance_lifecycles: BTreeMap::new(),
         }
     }
 
@@ -439,14 +560,23 @@ impl MemJournal {
             _ => None,
         })
     }
+
+    /// Cached projection of the pure lifecycle fold for one logical address.
+    /// `starts` is also the next generation ordinal whenever no generation is
+    /// active. A durable implementation rebuilds the same projection while
+    /// replaying `l:start`/`l:stop`; no Worker-local counter participates.
+    fn instance_lifecycle(&self, address: &InstanceAddress) -> Result<(u64, bool), Error> {
+        let lifecycle = self
+            .instance_lifecycles
+            .get(address)
+            .copied()
+            .unwrap_or_default();
+        Ok((lifecycle.starts, lifecycle.active))
+    }
 }
 
 impl Journal for MemJournal {
-    fn append_inbound_routed(
-        &mut self,
-        submission: InboundSubmission,
-        mut routes: Vec<RouteTarget>,
-    ) -> Result<CommittedInbound, Error> {
+    fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error> {
         let next = self
             .next_seq
             .get(&submission.authority)
@@ -462,41 +592,165 @@ impl Journal for MemJournal {
                 });
             }
         };
-        let following = seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
+        seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
         let id = ids::root_id(&submission.authority, seq);
         let sys = MetaSys::root(id, self.graph_version.0);
         // The world's half seeds `ext` only: `app` is the
         // application's zone and starts empty at ingress
         // (D-2026-08-10-1).
         let envelope = Envelope::new(
-            Meta::new(sys).with_ext(submission.draft.ext),
-            submission.draft.data,
+            Meta::new(sys).with_ext(submission.draft.ext.clone()),
+            submission.draft.data.clone(),
         );
-        routes.sort();
-        let record = InboundRecord {
-            authority: submission.authority.clone(),
-            port: submission.port,
-            seq,
-            envelope: envelope.clone(),
-            routes,
-        };
-        self.next_seq.insert(submission.authority, following);
-        self.records.push(Record::Inbound(record.clone()));
-        Ok(CommittedInbound {
+        Ok(PreparedInbound {
+            submission,
             seq,
             envelope,
+        })
+    }
+
+    fn commit_inbound(
+        &mut self,
+        prepared: PreparedInbound,
+        mut routes: Vec<RouteTarget>,
+    ) -> Result<CommittedInbound, Error> {
+        let expected = self
+            .next_seq
+            .get(&prepared.submission.authority)
+            .copied()
+            .unwrap_or(0);
+        if prepared.seq != expected {
+            return Err(Error::SequenceMismatch {
+                expected,
+                got: prepared.seq,
+            });
+        }
+        let following = prepared.seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
+        for route in &routes {
+            let expected = self.instance_ref_for_admission(route.target.address())?;
+            if route.target != expected {
+                return Err(Error::InstanceGenerationMismatch {
+                    expected,
+                    got: route.target.clone(),
+                });
+            }
+        }
+        routes.sort();
+        let record = InboundRecord {
+            authority: prepared.submission.authority.clone(),
+            port: prepared.submission.port,
+            seq: prepared.seq,
+            envelope: prepared.envelope.clone(),
+            routes,
+        };
+        self.next_seq
+            .insert(prepared.submission.authority, following);
+        self.records.push(Record::Inbound(record.clone()));
+        Ok(CommittedInbound {
+            seq: prepared.seq,
+            envelope: prepared.envelope,
             record,
         })
     }
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
+        let expected = self.instance_ref_for_admission(transaction.instance.address())?;
+        if transaction.instance != expected {
+            return Err(Error::InstanceGenerationMismatch {
+                expected,
+                got: transaction.instance,
+            });
+        }
+        let (starts, active) = self.instance_lifecycle(transaction.instance.address())?;
+        match transaction.trigger {
+            node::Trigger::Lifecycle(node::Lifecycle::Start) if active => {
+                return Err(Error::InvalidInstanceLifecycle {
+                    instance: transaction.instance,
+                    active,
+                });
+            }
+            node::Trigger::Lifecycle(node::Lifecycle::Stop) if !active => {
+                return Err(Error::InvalidInstanceLifecycle {
+                    instance: transaction.instance,
+                    active,
+                });
+            }
+            _ => {}
+        }
+        let is_start = matches!(
+            transaction.trigger,
+            node::Trigger::Lifecycle(node::Lifecycle::Start)
+        );
+        let child_owner = transaction.instance.address().owner();
+        let valid_parent = match (
+            &transaction.parent_instance,
+            is_start,
+            child_owner.is_root(),
+        ) {
+            (None, true, true) | (None, false, _) => true,
+            (Some(parent), true, false) => {
+                let parent_owner = parent.address().owner();
+                child_owner.segments().starts_with(parent_owner.segments())
+                    && child_owner.segments().len() > parent_owner.segments().len()
+            }
+            _ => false,
+        };
+        if !valid_parent {
+            return Err(Error::InvalidParentInstance {
+                instance: transaction.instance,
+                parent: transaction.parent_instance,
+            });
+        }
+        if let Some(parent) = &transaction.parent_instance {
+            let expected_parent = self.instance_ref_for_admission(parent.address())?;
+            if parent != &expected_parent {
+                return Err(Error::InstanceGenerationMismatch {
+                    expected: expected_parent,
+                    got: parent.clone(),
+                });
+            }
+        }
+        for route in &transaction.routes {
+            let expected = self.instance_ref_for_admission(route.target.address())?;
+            if route.target != expected {
+                return Err(Error::InstanceGenerationMismatch {
+                    expected,
+                    got: route.target.clone(),
+                });
+            }
+        }
         // Canonicalize the declaratively sorted collections so an
         // invalid ordering is not constructible through the journal.
         transaction.consumed.sort();
         transaction.state_delta.sort_by(|a, b| a.0.cmp(&b.0));
         transaction.routes.sort();
+        let lifecycle_transition = match transaction.trigger {
+            node::Trigger::Lifecycle(node::Lifecycle::Start) => Some(InstanceLifecycle {
+                starts: starts.checked_add(1).ok_or(Error::SequenceOverflow)?,
+                active: true,
+            }),
+            node::Trigger::Lifecycle(node::Lifecycle::Stop) => Some(InstanceLifecycle {
+                starts,
+                active: false,
+            }),
+            _ => None,
+        };
+        let address = transaction.instance.address().clone();
         self.records.push(Record::Transaction(transaction));
+        if let Some(lifecycle) = lifecycle_transition {
+            self.instance_lifecycles.insert(address, lifecycle);
+        }
         Ok(())
+    }
+
+    fn instance_ref_for_admission(&self, address: &InstanceAddress) -> Result<InstanceRef, Error> {
+        let (starts, active) = self.instance_lifecycle(address)?;
+        let generation = if active {
+            starts.saturating_sub(1)
+        } else {
+            starts
+        };
+        Ok(InstanceRef::new(address.clone(), generation))
     }
 
     fn open_outbound(&mut self, intent: Intent) -> Result<(), Error> {
@@ -600,6 +854,11 @@ mod tests {
     use alloc::string::ToString;
     use alloc::vec;
 
+    fn instance(owner: &str, generation: u64) -> InstanceRef {
+        let owner = crate::plan::OwnerPath::new([owner]).expect("valid owner path");
+        InstanceRef::new(InstanceAddress::singleton(&owner), generation)
+    }
+
     fn authority(path: &str) -> IngressAuthority {
         IngressAuthority::single(node::Path::new([path]).unwrap())
     }
@@ -638,7 +897,126 @@ mod tests {
             prepared,
             idempotency_key: Some(String::from("op-1")),
             effect: node::EffectClass::Idempotent,
+            instance_settings: BTreeMap::new(),
         }
+    }
+
+    fn lifecycle_transaction(
+        instance: InstanceRef,
+        lifecycle: node::Lifecycle,
+    ) -> TransactionRecord {
+        let parent_instance = (lifecycle == node::Lifecycle::Start).then(|| {
+            InstanceRef::new(
+                InstanceAddress::singleton(&crate::plan::OwnerPath::root()),
+                0,
+            )
+        });
+        TransactionRecord {
+            node_path: node::Path::new(["worker"]).expect("valid node path"),
+            instance,
+            parent_instance,
+            trigger: node::Trigger::Lifecycle(lifecycle),
+            cause: None,
+            consumed: vec![],
+            state_delta: vec![],
+            emissions: vec![],
+            routes: vec![],
+            timers: vec![],
+        }
+    }
+
+    #[test]
+    fn generations_are_a_journal_fold_and_lifecycle_cannot_double_transition() {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let address = InstanceAddress::singleton(
+            &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
+        );
+        let first = InstanceRef::new(address.clone(), 0);
+        assert_eq!(journal.instance_ref_for_admission(&address).unwrap(), first);
+
+        let mut missing_parent = lifecycle_transaction(first.clone(), node::Lifecycle::Start);
+        missing_parent.parent_instance = None;
+        assert_eq!(
+            journal.commit(missing_parent).unwrap_err(),
+            Error::InvalidParentInstance {
+                instance: first.clone(),
+                parent: None,
+            }
+        );
+
+        journal
+            .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Start))
+            .unwrap();
+        assert_eq!(journal.instance_ref_for_admission(&address).unwrap(), first);
+        assert_eq!(
+            journal
+                .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Start))
+                .unwrap_err(),
+            Error::InvalidInstanceLifecycle {
+                instance: first.clone(),
+                active: true,
+            }
+        );
+
+        journal
+            .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Stop))
+            .unwrap();
+        let second = InstanceRef::new(address.clone(), 1);
+        assert_eq!(
+            journal.instance_ref_for_admission(&address).unwrap(),
+            second
+        );
+        assert!(matches!(
+            journal.commit(lifecycle_transaction(first, node::Lifecycle::Stop)),
+            Err(Error::InstanceGenerationMismatch { expected, .. }) if expected == second
+        ));
+        journal
+            .commit(lifecycle_transaction(
+                second.clone(),
+                node::Lifecycle::Start,
+            ))
+            .unwrap();
+        assert_eq!(
+            journal.instance_ref_for_admission(&address).unwrap(),
+            second
+        );
+    }
+
+    #[test]
+    fn a_committed_route_keeps_its_reserved_generation_until_start_materializes() {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let address = InstanceAddress::singleton(
+            &crate::plan::OwnerPath::new(["worker"]).expect("valid owner path"),
+        );
+        let reserved = InstanceRef::new(address.clone(), 0);
+        let prepared = journal
+            .prepare_inbound(submission("inbound", SubmissionSequence::Next))
+            .unwrap();
+        journal
+            .commit_inbound(
+                prepared,
+                vec![RouteTarget {
+                    edge: String::from(".in>worker.in"),
+                    target: reserved.clone(),
+                }],
+            )
+            .unwrap();
+
+        assert_eq!(
+            journal.instance_ref_for_admission(&address).unwrap(),
+            reserved,
+            "another reservation joins the same not-yet-polled generation"
+        );
+        journal
+            .commit(lifecycle_transaction(
+                reserved.clone(),
+                node::Lifecycle::Start,
+            ))
+            .unwrap();
+        assert_eq!(
+            journal.instance_ref_for_admission(&address).unwrap(),
+            reserved
+        );
     }
 
     #[test]
@@ -879,18 +1257,19 @@ mod tests {
         journal
             .commit(TransactionRecord {
                 node_path: node::Path::new(["shout"]).unwrap(),
-                partition_key: vec![],
+                instance: instance("shout", 0),
+                parent_instance: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![
                     ConsumedPosition {
                         edge: String::from("b"),
-                        source_partition: vec![1],
+                        source: instance("source", 1),
                         seq: 1,
                     },
                     ConsumedPosition {
                         edge: String::from("a"),
-                        source_partition: vec![2],
+                        source: instance("source", 2),
                         seq: 2,
                     },
                 ],
@@ -919,12 +1298,13 @@ mod tests {
         journal
             .commit(TransactionRecord {
                 node_path: node::Path::new(["shout"]).unwrap(),
-                partition_key: vec![],
+                instance: instance("shout", 0),
+                parent_instance: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![ConsumedPosition {
                     edge: String::from(".in>shout.in"),
-                    source_partition: vec![],
+                    source: instance("root", 0),
                     seq: 0,
                 }],
                 state_delta: vec![(String::from("count"), Value::Int(1))],

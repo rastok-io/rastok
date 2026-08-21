@@ -342,7 +342,7 @@ fn scheduler_gated_lifetimes_never_validate_as_persistent() {
 }
 
 #[test]
-fn graph_owned_instances_wait_for_the_graph_router() {
+fn a_persistent_graph_owned_instance_is_a_valid_route_scope() {
     let mut raw = bare_operator_plan();
     raw.owners[0].instance.key = Some(expr::Tree {
         root: expr::Expr::Path(vec![
@@ -352,12 +352,7 @@ fn graph_owned_instances_wait_for_the_graph_router() {
         ]),
         ty: DataType::Text,
     });
-    assert_eq!(
-        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::UnsupportedGraphInstance {
-            owner: String::new(),
-        }
-    );
+    ValidatedExecutionPlan::try_new(raw).expect("R3 routes through Graph-owned key frames");
 }
 
 #[test]

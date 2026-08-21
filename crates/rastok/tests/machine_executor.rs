@@ -9,11 +9,10 @@
 
 use rastok::boundary::{Completion, ProcessExit};
 use rastok::envelope::{Data, Envelope, Meta, MetaSys};
+use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use rastok::journal::ids;
-use rastok::plan::{GraphVersion, Slot, ValidatedExecutionPlan};
-use rastok::runtime::{
-    Delivery, Fault, Mailboxes, PartitionKey, PartitionState, TransactionExecutor, meta_value,
-};
+use rastok::plan::{GraphVersion, OwnerPath, Slot, ValidatedExecutionPlan};
+use rastok::runtime::{Delivery, Fault, InstanceState, Mailboxes, TransactionExecutor, meta_value};
 use rastok::{envelope, node};
 use std::collections::BTreeMap;
 
@@ -73,7 +72,7 @@ fn input(text: &str) -> Delivery {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>shout.in"),
         seq: 1,
-        source_partition: PartitionKey::singleton(),
+        source_instance: singleton(),
         envelope: Envelope::new(
             Meta::new(MetaSys::root(id, 1)),
             Data::materialized(envelope::Value::Map(data)),
@@ -81,16 +80,23 @@ fn input(text: &str) -> Delivery {
     }
 }
 
-fn singleton() -> PartitionKey {
-    PartitionKey::singleton()
+fn singleton() -> InstanceRef {
+    let owner = OwnerPath::new(["probe"]).expect("valid owner");
+    InstanceRef::new(InstanceAddress::singleton(&owner), 0)
 }
 
-fn text_key(value: &str) -> PartitionKey {
-    PartitionKey::from_value(
-        &rastok::datatype::DataType::Text,
-        &rastok::value::Value::Text(String::from(value)),
+fn text_key(value: &str) -> InstanceRef {
+    let owner = OwnerPath::new(["probe"]).expect("valid owner");
+    let address = InstanceAddress::new(
+        &owner,
+        &[InstanceFrame::SelectedKey {
+            owner: owner.clone(),
+            ty: rastok::datatype::DataType::Text,
+            value: rastok::value::Value::Text(String::from(value)),
+        }],
     )
-    .expect("text is a canonical partition key")
+    .expect("text is a canonical instance key");
+    InstanceRef::new(address, 0)
 }
 
 fn trigger_in() -> node::Trigger {
@@ -107,7 +113,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
     .expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
-    let state = PartitionState::new()
+    let state = InstanceState::new()
         .cell(&compilation.plan, slot, &singleton())
         .unwrap();
     // An ancestry-rich input: app fields, ext fields, a
@@ -134,7 +140,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>relay.in"),
         seq: 1,
-        source_partition: PartitionKey::singleton(),
+        source_instance: singleton(),
         envelope: Envelope::new(meta, Data::encoded(Encoding::Raw, *b"salut")),
     };
     let outcome = executor
@@ -207,7 +213,7 @@ fn the_meta_projection_carries_the_whole_spine() {
 fn the_activation_pattern_is_not_the_causal_trigger() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new()
+    let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
     // A handler is *selected* by its declared activation pattern…
@@ -277,7 +283,7 @@ fn metadata_writes_land_where_the_spec_says() {
     .expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
     let slot = Slot::new(0);
-    let state = PartitionState::new()
+    let state = InstanceState::new()
         .cell(&compilation.plan, slot, &singleton())
         .unwrap();
     let id = envelope::Id::derive(0x01, &[b"inbound", &0u64.to_le_bytes()]);
@@ -285,7 +291,7 @@ fn metadata_writes_land_where_the_spec_says() {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>o.in"),
         seq: 1,
-        source_partition: PartitionKey::singleton(),
+        source_instance: singleton(),
         envelope: Envelope::new(
             Meta::new(MetaSys::root(id, 1)),
             Data::encoded(Encoding::Raw, *b"payload"),
@@ -328,7 +334,7 @@ fn metadata_writes_land_where_the_spec_says() {
 fn a_transaction_commits_everything_together() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new()
+    let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
     assert_eq!(state.get("count"), Some(&rastok::value::Value::Int(0)));
@@ -367,7 +373,7 @@ fn a_transaction_commits_everything_together() {
 fn execution_is_deterministic() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new()
+    let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
     let delivery = input("salut");
@@ -384,7 +390,7 @@ fn execution_is_deterministic() {
 fn a_false_guard_consumes_without_effect() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new()
+    let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
     let outcome = executor
@@ -403,7 +409,7 @@ fn a_false_guard_consumes_without_effect() {
 fn a_faulted_transaction_changes_nothing() {
     let (plan, slot) = probe();
     let executor = TransactionExecutor::new(&plan, GraphVersion(1));
-    let state = PartitionState::new()
+    let state = InstanceState::new()
         .cell(&plan, slot, &singleton())
         .unwrap();
     // Avro payloads cannot be materialized in this build: the
@@ -412,7 +418,7 @@ fn a_faulted_transaction_changes_nothing() {
         port: node::Port::new("in").unwrap(),
         edge: String::from(".in>shout.in"),
         seq: 1,
-        source_partition: PartitionKey::singleton(),
+        source_instance: singleton(),
         envelope: Envelope::new(
             Meta::new(MetaSys::root(envelope::Id::from_bytes([1; 16]), 1)),
             Data::encoded(Encoding::Avro, *b"opaque"),
@@ -432,10 +438,10 @@ fn a_faulted_transaction_changes_nothing() {
 #[test]
 fn state_is_isolated_between_keys() {
     let (plan, slot) = probe();
-    let mut partitions = PartitionState::new();
+    let mut instances = InstanceState::new();
     let alice = text_key("alice");
     let bob = text_key("bob");
-    partitions
+    instances
         .apply(
             &plan,
             slot,
@@ -444,11 +450,11 @@ fn state_is_isolated_between_keys() {
         )
         .unwrap();
     assert_eq!(
-        partitions.cell(&plan, slot, &alice).unwrap().get("count"),
+        instances.cell(&plan, slot, &alice).unwrap().get("count"),
         Some(&rastok::value::Value::Int(7))
     );
     assert_eq!(
-        partitions.cell(&plan, slot, &bob).unwrap().get("count"),
+        instances.cell(&plan, slot, &bob).unwrap().get("count"),
         Some(&rastok::value::Value::Int(0)),
         "bob's cell starts from the plan defaults"
     );
@@ -696,13 +702,13 @@ fn a_caller_supplied_slot_is_verified_not_trusted() {
     let (plan, _) = probe();
     let ghost = Slot::new(999);
     assert_eq!(
-        PartitionState::new()
+        InstanceState::new()
             .cell(&plan, ghost, &singleton())
             .unwrap_err(),
         Fault::UnknownSlot(ghost)
     );
     assert_eq!(
-        PartitionState::new()
+        InstanceState::new()
             .apply(&plan, ghost, &singleton(), &[])
             .unwrap_err(),
         Fault::UnknownSlot(ghost)

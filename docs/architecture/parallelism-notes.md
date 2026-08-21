@@ -58,7 +58,9 @@ logical address
 ```
 
 The mapping from logical address (generation excluded) to virtual shard is
-stable and architecture-neutral.
+stable and architecture-neutral. R3 pins the proof seam as the first eight
+bytes of BLAKE3 over the canonical address, interpreted unsigned big-endian
+and reduced modulo a fixed non-zero virtual-shard count.
 Worker count may change without changing that mapping; changing the virtual
 shard count is an explicit reshard migration. A cross-keyed-boundary delivery
 is journaled even when both endpoints are currently colocated. Worker, Host,

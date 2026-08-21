@@ -185,6 +185,56 @@ implicit grace period, which this decision explicitly forbids. Idle dated
 events in the R2 VM are fenced by their causal last-admission id; they do not
 fabricate the journal-derived instance generation that R3 must introduce.
 
+**R3 routing checkpoint (2026-08-21).** The runtime now has one canonical
+`InstanceAddress`: canonical CBOR over the static owner path plus ordered
+outer-to-inner selected-key frames, each sealing the resolved `DataType` and
+canonical `Value`. `InstanceRef` adds the zero-based generation derived by the
+journal's `l:start`/`l:stop` fold. The address alone is the input to placement:
+the virtual-shard proof seam is `u64::from_be_bytes(blake3(address)[0..8]) mod
+virtual_shard_count`; generation, Worker count, Host, and scheduler order do
+not participate.
+
+Ingress is now a prepare/commit operation. Preparation mints the final root
+envelope, including `meta.sys`, without consuming its sequence; the VM then
+selects and validates the complete destination owner chain outermost first,
+checks mailbox capacity, and only then commits the inbound fact and its route.
+A normal transaction follows the same select/check/commit discipline. Thus a
+key may honestly read the complete immutable envelope, and failure of a key,
+owner value, or instance-bound Connector setting commits no ingress,
+`l:start`, cursor, state, or external effect.
+
+Every routed delivery now seals a full target instance reference, including
+persistent singletons. Every transaction seals its firing reference; consumed
+cursors use `(edge, source_instance_ref, seq)`; mailboxes, Node-local state,
+pending calls, delivery budgets, lifecycle work, and idle events use that same
+reference. Lexical edge scope and the validated owner tree decide which
+ancestor frames are retained and which child owners are entered; dotted paths
+are never parsed to reconstruct containment. A newly entered child records
+its enclosing Graph reference on `l:start` only. Delayed routes retain the
+generation they committed, while a later admission after a journaled stop
+receives the next ordinal and clean state.
+
+The causal-trace move declared above is therefore made now, separately from
+plan/package and semantic identity. `gauge-roundtrip.trace`,
+`echo-roundtrip.trace`, `jsonl-roundtrip.trace`, and `m0-probe.trace` move:
+INBOUND records carry key 25 route references, every TRANSACTION carries key
+31, consumed positions carry the full source reference at key 33, emitted
+routes carry full target references at key 38, and nested `l:start` may carry
+key 48. No semantic hash or `.rkp` body moves. The connector-free `gauge`
+hash remains the scope witness.
+
+The one-worker VM executes Graph-owned persistent routing, nested Graph/Node
+addresses, sticky ancestor selection across metadata rewrites, isolated
+state/cursors, journal-derived fresh generations, pre-effect instance bundles,
+and the architecture-neutral shard seam. Fixed, single-pass, tumbling, Graph
+lifecycle/cascade, finite Closing, and physical inter-shard transport remain
+their R4/R5/later gates. Source production of non-plan owner values and some
+dynamic rows remains an R1 frontend gap; R3 proves the runtime contract with
+validated-plan probes rather than pretending that missing source spelling is
+already public. Full crash recovery likewise remains an explicit
+`RecoveryFold`; the R3 journal rows are its authority and never trigger
+re-routing.
+
 ## D-2026-08-16-1 — A partition key is a journaled routing decision
 
 > **Superseded in full by D-2026-08-18-1 before public release.** The key and

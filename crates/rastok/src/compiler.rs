@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn an_instance_key_uses_the_graphs_resolved_input_type() {
         let source = r#"
-graph inferred_partition : App {
+graph inferred_instance : App {
   input in: int
   output out: int
   operator relay {
@@ -396,21 +396,22 @@ graph inferred_composite : App {
     }
 
     #[test]
-    fn checked_policies_never_disappear_when_transport_is_not_ready() {
-        let sources = [
-            (
-                r#"
+    fn graph_routing_lands_before_finite_lifetimes() {
+        let keyed_graph = r#"
 graph keyed_graph : App {
   input in: text
   instances = { key = data }
   operator relay { on in { out = . } }
   . -> relay -> nothing
 }
-"#,
-                "M1.4 R2 instance transport",
-            ),
-            (
-                r#"
+"#;
+        compile(
+            &[keyed_graph],
+            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("R3 routes through the Graph-owned key before producer commit");
+
+        let finite = r#"
 graph finite_singleton : App {
   operator relay {
     lifetime = { kind = fixed ; after = duration("30s") }
@@ -418,30 +419,24 @@ graph finite_singleton : App {
   }
   . -> relay -> nothing
 }
-"#,
-                "a fixed instance lifetime",
-            ),
-        ];
-        for (source, construct) in sources {
-            let bag = compile(
-                &[source],
-                &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
-            )
-            .expect_err("a checked policy must wait for its named transport/runtime gate");
-            assert!(bag.diagnostics().iter().any(|diagnostic| {
-                diagnostic.code() == check::E_CHECK_DEFERRED
-                    && diagnostic
-                        .fields()
-                        .iter()
-                        .any(|(name, value)| *name == "construct" && value == construct)
-            }));
-        }
+"#;
+        let bag = compile(
+            &[finite],
+            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect_err("the finite policy must wait for its named R4 scheduler gate");
+        assert!(bag.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code() == check::E_CHECK_DEFERRED
+                && diagnostic.fields().iter().any(|(name, value)| {
+                    *name == "construct" && value == "a fixed instance lifetime"
+                })
+        }));
     }
 
     #[test]
     fn a_resolved_variant_cannot_become_an_instance_key() {
         let source = r#"
-graph dynamic_partition : App {
+graph dynamic_instance : App {
   input in: variant
   output out: variant
   operator relay {
@@ -467,7 +462,7 @@ graph dynamic_partition : App {
     #[test]
     fn one_instance_expression_requires_one_type_across_input_ports() {
         let source = r#"
-graph conflicting_partition : App {
+graph conflicting_instance : App {
   input alpha: int
   input beta: text
   output out: int

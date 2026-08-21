@@ -51,12 +51,15 @@ fn compilation() -> rastok::compiler::Compilation {
 // M1.3 final review: the semantic hash stays fixed while the package drops
 // the lowering-only Operator runtime-fault `err` row. It was never part of
 // canonical HIR identity and no causal trace changes.
-// DELIBERATE CONTAINER MOVE 2026-08-16 (M1.4 P1): plan-package v8 adds
-// partition descriptors and lifecycle activations. This graph declares none,
+// DELIBERATE CONTAINER MOVE 2026-08-16 (M1.4 P1): the unpublished v8 draft
+// added partition descriptors and lifecycle activations. This graph declares none,
 // so its semantic hash and trace remain fixed while its package checksum moves.
 // DELIBERATE CONTAINER MOVE 2026-08-21 (M1.4 R2 checkpoint): categorical
 // v9 replaces that draft with the root/Node owner table and scoped edges.
-// JSONL declares no instance semantics, so hash and trace remain fixed.
+// JSONL declares no instance semantics, so its hash remains fixed.
+// DELIBERATE TRACE MOVE 2026-08-21 (M1.4 R3): singleton routes and
+// transactions now carry complete instance references. The package and hash
+// remain fixed; only the causal trace moves.
 const JSONL_HASH: &str = "9e66e62cbe17c17d6394e3692ed074e3416782ac3a3ea569a53af9edea54c29b";
 
 #[test]

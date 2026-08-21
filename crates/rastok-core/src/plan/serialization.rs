@@ -617,7 +617,7 @@ fn tree_tree(tree: &expr::Tree) -> Cbor {
     Cbor::Array(vec![type_tree(&tree.ty), expr_tree(&tree.root)])
 }
 
-fn type_tree(ty: &DataType) -> Cbor {
+pub(crate) fn type_tree(ty: &DataType) -> Cbor {
     match ty {
         DataType::Null => Cbor::Uint(1),
         DataType::Bool => Cbor::Uint(2),

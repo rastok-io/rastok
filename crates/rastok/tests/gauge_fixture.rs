@@ -36,14 +36,17 @@ fn compilation() -> rastok::compiler::Compilation {
 // M1.3 final review keeps this connector-free semantic hash unchanged and
 // removes the lowering-only Operator `err` row from its package. That row
 // was never canonical HIR identity and never belonged in the plan.
-// DELIBERATE CONTAINER MOVE 2026-08-16 (M1.4 P1): v8 transports optional
-// partition descriptors and lifecycle activations. Gauge declares neither,
+// DELIBERATE CONTAINER MOVE 2026-08-16 (M1.4 P1): the unpublished v8 draft
+// transported partition descriptors and lifecycle activations. Gauge declared neither,
 // so its semantic hash and causal trace stay fixed while the package checksum
 // changes with the format version.
 // DELIBERATE CONTAINER MOVE 2026-08-21 (M1.4 R2 checkpoint): categorical
 // v9 replaces that draft with the mandatory root owner, reciprocal Node owner
 // references and scoped edges. Gauge remains a persistent singleton, so its
-// semantic hash and causal trace stay fixed while the package body moves.
+// semantic hash stays fixed while the package body moves.
+// DELIBERATE TRACE MOVE 2026-08-21 (M1.4 R3): even singleton routes and
+// transactions now carry their complete instance references. The semantic
+// hash and package remain fixed; only the causal trace moves.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]

@@ -288,7 +288,7 @@ fn key_name(key: u64) -> String {
         24 => "ingress_port",
         25 => "routes",
         30 => "node_path",
-        31 => "partition_key",
+        31 => "instance_ref",
         32 => "trigger",
         33 => "consumed",
         34 => "join_inputs",
@@ -305,6 +305,7 @@ fn key_name(key: u64) -> String {
         45 => "closure",
         46 => "edge_cursor",
         47 => "edge",
+        48 => "parent_instance_ref",
         _ => return format!("key {key}"),
     };
     format!("{name}({key})")
@@ -340,10 +341,7 @@ fn record_tree(record: &Record) -> Cbor {
                         routes
                             .into_iter()
                             .map(|route| {
-                                Cbor::Array(vec![
-                                    Cbor::Text(route.edge),
-                                    Cbor::Bytes(route.target_partition),
-                                ])
+                                Cbor::Array(vec![Cbor::Text(route.edge), route.target.tree()])
                             })
                             .collect(),
                     ),
@@ -357,8 +355,9 @@ fn record_tree(record: &Record) -> Cbor {
                 (30, Cbor::Text(transaction.node_path.to_string())),
                 (32, Cbor::Text(transaction.trigger.to_string())),
             ]);
-            if !transaction.partition_key.is_empty() {
-                pairs.insert(31, Cbor::Bytes(transaction.partition_key.clone()));
+            pairs.insert(31, transaction.instance.tree());
+            if let Some(parent) = &transaction.parent_instance {
+                pairs.insert(48, parent.tree());
             }
             if let Some(cause) = transaction.cause {
                 pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));
@@ -374,7 +373,7 @@ fn record_tree(record: &Record) -> Cbor {
                         .map(|position| {
                             Cbor::Array(vec![
                                 Cbor::Text(position.edge.clone()),
-                                Cbor::Bytes(position.source_partition.clone()),
+                                position.source.tree(),
                                 Cbor::Uint(position.seq),
                             ])
                         })
@@ -442,7 +441,7 @@ fn record_tree(record: &Record) -> Cbor {
                                 Cbor::Array(vec![
                                     Cbor::Bytes(route.delivery.as_bytes().to_vec()),
                                     Cbor::Text(route.edge),
-                                    Cbor::Bytes(route.target_partition),
+                                    route.target.tree(),
                                 ])
                             })
                             .collect(),

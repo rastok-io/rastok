@@ -95,11 +95,17 @@ The repository opens publicly with this milestone (15 October 2026).
   keeps the synchronous one-worker reference engine; the same addresses are
   designed for future concurrent Workers and Coordinator/child-Worker
   deployment without placing physical facts in causal identity. Its first R2
-  checkpoint has allocated categorical plan-package v9: lexical Graph/Node
+  checkpoint allocated categorical plan-package v9: lexical Graph/Node
   owners, scoped edges, typed key/lifetime policy, phased immutable values and
   dynamic Connector rows now travel and are revalidated independently of the
-  compiler Registry. Hierarchical instance references and their deliberate
-  causal-trace move remain R3, not part of that package-only rebaseline.
+  compiler Registry. R3 has now landed hierarchical routing: canonical
+  `(address, generation)` references are sealed by producers and shared by
+  journal, mailboxes, state, calls, timers, lifecycle and cursors; Graph keys
+  are sticky across descendant traffic; candidate bindings fail before
+  ingress/effect; and a stable virtual-shard seam proves placement neutrality.
+  This deliberately moved causal traces, including singleton traces, without
+  moving semantic hashes or plan-package bodies. Finite lifetimes and bounded
+  Closing remain R4/R5.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

@@ -1,17 +1,16 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-21 for the M1.4 R2 transport checkpoint. The
+> of the build; updated 2026-08-21 for the M1.4 R3 routing checkpoint. The
 > former named-partition P1-P3 implementation is superseded; categorical v9
-> owner transport is target evidence while hierarchical routing remains R3.
+> owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
 > evidence lives in [`m1-slice.md`](m1-slice.md). The specified M1.3
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
 > distinguishes the retained v7 type/value/expression registry from the
-> current categorical v9 instance transport and the still-pending R3 causal
-> routing rows.
+> categorical v9 instance transport and the R3 causal routing rows.
 
 This document refines the responsibility table of
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md) to the component level: the
@@ -87,7 +86,8 @@ crates/rastok-core/src/       # the kernel — #![no_std] + alloc (split at M0.5
 ├── datatype.rs, value.rs       # logical types, values, validation/conformance
 ├── node.rs, envelope.rs, expr.rs, plan.rs
 ├── canonical_cbor.rs         # one bounded canonical byte discipline
-├── identity/encoding.rs      # tagged-value identity registry
+├── identity.rs               # canonical instance address/reference
+│   └── identity/encoding.rs  # tagged-value identity registry
 ├── json.rs, trivia.rs        # shared exact JSON and lexical-comment facts
 ├── journal.rs                # records (+ armed timers), trait, ids, MemJournal
 ├── boundary.rs               # host vocabulary, request framing, five traits
@@ -242,7 +242,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v9 preserves every Graph/Operator/Connector owner and parent relation separately from executable Node slots, validates scoped routes, solves every port, and rejects unresolved or conflicting constraints | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | M1.4 R2 v9 owner/instance/phased-value checkpoint landed; address/generation causal rows remain R3 |
+| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v9 preserves every Graph/Operator/Connector owner and parent relation separately from executable Node slots, validates scoped routes, solves every port, and rejects unresolved or conflicting constraints | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | M1.4 R2 v9 owner/instance/phased-value transport landed; R3 consumes it for hierarchical routing |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -285,7 +285,7 @@ single-stepping and future journal-relative inspection structural.
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
 | **Scheduler** | run-to-completion firing; the single dated-event queue — the **call budgets, armed at DELIVERY** so queue time counts, referenced by `(edge, envelope id)`, resolved reserve→resolve→ack so a refused expiry replays (a timeout is the scheduler's dated event, never a partner's answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
-| **Mailboxes** | per-instance-reference FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered delivery within one address generation | [execution-model.md §2–3](../spec/execution-model.md) | M0 base; M1.4 R3 rebase |
+| **Mailboxes** | per-instance-reference FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered delivery within one address generation | [execution-model.md §2–3](../spec/execution-model.md) | M0 base; M1.4 R3 hierarchical rebase landed |
 | **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
 | **Boundary completion** | one correlated completion closes an invocation and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically | completion drafts → one transaction of routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md) | M1.3 B7 |
@@ -347,7 +347,7 @@ Ownership rules that the types must make unrepresentable:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `commit(Transaction)` (atomic), `open_outbound(Intent)` (journal-before-effect), `close_outbound(call_ref, response XOR timeout) → Won \| AlreadyClosed` (exactly once — the anti-ghost race is typed), `append_inbound(InboundSubmission) → CommittedInbound { seq, envelope, record }` (in one accepting transaction: allocate or validate the sequence, derive the root id, mint the root `MetaSys` — `parent_id = null`, `origin_id = id` —, build the immutable envelope, commit; only then may the ACK flow), ordered `iter()` | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §2, §5](../spec/envelope.md) | M0 |
+| **`Journal`** | the typed logical records and their order; `MemJournal` in-memory first | **semantic operations**, not bare appends: `prepare_inbound` mints the final root envelope without consuming its sequence; `commit_inbound` atomically advances that sequence with producer-sealed routes; `instance_ref_for_admission` folds lifecycle history; `commit(Transaction)` verifies firing/parent/route generations; `open_outbound` is journal-before-effect; `close_outbound → Won \| AlreadyClosed` arbitrates closure | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [envelope.md §2, §5](../spec/envelope.md); [instances.md](../spec/instances.md) | M0 base; M1.4 R3 instance authority |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
 | **`RecoveryFold`** | journal → state, dated obligations, open-effect triage — the **only** place `OutcomeUnknown` is minted and an open OUTBOUND becomes `Abandoned`; snapshots are derived accelerations, never causal | records → recovered runtime state | [delivery-semantics.md §4.4, §6–7](../spec/delivery-semantics.md) | next |
 | *(golden projection)* | moved to its own `golden` module as built — see §3.6b | | | |
@@ -553,11 +553,11 @@ The chronological detail and commit evidence remain in
 - **M1.4 rebase:** D-2026-08-18-1 replaces the unreleased P0-P3 surface and
   transport with Node-owned `instances.key`, independent `lifetime`, private
   Node state, hierarchical logical addresses, and journal-derived instance
-  references. R1 checking and the categorical v9 owner/instance transport have
-  landed as a checkpoint; hierarchical routing, mailbox, cursor and lifecycle
-  proofs must still be re-landed through R3-R4. The reference VM remains
-  synchronous and one-worker.
-- **Next:** hierarchical instance routing, lifetime, bounded Closing, keyed Lab
+  references. R1 checking, categorical v9 owner transport, and R3
+  hierarchical routing/mailbox/state/cursor proofs have landed. Finite
+  lifecycle profiles remain R4. The reference VM remains synchronous and
+  one-worker.
+- **Next:** finite lifetime, bounded Closing, keyed Lab
   observability, Dispatch, joins, new adapters, Loop, counters, and `--watch`
   remain guarded in the order recorded by the
   [M1.4 backlog](m1.4-instances-backlog.md).

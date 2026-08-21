@@ -10,6 +10,7 @@ mod serialization;
 mod type_resolution;
 mod validation;
 
+pub(crate) use serialization::type_tree;
 pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
 pub use type_resolution::{ResolvedPort, ResolvedPortTable, TypeOrigin};
 pub use validation::{PlanValidationError, ValidatedExecutionPlan};

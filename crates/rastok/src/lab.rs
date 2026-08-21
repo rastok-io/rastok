@@ -617,6 +617,7 @@ mod tests {
             prepared,
             idempotency_key: None,
             effect: node::EffectClass::Idempotent,
+            instance_settings: BTreeMap::new(),
         };
         let outcome = partner.answer(&intent, &request);
         (outcome, partner.faults)
