@@ -6,10 +6,12 @@
 use rastok::canonical_cbor::{Value as Cbor, decode, encode};
 use rastok::compiler::compile;
 use rastok::contract::Registry;
-use rastok::golden::project;
+use rastok::golden::{Trace, project};
 use rastok::journal::Record;
 use rastok::node;
 use rastok::plan::GraphVersion;
+use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 
 const INSTANCE_LAB: &str = r#"
 graph instances : App {
@@ -327,6 +329,89 @@ fn the_public_lab_observes_join_correlation_and_expiry() {
             Cbor::Uint(0),
         ])),
         "trace key 31 independently pins owner/key frame order and generation"
+    );
+}
+
+#[test]
+fn moving_one_virtual_shard_changes_no_semantic_or_replay_input() {
+    let registry = Registry::try_m0().expect("the standard catalogue holds");
+    let before = compile(&[INSTANCE_LAB], &registry).expect("the public instance lab checks");
+    let after = compile(&[INSTANCE_LAB], &registry).expect("the same source checks again");
+    assert_eq!(
+        before.hash, after.hash,
+        "physical placement is not a compiler input"
+    );
+
+    let run = |compilation: &rastok::compiler::Compilation| {
+        rastok::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0])
+            .into_iter()
+            .find(|run| run.report.scenario == "key_isolation")
+            .expect("the keyed scenario ran")
+    };
+    let before_run = run(&before);
+    let after_run = run(&after);
+    assert!(
+        before_run.report.passed(),
+        "{:#?}",
+        before_run.report.failures
+    );
+    assert!(
+        after_run.report.passed(),
+        "{:#?}",
+        after_run.report.failures
+    );
+
+    let address = before_run
+        .records
+        .iter()
+        .find_map(|record| match record {
+            Record::Transaction(transaction)
+                if transaction.owner_path.to_string() == "sessions.counter" =>
+            {
+                Some(transaction.instance.address().clone())
+            }
+            _ => None,
+        })
+        .expect("the public trace contains one keyed child instance");
+    let shard_count = NonZeroU32::new(4093).expect("the proof uses a fixed non-zero count");
+    let shard = address.virtual_shard(shard_count);
+
+    // Placement is deliberately a lookup owned by the future coordinator,
+    // outside the compiler, address and journal APIs. Reassign the exact same
+    // virtual shard between two physical workers without feeding either fact
+    // back into execution.
+    let placement_before = BTreeMap::from([(shard, ("host-a", "worker-1"))]);
+    let placement_after = BTreeMap::from([(shard, ("host-b", "worker-7"))]);
+    assert_ne!(
+        placement_before.get(&shard),
+        placement_after.get(&shard),
+        "the physical owner really moved"
+    );
+    assert_eq!(
+        address.virtual_shard(shard_count),
+        shard,
+        "Worker count and assignment cannot perturb virtual sharding"
+    );
+
+    assert_eq!(
+        before_run.records, after_run.records,
+        "the journal facts are placement-neutral"
+    );
+    let before_trace = project(&before_run.records);
+    let after_trace = project(&after_run.records);
+    assert_eq!(before_trace, after_trace);
+    let stored: Vec<Vec<u8>> = (0..before_trace.len())
+        .map(|index| {
+            before_trace
+                .record_bytes(index)
+                .expect("every projected record has bytes")
+                .to_vec()
+        })
+        .collect();
+    assert_eq!(
+        Trace::from_stored(&stored),
+        Some(after_trace),
+        "the canonical replay input contains no Worker or Host fact"
     );
 }
 

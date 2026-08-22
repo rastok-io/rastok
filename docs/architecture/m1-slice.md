@@ -6,7 +6,7 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-21): items 1, 2 and the replacement item 3 are landed, as are
+**Current checkpoint (2026-08-22): items 1, 2 and the replacement item 3 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 M1.4 has been normatively rebased by D-2026-08-18-1 before public release.
 The executable P0–P3 named-`partition` / `per` draft is not the target source
@@ -22,6 +22,12 @@ fixed, single-pass, and processing-time tumbling lifetimes, including
 generation fences and inner-first Graph closure. R5 executes explicitly bounded
 Closing, cancellation and call settlement, redirects new arrivals to the
 bounded successor mailbox, then runs `on stop` and reclaims state.
+R6 executes nested Graph composition and bounded instance-local joins through
+the public Lab. R7 closes the executable slice: removed partition spellings are
+recovery-only, the identity ledger is audited, and virtual-shard reassignment is
+proved absent from semantic hashes, journal bytes, and replay input. The
+reference runtime remains deliberately one-worker; physical cluster leases and
+crash recovery are later work.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -292,9 +298,10 @@ step touches `vm.rs` once.
    typed `exit`, then run `on stop` and reclaim. D-2026-08-18-1 is the
    authority; the ordered
    [M1.4 instance backlog](m1.4-instances-backlog.md) realigns the private
-   P0–P3 draft; R0–R6 are landed, while the cluster-readiness/closure proof
-   remains R7 (some dynamic owner values and Graph handlers stay named R1
-   frontend gates).
+   P0–P3 draft; R0–R7 are landed and the executable M1.4 slice is closed.
+   Some dynamic owner values and Graph handlers stay named R1 frontend gates,
+   while physical cluster leases and crash recovery remain later work rather
+   than being claimed by the placement-neutrality proof.
 5. **Joins — `on (a, b)` bounded by `within …` / `last N`** —
    **LANDED with M1.4 R6 (2026-08-22)**: correlation windows and the static
    metadata merge of D-2026-08-10-2, inside the owning Operator instance.

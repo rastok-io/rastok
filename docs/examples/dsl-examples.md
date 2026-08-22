@@ -25,10 +25,12 @@ typed narrowing, and all five Graph/Node lifetime profiles execute. The former
 named-partition P0-P3 implementation is superseded by the
 `instances`/`lifetime` model. Hierarchical routing, keyed/nested Graph
 dispatch, Graph lifecycle facts, explicit bounded closing, and bounded
-presence joins execute. Graph lifecycle-handler lowering, HTTP/File adapters,
-Loop, Process service mode, and guest engines are still pending or guarded. Thus
-these are parser- and design-reference snippets, not a claim that every
-section runs today. The small executable fixtures under
+presence joins execute. R7 has audited the removed surface and physical
+placement neutrality without claiming a cluster runtime. Graph
+lifecycle-handler lowering, HTTP/File adapters, Loop, Process service mode,
+and guest engines are still pending or guarded. Thus these are parser- and
+design-reference snippets, not a claim that every section runs today. The
+small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.
 
 ## 1. Minimal — HTTP echo + log

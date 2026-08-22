@@ -16,7 +16,9 @@
 > adds universal owner lifecycle records without changing a semantic hash or
 > plan package. R5 adds bounded Closing facts and the empty
 > `ProcessExit::OutcomeUnknown`; existing non-closing traces stay fixed while
-> Process semantic hashes/packages move deliberately. D-2026-08-14-1
+> Process semantic hashes/packages move deliberately. R6–R7 move no existing
+> semantic, package, or causal artifact; R7 audits the complete M1.4 move ledger and proves a Worker
+> reassignment cannot alter canonical replay bytes. D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
 > from the plan constraints and requires exact agreement with the transported

@@ -114,8 +114,12 @@ The repository opens publicly with this milestone (15 October 2026).
   path and executes joins in the owning Operator instance, with FIFO
   candidate selection, `within`/`last` eviction, typed `JoinExpired`, lazy
   named inputs, and static CommonOrAbsent presence checks. Existing program
-  identity and causal goldens remain fixed; R7 is the remaining M1.4
-  cluster-readiness/closure audit.
+  identity and causal goldens remain fixed. R7 closes the executable M1.4
+  slice: removed forms are recovery-only, the complete identity-move ledger
+  is audited, and moving one stable virtual shard between physical Workers is
+  proved not to change semantic hash, journal bytes, or replay input. The
+  one-worker reference remains the only runtime claimed; cluster leases and
+  recovery are later work.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

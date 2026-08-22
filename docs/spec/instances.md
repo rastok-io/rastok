@@ -13,9 +13,10 @@
 > Graph closure, and bare `stop`. Source production of some dynamic
 > settings/values and Graph handlers remain named R1 gaps. R6 makes nested
 > Graphs and instance-local joins public end to end, including Lab and package
-> evidence; R7 remains the closure/cluster-readiness audit. This document is the single authority for logical
-> instance addressing, key selection, Node-local state, lifetime, and the
-> semantic boundary with future sharding.
+> evidence. R7 closes the executable slice with negative-space and
+> placement-neutrality proofs; it adds no cluster runtime. This document is
+> the single authority for logical instance addressing, key selection,
+> Node-local state, lifetime, and the semantic boundary with future sharding.
 
 Rastok separates three concerns that the former `partition` declaration
 combined:

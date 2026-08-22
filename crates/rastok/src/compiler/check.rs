@@ -1416,7 +1416,7 @@ impl Checker<'_, '_> {
                 }
             }
         }
-        if decl.per.is_some() {
+        if decl.removed_per.is_some() {
             self.instance_refusal(
                 decl.span,
                 "`per` was the unpublished partition-binding syntax; write `instances = { key = <expr> }` inside the Graph",
@@ -1581,7 +1581,7 @@ impl Checker<'_, '_> {
                     }
                 }
                 GraphItem::Edge(edge) => edges.push(edge),
-                GraphItem::Partition(partition) => self.instance_refusal(
+                GraphItem::RemovedPartition(partition) => self.instance_refusal(
                     partition.span,
                     "`partition` was unpublished syntax; declare `instances` and `lifetime` on the Node that owns them",
                 ),
@@ -2444,7 +2444,7 @@ impl Checker<'_, '_> {
         graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
-        if decl.per.is_some() {
+        if decl.removed_per.is_some() {
             self.instance_refusal(
                 decl.span,
                 "`per` was unpublished syntax; write `instances = { key = <expr> }` inside the Operator",
@@ -2486,7 +2486,7 @@ impl Checker<'_, '_> {
         graph_signature: &expr::Signature,
         graph_consts: &BTreeMap<String, crate::value::Value>,
     ) -> Option<Node> {
-        if decl.per.is_some() {
+        if decl.removed_per.is_some() {
             self.instance_refusal(
                 decl.span,
                 "`per` was unpublished syntax; write `instances = { key = <expr> }` inside the Connector",
@@ -4160,9 +4160,10 @@ impl Checker<'_, '_> {
                     let span = targets.first().map_or(decl.span, |target| target.span);
                     self.deferred("an atomic multi-emit", span);
                 }
-                SynStatement::Stop(Some(target)) => {
-                    self.deferred("a targeted stop action", target.span)
-                }
+                SynStatement::Stop(Some(target)) => self.instance_refusal(
+                    target.span,
+                    "targeted `stop` was removed; bare `stop` closes the current Node instance",
+                ),
                 SynStatement::Stop(None) => {
                     if activation == node::HandlerActivation::Lifecycle(node::Lifecycle::Stop) {
                         self.instance_refusal(
@@ -8066,7 +8067,8 @@ graph g : App {
 
         let (_, targeted) = check_source(&source.replace("stop }", "stop other }"));
         assert!(targeted.diagnostics().iter().any(|diagnostic| {
-            diagnostic.code() == E_CHECK_DEFERRED && diagnostic.message().contains("targeted stop")
+            diagnostic.code() == E_INSTANCE
+                && diagnostic.message().contains("targeted `stop` was removed")
         }));
         let recursive = source.replace("on in { out = . ; stop }", "on stop { stop }");
         let (_, recursive) = check_source(&recursive);
@@ -8177,18 +8179,47 @@ graph g : App {
     }
 
     #[test]
-    fn superseded_partition_spellings_have_migration_diagnostics() {
+    fn superseded_instance_spellings_have_exactly_one_migration_diagnostic() {
         let sources = [
-            "graph g : App { partition p { key = 1 ; lifetime = persistent } operator o { on in { out = . } } . -> o -> . }",
-            "graph g : App { operator o per (key = 1, lifetime = persistent) { on in { out = . } } . -> o -> . }",
+            (
+                "named partition",
+                "graph g : App { partition p { key = 1 ; lifetime = persistent } operator o { on in { out = . } } . -> o -> . }",
+                "`partition`",
+            ),
+            (
+                "Graph per",
+                "graph g : App per p { operator o { on in { out = . } } . -> o -> . }",
+                "`per`",
+            ),
+            (
+                "Operator inline per",
+                "graph g : App { operator o per (key = 1, lifetime = persistent) { on in { out = . } } . -> o -> . }",
+                "`per`",
+            ),
+            (
+                "Connector per",
+                "graph g : App { connector p : Process per p { command = \"cat\" ; codec = lines ; effect = idempotent ; behavior = deterministic } . -> p -> . }",
+                "`per`",
+            ),
+            (
+                "join by",
+                "type JoinExpiry = union { JoinExpired {} } graph g : App { operator j { input a: int ; input b: int ; output out: int ; output expired: JoinExpiry ; on (a, b) by a.data within duration(\"1s\") { out = a.data + b.data } } . -> j.a ; . -> j.b ; j -> . ; j.expired -> nothing }",
+                "join `by`",
+            ),
+            (
+                "targeted stop",
+                "graph g : App { operator o { on in { stop p } } . -> o -> . }",
+                "targeted `stop`",
+            ),
         ];
-        for source in sources {
+        for (label, source, expected) in sources {
             let (_, bag) = check_source(source);
-            assert!(bag.diagnostics().iter().any(|diagnostic| {
-                diagnostic.code() == E_INSTANCE
-                    && (diagnostic.message().contains("`partition`")
-                        || diagnostic.message().contains("`per`"))
-            }));
+            assert_eq!(bag.diagnostics().len(), 1, "{label}: {bag:#?}");
+            assert_eq!(bag.diagnostics()[0].code(), E_INSTANCE, "{label}");
+            assert!(
+                bag.diagnostics()[0].message().contains(expected),
+                "{label}: {bag:#?}"
+            );
         }
     }
 }

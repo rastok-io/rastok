@@ -16,6 +16,8 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`m1.4-instances-backlog.md`](m1.4-instances-backlog.md) for the ordered
   rebase onto Node-owned keys, lifetime, hierarchical addresses and bounded
   Closing;
+- [`m1.4-exit-report.md`](m1.4-exit-report.md) for the R7 negative-space,
+  identity-ledger, portability, and placement-neutrality evidence;
 - [`build-order.md`](build-order.md) for the dependency-driven stage
   sequence used to build the M0 modules;
 - [`components.md`](components.md) for the component blueprint: owned

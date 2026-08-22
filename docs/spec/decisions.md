@@ -394,6 +394,37 @@ watermark. The no-join dispatcher and single-payload evaluation retain their
 direct paths, so the established relay bound remains green rather than being
 paid for by programs that do not use R6.
 
+**R7 closure and placement checkpoint (2026-08-22).** The executable M1.4
+instance slice is closed under its one-worker contract. The old source forms
+remain only as parser recovery nodes explicitly named `Removed*`; `partition`,
+Graph/Operator/Connector `per`, join `by`, and targeted `stop` each produce one
+`E-INSTANCE` migration diagnostic and cannot enter HIR or plan. No
+`PartitionSpec`, old routing key, or v8 decoder path exists; every earlier
+categorical version remains refused by number.
+
+Physical placement remains an external lookup after logical selection:
+canonical address → fixed virtual shard → current Worker. The public keyed Lab
+proof reassigns one shard between two different Host/Worker pairs and observes
+the same semantic hash, journal records, canonical record bytes, and
+reconstructed replay trace. Neither assignment is an input to compilation,
+routing, journaling, or replay. Full Worker leases, fencing, migration and
+distributed recovery remain later architecture, not hidden M1 behavior.
+
+The measured unkeyed lookup introduced in R4 is retained. An executable probe
+routes twice through an unkeyed child of a keyed Graph and reconstructs the
+exact canonical child address independently; the second route proves the fast
+lookup. It is a fast path over the same complete `InstanceRef`, not a singleton
+authority. The general route path is strengthened so an internal delivery
+during Graph Closing continues in an already-active keyed descendant instead
+of selecting its successor. R7 moves no semantic hash, package, or causal
+golden; the syntax-tree debug golden moves only because its recovery field is
+renamed from active-looking `per` to `removed_per`. The full M1.4 move ledger
+and named limits are recorded in
+[`../architecture/m1.4-exit-report.md`](../architecture/m1.4-exit-report.md).
+The final portability gate passes 697 all-feature tests, three `no_std` ISAs,
+and the Cortex-M33 spike at 2 753 relay ticks average / 2 986 maximum with the
+semantic hash still `419a52a1…`.
+
 ## D-2026-08-16-1 — A partition key is a journaled routing decision
 
 > **Superseded in full by D-2026-08-18-1 before public release.** The key and

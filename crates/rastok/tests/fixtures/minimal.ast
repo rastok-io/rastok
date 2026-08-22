@@ -28,7 +28,7 @@ SyntaxTree {
                         ],
                     },
                 ),
-                per: None,
+                removed_per: None,
                 body: [
                     Operator(
                         OperatorDecl {
@@ -43,7 +43,7 @@ SyntaxTree {
                                 },
                             },
                             annotation: None,
-                            per: None,
+                            removed_per: None,
                             body: [
                                 Handler(
                                     HandlerDecl {

@@ -2674,6 +2674,27 @@ impl<'plan> Vm<'plan> {
         Ok(None)
     }
 
+    fn closing_generation_for_internal_route(
+        &self,
+        address: &InstanceAddress,
+        source: Option<&InstanceRef>,
+        lifetime: &InstanceLifetime,
+    ) -> Option<InstanceRef> {
+        if self.closing.is_empty() || matches!(lifetime, InstanceLifetime::SinglePass) {
+            return None;
+        }
+        let first = InstanceRef::new(address.clone(), 0);
+        let last = InstanceRef::new(address.clone(), u64::MAX);
+        let reference = self.closing.range(first..=last).next_back()?;
+        let instance = self.instances.get(reference)?;
+        let InstancePhase::Closing { scope, .. } = &instance.phase else {
+            return None;
+        };
+        source
+            .is_some_and(|source| self.is_within_instance(source, scope))
+            .then(|| reference.clone())
+    }
+
     fn candidate_owner(
         &self,
         journal: &dyn Journal,
@@ -2692,11 +2713,12 @@ impl<'plan> Vm<'plan> {
                 reason: "an owner reference escaped the validated owner table",
             })?;
         // An unkeyed non-tumbling owner keeps one address within the selected
-        // parent generation. Reuse that already-validated reference instead
-        // of rebuilding canonical address bytes and folding the journal on
-        // every delivery. Tumbling is excluded because virtual time selects a
-        // distinct address; a missing live entry still falls through to the
-        // journal-derived successor generation for idle/fixed/single-pass.
+        // parent generation. This is only a measured lookup fast path: the
+        // reference still carries the canonical address and journal-derived
+        // generation used everywhere else. Tumbling is excluded because
+        // virtual time selects a distinct address; a missing live entry still
+        // falls through to the journal-derived successor generation for
+        // idle/fixed/single-pass.
         if owner.instance.key.is_none()
             && !matches!(owner.instance.lifetime, InstanceLifetime::Tumbling(_))
         {
@@ -2813,6 +2835,16 @@ impl<'plan> Vm<'plan> {
         };
         let address = InstanceAddress::new(&owner.path, &frames)
             .map_err(|error| VmError::Fault(Fault::Unrepresentable(error.to_string())))?;
+        // The journal normally selects the current generation. Only Closing
+        // is different: external traffic belongs to the reserved successor,
+        // while work already admitted inside the closing scope must retain
+        // the old generation. The replay-derived closing index keeps this
+        // exceptional lookup off ordinary and first-admission paths.
+        if let Some(reference) =
+            self.closing_generation_for_internal_route(&address, source, &owner.instance.lifetime)
+        {
+            return Ok(reference);
+        }
         let reference = journal
             .instance_ref_for_admission(&address)
             .map_err(VmError::Journal)?;

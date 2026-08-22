@@ -498,24 +498,25 @@ graph nested : App {
     .expect("the public nested Graph source compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(&mut journal, text_submission("alice")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    for _ in 0..2 {
+        vm.inject(&mut journal, text_submission("alice")).unwrap();
+        vm.drain(&mut journal).unwrap();
+    }
 
-    assert_eq!(vm.outputs().len(), 1);
-    assert_eq!(
-        vm.outputs()[0].envelope.data(),
-        &Data::materialized(Value::Text(String::from("hello alice")))
-    );
+    assert_eq!(vm.outputs().len(), 2);
+    assert!(vm.outputs().iter().all(|output| {
+        output.envelope.data() == &Data::materialized(Value::Text(String::from("hello alice")))
+    }));
     assert!(journal.records().iter().any(|record| matches!(
         record,
         Record::Transaction(transaction)
             if transaction.owner_path.to_string() == "sessions"
                 && transaction.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start)
     )));
-    let transaction = journal
+    let transactions: Vec<_> = journal
         .records()
         .iter()
-        .find_map(|record| match record {
+        .filter_map(|record| match record {
             Record::Transaction(transaction)
                 if transaction.owner_path.to_string() == "sessions.greet"
                     && matches!(transaction.trigger, node::Trigger::Port(_)) =>
@@ -524,7 +525,8 @@ graph nested : App {
             }
             _ => None,
         })
-        .expect("the child handler fires");
+        .collect();
+    assert_eq!(transactions.len(), 2, "the child handler fires twice");
     let session = OwnerPath::new(["sessions"]).expect("valid Graph owner");
     let expected = InstanceAddress::new(
         &OwnerPath::new(["sessions", "greet"]).expect("valid child owner"),
@@ -535,7 +537,12 @@ graph nested : App {
         }],
     )
     .expect("the selected text key is canonical");
-    assert_eq!(transaction.instance.address(), &expected);
+    assert!(
+        transactions
+            .iter()
+            .all(|transaction| transaction.instance.address() == &expected),
+        "the second route's fast lookup retains the reconstructed canonical address"
+    );
 }
 
 const JOIN_PROBE: &str = r#"
@@ -1695,7 +1702,10 @@ graph draining : App {
     effect = idempotent
     behavior = deterministic
   }
-  operator collect { on in { out = . } }
+  operator collect {
+    instances = { key = data }
+    on in { out = . }
+  }
 
   . -> seed -> collect -> .
   . -> shell

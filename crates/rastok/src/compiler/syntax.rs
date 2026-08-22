@@ -181,15 +181,15 @@ pub enum CmpOp {
     Ge,
 }
 
-/// `graph IDENT ( ":" annotation )? per? "{" body "}"`
+/// `graph IDENT ( ":" annotation )? removed_per? "{" body "}"`
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraphDecl {
     /// The declared instance name.
     pub name: Name,
     /// `+`-joined stdlib symbols; classification is the checker's job.
     pub annotation: Option<Annotation>,
-    /// Keyed replication clause.
-    pub per: Option<PerClause>,
+    /// Recovery-only capture of the unpublished `per` spelling.
+    pub removed_per: Option<RemovedPerClause>,
     /// Body items in source order.
     pub body: Vec<GraphItem>,
     /// The whole declaration.
@@ -209,8 +209,8 @@ pub struct Annotation {
 pub enum GraphItem {
     /// `input x` / `output x`
     Port(PortDecl),
-    /// `partition IDENT { … }`
-    Partition(PartitionDecl),
+    /// Recovery-only capture of `partition IDENT { … }`.
+    RemovedPartition(RemovedPartitionDecl),
     /// `operator IDENT … { … }`
     Operator(OperatorDecl),
     /// `connector IDENT : T … { … }`
@@ -231,22 +231,22 @@ pub enum GraphItem {
     Error(ErrorNode),
 }
 
-/// `operator IDENT ( ":" annotation )? per? { body }`
+/// `operator IDENT ( ":" annotation )? removed_per? { body }`
 #[derive(Debug, Clone, PartialEq)]
 pub struct OperatorDecl {
     /// The declared instance name.
     pub name: Name,
     /// Optional stdlib alias and aspects.
     pub annotation: Option<Annotation>,
-    /// Keyed replication clause.
-    pub per: Option<PerClause>,
+    /// Recovery-only capture of the unpublished `per` spelling.
+    pub removed_per: Option<RemovedPerClause>,
     /// Body items in source order.
     pub body: Vec<OperatorItem>,
     /// The whole declaration.
     pub span: Span,
 }
 
-/// `connector IDENT ":" annotation per? { body }` — the annotation is
+/// `connector IDENT ":" annotation removed_per? { body }` — the annotation is
 /// syntactically mandatory: an external boundary is explicit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectorDecl {
@@ -254,8 +254,8 @@ pub struct ConnectorDecl {
     pub name: Name,
     /// The mandatory trait, plus optional aspects.
     pub annotation: Annotation,
-    /// Keyed replication clause.
-    pub per: Option<PerClause>,
+    /// Recovery-only capture of the unpublished `per` spelling.
+    pub removed_per: Option<RemovedPerClause>,
     /// Body items in source order.
     pub body: Vec<OperatorItem>,
     /// The whole declaration.
@@ -329,29 +329,30 @@ pub struct VarDecl {
     pub span: Span,
 }
 
-/// `partition IDENT { key = … ; lifetime = … }`
+/// Recovery-only syntax for the unpublished
+/// `partition IDENT { key = … ; lifetime = … }` form.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PartitionDecl {
+pub struct RemovedPartitionDecl {
     /// The partition name.
     pub name: Name,
     /// Body fields in source order.
-    pub fields: Vec<PartitionField>,
+    pub fields: Vec<RemovedPartitionField>,
     /// The whole declaration.
     pub span: Span,
 }
 
-/// One field of a partition body.
+/// One field retained only to consume a removed partition body exactly once.
 #[derive(Debug, Clone, PartialEq)]
-pub enum PartitionField {
+pub enum RemovedPartitionField {
     /// `key = <expr_token>`
     Key(ExprSource),
     /// `lifetime = <lifetime_value>`
-    Lifetime(LifetimeValue),
+    Lifetime(RemovedLifetimeValue),
 }
 
-/// The `lifetime` vocabulary.
+/// The removed partition body's lifetime vocabulary.
 #[derive(Debug, Clone, PartialEq)]
-pub enum LifetimeValue {
+pub enum RemovedLifetimeValue {
     /// Bare duration value — idle-ttl.
     Expr(ExprSource),
     /// `persistent`
@@ -365,28 +366,27 @@ pub enum LifetimeValue {
         /// The window duration.
         duration: ExprSource,
         /// The window mode.
-        mode: WindowMode,
+        mode: RemovedWindowMode,
     },
 }
 
 /// Window advancement mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowMode {
+pub enum RemovedWindowMode {
     /// `tumbling`
     Tumbling,
     /// `sliding`
     Sliding,
 }
 
-/// `per` clause: named partition references or an inline anonymous
-/// partition.
+/// Recovery-only capture of a named or inline unpublished `per` clause.
 #[derive(Debug, Clone, PartialEq)]
-pub enum PerClause {
+pub enum RemovedPerClause {
     /// `per a, b` — references to declared partitions; a tuple when
     /// several.
     Named(Vec<Name>),
     /// `per { … }` / `per (key = …)` — private anonymous partition.
-    Inline(Vec<PartitionField>),
+    Inline(Vec<RemovedPartitionField>),
 }
 
 /// `on trigger guard* body?` — a body-less handler is the Loop
@@ -791,7 +791,7 @@ mod tests {
                 annotation: Some(Annotation {
                     symbols: vec![name("App", 11..14)],
                 }),
-                per: None,
+                removed_per: None,
                 body: vec![GraphItem::Edge(EdgeDecl {
                     endpoints: vec![
                         EdgeEndpoint::Ref(PortRef {

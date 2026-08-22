@@ -17,11 +17,11 @@ use crate::compiler::lexer::{
 use crate::compiler::syntax::{
     Annotation, AspectEvent, Attribute, BaseType, CmpOp, ConnectorDecl, EdgeDecl, EdgeEndpoint,
     ErrorNode, ExpectStep, ExprSource, FieldDecl, FrontendPayload, FrontendValue, GraphDecl,
-    GraphItem, Guard, HandlerDecl, IntLit, LValue, LabDecl, LifetimeValue, MockDecl, Name,
-    OperatorDecl, OperatorItem, PartitionDecl, PartitionField, PerClause, PortDecl, PortDirection,
-    PortRef, ScalarType, ScenarioDecl, ScenarioItem, SimulationDecl, Statement, StructBody,
-    StructEntry, SubBlock, SyntaxTree, TaggedCaseDecl, TopDecl, Trigger, TypeRef, ValDecl, Value,
-    VarDecl, WindowMode,
+    GraphItem, Guard, HandlerDecl, IntLit, LValue, LabDecl, MockDecl, Name, OperatorDecl,
+    OperatorItem, PortDecl, PortDirection, PortRef, RemovedLifetimeValue, RemovedPartitionDecl,
+    RemovedPartitionField, RemovedPerClause, RemovedWindowMode, ScalarType, ScenarioDecl,
+    ScenarioItem, SimulationDecl, Statement, StructBody, StructEntry, SubBlock, SyntaxTree,
+    TaggedCaseDecl, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 
@@ -820,14 +820,14 @@ impl<'src> Parser<'src, '_> {
         self.bump();
         let name = self.name("the graph name")?;
         let annotation = self.optional_annotation()?;
-        let per = self.optional_per()?;
+        let removed_per = self.optional_removed_per()?;
         self.expect(TokenKind::LBrace, "`{`")?;
         let body = self.graph_body();
         self.expect(TokenKind::RBrace, "`}`");
         Some(GraphDecl {
             name,
             annotation,
-            per,
+            removed_per,
             body,
             span: self.span_from(start),
         })
@@ -848,8 +848,8 @@ impl<'src> Parser<'src, '_> {
                         Some(port) => GraphItem::Port(port),
                         None => GraphItem::Error(self.recover(start)),
                     }),
-                    "partition" => items.push(match self.partition_decl() {
-                        Some(partition) => GraphItem::Partition(partition),
+                    "partition" => items.push(match self.removed_partition_decl() {
+                        Some(partition) => GraphItem::RemovedPartition(partition),
                         None => GraphItem::Error(self.recover(start)),
                     }),
                     "operator" => items.push(match self.operator_decl() {
@@ -1061,14 +1061,14 @@ impl<'src> Parser<'src, '_> {
         self.bump();
         let name = self.name("the operator name")?;
         let annotation = self.optional_annotation()?;
-        let per = self.optional_per()?;
+        let removed_per = self.optional_removed_per()?;
         self.expect(TokenKind::LBrace, "`{`")?;
         let body = self.operator_body();
         self.expect(TokenKind::RBrace, "`}`");
         Some(OperatorDecl {
             name,
             annotation,
-            per,
+            removed_per,
             body,
             span: self.span_from(start),
         })
@@ -1080,14 +1080,14 @@ impl<'src> Parser<'src, '_> {
         let name = self.name("the connector name")?;
         self.expect(TokenKind::Colon, "`:` — a connector declares its type")?;
         let annotation = self.annotation()?;
-        let per = self.optional_per()?;
+        let removed_per = self.optional_removed_per()?;
         self.expect(TokenKind::LBrace, "`{`")?;
         let body = self.operator_body();
         self.expect(TokenKind::RBrace, "`}`");
         Some(ConnectorDecl {
             name,
             annotation,
-            per,
+            removed_per,
             body,
             span: self.span_from(start),
         })
@@ -1497,14 +1497,14 @@ impl<'src> Parser<'src, '_> {
         })
     }
 
-    fn partition_decl(&mut self) -> Option<PartitionDecl> {
+    fn removed_partition_decl(&mut self) -> Option<RemovedPartitionDecl> {
         let start = self.peek().span.range().start;
         self.bump();
         let name = self.name("the partition name")?;
         self.expect(TokenKind::LBrace, "`{`")?;
-        let fields = self.partition_fields(TokenKind::RBrace, &ATTR_POSITION);
+        let fields = self.removed_partition_fields(TokenKind::RBrace, &ATTR_POSITION);
         self.expect(TokenKind::RBrace, "`}`");
-        Some(PartitionDecl {
+        Some(RemovedPartitionDecl {
             name,
             fields,
             span: self.span_from(start),
@@ -1512,11 +1512,11 @@ impl<'src> Parser<'src, '_> {
     }
 
     /// `key = …` / `lifetime = …` fields, up to `close`.
-    fn partition_fields(
+    fn removed_partition_fields(
         &mut self,
         close: TokenKind,
         position: &TerminatorSet,
-    ) -> Vec<PartitionField> {
+    ) -> Vec<RemovedPartitionField> {
         let mut fields = Vec::new();
         loop {
             let token = self.peek();
@@ -1532,14 +1532,16 @@ impl<'src> Parser<'src, '_> {
                     if self.expect(TokenKind::Eq, "`=`").is_none() {
                         break;
                     }
-                    fields.push(PartitionField::Key(self.expr(position)));
+                    fields.push(RemovedPartitionField::Key(self.expr(position)));
                 }
                 TokenKind::Ident if token.text == "lifetime" => {
                     self.bump();
                     if self.expect(TokenKind::Eq, "`=`").is_none() {
                         break;
                     }
-                    fields.push(PartitionField::Lifetime(self.lifetime_value(position)));
+                    fields.push(RemovedPartitionField::Lifetime(
+                        self.removed_lifetime_value(position),
+                    ));
                 }
                 _ => {
                     self.error_expected("`key` or `lifetime`");
@@ -1550,37 +1552,37 @@ impl<'src> Parser<'src, '_> {
         fields
     }
 
-    fn lifetime_value(&mut self, position: &TerminatorSet) -> LifetimeValue {
+    fn removed_lifetime_value(&mut self, position: &TerminatorSet) -> RemovedLifetimeValue {
         let token = self.peek();
         match (token.kind, token.text) {
             (TokenKind::Ident, "persistent") => {
                 self.bump();
-                LifetimeValue::Persistent(token.span)
+                RemovedLifetimeValue::Persistent(token.span)
             }
             (TokenKind::Ident, "single_pass") => {
                 self.bump();
-                LifetimeValue::SinglePass(token.span)
+                RemovedLifetimeValue::SinglePass(token.span)
             }
             (TokenKind::Ident, "fixed") => {
                 self.bump();
-                LifetimeValue::Fixed(self.expr(position))
+                RemovedLifetimeValue::Fixed(self.expr(position))
             }
             (TokenKind::Ident, "window") => {
                 self.bump();
                 let duration = self.expr(&WINDOW_POSITION);
                 let mode = if self.at_word("sliding") {
                     self.bump();
-                    WindowMode::Sliding
+                    RemovedWindowMode::Sliding
                 } else if self.at_word("tumbling") {
                     self.bump();
-                    WindowMode::Tumbling
+                    RemovedWindowMode::Tumbling
                 } else {
                     self.error_expected("`tumbling` or `sliding`");
-                    WindowMode::Tumbling
+                    RemovedWindowMode::Tumbling
                 };
-                LifetimeValue::Window { duration, mode }
+                RemovedLifetimeValue::Window { duration, mode }
             }
-            _ => LifetimeValue::Expr(self.expr(position)),
+            _ => RemovedLifetimeValue::Expr(self.expr(position)),
         }
     }
 
@@ -1599,7 +1601,7 @@ impl<'src> Parser<'src, '_> {
         Some(Annotation { symbols })
     }
 
-    fn optional_per(&mut self) -> Option<Option<PerClause>> {
+    fn optional_removed_per(&mut self) -> Option<Option<RemovedPerClause>> {
         if !self.at_word("per") {
             return Some(None);
         }
@@ -1608,22 +1610,22 @@ impl<'src> Parser<'src, '_> {
         let clause = match token.kind {
             TokenKind::LParen => {
                 self.bump();
-                let fields = self.partition_fields(TokenKind::RParen, &PAREN_POSITION);
+                let fields = self.removed_partition_fields(TokenKind::RParen, &PAREN_POSITION);
                 self.expect(TokenKind::RParen, "`)`")?;
-                PerClause::Inline(fields)
+                RemovedPerClause::Inline(fields)
             }
             TokenKind::LBrace => {
                 self.bump();
-                let fields = self.partition_fields(TokenKind::RBrace, &ATTR_POSITION);
+                let fields = self.removed_partition_fields(TokenKind::RBrace, &ATTR_POSITION);
                 self.expect(TokenKind::RBrace, "`}`")?;
-                PerClause::Inline(fields)
+                RemovedPerClause::Inline(fields)
             }
             _ => {
                 let mut names = vec![self.name("a partition name")?];
                 while self.eat(TokenKind::Comma).is_some() {
                     names.push(self.name("a partition name")?);
                 }
-                PerClause::Named(names)
+                RemovedPerClause::Named(names)
             }
         };
         Some(Some(clause))
@@ -3106,11 +3108,6 @@ mod tests {
 
     const DECLS_ONLY: &str = r#"
 graph m0_probe : App {
-  partition session {
-    key = meta.app.session_key
-    lifetime = duration("2h")
-  }
-
   connector echo : Process {
     mode = job ; command = "cat"
     codec = lines
@@ -3136,11 +3133,10 @@ graph m0_probe : App {
         };
         assert_eq!(graph.name.text, "m0_probe");
         assert_eq!(graph.annotation.as_ref().unwrap().symbols[0].text, "App");
-        assert_eq!(graph.body.len(), 4);
-        assert!(matches!(graph.body[0], GraphItem::Partition(_)));
-        assert!(matches!(graph.body[1], GraphItem::Connector(_)));
-        assert!(matches!(graph.body[2], GraphItem::Operator(_)));
-        assert!(matches!(graph.body[3], GraphItem::Val(_)));
+        assert_eq!(graph.body.len(), 3);
+        assert!(matches!(graph.body[0], GraphItem::Connector(_)));
+        assert!(matches!(graph.body[1], GraphItem::Operator(_)));
+        assert!(matches!(graph.body[2], GraphItem::Val(_)));
     }
 
     #[test]
@@ -3149,7 +3145,7 @@ graph m0_probe : App {
         let TopDecl::Graph(graph) = &tree.decls[0] else {
             panic!("expected a graph");
         };
-        let GraphItem::Connector(echo) = &graph.body[1] else {
+        let GraphItem::Connector(echo) = &graph.body[0] else {
             panic!("expected the connector");
         };
         assert_eq!(echo.name.text, "echo");
@@ -3173,20 +3169,23 @@ graph m0_probe : App {
     }
 
     #[test]
-    fn the_partition_holds_key_and_lifetime() {
-        let tree = parse_clean(DECLS_ONLY);
+    fn the_removed_partition_is_preserved_for_one_migration_diagnostic() {
+        let tree = parse_clean(
+            "graph g : App {\n  partition session {\n    key = meta.app.session_key\n    lifetime = duration(\"2h\")\n  }\n}\n",
+        );
         let TopDecl::Graph(graph) = &tree.decls[0] else {
             panic!("expected a graph");
         };
-        let GraphItem::Partition(session) = &graph.body[0] else {
-            panic!("expected the partition");
+        let GraphItem::RemovedPartition(session) = &graph.body[0] else {
+            panic!("expected the removed partition recovery node");
         };
         assert_eq!(session.name.text, "session");
-        let PartitionField::Key(key) = &session.fields[0] else {
+        let RemovedPartitionField::Key(key) = &session.fields[0] else {
             panic!("expected the key");
         };
         assert_eq!(key.text, "meta.app.session_key");
-        let PartitionField::Lifetime(LifetimeValue::Expr(ttl)) = &session.fields[1] else {
+        let RemovedPartitionField::Lifetime(RemovedLifetimeValue::Expr(ttl)) = &session.fields[1]
+        else {
             panic!("expected the idle-ttl lifetime");
         };
         assert_eq!(ttl.text, "duration(\"2h\")");
@@ -3198,7 +3197,7 @@ graph m0_probe : App {
         let TopDecl::Graph(graph) = &tree.decls[0] else {
             panic!("expected a graph");
         };
-        let GraphItem::Operator(shout) = &graph.body[2] else {
+        let GraphItem::Operator(shout) = &graph.body[1] else {
             panic!("expected the operator");
         };
         let OperatorItem::Port(port) = &shout.body[0] else {

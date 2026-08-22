@@ -9,7 +9,9 @@
 > single-pass, and processing-time tumbling lifetimes with journal-derived
 > generations. R5 executes explicit bounded Closing, successor-generation
 > admission, cancellation, settlement, terminal `OutcomeUnknown`, and
-> inner-first Graph closure.
+> inner-first Graph closure. R6 executes nested composition and bounded joins;
+> R7 closes the one-worker slice and proves physical Worker assignment is not
+> a causal input.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the

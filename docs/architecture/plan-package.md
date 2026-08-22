@@ -49,6 +49,10 @@
 > Graph composition public. Existing packages do not move: the new activation
 > row occurs only in newly executable join programs, while nested Graph source
 > already maps to the owner/edge tables v9 was designed to carry.
+> R7 changes no package byte: it categorically rechecks that the unpublished
+> v8 body remains refused, removes the old partition spellings from executable
+> syntax, and proves that the physical virtual-shard-to-Worker lookup is absent
+> from the v9 body, semantic identity, journal, and replay input.
 > A decoded key type is re-derived and compared; unlike
 > compiler lowering, package validation never normalizes the claim.
 >

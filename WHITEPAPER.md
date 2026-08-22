@@ -2689,11 +2689,14 @@ simulations designed to become executable evidence as the runtime
 lands. The current evidence gates are listed in
 [ROADMAP.md](ROADMAP.md).
 
-As of M1.4 R6, the one-worker reference executes canonical keyed/lifetime
+As of M1.4 R7, the one-worker reference executes canonical keyed/lifetime
 instances, bounded Closing, nested Graph composition, and instance-local
 bounded joins from source through package validation and public Lab scenarios.
-This is milestone evidence, not a production-readiness claim; distributed
-Host/Worker ownership remains a later physical implementation of the same
+The closure audit also proves that moving a stable virtual shard between
+physical Host/Worker assignments changes neither semantic identity, causal
+journal bytes, nor replay input. This is milestone evidence, not a
+production-readiness or cluster-runtime claim; distributed leases, fencing,
+recovery, and scheduling remain later physical implementations of the same
 logical addresses.
 
 This white paper is designed to outlive individual releases. The DSL

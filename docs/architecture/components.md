@@ -1,7 +1,7 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-21 for the M1.4 R4 lifetime checkpoint. The
+> of the build; updated 2026-08-22 for the M1.4 R7 closure checkpoint. The
 > former named-partition P1-P3 implementation is superseded; categorical v9
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
@@ -10,8 +10,8 @@
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
 > distinguishes the retained v7 type/value/expression registry from the
-> categorical v9 instance transport, R3 causal routing rows, and R4 lifetime
-> execution.
+> categorical v9 instance transport, R3 causal routing rows, R4 lifetime
+> execution, R5 Closing, R6 joins, and R7 placement-neutrality proof.
 
 This document refines the responsibility table of
 [`ARCHITECTURE.md`](../../ARCHITECTURE.md) to the component level: the
