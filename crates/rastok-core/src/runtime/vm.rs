@@ -385,6 +385,7 @@ impl OutboundConnectorBindings for NoOutboundBindings {
         &mut self,
         connector: &node::Path,
         _: &Data,
+        _: &BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, crate::boundary::DriverRouteError> {
         Err(crate::boundary::DriverRouteError::UnboundOutbound(
             connector.clone(),
@@ -1202,27 +1203,15 @@ impl<'plan> Vm<'plan> {
                     reason: "a delivery opened a call on a connector without an effect class",
                 });
             };
+            let resolved_settings =
+                self.resolve_invocation_settings(&instance, spec, &planned.path, &queued.envelope)?;
             match bindings
-                .prepare_request(&planned.path, queued.envelope.data())
+                .prepare_request(&planned.path, queued.envelope.data(), &resolved_settings)
                 .map_err(crate::boundary::DispatchError::Driver)
                 .map_err(VmError::Dispatch)?
             {
                 RequestPreparation::Rejected(completion) => Err(completion),
                 RequestPreparation::Prepared(prepared) => {
-                    let instance_settings = self
-                        .instances
-                        .get(&instance)
-                        .map(|bundle| &bundle.settings)
-                        .or_else(|| {
-                            self.waiting
-                                .get(&instance)
-                                .map(|waiting| &waiting.candidate.settings)
-                        })
-                        .ok_or_else(|| VmError::PlanInvariant {
-                            node: planned.path.clone(),
-                            reason: "a queued call lost its selected instance bundle",
-                        })?
-                        .clone();
                     let emitting_id = queued.envelope.meta().sys().id();
                     Ok(Intent {
                         call_ref: ids::call_ref(
@@ -1235,7 +1224,7 @@ impl<'plan> Vm<'plan> {
                         prepared,
                         idempotency_key: None,
                         effect,
-                        instance_settings,
+                        resolved_settings,
                     })
                 }
             }
@@ -2471,8 +2460,10 @@ impl<'plan> Vm<'plan> {
         // one value carried by the intent — nobody recomputes. An
         // unframeable request completes on `exit` before any open
         // fact exists: stderr is not a lifecycle channel.
+        let resolved_settings =
+            self.resolve_invocation_settings(instance, spec, &planned.path, &delivery.envelope)?;
         let prepared = match bindings
-            .prepare_request(&planned.path, delivery.envelope.data())
+            .prepare_request(&planned.path, delivery.envelope.data(), &resolved_settings)
             .map_err(crate::boundary::DispatchError::Driver)
             .map_err(VmError::Dispatch)?
         {
@@ -2498,15 +2489,6 @@ impl<'plan> Vm<'plan> {
         // The call identity: one delivery carrying one prepared
         // request (envelope.md §2) — the reference says by where,
         // the digest says what.
-        let instance_settings = self
-            .instances
-            .get(instance)
-            .ok_or_else(|| VmError::PlanInvariant {
-                node: planned.path.clone(),
-                reason: "an opening call lost its installed instance bundle",
-            })?
-            .settings
-            .clone();
         let intent = Intent {
             call_ref: ids::call_ref(
                 ids::delivery_ref(&delivery.edge, emitting_id),
@@ -2520,7 +2502,7 @@ impl<'plan> Vm<'plan> {
             // keyed irreversible intent arrives with its invariants.
             idempotency_key: None,
             effect,
-            instance_settings,
+            resolved_settings,
         };
         let call_ref = intent.call_ref;
         journal.open_outbound(intent).map_err(VmError::Journal)?;
@@ -3194,6 +3176,60 @@ impl<'plan> Vm<'plan> {
                 continue;
             };
             if *site == EvaluationSite::Invocation {
+                continue;
+            }
+            let value = resolve_payload(
+                eval_lazy(expr, &bindings, &data, &self.plan.assets).map_err(VmError::Fault)?,
+                &data,
+            )
+            .map_err(VmError::Fault)?;
+            if let Some(violation) = expr.ty.violation(name, &value) {
+                return Err(VmError::Fault(Fault::Unrepresentable(
+                    violation.to_string(),
+                )));
+            }
+            settings.insert(name.clone(), value);
+        }
+        Ok(settings)
+    }
+
+    fn resolve_invocation_settings(
+        &self,
+        instance: &InstanceRef,
+        spec: &crate::plan::ConnectorSpec,
+        node: &node::Path,
+        envelope: &Envelope,
+    ) -> Result<BTreeMap<String, crate::value::Value>, VmError> {
+        let (values, mut settings) = self
+            .instances
+            .get(instance)
+            .map(|bundle| (&bundle.values, bundle.settings.clone()))
+            .or_else(|| {
+                self.waiting.get(instance).map(|waiting| {
+                    (
+                        &waiting.candidate.values,
+                        waiting.candidate.settings.clone(),
+                    )
+                })
+            })
+            .ok_or_else(|| VmError::PlanInvariant {
+                node: node.clone(),
+                reason: "an opening call lost its selected instance bundle",
+            })?;
+        let mut bindings: BTreeMap<String, crate::expr::EvalValue> = values
+            .iter()
+            .map(|(name, value)| (name.clone(), crate::expr::EvalValue::from(value.clone())))
+            .collect();
+        bindings.insert(
+            String::from("meta"),
+            crate::expr::EvalValue::from(meta_value(envelope.meta())),
+        );
+        let data = DataSlot::new(envelope.data());
+        for (name, setting) in &spec.attributes {
+            let AttrSetting::Expr { site, expr } = setting else {
+                continue;
+            };
+            if *site != EvaluationSite::Invocation {
                 continue;
             }
             let value = resolve_payload(

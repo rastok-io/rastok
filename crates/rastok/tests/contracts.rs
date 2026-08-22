@@ -28,6 +28,12 @@ fn process_graph(body: &str) -> String {
     )
 }
 
+fn file_graph(body: &str) -> String {
+    format!(
+        "graph g : App {{\n  connector file : File {{\n{body}\n  }}\n  . -> file\n  file.out -> nothing\n  file.exit -> nothing\n}}\n"
+    )
+}
+
 const FULL: &str =
     "    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic";
 
@@ -413,6 +419,177 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
             }
         }
     }
+}
+
+#[test]
+fn file_profiles_resolve_the_same_rows_in_the_sheet_and_core_mirror() {
+    let id = rastok::connector::ConnectorId::parse(rastok::connector::FILE_CONNECTOR_ID)
+        .expect("the standard File id");
+    for mode in ["read", "replace"] {
+        let ports = rastok::stdlib::FILE
+            .resolve_ports(&std::collections::BTreeMap::from([(
+                String::from("mode"),
+                String::from(mode),
+            )]))
+            .expect("every executable File profile resolves");
+        for port in ports {
+            assert_eq!(
+                port.ty,
+                rastok::boundary::file_port_type(&id, port.port.name(), Some(mode)),
+                "{mode} on {}",
+                port.port
+            );
+        }
+    }
+    for attribute in ["mode", "path", "effect", "behavior", "timeout", "max_read"] {
+        let profile = rastok::stdlib::FILE
+            .profile("read")
+            .expect("the read profile");
+        let sheet_site = if attribute == "mode" {
+            Some(EvaluationSite::Plan)
+        } else {
+            rastok::stdlib::FILE
+                .attribute(Some(profile), attribute)
+                .map(|spec| spec.latest_site)
+        };
+        assert_eq!(
+            sheet_site,
+            rastok::boundary::file_attribute_site(&id, attribute),
+            "the Registry-free phase mirror drifted for `{attribute}`"
+        );
+    }
+}
+
+#[test]
+fn a_file_path_closes_at_invocation_and_defaults_travel() {
+    let source = file_graph("    mode = read\n    path = data as text");
+    let compilation = compile_one(&source).expect("the File read contract checks");
+    let spec = compilation.plan.plan().nodes[0]
+        .connector()
+        .expect("the File connector");
+    assert_eq!(spec.contract.as_str(), rastok::connector::FILE_CONNECTOR_ID);
+    assert_eq!(
+        spec.attribute("max_read"),
+        Some(&rastok::plan::AttrSetting::Value(
+            rastok::value::Value::Text(String::from("8MiB"))
+        ))
+    );
+    assert!(matches!(
+        spec.attribute("path"),
+        Some(rastok::plan::AttrSetting::Expr {
+            site: EvaluationSite::Invocation,
+            expr,
+        }) if expr.ty == rastok::datatype::DataType::Text
+    ));
+    let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
+    let (decoded, _) = rastok::plan::decode(&bytes).expect("the dynamic path round-trips");
+    assert_eq!(*decoded, *compilation.plan);
+}
+
+#[test]
+fn file_replace_has_bytes_input_and_no_read_budget() {
+    let source = file_graph(
+        "    mode = replace\n    path = \"artifact.bin\"\n    timeout = duration(\"0s\")",
+    );
+    let compilation = compile_one(&source).expect("the File replace contract checks");
+    let node = &compilation.plan.plan().nodes[0];
+    let spec = node.connector().expect("the File connector");
+    assert!(spec.attribute("max_read").is_none());
+    assert_eq!(
+        node.ports
+            .iter()
+            .find(|port| port.port.name() == "in")
+            .and_then(|port| port.ty.as_ref()),
+        Some(&rastok::datatype::DataType::BYTES)
+    );
+}
+
+#[test]
+fn unsupported_file_surfaces_refuse_by_name() {
+    refusal_with(
+        &file_graph("    mode = watch\n    path = \"artifact.bin\""),
+        "E-CHECK-DEFERRED",
+        "the File watch profile",
+    );
+    refusal_with(
+        &file_graph("    mode = list\n    path = \"artifact.bin\""),
+        "E-CONTRACT-ATTR",
+        "expected one of",
+    );
+    for attribute in ["recursive", "create_parents"] {
+        refusal_with(
+            &file_graph(&format!(
+                "    mode = read\n    path = \"artifact.bin\"\n    {attribute} = true"
+            )),
+            "E-CONTRACT-ATTR",
+            "not on the contract sheet",
+        );
+    }
+}
+
+#[test]
+fn file_intent_and_budgets_are_never_guessed() {
+    refusal_with(
+        &file_graph("    path = \"artifact.bin\""),
+        "E-CONTRACT-REQUIRED",
+        "mode",
+    );
+    refusal_with(
+        &file_graph("    mode = read"),
+        "E-CONTRACT-REQUIRED",
+        "path",
+    );
+    refusal_with(
+        &file_graph("    mode = read\n    path = 1"),
+        "E-PORT-TYPE",
+        "`path` requires text",
+    );
+    refusal_with(
+        &file_graph("    mode = read\n    path = \"artifact.bin\"\n    max_read = \"many\""),
+        "E-CONTRACT-ATTR",
+        "does not fit",
+    );
+}
+
+#[test]
+fn a_forged_file_sheet_never_becomes_a_valid_plan() {
+    let source = file_graph("    mode = read\n    path = \"artifact.bin\"");
+    let compilation = compile_one(&source).expect("the File read contract checks");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    let rastok::plan::NodeKind::Connector(spec) = &mut plan.nodes[0].kind else {
+        panic!("the compiled node is the File connector")
+    };
+    spec.attributes.retain(|(name, _)| name != "path");
+    assert!(matches!(
+        rastok::plan::ValidatedExecutionPlan::try_from(plan),
+        Err(
+            rastok::plan::PlanValidationError::MissingContractAttribute {
+                attribute: "path",
+                ..
+            }
+        )
+    ));
+
+    let dynamic = file_graph("    mode = read\n    path = data as text");
+    let compilation = compile_one(&dynamic).expect("the dynamic File path checks");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    let rastok::plan::NodeKind::Connector(spec) = &mut plan.nodes[0].kind else {
+        panic!("the compiled node is the File connector")
+    };
+    let Some(rastok::plan::AttrSetting::Expr { site, .. }) = spec
+        .attributes
+        .iter_mut()
+        .find(|(name, _)| name == "path")
+        .map(|(_, setting)| setting)
+    else {
+        panic!("the dynamic path travels as an expression")
+    };
+    *site = EvaluationSite::Instance;
+    assert!(matches!(
+        rastok::plan::ValidatedExecutionPlan::try_from(plan),
+        Err(rastok::plan::PlanValidationError::BindingSiteMismatch { name, .. })
+            if name == "path"
+    ));
 }
 
 #[test]

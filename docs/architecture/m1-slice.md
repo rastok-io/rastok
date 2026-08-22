@@ -341,8 +341,10 @@ step touches `vm.rs` once.
    `OutboundConnectorDriver` role. Static registration is first-class and
    future plugin loaders must feed the same registry. `File` proves one-file
    `read` and atomic `replace`; directory traversal and single-file `watch`
-   remain named limits. The half-day claim is measured separately from the
-   one-time binder tax.
+   remain named limits. C3 has frozen and implemented the sheet, portable
+   `FileExit`, read budget, path semantics, and invocation-value transport
+   without touching the filesystem; C4 supplies the real Driver. The
+   half-day claim is measured separately from the one-time binder tax.
 7. **`HttpClient`** — outbound calls under declared budgets, on the
    harness. Decision point before code: hand-rolled bounded HTTP/1.1
    versus a vetted dependency, and whether TLS enters M1 at all (the

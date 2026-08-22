@@ -79,11 +79,13 @@ impl OutboundConnectorBindings for ProjectionRefusal {
         &mut self,
         connector: &node::Path,
         data: &Data,
+        resolved_settings: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
         Ok(OutboundConnectorDriver::prepare_request(
             &mut self.inner,
             connector,
             data,
+            resolved_settings,
         ))
     }
 
@@ -133,7 +135,12 @@ struct ClosingWorld {
 }
 
 impl OutboundConnectorDriver for ClosingWorld {
-    fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+    fn prepare_request(
+        &mut self,
+        _: &node::Path,
+        data: &Data,
+        _: &std::collections::BTreeMap<String, rastok::value::Value>,
+    ) -> RequestPreparation {
         rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
     }
 
@@ -194,7 +201,12 @@ graph bounded_closing : App {
 "#;
 
 impl OutboundConnectorDriver for EchoWorld {
-    fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+    fn prepare_request(
+        &mut self,
+        _: &node::Path,
+        data: &Data,
+        _: &std::collections::BTreeMap<String, rastok::value::Value>,
+    ) -> RequestPreparation {
         rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
     }
 
@@ -237,6 +249,42 @@ impl OutboundConnectorDriver for EchoWorld {
                 },
             })
             .collect()
+    }
+}
+
+#[derive(Default)]
+struct FileSettingsWorld {
+    prepared: Vec<std::collections::BTreeMap<String, Value>>,
+}
+
+impl OutboundConnectorDriver for FileSettingsWorld {
+    fn prepare_request(
+        &mut self,
+        _: &node::Path,
+        _: &Data,
+        settings: &std::collections::BTreeMap<String, Value>,
+    ) -> RequestPreparation {
+        self.prepared.push(settings.clone());
+        RequestPreparation::Prepared(rastok::boundary::PreparedRequest::seal(Vec::new()))
+    }
+
+    fn scheduler_completion(&mut self, _: &node::Path, _: SchedulerCompletion) -> Completion {
+        Completion::try_new(vec![PortOutput {
+            port: node::Port::conventional_exit(),
+            data: Data::materialized(Value::TaggedUnion(Box::new(
+                rastok::value::TaggedUnionValue {
+                    case: String::from("Completed"),
+                    payload: Vec::new(),
+                },
+            ))),
+        }])
+        .expect("the File terminal fact is structurally complete")
+    }
+
+    fn start(&mut self, _: &Intent, _: &Envelope) {}
+
+    fn events(&mut self) -> Vec<Response> {
+        Vec::new()
     }
 }
 
@@ -358,6 +406,48 @@ fn run_probe() -> (MemJournal, Vec<rastok::runtime::vm::BoundaryOutput>) {
     vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(vm.is_stable());
     (journal, vm.outputs().to_vec())
+}
+
+#[test]
+fn invocation_settings_are_values_before_the_file_driver_prepares() {
+    let source = r#"
+graph file_path : App {
+  input in: text
+
+  connector file : File {
+    mode = read
+    path = data as text
+  }
+
+  . -> file
+  file.out -> nothing
+  file.exit -> nothing
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the invocation-bound File path checks");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = FileSettingsWorld::default();
+
+    vm.inject(&mut journal, text_submission("objects/report.bin"))
+        .expect("the text path is admitted");
+    vm.drain_with_bindings(&mut journal, &mut world)
+        .expect("resolution and call opening succeed");
+
+    let expected = std::collections::BTreeMap::from([(
+        String::from("path"),
+        Value::Text(String::from("objects/report.bin")),
+    )]);
+    assert_eq!(world.prepared.as_slice(), std::slice::from_ref(&expected));
+    assert_eq!(
+        journal.open_calls()[0].resolved_settings,
+        expected,
+        "the intent keeps the exact values the Driver prepared"
+    );
 }
 
 #[test]
@@ -2806,7 +2896,12 @@ struct ScriptedWorld {
 }
 
 impl OutboundConnectorDriver for ScriptedWorld {
-    fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+    fn prepare_request(
+        &mut self,
+        _: &node::Path,
+        data: &Data,
+        _: &std::collections::BTreeMap<String, rastok::value::Value>,
+    ) -> RequestPreparation {
         rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
     }
 

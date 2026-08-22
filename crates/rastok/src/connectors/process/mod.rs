@@ -687,7 +687,7 @@ impl<'plan> Process<'plan> {
         // This conversion is the Driver's typed belt: it never evaluates an
         // expression or supplies a default.
         let settings = binding
-            .resolve(&intent.instance_settings)
+            .resolve(&intent.resolved_settings)
             .map_err(|error| {
                 ProcessFailure::SpawnFailed {
                     message: format!("a validated Process instance setting refused: {error}"),
@@ -975,6 +975,7 @@ impl OutboundConnectorDriver for Process<'_> {
         &mut self,
         connector: &crate::node::Path,
         data: &Data,
+        _resolved_settings: &std::collections::BTreeMap<String, Value>,
     ) -> RequestPreparation {
         let Some(binding) = self.bindings.get(connector) else {
             return RequestPreparation::Rejected(

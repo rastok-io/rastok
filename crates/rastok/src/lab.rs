@@ -15,7 +15,7 @@ use crate::boundary::{
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
 };
-use crate::envelope::{Data, Envelope, Namespace, WriteTarget};
+use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::{Observed, Vm};
@@ -568,7 +568,12 @@ impl MockOutboundConnectorDriver<'_> {
 }
 
 impl OutboundConnectorDriver for MockOutboundConnectorDriver<'_> {
-    fn prepare_request(&mut self, connector: &node::Path, data: &Data) -> RequestPreparation {
+    fn prepare_request(
+        &mut self,
+        connector: &node::Path,
+        data: &Data,
+        _: &BTreeMap<String, Value>,
+    ) -> RequestPreparation {
         let Some(codec) = self.codecs.get(connector).copied() else {
             return RequestPreparation::Rejected(Completion::process_exit(
                 crate::boundary::ProcessExit::SpawnFailed {
@@ -668,7 +673,7 @@ mod tests {
             prepared,
             idempotency_key: None,
             effect: node::EffectClass::Idempotent,
-            instance_settings: BTreeMap::new(),
+            resolved_settings: BTreeMap::new(),
         };
         let outcome = driver.answer(&intent, &request);
         (outcome, driver.faults)

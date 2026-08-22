@@ -266,8 +266,9 @@ invocation. The checker always chooses the earliest site at which the written
 expression closes and transports that actual site in the effective plan. An
 attribute that selects a profile, port type, effect, behavior, or other plan
 shape has `plan` as its latest site and must therefore reduce during
-compilation. A contract may allow an operational setting such as a path,
-command, argument, URL, or environment value as late as **instance**; its
+compilation. A contract may allow an operational setting such as a command,
+argument, URL, environment value, or a path shared by an instance as late as
+**instance**; its
 typed expression may then read enclosing immutable `val`s and the Connector's
 own `instance.key`, and is evaluated exactly once when that Connector
 instance binds. A literal still reduces at plan, and an `env()`-only
@@ -275,8 +276,9 @@ expression binds at boot. The validated plan carries whether an effective
 attribute is a resolved value or a boot/instance/invocation expression, so an
 adapter has no Registry or fallback decision to make.
 
-An attribute whose latest site is invocation, such as an idempotency key or
-correlator, may read that invocation's typed envelope. It is not instance
+An attribute whose latest site is invocation, such as `File.path`, an
+idempotency key, or a correlator, may read that invocation's typed envelope.
+It is not instance
 configuration and cannot participate in instance addressing. Boot, instance,
 and invocation expressions all use the same expression tree; their signatures
 differ and the checker rejects a name from the wrong phase. An expression may

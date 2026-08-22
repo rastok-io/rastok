@@ -48,6 +48,13 @@
 > unchanged source kept its semantic hash and causal trace; R3 moves the trace
 > while keeping both semantic hash and package fixed.
 >
+> **M1.5 C3** is the first public source consumer of an invocation-phase
+> Connector row: `File.path`. The existing v10 `AttrSetting::Expr` form
+> carries its checked text tree and actual site; Registry-free validation
+> re-derives the site and contract ceiling. The evaluated path is call data,
+> not a package mutation, so C3 allocates no format tag and moves no existing
+> package or semantic identity.
+>
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
 > processing-time `tumbling` on Graph and Node owners. R5 adds the optional

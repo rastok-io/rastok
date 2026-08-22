@@ -221,6 +221,7 @@ pub fn check(
         resolved_types: BTreeMap::new(),
         type_stack: Vec::new(),
         pending_instances: Vec::new(),
+        pending_connector_attributes: Vec::new(),
     };
     // No top-level declaration is silently ignored, and none is
     // silently dropped either: until unit composition and a real
@@ -290,6 +291,7 @@ pub fn check(
     // against it and can extend nothing (D-2026-08-10-1).
     checker.seal_app_schema();
     checker.resolve_pending_instances(&mut checked_app);
+    checker.resolve_pending_connector_attributes(&mut checked_app);
     checker.in_lab = true;
     // A lab is a logical corpus: fragments sharing a name merge into
     // one; a duplicate simulation name inside the merged corpus
@@ -407,6 +409,23 @@ struct Checker<'bag, 'registry> {
     /// metadata schema has been sealed. That makes `meta.app.<leaf>` precise
     /// without a second type system or a runtime-only guess.
     pending_instances: Vec<PendingInstance>,
+    /// Invocation-bound Connector attributes are checked after the complete
+    /// application metadata schema and owner-instance key types are known.
+    /// The delay is checker-local: the expression still enters HIR identity
+    /// exactly once and the Driver never receives source text.
+    pending_connector_attributes: Vec<PendingConnectorAttribute>,
+}
+
+#[derive(Clone)]
+struct PendingConnectorAttribute {
+    node: node::Path,
+    name: String,
+    value: SynValue,
+    domain: contract::ValueDomain,
+    latest_site: crate::plan::EvaluationSite,
+    signature: expr::Signature,
+    consts: BTreeMap<String, crate::value::Value>,
+    span: Span,
 }
 
 #[derive(Clone)]
@@ -2335,6 +2354,121 @@ impl Checker<'_, '_> {
         }
     }
 
+    /// Closes invocation-bound Connector attributes after the application
+    /// metadata schema and instance-key types are final. Constants still
+    /// reduce to `AttrValue::Const`; only an expression that actually reads
+    /// invocation or instance context travels as an expression.
+    fn resolve_pending_connector_attributes(&mut self, graph: &mut Graph) {
+        let app_fields: Vec<(String, DataType)> = self
+            .app_schema
+            .iter()
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect();
+        let ext_fields = self.ext_schema_snapshot();
+        for pending in core::mem::take(&mut self.pending_connector_attributes) {
+            let Some(node) = node_at_path(graph, &pending.node) else {
+                continue;
+            };
+            let Some(input_type) = node
+                .ports
+                .iter()
+                .find(|port| port.direction == Direction::Input && port.port.name() == "in")
+                .and_then(|port| port.ty.clone())
+            else {
+                // An invalid/deferred profile already spoke. Do not add a
+                // speculative value diagnostic against a recovery port row.
+                continue;
+            };
+            let instance_key_type = node
+                .instance
+                .as_ref()
+                .and_then(|policy| policy.key.as_ref())
+                .map(|key| key.ty.clone());
+            let mut signature = pending
+                .signature
+                .clone()
+                .with("data", input_type)
+                .with("meta", DataType::Variant)
+                .with("meta.sys.id", DataType::Text)
+                .with("meta.sys.parent_id", DataType::Variant)
+                .with("meta.sys.origin_id", DataType::Text)
+                .with("meta.sys.role", DataType::Text)
+                .with("meta.sys.graph_version", DataType::INT)
+                .with("meta.ext.content_type", DataType::Text);
+            if let Some(key_type) = instance_key_type {
+                signature = signature.with("instance.key", key_type);
+            }
+            for (field, ty) in &app_fields {
+                signature = signature.with(format!("meta.app.{field}"), ty.clone());
+            }
+            for (field, ty) in &ext_fields {
+                signature = signature.with(format!("meta.ext.{field}"), ty.clone());
+            }
+            let Some(expected) = pending.domain.expression_type() else {
+                continue;
+            };
+            let Some(tree) = self.typed_value_tree(
+                &pending.value,
+                &signature,
+                Some(&expected),
+                pending.span,
+                &pending.name,
+            ) else {
+                continue;
+            };
+            let site = expression_evaluation_site(&tree.root);
+            if !pending.latest_site.admits(site) {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONTRACT_ATTR,
+                        Phase::Check,
+                        format!(
+                            "`{}` closes at {site:?}, after the sheet's {:?} ceiling",
+                            pending.name, pending.latest_site
+                        ),
+                    )
+                    .with_span(pending.span)
+                    .with_field("attribute", pending.name.clone())
+                    .with_field("detail", "attribute evaluation phase"),
+                );
+                continue;
+            }
+            let value = if site == crate::plan::EvaluationSite::Plan {
+                let Some(constant) = self.reduce_constant(tree, pending.span, &pending.consts)
+                else {
+                    continue;
+                };
+                if !pending.domain.admits(&constant.value) {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTRACT_ATTR,
+                            Phase::Check,
+                            format!(
+                                "`{}` does not fit the {:?} contract domain",
+                                pending.name, pending.domain
+                            ),
+                        )
+                        .with_span(pending.span)
+                        .with_field("attribute", pending.name.clone())
+                        .with_field("detail", "attribute value domain"),
+                    );
+                    continue;
+                }
+                AttrValue::Const(constant)
+            } else {
+                AttrValue::Expr { site, tree }
+            };
+            if let Some(node) = node_at_path_mut(graph, &pending.node)
+                && let NodeRole::Connector { attributes, .. } = &mut node.role
+            {
+                attributes.push(Attribute {
+                    name: pending.name,
+                    value,
+                });
+            }
+        }
+    }
+
     fn resolve_instance_lifetime(
         &mut self,
         source: &InstanceLifetimeSource,
@@ -2677,7 +2811,7 @@ impl Checker<'_, '_> {
                     selector_written = true;
                     match &attribute.value {
                         AttrValue::Word(word) => Some(word.clone()),
-                        AttrValue::Const(_) => {
+                        AttrValue::Const(_) | AttrValue::Expr { .. } => {
                             refuse(
                                 self.bag,
                                 selector.attribute,
@@ -2852,6 +2986,9 @@ impl Checker<'_, '_> {
                         _ => Some(format!("expected one of {words:?} as a bare word")),
                     }
                 }
+                (contract::ValueDomain::Choice(words), AttrValue::Expr { .. }) => {
+                    Some(format!("expected one of {words:?} as a bare word"))
+                }
                 (
                     contract::ValueDomain::Text
                     | contract::ValueDomain::TextList
@@ -2958,7 +3095,7 @@ impl Checker<'_, '_> {
             .iter()
             .filter_map(|attribute| match &attribute.value {
                 AttrValue::Word(word) => Some((attribute.name.clone(), word.clone())),
-                AttrValue::Const(_) => None,
+                AttrValue::Const(_) | AttrValue::Expr { .. } => None,
             })
             .collect();
         match contract.resolve_ports(&effective_words) {
@@ -3009,6 +3146,30 @@ impl Checker<'_, '_> {
                 None
             }
         }
+    }
+
+    /// Returns one common sheet row whose value may legitimately remain open
+    /// until an invocation. Profile-local rows are intentionally excluded:
+    /// the profile must be selected before they can name one unambiguous
+    /// contract. `File.path` is the first executable consumer.
+    fn invocation_attribute_spec(
+        &self,
+        node: &Node,
+        name: &str,
+    ) -> Option<(contract::ValueDomain, crate::plan::EvaluationSite)> {
+        let source_name = node.connector_contract_id()?;
+        let contract::Availability::Available(sheet) = self.registry.connector(source_name) else {
+            return None;
+        };
+        sheet
+            .common
+            .iter()
+            .find(|spec| {
+                spec.name == name
+                    && spec.latest_site == crate::plan::EvaluationSite::Invocation
+                    && spec.domain.expression_type().is_some()
+            })
+            .map(|spec| (spec.domain.clone(), spec.latest_site))
     }
 
     fn node_body(
@@ -3114,6 +3275,7 @@ impl Checker<'_, '_> {
                         .map(|segment| segment.text.as_str())
                         .collect::<Vec<_>>()
                         .join(".");
+                    let invocation_spec = self.invocation_attribute_spec(node, &name);
                     if node.connector_contract_id().is_none() {
                         self.deferred("an operator attribute", attribute.span);
                     } else if !written_attributes.insert(name.clone()) {
@@ -3127,6 +3289,18 @@ impl Checker<'_, '_> {
                             .with_field("attribute", name)
                             .with_field("detail", "repeated attribute"),
                         );
+                    } else if let Some((domain, latest_site)) = invocation_spec {
+                        self.pending_connector_attributes
+                            .push(PendingConnectorAttribute {
+                                node: node.path.clone(),
+                                name,
+                                value: attribute.value.clone(),
+                                domain,
+                                latest_site,
+                                signature: signature.clone(),
+                                consts: consts.clone(),
+                                span: attribute.span,
+                            });
                     } else if let Some(checked) =
                         self.attribute_value(&attribute.value, &signature, &consts, attribute.span)
                         && let NodeRole::Connector { attributes, .. } = &mut node.role
@@ -6749,6 +6923,15 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
         if let Some(policy) = &mut node.instance {
             instance(policy, remap);
         }
+        if let NodeRole::Connector { attributes, .. } = &mut node.role {
+            for attribute in attributes {
+                match &mut attribute.value {
+                    AttrValue::Const(constant) => expr(&mut constant.tree.root, remap),
+                    AttrValue::Expr { tree, .. } => expr(&mut tree.root, remap),
+                    AttrValue::Word(_) => {}
+                }
+            }
+        }
         for val in &mut node.vals {
             expr(&mut val.value.tree.root, remap);
         }
@@ -6997,6 +7180,64 @@ fn expression_reads_data(expr: &expr::Expr) -> bool {
         }
     }
     false
+}
+
+/// Earliest runtime phase required by one checked expression. Source-visible
+/// immutable vals are plan constants in the current frontend; the two runtime
+/// roots and `instance.key` are therefore the only later bindings here. The
+/// package validator independently re-derives this claim from the transported
+/// owner environment.
+fn expression_evaluation_site(expr: &expr::Expr) -> crate::plan::EvaluationSite {
+    use crate::plan::EvaluationSite;
+
+    let mut site = EvaluationSite::Plan;
+    let mut stack = vec![expr];
+    while let Some(expr) = stack.pop() {
+        match expr {
+            expr::Expr::Path(path)
+                if path
+                    .first()
+                    .is_some_and(|root| matches!(root.as_str(), "data" | "meta")) =>
+            {
+                return EvaluationSite::Invocation;
+            }
+            expr::Expr::Path(path)
+                if matches!(path.as_slice(), [instance, key, ..]
+                    if instance == "instance" && key == "key") =>
+            {
+                site = site.max(EvaluationSite::Instance);
+            }
+            expr::Expr::Path(_) | expr::Expr::Literal(_) | expr::Expr::Asset(_) => {}
+            expr::Expr::Unary { expr, .. }
+            | expr::Expr::Is { expr, .. }
+            | expr::Expr::As { expr, .. } => stack.push(expr),
+            expr::Expr::Binary { left, right, .. } => {
+                stack.push(left);
+                stack.push(right);
+            }
+            expr::Expr::Ternary {
+                cond,
+                then,
+                otherwise,
+            } => {
+                stack.push(cond);
+                stack.push(then);
+                stack.push(otherwise);
+            }
+            expr::Expr::Index { base, index } => {
+                stack.push(base);
+                stack.push(index);
+            }
+            expr::Expr::Call { args, .. } | expr::Expr::List(args) => stack.extend(args),
+            expr::Expr::MapLit(entries) => {
+                stack.extend(entries.iter().map(|(_, value)| value));
+            }
+            expr::Expr::Struct(fields) | expr::Expr::Tagged { fields, .. } => {
+                stack.extend(fields.iter().map(|(_, value)| value));
+            }
+        }
+    }
+    site
 }
 
 fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError> {

@@ -11,6 +11,34 @@ use core::fmt;
 /// The standard Process contract's stable major-version identity.
 pub const PROCESS_CONNECTOR_ID: &str = "rastok/process@1";
 
+/// The standard single-file contract's stable major-version identity.
+pub const FILE_CONNECTOR_ID: &str = "rastok/file@1";
+
+/// Portable upper bound of one declared byte budget: 4 GiB inclusive.
+pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Parses one exact portable byte-size spelling shared by sheets, package
+/// validation and Drivers.
+#[must_use]
+pub fn byte_size(text: &str) -> Option<u64> {
+    let text = text.trim_matches(|character: char| character.is_ascii_whitespace());
+    let split = text.find(|character: char| !character.is_ascii_digit())?;
+    let (digits, suffix) = text.split_at(split);
+    if digits.is_empty() {
+        return None;
+    }
+    let base: u64 = digits.parse().ok()?;
+    let factor: u64 = match suffix.trim_matches(|character: char| character.is_ascii_whitespace()) {
+        "B" => 1,
+        "KiB" => 1024,
+        "MiB" => 1024 * 1024,
+        "GiB" => 1024 * 1024 * 1024,
+        _ => return None,
+    };
+    let size = base.checked_mul(factor)?;
+    (size <= MAX_BYTE_SIZE).then_some(size)
+}
+
 /// A validated, canonical Connector contract identity.
 ///
 /// The spelling is `<namespace>/<name>@<major>`.  The namespace is one or

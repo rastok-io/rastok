@@ -314,10 +314,11 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         &mut self,
         connector: &node::Path,
         data: &Data,
+        resolved_settings: &BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
         Ok(self
             .outbound_driver(connector)?
-            .prepare_request(connector, data))
+            .prepare_request(connector, data, resolved_settings))
     }
 
     fn scheduler_completion(
@@ -501,6 +502,7 @@ mod tests {
     use crate::node;
     use crate::plan::{GraphVersion, ValidatedExecutionPlan};
     use crate::runtime::vm::Vm;
+    use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
 
     struct FakeFactory {
@@ -590,7 +592,12 @@ mod tests {
     }
 
     impl OutboundConnectorDriver for RoutingDriver {
-        fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+        fn prepare_request(
+            &mut self,
+            _: &node::Path,
+            data: &Data,
+            _: &BTreeMap<String, crate::value::Value>,
+        ) -> RequestPreparation {
             crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
         }
 
@@ -755,7 +762,12 @@ graph mixed : App {
     }
 
     impl OutboundConnectorDriver for DuplexDriver {
-        fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+        fn prepare_request(
+            &mut self,
+            _: &node::Path,
+            data: &Data,
+            _: &BTreeMap<String, crate::value::Value>,
+        ) -> RequestPreparation {
             self.observations.lock().unwrap().push("outbound");
             crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
         }
@@ -835,6 +847,7 @@ graph mixed : App {
             &mut bindings,
             &node::Path::new(["first"]).unwrap(),
             &Data::materialized(Value::Text(String::from("request"))),
+            &BTreeMap::new(),
         )
         .unwrap();
         assert!(matches!(preparation, RequestPreparation::Prepared(_)));

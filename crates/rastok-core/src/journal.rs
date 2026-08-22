@@ -1199,7 +1199,7 @@ mod tests {
             prepared,
             idempotency_key: Some(String::from("op-1")),
             effect: node::EffectClass::Idempotent,
-            instance_settings: BTreeMap::new(),
+            resolved_settings: BTreeMap::new(),
         }
     }
 

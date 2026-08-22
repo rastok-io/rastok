@@ -182,6 +182,57 @@ pub fn process_attribute_site(
     }
 }
 
+/// Effective logical type of one currently executable `File` port.
+///
+/// This is the Registry-free mirror of the compiler sheet. `watch` is a
+/// known source profile but has no executable row until its inbound protocol
+/// is specified.
+#[must_use]
+pub fn file_port_type(
+    contract: &crate::connector::ConnectorId,
+    port: &str,
+    mode_word: Option<&str>,
+) -> Option<DataType> {
+    if contract.as_str() != crate::connector::FILE_CONNECTOR_ID {
+        return None;
+    }
+    match (port, mode_word) {
+        ("in", Some("read")) => Some(DataType::Variant),
+        ("in", Some("replace")) => Some(DataType::BYTES),
+        ("out", Some("read" | "replace")) => Some(DataType::BYTES),
+        ("exit", Some("read" | "replace")) => file_exit_type().ok(),
+        _ => None,
+    }
+}
+
+/// Latest evaluation site admitted by the executable `File` contract.
+#[must_use]
+pub fn file_attribute_site(
+    contract: &crate::connector::ConnectorId,
+    attribute: &str,
+) -> Option<crate::plan::EvaluationSite> {
+    use crate::plan::EvaluationSite;
+
+    if contract.as_str() != crate::connector::FILE_CONNECTOR_ID {
+        return None;
+    }
+    match attribute {
+        "mode" | "effect" | "behavior" | "max_read" => Some(EvaluationSite::Plan),
+        "timeout" => Some(EvaluationSite::Instance),
+        "path" => Some(EvaluationSite::Invocation),
+        _ => None,
+    }
+}
+
+/// Registry-free evaluation-site mirror for every built-in Connector.
+#[must_use]
+pub fn connector_attribute_site(
+    contract: &crate::connector::ConnectorId,
+    attribute: &str,
+) -> Option<crate::plan::EvaluationSite> {
+    process_attribute_site(contract, attribute).or_else(|| file_attribute_site(contract, attribute))
+}
+
 /// The canonical logical type of the conventional `Process.exit` port.
 ///
 /// B5 fixes the migration target beside the old boundary facts; v7 transports
@@ -234,6 +285,44 @@ pub fn process_exit_type() -> Result<DataType, TypeError> {
         capture_failed,
         outcome_unknown,
         output_overflow,
+    ])?))
+}
+
+/// The portable terminal union of one `File` invocation.
+///
+/// Host error numbers, paths and platform messages deliberately do not enter
+/// this causal type. The operation and requested path are already sealed by
+/// the outbound intent; the cases describe only portable outcomes.
+///
+/// # Errors
+///
+/// Returns the canonical type constructor's precise invariant violation.
+pub fn file_exit_type() -> Result<DataType, TypeError> {
+    let empty = || StructType::new(Vec::new());
+    let completed = TaggedCase::new("Completed", empty()?)?;
+    let not_found = TaggedCase::new("NotFound", empty()?)?;
+    let not_a_file = TaggedCase::new("NotAFile", empty()?)?;
+    let permission_denied = TaggedCase::new("PermissionDenied", empty()?)?;
+    let invalid_path = TaggedCase::new("InvalidPath", empty()?)?;
+    let read_limit_exceeded = TaggedCase::new(
+        "ReadLimitExceeded",
+        StructType::new(alloc::vec![TypeField::new("limit", DataType::UINT)])?,
+    )?;
+    let atomic_replace_unavailable = TaggedCase::new("AtomicReplaceUnavailable", empty()?)?;
+    let io_failed = TaggedCase::new("IoFailed", empty()?)?;
+    let timeout_expired = TaggedCase::new("TimeoutExpired", empty()?)?;
+    let outcome_unknown = TaggedCase::new("OutcomeUnknown", empty()?)?;
+    Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
+        completed,
+        not_found,
+        not_a_file,
+        permission_denied,
+        invalid_path,
+        read_limit_exceeded,
+        atomic_replace_unavailable,
+        io_failed,
+        timeout_expired,
+        outcome_unknown,
     ])?))
 }
 
@@ -485,8 +574,10 @@ pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
     Ok(PreparedRequest::seal(bytes))
 }
 
-/// Canonical journaled outbound-call intent (`identity.md` §3, keys
-/// 40–43 and 47): journaled open before the effect executes.
+/// Outbound-call intent: the canonical fields (`identity.md` §3, keys 40–43
+/// and 47) are journaled open before the effect executes; resolved settings
+/// remain execution material whose call-varying semantics must already be
+/// covered by the prepared-request digest.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Intent {
     /// The derived internal call identity.
@@ -508,11 +599,12 @@ pub struct Intent {
     pub idempotency_key: Option<String>,
     /// The declared effect class of the call.
     pub effect: node::EffectClass,
-    /// Effective Connector attributes evaluated once in the selected
-    /// instance bundle. They are derived from the sealed plan and instance
-    /// context; Drivers consume them but never choose defaults or evaluate
-    /// expressions.
-    pub instance_settings: alloc::collections::BTreeMap<String, crate::value::Value>,
+    /// Effective non-plan Connector attributes resolved for this exact call.
+    /// Instance rows are reused from the immutable instance bundle;
+    /// invocation rows are evaluated against the admitted envelope before
+    /// request preparation. Drivers consume them but never choose defaults or
+    /// evaluate expressions.
+    pub resolved_settings: alloc::collections::BTreeMap<String, crate::value::Value>,
 }
 
 impl Intent {
@@ -930,11 +1022,12 @@ pub trait InboundConnectorDriver {
 pub trait OutboundConnectorDriver {
     /// Frames one invocation under this bound contract before the machine
     /// opens its outbound record. The Driver chooses no defaults: binding has
-    /// already resolved the contract and instance settings for `connector`.
+    /// already resolved every effective non-plan setting for `connector`.
     fn prepare_request(
         &mut self,
         connector: &node::Path,
         data: &envelope::Data,
+        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
     ) -> RequestPreparation;
 
     /// Builds the contract-typed representation of a machine-decided
@@ -978,6 +1071,7 @@ pub trait OutboundConnectorBindings {
         &mut self,
         connector: &node::Path,
         data: &envelope::Data,
+        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError>;
 
     /// Projects a scheduler fact through the bound contract.
@@ -1025,9 +1119,13 @@ where
         &mut self,
         connector: &node::Path,
         data: &envelope::Data,
+        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
         Ok(OutboundConnectorDriver::prepare_request(
-            self, connector, data,
+            self,
+            connector,
+            data,
+            resolved_settings,
         ))
     }
 
@@ -1293,7 +1391,12 @@ mod tests {
     }
 
     impl OutboundConnectorDriver for Scripted {
-        fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+        fn prepare_request(
+            &mut self,
+            _: &node::Path,
+            data: &Data,
+            _: &alloc::collections::BTreeMap<String, crate::value::Value>,
+        ) -> RequestPreparation {
             match prepare_lines(data) {
                 Ok(prepared) => RequestPreparation::Prepared(prepared),
                 Err(message) => RequestPreparation::Rejected(Completion::process_exit(
@@ -1335,6 +1438,7 @@ mod tests {
             &mut self,
             _: &node::Path,
             data: &Data,
+            _: &alloc::collections::BTreeMap<String, crate::value::Value>,
         ) -> Result<RequestPreparation, DriverRouteError> {
             Ok(prepare_process_request(RequestCodec::Lines, data))
         }
@@ -1393,7 +1497,7 @@ mod tests {
             prepared,
             idempotency_key: None,
             effect: node::EffectClass::Idempotent,
-            instance_settings: alloc::collections::BTreeMap::new(),
+            resolved_settings: alloc::collections::BTreeMap::new(),
         };
         journal.open_outbound(intent.clone()).unwrap();
         (journal, intent)
@@ -1614,5 +1718,48 @@ mod tests {
             let value = exit.into_value();
             assert!(ty.accepts(&value), "{value:?} must inhabit ProcessExit");
         }
+    }
+
+    #[test]
+    fn file_exit_is_the_exact_portable_terminal_union() {
+        let crate::datatype::DataType::TaggedUnion(union) =
+            file_exit_type().expect("the standard FileExit type is valid")
+        else {
+            panic!("FileExit must remain a tagged union")
+        };
+        let cases: Vec<_> = union.cases().iter().map(|case| case.name()).collect();
+        assert_eq!(
+            cases,
+            [
+                "AtomicReplaceUnavailable",
+                "Completed",
+                "InvalidPath",
+                "IoFailed",
+                "NotAFile",
+                "NotFound",
+                "OutcomeUnknown",
+                "PermissionDenied",
+                "ReadLimitExceeded",
+                "TimeoutExpired",
+            ]
+        );
+        let limit = union
+            .cases()
+            .iter()
+            .find(|case| case.name() == "ReadLimitExceeded")
+            .expect("the bounded-read case");
+        assert_eq!(limit.payload().fields().len(), 1);
+        assert_eq!(limit.payload().fields()[0].name(), "limit");
+        assert_eq!(
+            limit.payload().fields()[0].ty(),
+            &crate::datatype::DataType::UINT
+        );
+        assert!(
+            union
+                .cases()
+                .iter()
+                .filter(|case| case.name() != "ReadLimitExceeded")
+                .all(|case| case.payload().fields().is_empty())
+        );
     }
 }

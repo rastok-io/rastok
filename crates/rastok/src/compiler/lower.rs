@@ -426,6 +426,19 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 detail: "the canonical owner table omitted an executable Node",
             })?;
         symbols.nodes.push(hir_node.path.to_string());
+        let owner_path =
+            OwnerPath::new(hir_node.path.segments().iter().cloned()).map_err(|_| LowerError {
+                owner: hir_node.path.to_string(),
+                detail: "a checked Node path did not form an owner path",
+            })?;
+        let graph_path = owner_path.parent().unwrap_or_else(OwnerPath::root);
+        let mut constants = graph_constant_environment(hir, &graph_path);
+        constants.extend(
+            hir_node
+                .vals
+                .iter()
+                .map(|value| (value.name.clone(), value.value.value.clone())),
+        );
         // Declaratively unordered collections ship in canonical order,
         // so equal hashes always mean equal plans.
         let mut attributes: Vec<_> = hir_node
@@ -436,6 +449,10 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 let setting = match &attribute.value {
                     AttrValue::Word(word) => AttrSetting::Word(word.clone()),
                     AttrValue::Const(constant) => AttrSetting::Value(constant.value.clone()),
+                    AttrValue::Expr { site, tree } => AttrSetting::Expr {
+                        site: *site,
+                        expr: substitute_tree(tree, &constants),
+                    },
                 };
                 (attribute.name.clone(), setting)
             })
@@ -1137,6 +1154,11 @@ impl Writer<'_> {
                 AttrValue::Const(constant) => {
                     self.tag(2);
                     self.tree(&constant.tree);
+                }
+                AttrValue::Expr { site, tree } => {
+                    self.tag(3);
+                    self.tag(*site as u8);
+                    self.tree(tree);
                 }
             }
         }

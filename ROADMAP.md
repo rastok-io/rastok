@@ -129,8 +129,9 @@ The repository opens publicly with this milestone (15 October 2026).
   `watch` deliberately outside this slice. See the
   [ordered M1.5 backlog](docs/architecture/m1.5-connectors-backlog.md).
   C0's pure Driver-seam refactor, C1's categorical v10 identity/role
-  transport, and C2's mixed-family pre-journal binder are landed; C3 opens
-  the `File` contract and invocation settings.
+  transport, C2's mixed-family pre-journal binder, and C3's Registry-free
+  `rastok/file@1` sheet plus pre-intent invocation settings are landed. C4
+  implements the real one-file Driver; C3 performs no filesystem access.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

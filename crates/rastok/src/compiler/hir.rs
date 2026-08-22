@@ -203,6 +203,13 @@ pub enum AttrValue {
     Word(String),
     /// A constant expression with its reduction.
     Const(Const),
+    /// A checked expression whose value closes after plan construction.
+    Expr {
+        /// Earliest site at which every binding is available.
+        site: crate::plan::EvaluationSite,
+        /// Canonical typed expression transported to the plan.
+        tree: expr::Tree,
+    },
 }
 
 /// One mutable state cell.

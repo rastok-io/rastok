@@ -29,6 +29,8 @@ pub enum PortDataType {
     Variant,
     /// Canonical terminal union of one Process invocation.
     ProcessExit,
+    /// Canonical terminal union of one File invocation.
+    FileExit,
 }
 
 impl PortDataType {
@@ -38,6 +40,7 @@ impl PortDataType {
             Self::Bytes => Ok(crate::datatype::DataType::BYTES),
             Self::Variant => Ok(crate::datatype::DataType::Variant),
             Self::ProcessExit => crate::boundary::process_exit_type(),
+            Self::FileExit => crate::boundary::file_exit_type(),
         }
     }
 }
@@ -470,6 +473,24 @@ impl ValueDomain {
         )
     }
 
+    /// The canonical static type expected from one implemented expression
+    /// domain. Choice words are syntax rather than expressions; deferred-only
+    /// domains deliberately have no executable type here.
+    #[must_use]
+    pub fn expression_type(&self) -> Option<crate::datatype::DataType> {
+        match self {
+            Self::Text | Self::ByteSize => Some(crate::datatype::DataType::Text),
+            Self::TextList => Some(crate::datatype::DataType::array(
+                crate::datatype::DataType::Text,
+            )),
+            Self::Duration => Some(crate::datatype::DataType::DURATION),
+            Self::TextMap => Some(crate::datatype::DataType::text_map(
+                crate::datatype::DataType::Text,
+            )),
+            Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => None,
+        }
+    }
+
     /// Judges a CONSTANT value against the domain — the ONE
     /// predicate shared by author-written values and sheet defaults.
     #[must_use]
@@ -501,7 +522,7 @@ impl ValueDomain {
 /// — target-independent, so the same source validates identically
 /// on every machine (a 32-bit host compares lengths in `u64` and
 /// never allocates the bound up front).
-pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
+pub use crate::connector::MAX_BYTE_SIZE;
 
 /// Reads a declared byte size (`"8MiB"`, `"512KiB"`, `"100B"`) — an
 /// explicit unit is required, and the result is bounded by
@@ -510,24 +531,7 @@ pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
 /// is a size the runtime enforces, on every target width.
 #[must_use]
 pub fn byte_size(text: &str) -> Option<u64> {
-    // ASCII whitespace exactly — the normative rule is byte-level
-    // deterministic, no Unicode class in sight.
-    let text = text.trim_matches(|c: char| c.is_ascii_whitespace());
-    let split = text.find(|c: char| !c.is_ascii_digit())?;
-    let (digits, suffix) = text.split_at(split);
-    if digits.is_empty() {
-        return None;
-    }
-    let base: u64 = digits.parse().ok()?;
-    let factor: u64 = match suffix.trim_matches(|c: char| c.is_ascii_whitespace()) {
-        "B" => 1,
-        "KiB" => 1024,
-        "MiB" => 1024 * 1024,
-        "GiB" => 1024 * 1024 * 1024,
-        _ => return None,
-    };
-    let size = base.checked_mul(factor)?;
-    (size <= MAX_BYTE_SIZE).then_some(size)
+    crate::connector::byte_size(text)
 }
 
 /// Why a contract sheet cannot enter the registry — the sheet is an

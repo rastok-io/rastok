@@ -113,7 +113,7 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 *visibly shrinks* the probabilistic surface.
 
 
-## 3. The six contracts
+## 3. The seven contracts
 
 ### 3.1 `HttpServer` — inbound HTTP, two modes
 
@@ -387,6 +387,43 @@ containing that metadata; `Memory` does not invent a hidden record shape.
 to wire a static back-edge to an upstream Node. A replay tool or a new graph
 run can inject selected values as new roots.
 
+### 3.7 `File` — one logical file per invocation
+
+| Case | Contract |
+|---|---|
+| Role / Direction | outbound one-file operation; `mode = read \| replace` is required; `watch` is a known deferred spelling whose inbound role requires a later contract-version decision |
+| Ports | read: `in: variant`, one `out: bytes` on success, then `exit: FileExit`; replace: `in: bytes`, no success `out`, then `exit: FileExit` |
+| effect / behavior | `idempotent` / `deterministic` (pre-declared) |
+| Common attributes | `path: text` Required, latest site **invocation**; `timeout: duration` Optional, latest site instance |
+| Read attributes | `max_read: ByteSize = "8MiB"` (plan; portable maximum 4 GiB) |
+| Outcome cases | `Completed`; `NotFound`; `NotAFile`; `PermissionDenied`; `InvalidPath`; `ReadLimitExceeded { limit: uint }`; `AtomicReplaceUnavailable`; `IoFailed`; scheduler `TimeoutExpired`; bounded-Closing `OutcomeUnknown` |
+| Instances | ordinary Node instances; a dynamic `path` is evaluated for each invocation and is not instance addressing |
+| Journal / sim | request preparation and typed rejection occur before OUTBOUND open; the real Driver lands in M1.5 C4; C3 performs no filesystem access |
+
+`path` is a logical UTF-8 path relative to the physical root supplied to the
+bound Driver. The physical root is deployment data, not plan identity. Empty
+or absolute paths, NUL, empty segments, `.` and `..`, and a spelling the host
+cannot represent yield `InvalidPath`; parents are never created implicitly.
+The path spelling is not case-folded, Unicode-normalized or canonicalized.
+The root is a resolution base rather than a portable security sandbox: native
+symlink behavior belongs to the external world or to a stricter deployment
+Driver.
+
+A read publishes the complete bytes or no `out` at all. Crossing `max_read`
+returns `ReadLimitExceeded` with the declared limit. A replace stages in the
+target directory and uses one native atomic replacement. If that visibility
+guarantee is unavailable, `AtomicReplaceUnavailable` is terminal; there is no
+truncate/in-place fallback. The contract does not promise crash durability or
+preservation of permissions, ownership, xattrs or timestamps. Existing
+directory segments are required, while the final target may be created.
+
+The exit union is deliberately portable and mostly empty. The outbound
+intent already seals the operation and logical path; host error numbers,
+unstable messages and repeated paths are observations, not causal payload.
+Directory listing, recursion, removal and parent creation are not hidden File
+modes. A later watch contract must separately settle snapshot, replacement,
+deletion, overflow, resynchronization and acknowledgement semantics.
+
 ## 4. Standard vocabulary over core Operator semantics
 
 These names expose common patterns without adding a second execution model:
@@ -577,7 +614,7 @@ The surface reserves the following mapping:
 
 ## 8. Non-goals of this doc (deferred, with homes)
 
-- **Additional Connector traits**: `Postgres`, `File`, `Kafka`, `S3`, … —
+- **Additional Connector traits**: `Postgres`, `Kafka`, `S3`, … —
   same template, no suffixes. Their order follows executable use cases;
   runtime durability does not depend on an application Connector.
 - **`seeded`** behavior value.

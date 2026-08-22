@@ -77,10 +77,13 @@ change external outcomes but may not weaken a contract or bypass binding.
 contract addresses exactly one file per invocation. `read` and atomic
 `replace` are the initial outbound modes. A path may name a file below
 existing directories, but the connector does not list directories, recurse,
-create parents or remove trees. A future single-file `watch` profile is an
-Inbound role and stays deferred until initial snapshot, replacement,
-deletion, overflow, resynchronization and acknowledgement semantics are
-decided. Directory traversal, if ever admitted, is a separate contract.
+create parents or remove trees. The single-file `watch` spelling is reserved
+by a named deferral until initial snapshot, replacement, deletion, overflow,
+resynchronization and acknowledgement semantics are decided. Because watch is
+an Inbound role while `rastok/file@1` is Outbound, lifting it also requires an
+explicit contract-version or separate-contract decision; the deferred source
+word promises no v1 port shape. Directory traversal, if ever admitted, is a
+separate contract.
 
 The first implementation checkpoint only adopts this vocabulary and module
 boundary and therefore moves no semantic identity. The versioned identifier
@@ -148,6 +151,61 @@ The mixed-family proof executes two different fake contract ids through one
 VM, while a both-role proof reaches both interfaces on one shared bound
 object. Binding failures start no Driver effect and create no journal. C2
 moves no semantic hash, package byte, causal trace, or format version.
+
+**C3 File-contract checkpoint (2026-08-22).** `rastok/file@1` is an
+outbound, one-file contract with two executable profiles and one named
+deferred profile. `read` accepts `in: variant`, emits exactly one complete
+`out: bytes` on success, and terminates on `exit: FileExit`; `replace`
+accepts `in: bytes`, emits no success payload, and terminates on the same
+exit port. `watch` is known but deferred and its placeholder row is not an
+executable role/port promise. The user must write `mode`; intent is never
+inferred from payload or wiring. Both executable profiles have
+predeclared `effect = idempotent` and `behavior = deterministic`.
+
+`path: text` is required and may close as late as invocation. Its checked
+expression travels in the existing v10 dynamic-attribute row. Immediately
+before request preparation, the VM evaluates it against the admitted
+envelope plus the immutable instance bundle, validates the result, and gives
+the Driver only the resulting value map. A fault opens no outbound record.
+Plan values have already been bound by the factory; instance and invocation
+values are resolved into the same per-call map. A Driver never receives an
+expression tree, consults the ContractCatalog, or injects a default. The exact
+values used for request preparation ride with the in-memory intent so start
+observes the same call that was sealed.
+
+The logical path is UTF-8 text relative to an explicit physical root supplied
+when the Driver is bound. That root, a crate path, mount, Host and sandbox
+policy are deployment facts and never enter the semantic plan. C4's Driver
+must reject empty or absolute paths, NUL, empty segments, `.` and `..`, and
+native-invalid spellings as `InvalidPath`; it creates no parent directory.
+It preserves the written Unicode, case and segment spelling and never calls a
+semantic `canonicalize`. The root is an address base, not a promised security
+sandbox: native symlink resolution is external-world behavior unless a
+deployment supplies a stricter Driver.
+
+`read` is all-or-nothing and bounded by `max_read`, default `"8MiB"` under
+the existing portable 4-GiB byte-size grammar. A limit refusal publishes no
+partial `out`. `replace` writes a temporary file in the target directory and
+publishes it through one native atomic replace; a platform that cannot make
+that guarantee returns `AtomicReplaceUnavailable` and must never fall back to
+truncate/in-place writing. The contract promises atomic visibility, not
+crash durability (`fsync`) or preservation of permissions, ownership, xattrs
+or timestamps. Existing directory segments are required; only the final file
+may be created.
+
+`FileExit` has the exact portable cases `Completed`, `NotFound`, `NotAFile`,
+`PermissionDenied`, `InvalidPath`, `ReadLimitExceeded { limit: uint }`,
+`AtomicReplaceUnavailable`, `IoFailed`, `TimeoutExpired`, and
+`OutcomeUnknown`. Paths, host messages and error numbers do not enter those
+payloads: the intent already identifies the operation and path, while
+unstable physical detail belongs to observation. Directory listing,
+recursion, implicit parent creation and removal are absent sheet attributes;
+the single-file watch protocol remains a named deferral.
+
+C3 performs no filesystem observation and registers no File Driver. It adds
+no format tag and moves no existing semantic hash, package or causal trace;
+new File programs use the already allocated v10 connector and phased-setting
+forms. C4 alone implements the external effect.
 
 ## D-2026-08-18-1 — Nodes own instances; key, lifetime, and state scope are separate
 

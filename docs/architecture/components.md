@@ -75,7 +75,7 @@ canonical record projection ─▶ golden compare
 | HIR | `compiler` (check) | canonicalize, lower | desugared, name-resolved, typed — the hash input ([identity.md §1](../spec/identity.md)); spans live in side tables; **the entire lab is excluded from the hash** |
 | canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
 | `plan::ValidatedExecutionPlan` | `compiler` (lower, then validate) or `plan::decode` | `runtime`, `lab`, `plan::encode` | the only executable/package boundary: an immutable `ExecutionPlan` whose tables, `expr::Tree`s, slots, contracts, and structural budgets have already passed the plan gate |
-| `boundary::Intent` (open OUTBOUND) | `runtime` | dispatcher → `boundary::OutboundConnectorDriver` impls | journaled before any handler runs, carrying the canonical call fields — emitting id, connector path, request digest, optional idempotency key ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
+| `boundary::Intent` (open OUTBOUND) | `runtime` | dispatcher → `boundary::OutboundConnectorDriver` impls | the runtime carrier for the canonical call fields and already-resolved non-plan settings used to prepare this exact call; the causal open record seals emitting id, connector path, request digest and optional idempotency key before any Driver effect, while settings remain execution material rather than a parallel causal field ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
 | `boundary::Completion` | `connectors` or the Lab's mock Driver | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallRef` — never by the business key; a Driver only answers and never decides a timeout or mints journal records |
 | `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | Drivers and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `diagnostics::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
@@ -403,7 +403,8 @@ whatever its execution format.
 | **`connectors::DriverRegistry`** | exact `ConnectorId` → implementation factory mapping and role-availability checks; duplicate ids refuse | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
 | **`connectors::RuntimeBindings`** | the pre-VM association of every runnable inbound and callable outbound Node with one family object; exact role-view proof; Node-path and call-family routing without concrete contract matching | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
 | **`connectors::ProcessFactory` / `Process`** | the explicit `rastok/process@1` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; family module C0; registry binding C2 |
-| **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory, File) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded; `File` is M1.5 |
+| **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@1`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget; no filesystem implementation | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3; real Driver is C4 |
+| **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |
 
 ### 3.9 The lab (`lab`)
@@ -565,7 +566,7 @@ The chronological detail and commit evidence remain in
   hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
   profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.
-- **Next:** M1.5's `File` contract and Driver on the landed global binder, then Loop,
+- **Next:** M1.5's real `File` Driver on the landed C3 contract, then Loop,
   counters, and `--watch`
   remain guarded in the order recorded by the
-  [M1.4 backlog](m1.4-instances-backlog.md).
+  [M1.5 backlog](m1.5-connectors-backlog.md).

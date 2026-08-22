@@ -174,6 +174,15 @@ closure (the call-closed rule, execution-model §6.3) :
      discarded  (late response after closure — observability-visible, graph-invisible)
 ```
 
+Request preparation happens after every contract setting for that call has
+become a typed value and before the open record. A call-varying setting that
+changes the external operation must affect the prepared request seal. In
+particular, the `File` Driver's prepared descriptor includes the exact
+logical path (and replacement bytes for `mode = replace`); two paths cannot
+share a request digest merely because their trigger payloads are equal. The
+resolved setting map is an execution carrier, not a new causal record field:
+the outbound record retains the canonical digest authority.
+
 One call = exactly one closure. The recall rows of §4.4 need no new closure
 kind — a recall is *the same call* re-attempted, and its reply (or timeout)
 closes it through the normal rule.

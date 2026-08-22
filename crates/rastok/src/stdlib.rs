@@ -2,15 +2,15 @@
 //! [`crate::contract`] metamodel.
 //!
 //! Governing rule: [`stdlib.md`] — the ten-case Connector template and
-//! the six contracts. Contracts are data: the checker validates
+//! the standard contracts. Contracts are data: the checker validates
 //! declarations against these sheets without linking any Driver, and
-//! Drivers implement them later. M0 ships the `Process` sheet with
-//! its job profile; the rest of the catalogue is declared so its names
+//! Drivers implement them later. The current catalogue ships executable
+//! `Process` and `File` sheets; the remaining names are declared so they
 //! refuse explicitly rather than accidentally.
 //!
 //! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
 
-use crate::connector::{ConnectorRoles, PROCESS_CONNECTOR_ID};
+use crate::connector::{ConnectorRoles, FILE_CONNECTOR_ID, PROCESS_CONNECTOR_ID};
 use crate::contract::{
     AttributeSpec, ConnectorContract, ContractCatalog, DefaultValue, EvaluationSite,
     FrontendContract, FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice,
@@ -219,16 +219,113 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
     }),
 };
 
+/// The one-file outbound contract. One invocation either reads one complete
+/// bounded byte value or atomically replaces one file; directory operations
+/// and observation streams are separate contracts, never hidden modes.
+pub const FILE: ConnectorContract = ConnectorContract {
+    id: FILE_CONNECTOR_ID,
+    name: "File",
+    roles: ConnectorRoles::Outbound,
+    ports: &[
+        PortContract {
+            name: "in",
+            direction: Direction::Input,
+            unwired: UnwiredPolicy::RequireWire,
+            ty: PortTypeRule::AttributeSelected {
+                attribute: "mode",
+                choices: &[
+                    PortTypeChoice {
+                        word: "read",
+                        ty: PortDataType::Variant,
+                    },
+                    PortTypeChoice {
+                        word: "replace",
+                        ty: PortDataType::Bytes,
+                    },
+                    // The deferred selector word keeps this table total. It
+                    // promises no future trigger shape: lifting an inbound
+                    // watch requires an explicit contract-version decision.
+                    PortTypeChoice {
+                        word: "watch",
+                        ty: PortDataType::Variant,
+                    },
+                ],
+            },
+        },
+        PortContract {
+            name: "out",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RootSink,
+            ty: PortTypeRule::Fixed(PortDataType::Bytes),
+        },
+        PortContract {
+            name: "exit",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RootSink,
+            ty: PortTypeRule::Fixed(PortDataType::FileExit),
+        },
+    ],
+    common: &[
+        AttributeSpec {
+            name: "path",
+            presence: Presence::Required,
+            domain: ValueDomain::Text,
+            latest_site: EvaluationSite::Invocation,
+        },
+        AttributeSpec {
+            // Read and atomic replace are idempotent for the same sealed
+            // request. Append and directory mutation are not this contract.
+            name: "effect",
+            presence: Presence::Defaulted(DefaultValue::Choice("idempotent")),
+            domain: ValueDomain::Choice(&["idempotent"]),
+            latest_site: EvaluationSite::Plan,
+        },
+        AttributeSpec {
+            name: "behavior",
+            presence: Presence::Defaulted(DefaultValue::Choice("deterministic")),
+            domain: ValueDomain::Choice(&["deterministic"]),
+            latest_site: EvaluationSite::Plan,
+        },
+        AttributeSpec {
+            name: "timeout",
+            presence: Presence::Optional,
+            domain: ValueDomain::Duration,
+            latest_site: EvaluationSite::Instance,
+        },
+    ],
+    selector: Some(ProfileSelector {
+        attribute: "mode",
+        // Reading versus replacing is user intent and never inferred from the
+        // payload or wiring.
+        default: None,
+        profiles: &[
+            Profile {
+                word: "read",
+                support: ProfileSupport::Available,
+                attributes: &[AttributeSpec {
+                    name: "max_read",
+                    presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
+                    domain: ValueDomain::ByteSize,
+                    latest_site: EvaluationSite::Plan,
+                }],
+            },
+            Profile {
+                word: "replace",
+                support: ProfileSupport::Available,
+                attributes: &[],
+            },
+            Profile {
+                word: "watch",
+                support: ProfileSupport::Deferred("the File watch profile"),
+                attributes: &[],
+            },
+        ],
+    }),
+};
+
 /// The catalogue names declared by `stdlib.md` whose Drivers are not
 /// in the M0 build.
-const DECLARED: &[&str] = &[
-    "HttpServer",
-    "HttpClient",
-    "Clock",
-    "Calendar",
-    "Memory",
-    "File",
-];
+const DECLARED: &[&str] = &["HttpServer", "HttpClient", "Clock", "Calendar", "Memory"];
 
 const M0_FRONTENDS: &[FrontendContract] = &[
     FrontendContract {
@@ -335,7 +432,8 @@ impl ContractCatalog {
             .iter()
             .cloned()
             .try_fold(base, Self::try_with_frontend)?
-            .try_with(PROCESS)
+            .try_with(PROCESS)?
+            .try_with(FILE)
     }
 }
 
@@ -383,6 +481,26 @@ mod tests {
                 .iter()
                 .any(|port| port.port.name() == "exit" && port.ty.as_ref() == Some(&process_exit))
         );
+    }
+
+    #[test]
+    fn the_file_sheet_holds_its_own_door() {
+        assert!(crate::contract::validate_sheet(&FILE).is_ok());
+        let read = FILE.profile("read").expect("the read profile");
+        assert!(FILE.attribute(Some(read), "max_read").is_some());
+        assert_eq!(
+            FILE.attribute(Some(read), "path")
+                .expect("the common path")
+                .latest_site,
+            EvaluationSite::Invocation
+        );
+        let ports = FILE
+            .resolve_ports(&std::collections::BTreeMap::from([(
+                String::from("mode"),
+                String::from("read"),
+            )]))
+            .expect("the effective File sheet resolves");
+        assert_eq!(ports.len(), 3);
     }
 
     #[test]

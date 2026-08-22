@@ -248,7 +248,12 @@ struct Liar {
 }
 
 impl OutboundConnectorDriver for Liar {
-    fn prepare_request(&mut self, _: &rastok::node::Path, data: &Data) -> RequestPreparation {
+    fn prepare_request(
+        &mut self,
+        _: &rastok::node::Path,
+        data: &Data,
+        _: &std::collections::BTreeMap<String, rastok::value::Value>,
+    ) -> RequestPreparation {
         rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
     }
 
@@ -329,7 +334,12 @@ struct Swapper {
 }
 
 impl OutboundConnectorDriver for Swapper {
-    fn prepare_request(&mut self, _: &rastok::node::Path, data: &Data) -> RequestPreparation {
+    fn prepare_request(
+        &mut self,
+        _: &rastok::node::Path,
+        data: &Data,
+        _: &std::collections::BTreeMap<String, rastok::value::Value>,
+    ) -> RequestPreparation {
         rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
     }
 

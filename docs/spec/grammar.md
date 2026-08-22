@@ -599,7 +599,7 @@ No `Reader`, `Writer`, or `Endpoint` suffix is needed in the DSL :
 | `Process` | typed stdio + lifecycle ports | default `in`/`out`/`err`/`exit` = `stdin`/`stdout`/`stderr`/tagged invocation terminal, one child-process lifecycle per job call |
 | `Jaq` | its transformer contract | pure `in -> out` envelope transform |
 | `Memory` | its fixed store contract | `in` appends; `read` requests a bounded snapshot on `out` |
-| `File` (deferred) | its future ports and configuration | read side, write side, or both |
+| `File` | `mode` plus the contract sheet | `read`: variant trigger → bytes; `replace`: bytes → terminal exit; both use a required invocation-capable `path` |
 
 Rust implementation structs may use explicit names (`FileReader`,
 `JsonRpcWriter`, etc.). The NodeRegistry exposes suffix-free DSL type names
@@ -1116,7 +1116,7 @@ does not claim implementation or release status.
 | `HttpServer` | Connector node | specified in the initial stdlib catalog |
 | `HttpClient` | Connector node | specified in the initial stdlib catalog ; response/DLQ semantics follow the delivery spec |
 | `Process` | Connector node | specified in the initial stdlib catalog ; codec/protocol matrix must remain narrow |
-| `File` | Connector node | deferred; must use the standard Connector contract |
+| `File` | Connector node | executable C3 sheet: explicit one-file `read` / atomic `replace`; `watch` and directory operations are named deferrals |
 | `Postgres` | Connector node | deferred; must use the standard Connector contract |
 | `Sqlite` | Connector node | deferred; must use the standard Connector contract |
 | `Clock` | Connector node (mockable clock) | specified in the initial stdlib catalog |

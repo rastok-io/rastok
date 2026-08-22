@@ -52,7 +52,12 @@ struct EchoWorld {
 }
 
 impl OutboundConnectorDriver for EchoWorld {
-    fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+    fn prepare_request(
+        &mut self,
+        _: &node::Path,
+        data: &Data,
+        _: &std::collections::BTreeMap<String, rastok::value::Value>,
+    ) -> RequestPreparation {
         rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
     }
 
