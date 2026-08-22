@@ -130,8 +130,11 @@ The repository opens publicly with this milestone (15 October 2026).
   [ordered M1.5 backlog](docs/architecture/m1.5-connectors-backlog.md).
   C0's pure Driver-seam refactor, C1's categorical v10 identity/role
   transport, C2's mixed-family pre-journal binder, and C3's Registry-free
-  `rastok/file@1` sheet plus pre-intent invocation settings are landed. C4
-  implements the real one-file Driver; C3 performs no filesystem access.
+  `rastok/file@1` sheet plus pre-intent invocation settings are landed. C4's
+  real one-file Driver now performs bounded complete reads and native atomic
+  replacement only after OUTBOUND open, with portable exits, cooperative
+  cancellation and no-recall replay. C5 is the active conformance/composition
+  gate across Process and File.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

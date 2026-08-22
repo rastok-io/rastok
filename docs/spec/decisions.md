@@ -207,6 +207,45 @@ no format tag and moves no existing semantic hash, package or causal trace;
 new File programs use the already allocated v10 connector and phased-setting
 forms. C4 alone implements the external effect.
 
+**C4 File-Driver checkpoint (2026-08-23).** `FileFactory` now binds
+`rastok/file@1` to one explicit physical root without inspecting that root.
+Pure request preparation validates the logical path and seals one versioned
+operation descriptor: mode, exact UTF-8 logical path, and either `max_read` or
+the exact replacement bytes. Those descriptor bytes — not a later
+reconstruction from attributes — are the request-digest material and the sole
+operation a worker executes after OUTBOUND is open.
+
+The logical separator is `/`; `\` is rejected so one plan cannot reinterpret a
+segment as a separator on another host. Native absolute forms are rejected in
+addition to the C3 lexical refusals. Joining the path to the root and every
+filesystem observation happen only in the post-open worker.
+
+One detached worker per call keeps blocking filesystem I/O outside the
+synchronous machine. Read checks the declared limit before retaining each
+chunk and publishes either one complete raw-byte `out` followed by `Completed`,
+or no `out` and one portable refusal. Replace opens a collision-safe
+`create_new` staging file in the target directory, writes it completely, then
+uses the host's native same-directory atomic rename. The target is never used
+as staging, and there is no truncate fallback. On platforms where replacing
+an existing target cannot be guaranteed atomically, the result is
+`AtomicReplaceUnavailable`.
+
+Cancellation is cooperative and best effort. If observed before read
+completion or the rename commit point, the worker publishes nothing; the
+scheduler owns the terminal timeout/unknown fact. If the external operation
+wins the race, its completion may arrive late and the generic close-once
+dispatcher makes it graph-invisible while retaining it as an observation.
+Dropping a bound Driver requests cancellation of all remaining workers.
+`Dispatcher::resume` marks existing open calls as already started: only the
+future recovery fold may authorize a recall, so replay alone never observes or
+mutates a file.
+
+Host messages, paths and error numbers stay outside causal values. The Driver
+maps only the portable FileExit distinctions and collapses every remaining
+host failure to `IoFailed`. C4 changes no plan format, semantic hash, package,
+or causal trace; File request digests begin to exist only for newly executed
+File calls.
+
 ## D-2026-08-18-1 — Nodes own instances; key, lifetime, and state scope are separate
 
 The unreleased named-partition model fused three independent concerns: a key

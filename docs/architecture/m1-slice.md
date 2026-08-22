@@ -32,7 +32,8 @@ M1.5 C0 separated Connector/Contract/Driver vocabulary without an identity
 move; C1 now publishes stable Connector ids and role requirements in
 categorical plan-package v10, with separate compiler `ContractCatalog` and
 runtime `DriverRegistry`. C2 now binds every active role before the VM and
-routes mixed families without concrete-name dispatch; C3 opens `File`.
+routes mixed families without concrete-name dispatch; C3 opens `File`, and C4
+executes its bounded read/atomic-replace effects behind the generic boundary.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -343,7 +344,8 @@ step touches `vm.rs` once.
    `read` and atomic `replace`; directory traversal and single-file `watch`
    remain named limits. C3 has frozen and implemented the sheet, portable
    `FileExit`, read budget, path semantics, and invocation-value transport
-   without touching the filesystem; C4 supplies the real Driver. The
+   without touching the filesystem; C4 now supplies the real Driver and proves
+   journal-before-filesystem, portable exits, cancel and no-recall replay. The
    half-day claim is measured separately from the one-time binder tax.
 7. **`HttpClient`** — outbound calls under declared budgets, on the
    harness. Decision point before code: hand-rolled bounded HTTP/1.1

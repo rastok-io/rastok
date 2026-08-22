@@ -403,7 +403,8 @@ whatever its execution format.
 | **`connectors::DriverRegistry`** | exact `ConnectorId` → implementation factory mapping and role-availability checks; duplicate ids refuse | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
 | **`connectors::RuntimeBindings`** | the pre-VM association of every runnable inbound and callable outbound Node with one family object; exact role-view proof; Node-path and call-family routing without concrete contract matching | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
 | **`connectors::ProcessFactory` / `Process`** | the explicit `rastok/process@1` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; family module C0; registry binding C2 |
-| **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@1`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget; no filesystem implementation | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3; real Driver is C4 |
+| **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@1`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
+| **`connectors::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
 | **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |
 
@@ -566,7 +567,7 @@ The chronological detail and commit evidence remain in
   hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
   profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.
-- **Next:** M1.5's real `File` Driver on the landed C3 contract, then Loop,
+- **Next:** M1.5 C5 composition/conformance over Process and File, then Loop,
   counters, and `--watch`
   remain guarded in the order recorded by the
   [M1.5 backlog](m1.5-connectors-backlog.md).

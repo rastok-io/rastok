@@ -398,12 +398,14 @@ run can inject selected values as new roots.
 | Read attributes | `max_read: ByteSize = "8MiB"` (plan; portable maximum 4 GiB) |
 | Outcome cases | `Completed`; `NotFound`; `NotAFile`; `PermissionDenied`; `InvalidPath`; `ReadLimitExceeded { limit: uint }`; `AtomicReplaceUnavailable`; `IoFailed`; scheduler `TimeoutExpired`; bounded-Closing `OutcomeUnknown` |
 | Instances | ordinary Node instances; a dynamic `path` is evaluated for each invocation and is not instance addressing |
-| Journal / sim | request preparation and typed rejection occur before OUTBOUND open; the real Driver lands in M1.5 C4; C3 performs no filesystem access |
+| Journal / sim | request preparation and typed rejection occur before OUTBOUND open; C4's real Driver executes only the sealed operation after open; replay never recalls it without recovery triage |
 
 `path` is a logical UTF-8 path relative to the physical root supplied to the
-bound Driver. The physical root is deployment data, not plan identity. Empty
-or absolute paths, NUL, empty segments, `.` and `..`, and a spelling the host
-cannot represent yield `InvalidPath`; parents are never created implicitly.
+bound Driver. The physical root is deployment data, not plan identity. `/` is
+the only logical separator; `\` refuses rather than changing meaning across
+hosts. Empty or native-absolute paths, NUL, empty segments, `.` and `..`, and
+a spelling the host cannot represent yield `InvalidPath`; parents are never
+created implicitly.
 The path spelling is not case-folded, Unicode-normalized or canonicalized.
 The root is a resolution base rather than a portable security sandbox: native
 symlink behavior belongs to the external world or to a stricter deployment
@@ -416,6 +418,13 @@ guarantee is unavailable, `AtomicReplaceUnavailable` is terminal; there is no
 truncate/in-place fallback. The contract does not promise crash durability or
 preservation of permissions, ownership, xattrs or timestamps. Existing
 directory segments are required, while the final target may be created.
+
+The sealed request descriptor carries mode, exact logical path, and the read
+bound or exact replacement bytes. It is prepared before OUTBOUND open and
+executed without recomputation afterwards. Cancellation before the read or
+rename commit point is silent at the Driver; scheduler timeout and bounded
+Closing own the terminal fact. A completion that loses the close race is an
+ordinary late observation, never a second graph event.
 
 The exit union is deliberately portable and mostly empty. The outbound
 intent already seals the operation and logical path; host error numbers,

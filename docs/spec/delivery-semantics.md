@@ -183,6 +183,14 @@ share a request digest merely because their trigger payloads are equal. The
 resolved setting map is an execution carrier, not a new causal record field:
 the outbound record retains the canonical digest authority.
 
+For `rastok/file@1`, the post-open worker decodes and executes that descriptor
+itself; it never re-reads the plan settings. Cooperative cancellation before a
+complete read or atomic-rename commit emits nothing from the Driver, leaving
+the scheduler's won closure authoritative. A completion observed after another
+closure won is handled by the same discarded-response rule as every outbound
+protocol. `Dispatcher::resume` starts no existing open call: filesystem recall
+is a future recovery-fold decision, not replay behavior.
+
 One call = exactly one closure. The recall rows of §4.4 need no new closure
 kind — a recall is *the same call* re-attempted, and its reply (or timeout)
 closes it through the normal rule.

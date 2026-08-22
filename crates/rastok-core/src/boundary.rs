@@ -79,9 +79,9 @@ impl fmt::Display for CallRef {
     }
 }
 
-/// The exact protocol bytes of a request, sealed: what the journal
-/// digests and what the driver receives are THE SAME VALUE — the
-/// machine prepares once, the Driver transports, nobody recomputes.
+/// The exact protocol or operation bytes of a request, sealed: what the
+/// journal digests and what the driver executes are THE SAME VALUE — the
+/// machine prepares once, the Driver acts, nobody recomputes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedRequest {
     bytes: alloc::vec::Vec<u8>,
@@ -99,7 +99,7 @@ impl PreparedRequest {
         Self { bytes, digest }
     }
 
-    /// The exact bytes to send.
+    /// The exact bytes to transport or execute.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
@@ -369,6 +369,68 @@ pub enum ProcessExit {
     },
 }
 
+/// The portable terminal facts emitted by `File`.
+///
+/// This Rust enum is a Driver-side construction aid, not a second logical
+/// type. [`FileExit::into_value`] is the sole projection into the ordinary
+/// canonical tagged union carried by the `exit` port. Host error numbers,
+/// paths, and platform messages never cross this boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileExit {
+    /// The requested read or atomic replacement completed.
+    Completed,
+    /// No filesystem entry exists at the logical path.
+    NotFound,
+    /// The entry or one of its required path components is not a file.
+    NotAFile,
+    /// The host denied the operation.
+    PermissionDenied,
+    /// The logical path has no portable File spelling.
+    InvalidPath,
+    /// A complete read would exceed the declared bound.
+    ReadLimitExceeded {
+        /// Declared read bound in bytes.
+        limit: u64,
+    },
+    /// The host cannot provide the contract's atomic replacement primitive.
+    AtomicReplaceUnavailable,
+    /// A portable classification above cannot describe the I/O failure.
+    IoFailed,
+    /// The scheduler's invocation budget won the close race.
+    TimeoutExpired,
+    /// Cancellation was requested, but no terminal observation arrived
+    /// within the instance's explicit settlement budget.
+    OutcomeUnknown,
+}
+
+impl FileExit {
+    /// Projects the Driver fact into the ordinary canonical tagged value.
+    #[must_use]
+    pub fn into_value(self) -> crate::value::Value {
+        use crate::value::{TaggedUnionValue, Value};
+
+        let (case, payload) = match self {
+            Self::Completed => ("Completed", Vec::new()),
+            Self::NotFound => ("NotFound", Vec::new()),
+            Self::NotAFile => ("NotAFile", Vec::new()),
+            Self::PermissionDenied => ("PermissionDenied", Vec::new()),
+            Self::InvalidPath => ("InvalidPath", Vec::new()),
+            Self::ReadLimitExceeded { limit } => (
+                "ReadLimitExceeded",
+                alloc::vec![(String::from("limit"), Value::Uint(limit))],
+            ),
+            Self::AtomicReplaceUnavailable => ("AtomicReplaceUnavailable", Vec::new()),
+            Self::IoFailed => ("IoFailed", Vec::new()),
+            Self::TimeoutExpired => ("TimeoutExpired", Vec::new()),
+            Self::OutcomeUnknown => ("OutcomeUnknown", Vec::new()),
+        };
+        Value::TaggedUnion(alloc::boxed::Box::new(TaggedUnionValue {
+            case: String::from(case),
+            payload,
+        }))
+    }
+}
+
 /// Why a bounded Process capture stopped.
 ///
 /// Keeping this closed beside [`ProcessExit`] prevents a Driver from
@@ -488,6 +550,18 @@ pub fn process_scheduler_completion(completion: SchedulerCompletion) -> Completi
     Completion::process_exit(match completion {
         SchedulerCompletion::TimeoutExpired => ProcessExit::TimeoutExpired,
         SchedulerCompletion::OutcomeUnknown => ProcessExit::OutcomeUnknown,
+    })
+}
+
+/// Projects a machine-decided terminal fact into the File contract.
+///
+/// This is selected by a bound File Driver; the generic scheduler never
+/// dispatches on a concrete Connector name.
+#[must_use]
+pub fn file_scheduler_completion(completion: SchedulerCompletion) -> Completion {
+    Completion::file_exit(match completion {
+        SchedulerCompletion::TimeoutExpired => FileExit::TimeoutExpired,
+        SchedulerCompletion::OutcomeUnknown => FileExit::OutcomeUnknown,
     })
 }
 
@@ -705,6 +779,30 @@ impl Completion {
     #[must_use]
     pub fn process_exit(exit: ProcessExit) -> Self {
         Self::process(Vec::new(), Vec::new(), exit)
+    }
+
+    /// Builds one File completion: an optional complete read followed by the
+    /// sole terminal fact. Replace success deliberately supplies no `out`.
+    #[must_use]
+    pub fn file(out: Option<envelope::Data>, exit: FileExit) -> Self {
+        let mut outputs = Vec::with_capacity(usize::from(out.is_some()).saturating_add(1));
+        if let Some(data) = out {
+            outputs.push(PortOutput {
+                port: node::Port::conventional_out(),
+                data,
+            });
+        }
+        outputs.push(PortOutput {
+            port: node::Port::conventional_exit(),
+            data: envelope::Data::materialized(exit.into_value()),
+        });
+        Self { outputs }
+    }
+
+    /// Builds a File completion containing only its terminal fact.
+    #[must_use]
+    pub fn file_exit(exit: FileExit) -> Self {
+        Self::file(None, exit)
     }
 }
 
@@ -1722,9 +1820,8 @@ mod tests {
 
     #[test]
     fn file_exit_is_the_exact_portable_terminal_union() {
-        let crate::datatype::DataType::TaggedUnion(union) =
-            file_exit_type().expect("the standard FileExit type is valid")
-        else {
+        let ty = file_exit_type().expect("the standard FileExit type is valid");
+        let crate::datatype::DataType::TaggedUnion(union) = &ty else {
             panic!("FileExit must remain a tagged union")
         };
         let cases: Vec<_> = union.cases().iter().map(|case| case.name()).collect();
@@ -1761,5 +1858,20 @@ mod tests {
                 .filter(|case| case.name() != "ReadLimitExceeded")
                 .all(|case| case.payload().fields().is_empty())
         );
+        for exit in [
+            FileExit::Completed,
+            FileExit::NotFound,
+            FileExit::NotAFile,
+            FileExit::PermissionDenied,
+            FileExit::InvalidPath,
+            FileExit::ReadLimitExceeded { limit: 42 },
+            FileExit::AtomicReplaceUnavailable,
+            FileExit::IoFailed,
+            FileExit::TimeoutExpired,
+            FileExit::OutcomeUnknown,
+        ] {
+            let value = exit.into_value();
+            assert!(ty.accepts(&value), "{value:?} must inhabit FileExit");
+        }
     }
 }

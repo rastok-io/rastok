@@ -4,9 +4,11 @@
 //! The public re-export keeps the pre-M1.5 `connectors::Process` path stable
 //! while the catalogue grows without returning to one monolithic file.
 
+mod file;
 mod process;
 mod registry;
 
+pub use file::{File, FileBindError, FileFactory, FileSettingsError};
 pub use process::{Process, ProcessBindError, ProcessFactory, ProcessSettingsError};
 pub use registry::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverBindingError, DriverFactoryError,
