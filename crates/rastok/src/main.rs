@@ -9,9 +9,9 @@
 //! the unit's lab and reports every scenario. Diagnostics render in
 //! the rustc shape through [`rastok::render`].
 
-use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
 use rastok::compiler::Compilation;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
@@ -84,7 +84,7 @@ fn load(paths: &[String]) -> Result<(Compilation, Sources), ExitCode> {
         }
     }
     let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-    let registry = match Registry::try_m0() {
+    let registry = match ContractCatalog::try_m0() {
         Ok(registry) => registry,
         Err(defect) => {
             eprintln!("error: the standard catalogue is broken: {defect}");
@@ -145,7 +145,7 @@ fn run(paths: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let authority = match node::Path::new(["cli"]) {
+    let inbound_path = match node::Path::new(["cli"]) {
         Ok(path) => path,
         Err(_) => return ExitCode::FAILURE,
     };
@@ -161,7 +161,7 @@ fn run(paths: &[String]) -> ExitCode {
             }
         };
         let submission = InboundSubmission {
-            authority: IngressAuthority::single(authority.clone()),
+            provenance: InboundEnvelopeProvenance::single(inbound_path.clone()),
             // The line-fed run enters through the implicit input;
             // named ingress is the Lab's and the future servers'.
             port: node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),

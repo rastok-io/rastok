@@ -10,11 +10,11 @@
 //! moves these traces once more by sealing owner paths as segment arrays.
 
 use rastok::boundary::{
-    Completion, Draft, InboundSubmission, IngressAuthority, Intent, OutboundConnectorDriver,
-    ProcessExit, Response, SubmissionSequence,
+    Completion, Draft, InboundEnvelopeProvenance, InboundSubmission, Intent,
+    OutboundConnectorDriver, ProcessExit, Response, SubmissionSequence,
 };
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Encoding, Envelope, Namespace, Value};
 use rastok::golden::{Trace, diff, project};
 use rastok::journal::{MemJournal, Record};
@@ -77,7 +77,7 @@ impl OutboundConnectorDriver for EchoWorld {
 fn run(source: &str) -> Vec<Record> {
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -87,7 +87,7 @@ fn run(source: &str) -> Vec<Record> {
     vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Struct(data)),
@@ -173,7 +173,7 @@ fn the_lab_scenario_matches_its_stored_golden() {
     let source = std::fs::read_to_string(example()).expect("the example reads");
     let compilation = rastok::compiler::compile(
         &[source.as_str()],
-        &rastok::contract::Registry::try_m0().expect("the standard catalogue holds"),
+        &rastok::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit");
     let runs = rastok::lab::run(

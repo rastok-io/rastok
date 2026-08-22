@@ -1,8 +1,8 @@
 # Instances, keys, lifetime, and placement
 
 > **Status:** normative M1.4 target, adopted by D-2026-08-18-1. The compiler
-> accepts and checks the R1 `instances` / `lifetime` surface. Plan-package v9
-> now carries the categorical parent-linked owner table, scoped routes,
+> accepts and checks the R1 `instances` / `lifetime` surface. Plan-package v10
+> retains v9's categorical parent-linked owner table, scoped routes,
 > independent instance policy, immutable owner expressions, and phased
 > Connector settings. R3 routes every owner through canonical hierarchical
 > instance references; those references index routes, transactions,
@@ -644,9 +644,10 @@ The plan/package and journal vocabulary has been rewritten from the draft
 `partition_key` / `target_partition` names to logical instance addresses and
 generation-bearing references without renumbering already reserved
 extend-only journal keys merely for spelling.
-Plan-package v9 is now the categorical owner/instance transport and refuses
-the unpublished v8 draft. That package-only move leaves semantic hashes and
-causal traces unchanged at R2. R3 has now made the instance reference
+Plan-package v10 retains v9's categorical owner/instance transport and
+refuses both v9 and the unpublished v8 draft as input. The original v9
+package-only move left semantic hashes and causal traces unchanged at R2. R3
+made the instance reference
 mandatory in the causal journal core as its own declared trace move: existing
 trace goldens move, including singleton graphs, while semantic graph hashes
 and plan-package bodies remain unchanged.

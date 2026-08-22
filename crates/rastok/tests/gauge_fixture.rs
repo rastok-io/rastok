@@ -6,12 +6,12 @@
 //! owe (D-2026-08-08-2/-3): one graph carrying a TYPED named
 //! boundary input, typed operator ports, and a typed named output,
 //! with its Lab scenario. Pinned here: the exact semantic hash (the
-//! identity move of the port-table presence tag), the current v9 package
+//! identity move of the port-table presence tag), the current v10 package
 //! bytes, and the full golden trace whose INBOUND record seals the
 //! ingress port as key 24.
 
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use std::path::{Path, PathBuf};
 
 fn example() -> PathBuf {
@@ -22,7 +22,7 @@ fn compilation() -> rastok::compiler::Compilation {
     let source = std::fs::read_to_string(example()).expect("the example reads");
     compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit")
 }
@@ -49,6 +49,9 @@ fn compilation() -> rastok::compiler::Compilation {
 // hash and package remain fixed; only the causal trace moves.
 // R3 REVIEW CLOSURE: owner paths are sealed as segment arrays instead of
 // dotted display text. The same trace moves again; hash and package do not.
+// DELIBERATE CONTAINER MOVE 2026-08-22 (M1.5 C1): categorical v10 adds
+// Connector ids and roles. Gauge has no Connector, so only its package
+// version/checksum moves; semantic hash and causal trace stay byte-identical.
 const GAUGE_HASH: &str = "0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e";
 
 #[test]
@@ -74,7 +77,7 @@ fn the_package_matches_its_golden() {
     }
     let golden = std::fs::read_to_string(&path)
         .expect("no package golden; run once with RASTOK_BLESS=1 to bless");
-    assert_eq!(golden.trim(), rendered, "the v9 typed package is pinned");
+    assert_eq!(golden.trim(), rendered, "the v10 typed package is pinned");
 }
 
 #[test]

@@ -212,8 +212,12 @@ pub struct FrontendContract {
 /// profile shares, and the profiles one selector attribute picks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectorContract {
+    /// Stable semantic identity transported by the categorical plan.
+    pub id: &'static str,
     /// The NodeType name (`Process`).
     pub name: &'static str,
+    /// External-world roles required from a runtime Driver registration.
+    pub roles: crate::connector::ConnectorRoles,
     /// Ports, their directions, effective type rules and unwired policy.
     pub ports: &'static [PortContract],
     /// The attributes common to every profile.
@@ -261,7 +265,7 @@ impl ConnectorContract {
 
     /// Resolves this sheet's complete travelling port table from effective
     /// choice attributes. The caller passes attributes after defaults have
-    /// been materialized, so no runtime Registry lookup remains.
+    /// been materialized, so no runtime ContractCatalog lookup remains.
     ///
     /// # Errors
     ///
@@ -533,6 +537,22 @@ pub fn byte_size(text: &str) -> Option<u64> {
 /// author's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SheetDefect {
+    /// The stable contract identity is not canonical.
+    InvalidConnectorId {
+        /// Exact spelling supplied by the sheet.
+        id: &'static str,
+        /// Canonical grammar category that refused it.
+        reason: crate::connector::ConnectorIdError,
+    },
+    /// Two source symbols claim one stable semantic identity.
+    ConnectorIdCollision {
+        /// Canonical id claimed by both sheets.
+        id: &'static str,
+        /// Sheet already admitted under that id.
+        existing: &'static str,
+        /// Different sheet attempting to reuse it.
+        incoming: &'static str,
+    },
     /// A port name the language refuses.
     InvalidPortName(&'static str),
     /// One name in both direction lists, or listed twice.
@@ -613,6 +633,17 @@ pub enum SheetDefect {
 impl core::fmt::Display for SheetDefect {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::InvalidConnectorId { id, reason } => {
+                write!(f, "connector id `{id}` is invalid: {reason}")
+            }
+            Self::ConnectorIdCollision {
+                id,
+                existing,
+                incoming,
+            } => write!(
+                f,
+                "connector id `{id}` is claimed by both `{existing}` and `{incoming}`"
+            ),
             Self::InvalidPortName(name) => write!(f, "`{name}` is not a valid port name"),
             Self::ConflictingPort(name) => {
                 write!(f, "`{name}` is listed twice or in both directions")
@@ -795,6 +826,12 @@ fn validate_attributes(
 
 /// Holds a sheet to the rules the checker will assume forever after.
 pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
+    crate::connector::ConnectorId::parse(contract.id).map_err(|reason| {
+        SheetDefect::InvalidConnectorId {
+            id: contract.id,
+            reason,
+        }
+    })?;
     if !expressible_name(contract.name) {
         return Err(SheetDefect::InexpressibleName(contract.name));
     }
@@ -993,32 +1030,48 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
     Ok(())
 }
 
-/// The contract registry a build wires into its checker.
+/// The contract catalogue a build wires into its checker.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Registry {
-    pub(crate) connectors: Vec<ConnectorContract>,
+pub struct ContractCatalog {
+    pub(crate) connectors: BTreeMap<crate::connector::ConnectorId, ConnectorContract>,
     pub(crate) declared: Vec<&'static str>,
     pub(crate) frontends: Vec<FrontendContract>,
 }
 
-impl Registry {
-    /// Extends the registry with one more contract sheet — the seam
+impl ContractCatalog {
+    /// Extends the catalogue with one more contract sheet — the seam
     /// every M1 connector lands through (`File`, the HTTP pair), and
     /// what a test contract uses to exercise the transport of
     /// resolved port tables. FALLIBLE: a sheet is validated before
     /// it becomes an authority — the checker materializes tables and
-    /// defaults from it and never re-checks. A name already present
-    /// is replaced.
+    /// defaults from it and never re-checks. A source name already present
+    /// is replaced, but a second source name may never alias the same stable
+    /// identity.
     ///
     /// # Errors
     ///
     /// The first [`SheetDefect`], named.
     pub fn try_with(mut self, contract: ConnectorContract) -> Result<Self, SheetDefect> {
         validate_sheet(&contract)?;
+        let id = crate::connector::ConnectorId::parse(contract.id).map_err(|reason| {
+            SheetDefect::InvalidConnectorId {
+                id: contract.id,
+                reason,
+            }
+        })?;
+        if let Some(existing) = self.connectors.get(&id)
+            && existing.name != contract.name
+        {
+            return Err(SheetDefect::ConnectorIdCollision {
+                id: contract.id,
+                existing: existing.name,
+                incoming: contract.name,
+            });
+        }
         self.connectors
-            .retain(|existing| existing.name != contract.name);
+            .retain(|_, existing| existing.name != contract.name);
         self.declared.retain(|declared| *declared != contract.name);
-        self.connectors.push(contract);
+        self.connectors.insert(id, contract);
         Ok(self)
     }
 
@@ -1027,7 +1080,7 @@ impl Registry {
     pub fn connector(&self, name: &str) -> Availability<'_> {
         if let Some(contract) = self
             .connectors
-            .iter()
+            .values()
             .find(|contract| contract.name == name)
         {
             return Availability::Available(contract);
@@ -1036,6 +1089,15 @@ impl Registry {
             return Availability::Declared;
         }
         Availability::Unknown
+    }
+
+    /// Resolves the exact stable identity carried by a categorical plan.
+    #[must_use]
+    pub fn connector_by_id(
+        &self,
+        id: &crate::connector::ConnectorId,
+    ) -> Option<&ConnectorContract> {
+        self.connectors.get(id)
     }
 
     /// Extends the registry with a tagged frontend contract.  A repeated name

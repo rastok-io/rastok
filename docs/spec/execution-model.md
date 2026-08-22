@@ -2,7 +2,7 @@
 
 > **Status:** normative. The Node-owned instance model in
 > [instances.md](instances.md) supersedes the unreleased P0–P3
-> named-partition implementation. Categorical plan-package v9 now carries the
+> named-partition implementation. Categorical plan-package v10 retains the v9
 > realigned owner tree and instance policies. R3 routes every delivery through
 > one hierarchical instance reference shared by journal, mailbox, state,
 > calls, timers, lifecycle, and cursors. R4 executes persistent, idle, fixed,

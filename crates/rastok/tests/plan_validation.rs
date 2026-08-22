@@ -9,7 +9,7 @@
 
 use rastok::canonical_cbor::MAX_NESTING;
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::datatype::{DataType, StructType, TaggedCase, TaggedUnionType};
 use rastok::expr;
 use rastok::node::{self, Direction, Port};
@@ -40,7 +40,7 @@ graph probe : App {
 fn raw_probe() -> ExecutionPlan {
     compile(
         &[PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan")
     .plan
@@ -83,7 +83,7 @@ fn raw_join(bounded: bool) -> ExecutionPlan {
     );
     compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the join fixture is valid")
     .plan
@@ -178,7 +178,7 @@ graph probe : App {
 "#;
     compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a program the checker accepts must validate at the plan");
 }
@@ -204,7 +204,7 @@ graph g : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a same-direction redeclaration is a no-op");
     assert_eq!(compilation.plan.plan().boundary.len(), 2);
@@ -234,7 +234,7 @@ graph g : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("an explicit conventional pin is supported");
     let raw = compilation.plan.plan();
@@ -259,7 +259,7 @@ graph g : App {
     assert_eq!(boundary.origin(), plan::TypeOrigin::Declared);
 
     let package = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, _) = plan::decode(&package).expect("the source pin survives v9");
+    let (decoded, _) = plan::decode(&package).expect("the source pin survives v10");
     assert_eq!(
         decoded
             .resolved_ports()
@@ -276,7 +276,7 @@ graph g : App {
 fn an_operator_without_err_has_no_hidden_producer_pin() {
     let compilation = compile(
         &[PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the probe resolves");
     let relay = compilation
@@ -774,7 +774,7 @@ fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
         plan::NodeKind::Connector(spec) => spec,
         plan::NodeKind::Operator => panic!("shell is a connector"),
     };
-    spec.contract = String::from("Custom");
+    spec.contract = rastok::connector::ConnectorId::parse("test/custom@1").unwrap();
     spec.attributes = vec![(
         String::from("late"),
         plan::AttrSetting::Expr {
@@ -920,7 +920,7 @@ graph g : App {
 "#;
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the repetition refuses");
     assert!(
@@ -951,7 +951,7 @@ graph probe : App {
 "#;
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the redeclaration refuses");
     assert!(
@@ -1191,7 +1191,7 @@ graph probe : App {
 "#;
     compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("an Operator may use the ordinary name `exit` for an input");
 }
@@ -1490,12 +1490,12 @@ fn handler_declaration_order_is_not_identity() {
     );
     let one = compile(
         &[TWO_TRIGGERS],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let two = compile(
         &[swapped.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     assert_eq!(one.hash, two.hash, "same identity");
@@ -1524,7 +1524,7 @@ graph joined : App {
   pair.expired -> .expired
 }
 "#;
-    let registry = Registry::try_m0().expect("the standard catalogue holds");
+    let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
     let original = compile(&[source], &registry).expect("the join compiles");
     let reversed_source = source.replace("on (left, right)", "on (right, left)");
     let reversed = compile(&[reversed_source.as_str()], &registry).expect("the reverse compiles");
@@ -1687,7 +1687,7 @@ graph attributed : App {
 "#;
     let bag = compile(
         &[without_pick],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("CommonOrAbsent cannot satisfy a required downstream read");
     assert!(
@@ -1707,7 +1707,7 @@ graph attributed : App {
     );
     let mut forged = compile(
         &[with_pick.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("an explicit named-input pick resolves presence")
     .plan
@@ -1735,7 +1735,7 @@ graph attributed : App {
 }
 
 #[test]
-fn a_future_lifecycle_handler_cannot_enter_v9_early() {
+fn a_future_lifecycle_handler_cannot_enter_v10_early() {
     let mut plan = raw_probe();
     plan.handlers[0].activation =
         rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Compensate);
@@ -1752,7 +1752,7 @@ fn a_future_lifecycle_handler_cannot_enter_v9_early() {
 fn reordered_handlers_are_not_canonical() {
     let mut plan = compile(
         &[TWO_TRIGGERS],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan")
     .plan
@@ -1888,7 +1888,7 @@ fn what_the_type_accepts_the_format_reads_back() {
     // bound. `encode ⇒ decode` is total — no gap at the boundary.
     let hash = compile(
         &[PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan")
     .hash;
@@ -2046,7 +2046,7 @@ graph g : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the source narrowing compiles");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);

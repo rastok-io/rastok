@@ -19,7 +19,9 @@ use cortex_m_semihosting::{debug, hprintln};
 use embedded_alloc::LlffHeap as Heap;
 use panic_semihosting as _;
 
-use rastok_core::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+use rastok_core::boundary::{
+    Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+};
 use rastok_core::envelope::{Data, Id, Namespace, Value};
 use rastok_core::journal;
 use rastok_core::journal::{MemJournal, Record};
@@ -121,7 +123,7 @@ fn submission(text: &str, marker: u8) -> InboundSubmission {
     let _ = marker;
     let _ = &mut ext;
     InboundSubmission {
-        authority: IngressAuthority::single(Path::new(["pico"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(Path::new(["pico"]).unwrap()),
         port: rastok_core::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from(text))),

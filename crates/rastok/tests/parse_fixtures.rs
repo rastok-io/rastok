@@ -9,7 +9,7 @@
 //! goldens after an intentional change, then review the diff.
 
 use rastok::compiler::parser::parse;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::diagnostics::{Bag, SourceId};
 use std::fmt::Write as _;
 use std::fs;
@@ -19,7 +19,7 @@ use std::path::Path;
 fn fixtures_match_their_goldens() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let bless = std::env::var_os("RASTOK_BLESS").is_some();
-    let registry = Registry::try_m0().expect("the standard frontend catalogue is valid");
+    let registry = ContractCatalog::try_m0().expect("the standard frontend catalogue is valid");
     let mut fixtures = 0;
     let mut entries: Vec<_> = fs::read_dir(&root)
         .expect("fixtures directory")

@@ -112,7 +112,7 @@ impl ProcessBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessSettingsError {
     /// The spec belongs to another contract entirely.
-    NotProcess(String),
+    NotProcess(crate::connector::ConnectorId),
     /// A Defaulted attribute did not travel in the plan.
     Unresolved(&'static str),
     /// A mode this build has no Driver for.
@@ -238,7 +238,7 @@ impl ProcessFailure {
 impl ProcessSettings {
     fn try_from(spec: &rastok_core::plan::ConnectorSpec) -> Result<Self, ProcessSettingsError> {
         use ProcessSettingsError as E;
-        if spec.contract != "Process" {
+        if spec.contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
             return Err(E::NotProcess(spec.contract.clone()));
         }
         match spec.attribute("mode") {
@@ -406,7 +406,7 @@ pub enum ProcessBindReason {
     /// arrive at this Driver and strand open.
     UnservedConnector {
         /// The foreign contract's name.
-        contract: String,
+        contract: crate::connector::ConnectorId,
     },
 }
 
@@ -614,7 +614,7 @@ impl<'plan> Process<'plan> {
                 // one OutboundConnectorDriver, an inbound source to exactly
                 // one InboundConnectorDriver, and a both-role Connector to
                 // both (m1-slice, the connector items).
-                if spec.contract != "Process" {
+                if spec.contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
                     let slot = crate::plan::Slot::new(
                         u32::try_from(
                             plan.plan()
@@ -1044,9 +1044,11 @@ impl OutboundConnectorDriver for Process<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use crate::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use crate::compiler::compile;
-    use crate::contract::Registry;
+    use crate::contract::ContractCatalog;
     use crate::envelope::Namespace;
     use crate::journal::{MemJournal, OutboundStatus, Record};
     use crate::plan::GraphVersion;
@@ -1073,7 +1075,7 @@ graph real : App {
 
     fn submission_data(data: Data) -> InboundSubmission {
         InboundSubmission {
-            authority: IngressAuthority::single(crate::node::Path::new(["cli"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(crate::node::Path::new(["cli"]).unwrap()),
             port: crate::node::Port::new("in").unwrap(),
             draft: Draft {
                 data,
@@ -1100,7 +1102,7 @@ graph real : App {
     ) -> (MemJournal, Vec<Envelope>, Vec<Envelope>, Vec<Observed>) {
         let compilation = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -1634,7 +1636,7 @@ graph unframeable : App {
 "#;
         let compilation = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("the route resolves to text");
         let mut journal = MemJournal::new(GraphVersion(1));

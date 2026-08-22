@@ -8,12 +8,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 
 fn refuses_with(source: &str, code: &str) -> Vec<String> {
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the source must refuse");
     let hits: Vec<String> = bag
@@ -72,12 +72,12 @@ fn inference_is_order_independent() {
     let ba = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.second = 2\n        meta.app.first = \"a\"\n        data = data\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let first = compile(
         &[ab],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let second = compile(
         &[ba],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     // The write ORDER is identity (the fold executes in order), so
@@ -86,7 +86,7 @@ fn inference_is_order_independent() {
     let reads = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.first = \"a\"\n        meta.app.second = 2\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in where meta.app.first == \"a\" { out = data }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
     compile(
         &[reads],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a downstream read of an inferred field");
     let _ = (first, second);
@@ -97,7 +97,7 @@ fn a_type_conflict_names_both_sites() {
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta.app.flag = \"text\"\n        data = data\n      }\n    }\n  }\n  operator p {\n    on in {\n      out = {\n        meta.app.flag = 7\n        data = data\n      }\n    }\n  }\n  . -> o\n  o -> p\n  p -> .\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("one field, one type");
     let hit = bag
@@ -128,7 +128,7 @@ fn a_reserved_node_name_refuses() {
         );
         let bag = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect_err("reserved");
         assert!(
@@ -220,7 +220,7 @@ lab g {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit");
     let runs = rastok::lab::run(
@@ -244,12 +244,12 @@ fn the_lab_never_moves_the_production_hash() {
     );
     let bare = compile(
         &[graph],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the bare graph");
     let inhabited = compile(
         &[with_lab.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the graph with a lab");
     assert_eq!(bare.hash, inhabited.hash, "the Lab is not identity");
@@ -265,7 +265,9 @@ fn content_type_follows_the_payload_not_the_merge() {
     // The lifecycle across spellings (D-2026-08-10-4): a kept
     // witness keeps it, fresh data strikes it, an explicit write
     // wins — variables and ternaries included.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -277,7 +279,7 @@ fn content_type_follows_the_payload_not_the_merge() {
         );
         let compilation = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -290,7 +292,9 @@ fn content_type_follows_the_payload_not_the_merge() {
         vm.inject(
             &mut journal,
             InboundSubmission {
-                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Text(String::from("a,b"))),

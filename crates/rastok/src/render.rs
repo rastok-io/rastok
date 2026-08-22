@@ -119,7 +119,7 @@ fn locate(text: &str, offset: usize) -> (usize, usize, &str) {
 mod tests {
     use super::*;
     use crate::compiler::compile;
-    use crate::contract::Registry;
+    use crate::contract::ContractCatalog;
 
     #[test]
     fn a_semantic_refusal_renders_with_its_source_line() {
@@ -129,7 +129,7 @@ mod tests {
             "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
         let Err(bag) = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         ) else {
             panic!("the direction is violated");
         };
@@ -157,7 +157,7 @@ mod tests {
             "graph g : App {\n  operator o {\n    on in { in = . }\n  }\n  . -> o -> .\n}\n";
         let Err(bag) = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         ) else {
             panic!("the direction is violated");
         };

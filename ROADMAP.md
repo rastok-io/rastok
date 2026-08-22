@@ -98,7 +98,7 @@ The repository opens publicly with this milestone (15 October 2026).
   checkpoint allocated categorical plan-package v9: lexical Graph/Node
   owners, scoped edges, typed key/lifetime policy, phased immutable values and
   dynamic Connector rows now travel and are revalidated independently of the
-  compiler Registry. R3 landed hierarchical routing: canonical
+  compiler ContractCatalog. R3 landed hierarchical routing: canonical
   `(address, generation)` references are sealed by producers and shared by
   journal, mailboxes, state, calls, timers, lifecycle and cursors; Graph keys
   are sticky across descendant traffic; candidate bindings fail before
@@ -128,6 +128,8 @@ The repository opens publicly with this milestone (15 October 2026).
   proof connector: one-file `read` and atomic `replace`, with directories and
   `watch` deliberately outside this slice. See the
   [ordered M1.5 backlog](docs/architecture/m1.5-connectors-backlog.md).
+  C0's pure Driver-seam refactor and C1's categorical v10 identity/role
+  transport are landed; C2 is the mixed-family global binder.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

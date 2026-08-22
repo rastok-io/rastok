@@ -56,7 +56,7 @@ pub struct Compilation {
 ///
 /// Returns the full diagnostic bag when parsing or checking rejects
 /// the unit; no plan exists in that case, by construction.
-pub fn compile(sources: &[&str], registry: &contract::Registry) -> Result<Compilation, Bag> {
+pub fn compile(sources: &[&str], registry: &contract::ContractCatalog) -> Result<Compilation, Bag> {
     compile_with_assets(sources, registry, None)
 }
 
@@ -64,7 +64,7 @@ pub fn compile(sources: &[&str], registry: &contract::Registry) -> Result<Compil
 /// parser's own reading — the CLI's asset-root anchor
 /// (D-2026-08-10-5). `None` when no source declares one.
 #[must_use]
-pub fn app_source_index(sources: &[&str], registry: &contract::Registry) -> Option<usize> {
+pub fn app_source_index(sources: &[&str], registry: &contract::ContractCatalog) -> Option<usize> {
     use crate::compiler::syntax::TopDecl;
     let mut scratch = Bag::new();
     for (index, source) in sources.iter().enumerate() {
@@ -90,7 +90,7 @@ pub fn app_source_index(sources: &[&str], registry: &contract::Registry) -> Opti
 /// As [`compile`].
 pub fn compile_with_assets(
     sources: &[&str],
-    registry: &contract::Registry,
+    registry: &contract::ContractCatalog,
     asset_root: Option<&std::path::Path>,
 ) -> Result<Compilation, Bag> {
     let mut bag = Bag::new();
@@ -343,7 +343,7 @@ graph inferred_instance : App {
 "#;
         let compilation = compile(
             &[source],
-            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("the graph supplies the omitted node-port type");
         assert_eq!(
@@ -377,7 +377,7 @@ graph g : App {
 "#;
         let bag = compile(
             &[source],
-            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect_err("idle cannot invent a drain or cancellation policy");
         assert!(bag.diagnostics().iter().any(|diagnostic| {
@@ -401,7 +401,7 @@ graph inferred_composite : App {
 "#;
         let compilation = compile(
             &[source],
-            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("the resolved input closes every composite-key leaf");
         let key = compilation
@@ -427,7 +427,7 @@ graph keyed_graph : App {
 "#;
         compile(
             &[keyed_graph],
-            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("R3 routes through the Graph-owned key before producer commit");
 
@@ -443,7 +443,7 @@ graph finite_singleton : App {
 "#;
         let compilation = compile(
             &[finite],
-            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("R4 executes a fixed owner lifetime");
         assert_eq!(
@@ -471,7 +471,7 @@ graph dynamic_instance : App {
 "#;
         let bag = compile(
             &[source],
-            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect_err("a resolved dynamic value has no canonical instance identity");
         assert!(bag.diagnostics().iter().any(|diagnostic| {
@@ -504,7 +504,7 @@ graph conflicting_instance : App {
 "#;
         let bag = compile(
             &[source],
-            &crate::contract::Registry::try_m0().expect("the standard catalogue holds"),
+            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect_err("one key expression cannot change logical type by input port");
         assert!(bag.diagnostics().iter().any(|diagnostic| {

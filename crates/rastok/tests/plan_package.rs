@@ -12,7 +12,7 @@
 
 use rastok::canonical_cbor::{Value as Cbor, decode, encode};
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::plan::{self, DecodeError};
 use std::path::PathBuf;
 
@@ -28,7 +28,7 @@ fn packaged_example() -> (
     let source = std::fs::read_to_string(example()).expect("the example reads");
     let compilation = compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
@@ -44,7 +44,7 @@ fn the_round_trip_preserves_the_plan_and_its_identity() {
 }
 
 #[test]
-fn v9_round_trips_tagged_structural_and_narrowing_expressions() {
+fn v10_round_trips_tagged_structural_and_narrowing_expressions() {
     let sources = [
         r#"
 type Failure = union { Broken { message: text } }
@@ -82,18 +82,18 @@ graph g : App {
     for source in sources {
         let compilation = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
-        .expect("a valid v9 program");
+        .expect("a valid v10 program");
         let bytes = plan::encode(&compilation.plan, &compilation.hash);
-        let (decoded, hash) = plan::decode(&bytes).expect("the v9 package opens");
+        let (decoded, hash) = plan::decode(&bytes).expect("the v10 package opens");
         assert_eq!(decoded, compilation.plan);
         assert_eq!(hash, compilation.hash);
     }
 }
 
 #[test]
-fn v9_round_trips_the_categorical_instance_contract() {
+fn v10_round_trips_the_categorical_instance_contract() {
     let source = r#"
 graph g : App {
   input in: text
@@ -113,7 +113,7 @@ graph g : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the keyed program checks");
     let before = compilation
@@ -135,7 +135,7 @@ graph g : App {
     }));
 
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, hash) = plan::decode(&bytes).expect("the v9 package opens");
+    let (decoded, hash) = plan::decode(&bytes).expect("the v10 package opens");
     assert_eq!(decoded, compilation.plan);
     assert_eq!(hash, compilation.hash);
 }
@@ -167,7 +167,7 @@ graph g : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the nested keyed graph checks");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
@@ -195,7 +195,7 @@ graph g : App {
 }
 
 #[test]
-fn v9_round_trips_a_bounded_join_activation_without_a_second_key_authority() {
+fn v10_round_trips_a_bounded_join_activation_without_a_second_key_authority() {
     let source = r#"
 type JoinExpiry = union { JoinExpired {} }
 graph g : App {
@@ -221,7 +221,7 @@ graph g : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the public bounded join checks");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
@@ -247,6 +247,9 @@ fn the_example_package_matches_its_golden() {
     // edges are derived plan structure, not a semantic change to this graph.
     // M1.4 R5 deliberately moves both hash and package because the exact
     // ProcessExit union gains the empty OutcomeUnknown settlement case.
+    // M1.5 C1 deliberately moves both again: stable `rastok/process@1` and
+    // its outbound role replace the source symbol in identity, while v10
+    // carries those categorical facts. The causal trace remains unchanged.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
@@ -273,6 +276,84 @@ fn reframe(bytes: &[u8], edit: impl FnOnce(&mut std::collections::BTreeMap<u64, 
     out
 }
 
+/// Re-seals a package after deliberately forging its categorical body.
+fn reframe_body(
+    bytes: &[u8],
+    edit: impl FnOnce(&mut std::collections::BTreeMap<u64, Cbor>),
+) -> Vec<u8> {
+    let rest = bytes.strip_prefix(b"RKPB").expect("the magic");
+    let (Cbor::Map(mut envelope), _) = decode(rest).expect("the envelope decodes") else {
+        panic!("the envelope is a map");
+    };
+    let Cbor::Bytes(old_body) = envelope.get(&3).expect("the body") else {
+        panic!("the body is bytes");
+    };
+    let (Cbor::Map(mut body), _) = decode(old_body).expect("the body decodes") else {
+        panic!("the body is a map");
+    };
+    edit(&mut body);
+    let body = encode(&Cbor::Map(body));
+    let Cbor::Bytes(hash) = envelope.get(&2).expect("the semantic hash") else {
+        panic!("the semantic hash is bytes");
+    };
+    let mut checksum = [0_u8; 32];
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"rastok.plan-package\0");
+    hasher.update(&plan::FORMAT_VERSION.to_le_bytes());
+    hasher.update(hash);
+    hasher.update(&body);
+    hasher.finalize_xof().fill(&mut checksum);
+    envelope.insert(3, Cbor::Bytes(body));
+    envelope.insert(4, Cbor::Bytes(checksum.to_vec()));
+    let mut out = b"RKPB".to_vec();
+    out.extend_from_slice(&encode(&Cbor::Map(envelope)));
+    out
+}
+
+fn connector_spec_mut(body: &mut std::collections::BTreeMap<u64, Cbor>) -> &mut Cbor {
+    let Cbor::Array(nodes) = body.get_mut(&1).expect("the node table") else {
+        panic!("nodes are an array");
+    };
+    let Cbor::Map(shell) = &mut nodes[1] else {
+        panic!("shell is a node map");
+    };
+    let Cbor::Array(kind) = shell.get_mut(&2).expect("the node kind") else {
+        panic!("the connector kind is an array");
+    };
+    &mut kind[1]
+}
+
+#[test]
+fn connector_identity_and_roles_are_categorical_plan_facts() {
+    let (_, _, bytes) = packaged_example();
+
+    let forged_id = reframe_body(&bytes, |body| {
+        let Cbor::Map(spec) = connector_spec_mut(body) else {
+            panic!("the connector spec is a map");
+        };
+        spec.insert(1, Cbor::Text(String::from("Process")));
+    });
+    assert_eq!(
+        plan::decode(&forged_id).unwrap_err(),
+        DecodeError::Malformed(String::from(
+            "invalid connector id: expected exactly `<namespace>/<name>@<major>`"
+        ))
+    );
+
+    let forged_role = reframe_body(&bytes, |body| {
+        let Cbor::Map(spec) = connector_spec_mut(body) else {
+            panic!("the connector spec is a map");
+        };
+        spec.insert(6, Cbor::Uint(1));
+    });
+    assert_eq!(
+        plan::decode(&forged_role).unwrap_err(),
+        DecodeError::Invalid(rastok::plan::PlanValidationError::ContractRoleMismatch {
+            node: rastok::node::Path::new(["shell"]).unwrap(),
+        })
+    );
+}
+
 #[test]
 fn every_refusal_is_typed() {
     let (_, _, bytes) = packaged_example();
@@ -294,8 +375,9 @@ fn every_refusal_is_typed() {
 
     // Every earlier categorical body is refused by number, never migrated
     // silently. In particular, v8 was the unreleased named-partition draft;
-    // v9 replaces it rather than assigning two meanings to one version.
-    for draft in [2u64, 3, 4, 5, 6, 7, 8] {
+    // v9 replaced it rather than assigning two meanings to one version; v10
+    // then categorically replaces source Connector names with stable ids.
+    for draft in [2u64, 3, 4, 5, 6, 7, 8, 9] {
         let retired = reframe(&bytes, |pairs| {
             pairs.insert(1, Cbor::Uint(draft));
         });
@@ -381,7 +463,7 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
         );
         let compilation = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan");
         let bytes = plan::encode(&compilation.plan, &compilation.hash);
@@ -407,7 +489,9 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
 /// outputs and the error count — the execution fingerprint the matrix
 /// compares.
 fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<String>, usize) {
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -415,7 +499,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(plan, GraphVersion(1));
     let submission = InboundSubmission {
-        authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from("go"))),
@@ -464,7 +548,7 @@ fn a_non_canonical_envelope_refuses() {
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x09],
+        &[0xa4, 0x01, 0x0a],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -479,16 +563,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 8 written on two
-    // bytes (0x18 0x07) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 10 written on two
+    // bytes (0x18 0x0a) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x09],
+        &[0xa4, 0x01, 0x0a],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x09]);
+    widened.splice(6..7, [0x18, 0x0a]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
@@ -556,7 +640,7 @@ fn a_program_beyond_the_nesting_budget_refuses_by_name() {
     let source = nested_additions(200);
     let bag = compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("beyond the budget");
     assert!(
@@ -582,7 +666,7 @@ fn a_nan_plan_equals_itself_across_the_trip() {
     let source = "graph g : App {\n  input in: text\n  operator o {\n    var seen : double = 0.0 / 0.0\n\n    on in {\n      out = data\n    }\n  }\n\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
@@ -601,7 +685,7 @@ fn the_zero_signs_are_two_plans() {
         );
         compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan")
     };
@@ -631,7 +715,7 @@ fn a_hostile_depth_source_refuses_and_the_process_survives() {
         let chain = nested_additions(30_000);
         let bag = compile(
             &[chain.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect_err("beyond the budget");
         assert!(
@@ -650,7 +734,7 @@ fn a_hostile_depth_source_refuses_and_the_process_survives() {
         );
         let bag = compile(
             &[tower.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect_err("beyond the guard");
         assert!(
@@ -685,7 +769,7 @@ fn a_deep_but_budgeted_program_rides_the_round_trip() {
     let source = nested_additions(100);
     let compilation = compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("within the budget");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
@@ -711,12 +795,12 @@ fn the_depth_boundaries_are_exact() {
     };
     compile(
         &[parens(127).as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("127 pairs fit the parser guard");
     let bag = compile(
         &[parens(128).as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the 128th refuses");
     let depth = bag
@@ -740,14 +824,14 @@ fn the_depth_boundaries_are_exact() {
     let deep_ok = nested_additions(119);
     let compilation = compile(
         &[deep_ok.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("119 additions fit");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     plan::decode(&bytes).expect("the deepest accepted program reads back");
     let bag = compile(
         &[nested_additions(120).as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the 120th refuses");
     let depth = bag

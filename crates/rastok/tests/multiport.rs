@@ -10,7 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 
 /// One input fanning to two named outputs through named node ports.
 const SORTER: &str = r#"
@@ -93,7 +93,7 @@ fn avro_ext() -> rastok::envelope::Namespace {
 fn lab_passes(source: &str) {
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit");
     let runs = rastok::lab::run(
@@ -124,7 +124,7 @@ fn refusal_code(graph: &str, injection: &str) -> Vec<&'static str> {
     );
     let bag = compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the scenario refuses");
     bag.diagnostics()
@@ -185,7 +185,9 @@ fn the_machine_verifies_the_ingress_port() {
     // The raw API is verified, not trusted: a submission at a port
     // that is not a graph input refuses typed, before any journal
     // append.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -193,13 +195,13 @@ fn the_machine_verifies_the_ingress_port() {
 
     let compilation = compile(
         &[MERGER_GRAPH],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let submission = |port: &str| InboundSubmission {
-        authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from("go"))),
@@ -222,7 +224,9 @@ fn the_machine_verifies_the_ingress_port() {
 
 #[test]
 fn the_inbound_record_carries_its_port_and_omits_the_default() {
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::canonical_cbor::{Value as Cbor, decode};
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::{Journal, MemJournal};
@@ -230,7 +234,7 @@ fn the_inbound_record_carries_its_port_and_omits_the_default() {
 
     let mut journal = MemJournal::new(GraphVersion(1));
     let submission = |port: &str| InboundSubmission {
-        authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::encoded(Encoding::Raw, *b"go"),
@@ -305,7 +309,7 @@ fn a_pinned_input_types_the_handler_data() {
     let source = "graph g : App {\n  operator o {\n    input evt : text\n    on evt { out = data * 2 }\n  }\n  . -> o.evt\n  o -> .\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("text times int refuses");
     assert!(
@@ -321,7 +325,7 @@ fn an_emission_against_a_pinned_output_refuses() {
     let source = "graph g : App {\n  operator o {\n    output score : int\n    on in { score = \"nope\" }\n  }\n  . -> o\n  o.score -> .\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("a text emission into an int port");
     assert!(
@@ -337,7 +341,7 @@ fn mismatched_pinned_edge_ends_refuse() {
     let source = "graph g : App {\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : text\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("int wired into text");
     assert!(
@@ -353,7 +357,7 @@ fn a_typed_injection_refuses_by_contract() {
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = \"text\"\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("a text injection into an int input");
     assert!(
@@ -369,7 +373,7 @@ fn typed_ports_travel_in_the_package() {
     use rastok::plan;
     let compilation = compile(
         &[TYPED],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let gauge = compilation
@@ -413,12 +417,12 @@ fn the_annotation_is_identity() {
     let bare = annotated.replace(" : text", "");
     let one = compile(
         &[annotated],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let two = compile(
         &[bare.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     assert_ne!(one.hash, two.hash, "the annotation is identity material");
@@ -434,7 +438,7 @@ fn expect_refusal(expectation: &str) -> Vec<&'static str> {
     );
     let bag = compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the expectation refuses");
     bag.diagnostics()
@@ -473,7 +477,7 @@ fn conformance_refuses(body: &str) {
     let source = gauge_graph(body);
     let bag = compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the pin holds");
     assert!(
@@ -505,26 +509,26 @@ fn conforming_forms_pass() {
     // Data with the right type and range.
     compile(
         &[gauge_graph("score = size(data)").as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("int through the int pin");
     // Patch, whole-data write of the pinned type.
     compile(
         &[gauge_graph("score = {data = 7}").as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a whole-data write of the pinned type");
     // Nothing produces nothing.
     compile(
         &[gauge_graph("score = nothing").as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("nothing conforms");
     // Identity through matching pins.
     let echoed = "graph g : App {\n  operator o {\n    input evt : text\n    output echo : text\n\n    on evt {\n      echo = .\n    }\n  }\n\n  . -> o.evt\n  o.echo -> .\n}\n";
     compile(
         &[echoed],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("text through the text pin, unchanged");
 }
@@ -539,7 +543,7 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
     // The reviewer's map through the int input.
     let bag = compile(
         &[inject("{v = 1}").as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("a map breaches");
     assert!(
@@ -551,7 +555,7 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
     // The bound, at ingress.
     let bag = compile(
         &[inject("2147483648").as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the bound holds");
     assert!(
@@ -563,7 +567,7 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
     // A conforming constant passes.
     compile(
         &[inject("7").as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("an int through the int input");
 }
@@ -583,7 +587,9 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
     // to make a usable port. The resolved sheet ships every row with its
     // effective type; no named port becomes an implicit variant.
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
+        id: "test/probe@1",
         name: "Probe",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[
             PortContract {
                 name: "in",
@@ -632,7 +638,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
         ],
         selector: None,
     };
-    let registry = Registry::try_m0()
+    let registry = ContractCatalog::try_m0()
         .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
@@ -657,7 +663,9 @@ fn a_named_connector_edge_defers_by_name() {
     use rastok::node::Direction;
     use rastok::plan::UnwiredPolicy;
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
+        id: "test/probe@1",
         name: "Probe",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[
             PortContract {
                 name: "in",
@@ -706,7 +714,7 @@ fn a_named_connector_edge_defers_by_name() {
         ],
         selector: None,
     };
-    let registry = Registry::try_m0()
+    let registry = ContractCatalog::try_m0()
         .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
@@ -733,7 +741,7 @@ fn the_fold_follows_the_runtime_order() {
     // The reverse order ends on the written int and conforms.
     compile(
         &[gauge_graph("score = {\n        data.x = 2\n        data = 1\n      }").as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the final whole-data write decides");
 }
@@ -745,7 +753,7 @@ fn a_metadata_only_injection_still_carries_the_draft_struct() {
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = {meta.tag = \"x\"}\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the draft map breaches the int pin");
     assert!(
@@ -762,7 +770,9 @@ fn the_braced_record_is_physically_a_struct() {
     // tags 17 and 18). A braced record produces a STRUCT — asserted
     // on the envelope itself for all three interpreters' shared
     // path, and on the canonical seal below.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -771,7 +781,7 @@ fn the_braced_record_is_physically_a_struct() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        v = 7\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -779,7 +789,9 @@ fn the_braced_record_is_physically_a_struct() {
     vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Int(1)),
@@ -874,7 +886,9 @@ lab g {
 fn an_empty_brace_is_an_empty_record() {
     // `{}` builds an EMPTY struct — never an identity (identity is
     // `.`). The injected payload must not leak through.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -883,7 +897,7 @@ fn an_empty_brace_is_an_empty_record() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {} }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -891,7 +905,9 @@ fn an_empty_brace_is_an_empty_record() {
     vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Int(1)),
@@ -913,7 +929,9 @@ fn an_empty_brace_is_an_empty_record() {
 fn a_whole_data_write_is_the_payload_itself() {
     // `{data = 1}` is the ENVELOPE form: the payload becomes the
     // integer 1 — never a struct with a field named `data`.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -922,7 +940,7 @@ fn a_whole_data_write_is_the_payload_itself() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {data = 1} }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -930,7 +948,9 @@ fn a_whole_data_write_is_the_payload_itself() {
     vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Text(String::from("gone"))),
@@ -955,7 +975,7 @@ fn a_mixed_brace_refuses_with_the_dedicated_diagnostic() {
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        v = 1\n        meta.flag = true\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the mix refuses");
     assert!(
@@ -978,7 +998,7 @@ fn a_block_entry_carries_its_root_into_the_classification() {
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        ordinary { x = 1 }\n        meta.flag = true\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the mix refuses");
     assert!(
@@ -998,7 +1018,7 @@ fn a_block_entry_carries_its_root_into_the_classification() {
     let source = "graph g : App {\n  operator o {\n    on in {\n      out = {\n        meta { flag = true }\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the dead block refuses");
     assert!(
@@ -1017,7 +1037,9 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     // `out = .` — the exact re-emission: payload AND writable
     // metadata cross untouched. (The encoded twin lives in
     // `data_materializes_only_on_demand`.)
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1026,7 +1048,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1041,7 +1063,9 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Struct(vec![(String::from("v"), Value::Int(1))])),
@@ -1072,7 +1096,9 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
     // `parent = {}` writes an EMPTY STRUCT under `parent` — a
     // leaf-splice alone would write nothing and the field would
     // vanish. Every nesting and both braced forms hold it.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1084,7 +1110,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
         );
         let compilation = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -1092,7 +1118,9 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
         vm.inject(
             &mut journal,
             InboundSubmission {
-                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Int(1)),
@@ -1134,12 +1162,12 @@ fn the_empty_record_travels_and_hashes_stably() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = { parent = {} } }\n  }\n  . -> o -> .\n}\n";
     let first = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let second = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     assert_eq!(first.hash, second.hash, "the hash is stable");
@@ -1216,7 +1244,7 @@ lab g {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit");
     let runs = rastok::lab::run(
@@ -1244,7 +1272,9 @@ fn a_defective_sheet_is_held_at_the_door() {
     use rastok::node::Direction;
     use rastok::plan::UnwiredPolicy;
     const MISDIRECTED: ConnectorContract = ConnectorContract {
+        id: "test/bad@1",
         name: "Bad",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[PortContract {
             name: "out",
             direction: Direction::Input,
@@ -1255,7 +1285,9 @@ fn a_defective_sheet_is_held_at_the_door() {
         selector: None,
     };
     const CONFLICTING: ConnectorContract = ConnectorContract {
+        id: "test/bad@1",
         name: "Bad",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[
             PortContract {
                 name: "request",
@@ -1275,9 +1307,9 @@ fn a_defective_sheet_is_held_at_the_door() {
     };
     // A default port against its implicit direction — the exact
     // defect that would have split the checker from the validator
-    // through the old Registry fallback.
+    // through the old ContractCatalog fallback.
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(MISDIRECTED)
             .unwrap_err(),
@@ -1285,14 +1317,14 @@ fn a_defective_sheet_is_held_at_the_door() {
     );
     // One name in both directions.
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(CONFLICTING)
             .unwrap_err(),
         SheetDefect::ConflictingPort("request")
     );
     // The shipped M0 sheet passes its own door.
-    Registry::try_m0()
+    ContractCatalog::try_m0()
         .expect("the standard catalogue holds")
         .try_with(rastok::stdlib::PROCESS)
         .expect("the Process sheet is valid");
@@ -1303,7 +1335,9 @@ fn boundary_outputs_carry_their_port() {
     // Two named outputs are two different FACTS: the business API
     // answers (port, envelope) pairs, not an anonymous stream the
     // caller would have to re-derive from the plan.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1312,7 +1346,7 @@ fn boundary_outputs_carry_their_port() {
     let graph = &SORTER[..SORTER.find("lab ").expect("the lab block")];
     let compilation = compile(
         &[graph],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1320,7 +1354,9 @@ fn boundary_outputs_carry_their_port() {
     vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Int(1)),
@@ -1356,7 +1392,9 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     // The reviewer's escape: the raw API accepted a wrong-typed
     // draft and JOURNALED it. The pins are judged before any append
     // — replay never meets a record a pin refuses.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1365,13 +1403,13 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let submission = InboundSubmission {
-        authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new("alpha").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from("wrong"))),
@@ -1415,7 +1453,7 @@ lab g {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the graph has one resolved int flow");
     let runs = rastok::lab::run(
@@ -1462,7 +1500,7 @@ lab g {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the destination constrains the complete flow");
     let runs = rastok::lab::run(
@@ -1526,7 +1564,7 @@ lab g {
 "#;
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("text cannot feed an int port");
     assert!(
@@ -1544,7 +1582,7 @@ fn the_validator_refuses_mismatched_edge_pins() {
     let compiled = || {
         compile(
             &[TYPED],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan")
         .plan
@@ -1578,7 +1616,7 @@ fn the_validator_refuses_mismatched_edge_pins() {
     .expect("the example reads");
     let mut plan = compile(
         &[gauge.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan")
     .plan
@@ -1602,7 +1640,7 @@ fn a_named_constant_answers_like_its_literal() {
     let source = "graph g : App {\n  operator o {\n    val huge = 2147483648\n    output score : int\n    on in { score = huge }\n  }\n  . -> o\n  o.score -> .\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("the alias breaches like the literal");
     assert!(
@@ -1623,14 +1661,14 @@ fn an_explicit_variant_is_dynamic_not_an_inference_hole() {
     let flexible = "graph g : App {\n  input in: variant\n  operator o {\n    output flexible : variant\n    on in { flexible = 1 }\n  }\n  . -> o\n  o.flexible -> .\n}\n";
     compile(
         &[flexible],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("an int through a variant pin");
 
     let variant_to_int = "graph g : App {\n  input in: variant\n  operator a {\n    output flexible : variant\n    on in { flexible = data }\n  }\n  operator b {\n    input evt : int\n    on evt { out = data }\n  }\n  . -> a\n  a.flexible -> b.evt\n  b -> .\n}\n";
     let bag = compile(
         &[variant_to_int],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("variant cannot silently narrow to int");
     assert!(
@@ -1642,7 +1680,7 @@ fn an_explicit_variant_is_dynamic_not_an_inference_hole() {
     let int_to_variant = "graph g : App {\n  input in: variant\n  operator a {\n    output score : int\n    on in { score = 1 }\n  }\n  operator b {\n    input evt : variant\n    on evt { out = data }\n  }\n  . -> a\n  a.score -> b.evt\n  b -> .\n}\n";
     let compilation = compile(
         &[int_to_variant],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("int is assignable to variant");
 
@@ -1680,7 +1718,7 @@ graph g : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the name err carries no hidden producer type");
     let source = compilation
@@ -1773,7 +1811,7 @@ lab g {
 "#;
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("variant cannot silently narrow to int");
     assert!(
@@ -1785,7 +1823,9 @@ lab g {
 
 #[test]
 fn the_bare_data_relay_preserves_the_logical_type() {
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1795,7 +1835,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let relay = |data: Value| {
@@ -1804,7 +1844,9 @@ fn the_bare_data_relay_preserves_the_logical_type() {
         vm.inject(
             &mut journal,
             InboundSubmission {
-                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(data),
@@ -1837,7 +1879,9 @@ fn the_bare_data_relay_preserves_the_logical_type() {
 
 #[test]
 fn an_ingress_pin_violation_is_a_named_error() {
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1846,7 +1890,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1855,7 +1899,9 @@ fn an_ingress_pin_violation_is_a_named_error() {
         .inject(
             &mut journal,
             InboundSubmission {
-                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
                 port: rastok::node::Port::new("alpha").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Text(String::from("wrong"))),
@@ -1916,7 +1962,7 @@ lab g {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit");
     let runs = rastok::lab::run(
@@ -1956,7 +2002,7 @@ lab g {
 
 #[test]
 fn the_validator_reads_the_table_and_gates_the_capability() {
-    // Two DISTINCT refusals prove the table is read without any Registry:
+    // Two DISTINCT refusals prove the table is read without any ContractCatalog:
     // Process cannot grow a port beyond its resolved contract, while a
     // referenced row absent from the table refuses by ignorance.
     use rastok::datatype::DataType;
@@ -1965,7 +2011,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n  . -> probe -> .\n}\n";
     let mut plan = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the Process contract compiles")
     .plan
@@ -2036,7 +2082,9 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
     // The logical type rides the VALUE through the Rastok expression bridge — not
     // an AST special case: a local binding and a ternary preserve it
     // exactly like the bare relay.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2049,7 +2097,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
         );
         let compilation = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -2057,7 +2105,9 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
         vm.inject(
             &mut journal,
             InboundSubmission {
-                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(data),
@@ -2133,7 +2183,7 @@ lab g {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit");
     let runs = rastok::lab::run(
@@ -2150,7 +2200,9 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     // representation — bytes, encoding, and content-type hint —
     // before any Rastok expression binding materializes. An Avro relay therefore
     // works; reading an Avro FIELD still faults, typed.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2159,7 +2211,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2167,7 +2219,9 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
@@ -2204,7 +2258,7 @@ fn a_spawn_failure_cannot_cross_a_pin() {
     let source = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"/definitely/not/a/binary\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator sink {\n    input evt : int\n    on evt { out = data }\n  }\n\n  . -> shell\n  shell.err -> sink.evt\n  shell.out -> .\n  sink -> .\n}\n";
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("variant cannot silently narrow to int");
     assert!(
@@ -2254,7 +2308,7 @@ lab g {
 "#;
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("variant cannot silently narrow to int");
     assert!(
@@ -2272,7 +2326,7 @@ fn a_struct_initializer_cannot_enter_an_int_state_cell() {
     let source = "graph g : App {\n  input in: variant\n  operator relay {\n    var seen : int = 0\n    on in { seen = seen + 1\n      out = data }\n  }\n  . -> relay -> .\n}\n";
     let mut plan = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan")
     .plan
@@ -2299,7 +2353,9 @@ fn data_materializes_only_on_demand() {
     // An expression that never reads `data` must never force an
     // opaque payload to decode: a `true` guard, a state write, and
     // an identity emission all leave Avro bytes untouched.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2308,7 +2364,7 @@ fn data_materializes_only_on_demand() {
     let run = |source: &str| {
         let compilation = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -2316,7 +2372,9 @@ fn data_materializes_only_on_demand() {
         vm.inject(
             &mut journal,
             InboundSubmission {
-                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
@@ -2376,7 +2434,9 @@ fn short_circuits_never_demand_the_data() {
     // The demand comes from the EVALUATOR, not a pre-scan of the
     // tree: a branch the evaluation never takes must never force an
     // opaque payload to decode, even though `data` appears in it.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Encoding, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2385,7 +2445,7 @@ fn short_circuits_never_demand_the_data() {
     let run = |source: &str| {
         let compilation = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -2393,7 +2453,9 @@ fn short_circuits_never_demand_the_data() {
         vm.inject(
             &mut journal,
             InboundSubmission {
-                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::encoded(Encoding::Avro, *b"\x01\x02"),
@@ -2455,7 +2517,9 @@ fn the_carry_is_as_lazy_as_the_name() {
     // taken ternary arm behave exactly like `out = data` — the whole
     // payload ships its REPRESENTATION (bytes, encoding, MIME),
     // opaque or not, however the carry is written.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2467,7 +2531,7 @@ fn the_carry_is_as_lazy_as_the_name() {
         );
         let compilation = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -2475,7 +2539,9 @@ fn the_carry_is_as_lazy_as_the_name() {
         vm.inject(
             &mut journal,
             InboundSubmission {
-                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::encoded(encoding, bytes.to_vec()),
@@ -2524,7 +2590,7 @@ fn the_carry_is_as_lazy_as_the_name() {
 
 #[test]
 fn a_field_access_materializes_exactly_once_per_envelope() {
-    // The envelope's own cell is the cache authority: the first
+    // The envelope's own cell is the cache provenance: the first
     // structural access fills it; every later demand — this
     // transaction's or a later node's — reads the cell.
     use rastok::envelope::{Data, Encoding};
@@ -2548,7 +2614,9 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     // emitted data carries the FILLED cell, so the next node's
     // demand is a cache read — once per envelope, not once per
     // transaction.
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2557,7 +2625,7 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in where size(data) > 0 { out = . }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2565,7 +2633,9 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::encoded(Encoding::Raw, *b"ok"),
@@ -2639,7 +2709,9 @@ fn struct_equality_is_by_name_like_the_seal() {
 
 #[test]
 fn a_duplicated_struct_field_refuses_at_the_door() {
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2648,7 +2720,7 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2657,7 +2729,9 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
         .inject(
             &mut journal,
             InboundSubmission {
-                authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    rastok::node::Path::new(["probe"]).unwrap(),
+                ),
                 port: rastok::node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::materialized(Value::Struct(vec![
@@ -2679,7 +2753,9 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
 
 #[test]
 fn the_conformance_judgement_is_matchable() {
-    use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+    use rastok::boundary::{
+        Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
+    };
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2689,13 +2765,13 @@ fn the_conformance_judgement_is_matchable() {
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  .alpha -> o.a\n  o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let submission = |data: Value| InboundSubmission {
-        authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         port: rastok::node::Port::new("alpha").unwrap(),
         draft: Draft {
             data: Data::materialized(data),

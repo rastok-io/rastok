@@ -6,9 +6,9 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{Draft, InboundSubmission, IngressAuthority, SubmissionSequence};
+use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
@@ -25,7 +25,7 @@ fn drive(
 ) {
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -35,7 +35,9 @@ fn drive(
     vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(data),
@@ -259,7 +261,7 @@ lab g {{
     );
     let compilation = compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit");
     let runs = rastok::lab::run(
@@ -316,7 +318,7 @@ lab g {{
     );
     let compilation = compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("one JSON object inhabits the jsonl variant pin");
     let runs = rastok::lab::run(
@@ -441,7 +443,7 @@ lab g {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit");
     let runs = rastok::lab::run(
@@ -461,7 +463,7 @@ fn an_out_of_domain_decimal_refuses_at_the_door() {
     // allocation (D-2026-08-10-7).
     let compilation = compile(
         &[CAT_JSONL],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -469,7 +471,9 @@ fn an_out_of_domain_decimal_refuses_at_the_door() {
     let refused = vm.inject(
         &mut journal,
         InboundSubmission {
-            authority: IngressAuthority::single(rastok::node::Path::new(["probe"]).unwrap()),
+            provenance: InboundEnvelopeProvenance::single(
+                rastok::node::Path::new(["probe"]).unwrap(),
+            ),
             port: rastok::node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::materialized(Value::Decimal {
@@ -491,7 +495,7 @@ fn a_validated_plan_never_carries_an_unknown_codec() {
     // and quietly run as `lines`.
     let compilation = compile(
         &[CAT_JSONL],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
@@ -521,7 +525,7 @@ fn a_process_plan_without_a_codec_never_validates() {
     // instead of silently running as `lines`.
     let compilation = compile(
         &[CAT_JSONL],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
@@ -547,13 +551,13 @@ fn another_contracts_codec_vocabulary_is_untouched() {
     // refused by Process's domain.
     let compilation = compile(
         &[CAT_JSONL],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
-            spec.contract = String::from("Custom");
+            spec.contract = rastok::connector::ConnectorId::parse("test/custom@1").unwrap();
             for (name, setting) in &mut spec.attributes {
                 if name == "codec" {
                     *setting = rastok::plan::AttrSetting::Word(String::from("json"));

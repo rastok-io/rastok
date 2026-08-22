@@ -89,8 +89,10 @@ pub enum NodeRole {
     Operator,
     /// External-effect Driver under a contract sheet.
     Connector {
-        /// The trait symbol (`Process`).
-        trait_name: String,
+        /// Stable canonical identity resolved from the source symbol.
+        contract_id: String,
+        /// Runtime roles declared by that contract.
+        roles: crate::connector::ConnectorRoles,
         /// Checked attributes, in declaration order.
         attributes: Vec<Attribute>,
     },
@@ -129,11 +131,11 @@ impl Node {
         }
     }
 
-    /// The connector's trait symbol, when a connector.
+    /// The connector's stable contract identity, when a connector.
     #[must_use]
-    pub fn connector_trait(&self) -> Option<&str> {
+    pub fn connector_contract_id(&self) -> Option<&str> {
         match &self.role {
-            NodeRole::Connector { trait_name, .. } => Some(trait_name),
+            NodeRole::Connector { contract_id, .. } => Some(contract_id),
             NodeRole::Operator => None,
         }
     }

@@ -428,8 +428,10 @@ pub struct OwnerValue {
 /// A connector's planned configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectorSpec {
-    /// The contract sheet name (`Process`).
-    pub contract: String,
+    /// Stable semantic contract identity (`rastok/process@1`).
+    pub contract: crate::connector::ConnectorId,
+    /// Inbound/outbound runtime roles required by the contract.
+    pub roles: crate::connector::ConnectorRoles,
     /// The declared effect — typed at the HIR/plan frontier, where
     /// distinctions become irrevocable.
     pub effect: node::Effect,
@@ -460,7 +462,7 @@ pub enum AttrSetting {
     Value(Value),
     /// A checked expression evaluated at the transported site. Plan-shaping
     /// rows can never use this form; validation has enough information to
-    /// reject it without the compiler Registry.
+    /// reject it without the compiler ContractCatalog.
     Expr {
         /// Earliest actual evaluation site.
         site: EvaluationSite,

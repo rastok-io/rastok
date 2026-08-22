@@ -164,14 +164,14 @@ pub struct Unit {
     pub files: Vec<(SourceId, SyntaxTree)>,
 }
 
-/// Checks a unit into HIR against a contract registry. Diagnostics
+/// Checks a unit into HIR against a contract catalogue. Diagnostics
 /// accumulate in `bag`; `None` means the unit has no single `: App`
 /// graph to check. A returned HIR is meaningful only when the bag
 /// holds no errors.
 #[must_use]
 pub fn check(
     unit: &Unit,
-    registry: &contract::Registry,
+    registry: &contract::ContractCatalog,
     bag: &mut Bag,
     asset_root: Option<&std::path::Path>,
 ) -> Option<Hir> {
@@ -373,7 +373,7 @@ pub fn check(
 
 struct Checker<'bag, 'registry> {
     bag: &'bag mut Bag,
-    registry: &'registry contract::Registry,
+    registry: &'registry contract::ContractCatalog,
     /// The `ext` vocabulary the instantiated connectors' sheets
     /// declare — the standard `content_type` is always known.
     ext_fields: std::collections::BTreeSet<String>,
@@ -889,7 +889,7 @@ impl Checker<'_, '_> {
                 );
                 continue;
             };
-            if node.connector_trait().is_none() {
+            if node.connector_contract_id().is_none() {
                 self.deferred("a mock of an operator", name.span);
                 continue;
             }
@@ -2504,7 +2504,10 @@ impl Checker<'_, '_> {
         let mut node = Node {
             path,
             role: NodeRole::Connector {
-                trait_name,
+                // Recovery value only: `contract()` replaces it with the
+                // canonical id before a successful HIR can be lowered.
+                contract_id: trait_name,
+                roles: crate::connector::ConnectorRoles::Outbound,
                 attributes: Vec::new(),
             },
             vals: Vec::new(),
@@ -2567,6 +2570,13 @@ impl Checker<'_, '_> {
                 return;
             }
         };
+        if let NodeRole::Connector {
+            contract_id, roles, ..
+        } = &mut node.role
+        {
+            *contract_id = contract.id.to_string();
+            *roles = contract.roles;
+        }
         // Name, direction and sink policy do not depend on attribute
         // values. Materialize that part immediately so a bad selector or
         // attribute keeps its one truthful diagnostic instead of causing
@@ -2957,7 +2967,7 @@ impl Checker<'_, '_> {
                 // Missing/invalid effective choices have already received
                 // their source-facing contract diagnostic above. A type
                 // constructor failure is a sheet defect and cannot pass the
-                // Registry door; this guard prevents an incomplete HIR if a
+                // ContractCatalog door; this guard prevents an incomplete HIR if a
                 // future rule violates that invariant.
                 if !matches!(
                     &error,
@@ -3104,7 +3114,7 @@ impl Checker<'_, '_> {
                         .map(|segment| segment.text.as_str())
                         .collect::<Vec<_>>()
                         .join(".");
-                    if node.connector_trait().is_none() {
+                    if node.connector_contract_id().is_none() {
                         self.deferred("an operator attribute", attribute.span);
                     } else if !written_attributes.insert(name.clone()) {
                         self.bag.push(
@@ -6444,7 +6454,7 @@ impl Checker<'_, '_> {
         // B7 makes the conventional terminal output executable beside the
         // ordinary in/out/err ports. Further contract-specific ports remain
         // transported-but-deferred until their Driver slice exists.
-        if target_node.is_some_and(|target| target.connector_trait().is_some())
+        if target_node.is_some_and(|target| target.connector_contract_id().is_some())
             && !matches!(port_name, "in" | "out" | "err" | "exit")
         {
             self.deferred("a connector edge beyond the default trio", reference.span);
@@ -6452,7 +6462,7 @@ impl Checker<'_, '_> {
         }
         let direction = if let Some(target) = target_node {
             self.node_port_direction(target, port_name).or_else(|| {
-                if target.connector_trait().is_some() {
+                if target.connector_contract_id().is_some() {
                     return None;
                 }
                 match port_name {
@@ -7071,7 +7081,7 @@ mod tests {
 
     fn check_source(source: &str) -> (Option<Hir>, Bag) {
         let mut bag = Bag::new();
-        let registry = contract::Registry::try_m0().expect("the standard catalogue holds");
+        let registry = contract::ContractCatalog::try_m0().expect("the standard catalogue holds");
         let tree = parse(SourceId::new(0), source, &registry, &mut bag);
         let unit = Unit {
             files: vec![(SourceId::new(0), tree)],
@@ -7128,7 +7138,10 @@ graph m0_probe : App {
         assert_eq!(hir.app.nodes.len(), 2);
         let echo = &hir.app.nodes[0];
         assert_eq!(echo.category(), node::Kind::Connector);
-        assert_eq!(echo.connector_trait(), Some("Process"));
+        assert_eq!(
+            echo.connector_contract_id(),
+            Some(crate::connector::PROCESS_CONNECTOR_ID)
+        );
         // The EFFECTIVE sheet (D-2026-08-12-1): the five written
         // attributes plus the injected defaults — `args = []`,
         // `err_codec = lines` and,

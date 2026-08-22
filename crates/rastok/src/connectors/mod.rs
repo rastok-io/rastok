@@ -5,5 +5,10 @@
 //! while the catalogue grows without returning to one monolithic file.
 
 mod process;
+mod registry;
 
 pub use process::{Process, ProcessBindError, ProcessBindReason, ProcessSettingsError};
+pub use registry::{
+    BoundConnectorDriver, ConnectorDriverFactory, DriverBindingError, DriverFactoryError,
+    DriverRegistrationError, DriverRegistry,
+};

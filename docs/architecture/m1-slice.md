@@ -28,6 +28,10 @@ recovery-only, the identity ledger is audited, and virtual-shard reassignment is
 proved absent from semantic hashes, journal bytes, and replay input. The
 reference runtime remains deliberately one-worker; physical cluster leases and
 crash recovery are later work.
+M1.5 C0 separated Connector/Contract/Driver vocabulary without an identity
+move; C1 now publishes stable Connector ids and role requirements in
+categorical plan-package v10, with separate compiler `ContractCatalog` and
+runtime `DriverRegistry`. C2 is the mixed-family global binder.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -342,7 +346,7 @@ step touches `vm.rs` once.
    harness. Decision point before code: hand-rolled bounded HTTP/1.1
    versus a vetted dependency, and whether TLS enters M1 at all (the
    October demo runs mocked; a `decisions.md` entry either way).
-8. **`HttpServer`, ack mode** — the inbound side: ingress authority,
+8. **`HttpServer`, ack mode** — the inbound side: inbound-envelope provenance,
    submission sequence, backpressure at the boundary.
 9. **The Loop aspect** — the bounded-iteration primitive, alive on a
    graph.
@@ -376,8 +380,9 @@ step touches `vm.rs` once.
 
 No durable journal on disk (the format is designed, not built), no
 Saga manager, no `compensable`/`irreversible` execution, no
-`Process` service mode, no distribution, no cluster, no runtime or
-distributed registry (the compiler's contract `Registry` is already
-landed), no TLS commitment before its decision entry. The parallelism
+`Process` service mode, no distribution, no cluster, no distributed
+registry or plugin loader (the compiler's local `ContractCatalog` and the
+runtime's local `DriverRegistry` are already landed), no TLS commitment
+before its decision entry. The parallelism
 decisions of [`parallelism-notes.md`](parallelism-notes.md) stay a
 decision list — M1 remains one worker.

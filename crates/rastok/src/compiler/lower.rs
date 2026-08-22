@@ -337,7 +337,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         edges: Vec::new(),
         handlers: Vec::new(),
         // DERIVED from the writes the hash already seals — carried
-        // for the Registry-less validator (D-2026-08-10-1), never
+        // for the ContractCatalog-less validator (D-2026-08-10-1), never
         // hashed twice.
         app_schema: hir.app_schema.clone(),
         ext_schema: hir.ext_schema.clone(),
@@ -456,8 +456,16 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         plan.nodes.push(Node {
             path: hir_node.path.clone(),
             kind: match &hir_node.role {
-                NodeRole::Connector { trait_name, .. } => NodeKind::Connector(ConnectorSpec {
-                    contract: trait_name.clone(),
+                NodeRole::Connector {
+                    contract_id, roles, ..
+                } => NodeKind::Connector(ConnectorSpec {
+                    contract: crate::connector::ConnectorId::parse(contract_id).map_err(|_| {
+                        LowerError {
+                            owner: hir_node.path.to_string(),
+                            detail: "a checked Connector carries a non-canonical contract id",
+                        }
+                    })?,
+                    roles: *roles,
                     effect: typed_effect(hir_node),
                     behavior: typed_behavior(hir_node),
                     attributes,
@@ -607,7 +615,7 @@ fn lower_instance(
 }
 
 /// A checked instance policy whose runtime profile is not executable at the
-/// current M1.4 gate. V9 can transport every closed profile; lowering refuses
+/// current M1.4 gate. V10 retains transport for every closed profile; lowering refuses
 /// before packaging until the corresponding scheduler rule exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LowerError {
@@ -1097,9 +1105,16 @@ impl Writer<'_> {
         self.str(&node.path.to_string());
         match &node.role {
             crate::compiler::hir::NodeRole::Operator => self.tag(0),
-            crate::compiler::hir::NodeRole::Connector { trait_name, .. } => {
+            crate::compiler::hir::NodeRole::Connector {
+                contract_id, roles, ..
+            } => {
                 self.tag(1);
-                self.str(trait_name);
+                self.str(contract_id);
+                self.tag(match roles {
+                    crate::connector::ConnectorRoles::Inbound => 1,
+                    crate::connector::ConnectorRoles::Outbound => 2,
+                    crate::connector::ConnectorRoles::InboundAndOutbound => 3,
+                });
             }
         }
         let mut vals: Vec<_> = node.vals.iter().collect();
@@ -1585,7 +1600,7 @@ impl Writer<'_> {
 mod tests {
     use super::DataType;
     use crate::compiler::compile;
-    use crate::contract::Registry;
+    use crate::contract::ContractCatalog;
     use crate::node;
     use crate::plan::{AttrSetting, Emission, GraphVersion, Manifest, Step};
 
@@ -1612,7 +1627,7 @@ graph m0_probe : App {
     fn the_m0_probe_compiles_to_a_plan() {
         let compilation = compile(
             &[M0_PROBE],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid plan");
         assert!(compilation.warnings.is_empty());
@@ -1622,7 +1637,11 @@ graph m0_probe : App {
         assert_eq!(plan.nodes[0].path.to_string(), "shout");
         assert_eq!(plan.nodes[1].path.to_string(), "echo");
         let spec = plan.nodes[1].connector().expect("a connector spec");
-        assert_eq!(spec.contract, "Process");
+        assert_eq!(
+            spec.contract.as_str(),
+            crate::connector::PROCESS_CONNECTOR_ID
+        );
+        assert_eq!(spec.roles, crate::connector::ConnectorRoles::Outbound);
         assert_eq!(
             spec.attribute("command"),
             Some(&AttrSetting::Value(crate::value::Value::Text(
@@ -1669,7 +1688,7 @@ graph m0_probe : App {
     fn the_mandatory_axes_ship_typed() {
         let compilation = compile(
             &[M0_PROBE],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         let spec = compilation.plan.nodes[1].connector().unwrap();
@@ -1687,13 +1706,13 @@ graph m0_probe : App {
     fn the_hash_ignores_formatting_and_declaration_order() {
         let original = compile(
             &[M0_PROBE],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap()
         .hash;
         let same = compile(
             &[M0_PROBE],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap()
         .hash;
@@ -1724,7 +1743,7 @@ graph m0_probe : App {
         assert_eq!(
             compile(
                 &[reordered],
-                &Registry::try_m0().expect("the standard catalogue holds")
+                &ContractCatalog::try_m0().expect("the standard catalogue holds")
             )
             .unwrap()
             .hash,
@@ -1736,7 +1755,7 @@ graph m0_probe : App {
     fn the_hash_is_sensitive_to_meaning() {
         let original = compile(
             &[M0_PROBE],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap()
         .hash;
@@ -1744,7 +1763,7 @@ graph m0_probe : App {
         assert_ne!(
             compile(
                 &[renamed.as_str()],
-                &Registry::try_m0().expect("the standard catalogue holds")
+                &ContractCatalog::try_m0().expect("the standard catalogue holds")
             )
             .unwrap()
             .hash,
@@ -1755,7 +1774,7 @@ graph m0_probe : App {
         assert_ne!(
             compile(
                 &[regexed.as_str()],
-                &Registry::try_m0().expect("the standard catalogue holds")
+                &ContractCatalog::try_m0().expect("the standard catalogue holds")
             )
             .unwrap()
             .hash,
@@ -1800,15 +1819,18 @@ graph m0_probe : App {
         // DELIBERATE FIXTURE MIGRATION 2026-08-15 (M1.3 B9): the first
         // structural inspection now names the operator's closed input type;
         // `variant` can no longer be inspected without `is`/`as` narrowing.
+        // DELIBERATE MOVE 2026-08-22 (M1.5 C1): the source symbol
+        // `Process` resolves to `rastok/process@1`, and the stable id plus
+        // required outbound role are now canonical HIR identity.
         let hash = compile(
             &[M0_PROBE],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap()
         .hash;
         assert_eq!(
             hash.to_string(),
-            "29c69b70dcf686a9122647d22d61a788c39672936df9a4ed76470e4e68f19a9d"
+            "52406fcf0951b8b8bf16188e677dfea2cd6b0b873a7ff10b1360501015bd28a6"
         );
     }
 
@@ -1818,13 +1840,13 @@ graph m0_probe : App {
         let with_port = "graph g : App {\n  input feed: text\n  operator o { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  . -> o -> .\n}\n";
         let bare_hash = compile(
             &[bare],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap()
         .hash;
         let ported = compile(
             &[with_port],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         assert_ne!(
@@ -1847,12 +1869,12 @@ graph m0_probe : App {
         let reordered = "graph g : App {\n  operator a { input in: struct { anchor: text } on in where data.anchor == \"\" { out = . } }\n  operator b { on in { out = . } }\n  b -> .\n  a -> b\n  . -> a\n}\n";
         let one = compile(
             &[forward],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         let two = compile(
             &[reordered],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         assert_eq!(one.hash, two.hash);
@@ -1868,12 +1890,12 @@ graph m0_probe : App {
         };
         let one = compile(
             &[with_attrs("    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic\n").as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         let two = compile(
             &[with_attrs("    behavior = deterministic ; effect = idempotent\n    codec = lines ; command = \"cat\"\n").as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         assert_eq!(one.hash, two.hash);
@@ -1889,12 +1911,12 @@ graph m0_probe : App {
         };
         let forward = compile(
             &[with_map("{'a': 1, 'b': 2}").as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         let reversed = compile(
             &[with_map("{'b': 2, 'a': 1}").as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         assert_eq!(forward.hash, reversed.hash);
@@ -1906,7 +1928,7 @@ graph m0_probe : App {
         let source = "graph g : App {\n  input feed: text\n  output sink\n  operator o {\n    on event { result = . }\n  }\n  .feed -> o.event\n  o.result -> .sink\n}\n";
         let compilation = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         let ports = &compilation.plan.nodes[0].ports;
@@ -1928,12 +1950,12 @@ graph m0_probe : App {
         };
         let five = compile(
             &[with_val("5").as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         let six = compile(
             &[with_val("6").as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
         // A local constant is identity material...
@@ -1953,7 +1975,7 @@ graph m0_probe : App {
     fn a_plan_with_errors_is_unrepresentable() {
         let bag = compile(
             &["graph g : App {\n  connector c : Process { }\n  . -> c -> .\n}\n"],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect_err("missing mandatory attributes must refuse");
         assert!(bag.has_errors());
@@ -1963,7 +1985,7 @@ graph m0_probe : App {
     fn versions_alias_the_hash_through_the_manifest() {
         let hash = compile(
             &[M0_PROBE],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap()
         .hash;

@@ -22,18 +22,21 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-/// Opaque ingress identity: exactly `(connector_path, replica)`.
-/// Opaque so the replica is never inlined anywhere else — the
-/// multi-host door stays open. In single-process execution the
-/// replica is 0.
+/// Provenance shared by root envelopes entering through one logical
+/// Connector replica: exactly `(connector_path, replica)`.
+///
+/// This is neither a network address nor the identity of one submission. The
+/// journal combines it with an accepted inbound sequence to mint one root;
+/// keeping the replica opaque here leaves multi-host placement out of causal
+/// identity. In single-process execution the replica is 0.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct IngressAuthority {
+pub struct InboundEnvelopeProvenance {
     connector_path: node::Path,
     replica: u64,
 }
 
-impl IngressAuthority {
-    /// The single-process authority for one ingress connector.
+impl InboundEnvelopeProvenance {
+    /// The single-process provenance of one inbound Connector.
     #[must_use]
     pub fn single(connector_path: node::Path) -> Self {
         Self {
@@ -42,7 +45,7 @@ impl IngressAuthority {
         }
     }
 
-    /// The ingress connector's root-relative path — root-recipe input.
+    /// The inbound Connector's root-relative path — root-recipe input.
     #[must_use]
     pub fn connector_path(&self) -> &node::Path {
         &self.connector_path
@@ -147,7 +150,7 @@ impl RequestCodec {
     /// [`ValidatedExecutionPlan`]: crate::plan::ValidatedExecutionPlan
     #[must_use]
     pub fn of(spec: &crate::plan::ConnectorSpec) -> Self {
-        if spec.contract != "Process" {
+        if spec.contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
             return Self::Lines;
         }
         match spec.attribute("codec") {
@@ -160,15 +163,15 @@ impl RequestCodec {
 /// Effective logical type of one currently executable Connector port.
 ///
 /// The compiler sheet owns the source-facing rule. This core mirror lets a
-/// package validator prove the same table without a compiler Registry.
+/// package validator prove the same table without a compiler ContractCatalog.
 #[must_use]
 pub fn process_port_type(
-    contract: &str,
+    contract: &crate::connector::ConnectorId,
     port: &str,
     codec_word: Option<&str>,
     err_codec_word: Option<&str>,
 ) -> Option<DataType> {
-    if contract != "Process" {
+    if contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
         return None;
     }
     match (port, codec_word) {
@@ -191,16 +194,16 @@ pub fn process_port_type(
 ///
 /// The compiler sheet owns the source-facing rule. This core mirror lets a
 /// package validator reject a forged late binding without linking the
-/// compiler Registry. Keep it in product agreement with the sheet, just like
+/// compiler ContractCatalog. Keep it in product agreement with the sheet, just like
 /// [`process_port_type`].
 #[must_use]
 pub fn process_attribute_site(
-    contract: &str,
+    contract: &crate::connector::ConnectorId,
     attribute: &str,
 ) -> Option<crate::plan::EvaluationSite> {
     use crate::plan::EvaluationSite;
 
-    if contract != "Process" {
+    if contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
         return None;
     }
     match attribute {
@@ -709,12 +712,12 @@ pub enum SubmissionSequence {
     Explicit(u64),
 }
 
-/// A draft proposed for atomic acceptance: ingress births drafts,
+/// A draft proposed for atomic acceptance: inbound Drivers propose drafts,
 /// never envelopes — a root envelope cannot pre-exist its sequence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundSubmission {
-    /// Who proposes it.
-    pub authority: IngressAuthority,
+    /// Stable external origin shared by roots from this logical replica.
+    pub provenance: InboundEnvelopeProvenance,
     /// The graph input the draft enters — `in` or a declared
     /// boundary input. Journaled with the record: replay must
     /// re-route from the same port, so the port is a causal fact.
@@ -1085,10 +1088,10 @@ mod tests {
     use alloc::vec;
 
     #[test]
-    fn the_authority_stays_opaque_but_answers_the_recipes() {
-        let authority = IngressAuthority::single(node::Path::new(["inbound"]).unwrap());
-        assert_eq!(authority.connector_path().to_string(), "inbound");
-        assert_eq!(authority.replica(), 0);
+    fn inbound_provenance_stays_opaque_but_answers_the_recipes() {
+        let provenance = InboundEnvelopeProvenance::single(node::Path::new(["inbound"]).unwrap());
+        assert_eq!(provenance.connector_path().to_string(), "inbound");
+        assert_eq!(provenance.replica(), 0);
     }
 
     /// A scripted driver: records what it was asked to start,
@@ -1113,7 +1116,9 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         let committed = journal
             .append_inbound(InboundSubmission {
-                authority: IngressAuthority::single(node::Path::new(["inbound"]).unwrap()),
+                provenance: InboundEnvelopeProvenance::single(
+                    node::Path::new(["inbound"]).unwrap(),
+                ),
                 port: node::Port::new("in").unwrap(),
                 draft: Draft {
                     data: Data::encoded(Encoding::Raw, *b"salut"),

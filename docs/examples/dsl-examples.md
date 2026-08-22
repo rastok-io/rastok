@@ -15,10 +15,11 @@ these concepts concretely. Stdlib aliases (`HttpClient`, `Process`,
 the primitive `operator` / `connector` keywords stand on their own
 when no alias fits.
 
-The parser is a forward lexeme stream. Categorical plan-package v9 retains
-the complete v7 M1.3 type/value/expression registry and now carries lexical
-owners, Node-owned instance policy, scoped edges, and phased immutable
-expressions. As of 2026-08-22,
+The parser is a forward lexeme stream. Categorical plan-package v10 retains
+v9's lexical owners, Node-owned instance policy, scoped edges and phased
+immutable expressions plus the complete v7 M1.3 type/value/expression
+registry; it also carries stable Connector ids and required roles. As of
+2026-08-22,
 `Process(mode = job)` with `lines`/`jsonl`/`bytes`, multiport completion,
 the three metadata zones, `IDENT!` frontends, structural and tagged types,
 typed narrowing, and all five Graph/Node lifetime profiles execute. The former

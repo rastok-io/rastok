@@ -322,10 +322,10 @@ fn record_tree(record: &Record) -> Cbor {
                 (20, spine(&inbound.envelope)),
                 (
                     21,
-                    Cbor::Text(inbound.authority.connector_path().to_string()),
+                    Cbor::Text(inbound.provenance.connector_path().to_string()),
                 ),
                 (22, Cbor::Uint(inbound.seq)),
-                (23, Cbor::Uint(inbound.authority.replica())),
+                (23, Cbor::Uint(inbound.provenance.replica())),
             ]);
             // Key 24: the ingress port — a causal fact since named
             // boundary inputs, omitted for the default `in` (absent

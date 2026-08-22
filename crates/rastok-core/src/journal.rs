@@ -19,7 +19,7 @@
 //! [`identity.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/identity.md
 
 use crate::boundary::{
-    CallRef, Completion, InboundSubmission, IngressAuthority, Intent, SubmissionSequence,
+    CallRef, Completion, InboundEnvelopeProvenance, InboundSubmission, Intent, SubmissionSequence,
 };
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::identity::{InstanceAddress, InstanceRef};
@@ -34,7 +34,7 @@ use core::fmt;
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its domain tags.
 pub mod ids {
-    use super::{CallRef, Id, IngressAuthority, InstanceRef, node};
+    use super::{CallRef, Id, InboundEnvelopeProvenance, InstanceRef, node};
     use alloc::string::ToString;
 
     /// Domain tag of a root derivation: 2 fields.
@@ -58,11 +58,11 @@ pub mod ids {
     /// recipe; a non-zero replica joins the derivation when multi-host
     /// semantics land.
     #[must_use]
-    pub fn root_id(authority: &IngressAuthority, seq: u64) -> Id {
+    pub fn root_id(provenance: &InboundEnvelopeProvenance, seq: u64) -> Id {
         Id::derive(
             ROOT,
             &[
-                authority.connector_path().to_string().as_bytes(),
+                provenance.connector_path().to_string().as_bytes(),
                 &seq.to_le_bytes(),
             ],
         )
@@ -178,14 +178,14 @@ pub enum Record {
 /// `(connector_path, replica, seq)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundRecord {
-    /// Who accepted it.
-    pub authority: IngressAuthority,
+    /// Stable provenance of the external root stream.
+    pub provenance: InboundEnvelopeProvenance,
     /// The graph input the envelope entered — a causal fact: replay
     /// re-routes from this port. Projects as key 24, omitted for the
     /// default `in` (absent = omitted, so pre-multiport traces are
     /// byte-identical).
     pub port: node::Port,
-    /// The atomic per-authority sequence.
+    /// The atomic per-provenance sequence.
     pub seq: u64,
     /// The envelope born here.
     pub envelope: Envelope,
@@ -385,7 +385,7 @@ pub enum Error {
         /// What the submission carried.
         got: u64,
     },
-    /// A per-authority sequence exhausted its range; monotonicity
+    /// A per-provenance sequence exhausted its range; monotonicity
     /// cannot continue.
     SequenceOverflow,
     /// A route or transaction named a generation other than the one derived
@@ -638,13 +638,13 @@ pub trait Journal {
 }
 
 /// The M0 in-memory journal. It preserves the logical boundaries a
-/// durable implementation needs — typed records, per-authority
+/// durable implementation needs — typed records, per-provenance
 /// sequences, append-only closure — with no claim about files.
 #[derive(Debug)]
 pub struct MemJournal {
     graph_version: GraphVersion,
     records: Vec<Record>,
-    next_seq: BTreeMap<IngressAuthority, u64>,
+    next_seq: BTreeMap<InboundEnvelopeProvenance, u64>,
     /// Replay-derived lifecycle fold, maintained atomically with `records`.
     /// It is an index over causal facts, never a second generation authority.
     instance_lifecycles: BTreeMap<InstanceAddress, InstanceLifecycle>,
@@ -790,7 +790,7 @@ impl Journal for MemJournal {
     fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error> {
         let next = self
             .next_seq
-            .get(&submission.authority)
+            .get(&submission.provenance)
             .copied()
             .unwrap_or(0);
         let seq = match submission.sequence {
@@ -804,7 +804,7 @@ impl Journal for MemJournal {
             }
         };
         seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
-        let id = ids::root_id(&submission.authority, seq);
+        let id = ids::root_id(&submission.provenance, seq);
         let sys = MetaSys::root(id, self.graph_version.0);
         // The world's half seeds `ext` only: `app` is the
         // application's zone and starts empty at ingress
@@ -827,7 +827,7 @@ impl Journal for MemJournal {
     ) -> Result<CommittedInbound, Error> {
         let expected = self
             .next_seq
-            .get(&prepared.submission.authority)
+            .get(&prepared.submission.provenance)
             .copied()
             .unwrap_or(0);
         if prepared.seq != expected {
@@ -848,14 +848,14 @@ impl Journal for MemJournal {
         }
         routes.sort();
         let record = InboundRecord {
-            authority: prepared.submission.authority.clone(),
+            provenance: prepared.submission.provenance.clone(),
             port: prepared.submission.port,
             seq: prepared.seq,
             envelope: prepared.envelope.clone(),
             routes,
         };
         self.next_seq
-            .insert(prepared.submission.authority, following);
+            .insert(prepared.submission.provenance, following);
         self.records.push(Record::Inbound(record.clone()));
         Ok(CommittedInbound {
             seq: prepared.seq,
@@ -1161,13 +1161,13 @@ mod tests {
         InstanceRef::new(InstanceAddress::singleton(&owner), generation)
     }
 
-    fn authority(path: &str) -> IngressAuthority {
-        IngressAuthority::single(node::Path::new([path]).unwrap())
+    fn provenance(path: &str) -> InboundEnvelopeProvenance {
+        InboundEnvelopeProvenance::single(node::Path::new([path]).unwrap())
     }
 
     fn submission(path: &str, sequence: SubmissionSequence) -> InboundSubmission {
         InboundSubmission {
-            authority: authority(path),
+            provenance: provenance(path),
             port: node::Port::new("in").unwrap(),
             draft: Draft {
                 data: Data::encoded(Encoding::Raw, *b"hello"),
@@ -1475,7 +1475,7 @@ mod tests {
 
     #[test]
     fn the_id_recipes_are_pinned_byte_for_byte() {
-        let root = ids::root_id(&authority("inbound"), 7);
+        let root = ids::root_id(&provenance("inbound"), 7);
         assert_eq!(root.to_string(), "78cf0ba5304d78c7857726f182eb0706");
         let emission = ids::emission_id(
             &node::Path::new(["shout"]).unwrap(),
@@ -1545,7 +1545,7 @@ mod tests {
             .append_inbound(submission("inbound", SubmissionSequence::Next))
             .unwrap();
         let sys = committed.envelope.meta().sys();
-        assert_eq!(sys.id(), ids::root_id(&authority("inbound"), 0));
+        assert_eq!(sys.id(), ids::root_id(&provenance("inbound"), 0));
         assert_eq!(sys.parent_id(), None);
         assert_eq!(sys.origin_id(), sys.id());
         assert_eq!(sys.graph_version(), 1);
@@ -1559,7 +1559,7 @@ mod tests {
     }
 
     #[test]
-    fn sequences_are_monotone_per_authority() {
+    fn sequences_are_monotone_per_inbound_provenance() {
         let mut journal = MemJournal::new(GraphVersion(1));
         for expected in 0..3 {
             let committed = journal

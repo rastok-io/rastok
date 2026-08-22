@@ -661,7 +661,7 @@ pub trait Bindings {
     fn get(&self, name: &str) -> Option<EvalValue>;
 
     /// The whole payload behind a [`EvalValue::Payload`] witness,
-    /// materialized. The default has no payload authority: a witness
+    /// materialized. The default has no payload provenance: a witness
     /// reaching an environment that cannot honor it is a fault, not
     /// a silent value.
     ///

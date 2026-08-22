@@ -8,8 +8,8 @@
 //! test double.
 
 use crate::boundary::{
-    Completion, Draft, InboundSubmission, IngressAuthority, Intent, OutboundConnectorDriver,
-    PortOutput, Response, SubmissionSequence,
+    Completion, Draft, InboundEnvelopeProvenance, InboundSubmission, Intent,
+    OutboundConnectorDriver, PortOutput, Response, SubmissionSequence,
 };
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
@@ -109,7 +109,7 @@ fn run_scenario(
                 match draft(value) {
                     Ok(draft) => {
                         let submission = InboundSubmission {
-                            authority: IngressAuthority::single(
+                            provenance: InboundEnvelopeProvenance::single(
                                 node::Path::new(["lab"])
                                     .unwrap_or_else(|_| unreachable!("`lab` is a valid path")),
                             ),
@@ -583,7 +583,7 @@ impl OutboundConnectorDriver for MockOutboundConnectorDriver<'_> {
 mod tests {
     use super::*;
     use crate::compiler::compile;
-    use crate::contract::Registry;
+    use crate::contract::ContractCatalog;
 
     /// Drives the scripted driver directly with an OPAQUE request:
     /// the branch and statement structure decides the demand, so a
@@ -594,7 +594,7 @@ mod tests {
         );
         let compilation = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid unit");
         let mock = &compilation.labs[0].simulations[0].mocks[0];
@@ -740,7 +740,7 @@ lab m0_probe {
     fn reports() -> Vec<ScenarioReport> {
         let compilation = compile(
             &[PROBE_WITH_LAB],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid unit");
         assert_eq!(compilation.labs.len(), 1);
@@ -780,7 +780,7 @@ lab m0_probe {
         );
         let compilation = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
@@ -802,7 +802,7 @@ lab m0_probe {
         );
         let compilation = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
@@ -822,7 +822,7 @@ lab m0_probe {
         );
         let compilation = compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
@@ -859,7 +859,7 @@ lab m0_probe {
 "#;
         let compilation = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
@@ -903,7 +903,7 @@ lab m0_probe {
 "#;
         let compilation = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid unit");
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);

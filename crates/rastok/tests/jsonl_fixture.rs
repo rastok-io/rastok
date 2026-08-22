@@ -11,7 +11,7 @@
 //! reason.
 
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use std::path::{Path, PathBuf};
 
 fn example() -> PathBuf {
@@ -22,7 +22,7 @@ fn compilation() -> rastok::compiler::Compilation {
     let source = std::fs::read_to_string(example()).expect("the example reads");
     compile(
         &[source.as_str()],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid unit")
 }
@@ -65,7 +65,10 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE MOVE 2026-08-21 (M1.4 R5): bounded Closing may have to settle an
 // unconfirmed cancellation, so ProcessExit gains the empty OutcomeUnknown
 // case. The closed port type is source identity; existing traces do not move.
-const JSONL_HASH: &str = "a058f1aa752f924c1814035e67ea12bde915db6781a69c76b89645a0689d3d8f";
+// DELIBERATE MOVE 2026-08-22 (M1.5 C1): `rastok/process@1` and its required
+// outbound role replace the source-level `Process` symbol in canonical HIR;
+// categorical v10 carries both. The causal trace is unchanged.
+const JSONL_HASH: &str = "9643616e343b2001d3050aca99dfb1279373c2a59fb366d5a5f54ef44429e6b6";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

@@ -1,11 +1,11 @@
 //! Public M1.4 instance scenarios. These proofs enter through source, the
-//! checker, v9 lowering, and the Lab; no test reaches into VM state cells.
+//! checker, v10 lowering, and the Lab; no test reaches into VM state cells.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::expect_used, clippy::panic)]
 
 use rastok::canonical_cbor::{Value as Cbor, decode, encode};
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::golden::{Trace, project};
 use rastok::journal::Record;
 use rastok::node;
@@ -229,7 +229,7 @@ lab joined {
 fn the_public_lab_observes_every_instance_profile_and_key_isolation() {
     let compilation = compile(
         &[INSTANCE_LAB],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the complete public instance lab checks");
     let runs = rastok::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
@@ -265,7 +265,7 @@ fn the_public_lab_observes_every_instance_profile_and_key_isolation() {
 fn the_public_lab_observes_join_correlation_and_expiry() {
     let compilation = compile(
         &[JOIN_LAB],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the public join lab checks");
     let runs = rastok::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
@@ -334,7 +334,7 @@ fn the_public_lab_observes_join_correlation_and_expiry() {
 
 #[test]
 fn moving_one_virtual_shard_changes_no_semantic_or_replay_input() {
-    let registry = Registry::try_m0().expect("the standard catalogue holds");
+    let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
     let before = compile(&[INSTANCE_LAB], &registry).expect("the public instance lab checks");
     let after = compile(&[INSTANCE_LAB], &registry).expect("the same source checks again");
     assert_eq!(
@@ -417,7 +417,7 @@ fn moving_one_virtual_shard_changes_no_semantic_or_replay_input() {
 
 #[test]
 fn invalid_and_missing_instance_key_paths_refuse_at_the_source_boundary() {
-    let registry = Registry::try_m0().expect("the standard catalogue holds");
+    let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
     for (key, expected) in [
         ("data.missing", "no declared member `missing`"),
         ("[data.tenant]", "canonical scalar/enum leaves"),
@@ -480,7 +480,7 @@ graph cyclic : App {
 "#;
     let bag = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect_err("composition must not hide a spatial cycle");
     assert!(

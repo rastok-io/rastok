@@ -215,8 +215,8 @@ pub enum PlanValidationError {
         /// The complete `meta.app.*` or `meta.ext.*` path.
         field: String,
     },
-    /// A lifecycle activation belongs to a later executable slice. Format v9
-    /// can represent the closed registry without silently enabling it.
+    /// A lifecycle activation belongs to a later executable slice. Format v10
+    /// retains the closed registry without silently enabling it.
     UnsupportedLifecycleHandler {
         /// The declaring node.
         node: node::Path,
@@ -255,6 +255,12 @@ pub enum PlanValidationError {
         node: node::Path,
         /// Missing port.
         port: &'static str,
+    },
+    /// A built-in Connector claims runtime roles that its stable contract id
+    /// does not define.
+    ContractRoleMismatch {
+        /// Connector node.
+        node: node::Path,
     },
     /// A resolved built-in Connector row disagrees with its self-contained
     /// contract rule (direction, routing policy, or effective type).
@@ -689,6 +695,10 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: `{node}` omits resolved contract port `{port}`"
             ),
+            Self::ContractRoleMismatch { node } => write!(
+                f,
+                "invalid plan: `{node}` carries roles outside its stable connector contract"
+            ),
             Self::ContractPortMismatch { node, port } => write!(
                 f,
                 "invalid plan: `{node}.{port}` disagrees with the resolved connector contract"
@@ -893,7 +903,7 @@ impl ValidatedExecutionPlan {
     /// Effective logical types of every graph-boundary and node port.
     ///
     /// Unlike raw source declarations, this table contains no inference
-    /// variable and no recovery hole. Format v9 carries it and the decoder
+    /// variable and no recovery hole. Format v10 carries it and the decoder
     /// derives it again from the raw constraints before requiring equality.
     #[must_use]
     pub const fn resolved_ports(&self) -> &super::type_resolution::ResolvedPortTable {
@@ -1364,7 +1374,7 @@ fn tree_type_at(tree: &expr::Tree, location: String) -> Result<(), PlanValidatio
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
-/// v9 encoder can observe the plan.
+/// v10 encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -1800,7 +1810,9 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 let Some(spec) = node.connector() else {
                     continue;
                 };
-                if spec.contract != "Process" || !owner_contains(plan, slot, node.owner) {
+                if spec.contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID
+                    || !owner_contains(plan, slot, node.owner)
+                {
                     continue;
                 }
                 if owner.instance.closing.is_none() {
@@ -2123,7 +2135,12 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     });
                 }
             }
-            if spec.contract == "Process" {
+            if spec.contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID {
+                if spec.roles != crate::connector::ConnectorRoles::Outbound {
+                    return Err(PlanValidationError::ContractRoleMismatch {
+                        node: node.path.clone(),
+                    });
+                }
                 let codec = match spec.attribute("codec") {
                     Some(crate::plan::AttrSetting::Word(word))
                         if matches!(word.as_str(), "bytes" | "jsonl" | "lines") =>

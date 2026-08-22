@@ -6,7 +6,7 @@
 > journal records.
 >
 > The registry below retains the executable v7 type/value/expression registry
-> inside categorical plan-package v9 and specifies the M1.4 instance-address
+> inside categorical plan-package v10 and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
 > typed key/lifetime policy and phased immutable expressions. R3 made
@@ -18,7 +18,10 @@
 > `ProcessExit::OutcomeUnknown`; existing non-closing traces stay fixed while
 > Process semantic hashes/packages move deliberately. R6–R7 move no existing
 > semantic, package, or causal artifact; R7 audits the complete M1.4 move ledger and proves a Worker
-> reassignment cannot alter canonical replay bytes. D-2026-08-14-1
+> reassignment cannot alter canonical replay bytes. M1.5 C1 replaces source
+> Connector names with stable versioned ids and required roles, moving
+> Process semantic hashes and v10 packages while leaving causal records
+> unchanged. D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
 > from the plan constraints and requires exact agreement with the transported
@@ -54,7 +57,8 @@ tree, scoped edges, ports, edge configs), resolved
 effective Connector attribute's selected evaluation site; handlers, the order of statements inside
 a handler (`emission_index` = text order) and the order of ports in a
 join ; every Rastok expression (hashed as its canonical expression AST) ;
-resolved logical types and complete port tables, attributes,
+resolved logical types and complete port tables, Connector contract ids and
+required roles, attributes,
 annotations, `variant` clauses ; `var` defaults
 (the recovery fold reads them) ; guest-language block bodies (opaque — raw bytes
 after common-indentation stripping) and the pinned guest language,
@@ -139,6 +143,16 @@ semantic hash, package, and causal trace remains fixed. When a join fires,
 transaction key 34 records exactly one contributing envelope id per declared
 port in that same order; key 33 independently remains canonically sorted by
 cursor.
+
+**M1.5 C1 Connector-identity checkpoint (2026-08-22).** The source contract
+symbol resolves to one canonical versioned `ConnectorId`; that id and the
+contract's closed inbound/outbound role requirement replace the source name
+in canonical HIR and format v10. Process identities therefore move once:
+compiler probe `29c69b70… → 52406fcf…`, JSONL
+`a058f1aa… → 9643616e…`, and echo/spike
+`419a52a1… → 190f0efc…`. Connector-free gauge remains
+`0d3ad43d…`. V10 package containers move; existing causal traces do not,
+because Driver selection is neither a causal event nor a placement fact.
 
 ## 2. `graph_version` and the manifest
 
@@ -274,7 +288,7 @@ timer fields.
 | 20 | envelope | map | the spine (keys 1–9) of the entering envelope |
 | 21 | connector_path | text | the ingress node's root-relative path (root recipe input, envelope.md §2) |
 | 22 | inbound_seq | uint | the atomic sequence for `(connector_path, replica)` — minted by the owning shard's leader ; root recipe input |
-| 23 | replica | uint | the logical ingress-producer replica id; sealed so the record autonomously reconstructs `(connector_path, replica, inbound_seq)`. It may be allocated by the leader of the ingress producer's shard, but is never the target-routing shard and never changes when a destination moves Workers. |
+| 23 | replica | uint | the logical inbound Connector replica in `InboundEnvelopeProvenance`; sealed so the record autonomously reconstructs `(connector_path, replica, inbound_seq)`. It may be allocated by the leader responsible for that inbound Connector, but is never the target-routing shard and never changes when a destination moves Workers. |
 | 24 | ingress_port | text | the graph input the envelope entered — a causal fact : replay re-routes from this port ; **omitted for the default `in`** (absent = omitted), so pre-multiport records are byte-identical (D-2026-08-08-2) |
 | 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INBOUND record. |
 

@@ -2,7 +2,7 @@
 
 > Implementation blueprint — non-normative. Originally written ahead
 > of the build; updated 2026-08-22 for the M1.4 R7 closure checkpoint. The
-> former named-partition P1-P3 implementation is superseded; categorical v9
+> former named-partition P1-P3 implementation is superseded; categorical v10
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
@@ -10,7 +10,8 @@
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
 > distinguishes the retained v7 type/value/expression registry from the
-> categorical v9 instance transport, R3 causal routing rows, R4 lifetime
+> categorical v10 plan transport (retaining v9's instance model and adding
+> stable Connector ids/roles), R3 causal routing rows, R4 lifetime
 > execution, R5 Closing, R6 joins, and R7 placement-neutrality proof.
 
 This document refines the responsibility table of
@@ -162,7 +163,7 @@ data out, the governing spec, and current status.
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
 | **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspects, Node-owned instance-key expressions, lifetime profiles, nested Graph composition, and instance-local joins | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.4 R1 surface through R6 public composition/joins; some dynamic owner values and Graph handlers remain named gates |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
-| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, handlers, expression trees, `Slot` resolution, schemas and assets; key types re-derived and structural/runtime capability validated before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | categorical v9 R2 checkpoint; compiler-only data-key inference is explicit, unsupported lifetimes/Graph routing/dynamic source rows refuse closed |
+| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, handlers, expression trees, stable Connector ids/roles, `Slot` resolution, schemas and assets; key types re-derived and structural/runtime capability validated before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | categorical v10 C1 checkpoint; compiler-only data-key inference is explicit, unsupported dynamic source rows refuse closed |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
 
 The facade returns `Result<Compilation, Diagnostics>` with
@@ -212,7 +213,7 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry, retained unchanged inside categorical v9 |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry, retained unchanged inside categorical v10 |
 
 `expr` never sees an envelope, Node, or placement boundary, and owns its own
 `expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
@@ -244,7 +245,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v9 preserves every Graph/Operator/Connector owner and parent relation separately from executable Node slots, validates scoped routes, solves every port, and rejects unresolved or conflicting constraints | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | M1.4 R2 v9 owner/instance/phased-value transport landed; R3 consumes it for hierarchical routing |
+| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v10 preserves every Graph/Operator/Connector owner and parent relation separately from executable Node slots, validates scoped routes, solves every port, and carries canonical Connector ids/roles | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | M1.5 C1 v10 identity transport; retains M1.4's owner/instance model unchanged |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -306,7 +307,7 @@ remain host seams rather than objects the M1 VM consumes directly.
 
 | Interface | Owns | Real side | Lab side | Spec | Status |
 |---|---|---|---|---|---|
-| **`InboundConnectorDriver`** | proposal of inbound **drafts** — payload, birth metadata, `IngressAuthority` (opaque), and a sequence request `Next \| Explicit(seq)` (a fixture can replay a production slice with explicit sequences); bounded, with commit/backpressure translated outward. It never births an envelope: a root envelope **cannot pre-exist its sequence** — the root id derives from `inbound_seq` and `origin_id = id` — so only the journal's accepting transaction mints it | future listener Drivers | scenario injection through `Vm::inject` (no `Fixture` type) | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) fixtures | trait vocabulary landed in M1.5 C0; commit acknowledgement widens with the first inbound Driver |
+| **`InboundConnectorDriver`** | proposal of inbound **drafts** — payload, birth metadata, opaque `InboundEnvelopeProvenance`, and a sequence request `Next \| Explicit(seq)` (a fixture can replay a production slice with explicit sequences); bounded, with commit/backpressure translated outward. It never births an envelope: a root envelope **cannot pre-exist its sequence** — the root id derives from the provenance plus `inbound_seq`, and `origin_id = id` — so only the journal's accepting transaction mints it | future listener Drivers | scenario injection through `Vm::inject` (no `Fixture` type) | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) fixtures | trait vocabulary landed in M1.5 C0; provenance named in C1; commit acknowledgement widens with the first inbound Driver |
 | **`OutboundConnectorDriver`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef` and one ordered `Completion`; correlation is the **Connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a Driver deduplicates on the idempotency key only *when its protocol cooperates*; `cancel(call_ref)` withdraws in-flight work when the machine closes a call (default: nothing) | `connectors::Process` | the Lab's mock Driver | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M1.3 B7 semantics; M1.5 C0 name |
 | **`Clock`** | the only source of time. As built, M0 consumes no trait impl: `Vm::advance(journal, driver, target)` IS the virtual clock — the caller (a Lab step, the CLI's wall-mapping loop) chooses targets, due budgets fire in expiry order, and same-instant expiries all fire before the machine drains | declared trait; `advance` targets in M0 | `advance` calls | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (target-driven) |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | not built; fault steps remain guarded | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | declared seam; current wiring boots only |
@@ -368,8 +369,8 @@ against the STORED golden; the workflow (compare, explicit `--bless`)
 is driven by the lab's returned records, the golden tests, and `main`.
 
 `InboundRecord` carries the full root recipe — the opaque
-`IngressAuthority` (wrapping exactly the normative `(connector_path,
-replica)` pair) plus the sequence — so a record autonomously
+`InboundEnvelopeProvenance` (wrapping exactly the normative
+`(connector_path, replica)` pair) plus the sequence — so a record autonomously
 reconstructs its root id ([identity.md §3](../spec/identity.md)). The
 projection lives here because it also serves production replay and
 cross-runtime conformance; the golden *workflow* (compare, explicit
@@ -379,7 +380,7 @@ bless, diff rendering) is driven by `lab` and `main`.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`contract::ConnectorContract`** | the compiler-facing contract sheet: one `PortContract` table (direction, unwired policy, fixed/same-as/choice-selected logical type rules), common attributes, optional profile selector, and effective presence/default/domain/**latest-evaluation-site** rules. Plan-shaping attributes are compile-time; operational settings may permit boot/instance context and invocation expressions keep their request/call bindings. Checking selects the earliest actual site and ships it. The ten-case prose template remains the normative design review checklist; only executable checker facts belong in this type | resolved by the checker into self-contained plan rows; **never depends on Driver code and never travels as a Registry** | [stdlib.md §1–3](../spec/stdlib.md); [instances.md §3](../spec/instances.md); D-2026-08-12-1; D-2026-08-14-1 | M1.3 B5 base; M1.4 R1 phase lift |
+| **`contract::ConnectorContract` / `ContractCatalog`** | the compiler-facing contract sheet: canonical `ConnectorId`, required roles, one `PortContract` table, common attributes, optional profile selector, and effective presence/default/domain/evaluation-site rules. The catalogue is keyed by id while source symbols remain a checker concern; two symbols cannot alias one id | resolved by the checker into self-contained plan rows; **never depends on Driver code and never travels as a catalogue** | [stdlib.md §1–3](../spec/stdlib.md); [instances.md §3](../spec/instances.md); D-2026-08-22-1 | M1.5 C1 |
 | **`contract::FrontendContract`** | an ordinary source name plus its registered framing/reader policy. Built-in JSON/text/base64 execute; guest/data names retain a specific framing contract and named deferral until their compiler lands | consumed by parser and checker; never serialized by itself | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md); [identity.md §1](../spec/identity.md) | M1.3 B4 |
 
 This module answers "how does the compiler know what `Process` is
@@ -399,6 +400,7 @@ whatever its execution format.
 
 | Component | Owns | Spec | Status |
 |---|---|---|---|
+| **`connectors::DriverRegistry`** | exact `ConnectorId` → implementation factory mapping and role-availability checks; duplicate ids refuse, and a both-role factory binds one shared object | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1; global plan binder lands in C2 |
 | **`connectors::Process`** | the real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2; moved under a family module in M1.5 C0 |
 | **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory, File) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded; `File` is M1.5 |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |
@@ -486,10 +488,11 @@ items still constrain later slices.
   semantic operations over typed records. Segment files,
   snapshots-on-disk, and retention arrive later behind the same trait
   (`ARCHITECTURE.md`, boundary rule 5).
-- **Opaque origin authorities.** `boundary::IngressAuthority` wraps
+- **Opaque inbound provenance.** `boundary::InboundEnvelopeProvenance` wraps
   exactly the normative `(connector_path, replica)` pair
   ([identity.md §3](../spec/identity.md)) but stays opaque: M0 code
-  never assumes the replica component is a constant it may inline.
+  never assumes the replica component is a constant it may inline. The value
+  is provenance shared by inbound roots, not an address or submission id.
   This keeps the multi-host door open without building anything behind
   it.
 - **One canonical encoder.** Every canonical form — HIR, plan, record
@@ -556,7 +559,8 @@ The chronological detail and commit evidence remain in
 - **M1.4 rebase:** D-2026-08-18-1 replaces the unreleased P0-P3 surface and
   transport with Node-owned `instances.key`, independent `lifetime`, private
   Node state, hierarchical logical addresses, and journal-derived instance
-  references. R1 checking, categorical v9 owner transport, R3
+  references. R1 checking, categorical v10 transport (retaining the v9 owner
+  model and adding Connector ids/roles), R3
   hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
   profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.

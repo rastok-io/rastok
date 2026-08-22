@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v9: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v10: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -39,12 +39,12 @@ use crate::value::Value;
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
-/// The format version this module writes and reads. V9 retains v7's complete
-/// logical type, materialized-value and expression registries and adds the
-/// categorical lexical-owner table, scoped edges, instance policy and phased
-/// immutable expressions. A new format is a new version, and an old decoder
-/// refuses it by name, exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 9;
+/// The format version this module writes and reads. V10 retains v9's complete
+/// owner/instance/type/value/expression transport and replaces source-level
+/// Connector names with canonical versioned ids plus explicit runtime roles.
+/// A new format is a new version, and an old decoder refuses it by name,
+/// exactly as the format note promises.
+pub const FORMAT_VERSION: u32 = 10;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -464,7 +464,7 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
         node::Behavior::Probabilistic => 2,
     });
     Cbor::Map(BTreeMap::from([
-        (1, Cbor::Text(spec.contract.clone())),
+        (1, Cbor::Text(spec.contract.as_str().into())),
         (2, effect),
         (3, behavior),
         (
@@ -477,6 +477,14 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
                     })
                     .collect(),
             ),
+        ),
+        (
+            6,
+            Cbor::Uint(match spec.roles {
+                crate::connector::ConnectorRoles::Inbound => 1,
+                crate::connector::ConnectorRoles::Outbound => 2,
+                crate::connector::ConnectorRoles::InboundAndOutbound => 3,
+            }),
         ),
     ]))
 }
@@ -1544,7 +1552,9 @@ fn owner_value_from(tree: &Cbor) -> Result<OwnerValue, DecodeError> {
 
 fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
     let pairs = map_of(tree, "connector spec")?;
-    let contract = text_of(get(pairs, 1, "contract")?, "contract")?.to_string();
+    let contract =
+        crate::connector::ConnectorId::parse(text_of(get(pairs, 1, "contract")?, "contract")?)
+            .map_err(|reason| DecodeError::Malformed(format!("invalid connector id: {reason}")))?;
     let effect = match get(pairs, 2, "effect")? {
         Cbor::Uint(0) => node::Effect::None,
         Cbor::Array(parts) => match parts.as_slice() {
@@ -1576,8 +1586,15 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
             _ => return Err(err("attribute")),
         }
     }
+    let roles = match get(pairs, 6, "connector roles")? {
+        Cbor::Uint(1) => crate::connector::ConnectorRoles::Inbound,
+        Cbor::Uint(2) => crate::connector::ConnectorRoles::Outbound,
+        Cbor::Uint(3) => crate::connector::ConnectorRoles::InboundAndOutbound,
+        _ => return Err(err("connector roles")),
+    };
     Ok(ConnectorSpec {
         contract,
+        roles,
         effect,
         behavior,
         attributes,
@@ -2450,7 +2467,7 @@ mod tests {
     }
 
     #[test]
-    fn v9_owner_lifetimes_sites_and_dynamic_attributes_have_one_spelling() {
+    fn v10_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
         let lifetimes = [
             InstanceLifetime::Persistent,
             InstanceLifetime::Idle(1),
@@ -2518,7 +2535,7 @@ mod tests {
     }
 
     #[test]
-    fn v9_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
+    fn v10_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
         let package = instance_package();
 
         let lying_key_type = mutate_package_body(&package, |body| {
@@ -2637,7 +2654,11 @@ mod tests {
                 Node {
                     path: node::Path::new(["shell"]).unwrap(),
                     kind: NodeKind::Connector(ConnectorSpec {
-                        contract: text("Process"),
+                        contract: crate::connector::ConnectorId::parse(
+                            crate::connector::PROCESS_CONNECTOR_ID,
+                        )
+                        .unwrap(),
+                        roles: crate::connector::ConnectorRoles::Outbound,
                         effect: node::Effect::Class(node::EffectClass::Idempotent),
                         behavior: node::Behavior::Deterministic,
                         attributes: vec![

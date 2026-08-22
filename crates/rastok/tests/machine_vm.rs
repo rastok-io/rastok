@@ -18,10 +18,11 @@ use rastok::plan::{
 use rastok::runtime::vm::{Vm, VmError};
 
 use rastok::boundary::{
-    Completion, Draft, IngressAuthority, PortOutput, ProcessExit, Response, SubmissionSequence,
+    Completion, Draft, InboundEnvelopeProvenance, PortOutput, ProcessExit, Response,
+    SubmissionSequence,
 };
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::envelope::{Encoding, Namespace, Value};
 use rastok::journal::{MemJournal, OutboundStatus, Record};
 
@@ -164,7 +165,7 @@ impl OutboundConnectorDriver for EchoWorld {
 fn submission(text: &str) -> InboundSubmission {
     let data = vec![(String::from("text"), Value::Text(String::from(text)))];
     InboundSubmission {
-        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Struct(data)),
@@ -176,7 +177,7 @@ fn submission(text: &str) -> InboundSubmission {
 
 fn text_submission(text: &str) -> InboundSubmission {
     InboundSubmission {
-        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Text(String::from(text))),
@@ -188,7 +189,7 @@ fn text_submission(text: &str) -> InboundSubmission {
 
 fn int_submission(value: i64) -> InboundSubmission {
     InboundSubmission {
-        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Int(value)),
@@ -200,7 +201,7 @@ fn int_submission(value: i64) -> InboundSubmission {
 
 fn port_int_submission(port: &str, value: i64) -> InboundSubmission {
     InboundSubmission {
-        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Int(value)),
@@ -224,7 +225,7 @@ fn encoded_submission(
         ))),
     );
     InboundSubmission {
-        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new(port).unwrap(),
         draft: Draft {
             data: Data::encoded(encoding, bytes),
@@ -236,7 +237,7 @@ fn encoded_submission(
 
 fn tenant_submission(tenant: &str, user: i64) -> InboundSubmission {
     InboundSubmission {
-        authority: IngressAuthority::single(node::Path::new(["cli"]).unwrap()),
+        provenance: InboundEnvelopeProvenance::single(node::Path::new(["cli"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
         draft: Draft {
             data: Data::materialized(Value::Struct(vec![
@@ -267,7 +268,7 @@ fn root_exit_cases<'a>(vm: &'a Vm<'_>) -> Vec<&'a str> {
 fn run_probe() -> (MemJournal, Vec<rastok::runtime::vm::BoundaryOutput>) {
     let compilation = compile(
         &[M0_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -369,7 +370,7 @@ graph rooted : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("R3 admits a persistent Graph-owned key");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -444,7 +445,7 @@ graph nested : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the two key dimensions are type-closed");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -493,7 +494,7 @@ graph nested : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the public nested Graph source compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -574,7 +575,7 @@ graph joined : App {
 fn a_public_join_consumes_one_presence_set_in_declared_port_order() {
     let compilation = compile(
         &[JOIN_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the public join source compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -647,7 +648,7 @@ fn a_public_join_consumes_one_presence_set_in_declared_port_order() {
 fn a_presence_join_uses_arrival_only_for_the_trigger_not_tuple_order() {
     let compilation = compile(
         &[JOIN_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the public join source compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -720,7 +721,7 @@ graph selected : App {
 fn a_theta_join_refines_fifo_candidates_without_consuming_a_false_pair() {
     let compilation = compile(
         &[THETA_JOIN_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the bounded theta join compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -753,7 +754,7 @@ fn a_theta_join_refines_fifo_candidates_without_consuming_a_false_pair() {
 fn last_evicts_the_oldest_candidate_before_correlating_new_work() {
     let compilation = compile(
         &[JOIN_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the last-bounded join compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -823,7 +824,7 @@ graph timed : App {
 fn within_evicts_only_a_still_buffered_candidate() {
     let compilation = compile(
         &[WITHIN_JOIN_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the within-bounded join compiles");
 
@@ -909,7 +910,7 @@ graph keyed_join : App {
 fn a_join_correlates_only_inside_its_owning_operator_instance() {
     let compilation = compile(
         &[KEYED_JOIN_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the keyed join compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -991,7 +992,7 @@ graph attributed : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("named join metadata follows the same sealed grid as bare meta");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1041,7 +1042,7 @@ graph attributed : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("an unused optional join field is legal");
 
@@ -1086,7 +1087,7 @@ graph lazy_join : App {{
         );
         compile(
             &[source.as_str()],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("the lazy join checks")
     };
@@ -1183,7 +1184,7 @@ graph dynamic_binding : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the static spelling supplies a valid plan skeleton");
     let mut raw = compilation.plan.into_inner();
@@ -1271,7 +1272,7 @@ graph failing_bundle : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the keyed plan checks");
     let mut raw = compilation.plan.into_inner();
@@ -1337,7 +1338,7 @@ graph keyed : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the keyed graph checks");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1465,7 +1466,7 @@ graph lifecycle : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the lifecycle graph checks");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1629,7 +1630,7 @@ graph nested_lifetimes : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the keyed Process graph checks");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1715,7 +1716,7 @@ graph draining : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a bounded call may live inside a finite Graph");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1750,7 +1751,7 @@ graph draining : App {
 fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
     let compilation = compile(
         &[CLOSING_PROCESS],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the explicit closing policy bounds the open Process call");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1789,7 +1790,7 @@ fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
 fn silent_cancel_becomes_one_unknown_only_after_settlement() {
     let compilation = compile(
         &[CLOSING_PROCESS],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the explicit closing policy bounds the open Process call");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -1863,7 +1864,7 @@ fn bounded_closing_interleavings_are_model_checked() {
 
     let compilation = compile(
         &[CLOSING_PROCESS],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the explicit policy closes every schedule in bounded time");
     for reply_at in [
@@ -1976,7 +1977,7 @@ fn bounded_closing_interleavings_are_model_checked() {
 fn external_arrival_waits_for_the_clean_successor_generation() {
     let compilation = compile(
         &[CLOSING_PROCESS],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("the explicit closing policy bounds the open Process call");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2062,7 +2063,7 @@ graph two_calls : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("one root policy bounds both Process descendants");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2135,7 +2136,7 @@ graph finite : App {{
         );
         let compilation = compile(
             &[&source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("R4 admits the finite profile");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -2204,7 +2205,7 @@ graph persistent : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("persistent is the executable omission default");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2251,7 +2252,7 @@ graph keyed_fixed : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("key and fixed lifetime are orthogonal");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2309,7 +2310,7 @@ graph one : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("single-pass is executable");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2376,7 +2377,7 @@ graph explicit_stop : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("bare stop names the current owner without a target language");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2427,7 +2428,7 @@ graph windows : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("an unkeyed Graph can own a temporal window");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2514,7 +2515,7 @@ graph clipped : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("nested finite profiles are executable");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2551,7 +2552,7 @@ graph parent : App {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("nested fixed generations are executable");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2608,7 +2609,7 @@ graph ties : App {
     let run = || {
         let compilation = compile(
             &[source],
-            &Registry::try_m0().expect("the standard catalogue holds"),
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("equal fixed deadlines are executable");
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -2640,7 +2641,7 @@ graph ties : App {
 fn stderr_and_terminal_status_leave_on_independent_ports() {
     let compilation = compile(
         &[M0_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2674,7 +2675,7 @@ fn stderr_and_terminal_status_leave_on_independent_ports() {
 fn malformed_terminal_facts_are_refused_loudly() {
     let compilation = compile(
         &[M0_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2747,7 +2748,7 @@ on in {
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2861,7 +2862,7 @@ impl Journal for FlakyJournal {
 fn a_refused_commit_leaves_the_delivery_replayable() {
     let compilation = compile(
         &[M0_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = FlakyJournal {
@@ -2911,7 +2912,7 @@ on in where data.text != "" {
 fn a_silent_driver_expires_into_a_typed_timeout() {
     let compilation = compile(
         &[TIMED_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -2953,7 +2954,7 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
     // closes at the expiry, back to back.
     let compilation = compile(
         &[TIMED_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -3059,7 +3060,7 @@ on in { out = data.text }
 "#;
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -3083,7 +3084,7 @@ on in { out = data.text }
 fn an_answer_and_an_expiry_race_to_a_single_closure() {
     let compilation = compile(
         &[TIMED_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -3117,7 +3118,7 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
 fn a_late_answer_is_a_reported_observation_not_a_silence() {
     let compilation = compile(
         &[TIMED_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -3156,7 +3157,7 @@ fn a_refused_expiry_stays_armed_and_replays() {
     // Case: the pending call's Timeout closure is refused.
     let compilation = compile(
         &[TIMED_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = FlakyJournal {
@@ -3183,7 +3184,7 @@ fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
     // Case: the queued delivery's open fact is refused at expiry.
     let compilation = compile(
         &[TIMED_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
@@ -3211,7 +3212,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     // transaction's commit is refused — the delivery must stay.
     let compilation = compile(
         &["graph g : App {\n  connector echo : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    effect = idempotent ; behavior = deterministic\n    timeout = duration(\"5s\")\n  }\n  operator wrap {\n    on in { out = . }\n  }\n  . -> wrap -> echo -> nothing\n}\n"],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
@@ -3273,7 +3274,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
 fn a_suspended_call_keeps_its_mailbox_claimed() {
     let compilation = compile(
         &[M0_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
@@ -3300,7 +3301,7 @@ fn a_suspended_call_keeps_its_mailbox_claimed() {
 fn a_filtered_input_reaches_stability_without_output() {
     let compilation = compile(
         &[M0_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));

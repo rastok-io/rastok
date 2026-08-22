@@ -29,10 +29,11 @@
 //! it cannot yet close explicit.
 
 use crate::boundary::{
-    Draft, InboundSubmission, IngressAuthority, OutboundConnectorDriver, SubmissionSequence,
+    Draft, InboundEnvelopeProvenance, InboundSubmission, OutboundConnectorDriver,
+    SubmissionSequence,
 };
 use crate::compiler::compile;
-use crate::contract::{ConnectorContract, Registry};
+use crate::contract::{ConnectorContract, ContractCatalog};
 use crate::datatype::DataType;
 use crate::envelope::{Data, Namespace, Value};
 use crate::journal::{Closure, MemJournal, OutboundStatus, Record};
@@ -130,7 +131,7 @@ impl Report {
 #[must_use]
 pub fn verify(
     profile: &Profile,
-    registry: &Registry,
+    registry: &ContractCatalog,
     factory: &mut dyn OutboundConnectorDriverFactory,
 ) -> Report {
     let mut report = Report::default();
@@ -348,7 +349,7 @@ fn resolved_exit_cases(
         .nodes
         .iter()
         .filter_map(crate::plan::Node::connector)
-        .find(|spec| spec.contract == contract.name)
+        .find(|spec| spec.contract.as_str() == contract.id)
         .ok_or_else(|| format!("the probe instantiates no `{}` connector", contract.name))?;
     let exit = if contract.name == "Process" {
         // The harness reads the same exact union carried by the v7 resolved
@@ -387,7 +388,7 @@ fn resolved_exit_cases(
 
 fn submission(text: &str) -> InboundSubmission {
     InboundSubmission {
-        authority: IngressAuthority::single(
+        provenance: InboundEnvelopeProvenance::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
         port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),
@@ -488,7 +489,7 @@ fn audit_journal(journal: &MemJournal, report: &mut Report) {
 
 fn run_provocation(
     provocation: &Provocation,
-    registry: &Registry,
+    registry: &ContractCatalog,
     factory: &mut dyn OutboundConnectorDriverFactory,
 ) -> Result<(), String> {
     let compilation = compile(&[provocation.source.as_str()], registry).map_err(|bag| {
@@ -539,7 +540,7 @@ fn root_exit_case(vm: &Vm<'_>) -> Option<String> {
 /// fact.
 fn mute_battery(
     source: &str,
-    registry: &Registry,
+    registry: &ContractCatalog,
     factory: &mut dyn OutboundConnectorDriverFactory,
 ) -> Result<(), String> {
     let compilation = compile(&[source], registry)
@@ -591,7 +592,7 @@ fn mute_battery(
 /// first closure, or the battery never actually interleaved.
 fn interleave_battery(
     probe: &InterleaveProbe,
-    registry: &Registry,
+    registry: &ContractCatalog,
     factory: &mut dyn OutboundConnectorDriverFactory,
 ) -> Result<(), String> {
     let compilation = compile(&[probe.source.as_str()], registry).map_err(|bag| {
@@ -611,7 +612,7 @@ fn interleave_battery(
         (String::from("b"), Value::Text(String::from(probe.b))),
     ];
     let paired = InboundSubmission {
-        authority: IngressAuthority::single(
+        provenance: InboundEnvelopeProvenance::single(
             node::Path::new(["conformance"]).unwrap_or_else(|_| unreachable!("a valid path")),
         ),
         port: node::Port::new("in").unwrap_or_else(|_| unreachable!("a valid port")),

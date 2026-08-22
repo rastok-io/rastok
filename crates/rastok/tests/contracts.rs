@@ -8,9 +8,9 @@
 
 use rastok::compiler::compile;
 use rastok::contract::{
-    AttributeSpec, ConnectorContract, DefaultValue, EvaluationSite, FrontendContract,
-    FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice, PortTypeRule,
-    Presence, Profile, ProfileSelector, ProfileSupport, Registry, SheetDefect, ValueDomain,
+    AttributeSpec, ConnectorContract, ContractCatalog, DefaultValue, EvaluationSite,
+    FrontendContract, FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice,
+    PortTypeRule, Presence, Profile, ProfileSelector, ProfileSupport, SheetDefect, ValueDomain,
 };
 use rastok::node::Direction;
 use rastok::plan::UnwiredPolicy;
@@ -18,7 +18,7 @@ use rastok::plan::UnwiredPolicy;
 fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
     compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
 }
 
@@ -65,7 +65,9 @@ fn sheet(common: &'static [AttributeSpec], selector: Option<ProfileSelector>) ->
         },
     ];
     ConnectorContract {
+        id: "test/probe@1",
         name: "Probe",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: PORTS,
         common,
         selector,
@@ -89,7 +91,7 @@ fn a_duplicate_attribute_is_a_sheet_defect() {
         },
     ];
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(DUP, None))
             .unwrap_err(),
@@ -98,9 +100,69 @@ fn a_duplicate_attribute_is_a_sheet_defect() {
 }
 
 #[test]
+fn the_catalogue_keys_source_symbols_by_stable_contract_identity() {
+    let catalogue = ContractCatalog::try_m0().expect("the standard catalogue holds");
+    let id =
+        rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID).unwrap();
+    let process = catalogue
+        .connector_by_id(&id)
+        .expect("Process is keyed by its stable id");
+    assert_eq!(process.name, "Process");
+    assert_eq!(process.roles, rastok::connector::ConnectorRoles::Outbound);
+
+    let invalid = ConnectorContract {
+        id: "Process",
+        ..sheet(&[], None)
+    };
+    assert_eq!(
+        ContractCatalog::default().try_with(invalid).unwrap_err(),
+        SheetDefect::InvalidConnectorId {
+            id: "Process",
+            reason: rastok::connector::ConnectorIdError::Shape,
+        }
+    );
+
+    let alias = ConnectorContract {
+        id: rastok::connector::PROCESS_CONNECTOR_ID,
+        name: "ProcessAlias",
+        ..sheet(&[], None)
+    };
+    assert_eq!(
+        catalogue.try_with(alias).unwrap_err(),
+        SheetDefect::ConnectorIdCollision {
+            id: rastok::connector::PROCESS_CONNECTOR_ID,
+            existing: "Process",
+            incoming: "ProcessAlias",
+        }
+    );
+}
+
+#[test]
+fn source_connector_symbols_disappear_after_contract_resolution() {
+    let process_catalogue = ContractCatalog::default()
+        .try_with(rastok::stdlib::PROCESS.clone())
+        .expect("the Process sheet holds");
+    let alias_catalogue = ContractCatalog::default()
+        .try_with(ConnectorContract {
+            name: "Shell",
+            ..rastok::stdlib::PROCESS.clone()
+        })
+        .expect("one alternate source symbol may resolve to the same stable id");
+    let process_source = process_graph(FULL);
+    let process = compile(&[process_source.as_str()], &process_catalogue).expect("Process checks");
+    let shell_source = process_source.replace(": Process", ": Shell");
+    let shell = compile(&[shell_source.as_str()], &alias_catalogue).expect("Shell checks");
+
+    assert_eq!(process.hash, shell.hash);
+    assert_eq!(process.plan, shell.plan);
+}
+
+#[test]
 fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
     const CYCLIC: ConnectorContract = ConnectorContract {
+        id: "test/cyclic@1",
         name: "Cyclic",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[
             PortContract {
                 name: "first",
@@ -125,7 +187,7 @@ fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
         selector: None,
     };
     assert!(matches!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(CYCLIC),
         Err(SheetDefect::CyclicPortTypes("first"))
@@ -147,7 +209,9 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
         },
     ];
     const SHEET: ConnectorContract = ConnectorContract {
+        id: "test/parametric@1",
         name: "Parametric",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[
             PortContract {
                 name: "in",
@@ -181,7 +245,7 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
             profiles: PROFILES,
         }),
     };
-    let registry = Registry::try_m0()
+    let registry = ContractCatalog::try_m0()
         .expect("the standard catalogue holds")
         .try_with(SHEET.clone())
         .expect("the parametric sheet is sound");
@@ -217,7 +281,9 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
         latest_site: EvaluationSite::Plan,
     }];
     const AMBIGUOUS: ConnectorContract = ConnectorContract {
+        id: "test/ambiguous@1",
         name: "Ambiguous",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[PortContract {
             name: "out",
             direction: Direction::Output,
@@ -249,7 +315,7 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
         }),
     };
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(AMBIGUOUS)
             .unwrap_err(),
@@ -269,7 +335,9 @@ fn a_port_type_selector_is_structurally_plan_bound() {
         latest_site: EvaluationSite::Instance,
     }];
     const LATE: ConnectorContract = ConnectorContract {
+        id: "test/late@1",
         name: "Late",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[PortContract {
             name: "out",
             direction: Direction::Output,
@@ -286,7 +354,7 @@ fn a_port_type_selector_is_structurally_plan_bound() {
         selector: None,
     };
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(LATE)
             .unwrap_err(),
@@ -300,7 +368,9 @@ fn a_port_type_selector_is_structurally_plan_bound() {
 #[test]
 fn an_input_cannot_own_an_unwired_output_policy() {
     const INVALID: ConnectorContract = ConnectorContract {
+        id: "test/invalid-sink@1",
         name: "InvalidSink",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[PortContract {
             name: "in",
             direction: Direction::Input,
@@ -311,7 +381,7 @@ fn an_input_cannot_own_an_unwired_output_policy() {
         selector: None,
     };
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(INVALID)
             .unwrap_err(),
@@ -332,7 +402,8 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
             for port in ports {
                 let sheet = port.ty.expect("the promised port is typed");
                 let core = rastok::boundary::process_port_type(
-                    "Process",
+                    &rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID)
+                        .unwrap(),
                     port.port.name(),
                     Some(codec),
                     Some(err_codec),
@@ -363,7 +434,7 @@ fn a_duplicate_profile_is_a_sheet_defect() {
         ],
     };
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(TWICE)))
             .unwrap_err(),
@@ -383,7 +454,7 @@ fn an_unknown_default_profile_is_a_sheet_defect() {
         }],
     };
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(GHOST)))
             .unwrap_err(),
@@ -409,7 +480,7 @@ fn a_selector_colliding_with_an_attribute_is_a_sheet_defect() {
         }],
     };
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(MODE, Some(SELECTOR)))
             .unwrap_err(),
@@ -426,7 +497,7 @@ fn an_uncompilable_expression_default_is_a_sheet_defect() {
         latest_site: EvaluationSite::Plan,
     }];
     assert!(matches!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(BAD, None))
             .unwrap_err(),
@@ -444,7 +515,7 @@ fn a_default_outside_its_domain_is_a_sheet_defect() {
         latest_site: EvaluationSite::Plan,
     }];
     assert!(matches!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(MISFIT, None))
             .unwrap_err(),
@@ -458,7 +529,7 @@ fn a_default_outside_its_domain_is_a_sheet_defect() {
         latest_site: EvaluationSite::Plan,
     }];
     assert!(matches!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(OUTSIDE, None))
             .unwrap_err(),
@@ -475,7 +546,7 @@ fn a_duplicate_choice_word_is_a_sheet_defect() {
         latest_site: EvaluationSite::Plan,
     }];
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(DUP, None))
             .unwrap_err(),
@@ -492,7 +563,7 @@ fn a_deferred_only_domain_needs_a_deferred_profile() {
         latest_site: EvaluationSite::Invocation,
     }];
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(RAW, None))
             .unwrap_err(),
@@ -792,7 +863,7 @@ fn a_callable_foreign_connector_refuses_at_bind() {
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
-            spec.contract = String::from("Custom");
+            spec.contract = rastok::connector::ConnectorId::parse("test/custom@1").unwrap();
             node.ports = vec![
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("in").expect("a conventional port"),
@@ -823,7 +894,7 @@ fn a_callable_foreign_connector_refuses_at_bind() {
         .expect_err("the callable foreign connector refuses")
         .to_string();
     assert!(
-        message.contains("Process-only binding cannot serve callable `Custom`"),
+        message.contains("Process-only binding cannot serve callable `test/custom@1`"),
         "{message}"
     );
     // Sever every edge DELIVERING to the connector: a pure source.
@@ -928,7 +999,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         latest_site: EvaluationSite::Plan,
     }];
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(EMPTY, None))
             .unwrap_err(),
@@ -940,7 +1011,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         profiles: &[],
     };
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(NOBODY)))
             .unwrap_err(),
@@ -953,7 +1024,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         latest_site: EvaluationSite::Plan,
     }];
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(SENTINEL, None))
             .unwrap_err(),
@@ -965,7 +1036,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
         ..sheet(&[], None)
     };
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(unnameable)
             .unwrap_err(),
@@ -1034,7 +1105,7 @@ fn tag_words_serve_as_choice_words_on_another_sheet() {
             latest_site: EvaluationSite::Plan,
         },
     ];
-    let registry = Registry::try_m0()
+    let registry = ContractCatalog::try_m0()
         .expect("the standard catalogue holds")
         .try_with(sheet(CHOICES, None))
         .expect("a valid sheet");
@@ -1104,7 +1175,11 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
 
     for spec in PROCESS.common {
         assert_eq!(
-            rastok::boundary::process_attribute_site("Process", spec.name),
+            rastok::boundary::process_attribute_site(
+                &rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID,)
+                    .unwrap(),
+                spec.name,
+            ),
             Some(spec.latest_site),
             "common attribute {}",
             spec.name
@@ -1112,14 +1187,24 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
     }
     let selector = PROCESS.selector.expect("Process has profiles");
     assert_eq!(
-        rastok::boundary::process_attribute_site("Process", selector.attribute),
+        rastok::boundary::process_attribute_site(
+            &rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID)
+                .unwrap(),
+            selector.attribute,
+        ),
         Some(EvaluationSite::Plan),
         "the profile selector shapes the plan"
     );
     for profile in selector.profiles {
         for spec in profile.attributes {
             assert_eq!(
-                rastok::boundary::process_attribute_site("Process", spec.name),
+                rastok::boundary::process_attribute_site(
+                    &rastok::connector::ConnectorId::parse(
+                        rastok::connector::PROCESS_CONNECTOR_ID,
+                    )
+                    .unwrap(),
+                    spec.name,
+                ),
                 Some(spec.latest_site),
                 "{} attribute {}",
                 profile.word,
@@ -1128,11 +1213,18 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
         }
     }
     assert_eq!(
-        rastok::boundary::process_attribute_site("Process", "unknown"),
+        rastok::boundary::process_attribute_site(
+            &rastok::connector::ConnectorId::parse(rastok::connector::PROCESS_CONNECTOR_ID)
+                .unwrap(),
+            "unknown",
+        ),
         None
     );
     assert_eq!(
-        rastok::boundary::process_attribute_site("Other", "command"),
+        rastok::boundary::process_attribute_site(
+            &rastok::connector::ConnectorId::parse("test/other@1").unwrap(),
+            "command",
+        ),
         None
     );
 }
@@ -1212,7 +1304,7 @@ fn sibling_profiles_may_share_an_attribute_name() {
         ],
     };
     assert!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(SELECTOR)))
             .is_ok()
@@ -1222,7 +1314,9 @@ fn sibling_profiles_may_share_an_attribute_name() {
 #[test]
 fn an_inexpressible_sheet_name_is_a_sheet_defect() {
     let bad_port = ConnectorContract {
+        id: "test/probe@1",
         name: "Probe",
+        roles: rastok::connector::ConnectorRoles::Outbound,
         ports: &[PortContract {
             name: "bad port",
             direction: Direction::Input,
@@ -1233,7 +1327,7 @@ fn an_inexpressible_sheet_name_is_a_sheet_defect() {
         selector: None,
     };
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(bad_port)
             .unwrap_err(),
@@ -1246,7 +1340,7 @@ fn an_inexpressible_sheet_name_is_a_sheet_defect() {
         latest_site: EvaluationSite::Plan,
     }];
     assert_eq!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(BAD_ATTR, None))
             .unwrap_err(),
@@ -1271,7 +1365,7 @@ fn a_deferred_domain_carries_no_default() {
         }],
     };
     assert!(matches!(
-        Registry::try_m0()
+        ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(LIE)))
             .unwrap_err(),
@@ -1420,14 +1514,14 @@ fn structural_words_are_reserved_but_frontend_names_are_bindable() {
 #[test]
 fn a_registered_frontend_owns_framing_without_becoming_a_keyword() {
     assert_eq!(
-        Registry::default().try_with_frontend(FrontendContract {
+        ContractCatalog::default().try_with_frontend(FrontendContract {
             name: "bad name",
             reader: FrontendReader::Text,
         }),
         Err(SheetDefect::InexpressibleName("bad name")),
         "an admitted frontend contract must be writable before `!`"
     );
-    let registry = Registry::try_m0()
+    let registry = ContractCatalog::try_m0()
         .expect("the standard catalogue holds")
         .try_with_frontend(FrontendContract {
             name: "starlark",

@@ -91,6 +91,38 @@ golden move before re-blessing. This decision supersedes the `Ingress` and
 while preserving their already-proved prepare/commit, correlation,
 completion, cancellation and conformance semantics.
 
+**C1 identity checkpoint (2026-08-22).** A `ConnectorId` has exactly the
+canonical spelling `<namespace>/<name>@<major>`: the namespace is one or more
+dot-separated lowercase ASCII labels, the name is one lowercase ASCII label,
+labels start with a letter and may contain digits or internal hyphens, and the
+major is a positive canonical `u32` decimal without a leading zero. No alias
+is normalized. A source symbol such as `Process` resolves through the
+`ContractCatalog`; only its stable id (`rastok/process@1`) and required roles
+enter canonical HIR and the plan. Two source symbols may not claim one id,
+and a `DriverRegistry` rejects a duplicate physical implementation rather
+than selecting by registration order. Binding distinguishes an absent id
+from an implementation missing a required role.
+
+Plan-package **v10** categorically replaces v9 by transporting the canonical
+id and the closed role value (`inbound`, `outbound`, or both) in every
+Connector row. Roles use new Connector-spec key 6; retired `error_set` key 5
+remains unassigned forever. V9 is refused, not migrated. This is a deliberate identity
+move for Process programs: compiler probe `29c69b70… → 52406fcf…`, JSONL
+`a058f1aa… → 9643616e…`, and echo/spike `419a52a1… → 190f0efc…`.
+The connector-free gauge remains `0d3ad43d…`, proving scope. All three
+package goldens move to the v10 container; Process packages additionally
+replace the source name with the id and add the role. Existing causal traces
+remain byte-identical because neither contract identity nor roles are causal
+record fields.
+
+The former `IngressAuthority` type is named
+`InboundEnvelopeProvenance`: **the provenance of inbound envelopes**. It is
+the opaque, stable `(connector_path, replica)` root-stream fact shared by the
+envelopes accepted from that logical Connector replica; the journal combines
+it with `inbound_seq` to mint each root. It is neither a network address nor a
+per-submission id. This vocabulary change preserves the root recipe and every
+causal byte.
+
 ## D-2026-08-18-1 — Nodes own instances; key, lifetime, and state scope are separate
 
 The unreleased named-partition model fused three independent concerns: a key

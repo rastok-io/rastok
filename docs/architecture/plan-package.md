@@ -18,6 +18,14 @@
 > The package is a TRANSPORT format: versioned and free to evolve by
 > version bump; none of v1, v2, or v3 was ever published and no
 > decoder reads them — each refuses by its number.
+> **Format v10 (D-2026-08-22-1, C1 identity checkpoint, landed
+> 2026-08-22)** retains the complete v9 owner/instance/type/value/expression
+> transport and makes Connector identity categorical. Each Connector spec
+> carries a validated `<namespace>/<name>@<major>` id and its required runtime
+> role set; source names such as `Process` no longer travel. Registry-free
+> validation checks canonical ids and the built-in Process id/role contract.
+> V9 is categorically refused rather than guessed or migrated.
+>
 > **Format v9 (D-2026-08-18-1, R2 transport tranche, landed
 > 2026-08-21)** refuses the unreleased v8 named-partition draft and adds the
 > categorical lexical-owner table. The root App Graph, nested Graphs, and
@@ -26,7 +34,7 @@
 > the exact `instances.key` tree and inferred type, independent lifetime, and
 > phased immutable values. Connector attributes may likewise transport a
 > checked boot/instance/invocation expression; a plan-shaping dynamic row
-> refuses without consulting the compiler Registry.
+> refuses without consulting the compiler ContractCatalog.
 >
 > Owner and execution tables are deliberately distinct. A Graph owns lexical
 > context and lifecycle but is not an executable VM Node; an Operator or
@@ -62,7 +70,7 @@
 > identity.md, the full expression alphabet (`struct`, tagged constructor,
 > `is`, `as`) and the total resolved-port table travel together. A decoder
 > rebuilds the effective table from raw constraints and compares it exactly
-> with the transported claim; no compiler Registry or unresolved inference
+> with the transported claim; no compiler ContractCatalog or unresolved inference
 > variable can enter execution. `Process.exit` therefore carries exact
 > `ProcessExit`, and `decimal()` is statically `number`; their former v6
 > representation bridges are gone. V6 joins the refused drafts and is never
@@ -131,7 +139,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (9)                  │
+        │ 1 : format_version   uint      (10)                 │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -208,7 +216,7 @@ the compiler surfaces that refusal as the user diagnostic
 `E-PLAN-DEPTH` — so what `encode` accepts, `decode` reads back, with
 no gap at the boundary.
 
-Expression typing and arbitrary compiler-Registry coherence remain the
+Expression typing and arbitrary compiler-ContractCatalog coherence remain the
 compiler's job. For executable built-ins, the package validates the resolved
 contract facts it must dereference: the active `Process` attributes and exact
 four-row port table are checked without a Registry. The package's validation holds the *structural*
@@ -216,7 +224,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v9)
+## Body tables (format v10)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -291,8 +299,12 @@ owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
               // requires exact equality with the transported reduction.
               // Invocation refuses for owner vals; invocation-local vals
               // remain handler steps.
-spec       := {1: contract (text), 2: effect, 3: behavior (uint: 1 deterministic · 2 probabilistic),
-               4: [[name (text), attr]*]}
+spec       := {1: connector_id (text), 2: effect,
+               3: behavior (uint: 1 deterministic · 2 probabilistic),
+               4: [[name (text), attr]*], 6: connector_roles}
+              // connector_id is canonical <namespace>/<name>@<major>
+              // connector_roles := uint: 1 inbound · 2 outbound ·
+              //                            3 inbound+outbound
               // key 5 (error_set) is RETIRED by B5 and never reused
 effect     := 0 | [1, class (uint: 1 idempotent · 2 compensable · 3 irreversible)]
 attr       := [1, word (text)] | [2, tagged_value]
@@ -302,7 +314,7 @@ attr       := [1, word (text)] | [2, tagged_value]
               // contract at the ACTUAL boot, instance, or invocation site;
               // the contract's latest permitted site stays compiler-side,
               // while this selected phase is plan data and is never recovered
-              // from the compiler Registry. This checkpoint admits the row
+              // from the compiler ContractCatalog. This checkpoint admits the row
               // only when the core has an explicit contract mirror; an
               // unknown contract or attribute refuses closed.
               // Form 3 may not claim Plan: a plan result uses form 2.

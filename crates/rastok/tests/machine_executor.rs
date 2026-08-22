@@ -17,7 +17,7 @@ use rastok::{envelope, node};
 use std::collections::BTreeMap;
 
 use rastok::compiler::compile;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::envelope::Encoding;
 
 const M0_PROBE: &str = r#"
@@ -44,7 +44,7 @@ on in where data.text != "" {
 fn probe() -> (ValidatedExecutionPlan, Slot) {
     let compilation = compile(
         &[M0_PROBE],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let slot = Slot::new(
@@ -108,7 +108,7 @@ fn an_identity_emission_inherits_everything_but_its_spine() {
     let source = "graph g : App {\n  input in: variant\n  operator relay {\n    on in { out = . }\n  }\n  . -> relay -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));
@@ -278,7 +278,7 @@ fn metadata_writes_land_where_the_spec_says() {
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.flag = \"yes\"\n        meta.app.audit.origin = \"trace\"\n        meta.ext.content_type = \"text/x-rastok\"\n      }\n    }\n  }\n  . -> o -> .\n}\n";
     let compilation = compile(
         &[source],
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
     let executor = TransactionExecutor::new(&compilation.plan, GraphVersion(1));

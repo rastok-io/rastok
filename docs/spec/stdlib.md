@@ -1,6 +1,6 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.4 R6.** B5 removed the
+> **Status: normative and executable through M1.5 C1.** B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
@@ -24,6 +24,12 @@ future runtime all read the same contract?**
 
 Every Connector trait is specified by the same template. No case is
 optional — a Connector whose contract leaves a case blank is not spec'd:
+
+Every admitted sheet also has one canonical versioned `ConnectorId` and a
+closed required Driver-role fact. The source-facing trait name is ergonomic
+syntax; the id and effective roles are the semantic facts transported by the
+plan. Physical crates, features, libraries, Hosts and Workers are never
+contract identity.
 
 | # | Case | Why it is mandatory |
 |---|---|---|
@@ -148,7 +154,8 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 
 | Case | Contract |
 |---|---|
-| Role / Direction | child process over stdio; **both** (caller + source) |
+| Stable identity | `rastok/process@1` |
+| Role / Direction | child process over stdio; target contract **both** (caller + source). The currently executable `job` profile requires only the outbound role; the inbound service profile remains deferred and cannot silently broaden a job plan's binding requirement. |
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
 | effect / behavior | **per-instance, both mandatory** |
 | Attributes | the normative table below (D-2026-08-12-1, amended by D-2026-08-14-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |

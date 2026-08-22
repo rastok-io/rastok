@@ -116,7 +116,7 @@ pub(crate) fn is_dead_initializer_tag(word: &str) -> bool {
 pub fn parse(
     source_id: SourceId,
     source: &str,
-    registry: &crate::contract::Registry,
+    registry: &crate::contract::ContractCatalog,
     bag: &mut Bag,
 ) -> SyntaxTree {
     Parser {
@@ -131,7 +131,7 @@ pub fn parse(
 
 struct Parser<'src, 'bag> {
     lexer: Lexer<'src>,
-    registry: &'bag crate::contract::Registry,
+    registry: &'bag crate::contract::ContractCatalog,
     source_id: SourceId,
     last_end: usize,
     bag: &'bag mut Bag,
@@ -2290,8 +2290,8 @@ mod tests {
     use super::*;
 
     fn parse(source_id: SourceId, source: &str, bag: &mut Bag) -> SyntaxTree {
-        let registry =
-            crate::contract::Registry::try_m0().expect("the standard frontend catalogue is valid");
+        let registry = crate::contract::ContractCatalog::try_m0()
+            .expect("the standard frontend catalogue is valid");
         super::parse(source_id, source, &registry, bag)
     }
 
@@ -2443,7 +2443,8 @@ mod tests {
         // therefore reaches the one trivia authority and reports the
         // cause before the inevitable missing-closer cascades; CHECK is
         // not required to make the primary fault visible.
-        let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
+        let registry =
+            crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds");
         for (label, source) in [
             (
                 "following source is commented out",
@@ -2869,7 +2870,8 @@ mod tests {
         // fields are never statements of the enclosing handler. The
         // real value parser owns every structurally recognizable form
         // before the position diagnostic is emitted.
-        let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
+        let registry =
+            crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds");
         for (label, bare) in [
             ("struct", "{\n        a = 1\n      }"),
             ("map", "{\n        \"a\": 1\n      }"),
@@ -2967,7 +2969,8 @@ mod tests {
         // at the value position's first safe line boundary. The Rastok expression
         // compiler owns the one syntax diagnostic; the host parser
         // only preserves the surrounding RKG structure.
-        let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
+        let registry =
+            crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds");
         for (label, malformed) in [
             ("double quote", "\"oops"),
             ("single quote", "'oops"),
@@ -3019,7 +3022,8 @@ mod tests {
 
     #[test]
     fn incomplete_expression_has_one_voice_in_attributes_and_guards() {
-        let registry = crate::contract::Registry::try_m0().expect("the standard catalogue holds");
+        let registry =
+            crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds");
         for (label, source) in [
             (
                 "attribute",

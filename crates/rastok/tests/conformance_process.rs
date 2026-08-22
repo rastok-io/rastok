@@ -15,7 +15,7 @@ use rastok::conformance::{
     verify,
 };
 use rastok::connectors::Process;
-use rastok::contract::Registry;
+use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Envelope, Value};
 use rastok::plan::ValidatedExecutionPlan;
 use rastok::stdlib::PROCESS;
@@ -223,7 +223,7 @@ fn process_profile() -> Profile {
 fn process_passes_the_whole_battery() {
     let report = verify(
         &process_profile(),
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         &mut ProcessFactory,
     );
     assert_conformant(&report, &["CaptureFailed", "OutcomeUnknown"]);
@@ -294,7 +294,7 @@ fn a_malformed_terminal_case_fails_the_battery() {
     };
     let report = verify(
         &profile,
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         &mut LiarFactory,
     );
     assert!(!report.conformant());
@@ -372,7 +372,7 @@ fn crossed_concurrent_replies_fail_the_battery() {
     };
     let report = verify(
         &profile,
-        &Registry::try_m0().expect("the standard catalogue holds"),
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         &mut SwapperFactory,
     );
     assert!(

@@ -10,10 +10,11 @@
 //!
 //! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
 
+use crate::connector::{ConnectorRoles, PROCESS_CONNECTOR_ID};
 use crate::contract::{
-    AttributeSpec, ConnectorContract, DefaultValue, EvaluationSite, FrontendContract,
-    FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice, PortTypeRule,
-    Presence, Profile, ProfileSelector, ProfileSupport, Registry, ValueDomain,
+    AttributeSpec, ConnectorContract, ContractCatalog, DefaultValue, EvaluationSite,
+    FrontendContract, FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice,
+    PortTypeRule, Presence, Profile, ProfileSelector, ProfileSupport, ValueDomain,
 };
 use crate::node::Direction;
 use crate::plan::UnwiredPolicy;
@@ -24,7 +25,9 @@ use crate::plan::UnwiredPolicy;
 /// deferred by this build — its attribute NAMES are normative, their
 /// domains deferred-only).
 pub const PROCESS: ConnectorContract = ConnectorContract {
+    id: PROCESS_CONNECTOR_ID,
     name: "Process",
+    roles: ConnectorRoles::Outbound,
     ports: &[
         PortContract {
             name: "in",
@@ -312,7 +315,7 @@ const M0_FRONTENDS: &[FrontendContract] = &[
     },
 ];
 
-impl Registry {
+impl ContractCatalog {
     /// The M0 registry through its fallible door — the same
     /// validation any extension walks.
     ///
@@ -322,7 +325,7 @@ impl Registry {
     /// catalogue.
     pub fn try_m0() -> Result<Self, crate::contract::SheetDefect> {
         let base = Self {
-            connectors: Vec::new(),
+            connectors: std::collections::BTreeMap::new(),
             declared: DECLARED.to_vec(),
             frontends: Vec::new(),
         };
@@ -342,14 +345,14 @@ mod tests {
     use crate::contract::Availability;
 
     #[test]
-    fn the_registry_resolves_the_three_availabilities() {
-        let registry = Registry::try_m0().expect("the standard catalogue holds");
+    fn the_catalogue_resolves_the_three_availabilities() {
+        let catalogue = ContractCatalog::try_m0().expect("the standard catalogue holds");
         assert!(matches!(
-            registry.connector("Process"),
+            catalogue.connector("Process"),
             Availability::Available(contract) if contract.name == "Process"
         ));
-        assert_eq!(registry.connector("HttpServer"), Availability::Declared);
-        assert_eq!(registry.connector("Postgres"), Availability::Unknown);
+        assert_eq!(catalogue.connector("HttpServer"), Availability::Declared);
+        assert_eq!(catalogue.connector("Postgres"), Availability::Unknown);
     }
 
     #[test]
@@ -357,13 +360,14 @@ mod tests {
         // The sheet validates at the registry door — defaults
         // compiled, profiles coherent.
         assert!(crate::contract::validate_sheet(&PROCESS).is_ok());
-        let job = PROCESS.profile("job").unwrap();
-        let effect = PROCESS.attribute(Some(job), "effect").unwrap();
+        let process = PROCESS;
+        let job = process.profile("job").unwrap();
+        let effect = process.attribute(Some(job), "effect").unwrap();
         assert_eq!(effect.presence, Presence::Required);
-        assert!(PROCESS.attribute(Some(job), "max_output").is_some());
-        assert!(PROCESS.attribute(Some(job), "restart").is_none());
+        assert!(process.attribute(Some(job), "max_output").is_some());
+        assert!(process.attribute(Some(job), "restart").is_none());
         assert_eq!(
-            PROCESS.owning_profile("restart").map(|p| p.word),
+            process.owning_profile("restart").map(|p| p.word),
             Some("service")
         );
         let ports = PROCESS
@@ -383,7 +387,7 @@ mod tests {
 
     #[test]
     fn frontends_share_one_contract_registry() {
-        let registry = Registry::try_m0().expect("the standard catalogue holds");
+        let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
         assert_eq!(
             registry.frontend("json").map(|frontend| frontend.reader),
             Some(FrontendReader::Json)

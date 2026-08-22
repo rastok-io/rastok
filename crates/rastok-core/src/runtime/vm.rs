@@ -368,7 +368,7 @@ fn consider_operator_work(
 
 /// The plan-backed gate for one atomic boundary completion.
 ///
-/// Format v9 retains the exact `ProcessExit` union in the resolved port
+/// Format v10 retains the exact `ProcessExit` union in the resolved port
 /// table. This gate judges that same type, so no malformed terminal fact can
 /// become causal.
 struct PlanGate<'plan> {
@@ -390,7 +390,7 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
         let Some(spec) = planned.connector() else {
             return Err(format!("`{connector}` is not a connector"));
         };
-        if spec.contract != "Process" {
+        if spec.contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
             return Err(format!(
                 "the active OutboundConnectorDriver does not serve `{}` completions",
                 spec.contract

@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.4 R3 routing, 2026-08-21)
+title Rastok — bird's-eye module overview (M1.5 C1 identities, 2026-08-22)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -79,6 +79,13 @@ package "datatype / value — core logical data authority" as P_DATA {
   DataType : logical type tree and recursive conformance judge
   enum "Value" as CORE_Value <<enum>>
   CORE_Value : one materialized domain and structural validator
+}
+
+package "connector — stable contract identity" as P_CONNECTOR {
+  class ConnectorId <<struct>>
+  ConnectorId : canonical namespace/name@major identity
+  enum ConnectorRoles <<enum>>
+  ConnectorRoles : inbound, outbound, or both
 }
 
 package "expr — Rastok expression engine" as P_EXPR {
@@ -206,13 +213,13 @@ package "plan — serializable compiled execution model" as P_PLAN {
   GuestProgram : opaque compiled guest program
   class AssetBlob <<struct>>
   AssetBlob : content-addressed build-time asset bytes
-  class "encode / decode (categorical v9)" as PLAN_CODEC <<mod>>
+  class "encode / decode (categorical v10)" as PLAN_CODEC <<mod>>
   PLAN_CODEC : canonical validated plan package transport
 }
 
 package "contract — compiler-layer node contract metamodel" as P_CONTRACT {
   class ConnectorContract <<struct>>
-  ConnectorContract : ports, attributes, and profiles
+  ConnectorContract : id, roles, ports, attributes, and profiles
   class AttributeSpec <<struct>>
   AttributeSpec : name, presence, and value domain
   enum Presence <<enum>>
@@ -225,8 +232,8 @@ package "contract — compiler-layer node contract metamodel" as P_CONTRACT {
   Availability : available sheet, declared name, or unknown capability
   class ProfileSelector <<struct>>
   ProfileSelector : selects an available or deferred profile
-  class Registry <<struct>>
-  Registry : validated sheets and declared capability names
+  class ContractCatalog <<struct>>
+  ContractCatalog : sheets keyed by stable contract id
 }
 
 package "stdlib — standard catalogue instances" as P_STD {
@@ -257,8 +264,8 @@ package "boundary — contracts with the external world" as P_BND {
   CallRef : deterministic internal call identity
   class InboundSubmission <<struct>>
   InboundSubmission : draft proposed for atomic acceptance
-  class IngressAuthority <<struct>>
-  IngressAuthority : opaque connector-path and replica authority
+  class InboundEnvelopeProvenance <<struct>>
+  InboundEnvelopeProvenance : opaque connector-path and replica provenance
   class Intent <<struct>>
   Intent : canonical journaled outbound-call intent
   class PreparedRequest <<struct>>
@@ -339,6 +346,10 @@ package "golden — canonical projection, seal, and diff" as P_GOLD {
 }
 
 package "connectors — concrete external-effect Drivers" as P_CONN {
+  class DriverRegistry <<struct>>
+  DriverRegistry : exact id-to-factory and role binding
+  interface ConnectorDriverFactory <<trait>>
+  ConnectorDriverFactory : binds one contract implementation
   class Process <<struct>>
   Process : pre-bound async process Driver; out*, err*, then typed exit
   class ProcessBindError <<struct>>
@@ -407,6 +418,8 @@ P_IDENT ..> P_DATA : tags core values
 P_PLAN ..> P_CBOR : encodes / decodes
 P_PLAN ..> P_IDENT : tagged values
 P_PLAN ..> P_DATA : carries types / values
+P_PLAN ..> P_CONNECTOR : carries ids / roles
+P_CONTRACT ..> P_CONNECTOR : keys sheets
 P_RT ..> P_IDENT : addresses work
 P_RT ..> P_PLAN : uses
 P_RT ..> P_BND : uses
@@ -420,6 +433,7 @@ P_GOLD ..> P_CBOR : encodes / decodes
 P_GOLD ..> P_IDENT : tagged values
 P_CONN ..> P_BND : implements OutboundConnectorDriver
 P_CONN ..> P_PLAN : binds validated plan
+P_CONN ..> P_CONNECTOR : registers exact ids / roles
 P_CONF ..> P_BND : exercises OutboundConnectorDriver
 P_CONF ..> P_CONTRACT : reads contract
 P_LAB ..> P_COMP : uses
