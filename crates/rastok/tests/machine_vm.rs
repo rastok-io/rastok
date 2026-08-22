@@ -7,7 +7,7 @@
 // correct report is a panic.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use rastok::boundary::{InboundSubmission, Intent, Partner};
+use rastok::boundary::{InboundSubmission, Intent, OutboundConnectorDriver};
 use rastok::envelope::{Data, Envelope};
 use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use rastok::journal::Journal;
@@ -77,7 +77,7 @@ struct ClosingWorld {
     confirm_cancel: bool,
 }
 
-impl Partner for ClosingWorld {
+impl OutboundConnectorDriver for ClosingWorld {
     fn start(&mut self, intent: &Intent, _: &Envelope) {
         self.started.push(intent.call_ref);
     }
@@ -126,7 +126,7 @@ graph bounded_closing : App {
 }
 "#;
 
-impl Partner for EchoWorld {
+impl OutboundConnectorDriver for EchoWorld {
     fn start(&mut self, intent: &Intent, request: &Envelope) {
         let _ = request;
         self.seen.push(intent.clone());
@@ -1225,7 +1225,7 @@ graph dynamic_binding : App {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut process = rastok::connectors::Process::try_new(&plan)
-        .expect("the adapter accepts a validated instance-bound sheet");
+        .expect("the Driver accepts a validated instance-bound sheet");
     vm.inject(&mut journal, text_submission("salut")).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -1248,7 +1248,7 @@ graph dynamic_binding : App {
             .map(|output| output.envelope.data().clone())
             .collect::<Vec<_>>(),
         [Data::materialized(Value::Text(String::from("salut")))],
-        "the adapter ran the command selected by the parent Graph instance"
+        "the Driver ran the command selected by the parent Graph instance"
     );
 }
 
@@ -1302,7 +1302,7 @@ graph failing_bundle : App {
     ));
     assert!(
         journal.records().is_empty(),
-        "candidate evaluation precedes ingress, lifecycle, and adapter effects"
+        "candidate evaluation precedes ingress, lifecycle, and Driver effects"
     );
     assert!(vm.is_stable(), "the failed candidate installed no work");
 }
@@ -2725,7 +2725,7 @@ struct ScriptedWorld {
     answers: Vec<Response>,
 }
 
-impl Partner for ScriptedWorld {
+impl OutboundConnectorDriver for ScriptedWorld {
     fn start(&mut self, _: &Intent, _: &Envelope) {}
     fn events(&mut self) -> Vec<Response> {
         std::mem::take(&mut self.answers)
@@ -2908,7 +2908,7 @@ on in where data.text != "" {
 "#;
 
 #[test]
-fn a_silent_partner_expires_into_a_typed_timeout() {
+fn a_silent_driver_expires_into_a_typed_timeout() {
     let compilation = compile(
         &[TIMED_PROBE],
         &Registry::try_m0().expect("the standard catalogue holds"),
@@ -3091,7 +3091,7 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
     vm.drain(&mut journal).unwrap();
-    // The partner answers first; the expiry then loses the race —
+    // The driver answers first; the expiry then loses the race —
     // one closure fact, one completion transaction, no duplicate.
     vm.pump(&mut journal, &mut world).unwrap();
     vm.drain(&mut journal).unwrap();

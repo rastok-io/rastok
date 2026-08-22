@@ -35,7 +35,7 @@ Consolidated what M0 proved before widening it
   with typed refusals.
 - The embedded spike run emulated against its written go/no-go —
   provisional GO, silicon confirmation pending hardware.
-- The connector conformance harness over the `Partner` seam —
+- The connector conformance harness over the outbound Connector Driver seam —
   the M0 subset of the ten contract cases made executable (error-set,
   journal, timeout, cancel, silence, and interleaved-correlation
   disciplines; the declarative cases as sheet checks), with every
@@ -120,6 +120,14 @@ The repository opens publicly with this milestone (15 October 2026).
   proved not to change semantic hash, journal bytes, or replay input. The
   one-worker reference remains the only runtime claimed; cluster leases and
   recovery are later work.
+- M1.5 is active: contracts gain stable versioned identities, compiler
+  `ContractCatalog` and runtime `DriverRegistry` become separate authorities,
+  and one pre-journal binder serves mixed connector families through explicit
+  inbound/outbound Driver roles. Static composition is first-class and keeps
+  the same registry boundary available to future plugin hosts. `File` is the
+  proof connector: one-file `read` and atomic `replace`, with directories and
+  `watch` deliberately outside this slice. See the
+  [ordered M1.5 backlog](docs/architecture/m1.5-connectors-backlog.md).
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

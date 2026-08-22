@@ -1,5 +1,5 @@
 //! Rastok compiler and runtime — the M0 slice: one `.rkg` unit in,
-//! a checked plan, a journaled run against real adapters, a lab of
+//! a checked plan, a journaled run against real Drivers, a lab of
 //! scripted worlds, and a canonical trace out.
 //!
 //! The build sequence is documented in

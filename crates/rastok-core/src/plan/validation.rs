@@ -365,7 +365,7 @@ pub enum PlanValidationError {
     },
     /// A reference to a connector port beyond the default trio. The
     /// RESOLVED table travels in the plan (the future needs it), but
-    /// this machine's Partner seam does not carry the port yet —
+    /// this machine's OutboundConnectorDriver seam does not carry the port yet —
     /// `Intent`, the response protocol, and the outcome trigger all
     /// speak `in`/`out`/`err`. A plan wiring such a port is valid in
     /// shape and NOT executable faithfully, so it refuses here; the
@@ -2279,7 +2279,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         });
                     }
                     // The table ANSWERED for the port — but the
-                    // Partner seam cannot execute it yet: refuse by
+                    // OutboundConnectorDriver seam cannot execute it yet: refuse by
                     // capability, distinctly from ignorance.
                     if matches!(node.kind, NodeKind::Connector(_))
                         && !matches!(endpoint.port.name(), "in" | "out" | "err" | "exit")

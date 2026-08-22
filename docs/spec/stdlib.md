@@ -42,7 +42,7 @@ Case 8 deserves the emphasis: coverage must enumerate the cases a
 Connector can emit, but they are described by the ordinary types of its
 output ports, not by a parallel `error_set`. Runtime-produced cases such
 as timeout or unknown outcome must appear in the resolved port type just
-like adapter-produced cases. A boundary completion is a separate control
+like Driver-produced cases. A boundary completion is a separate control
 fact: it closes one obligation and may carry several typed port outputs.
 `--coverage` counts the cases and the completion paths.
 
@@ -63,14 +63,14 @@ it (`connector c: Clock`). Applies to all future traits too (`Postgres`,
 **The contract is also the assurance boundary**: a future
 `theorem` proves a graph **under** the Connector contracts declared here;
 an `experiment` (simulation-semantics.md §10) checks empirically
-that a real adapter and partner honor them. Neither layer replaces the
+that a real Driver and its external system honor them. Neither layer replaces the
 other.
 
 ## 2. `behavior` — the second axis, beside `effect`
 
 The world's *timing* nondeterminism is already journal-absorbed
 (journal-relative replay). `behavior` declares something else: **the
-partner's semantic function** —
+external system's semantic function** —
 
 ```
    same request, same world state  →  same answer ?
@@ -135,7 +135,7 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Case | Contract |
 |---|---|
 | Role / Direction | HTTP calls; **outbound caller** |
-| Ports | `in` (requests), `out` (all usable HTTP responses, including non-2xx bodies), `err` (raw transport diagnostics only when the adapter actually has bytes), `exit` (one typed terminal outcome per call) |
+| Ports | `in` (requests), `out` (all usable HTTP responses, including non-2xx bodies), `err` (raw transport diagnostics only when the Driver actually has bytes), `exit` (one typed terminal outcome per call) |
 | Populates | `meta.ext` : `content_type` (the response's Content-Type), `status: int` — on the reply envelope |
 | effect / behavior | **per-instance, both mandatory** |
 | Attributes | `url`/`base_url`+`path`, `method`, `codec`, `auth`, `tls`, `timeout`, `on_timeout = bypass (default) \| kill`, `idempotency_key` (mandatory when `irreversible`) |
@@ -164,12 +164,12 @@ selector; its omission selects `job` and the checker materializes
 spelling of a default are one identity (hash included). The plan
 carries the EFFECTIVE attributes; each contract row declares the latest
 permitted site, checking chooses the earliest site where the expression
-closes, and the adapter consumes resolved values or an explicitly transported
+closes, and the Driver consumes resolved values or an explicitly transported
 boot/instance/invocation expression and never reintroduces a default. M1.4 R1
 now carries this ceiling in the executable sheet and rejects a non-plan port
 type selector. Plan-resolved `cwd` and `env` already bind through the real
-adapter; transport of their boot/instance expressions remains the categorical
-R2 step, never an adapter fallback.
+Driver; transport of their boot/instance expressions remains the categorical
+R2 step, never a Driver fallback.
 
 | Attribute | Profile | Domain | Latest evaluation site | Presence |
 |---|---|---|---|---|
@@ -182,7 +182,7 @@ R2 step, never an adapter fallback.
 | `behavior` | common | choice, typed | plan | **Required** |
 | `timeout` | common | Rastok expression → `duration` | instance | Optional — a true optional: no budget declared, no budget |
 | `env` | common | `map<text,text>` | instance | Optional; canonical spelling `env = { "K": v }`; written entries override inherited host entries and unspecified entries remain inherited |
-| `max_output` | job | byte size: `<digits><unit>`, unit ∈ `B \| KiB \| MiB \| GiB` (explicit, required), ASCII whitespace tolerated around and between, ≤ 4 GiB (syntax bound; the adapter binding additionally proves the budget is REPRESENTABLE on this host — at most `isize::MAX` — while actual allocation is judged chunk by chunk at intake via `try_reserve`, surfacing as the typed overflow, never an abort) — one parser (`contract::byte_size`) judges at check AND enforces at run | plan | Defaulted(`"8MiB"`) |
+| `max_output` | job | byte size: `<digits><unit>`, unit ∈ `B \| KiB \| MiB \| GiB` (explicit, required), ASCII whitespace tolerated around and between, ≤ 4 GiB (syntax bound; the Driver binding additionally proves the budget is REPRESENTABLE on this host — at most `isize::MAX` — while actual allocation is judged chunk by chunk at intake via `try_reserve`, surfacing as the typed overflow, never an abort) — one parser (`contract::byte_size`) judges at check AND enforces at run | plan | Defaulted(`"8MiB"`) |
 | `on_timeout` | job | choice `kill` (one word — "fixed to `kill`") | plan | Defaulted(`kill`) |
 | `correlate` | service | Rastok expression path over invocation data | invocation | Optional |
 | `restart` | service | struct | instance | Optional |
@@ -218,11 +218,11 @@ identity/provenance rather than fields invented inside stderr or every exit
 payload.
 
 `OutcomeUnknown` is empty and closed. It is emitted only by supervision when
-no terminal partner outcome can be established: recovery triage of an open
+no terminal external outcome can be established: recovery triage of an open
 OUTBOUND, or expiry of an instance's explicit Closing settlement budget. In
 both cases the OUTBOUND closes `abandoned`, the envelope uses `l:recover`, and
 causal provenance explains the reason instead of a racing string payload. A
-confirmed close-time kill remains the observed `Exited` result. A late partner
+confirmed close-time kill remains the observed `Exited` result. A late Driver
 answer after abandonment is a discarded observation and cannot create a
 second exit.
 
@@ -239,7 +239,7 @@ frames earlier, but must preserve call identity, emit no frame after that
 call's `exit`, and keep aggregation/backpressure bounded.
 
 The frame boundaries are exact. For `lines`, a request is one `text` value;
-the adapter appends one `\n` when absent. On output, `\n` is removed from
+the Driver appends one `\n` when absent. On output, `\n` is removed from
 each UTF-8 line, an empty line is the empty text value, a final non-empty
 unterminated line is accepted at EOF, and an empty channel emits nothing.
 For `jsonl`, the same newline boundaries contain JSON values; an empty line
@@ -588,10 +588,10 @@ The surface reserves the following mapping:
 - Process death emits `Exited` on `instance.exit`; the restart policy may respawn the
   service and invoke its protocol-specific resume operation.
 
-A partner may persist per activity rather than per creation, so an empty
-session can legitimately be unresumable. The recovery recipe for such
-partners is **resume-or-start-fresh, routed on the typed instance-exit case** — graph-side
-wiring, no new mechanism.
+A Driver-owned resource may persist per activity rather than per creation, so
+an empty session can legitimately be unresumable. The recovery recipe for
+such resources is **resume-or-start-fresh, routed on the typed instance-exit
+case** — graph-side wiring, no new mechanism.
 
 
 ## 10. Related docs

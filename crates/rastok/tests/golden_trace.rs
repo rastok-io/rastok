@@ -10,8 +10,8 @@
 //! moves these traces once more by sealing owner paths as segment arrays.
 
 use rastok::boundary::{
-    Completion, Draft, InboundSubmission, IngressAuthority, Intent, Partner, ProcessExit, Response,
-    SubmissionSequence,
+    Completion, Draft, InboundSubmission, IngressAuthority, Intent, OutboundConnectorDriver,
+    ProcessExit, Response, SubmissionSequence,
 };
 use rastok::compiler::compile;
 use rastok::contract::Registry;
@@ -50,7 +50,7 @@ struct EchoWorld {
     answers: Vec<Response>,
 }
 
-impl Partner for EchoWorld {
+impl OutboundConnectorDriver for EchoWorld {
     fn start(&mut self, intent: &Intent, _request: &Envelope) {
         self.answers.push(Response {
             call_ref: intent.call_ref,

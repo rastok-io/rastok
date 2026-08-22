@@ -1266,7 +1266,7 @@ Required Rust extensions for the parser to land :
 | Branchement | Fan-out (`a -> { b; c }`) or fan-in (`{ a; b } -> c`). Real DSL primitive. |
 | Endpoint | Connector that owns an external resource address/lifecycle and declares explicit envelope ports. |
 | `scenario` | one executable case inside a `simulation` : a fixture (the scripted world-half of the journal) + expectations. See simulation-semantics.md. |
-| `mock` | scenario/simulation-level stand-in for a calling Connector — its body is ordinary handler grammar (+ `after`). Replaces the partner, not the bookkeeping. |
+| `mock` | scenario/simulation-level stand-in for a calling Connector — its body is ordinary handler grammar (+ `after`). Replaces the Driver, not the bookkeeping. |
 | Multi-tenancy | Expressed by a keyed owner (`instances = { key = … }`). The runtime materializes one logical instance per canonical key and may assign each keyed boundary to an independent virtual shard. Environmental isolation and physical placement remain outside this grammar. |
 
 ## Formal grammar

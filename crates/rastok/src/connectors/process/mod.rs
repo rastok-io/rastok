@@ -1,16 +1,18 @@
-// The adapter layer IS the OS boundary: spawning, threads, and the
+// The Driver layer IS the OS boundary: spawning, threads, and the
 // clock are its business — the frontier lints stop at this file.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-//! The real adapters behind connector contracts — where the graph's
+//! The real Process Driver behind its Connector contract — where the graph's
 //! intent becomes an actual effect on the machine.
 //!
-//! An adapter is a [`Partner`]: the dispatcher hands it journaled
-//! intents and collects its answers. Nothing else changes shape — the
-//! Lab's scripted worlds and these adapters are interchangeable
+//! A Driver is an [`OutboundConnectorDriver`]: the dispatcher hands it
+//! journaled intents and collects its answers. Nothing else changes shape —
+//! the Lab's scripted worlds and real Drivers are interchangeable
 //! behind the same trait, which is the point: a simulation exercises
 //! exactly the machinery a run does, minus this file.
 
-use crate::boundary::{Completion, Intent, OutputOverflowReason, Partner, ProcessExit, Response};
+use crate::boundary::{
+    Completion, Intent, OutboundConnectorDriver, OutputOverflowReason, ProcessExit, Response,
+};
 use crate::envelope::{Data, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
 use std::io::Read;
@@ -23,7 +25,7 @@ use std::process::{Command, Stdio};
 /// every Defaulted attribute must be present (the checker injected
 /// it; absence is a violated invariant), every value must inhabit
 /// its domain — the codec exhaustively, with NO fallback — and
-/// nothing is silently dropped or re-defaulted. The adapter
+/// nothing is silently dropped or re-defaulted. The Driver
 /// consumes THIS, never the raw attribute table.
 #[derive(Debug, Clone)]
 struct ProcessSettings {
@@ -113,7 +115,7 @@ pub enum ProcessSettingsError {
     NotProcess(String),
     /// A Defaulted attribute did not travel in the plan.
     Unresolved(&'static str),
-    /// A mode this build has no adapter for.
+    /// A mode this build has no Driver for.
     UnknownMode(String),
     /// `on_timeout` is fixed to `kill` on a job.
     OnTimeoutNotKill,
@@ -144,7 +146,7 @@ impl core::fmt::Display for ProcessSettingsError {
         match self {
             Self::NotProcess(contract) => write!(
                 f,
-                "the plan hands a `{contract}` connector to the Process adapter"
+                "the plan hands a `{contract}` connector to the Process Driver"
             ),
             Self::Unresolved(name) => write!(
                 f,
@@ -152,7 +154,7 @@ impl core::fmt::Display for ProcessSettingsError {
                  travelling sheet (the compiler resolves every attribute before a plan leaves)"
             ),
             Self::UnknownMode(word) => {
-                write!(f, "the `{word}` mode has no adapter in this build")
+                write!(f, "the `{word}` mode has no Driver in this build")
             }
             Self::OnTimeoutNotKill => {
                 write!(
@@ -286,7 +288,7 @@ impl ProcessSettings {
             Some(_) => return Err(E::EnvNotMap),
             None => std::collections::BTreeMap::new(),
         };
-        // EXHAUSTIVE: the adapter never re-interprets an unknown or
+        // EXHAUSTIVE: the Driver never re-interprets an unknown or
         // missing codec as `lines` — the fallback lives nowhere on
         // this path.
         let codec = match spec.attribute("codec") {
@@ -354,14 +356,14 @@ impl ProcessSettings {
     }
 }
 
-/// The `Process` adapter, job mode: one envelope, one spawn. stdin
+/// The `Process` Driver, job mode: one envelope, one spawn. stdin
 /// carries the codec-framed request; the complete stdout at exit
 /// becomes the one reply. The process boundary is the correlation.
 ///
-/// The adapter is asynchronous, as the Partner contract demands: a
-/// partner answers or stays silent — it never times itself out. Only
+/// The Driver is asynchronous, as the [`OutboundConnectorDriver`] contract
+/// demands: a Driver answers or stays silent — it never times itself out. Only
 /// the scheduler mints TimeoutExpired; when the machine closes a
-/// call, [`Partner::cancel`] kills the child. Every pipe drains on
+/// call, [`OutboundConnectorDriver::cancel`] kills the child. Every pipe drains on
 /// its own detached thread through a channel, so a descendant that
 /// inherits the pipes can never hang this process: readers are never
 /// joined, only drained.
@@ -383,7 +385,7 @@ pub struct Process<'plan> {
     answers: Vec<Response>,
 }
 
-/// Why a plan cannot BIND to the Process adapter — surfaced at
+/// Why a plan cannot BIND to the Process Driver — surfaced at
 /// construction, before the machine opens anything.
 #[derive(Debug)]
 pub struct ProcessBindError {
@@ -394,14 +396,14 @@ pub struct ProcessBindError {
 
 /// The two REAL bind authorities, kept apart (D-2026-08-12-1,
 /// review round): a Process spec whose settings refuse, or a world
-/// this single-Partner adapter cannot cover — the distinction the
-/// future BoundExecutionPlan router will inherit.
+/// this Process-only Driver cannot cover — the distinction M1.5's global
+/// binder removes.
 #[derive(Debug)]
 pub enum ProcessBindReason {
     /// The Process spec itself refuses.
     Settings(ProcessSettingsError),
     /// A CALLABLE connector of another contract: its intents would
-    /// arrive at this adapter and strand open.
+    /// arrive at this Driver and strand open.
     UnservedConnector {
         /// The foreign contract's name.
         contract: String,
@@ -414,8 +416,8 @@ impl core::fmt::Display for ProcessBindReason {
             Self::Settings(error) => error.fmt(f),
             Self::UnservedConnector { contract } => write!(
                 f,
-                "a callable `{contract}` connector has no adapter in this world — its calls \
-                 would strand open (the global binder is the second adapter's design)"
+                "the Process-only binding cannot serve callable `{contract}` — leaving it \
+                 unbound would strand calls open"
             ),
         }
     }
@@ -581,7 +583,7 @@ enum Chunk {
 }
 
 impl<'plan> Process<'plan> {
-    /// Binds an adapter to every `Process` connector of one
+    /// Binds a Driver to every `Process` connector of one
     /// VALIDATED plan, resolving all settings up front: a
     /// configuration defect refuses HERE — before any journaled
     /// open — and `SpawnFailed` is reserved for the OS actually
@@ -594,25 +596,24 @@ impl<'plan> Process<'plan> {
     /// undeclared emitted error, a budget beyond this host's `Vec`
     /// REPRESENTABILITY (never a memory promise — allocation is
     /// judged at intake), or a CALLABLE connector of another
-    /// contract this single-Partner world cannot serve (a pure
-    /// source is skipped).
+    /// contract this Process-only Driver cannot serve (a pure source is
+    /// skipped).
     pub fn try_new(
         plan: &'plan crate::plan::ValidatedExecutionPlan,
     ) -> Result<Self, ProcessBindError> {
         let mut bindings = std::collections::BTreeMap::new();
         for node in &plan.plan().nodes {
             if let NodeKind::Connector(spec) = &node.kind {
-                // A SPECIALIZED adapter — but the world it serves
-                // has ONE Partner, so a CALLABLE connector of
+                // A specialized Driver — but the world it serves has ONE
+                // OutboundConnectorDriver, so a CALLABLE connector of
                 // another contract would receive its intents HERE
                 // and strand them open: the binding refuses it. A
                 // pure source (no incoming edge) is merely skipped.
-                // The BoundExecutionPlan router is the second
-                // adapter's named design, with obligations BY ROLE:
-                // an outbound caller binds to exactly one Partner,
-                // an inbound source to exactly one ingress
-                // provider, a both-roles connector to both
-                // (m1-slice, the connector items).
+                // M1.5's global binder removes this specialization with
+                // obligations BY ROLE: an outbound caller binds to exactly
+                // one OutboundConnectorDriver, an inbound source to exactly
+                // one InboundConnectorDriver, and a both-role Connector to
+                // both (m1-slice, the connector items).
                 if spec.contract != "Process" {
                     let slot = crate::plan::Slot::new(
                         u32::try_from(
@@ -664,13 +665,13 @@ impl<'plan> Process<'plan> {
         let Some(binding) = self.bindings.get(&intent.connector_path) else {
             return Err(ProcessFailure::SpawnFailed {
                 message: "no Process binding serves this connector (unknown path, or another \
-                          contract this specialized adapter does not carry)"
+                          contract this specialized Driver does not carry)"
                     .to_string(),
             }
             .into_completion());
         };
         // The VM evaluates and type-checks instance rows before `l:start`.
-        // This conversion is the adapter's typed belt: it never evaluates an
+        // This conversion is the Driver's typed belt: it never evaluates an
         // expression or supplies a default.
         let settings = binding
             .resolve(&intent.instance_settings)
@@ -680,7 +681,7 @@ impl<'plan> Process<'plan> {
                 }
                 .into_completion()
             })?;
-        // The machine prepared and sealed the bytes; the adapter
+        // The machine prepared and sealed the bytes; the Driver
         // TRANSPORTS them — recomputing would reopen the gap between
         // sealed and sent.
         let framed = intent.prepared.bytes().to_vec();
@@ -956,7 +957,7 @@ fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, ProcessFailure> {
     Ok(items)
 }
 
-impl Partner for Process<'_> {
+impl OutboundConnectorDriver for Process<'_> {
     fn start(&mut self, intent: &Intent, request: &Envelope) {
         match self.launch(intent, request) {
             Ok(run) => self.runs.push(run),
@@ -1092,7 +1093,7 @@ graph real : App {
     /// Drives one submission to stability against real children: the
     /// wall clock maps onto the virtual clock in small steps, so
     /// declared budgets expire for real and the scheduler — never
-    /// the adapter — mints the timeouts.
+    /// the Driver — mints the timeouts.
     fn run_submission(
         source: &str,
         submission: InboundSubmission,
@@ -1173,7 +1174,7 @@ graph real : App {
         let exit = one_exit(&observed, "Exited");
         assert_eq!(exit[0], (String::from("exit_code"), Value::Int(0)));
         // The same normative sequence as the scripted world — the
-        // adapter changed, the machine did not.
+        // Driver changed, the machine did not.
         let closed = journal.records().iter().any(|record| {
             matches!(
                 record,
@@ -1386,7 +1387,7 @@ graph mute : App {
             "the budget actually fired"
         );
         // The scheduler minted it: the closure is a Timeout fact,
-        // never a partner-fabricated failure response.
+        // never a driver-fabricated failure response.
         assert!(journal.records().iter().any(|record| matches!(
             record,
             Record::Outbound(o)
@@ -1614,7 +1615,7 @@ graph hoarse : App {
     fn an_unframeable_request_never_reaches_the_call_boundary() {
         // B2 resolves the whole route to `text`: a structured ingress
         // refuses at the final pin before any mailbox or outbound fact.
-        // The adapter-level framing refusal remains a defence for forged
+        // The Driver-level framing refusal remains a defence for forged
         // plans, not a state a checked graph can normally reach.
         let source = r#"
 graph unframeable : App {
@@ -1769,7 +1770,7 @@ graph unframeable : App {
     }
 
     #[test]
-    fn every_adapter_terminal_inhabits_process_exit() {
+    fn every_driver_terminal_inhabits_process_exit() {
         let ty = crate::boundary::process_exit_type().expect("ProcessExit is canonical");
         let failures = [
             ProcessFailure::SpawnFailed {

@@ -33,7 +33,7 @@ The ontology, side by side — production on the left, its twin on the right :
 |---|---|
 | App | Lab |
 | Graph | Simulation (closes it) |
-| Connector | Mock (replaces the partner, §5) |
+| Connector | Mock (replaces its Driver, §5) |
 | deployed App + real profile | Experiment |
 | a concrete execution | Scenario |
 | an observation | Expect |
@@ -56,7 +56,7 @@ The mirror is deliberate :
 | Graph side | Simulation side | Reading |
 |---|---|---|
 | graph | simulation | the declared machine vs. its possibility space |
-| Connector boundary | mock | possible behavior of the external partner |
+| Connector boundary | mock | possible behavior of the external system |
 | source Connector output | injection | the world sends an envelope into the graph |
 | handler guard | expectation predicate | the graph reacts vs. the scenario observes |
 | runtime world | fixture | the recorded world-half, written in advance |
@@ -80,7 +80,7 @@ production the world-half is *recorded* ; in simulation there is no world —
 |---|---|---|
 | `orders.out = { … }` | the world sends | **INBOUND** (fixture-owned `inbound_seq`) |
 | `advance duration("30s")` | time passes | the dated decisions (the sweep, execution-model §8) |
-| `mock … { on in … }` | the partner answers | the **OUTBOUND closures** |
+| `mock … { on in … }` | the mock Outbound Driver answers | the **OUTBOUND closures** |
 | `crash after <record>` / `restart` | the process dies | volatile truncation + recovery |
 | `expect …` | *(nothing — pure observation)* | *(none)* |
 
@@ -90,7 +90,7 @@ production the world-half is *recorded* ; in simulation there is no world —
 > run. A mocked call still writes its real OUTBOUND records (`open` with key
 > and digest, `closed` with the mock's reply) ; the reply enters through the
 > Connector's normal response path (trigger `p:in`, parent = the request).
-> The mock replaces the partner, **not the bookkeeping**.
+> The mock replaces the Driver, **not the bookkeeping**.
 
 Two-mode equivalence, stated journal-relative : *same world-half in →
 byte-identical **causal cores** out*
@@ -417,7 +417,7 @@ incident is a **mechanical projection**, not inference :
 |---|---|---|
 | INBOUND records | → | injections (same envelopes, **same `inbound_seq`** — the injection's optional `seq` clause : `ping.out = { … } seq 105` ; hand-written scenarios omit it and use the fixture counter) |
 | dated decisions (`l:*` transactions) | → | the `advance` script — **times rebased** (t₀ = first record, deltas preserved) ; the bridge sets the scenario's **`origin` = the slice's first civil instant**, so window/cron arithmetic is preserved (§5.3, execution-model §9.3) |
-| OUTBOUND `closed(response)` | → | generated mock branches : the partner's real replies, **guarded by the recorded request id** (`on in where meta.sys.id == 0x9f42… { out = … }`) — ordinary mock grammar, zero new machinery |
+| OUTBOUND `closed(response)` | → | generated mock branches: the external system's real replies, **guarded by the recorded request id** (`on in where meta.sys.id == 0x9f42… { out = … }`) — ordinary mock grammar, zero new machinery |
 | OUTBOUND `closed(timeout)` | → | `{ out = nothing }` (the chrono re-does its work) |
 | crash + recovery (visible in the journal) | → | `crash after <record>` / `restart` |
 
@@ -438,7 +438,7 @@ itself.
 
 ## 10. Experiment — the third pillar of the Lab
 
-An `experiment` runs the **real App** — real adapters, at least one real
+An `experiment` runs the **real App** — real Drivers, at least one real
 Connector boundary, real time — under an **external deployment profile** :
 
 ```rastok
@@ -464,14 +464,14 @@ Rules :
   bounded* time (the bound is a profile-level knob, deliberately not new
   DSL surface).
 - **An experiment, never a proof** : an experiment result is evidence
-  about *this run against these partners* — it is never promoted to a
+  about *this run against these external systems* — it is never promoted to a
   universal claim.
-- **Ingress reality — an open gap in the experiment contract** : an
+- **Inbound reality — an open gap in the experiment contract**: an
   injection is *defined* as a write at a source
   Connector's **output** (§2 Boundaries) — in an experiment this
-  exercises the graph but **bypasses the real inbound adapter**
+  exercises the graph but **bypasses the real Inbound Connector Driver**
   (listener, codec, auth, transport). Testing a real *inbound* boundary
-  therefore requires either a **partner-side driver contract** (the
+  therefore requires either an **external client Driver contract** (the
   scenario drives a real client against the real listener) or a
   **profile-specific lowering** of injections into real requests.
   Neither is specified yet ; until then an experiment's *real*
@@ -493,7 +493,7 @@ real experiment failure
 
 **The assurance chain, explicit** : a (future) Theorem proves the Graph
 *under the Connectors' declared contracts* (stdlib.md); an Experiment
-checks empirically that the real adapters and partners honor those
+checks empirically that the real Drivers and external systems honor those
 contracts. Neither layer replaces the other.
 
 ## 11. Theorem — declarative, reserved
@@ -537,11 +537,11 @@ Future results are **epistemically exact** — nothing else is admissible :
 | `proved under assumptions […]` | holds, hypotheses listed explicitly |
 | `refuted` | a **minimal counterexample**, exported as a replayable Scenario |
 | `no counterexample within bounds` | bounded challenge exhausted its bounds — NOT a proof |
-| `unknown` | an opaque frontier (guest program, LLM, partner) precisely identified |
+| `unknown` | an opaque frontier (guest program, LLM, external system) precisely identified |
 
 A bounded challenge never yields `proved` — unless the verifier establishes
 that the bounds cover the entire state space. An opaque guest program (jq,
-SQL) or Connector (`Process`, an LLM partner) can be : formalized ; abstracted by an
+SQL) or Connector (`Process`, an LLM service) can be: formalized; abstracted by an
 explicit contract ; treated as nondeterministic ; or left opaque with
 result `unknown`. An opaque block never produces a false `proved` — but a
 theorem may still be proved if it holds **for every possible output** of

@@ -5,7 +5,7 @@
 //!
 //! One deployed unit in, evidence out. `check` compiles and prints
 //! the semantic hash; `run` executes the App against the real
-//! adapters, stdin lines in, boundary envelopes out; `simulate` runs
+//! Drivers, stdin lines in, boundary envelopes out; `simulate` runs
 //! the unit's lab and reports every scenario. Diagnostics render in
 //! the rustc shape through [`rastok::render`].
 
@@ -128,7 +128,7 @@ fn check(paths: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Runs the App against the real adapters: each stdin line is one
+/// Runs the App against the real Drivers: each stdin line is one
 /// text submission; boundary envelopes print to stdout, root errors
 /// to stderr.
 fn run(paths: &[String]) -> ExitCode {

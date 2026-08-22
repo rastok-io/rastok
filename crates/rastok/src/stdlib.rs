@@ -3,8 +3,8 @@
 //!
 //! Governing rule: [`stdlib.md`] — the ten-case Connector template and
 //! the six contracts. Contracts are data: the checker validates
-//! declarations against these sheets without linking any adapter, and
-//! adapters implement them later. M0 ships the `Process` sheet with
+//! declarations against these sheets without linking any Driver, and
+//! Drivers implement them later. M0 ships the `Process` sheet with
 //! its job profile; the rest of the catalogue is declared so its names
 //! refuse explicitly rather than accidentally.
 //!
@@ -93,7 +93,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             direction: Direction::Output,
             unwired: UnwiredPolicy::RootSink,
             // One exact union is shared by the contract, v7 port table,
-            // completion gate and Process adapter.
+            // completion gate and Process Driver.
             ty: PortTypeRule::Fixed(PortDataType::ProcessExit),
         },
     ],
@@ -171,7 +171,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                 attributes: &[
                     AttributeSpec {
                         // Judged by `contract::byte_size` — the same
-                        // parser the adapter enforces the budget
+                        // parser the Driver enforces the budget
                         // with (D-2026-08-12-1, review round).
                         name: "max_output",
                         presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
@@ -216,7 +216,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
     }),
 };
 
-/// The catalogue names declared by `stdlib.md` whose adapters are not
+/// The catalogue names declared by `stdlib.md` whose Drivers are not
 /// in the M0 build.
 const DECLARED: &[&str] = &[
     "HttpServer",

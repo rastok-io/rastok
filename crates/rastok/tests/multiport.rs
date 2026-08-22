@@ -172,7 +172,7 @@ fn an_injection_at_an_unknown_input_refuses_by_name() {
 #[test]
 fn a_source_connector_injection_stays_deferred() {
     // Injection at a node keeps refusing BY NAME — it joins with the
-    // source adapters, not with this lift.
+    // source Drivers, not with this lift.
     assert!(
         refusal_code(MERGER_GRAPH, "join.a").contains(&"E-CHECK-DEFERRED"),
         "{:?}",
@@ -710,7 +710,7 @@ fn a_named_connector_edge_defers_by_name() {
         .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
-    // The Partner seam does not speak named connector ports yet:
+    // The OutboundConnectorDriver seam does not speak named connector ports yet:
     // wiring one refuses BY NAME instead of compiling into an
     // execution that silently answers on `out`.
     let source = "graph g : App {\n  connector probe : Probe {\n    effect = idempotent ; behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  . -> relay\n  relay.out -> probe.request\n  probe.response -> .\n}\n";
@@ -1483,7 +1483,7 @@ lab g {
 #[test]
 fn a_connector_reply_holds_the_destination_pin() {
     // Process(lines).out is text. An int destination is impossible
-    // independently of any partner outcome, so B2 rejects the edge
+    // independently of any driver outcome, so B2 rejects the edge
     // before a VM or journal exists.
     let source = r#"
 graph g : App {
@@ -2097,7 +2097,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
 
 #[test]
 fn a_mock_relay_keeps_the_struct_witness() {
-    // A mock is checked against the same connector pin as a real adapter.
+    // A mock is checked against the same connector pin as a real Driver.
     // Each JSONL line is one variant emission, never a batch carrier.
     let source = r#"
 graph g : App {
@@ -2217,7 +2217,7 @@ fn a_spawn_failure_cannot_cross_a_pin() {
 #[test]
 fn a_timeout_error_cannot_cross_a_pin() {
     // Scheduler failures have the same resolved variant port as
-    // partner failures, so this impossible edge is rejected statically.
+    // driver failures, so this impossible edge is rejected statically.
     let source = r#"
 graph g : App {
   connector shell : Process {

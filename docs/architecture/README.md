@@ -18,6 +18,9 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   Closing;
 - [`m1.4-exit-report.md`](m1.4-exit-report.md) for the R7 negative-space,
   identity-ledger, portability, and placement-neutrality evidence;
+- [`m1.5-connectors-backlog.md`](m1.5-connectors-backlog.md) for the ordered
+  landing of stable Connector contracts, role-based Drivers, static/runtime
+  binding and the first second-family proof with `File`;
 - [`build-order.md`](build-order.md) for the dependency-driven stage
   sequence used to build the M0 modules;
 - [`components.md`](components.md) for the component blueprint: owned

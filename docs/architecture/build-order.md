@@ -89,7 +89,7 @@ Rastok divergences, including error cases.
 
 `Unit` merge, resolution, and checking into `Hir` and `NodeDecl`.
 Guarded refusals become real here: jq and SQL guests, catalogue
-connectors without adapters, and unsupported aspect or Loop syntax all
+connectors without Drivers, and unsupported aspect or Loop syntax all
 produce explicit diagnostics.
 
 Exit: at least one stable diagnostic that covers a real semantic rule
@@ -120,12 +120,13 @@ Exit: ordering and close-once invariant tests, per
 
 ### Stage 10 — `boundary`
 
-The world-facing traits (`Ingress`, `Partner`, `Clock`, `Supervisor`)
+The world-facing traits (`InboundConnectorDriver`,
+`OutboundConnectorDriver`, `Clock`, `Supervisor`)
 and the journal-driven machinery: `InboundSubmission`,
 `IngressAuthority`, `Intent`, `Response`, `CallRef`, `Dispatcher`,
 `DatedEvent`, `LifecycleEvent`.
 
-Exit: dispatcher tests against a scripted partner, asserting journaled
+Exit: dispatcher tests against a scripted Outbound Driver, asserting journaled
 intents and correlated responses.
 
 ### Stage 11 — `runtime` core
@@ -146,7 +147,7 @@ Exit: end-to-end in-memory execution of the M0 fixture graph.
 
 ### Stage 13 — `connectors`
 
-The real `Process` adapter over a harmless deterministic child
+The real `Process` Driver over a harmless deterministic child
 process, behind the same intent and outcome types as the Lab path.
 
 Exit: the App integration test named in the M0 minimal evidence.
@@ -154,7 +155,7 @@ Exit: the App integration test named in the M0 minimal evidence.
 ### Stage 14 — `lab`
 
 Scenario parsing (`Scenario`, `Expectation`, `Quantifier`, `Fixture`)
-and controlled execution (`PartnerMock`, `VirtualClock`,
+and controlled execution (`MockOutboundConnectorDriver`, `VirtualClock`,
 `ScenarioRunner`) over the same `Vm`.
 
 Exit: a repeatable Lab scenario for the same graph, with a scripted

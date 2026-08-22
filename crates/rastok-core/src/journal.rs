@@ -12,7 +12,7 @@
 //!
 //! The journal is append-only: closing a call adds a new fact, it
 //! never rewrites the open one. Records are written by the runtime
-//! mechanics only; adapters and mocks supply events, never records.
+//! mechanics only; Drivers and mocks supply events, never records.
 //!
 //! [`delivery-semantics.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/delivery-semantics.md
 //! [`envelope.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/envelope.md
@@ -315,12 +315,12 @@ pub enum OutboundStatus {
     Abandoned,
 }
 
-/// What closed a call — the partner's completion or the timeout,
+/// What closed a call — the driver's completion or the timeout,
 /// exactly one. Completion outputs are still drafts; the connector's
 /// transaction builds their envelopes atomically.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Closure {
-    /// The partner answered with ordered outputs and one terminal exit.
+    /// The driver answered with ordered outputs and one terminal exit.
     Response(Completion),
     /// The scheduler's budget expired first.
     Timeout,

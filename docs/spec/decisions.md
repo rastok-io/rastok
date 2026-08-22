@@ -5,6 +5,92 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-22-1 — Contracts name capabilities; Drivers supply them by role
+
+M1.5 opens the connector catalogue with a second real family (`File`). The
+existing runtime could execute only a single `Process` implementation, whose
+binder rejected every other callable contract. That shortcut must not become
+the architecture: one validated plan may contain several connector families,
+and every callable or source connector must be bound before the VM and journal
+exist.
+
+**Vocabulary and responsibilities are separate.** A **Connector** is the Node
+declared by an RKG program. A **Contract** is its compiler-visible semantic
+sheet: stable identity, roles, ports, types, attributes, phases and lifecycle
+rules. A **Driver** is one runtime implementation of that contract. A
+**Binding** is the verified association between a plan Connector and the
+Driver instance that will serve it. `adapter` remains an ordinary English
+description at external-format boundaries; it is not the runtime interface
+name.
+
+There are exactly two runtime roles, named relative to the Rastok boundary:
+
+- an `InboundConnectorDriver` proposes external arrivals to the runtime;
+  sequence minting, route preparation, mailbox admission and journal commit
+  remain runtime authorities;
+- an `OutboundConnectorDriver` starts already-journaled calls, reports their
+  correlated completions and accepts cancellation requests. It never writes
+  records or manufactures scheduler outcomes.
+
+A contract may require either role or both. When it requires both, one
+Connector factory creates one shared implementation state exposed through
+both role interfaces; two unrelated instances may not silently divide its
+protocol. This two-role model covers Process job/service, File
+read/replace/watch, HTTP client/server, clocks, queues, databases and duplex
+transports without a third connector kind.
+
+**The plan names the contract, not the binary.** Every connector contract has
+a stable, versioned identifier whose canonical spelling is
+`<namespace>/<name>@<major>`, for example `rastok/process@1` and
+`rastok/file@1`. The identifier is semantic and travels in the categorical
+plan. A shared-library path, Rust crate version, feature flag, Host, Worker,
+or concrete Driver version is physical deployment data and never enters the
+plan, semantic hash or causal journal. Unknown identifiers, unavailable
+Drivers, missing required roles and duplicate matching registrations all
+refuse by typed diagnostics; selection is never first-registration-wins.
+
+The compiler owns a **ContractCatalog** containing declarative sheets. The
+runtime owns a **DriverRegistry** containing implementation factories. Their
+keys meet only in the binder, which produces one `RuntimeBindings` table for
+the validated plan before the first VM, journal record or external effect.
+The core VM routes by the binding and role; it does not match on Process,
+File or any future connector name. Registry-free plan validation continues to
+verify every transported contract fact independently of either registry.
+
+**Static composition is first-class; plugins remain compatible, not frozen.**
+M1.5 supports explicit static registration, so embedded, minimal standalone
+and full standalone builds may link different Driver sets. Cargo features may
+be convenience presets, but semantic registration remains explicit and
+testable. A future trusted `.so`/`.dll` loader or out-of-process plugin host
+must register through the same DriverRegistry and publish a contract manifest
+readable without executing plugin code. M1.5 deliberately does not freeze a
+Rust dynamic ABI or a native plugin lifecycle; the stable boundary today is
+the contract identifier plus the semantic Driver protocols.
+
+**Simulation substitutes Drivers, never the machine.** The Lab builds mock
+Inbound/Outbound Connector Drivers against the same contracts and bindings.
+The production VM still mints envelopes, applies backpressure, journals
+intent before effect, validates typed completions and closes calls. A mock may
+change external outcomes but may not weaken a contract or bypass binding.
+
+**`File` is the proof of the architecture, not a filesystem API.** The M1.5
+contract addresses exactly one file per invocation. `read` and atomic
+`replace` are the initial outbound modes. A path may name a file below
+existing directories, but the connector does not list directories, recurse,
+create parents or remove trees. A future single-file `watch` profile is an
+Inbound role and stays deferred until initial snapshot, replacement,
+deletion, overflow, resynchronization and acknowledgement semantics are
+decided. Directory traversal, if ever admitted, is a separate contract.
+
+The first implementation checkpoint only adopts this vocabulary and module
+boundary and therefore moves no semantic identity. The versioned identifier
+transport is a categorical plan-format change allocated to M1.5's next gate;
+it must use one explicit format bump and enumerate every semantic/package
+golden move before re-blessing. This decision supersedes the `Ingress` and
+`Partner` interface names and the single-Process binder as an architecture,
+while preserving their already-proved prepare/commit, correlation,
+completion, cancellation and conformance semantics.
+
 ## D-2026-08-18-1 — Nodes own instances; key, lifetime, and state scope are separate
 
 The unreleased named-partition model fused three independent concerns: a key

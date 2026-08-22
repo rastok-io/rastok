@@ -103,7 +103,7 @@ enum TypeRefusal {
 pub const E_EXPR: Code = Code::new("E-EXPR");
 /// Diagnostic for grammar admitted but outside the executable subset.
 pub const E_CHECK_DEFERRED: Code = Code::new("E-CHECK-DEFERRED");
-/// Diagnostic for a connector type without an adapter in this build.
+/// Diagnostic for a connector type without a Driver in this build.
 pub const E_CONNECTOR_UNAVAILABLE: Code = Code::new("E-CONNECTOR-UNAVAILABLE");
 /// Diagnostic for an attribute violating its contract sheet.
 pub const E_CONTRACT_ATTR: Code = Code::new("E-CONTRACT-ATTR");
@@ -1007,7 +1007,7 @@ impl Checker<'_, '_> {
                     // Source syntax predeclares conventional `in`; the
                     // checker materializes every used boundary row before
                     // HIR leaves. Source-Connector injection still joins with
-                    // the source adapters.
+                    // the source Drivers.
                     let ["app", name] = segments.as_slice() else {
                         self.deferred("an injection outside the app boundary", target.span);
                         continue;
@@ -2545,7 +2545,7 @@ impl Checker<'_, '_> {
                         E_CONNECTOR_UNAVAILABLE,
                         Phase::Check,
                         format!(
-                            "`{}` is declared in the catalogue; its adapter is not in this build",
+                            "`{}` is declared in the catalogue; its Driver is not in this build",
                             symbol.text
                         ),
                     )
@@ -6443,7 +6443,7 @@ impl Checker<'_, '_> {
         };
         // B7 makes the conventional terminal output executable beside the
         // ordinary in/out/err ports. Further contract-specific ports remain
-        // transported-but-deferred until their adapter slice exists.
+        // transported-but-deferred until their Driver slice exists.
         if target_node.is_some_and(|target| target.connector_trait().is_some())
             && !matches!(port_name, "in" | "out" | "err" | "exit")
         {
@@ -6590,7 +6590,7 @@ enum DataShape<'a> {
 
 /// The pin a node's port carries: its table entry when declared, or the
 /// instantiated Connector contract's effective pin. The HIR and raw-plan
-/// adapters call the same pure B2 resolver.
+/// HIR and raw-plan paths call the same pure B2 resolver.
 fn node_port_pin(node: &Node, port: &node::Port) -> Option<DataType> {
     node.ports
         .iter()

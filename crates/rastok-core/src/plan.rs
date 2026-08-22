@@ -192,7 +192,7 @@ impl ExecutionPlan {
 pub enum NodeKind {
     /// Pure graph-internal computation.
     Operator,
-    /// External-effect adapter under a contract sheet.
+    /// External-effect Driver under a contract sheet.
     Connector(ConnectorSpec),
 }
 

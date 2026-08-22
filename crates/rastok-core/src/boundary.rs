@@ -3,7 +3,7 @@
 //! Governing rule: [`delivery-semantics.md`]. In run, the world plays
 //! itself; in simulation, the lab plays the world — both through the
 //! same traits, and the journal keeps its world-half either way. The
-//! [`Dispatcher`] is the loop between the journal and the partners:
+//! [`Dispatcher`] is the loop between the journal and the outbound drivers:
 //! it drives open outbound calls and settles their closures; only a
 //! won closure ever becomes a VM input.
 //!
@@ -77,8 +77,8 @@ impl fmt::Display for CallRef {
 }
 
 /// The exact protocol bytes of a request, sealed: what the journal
-/// digests and what the partner receives are THE SAME VALUE — the
-/// machine prepares once, the adapter transports, nobody recomputes.
+/// digests and what the driver receives are THE SAME VALUE — the
+/// machine prepares once, the Driver transports, nobody recomputes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedRequest {
     bytes: alloc::vec::Vec<u8>,
@@ -272,7 +272,7 @@ pub fn process_exit_type() -> Result<DataType, TypeError> {
 
 /// The semantic terminal facts emitted by `Process`.
 ///
-/// This Rust enum is an adapter-side construction aid, not a second logical
+/// This Rust enum is a Driver-side construction aid, not a second logical
 /// type. [`ProcessExit::into_value`] is the sole projection into the ordinary
 /// canonical [`crate::value::Value::TaggedUnion`] carried by the `exit` port.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -315,7 +315,7 @@ pub enum ProcessExit {
 
 /// Why a bounded Process capture stopped.
 ///
-/// Keeping this closed beside [`ProcessExit`] prevents an adapter from
+/// Keeping this closed beside [`ProcessExit`] prevents a Driver from
 /// constructing an enum value outside the logical `ProcessExit` contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputOverflowReason {
@@ -335,7 +335,7 @@ impl OutputOverflowReason {
 }
 
 impl ProcessExit {
-    /// Projects the adapter fact into the ordinary canonical tagged value.
+    /// Projects the Driver fact into the ordinary canonical tagged value.
     #[must_use]
     pub fn into_value(self) -> crate::value::Value {
         use crate::value::{TaggedUnionValue, Value};
@@ -504,7 +504,7 @@ pub struct Intent {
     /// The calling connector node.
     pub connector_path: node::Path,
     /// The prepared request — the sealed digest is canonical (key
-    /// 43); the bytes ride along for the partner and are never
+    /// 43); the bytes ride along for the driver and are never
     /// themselves record material.
     pub prepared: PreparedRequest,
     /// Names the business operation; stable across retries. `None`
@@ -514,7 +514,7 @@ pub struct Intent {
     pub effect: node::EffectClass,
     /// Effective Connector attributes evaluated once in the selected
     /// instance bundle. They are derived from the sealed plan and instance
-    /// context; adapters consume them but never choose defaults or evaluate
+    /// context; Drivers consume them but never choose defaults or evaluate
     /// expressions.
     pub instance_settings: alloc::collections::BTreeMap<String, crate::value::Value>,
 }
@@ -527,23 +527,23 @@ impl Intent {
     }
 }
 
-/// One ordinary output proposed by an external partner.
+/// One ordinary output proposed by an external driver.
 ///
 /// This is deliberately not a journal [`crate::journal::Emission`]: the
-/// partner states a port and payload, while the VM alone mints envelopes,
+/// driver states a port and payload, while the VM alone mints envelopes,
 /// identities and the atomic transaction record.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PortOutput {
     /// Ordinary connector output port.
     pub port: node::Port,
-    /// Payload representation returned by the partner.
+    /// Payload representation returned by the driver.
     pub data: envelope::Data,
 }
 
 /// One admitted invocation's ordered boundary completion.
 ///
 /// Construction seals the terminal barrier: exactly one conventional
-/// `exit` output exists and it is last. Consequently neither a partner nor a
+/// `exit` output exists and it is last. Consequently neither a driver nor a
 /// mock can represent an output that follows the invocation's terminal fact.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Completion {
@@ -594,7 +594,7 @@ impl Completion {
     ///
     /// Separating the two frame vectors in this API makes the fixed ordering
     /// (`out*`, then `err*`, then terminal `exit`) structural and prevents an
-    /// adapter from accidentally placing lifecycle data on stderr.
+    /// Driver from accidentally placing lifecycle data on stderr.
     #[must_use]
     pub fn process(out: Vec<envelope::Data>, err: Vec<envelope::Data>, exit: ProcessExit) -> Self {
         let mut outputs = Vec::with_capacity(out.len().saturating_add(err.len()).saturating_add(1));
@@ -650,7 +650,7 @@ impl fmt::Display for CompletionError {
 
 impl core::error::Error for CompletionError {}
 
-/// Protocol-correlated partner answer. A partner answers or stays
+/// Protocol-correlated driver answer. A driver answers or stays
 /// silent — never a timeout: timeouts are the scheduler's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Response {
@@ -661,7 +661,7 @@ pub struct Response {
     pub completion: Completion,
 }
 
-/// Judges a partner's completion against the calling connector's resolved
+/// Judges a driver's completion against the calling connector's resolved
 /// contract before it may become a causal fact. The dispatcher only asks.
 pub trait CompletionGate {
     /// `Ok` to admit; `Err(reason)` to refuse the closure.
@@ -845,16 +845,16 @@ pub enum LifecycleEvent {
 
 /// Supplies inbound submissions under backpressure: bounded, births
 /// drafts and never envelopes — a root cannot pre-exist its sequence.
-pub trait Ingress {
+pub trait InboundConnectorDriver {
     /// The next submission, if one is waiting.
     fn next(&mut self) -> Option<InboundSubmission>;
 }
 
-/// Starts external calls and supplies their answers. A partner
+/// Starts external calls and supplies their answers. A driver
 /// answers or stays silent — never a timeout and never an unknown
 /// outcome: budgets belong to the scheduler, triage to the recovery
 /// fold. Correlation uses the connector's own protocol.
-pub trait Partner {
+pub trait OutboundConnectorDriver {
     /// Withdraws an open call: the machine closed it (a won timeout)
     /// and any in-flight work should stop. Default: nothing — a
     /// scripted world has nothing to stop.
@@ -928,15 +928,15 @@ impl fmt::Display for DispatchError {
 
 impl core::error::Error for DispatchError {}
 
-/// The loop between the journal and the partners. It starts every
+/// The loop between the journal and the outbound drivers. It starts every
 /// journaled open call exactly once — journal-before-effect: the
-/// record always exists before the partner hears — and settles
+/// record always exists before the driver hears — and settles
 /// closures through the journal's close-once race into routable
 /// [`BoundaryEvent`]s. The VM owns everything after: the connector's
 /// transaction builds the output envelopes; the dispatcher never
-/// mints one. Mocks replace the partner, never this bookkeeping.
+/// mints one. Mocks replace the driver, never this bookkeeping.
 ///
-/// Restart discipline: re-calling a partner is a recovery decision
+/// Restart discipline: re-calling a driver is a recovery decision
 /// (idempotent or keyed calls may be re-called, a compensable call
 /// without a key may not — that triage belongs to the recovery fold).
 /// A dispatcher over an existing journal is therefore built with
@@ -969,7 +969,7 @@ impl Dispatcher {
     }
 
     /// Drives one round: starts newly journaled open calls, then
-    /// settles the partner's answers through the close-once race.
+    /// settles the driver's answers through the close-once race.
     ///
     /// # Errors
     ///
@@ -979,7 +979,7 @@ impl Dispatcher {
     pub fn pump(
         &mut self,
         journal: &mut dyn Journal,
-        partner: &mut dyn Partner,
+        driver: &mut dyn OutboundConnectorDriver,
         gate: &dyn CompletionGate,
     ) -> Result<PumpBatch, DispatchError> {
         // Start phase: every open call not yet started.
@@ -991,13 +991,13 @@ impl Dispatcher {
                 .find_envelope(intent.emitting_id)
                 .ok_or(DispatchError::MissingRequest(intent.call_ref))?;
             self.started.insert(intent.call_ref);
-            partner.start(&intent, &request);
+            driver.start(&intent, &request);
         }
         // Settle phase: won closures become routable events; losers
         // and strays stay visible.
         let mut batch = PumpBatch::default();
         let open = journal.open_calls();
-        for response in partner.events() {
+        for response in driver.events() {
             let Some(intent) = open
                 .iter()
                 .find(|intent| intent.call_ref == response.call_ref)
@@ -1091,7 +1091,7 @@ mod tests {
         assert_eq!(authority.replica(), 0);
     }
 
-    /// A scripted partner: records what it was asked to start,
+    /// A scripted driver: records what it was asked to start,
     /// answers from a script.
     #[derive(Default)]
     struct Scripted {
@@ -1099,7 +1099,7 @@ mod tests {
         replies: Vec<Response>,
     }
 
-    impl Partner for Scripted {
+    impl OutboundConnectorDriver for Scripted {
         fn start(&mut self, intent: &Intent, request: &Envelope) {
             self.started.push((intent.clone(), request.clone()));
         }
@@ -1141,44 +1141,44 @@ mod tests {
     }
 
     #[test]
-    fn the_record_exists_before_the_partner_hears() {
+    fn the_record_exists_before_the_driver_hears() {
         let (mut journal, intent) = seeded_journal();
-        let mut partner = Scripted::default();
+        let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut partner, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
-        assert_eq!(partner.started.len(), 1);
-        assert_eq!(partner.started[0].0.call_ref, intent.call_ref);
+        assert_eq!(driver.started.len(), 1);
+        assert_eq!(driver.started[0].0.call_ref, intent.call_ref);
         // A second pump never re-starts an already-started call.
         dispatcher
-            .pump(&mut journal, &mut partner, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
-        assert_eq!(partner.started.len(), 1);
+        assert_eq!(driver.started.len(), 1);
     }
 
     #[test]
     fn a_resumed_dispatcher_re_calls_nothing() {
         let (mut journal, _) = seeded_journal();
-        let mut partner = Scripted::default();
+        let mut driver = Scripted::default();
         // Restart over an existing journal: the open call counts as
         // started; re-calls are the recovery fold's decision.
         let mut dispatcher = Dispatcher::resume(&journal);
         dispatcher
-            .pump(&mut journal, &mut partner, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
-        assert!(partner.started.is_empty());
+        assert!(driver.started.is_empty());
     }
 
     #[test]
     fn won_closures_become_routable_events() {
         let (mut journal, intent) = seeded_journal();
-        let mut partner = Scripted::default();
+        let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut partner, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
-        partner.replies = vec![
+        driver.replies = vec![
             Response {
                 call_ref: intent.call_ref,
                 completion: Completion::process(
@@ -1204,7 +1204,7 @@ mod tests {
             },
         ];
         let batch = dispatcher
-            .pump(&mut journal, &mut partner, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
         assert_eq!(batch.events.len(), 1, "only the won closure feeds the VM");
         assert_eq!(batch.discarded.len(), 1, "the loser stays visible");
@@ -1230,12 +1230,12 @@ mod tests {
     #[test]
     fn a_completion_keeps_stderr_separate_from_its_exit() {
         let (mut journal, intent) = seeded_journal();
-        let mut partner = Scripted::default();
+        let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
         dispatcher
-            .pump(&mut journal, &mut partner, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
-        partner.replies = vec![Response {
+        driver.replies = vec![Response {
             call_ref: intent.call_ref,
             completion: Completion::process(
                 vec![],
@@ -1247,7 +1247,7 @@ mod tests {
             ),
         }];
         let batch = dispatcher
-            .pump(&mut journal, &mut partner, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
         assert_eq!(batch.events.len(), 1);
         let outputs = batch.events[0].completion.outputs();
@@ -1259,9 +1259,9 @@ mod tests {
     #[test]
     fn an_uncorrelated_answer_is_a_visible_fault() {
         let (mut journal, _) = seeded_journal();
-        let mut partner = Scripted::default();
+        let mut driver = Scripted::default();
         let mut dispatcher = Dispatcher::new();
-        partner.replies = vec![Response {
+        driver.replies = vec![Response {
             call_ref: ids::call_ref(
                 ids::delivery_ref("x.out>ghost.in", envelope::Id::from_bytes([9; 16])),
                 &[0; 32],
@@ -1272,7 +1272,7 @@ mod tests {
             }),
         }];
         let batch = dispatcher
-            .pump(&mut journal, &mut partner, &OpenGate)
+            .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
         assert!(batch.events.is_empty());
         assert_eq!(batch.uncorrelated.len(), 1, "correlation faults surface");

@@ -237,10 +237,10 @@ package "stdlib — standard catalogue instances" as P_STD {
 }
 
 package "boundary — contracts with the external world" as P_BND {
-  interface Ingress <<trait>>
-  Ingress : supplies inbound submissions under backpressure
-  interface Partner <<trait>>
-  Partner : starts calls, answers or stays silent, cancels on demand
+  interface InboundConnectorDriver <<trait>>
+  InboundConnectorDriver : supplies inbound submissions under backpressure
+  interface OutboundConnectorDriver <<trait>>
+  OutboundConnectorDriver : starts calls, answers or stays silent, cancels on demand
   interface CompletionGate <<trait>>
   CompletionGate : admits every typed port draft before call closure
   interface Clock <<trait>>
@@ -314,7 +314,7 @@ package "journal — durable causal history and recovery model" as P_J {
   enum CloseVerdict <<enum>>
   CloseVerdict : won or already-closed result
   enum Closure <<enum>>
-  Closure : partner completion or machine timeout
+  Closure : driver completion or machine timeout
   class MemJournal <<struct>>
   MemJournal : current in-memory journal implementation
   enum Record <<enum>>
@@ -338,18 +338,18 @@ package "golden — canonical projection, seal, and diff" as P_GOLD {
   GOLD_API : project, seal, diff over shared canonical CBOR
 }
 
-package "connectors — concrete external-effect adapters" as P_CONN {
+package "connectors — concrete external-effect Drivers" as P_CONN {
   class Process <<struct>>
-  Process : pre-bound async process adapter; out*, err*, then typed exit
+  Process : pre-bound async process Driver; out*, err*, then typed exit
   class ProcessBindError <<struct>>
   ProcessBindError : refuses an unserved or unresolved plan before VM boot
   class "HttpServer, HttpClient, Clock,\nCalendar, Memory, File" as CATALOGUE <<guarded>>
-  CATALOGUE : declared names — sheets and adapters land by slice
+  CATALOGUE : declared names — sheets and Drivers land by slice
 }
 
-package "conformance — adapter contract harness" as P_CONF {
-  interface AdapterFactory <<trait>>
-  AdapterFactory : builds the adapter behind the production Partner seam
+package "conformance — Driver contract harness" as P_CONF {
+  interface OutboundConnectorDriverFactory <<trait>>
+  OutboundConnectorDriverFactory : builds the Driver behind the production OutboundConnectorDriver seam
   class Profile <<struct>>
   Profile : provocations and declared proof surface
   class Report <<struct>>
@@ -418,13 +418,13 @@ P_J ..> P_IDENT : seals instance references
 P_GOLD ..> P_J : projects
 P_GOLD ..> P_CBOR : encodes / decodes
 P_GOLD ..> P_IDENT : tagged values
-P_CONN ..> P_BND : implements Partner
+P_CONN ..> P_BND : implements OutboundConnectorDriver
 P_CONN ..> P_PLAN : binds validated plan
-P_CONF ..> P_BND : exercises Partner
+P_CONF ..> P_BND : exercises OutboundConnectorDriver
 P_CONF ..> P_CONTRACT : reads contract
 P_LAB ..> P_COMP : uses
 P_LAB ..> P_RT : drives the Vm
-P_LAB ..> P_BND : mocks Partner
+P_LAB ..> P_BND : mocks OutboundConnectorDriver
 P_LAB ..> P_J : uses
 P_CLI ..> P_COMP : uses
 P_CLI ..> P_RT : uses

@@ -1,6 +1,6 @@
 //! The contract metamodel and the effective sheet (D-2026-08-12-1):
 //! presence, profiles, defaults injected before the hash, the plan
-//! carrying effective attributes, and the adapter consuming resolved
+//! carrying effective attributes, and the Driver consuming resolved
 //! values only.
 
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -706,7 +706,7 @@ fn mode_service_defers_before_validating_its_attributes() {
     );
 }
 
-/// Mutates the compiled plan's connector spec and BINDS the adapter:
+/// Mutates the compiled plan's connector spec and BINDS the Driver:
 /// every configuration defect must refuse at `Process::try_new` —
 /// before any journaled open — never as a `SpawnFailed`
 /// impersonating the OS (D-2026-08-12-1, review rounds).
@@ -784,11 +784,10 @@ fn the_binding_rechecks_optional_process_settings() {
 
 #[test]
 fn a_callable_foreign_connector_refuses_at_bind() {
-    // The review's blocker: in a single-Partner world, a CALLABLE
-    // connector of another contract would receive its intents at
-    // the Process adapter and strand them open — the binding
-    // refuses it by name. A PURE SOURCE (no incoming edge) is
-    // merely skipped: nothing will ever call it.
+    // Before the M1.5 global binder, a CALLABLE connector of another contract
+    // would receive its intents at the Process-only Driver and strand them
+    // open — the binding refuses it by name. A PURE SOURCE (no incoming edge)
+    // is merely skipped: nothing will ever call it.
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
@@ -824,7 +823,7 @@ fn a_callable_foreign_connector_refuses_at_bind() {
         .expect_err("the callable foreign connector refuses")
         .to_string();
     assert!(
-        message.contains("callable `Custom` connector has no adapter"),
+        message.contains("Process-only binding cannot serve callable `Custom`"),
         "{message}"
     );
     // Sever every edge DELIVERING to the connector: a pure source.
@@ -849,7 +848,7 @@ fn a_callable_foreign_connector_refuses_at_bind() {
         "a pure foreign source binds as a no-op"
     );
     // An unknown codec cannot even reach the binding: the plan
-    // validator refuses it first (the adapter's exhaustive match is
+    // validator refuses it first (the Driver's exhaustive match is
     // the belt BEHIND that door).
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
@@ -1052,7 +1051,7 @@ fn tag_words_serve_as_choice_words_on_another_sheet() {
 fn max_output_is_judged_at_check_not_at_spawn() {
     // The ByteSize domain closes the review's false green: a
     // non-size refuses at CHECK, through the same parser the
-    // adapter enforces the budget with.
+    // Driver enforces the budget with.
     let source = process_graph(&format!("{FULL}\n    max_output = \"banana\""));
     refusal_with(&source, "E-CONTRACT-ATTR", "ByteSize");
     assert_eq!(rastok::contract::byte_size("8MiB"), Some(8 * 1024 * 1024));

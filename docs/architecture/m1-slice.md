@@ -78,7 +78,8 @@ step touches `vm.rs` once.
    at emission-build time, and the Registry validates sheets at the
    door and is never consulted past resolution; `2aa50f4` fourth
    pass — the frontiers: boundary outputs carry their port, named
-   connector edges defer by name until the Partner seam speaks
+   connector edges defer by name until the then-named `Partner` seam (now
+   `OutboundConnectorDriver`, D-2026-08-22-1) speaks
    them, one pre-commit choke point judges every emission — including the
    then-synthesized errors — against every pin of its fan-out,
    the builders are physically STRUCTS (tag 17) across all three
@@ -272,7 +273,7 @@ step touches `vm.rs` once.
    value constructor, inserted structural-union wrapping once in checked HIR,
    and removed the special `ErrEmit` syntax/HIR path: `err` now emits like
    every other port. B7 has removed `TypedError` and the
-   success/failure-only reply split: the Partner returns one ordered
+   success/failure-only reply split: the Outbound Connector Driver returns one ordered
    completion, the VM commits all its ordinary port outputs atomically, and
    `Process(job)` frames `out*`/`err*` before a final typed `exit`. B8 now
    transports the complete canonical type/value/expression registry, exact
@@ -326,18 +327,17 @@ step touches `vm.rs` once.
    a named input; never a silent pick. Named payload witnesses remain
    independently lazy, and Registry-free presence validation forces an
    explicit metadata pick before a required downstream read.
-6. **`File` connector** — the first new adapter on the conformance
-   harness: the half-day claim gets its first real measurement, with
-   no network in the way. OPENS WITH the global binder decision
-   (D-2026-08-12-1, review rounds): today's world is single-Partner
-   (`Process::try_new` refuses any callable connector it does not
-   serve), and a second adapter needs the `BoundExecutionPlan`
-   router. Its obligations are BY ROLE, not only by call: an
-   outbound CALLER binds to exactly one Partner, an inbound SOURCE
-   (an `HttpServer`) binds to exactly one ingress provider, and a
-   both-roles connector owes both — bind → VM → journal, so nothing
-   opens against a world that cannot execute it. Design to
-   arbitrate at this item's start.
+6. **M1.5 — connector Drivers and `File`** — the first new real connector
+   family on the conformance harness, governed by
+   [D-2026-08-22-1](../spec/decisions.md) and the ordered
+   [M1.5 backlog](m1.5-connectors-backlog.md). A stable versioned contract ID
+   joins a compiler `ContractCatalog` to a physical `DriverRegistry`; one
+   pre-journal binder proves every required `InboundConnectorDriver` and
+   `OutboundConnectorDriver` role. Static registration is first-class and
+   future plugin loaders must feed the same registry. `File` proves one-file
+   `read` and atomic `replace`; directory traversal and single-file `watch`
+   remain named limits. The half-day claim is measured separately from the
+   one-time binder tax.
 7. **`HttpClient`** — outbound calls under declared budgets, on the
    harness. Decision point before code: hand-rolled bounded HTTP/1.1
    versus a vetted dependency, and whether TLS enters M1 at all (the

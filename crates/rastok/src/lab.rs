@@ -1,15 +1,15 @@
 //! The scenario runner — the graph's possible worlds, executed.
 //!
 //! A scenario is the world's half of a journal, written in advance:
-//! injections play the ingress, mocks play the partners, `advance`
+//! injections play the ingress, mocks play the outbound drivers, `advance`
 //! plays time. Everything runs on the same [`Vm`] a production run
-//! uses — the mock replaces the partner, never the bookkeeping — so
+//! uses — the mock replaces the driver, never the bookkeeping — so
 //! a green scenario is a statement about the machine, not about a
 //! test double.
 
 use crate::boundary::{
-    Completion, Draft, InboundSubmission, IngressAuthority, Intent, Partner, PortOutput, Response,
-    SubmissionSequence,
+    Completion, Draft, InboundSubmission, IngressAuthority, Intent, OutboundConnectorDriver,
+    PortOutput, Response, SubmissionSequence,
 };
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
@@ -95,7 +95,7 @@ fn run_scenario(
     }
     let mut journal = MemJournal::new(graph_version);
     let mut vm = Vm::boot(plan, graph_version);
-    let mut partner = MockPartner {
+    let mut driver = MockOutboundConnectorDriver {
         mocks,
         pending: Vec::new(),
         faults: Vec::new(),
@@ -124,7 +124,7 @@ fn run_scenario(
                             failures.push(format!("the injection was refused: {error}"));
                             continue;
                         }
-                        settle(&mut vm, &mut journal, &mut partner, &mut failures);
+                        settle(&mut vm, &mut journal, &mut driver, &mut failures);
                     }
                     Err(message) => failures.push(message),
                 }
@@ -132,10 +132,10 @@ fn run_scenario(
             ScenarioStep::Advance { nanos } => {
                 window_start = vm.observations().len();
                 let target = vm.now().saturating_add(*nanos);
-                if let Err(error) = vm.advance(&mut journal, &mut partner, target) {
+                if let Err(error) = vm.advance(&mut journal, &mut driver, target) {
                     failures.push(format!("the advance faulted: {error}"));
                 }
-                settle(&mut vm, &mut journal, &mut partner, &mut failures);
+                settle(&mut vm, &mut journal, &mut driver, &mut failures);
             }
             ScenarioStep::Expect(expectation) => {
                 if let Some(message) =
@@ -163,7 +163,7 @@ fn run_scenario(
 fn settle(
     vm: &mut Vm<'_>,
     journal: &mut MemJournal,
-    partner: &mut MockPartner<'_>,
+    driver: &mut MockOutboundConnectorDriver<'_>,
     failures: &mut Vec<String>,
 ) {
     let mut rested = false;
@@ -172,14 +172,14 @@ fn settle(
             failures.push(format!("a step faulted: {error}"));
             return;
         }
-        let report = match vm.pump(journal, partner) {
+        let report = match vm.pump(journal, driver) {
             Ok(report) => report,
             Err(error) => {
                 failures.push(format!("the boundary round faulted: {error}"));
                 return;
             }
         };
-        failures.append(&mut partner.faults);
+        failures.append(&mut driver.faults);
         for (response, reason) in &report.rejected {
             failures.push(format!(
                 "a reply to {:?} was refused before closure: {reason}",
@@ -345,17 +345,17 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
     }
 }
 
-/// The scripted partner: answers journaled intents from mock
+/// The scripted driver: answers journaled intents from mock
 /// branches — first match in text order — and reports every
 /// uncovered call loudly. Deterministic and stateless, a pure
 /// function of the request.
-struct MockPartner<'lab> {
+struct MockOutboundConnectorDriver<'lab> {
     mocks: BTreeMap<node::Path, &'lab Mock>,
     pending: Vec<Response>,
     faults: Vec<String>,
 }
 
-impl MockPartner<'_> {
+impl MockOutboundConnectorDriver<'_> {
     fn answer(&mut self, intent: &Intent, request: &Envelope) -> Option<Completion> {
         let Some(mock) = self.mocks.get(&intent.connector_path) else {
             self.faults.push(format!(
@@ -564,7 +564,7 @@ impl MockPartner<'_> {
     }
 }
 
-impl Partner for MockPartner<'_> {
+impl OutboundConnectorDriver for MockOutboundConnectorDriver<'_> {
     fn start(&mut self, intent: &Intent, request: &Envelope) {
         if let Some(completion) = self.answer(intent, request) {
             self.pending.push(Response {
@@ -585,7 +585,7 @@ mod tests {
     use crate::compiler::compile;
     use crate::contract::Registry;
 
-    /// Drives the scripted partner directly with an OPAQUE request:
+    /// Drives the scripted driver directly with an OPAQUE request:
     /// the branch and statement structure decides the demand, so a
     /// pre-scan of every handler would fail both cases below.
     fn opaque_answer(mock_body: &str) -> (Option<Completion>, Vec<String>) {
@@ -601,7 +601,7 @@ mod tests {
         let path = node::Path::new(["echo"]).unwrap();
         let mut mocks: BTreeMap<node::Path, &crate::compiler::hir::Mock> = BTreeMap::new();
         mocks.insert(path.clone(), mock);
-        let mut partner = MockPartner {
+        let mut driver = MockOutboundConnectorDriver {
             mocks,
             pending: Vec::new(),
             faults: Vec::new(),
@@ -625,8 +625,8 @@ mod tests {
             effect: node::EffectClass::Idempotent,
             instance_settings: BTreeMap::new(),
         };
-        let outcome = partner.answer(&intent, &request);
-        (outcome, partner.faults)
+        let outcome = driver.answer(&intent, &request);
+        (outcome, driver.faults)
     }
 
     #[test]
@@ -718,7 +718,7 @@ lab m0_probe {
       expect nothing app.err
     }
 
-    scenario silence_expires "a silent partner times out" {
+    scenario silence_expires "a silent driver times out" {
       mock echo {
         on in { out = nothing }
       }

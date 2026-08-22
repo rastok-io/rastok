@@ -19,7 +19,7 @@
 
 use crate::boundary::{
     BoundaryEvent, CallRef, ClosingDeadline, Completion, DatedPayload, Dispatcher,
-    InboundSubmission, InstanceDeadline, Intent, Partner, ProcessExit, Response,
+    InboundSubmission, InstanceDeadline, Intent, OutboundConnectorDriver, ProcessExit, Response,
 };
 use crate::datatype::DataType;
 use crate::envelope::{Data, Envelope, Id};
@@ -392,7 +392,7 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
         };
         if spec.contract != "Process" {
             return Err(format!(
-                "the active Partner does not serve `{}` completions",
+                "the active OutboundConnectorDriver does not serve `{}` completions",
                 spec.contract
             ));
         }
@@ -476,7 +476,7 @@ pub struct Observed {
 }
 
 /// One won closure and the trigger its completion transaction fires
-/// under: `p:in` for a partner answer, `l:timeout` for an expired
+/// under: `p:in` for a driver answer, `l:timeout` for an expired
 /// budget.
 #[derive(Debug, Clone, PartialEq)]
 struct SettledEntry {
@@ -878,22 +878,22 @@ impl<'plan> Vm<'plan> {
     pub fn pump(
         &mut self,
         journal: &mut dyn Journal,
-        partner: &mut dyn Partner,
+        driver: &mut dyn OutboundConnectorDriver,
     ) -> Result<PumpReport, VmError> {
         let mut report = core::mem::take(&mut self.buffered_pump);
-        report.append(self.poll_partner(journal, partner)?);
+        report.append(self.poll_outbound_driver(journal, driver)?);
         Ok(report)
     }
 
-    fn poll_partner(
+    fn poll_outbound_driver(
         &mut self,
         journal: &mut dyn Journal,
-        partner: &mut dyn Partner,
+        driver: &mut dyn OutboundConnectorDriver,
     ) -> Result<PumpReport, VmError> {
         let gate = PlanGate { plan: self.plan };
         let batch = self
             .dispatcher
-            .pump(journal, partner, &gate)
+            .pump(journal, driver, &gate)
             .map_err(VmError::Dispatch)?;
         let settled = batch.events.len();
         let in_port =
@@ -914,10 +914,10 @@ impl<'plan> Vm<'plan> {
     /// Advances the virtual date to `target`, firing each armed
     /// budget in expiry order — the discrete advance: time moves in
     /// jumps, and the machine drains between them. Only the machine
-    /// mints a timeout — a partner answers or stays silent, never
+    /// mints a timeout — a driver answers or stays silent, never
     /// times itself out. A budget runs from the DELIVERY, so an
     /// expiry resolves wherever the obligation lives: a call still
-    /// open closes with a Timeout fact (and the partner is told to
+    /// open closes with a Timeout fact (and the driver is told to
     /// cancel the in-flight work); a delivery still queued follows
     /// the call-closed rule — its call opens and closes at the
     /// expiry, back to back; an obligation already settled loses the
@@ -929,7 +929,7 @@ impl<'plan> Vm<'plan> {
     pub fn advance(
         &mut self,
         journal: &mut dyn Journal,
-        partner: &mut dyn Partner,
+        driver: &mut dyn OutboundConnectorDriver,
         target: i64,
     ) -> Result<(), VmError> {
         // Ready work at the current logical instant precedes any future
@@ -946,7 +946,7 @@ impl<'plan> Vm<'plan> {
                     ..
                 }
             ) {
-                let report = self.poll_partner(journal, partner)?;
+                let report = self.poll_outbound_driver(journal, driver)?;
                 self.buffered_pump.append(report);
                 self.drain(journal)?;
                 polled_at_settlement = true;
@@ -963,7 +963,7 @@ impl<'plan> Vm<'plan> {
             // never between simultaneous events — a same-instant
             // budget must not see the world advanced by its sibling.
             // A failed expiry stays armed: reserve, resolve, ack.
-            self.expire(journal, partner, payload)?;
+            self.expire(journal, driver, payload)?;
             self.scheduler.ack(key);
             while let Some((sibling_key, sibling)) = self.scheduler.peek_due(key.0) {
                 if !polled_at_settlement
@@ -975,7 +975,7 @@ impl<'plan> Vm<'plan> {
                         }
                     )
                 {
-                    let report = self.poll_partner(journal, partner)?;
+                    let report = self.poll_outbound_driver(journal, driver)?;
                     self.buffered_pump.append(report);
                     self.drain(journal)?;
                     polled_at_settlement = true;
@@ -987,11 +987,11 @@ impl<'plan> Vm<'plan> {
                         ..
                     }
                 );
-                self.expire(journal, partner, sibling)?;
+                self.expire(journal, driver, sibling)?;
                 self.scheduler.ack(sibling_key);
             }
             if saw_drain {
-                let report = self.poll_partner(journal, partner)?;
+                let report = self.poll_outbound_driver(journal, driver)?;
                 self.buffered_pump.append(report);
             }
             self.drain(journal)?;
@@ -1004,7 +1004,7 @@ impl<'plan> Vm<'plan> {
     fn expire(
         &mut self,
         journal: &mut dyn Journal,
-        partner: &mut dyn Partner,
+        driver: &mut dyn OutboundConnectorDriver,
         payload: DatedPayload,
     ) -> Result<(), VmError> {
         let (connector, edge, delivery, instance) = match payload {
@@ -1045,7 +1045,7 @@ impl<'plan> Vm<'plan> {
                 cause,
                 deadline,
             } => {
-                self.expire_closing(journal, partner, &instance, cause, deadline)?;
+                self.expire_closing(journal, driver, &instance, cause, deadline)?;
                 return Ok(());
             }
         };
@@ -1069,7 +1069,7 @@ impl<'plan> Vm<'plan> {
                 crate::journal::CloseVerdict::AlreadyClosed => return Ok(()),
                 crate::journal::CloseVerdict::Won => {}
             }
-            partner.cancel(&call_ref);
+            driver.cancel(&call_ref);
             let intent = journal
                 .find_call(&call_ref)
                 .unwrap_or_else(|| unreachable!("a closed call is journaled"));
@@ -1612,7 +1612,7 @@ impl<'plan> Vm<'plan> {
     fn expire_closing(
         &mut self,
         journal: &mut dyn Journal,
-        partner: &mut dyn Partner,
+        driver: &mut dyn OutboundConnectorDriver,
         reference: &InstanceRef,
         cause: Id,
         deadline: ClosingDeadline,
@@ -1656,7 +1656,7 @@ impl<'plan> Vm<'plan> {
                     .map(|(call_ref, _)| *call_ref)
                     .collect();
                 for call_ref in calls {
-                    partner.cancel(&call_ref);
+                    driver.cancel(&call_ref);
                 }
             }
             ClosingDeadline::Settlement => {
@@ -2342,7 +2342,7 @@ impl<'plan> Vm<'plan> {
 
     /// A delivery reaching a connector opens its outbound call:
     /// journal-before-effect — the open fact exists before any
-    /// partner hears — and the request is held until the call
+    /// driver hears — and the request is held until the call
     /// settles, its mailbox claimed for the whole wait: the worker is
     /// free, the node is not.
     fn open_call(
@@ -2366,7 +2366,7 @@ impl<'plan> Vm<'plan> {
         };
         let emitting_id = delivery.envelope.meta().sys().id();
         // The machine prepares ONCE, in the boundary vocabulary: the
-        // sealed digest and the bytes the partner will receive are
+        // sealed digest and the bytes the driver will receive are
         // one value carried by the intent — nobody recomputes. An
         // unframeable request completes on `exit` before any open
         // fact exists: stderr is not a lifecycle channel.
@@ -2463,7 +2463,7 @@ impl<'plan> Vm<'plan> {
     ///
     /// Pin conformance runs at TWO levels, deliberately: construction checks
     /// ordinary Operator emissions, while [`CompletionGate`] refuses an
-    /// invalid partner draft before closure. THIS final, non-recursive level
+    /// invalid driver draft before closure. THIS final, non-recursive level
     /// catches a violated plan/runtime invariant; it cannot manufacture
     /// another emission on the same bad wiring, so NOTHING commits.
     fn validate_and_prepare_emissions(

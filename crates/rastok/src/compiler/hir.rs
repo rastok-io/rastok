@@ -87,7 +87,7 @@ pub struct Val {
 pub enum NodeRole {
     /// Pure graph-internal computation.
     Operator,
-    /// External-effect adapter under a contract sheet.
+    /// External-effect Driver under a contract sheet.
     Connector {
         /// The trait symbol (`Process`).
         trait_name: String,
@@ -350,7 +350,7 @@ pub struct Simulation {
     pub scenarios: Vec<Scenario>,
 }
 
-/// A scripted stand-in for one connector: the partner replaced, the
+/// A scripted stand-in for one connector: the driver replaced, the
 /// bookkeeping untouched.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mock {

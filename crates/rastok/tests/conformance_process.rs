@@ -3,13 +3,16 @@
 #![allow(clippy::expect_used)]
 //! `Process` re-expressed on the conformance harness: the profile is
 //! the whole suite — probes, provocations, and the stated gap — and
-//! the battery holds the adapter to the ten contract cases. A second
-//! test turns the harness against a lying adapter to prove the
+//! the battery holds the Driver to the ten contract cases. A second
+//! test turns the harness against a lying Driver to prove the
 //! battery itself bites.
 
-use rastok::boundary::{Completion, Intent, Partner, PortOutput, ProcessExit, Response};
+use rastok::boundary::{
+    Completion, Intent, OutboundConnectorDriver, PortOutput, ProcessExit, Response,
+};
 use rastok::conformance::{
-    AdapterFactory, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
+    InterleaveProbe, OutboundConnectorDriverFactory, Profile, Provocation, assert_conformant,
+    verify,
 };
 use rastok::connectors::Process;
 use rastok::contract::Registry;
@@ -159,8 +162,11 @@ graph pair : App {
 
 struct ProcessFactory;
 
-impl AdapterFactory for ProcessFactory {
-    fn make<'plan>(&mut self, plan: &'plan ValidatedExecutionPlan) -> Box<dyn Partner + 'plan> {
+impl OutboundConnectorDriverFactory for ProcessFactory {
+    fn make<'plan>(
+        &mut self,
+        plan: &'plan ValidatedExecutionPlan,
+    ) -> Box<dyn OutboundConnectorDriver + 'plan> {
         Box::new(Process::try_new(plan).expect("the plan binds"))
     }
 }
@@ -200,7 +206,7 @@ fn process_profile() -> Profile {
             ),
             (
                 "OutcomeUnknown",
-                "bounded Closing, not the Process adapter, mints this case after \
+                "bounded Closing, not the Process Driver, mints this case after \
                  cancellation remains unobserved through settlement",
             ),
         ],
@@ -240,7 +246,7 @@ struct Liar {
     pending: Vec<Response>,
 }
 
-impl Partner for Liar {
+impl OutboundConnectorDriver for Liar {
     fn start(&mut self, intent: &Intent, _request: &Envelope) {
         self.pending.push(Response {
             call_ref: intent.call_ref,
@@ -264,8 +270,11 @@ impl Partner for Liar {
 
 struct LiarFactory;
 
-impl AdapterFactory for LiarFactory {
-    fn make<'plan>(&mut self, _plan: &'plan ValidatedExecutionPlan) -> Box<dyn Partner + 'plan> {
+impl OutboundConnectorDriverFactory for LiarFactory {
+    fn make<'plan>(
+        &mut self,
+        _plan: &'plan ValidatedExecutionPlan,
+    ) -> Box<dyn OutboundConnectorDriver + 'plan> {
         Box::new(Liar {
             pending: Vec::new(),
         })
@@ -306,7 +315,7 @@ struct Swapper {
     pending: Vec<Response>,
 }
 
-impl Partner for Swapper {
+impl OutboundConnectorDriver for Swapper {
     fn start(&mut self, intent: &Intent, _request: &Envelope) {
         let echoed = String::from_utf8_lossy(intent.prepared.bytes()).into_owned();
         self.pending.push(Response {
@@ -335,8 +344,11 @@ impl Partner for Swapper {
 
 struct SwapperFactory;
 
-impl AdapterFactory for SwapperFactory {
-    fn make<'plan>(&mut self, _plan: &'plan ValidatedExecutionPlan) -> Box<dyn Partner + 'plan> {
+impl OutboundConnectorDriverFactory for SwapperFactory {
+    fn make<'plan>(
+        &mut self,
+        _plan: &'plan ValidatedExecutionPlan,
+    ) -> Box<dyn OutboundConnectorDriver + 'plan> {
         Box::new(Swapper {
             pending: Vec::new(),
         })

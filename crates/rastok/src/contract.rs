@@ -124,11 +124,11 @@ impl std::error::Error for PortResolutionError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability<'registry> {
     /// The contract sheet is present in THIS registry — the checker
-    /// can resolve declarations against it. Whether an adapter ships
+    /// can resolve declarations against it. Whether a Driver ships
     /// is the build's wiring (the Lab mocks need none); the sheet
     /// claims the contract, not the implementation.
     Available(&'registry ConnectorContract),
-    /// The name is in the catalogue; its adapter is not in this build.
+    /// The name is in the catalogue; its Driver is not in this build.
     Declared,
     /// The name is not a known connector type.
     Unknown,
@@ -435,7 +435,7 @@ pub enum ValueDomain {
     /// A constant duration value.
     Duration,
     /// A constant byte-size string (`"8MiB"`) — judged by
-    /// [`byte_size`], the ONE parser the contract and the adapter
+    /// [`byte_size`], the ONE parser the contract and the Driver
     /// share: what validates is what executes.
     ByteSize,
     /// A text-keyed map whose values are all text.
@@ -502,7 +502,7 @@ pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
 /// Reads a declared byte size (`"8MiB"`, `"512KiB"`, `"100B"`) — an
 /// explicit unit is required, and the result is bounded by
 /// [`MAX_BYTE_SIZE`]. The ONE rule shared by the contract's domain
-/// judgement and the adapter's budget: a size the checker accepted
+/// judgement and the Driver's budget: a size the checker accepted
 /// is a size the runtime enforces, on every target width.
 #[must_use]
 pub fn byte_size(text: &str) -> Option<u64> {

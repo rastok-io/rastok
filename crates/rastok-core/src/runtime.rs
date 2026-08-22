@@ -1905,7 +1905,7 @@ pub fn eval_lazy(
 }
 
 /// The handler-facing materialized view of an envelope's data — the bridge a
-/// host layer (lab, adapters, tooling) uses to read what a handler
+/// host layer (lab, Drivers, tooling) uses to read what a handler
 /// reads.
 pub fn data_value(data: &Data) -> Result<Value, Fault> {
     // `Data::materialize_with` is the CACHE AUTHORITY: the decode

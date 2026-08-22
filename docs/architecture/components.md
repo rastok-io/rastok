@@ -74,9 +74,9 @@ canonical record projection ─▶ golden compare
 | HIR | `compiler` (check) | canonicalize, lower | desugared, name-resolved, typed — the hash input ([identity.md §1](../spec/identity.md)); spans live in side tables; **the entire lab is excluded from the hash** |
 | canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
 | `plan::ValidatedExecutionPlan` | `compiler` (lower, then validate) or `plan::decode` | `runtime`, `lab`, `plan::encode` | the only executable/package boundary: an immutable `ExecutionPlan` whose tables, `expr::Tree`s, slots, contracts, and structural budgets have already passed the plan gate |
-| `boundary::Intent` (open OUTBOUND) | `runtime` | dispatcher → `boundary::Partner` impls | journaled before any handler runs, carrying the canonical call fields — emitting id, connector path, request digest, optional idempotency key ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
-| `boundary::Completion` | `connectors` or the lab's mock partner | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallRef` — never by the business key; a partner only answers and never decides a timeout or mints journal records |
-| `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | adapters and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
+| `boundary::Intent` (open OUTBOUND) | `runtime` | dispatcher → `boundary::OutboundConnectorDriver` impls | journaled before any handler runs, carrying the canonical call fields — emitting id, connector path, request digest, optional idempotency key ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
+| `boundary::Completion` | `connectors` or the Lab's mock Driver | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallRef` — never by the business key; a Driver only answers and never decides a timeout or mints journal records |
+| `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | Drivers and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `diagnostics::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
 | golden projection | `golden::Trace` (project, seal, diff) | evidence compare | deterministic bytes: same scope, same bytes ([simulation-semantics.md §6](../spec/simulation-semantics.md)) |
 
@@ -106,9 +106,10 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 ├── stdlib.rs         # the standard CATALOGUE instancing those contracts (PROCESS,
 │                     #   declared connector names, built-in/deferred frontends)
 ├── golden.rs         # Trace, Divergence — projection, seal, named diff
-├── connectors.rs     # Process: bind effective settings, then async transport
-├── conformance.rs    # adapter contract harness over the production seam
-├── lab.rs            # run → ScenarioRun { report, records } ; the mock partner
+├── connectors/       # one module per Connector family
+│   └── process/      # Process: bind effective settings, then async Driver
+├── conformance.rs    # Driver contract harness over the production seam
+├── lab.rs            # run → ScenarioRun { report, records } ; mock Drivers
 ├── render.rs         # Sources + rustc-shaped diagnostic rendering
 └── main.rs           # thin bin : check | run | simulate (--golden / --bless)
 ```
@@ -145,7 +146,7 @@ crate promotion (the final layout stays open per `ARCHITECTURE.md`):
    created in advance.
 5. **One engine.** There is no simulator component: `rastok simulate`
    drives the same `runtime`, injects/advances through its public VM
-   surface, and substitutes the `Partner` with the lab's mock.
+   surface, and substitutes the `OutboundConnectorDriver` with the Lab's mock.
 
 ## 3. Component inventory
 
@@ -188,9 +189,9 @@ still rejected before HIR construction
 ([effects-and-sagas.md §2.1–2.2](../spec/effects-and-sagas.md),
 [stdlib.md §2](../spec/stdlib.md), [loop.md](../spec/loop.md)). The checker reads Connector
 contracts from `stdlib` (§3.7) through the `contract` metamodel,
-never from adapter code — and it INJECTS every omitted `Defaulted`
+never from Driver code — and it INJECTS every omitted `Defaulted`
 attribute into the effective HIR (D-2026-08-12-1), so the plan
-carries effective attributes only and adapters never reintroduce a default.
+carries effective attributes only and Drivers never reintroduce a default.
 D-2026-08-18-1 adds one explicit distinction inside that effective row: a
 plan-resolved word/value versus a contract-authorized dynamic expression. The
 contract declares its latest permitted site; the effective row transports the
@@ -285,7 +286,7 @@ single-stepping and future journal-relative inspection structural.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **Scheduler** | run-to-completion firing; the single dated-event queue — the **call budgets, armed at DELIVERY** so queue time counts, referenced by `(edge, envelope id)`, resolved reserve→resolve→ack so a refused expiry replays (a timeout is the scheduler's dated event, never a partner's answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
+| **Scheduler** | run-to-completion firing; the single dated-event queue — the **call budgets, armed at DELIVERY** so queue time counts, referenced by `(edge, envelope id)`, resolved reserve→resolve→ack so a refused expiry replays (a timeout is the scheduler's dated event, never a Driver answer); virtual-time `advance`; drain-to-stable | plan + ordered events → transaction firings | [execution-model.md §1, §5–6, §8](../spec/execution-model.md) | M0 (single worker) |
 | **Mailboxes** | per-instance-reference FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered delivery within one address generation | [execution-model.md §2–3](../spec/execution-model.md) | M0 base; M1.4 R3 hierarchical rebase landed |
 | **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
@@ -298,21 +299,21 @@ single-stepping and future journal-relative inspection structural.
 
 Every nondeterministic thing is represented at one of these host
 boundaries, and what crosses into causality is recorded — the journal's
-*world-half* is the record of it. The current lab substitutes the
-`Partner`, injects ingress drafts through `Vm::inject`, and drives virtual
+*world-half* is the record of it. The current Lab substitutes the
+`OutboundConnectorDriver`, injects inbound drafts through `Vm::inject`, and drives virtual
 time through `Vm::advance`; the declared `Clock` and `Supervisor` traits
 remain host seams rather than objects the M1 VM consumes directly.
 
 | Interface | Owns | Real side | Lab side | Spec | Status |
 |---|---|---|---|---|---|
-| **`Ingress`** | birth of inbound **drafts** — payload, birth metadata, `IngressAuthority` (opaque), and a sequence request `Next \| Explicit(seq)` (a fixture can replay a production slice with explicit sequences); bounded, backpressure translated outward. It never births an envelope: a root envelope **cannot pre-exist its sequence** — the root id derives from `inbound_seq` and `origin_id = id` — so only the journal's accepting transaction mints it | future listener adapters | scenario injection through `Vm::inject` (no `Fixture` type) | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) fixtures | boundary vocabulary + VM entry; no ingress adapter yet |
-| **`Partner`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef` and one ordered `Completion`; correlation is the **connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a partner deduplicates on the idempotency key only *when it cooperates*; `cancel(call_ref)` withdraws in-flight work when the machine closes a call (default: nothing) | `connectors::Process` | the lab's mock partner | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M1.3 B7 (Process only) |
-| **`Clock`** | the only source of time. As built, M0 consumes no trait impl: `Vm::advance(journal, partner, target)` IS the virtual clock — the driver (a lab step, the CLI's wall-mapping loop) chooses targets, due budgets fire in expiry order, and same-instant expiries all fire before the machine drains | declared trait; `advance` targets in M0 | `advance` calls | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (target-driven) |
+| **`InboundConnectorDriver`** | proposal of inbound **drafts** — payload, birth metadata, `IngressAuthority` (opaque), and a sequence request `Next \| Explicit(seq)` (a fixture can replay a production slice with explicit sequences); bounded, with commit/backpressure translated outward. It never births an envelope: a root envelope **cannot pre-exist its sequence** — the root id derives from `inbound_seq` and `origin_id = id` — so only the journal's accepting transaction mints it | future listener Drivers | scenario injection through `Vm::inject` (no `Fixture` type) | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) fixtures | trait vocabulary landed in M1.5 C0; commit acknowledgement widens with the first inbound Driver |
+| **`OutboundConnectorDriver`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef` and one ordered `Completion`; correlation is the **Connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a Driver deduplicates on the idempotency key only *when its protocol cooperates*; `cancel(call_ref)` withdraws in-flight work when the machine closes a call (default: nothing) | `connectors::Process` | the Lab's mock Driver | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M1.3 B7 semantics; M1.5 C0 name |
+| **`Clock`** | the only source of time. As built, M0 consumes no trait impl: `Vm::advance(journal, driver, target)` IS the virtual clock — the caller (a Lab step, the CLI's wall-mapping loop) chooses targets, due budgets fire in expiry order, and same-instant expiries all fire before the machine drains | declared trait; `advance` targets in M0 | `advance` calls | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (target-driven) |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | not built; fault steps remain guarded | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | declared seam; current wiring boots only |
 
 The **`Dispatcher`** (owned here) is the loop between the journal and
-the partners: it takes OUTBOUND records the VM opened, drives the
-selected `Partner` implementation, and settles answers through
+Outbound Connector Drivers: it takes OUTBOUND records the VM opened, drives
+the selected `OutboundConnectorDriver`, and settles answers through
 `journal::close_outbound(call_ref, …) → Won | AlreadyClosed`. Before
 any closure, the **`CompletionGate`** judges every output against the resolved
 port contract and the final value against exact `ProcessExit` — a refused reply never becomes
@@ -327,20 +328,20 @@ observation — discarded, uncorrelated, rejected — nothing silent.
 
 Ownership rules that the types must make unrepresentable:
 
-- a partner **answers or stays silent** — it never returns a timeout
+- an Outbound Connector Driver **answers or stays silent** — it never returns a timeout
   (the scheduler's dated event decides that) and never returns
   `OutcomeUnknown` (recovery or bounded Closing supervision mints it);
 - call identity is the internal `CallRef` — a **deterministic
   derivation of the canonical call fields**, never a new serialized
   causal field; the business/idempotency key names the *operation* for
-  retries and cooperative partner-side dedup — the two are never
+  retries and cooperative external-side dedup — the two are never
   conflated;
 - an inbound envelope is **born inside the accepting transaction**:
-  Ingress supplies a draft; only the journal can mint a root id
+  the Inbound Connector Driver supplies a draft; only the journal can mint a root id
   (the envelope is immutable and `meta.sys` runtime-owned);
-- adapters and mocks produce **events**; the runtime mechanics alone
+- Drivers and mocks produce **events**; the runtime mechanics alone
   write records — a mocked call still gets its OUTBOUND record because
-  the VM writes it before any partner, real or scripted, is invoked;
+  the VM writes it before any Driver, real or scripted, is invoked;
 - response and timeout can race, but **exactly one wins** the closure;
   the loser is recorded as a **discarded observation**, never a causal
   fact.
@@ -378,18 +379,18 @@ bless, diff rendering) is driven by `lab` and `main`.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`contract::ConnectorContract`** | the compiler-facing contract sheet: one `PortContract` table (direction, unwired policy, fixed/same-as/choice-selected logical type rules), common attributes, optional profile selector, and effective presence/default/domain/**latest-evaluation-site** rules. Plan-shaping attributes are compile-time; operational settings may permit boot/instance context and invocation expressions keep their request/call bindings. Checking selects the earliest actual site and ships it. The ten-case prose template remains the normative design review checklist; only executable checker facts belong in this type | resolved by the checker into self-contained plan rows; **never depends on adapter code and never travels as a Registry** | [stdlib.md §1–3](../spec/stdlib.md); [instances.md §3](../spec/instances.md); D-2026-08-12-1; D-2026-08-14-1 | M1.3 B5 base; M1.4 R1 phase lift |
+| **`contract::ConnectorContract`** | the compiler-facing contract sheet: one `PortContract` table (direction, unwired policy, fixed/same-as/choice-selected logical type rules), common attributes, optional profile selector, and effective presence/default/domain/**latest-evaluation-site** rules. Plan-shaping attributes are compile-time; operational settings may permit boot/instance context and invocation expressions keep their request/call bindings. Checking selects the earliest actual site and ships it. The ten-case prose template remains the normative design review checklist; only executable checker facts belong in this type | resolved by the checker into self-contained plan rows; **never depends on Driver code and never travels as a Registry** | [stdlib.md §1–3](../spec/stdlib.md); [instances.md §3](../spec/instances.md); D-2026-08-12-1; D-2026-08-14-1 | M1.3 B5 base; M1.4 R1 phase lift |
 | **`contract::FrontendContract`** | an ordinary source name plus its registered framing/reader policy. Built-in JSON/text/base64 execute; guest/data names retain a specific framing contract and named deferral until their compiler lands | consumed by parser and checker; never serialized by itself | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md); [identity.md §1](../spec/identity.md) | M1.3 B4 |
 
 This module answers "how does the compiler know what `Process` is
-without linking tokio": the contracts are data, the adapters implement
+without linking its Driver": the contracts are data, Drivers implement
 them, and the checker validates declarations against the spec sheet
 alone.
 
 ### 3.8 Connectors and guest engines (`connectors`, `guest_engines`)
 
 The effectful and the pure halves of extension, on mirrored seams: a
-`connectors/*` adapter implements `boundary::Partner`; a future
+`connectors/*` implementation satisfies one or both boundary Driver roles; a future
 `guest_engines/*` engine implements `runtime::GuestExecutor` and will
 pair with a compiler frontend registered only when the first real guest
 implementation lands. No placeholder `GuestFrontend` type exists in the
@@ -398,18 +399,18 @@ whatever its execution format.
 
 | Component | Owns | Spec | Status |
 |---|---|---|---|
-| **`connectors::Process`** | the real job-mode partner: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 |
-| **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory, File) | names declared so source refuses explicitly; contract sheets and adapters land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded |
+| **`connectors::Process`** | the real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2; moved under a family module in M1.5 C0 |
+| **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory, File) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded; `File` is M1.5 |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |
 
 ### 3.9 The lab (`lab`)
 
-An adapter set plus a driver — never a second engine.
+A Driver set plus the production machine — never a second engine.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
 | **`lab::run`** | driving the production `Vm` through each checked scenario: inject, advance, settle, expectation windows over the machine's observation log, the three quantifiers; every uncovered call, faulting predicate or guard, and unsettled machine is a named failure | `hir::Lab` + plan → `Vec<ScenarioRun { report, records }>` — the records feed the golden workflow | [simulation-semantics.md §2, §5–6](../spec/simulation-semantics.md) | M0 |
-| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual clock* IS `Vm::advance` (no `VirtualClock` type); the internal mock partner answers behind the same `Partner` seam as the real adapter — replies only, the VM still writes every OUTBOUND; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0 |
+| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual clock* IS `Vm::advance` (no `VirtualClock` type); the internal mock Driver answers behind the same `OutboundConnectorDriver` seam as the real Driver — replies only, the VM still writes every OUTBOUND; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0; vocabulary renamed in M1.5 C0 |
 | **Coverage** | the statically enumerable failure-space checklist | plan + scenarios → coverage report | [simulation-semantics.md §7](../spec/simulation-semantics.md) | later |
 | **Unsupported surfaces** | `integration`, `theorem`, `experiment`: parse, then refuse explicitly | reachable syntax → `unsupported` diagnostic | [simulation-semantics.md §10–11](../spec/simulation-semantics.md) | guarded |
 
@@ -424,14 +425,14 @@ second parser and no second engine.
 | **`node`** | the shared vocabulary: `Path` (enters the id recipes), `Kind`, `Port`, `Effect` (`None \| Class(EffectClass)` — `none` explicit, the three classes stay three), `Behavior` (deterministic \| probabilistic — the DSL attribute of the same name), `Trigger` (`p:` \| `l:` — a transaction property, **not** an envelope field) | [grammar.md](../spec/grammar.md) vocabulary; [effects-and-sagas.md §2.2](../spec/effects-and-sagas.md); [stdlib.md §2](../spec/stdlib.md); [envelope.md §3](../spec/envelope.md) | M0 |
 | **`envelope`** | `Envelope { meta, data }` where `meta.sys` is the **five-field Tier-1 spine** (`id`, `parent_id`, `origin_id`, `role`, `graph_version` — the content type lives in `meta.ext.content_type`, D-2026-08-10-4) plus the Tier-2 birth stamps (`saga_*` / `loop_*`) minted only on envelopes born in an aspect scope ([envelope.md §1.1–1.2](../spec/envelope.md)) and `data` is a two-state `Data` (matching the normative field name): `Encoded { encoding: Encoding (Raw \| Avro \| ArrowIpc), bytes, value_cache }` — original bytes preserved, materialized into `Value` once on first structural access, the cache neither causal nor serialized — **or `Materialized(Value)`** for values born in memory from the graph, encoded only at persistence ([envelope.md §5–5.1](../spec/envelope.md)) | [envelope.md](../spec/envelope.md) | M0 |
 | **`diagnostics`** | stable codes, severity, the registry's **phase vocabulary** (`parse`, `resolve`, `check`, `plan`, `run`, `replay`, `sim`), multi-span, structured fields; a check ships with its code, its negative test, and its registry row in the same change | [diagnostics.md](../spec/diagnostics.md) | M0 |
-| **`main`** | the `check` / `run` / `simulate` verbs, wiring (adapters, dispatcher, stdlib contracts), rendering; owns nothing semantic | — | M0 |
+| **`main`** | the `check` / `run` / `simulate` verbs, wiring (Drivers, dispatcher, stdlib contracts), rendering; owns nothing semantic | — | M0 |
 
 ## 4. Dependency direction
 
 ```text
 main (bin)
    │
-   ├──▶ lab (run + the mock partner) ───────────┐
+   ├──▶ lab (run + mock Drivers) ───────────────┐
    │                                            ├──▶ boundary contracts ──▶ runtime
    └──▶ run wiring (+ stdlib) ──────────────────┘        ▲                     │
                                                          │                     ▼
@@ -449,19 +450,19 @@ Rules, in force from the first commit:
 
 1. **`runtime`** depends only on `plan`, the `node`/`envelope` value types,
    the `boundary` contracts it emits into, and the `journal` trait — never
-   on an adapter, the lab, or the compiler. The M0 debt is closed:
+   on a Driver, the Lab, or the compiler. The M0 debt is closed:
    `boundary::prepare_request` creates one `PreparedRequest`, so the
    digest and transported bytes are the same sealed value without a
    VM→`connectors` dependency.
 2. **`expr`** depends on no graph/runtime concept; it shares only
    `canonical_cbor`, `json`, and `trivia` primitives from the kernel.
-3. **Adapters** (`connectors`, `guest_engines`, the lab's boundary
-   implementations) implement traits; nothing depends on an adapter
+3. **Extensions** (`connectors`, `guest_engines`, the Lab's boundary
+   implementations) implement traits; nothing depends on a Driver
    except `main`'s wiring. The `Dispatcher` is the only `boundary`
    component that touches `journal` — through the `Journal` trait,
    never a concrete store.
 4. **`stdlib`** is declarative data over the base vocabulary; the
-   checker and `main` read it; it depends on no adapter.
+   checker and `main` read it; it depends on no Driver.
 5. **`lab`** depends on `compiler`, the `boundary` contracts, and
    `journal`. It never patches or introspects `runtime` internals.
 6. **`node`, `envelope`, `diagnostics`** are shared foundations for the
@@ -471,7 +472,7 @@ Rules, in force from the first commit:
 7. **`golden`** reads journal records, not the VM.
 
 The `rastok-core` / `rastok` split now makes the most important frontier
-mechanical: the `no_std` kernel cannot import the compiler, adapters, lab,
+mechanical: the `no_std` kernel cannot import the compiler, Drivers, Lab,
 or OS layer. Dependencies within either crate still require review because
 Rust modules may refer across their tree.
 
@@ -514,7 +515,7 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `expr` (compile) |
 | Plan | `compiler` (canonicalize, lower), `plan::Manifest` |
 | Step | `runtime` (Scheduler, Mailboxes, TransactionExecutor, EmissionBuffer, error routing) |
-| Handle | `boundary::Dispatcher` + `boundary::Partner` behind `CompletionGate`; `connectors::Process` (App) or the lab mock (Lab) |
+| Handle | `boundary::Dispatcher` + `boundary::OutboundConnectorDriver` behind `CompletionGate`; `connectors::Process` (App) or the Lab mock (Lab) |
 | Record | `journal` (semantic operations, id derivation) |
 | Compare | `golden` projection, seal, and diff; `lab`-returned records; `main --golden/--bless` |
 
@@ -559,7 +560,7 @@ The chronological detail and commit evidence remain in
   hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
   profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.
-- **Next:** the R7 instance/cluster-readiness closure, then new adapters, Loop,
+- **Next:** M1.5's binding registry and new Drivers, then Loop,
   counters, and `--watch`
   remain guarded in the order recorded by the
   [M1.4 backlog](m1.4-instances-backlog.md).
