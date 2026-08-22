@@ -314,10 +314,10 @@ remain host seams rather than objects the M1 VM consumes directly.
 
 The **`Dispatcher`** (owned here) is the loop between the journal and
 Outbound Connector Drivers: it takes OUTBOUND records the VM opened, drives
-the selected `OutboundConnectorDriver`, and settles answers through
+the selected binding, and settles answers through
 `journal::close_outbound(call_ref, …) → Won | AlreadyClosed`. Before
 any closure, the **`CompletionGate`** judges every output against the resolved
-port contract and the final value against exact `ProcessExit` — a refused reply never becomes
+port contract — a refused reply never becomes
 a causal fact: it returns in `PumpBatch::rejected` with its reason,
 and the call stays open, honestly settleable by the timeout. Only a
 `Won` closure becomes an input event for the VM; `AlreadyClosed`
@@ -400,8 +400,9 @@ whatever its execution format.
 
 | Component | Owns | Spec | Status |
 |---|---|---|---|
-| **`connectors::DriverRegistry`** | exact `ConnectorId` → implementation factory mapping and role-availability checks; duplicate ids refuse, and a both-role factory binds one shared object | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1; global plan binder lands in C2 |
-| **`connectors::Process`** | the real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2; moved under a family module in M1.5 C0 |
+| **`connectors::DriverRegistry`** | exact `ConnectorId` → implementation factory mapping and role-availability checks; duplicate ids refuse | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
+| **`connectors::RuntimeBindings`** | the pre-VM association of every runnable inbound and callable outbound Node with one family object; exact role-view proof; Node-path and call-family routing without concrete contract matching | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
+| **`connectors::ProcessFactory` / `Process`** | the explicit `rastok/process@1` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; family module C0; registry binding C2 |
 | **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory, File) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded; `File` is M1.5 |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |
 
@@ -564,7 +565,7 @@ The chronological detail and commit evidence remain in
   hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
   profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.
-- **Next:** M1.5's binding registry and new Drivers, then Loop,
+- **Next:** M1.5's `File` contract and Driver on the landed global binder, then Loop,
   counters, and `--watch`
   remain guarded in the order recorded by the
   [M1.4 backlog](m1.4-instances-backlog.md).

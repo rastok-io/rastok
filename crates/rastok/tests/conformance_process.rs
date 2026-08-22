@@ -8,7 +8,8 @@
 //! battery itself bites.
 
 use rastok::boundary::{
-    Completion, Intent, OutboundConnectorDriver, PortOutput, ProcessExit, Response,
+    Completion, Intent, OutboundConnectorDriver, PortOutput, ProcessExit, RequestPreparation,
+    Response, SchedulerCompletion,
 };
 use rastok::conformance::{
     InterleaveProbe, OutboundConnectorDriverFactory, Profile, Provocation, assert_conformant,
@@ -247,6 +248,18 @@ struct Liar {
 }
 
 impl OutboundConnectorDriver for Liar {
+    fn prepare_request(&mut self, _: &rastok::node::Path, data: &Data) -> RequestPreparation {
+        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        _: &rastok::node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion {
+        rastok::boundary::process_scheduler_completion(completion)
+    }
+
     fn start(&mut self, intent: &Intent, _request: &Envelope) {
         self.pending.push(Response {
             call_ref: intent.call_ref,
@@ -316,6 +329,18 @@ struct Swapper {
 }
 
 impl OutboundConnectorDriver for Swapper {
+    fn prepare_request(&mut self, _: &rastok::node::Path, data: &Data) -> RequestPreparation {
+        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        _: &rastok::node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion {
+        rastok::boundary::process_scheduler_completion(completion)
+    }
+
     fn start(&mut self, intent: &Intent, _request: &Envelope) {
         let echoed = String::from_utf8_lossy(intent.prepared.bytes()).into_owned();
         self.pending.push(Response {

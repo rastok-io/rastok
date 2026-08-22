@@ -124,42 +124,6 @@ pub enum RequestCodec {
     Bytes,
 }
 
-impl RequestCodec {
-    /// Reads the codec word — the PROCESS sheet's framing rule,
-    /// scoped to that contract: `codec` is a sheet-local name, not
-    /// a global one, so a future sheet spelling its own `codec`
-    /// vocabulary is untouched by this mapping.
-    #[must_use]
-    pub fn from_word(word: Option<&str>) -> Self {
-        match word {
-            Some("jsonl") => Self::Jsonl,
-            Some("bytes") => Self::Bytes,
-            _ => Self::Lines,
-        }
-    }
-
-    /// Reads the codec from a `Process` connector spec. A
-    /// [`ValidatedExecutionPlan`] holds the attribute's domain AND
-    /// its presence for `Process` (the sheet requires it), so on a
-    /// validated plan the word is always there and always known —
-    /// nothing unknown is silently reinterpreted. A non-`Process`
-    /// contract answers `Lines` here only because nothing but
-    /// `Process` executes in v1; its framing question lands with
-    /// its sheet.
-    ///
-    /// [`ValidatedExecutionPlan`]: crate::plan::ValidatedExecutionPlan
-    #[must_use]
-    pub fn of(spec: &crate::plan::ConnectorSpec) -> Self {
-        if spec.contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
-            return Self::Lines;
-        }
-        match spec.attribute("codec") {
-            Some(crate::plan::AttrSetting::Word(word)) => Self::from_word(Some(word)),
-            _ => Self::Lines,
-        }
-    }
-}
-
 /// Effective logical type of one currently executable Connector port.
 ///
 /// The compiler sheet owns the source-facing rule. This core mirror lets a
@@ -407,6 +371,35 @@ pub fn prepare_request(
         RequestCodec::Jsonl => prepare_jsonl(data),
         RequestCodec::Bytes => prepare_bytes(data),
     }
+}
+
+/// Frames one Process request or returns its exact typed pre-call refusal.
+///
+/// This helper is shared by the real Driver and scripted Process worlds; it
+/// is not a VM fallback. The selected Driver binding calls it explicitly.
+#[must_use]
+pub fn prepare_process_request(codec: RequestCodec, data: &envelope::Data) -> RequestPreparation {
+    match prepare_request(codec, data) {
+        Ok(prepared) => RequestPreparation::Prepared(prepared),
+        Err(message) => {
+            RequestPreparation::Rejected(Completion::process_exit(ProcessExit::DecodeFailed {
+                message,
+                line: None,
+            }))
+        }
+    }
+}
+
+/// Projects a machine-decided terminal fact into the Process contract.
+///
+/// Like [`prepare_process_request`], this is selected by a bound Process
+/// Driver and is never concrete-name dispatch in the VM.
+#[must_use]
+pub fn process_scheduler_completion(completion: SchedulerCompletion) -> Completion {
+    Completion::process_exit(match completion {
+        SchedulerCompletion::TimeoutExpired => ProcessExit::TimeoutExpired,
+        SchedulerCompletion::OutcomeUnknown => ProcessExit::OutcomeUnknown,
+    })
 }
 
 /// Frames one opaque byte request without text or data-model conversion.
@@ -664,6 +657,83 @@ pub struct Response {
     pub completion: Completion,
 }
 
+/// Result of framing one invocation before its outbound record opens.
+///
+/// A rejection is an ordinary, contract-typed completion. It commits through
+/// the same connector transaction as any other completion, but no external
+/// effect or outbound-open record exists because there were no protocol bytes
+/// to send.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RequestPreparation {
+    /// Exact bytes whose digest becomes call identity material.
+    Prepared(PreparedRequest),
+    /// The contract's typed terminal response to an unframeable payload.
+    Rejected(Completion),
+}
+
+/// A terminal fact whose occurrence is decided by the machine, while its
+/// typed representation belongs to the Connector contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulerCompletion {
+    /// The invocation budget won the close-once race.
+    TimeoutExpired,
+    /// Cancellation was requested but no observation arrived by settlement.
+    OutcomeUnknown,
+}
+
+/// A route through an already-verified binding became impossible.
+///
+/// These errors are machine-integrity faults, not domain outcomes. The global
+/// binder proves every route before the VM and journal exist; retaining a
+/// typed belt here prevents a forged or internally inconsistent caller from
+/// becoming a silent no-op.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DriverRouteError {
+    /// No outbound binding owns this planned Connector path.
+    UnboundOutbound(node::Path),
+    /// A role view proven at bind time disappeared later.
+    UnavailableOutbound(node::Path),
+    /// An inbound role view proven at bind time disappeared later.
+    UnavailableInbound(crate::connector::ConnectorId),
+    /// One Driver answered a call started through another Connector family.
+    CrossFamilyResponse {
+        /// Correlated call.
+        call_ref: CallRef,
+        /// Family that started it.
+        expected: crate::connector::ConnectorId,
+        /// Family that answered it.
+        actual: crate::connector::ConnectorId,
+    },
+}
+
+impl fmt::Display for DriverRouteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnboundOutbound(connector) => {
+                write!(formatter, "no outbound Driver binding owns `{connector}`")
+            }
+            Self::UnavailableOutbound(connector) => write!(
+                formatter,
+                "the outbound Driver role bound for `{connector}` is no longer available"
+            ),
+            Self::UnavailableInbound(id) => write!(
+                formatter,
+                "the inbound Driver role bound for `{id}` is no longer available"
+            ),
+            Self::CrossFamilyResponse {
+                call_ref,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "Driver `{actual}` answered call {call_ref} started by `{expected}`"
+            ),
+        }
+    }
+}
+
+impl core::error::Error for DriverRouteError {}
+
 /// Judges a driver's completion against the calling connector's resolved
 /// contract before it may become a causal fact. The dispatcher only asks.
 pub trait CompletionGate {
@@ -858,6 +928,24 @@ pub trait InboundConnectorDriver {
 /// outcome: budgets belong to the scheduler, triage to the recovery
 /// fold. Correlation uses the connector's own protocol.
 pub trait OutboundConnectorDriver {
+    /// Frames one invocation under this bound contract before the machine
+    /// opens its outbound record. The Driver chooses no defaults: binding has
+    /// already resolved the contract and instance settings for `connector`.
+    fn prepare_request(
+        &mut self,
+        connector: &node::Path,
+        data: &envelope::Data,
+    ) -> RequestPreparation;
+
+    /// Builds the contract-typed representation of a machine-decided
+    /// terminal fact. The scheduler decides that the fact occurred; this
+    /// method only projects it into the Connector's ordinary output protocol.
+    fn scheduler_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion;
+
     /// Withdraws an open call: the machine closed it (a won timeout)
     /// and any in-flight work should stop. Default: nothing — a
     /// scripted world has nothing to stop.
@@ -872,6 +960,104 @@ pub trait OutboundConnectorDriver {
 
     /// The answers that arrived since the last drain.
     fn events(&mut self) -> Vec<Response>;
+}
+
+/// The verified outbound routing table consumed by the core VM.
+///
+/// A single Driver implements this automatically. The application-level
+/// `RuntimeBindings` implementation selects among several contract families
+/// and returns a typed error if its pre-VM proof is ever contradicted. The VM
+/// therefore never matches `Process`, `File`, or another concrete contract.
+pub trait OutboundConnectorBindings {
+    /// Frames one request through the Driver bound to `connector`.
+    ///
+    /// # Errors
+    ///
+    /// The planned path has no stable outbound route.
+    fn prepare_request(
+        &mut self,
+        connector: &node::Path,
+        data: &envelope::Data,
+    ) -> Result<RequestPreparation, DriverRouteError>;
+
+    /// Projects a scheduler fact through the bound contract.
+    ///
+    /// # Errors
+    ///
+    /// The planned path has no stable outbound route.
+    fn scheduler_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError>;
+
+    /// Withdraws one call through its owning binding.
+    ///
+    /// # Errors
+    ///
+    /// The planned path has no stable outbound route.
+    fn cancel(
+        &mut self,
+        connector: &node::Path,
+        call_ref: &CallRef,
+    ) -> Result<(), DriverRouteError>;
+
+    /// Starts one already-journaled call through its owning binding.
+    ///
+    /// # Errors
+    ///
+    /// The planned path has no stable outbound route.
+    fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError>;
+
+    /// Collects all answers since the previous round.
+    ///
+    /// # Errors
+    ///
+    /// A binding invariant was contradicted while polling.
+    fn events(&mut self) -> Result<Vec<Response>, DriverRouteError>;
+}
+
+impl<T> OutboundConnectorBindings for T
+where
+    T: OutboundConnectorDriver + ?Sized,
+{
+    fn prepare_request(
+        &mut self,
+        connector: &node::Path,
+        data: &envelope::Data,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        Ok(OutboundConnectorDriver::prepare_request(
+            self, connector, data,
+        ))
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError> {
+        Ok(OutboundConnectorDriver::scheduler_completion(
+            self, connector, completion,
+        ))
+    }
+
+    fn cancel(
+        &mut self,
+        _connector: &node::Path,
+        call_ref: &CallRef,
+    ) -> Result<(), DriverRouteError> {
+        OutboundConnectorDriver::cancel(self, call_ref);
+        Ok(())
+    }
+
+    fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError> {
+        OutboundConnectorDriver::start(self, intent, request);
+        Ok(())
+    }
+
+    fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
+        Ok(OutboundConnectorDriver::events(self))
+    }
 }
 
 /// Supplies one due event at a time: the VM drains to a stable state
@@ -911,6 +1097,8 @@ pub enum DispatchError {
     /// A journaled intent whose request envelope cannot be found:
     /// an integrity fault in the causal history.
     MissingRequest(CallRef),
+    /// The verified Driver routing table was contradicted.
+    Driver(DriverRouteError),
     /// The journal refused an operation.
     Journal(crate::journal::Error),
 }
@@ -924,6 +1112,7 @@ impl fmt::Display for DispatchError {
                     "no journaled envelope for the request of call {call_ref}"
                 )
             }
+            Self::Driver(error) => error.fmt(f),
             Self::Journal(error) => error.fmt(f),
         }
     }
@@ -979,10 +1168,10 @@ impl Dispatcher {
     /// [`DispatchError::MissingRequest`] when the causal history lacks
     /// a journaled request — an integrity fault; journal refusals are
     /// propagated, never absorbed.
-    pub fn pump(
+    pub fn pump<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
-        driver: &mut dyn OutboundConnectorDriver,
+        bindings: &mut B,
         gate: &dyn CompletionGate,
     ) -> Result<PumpBatch, DispatchError> {
         // Start phase: every open call not yet started.
@@ -993,14 +1182,16 @@ impl Dispatcher {
             let request = journal
                 .find_envelope(intent.emitting_id)
                 .ok_or(DispatchError::MissingRequest(intent.call_ref))?;
+            bindings
+                .start(&intent, &request)
+                .map_err(DispatchError::Driver)?;
             self.started.insert(intent.call_ref);
-            driver.start(&intent, &request);
         }
         // Settle phase: won closures become routable events; losers
         // and strays stay visible.
         let mut batch = PumpBatch::default();
         let open = journal.open_calls();
-        for response in driver.events() {
+        for response in bindings.events().map_err(DispatchError::Driver)? {
             let Some(intent) = open
                 .iter()
                 .find(|intent| intent.call_ref == response.call_ref)
@@ -1064,7 +1255,6 @@ mod tests {
     #[test]
     fn the_bytes_codec_never_falls_back_to_lines() {
         use crate::envelope::{Data, Value};
-        assert_eq!(RequestCodec::from_word(Some("bytes")), RequestCodec::Bytes);
         let framed = prepare_request(
             RequestCodec::Bytes,
             &Data::materialized(Value::Bytes(alloc::vec![0, 0xff, b'\n'])),
@@ -1103,12 +1293,76 @@ mod tests {
     }
 
     impl OutboundConnectorDriver for Scripted {
+        fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+            match prepare_lines(data) {
+                Ok(prepared) => RequestPreparation::Prepared(prepared),
+                Err(message) => RequestPreparation::Rejected(Completion::process_exit(
+                    ProcessExit::DecodeFailed {
+                        message,
+                        line: None,
+                    },
+                )),
+            }
+        }
+
+        fn scheduler_completion(
+            &mut self,
+            _: &node::Path,
+            completion: SchedulerCompletion,
+        ) -> Completion {
+            Completion::process_exit(match completion {
+                SchedulerCompletion::TimeoutExpired => ProcessExit::TimeoutExpired,
+                SchedulerCompletion::OutcomeUnknown => ProcessExit::OutcomeUnknown,
+            })
+        }
+
         fn start(&mut self, intent: &Intent, request: &Envelope) {
             self.started.push((intent.clone(), request.clone()));
         }
 
         fn events(&mut self) -> Vec<Response> {
             core::mem::take(&mut self.replies)
+        }
+    }
+
+    struct StartRefusal {
+        refuse: bool,
+        attempts: usize,
+    }
+
+    impl OutboundConnectorBindings for StartRefusal {
+        fn prepare_request(
+            &mut self,
+            _: &node::Path,
+            data: &Data,
+        ) -> Result<RequestPreparation, DriverRouteError> {
+            Ok(prepare_process_request(RequestCodec::Lines, data))
+        }
+
+        fn scheduler_completion(
+            &mut self,
+            _: &node::Path,
+            completion: SchedulerCompletion,
+        ) -> Result<Completion, DriverRouteError> {
+            Ok(process_scheduler_completion(completion))
+        }
+
+        fn cancel(&mut self, _: &node::Path, _: &CallRef) -> Result<(), DriverRouteError> {
+            Ok(())
+        }
+
+        fn start(&mut self, intent: &Intent, _: &Envelope) -> Result<(), DriverRouteError> {
+            self.attempts += 1;
+            if self.refuse {
+                return Err(DriverRouteError::UnboundOutbound(
+                    intent.connector_path.clone(),
+                ));
+            }
+            Ok(())
+        }
+
+        fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
+            Ok(Vec::new())
         }
     }
 
@@ -1160,6 +1414,27 @@ mod tests {
             .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
         assert_eq!(driver.started.len(), 1);
+    }
+
+    #[test]
+    fn a_refused_start_is_not_remembered_as_started() {
+        let (mut journal, _) = seeded_journal();
+        let mut bindings = StartRefusal {
+            refuse: true,
+            attempts: 0,
+        };
+        let mut dispatcher = Dispatcher::new();
+
+        assert!(matches!(
+            dispatcher.pump(&mut journal, &mut bindings, &OpenGate),
+            Err(DispatchError::Driver(DriverRouteError::UnboundOutbound(_)))
+        ));
+        assert_eq!(bindings.attempts, 1);
+        bindings.refuse = false;
+        dispatcher
+            .pump(&mut journal, &mut bindings, &OpenGate)
+            .unwrap();
+        assert_eq!(bindings.attempts, 2, "the open call was retried");
     }
 
     #[test]

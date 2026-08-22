@@ -854,11 +854,10 @@ fn the_binding_rechecks_optional_process_settings() {
 }
 
 #[test]
-fn a_callable_foreign_connector_refuses_at_bind() {
-    // Before the M1.5 global binder, a CALLABLE connector of another contract
-    // would receive its intents at the Process-only Driver and strand them
-    // open — the binding refuses it by name. A PURE SOURCE (no incoming edge)
-    // is merely skipped: nothing will ever call it.
+fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_sources() {
+    // A callable connector needs its exact Driver family before execution. A
+    // pure outbound-only source has no incoming edge and can never open a
+    // call, so it creates no runtime obligation.
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
@@ -890,11 +889,12 @@ fn a_callable_foreign_connector_refuses_at_bind() {
     }
     let callable = rastok::plan::ValidatedExecutionPlan::try_from(plan.clone())
         .expect("the foreign connector is structurally typed");
-    let message = rastok::connectors::Process::try_new(&callable)
+    let registry = rastok::connectors::DriverRegistry::default();
+    let message = rastok::connectors::RuntimeBindings::try_new(&callable, &registry)
         .expect_err("the callable foreign connector refuses")
         .to_string();
     assert!(
-        message.contains("Process-only binding cannot serve callable `test/custom@1`"),
+        message.contains("no Driver is registered for `test/custom@1`"),
         "{message}"
     );
     // Sever every edge DELIVERING to the connector: a pure source.
@@ -915,8 +915,8 @@ fn a_callable_foreign_connector_refuses_at_bind() {
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan)
         .expect("the foreign pure source remains structurally valid");
     assert!(
-        rastok::connectors::Process::try_new(&validated).is_ok(),
-        "a pure foreign source binds as a no-op"
+        rastok::connectors::RuntimeBindings::try_new(&validated, &registry).is_ok(),
+        "a pure outbound source requires no binding"
     );
     // An unknown codec cannot even reach the binding: the plan
     // validator refuses it first (the Driver's exhaustive match is

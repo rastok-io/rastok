@@ -1,6 +1,6 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.5 C1.** B5 removed the
+> **Status: normative and executable through M1.5 C2.** B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.

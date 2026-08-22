@@ -19,7 +19,8 @@
 
 use crate::boundary::{
     BoundaryEvent, CallRef, ClosingDeadline, Completion, DatedPayload, Dispatcher,
-    InboundSubmission, InstanceDeadline, Intent, OutboundConnectorDriver, ProcessExit, Response,
+    InboundSubmission, InstanceDeadline, Intent, OutboundConnectorBindings, RequestPreparation,
+    Response, SchedulerCompletion,
 };
 use crate::datatype::DataType;
 use crate::envelope::{Data, Envelope, Id};
@@ -368,11 +369,61 @@ fn consider_operator_work(
 
 /// The plan-backed gate for one atomic boundary completion.
 ///
-/// Format v10 retains the exact `ProcessExit` union in the resolved port
-/// table. This gate judges that same type, so no malformed terminal fact can
-/// become causal.
+/// Format v10 retains every Connector's exact resolved output types. This
+/// gate judges that table, so no malformed Driver fact can become causal.
 struct PlanGate<'plan> {
     plan: &'plan ValidatedExecutionPlan,
+}
+
+/// The explicit no-world binding used by the pure `step`/`drain` helpers.
+/// It lets Operator-only plans keep their compact API while a Connector call
+/// fails loudly instead of falling back to a concrete built-in contract.
+struct NoOutboundBindings;
+
+impl OutboundConnectorBindings for NoOutboundBindings {
+    fn prepare_request(
+        &mut self,
+        connector: &node::Path,
+        _: &Data,
+    ) -> Result<RequestPreparation, crate::boundary::DriverRouteError> {
+        Err(crate::boundary::DriverRouteError::UnboundOutbound(
+            connector.clone(),
+        ))
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        connector: &node::Path,
+        _: SchedulerCompletion,
+    ) -> Result<Completion, crate::boundary::DriverRouteError> {
+        Err(crate::boundary::DriverRouteError::UnboundOutbound(
+            connector.clone(),
+        ))
+    }
+
+    fn cancel(
+        &mut self,
+        connector: &node::Path,
+        _: &CallRef,
+    ) -> Result<(), crate::boundary::DriverRouteError> {
+        Err(crate::boundary::DriverRouteError::UnboundOutbound(
+            connector.clone(),
+        ))
+    }
+
+    fn start(
+        &mut self,
+        intent: &Intent,
+        _: &Envelope,
+    ) -> Result<(), crate::boundary::DriverRouteError> {
+        Err(crate::boundary::DriverRouteError::UnboundOutbound(
+            intent.connector_path.clone(),
+        ))
+    }
+
+    fn events(&mut self) -> Result<Vec<Response>, crate::boundary::DriverRouteError> {
+        Ok(Vec::new())
+    }
 }
 
 impl crate::boundary::CompletionGate for PlanGate<'_> {
@@ -387,15 +438,9 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
         else {
             return Err(format!("`{connector}` is absent from the validated plan"));
         };
-        let Some(spec) = planned.connector() else {
+        let Some(_) = planned.connector() else {
             return Err(format!("`{connector}` is not a connector"));
         };
-        if spec.contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
-            return Err(format!(
-                "the active OutboundConnectorDriver does not serve `{}` completions",
-                spec.contract
-            ));
-        }
         let slot =
             Slot::new(u32::try_from(index).map_err(|_| {
                 format!("the slot of `{connector}` is not representable by the plan")
@@ -418,9 +463,9 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
                     output.port.name()
                 ));
             }
-            // Validation has already proved that the transported Process
-            // contract row is the canonical ProcessExit type. The resolved
-            // table is therefore the sole admission authority here too.
+            // Validation has already proved the transported contract row.
+            // The resolved table is therefore the sole admission authority
+            // here too, independently of the concrete Connector family.
             let expected = resolved.ty();
             if output.port.name() == "exit" && !matches!(&output.data, Data::Materialized(_)) {
                 return Err(format!(
@@ -726,6 +771,20 @@ impl<'plan> Vm<'plan> {
     /// A fault leaves the machine exactly as it was — the failed step
     /// committed nothing, and its work stays reserved for a retry.
     pub fn step(&mut self, journal: &mut dyn Journal) -> Result<bool, VmError> {
+        self.step_with_bindings(journal, &mut NoOutboundBindings)
+    }
+
+    /// Executes one transaction with the verified outbound bindings available
+    /// for Connector request preparation.
+    ///
+    /// # Errors
+    ///
+    /// The same transaction or binding-integrity failures as [`Self::step`].
+    pub fn step_with_bindings<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+    ) -> Result<bool, VmError> {
         self.progress_closures();
         if !self.lifecycle.is_empty() {
             self.fire_lifecycle_next(journal)?;
@@ -766,11 +825,13 @@ impl<'plan> Vm<'plan> {
             };
             match &self.plan.nodes[slot.index()].kind {
                 NodeKind::Operator => self.fire_operator(journal, slot, &instance, &delivery)?,
-                NodeKind::Connector(_) => self.open_call(journal, slot, &instance, &delivery)?,
+                NodeKind::Connector(_) => {
+                    self.open_call(journal, bindings, slot, &instance, &delivery)?
+                }
             }
             return Ok(true);
         }
-        self.step_join_mailboxes(journal)
+        self.step_join_mailboxes(journal, bindings)
     }
 
     // Keep join reservation state out of the ordinary relay's stack frame.
@@ -778,7 +839,11 @@ impl<'plan> Vm<'plan> {
     // scan made a plan with no joins miss the established relay budget even
     // though its branch was never taken.
     #[inline(never)]
-    fn step_join_mailboxes(&mut self, journal: &mut dyn Journal) -> Result<bool, VmError> {
+    fn step_join_mailboxes<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+    ) -> Result<bool, VmError> {
         let mut after = None;
         while let Some((slot, instance, delivery)) =
             self.scheduler
@@ -802,7 +867,7 @@ impl<'plan> Vm<'plan> {
             after = Some((slot, instance.clone()));
             match &self.plan.nodes[slot.index()].kind {
                 NodeKind::Connector(_) => {
-                    self.open_call(journal, slot, &instance, &delivery)?;
+                    self.open_call(journal, bindings, slot, &instance, &delivery)?;
                     return Ok(true);
                 }
                 NodeKind::Operator => {
@@ -863,7 +928,20 @@ impl<'plan> Vm<'plan> {
     /// The first faulting step; everything before it committed, and
     /// the faulting work stays reserved.
     pub fn drain(&mut self, journal: &mut dyn Journal) -> Result<(), VmError> {
-        while self.step(journal)? {}
+        self.drain_with_bindings(journal, &mut NoOutboundBindings)
+    }
+
+    /// Drains ready work with the verified outbound bindings available.
+    ///
+    /// # Errors
+    ///
+    /// The first transaction or binding-integrity failure.
+    pub fn drain_with_bindings<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+    ) -> Result<(), VmError> {
+        while self.step_with_bindings(journal, bindings)? {}
         Ok(())
     }
 
@@ -875,25 +953,25 @@ impl<'plan> Vm<'plan> {
     /// # Errors
     ///
     /// Dispatcher integrity faults propagate.
-    pub fn pump(
+    pub fn pump<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
-        driver: &mut dyn OutboundConnectorDriver,
+        bindings: &mut B,
     ) -> Result<PumpReport, VmError> {
         let mut report = core::mem::take(&mut self.buffered_pump);
-        report.append(self.poll_outbound_driver(journal, driver)?);
+        report.append(self.poll_outbound_driver(journal, bindings)?);
         Ok(report)
     }
 
-    fn poll_outbound_driver(
+    fn poll_outbound_driver<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
-        driver: &mut dyn OutboundConnectorDriver,
+        bindings: &mut B,
     ) -> Result<PumpReport, VmError> {
         let gate = PlanGate { plan: self.plan };
         let batch = self
             .dispatcher
-            .pump(journal, driver, &gate)
+            .pump(journal, bindings, &gate)
             .map_err(VmError::Dispatch)?;
         let settled = batch.events.len();
         let in_port =
@@ -926,16 +1004,16 @@ impl<'plan> Vm<'plan> {
     /// # Errors
     ///
     /// Journal refusals and faulting steps, as in [`Self::drain`].
-    pub fn advance(
+    pub fn advance<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
-        driver: &mut dyn OutboundConnectorDriver,
+        bindings: &mut B,
         target: i64,
     ) -> Result<(), VmError> {
         // Ready work at the current logical instant precedes any future
         // expiry. In particular, a just-created instance commits `l:start`
         // before its first idle deadline can close it.
-        self.drain(journal)?;
+        self.drain_with_bindings(journal, bindings)?;
         while let Some((key, payload)) = self.scheduler.peek_due(target) {
             self.now = key.0;
             let mut polled_at_settlement = false;
@@ -946,9 +1024,9 @@ impl<'plan> Vm<'plan> {
                     ..
                 }
             ) {
-                let report = self.poll_outbound_driver(journal, driver)?;
+                let report = self.poll_outbound_driver(journal, bindings)?;
                 self.buffered_pump.append(report);
-                self.drain(journal)?;
+                self.drain_with_bindings(journal, bindings)?;
                 polled_at_settlement = true;
             }
             let mut saw_drain = matches!(
@@ -963,7 +1041,7 @@ impl<'plan> Vm<'plan> {
             // never between simultaneous events — a same-instant
             // budget must not see the world advanced by its sibling.
             // A failed expiry stays armed: reserve, resolve, ack.
-            self.expire(journal, driver, payload)?;
+            self.expire(journal, bindings, payload)?;
             self.scheduler.ack(key);
             while let Some((sibling_key, sibling)) = self.scheduler.peek_due(key.0) {
                 if !polled_at_settlement
@@ -975,9 +1053,9 @@ impl<'plan> Vm<'plan> {
                         }
                     )
                 {
-                    let report = self.poll_outbound_driver(journal, driver)?;
+                    let report = self.poll_outbound_driver(journal, bindings)?;
                     self.buffered_pump.append(report);
-                    self.drain(journal)?;
+                    self.drain_with_bindings(journal, bindings)?;
                     polled_at_settlement = true;
                 }
                 saw_drain |= matches!(
@@ -987,24 +1065,24 @@ impl<'plan> Vm<'plan> {
                         ..
                     }
                 );
-                self.expire(journal, driver, sibling)?;
+                self.expire(journal, bindings, sibling)?;
                 self.scheduler.ack(sibling_key);
             }
             if saw_drain {
-                let report = self.poll_outbound_driver(journal, driver)?;
+                let report = self.poll_outbound_driver(journal, bindings)?;
                 self.buffered_pump.append(report);
             }
-            self.drain(journal)?;
+            self.drain_with_bindings(journal, bindings)?;
         }
         self.now = self.now.max(target);
         Ok(())
     }
 
     /// Resolves one expired budget wherever the obligation lives.
-    fn expire(
+    fn expire<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
-        driver: &mut dyn OutboundConnectorDriver,
+        bindings: &mut B,
         payload: DatedPayload,
     ) -> Result<(), VmError> {
         let (connector, edge, delivery, instance) = match payload {
@@ -1045,7 +1123,7 @@ impl<'plan> Vm<'plan> {
                 cause,
                 deadline,
             } => {
-                self.expire_closing(journal, driver, &instance, cause, deadline)?;
+                self.expire_closing(journal, bindings, &instance, cause, deadline)?;
                 return Ok(());
             }
         };
@@ -1062,6 +1140,13 @@ impl<'plan> Vm<'plan> {
             })
             .map(|(call_ref, _)| *call_ref)
         {
+            // Contract projection is pure, but it can still expose a broken
+            // binding. Prove it before the close-once mutation so an
+            // integrity refusal cannot strand a journaled obligation.
+            let completion = bindings
+                .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
+                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(VmError::Dispatch)?;
             match journal
                 .close_outbound(&call_ref, crate::journal::Closure::Timeout)
                 .map_err(VmError::Journal)?
@@ -1069,7 +1154,10 @@ impl<'plan> Vm<'plan> {
                 crate::journal::CloseVerdict::AlreadyClosed => return Ok(()),
                 crate::journal::CloseVerdict::Won => {}
             }
-            driver.cancel(&call_ref);
+            bindings
+                .cancel(&connector, &call_ref)
+                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(VmError::Dispatch)?;
             let intent = journal
                 .find_call(&call_ref)
                 .unwrap_or_else(|| unreachable!("a closed call is journaled"));
@@ -1078,7 +1166,7 @@ impl<'plan> Vm<'plan> {
                     call_ref,
                     connector_path: intent.connector_path,
                     emitting_id: intent.emitting_id,
-                    completion: Completion::process_exit(ProcessExit::TimeoutExpired),
+                    completion,
                 },
                 trigger: node::Trigger::Lifecycle(node::Lifecycle::Timeout),
             });
@@ -1092,7 +1180,7 @@ impl<'plan> Vm<'plan> {
         // Journal facts come first; the mailbox is touched only after
         // they hold, so a refusal loses nothing.
         let slot = self.slot_of(&connector);
-        let queued_id = {
+        let queued_intent = {
             let Some(queued) = self
                 .scheduler
                 .mailboxes
@@ -1114,12 +1202,13 @@ impl<'plan> Vm<'plan> {
                     reason: "a delivery opened a call on a connector without an effect class",
                 });
             };
-            match crate::boundary::prepare_request(
-                crate::boundary::RequestCodec::of(spec),
-                queued.envelope.data(),
-            ) {
-                Err(_) => None,
-                Ok(prepared) => {
+            match bindings
+                .prepare_request(&planned.path, queued.envelope.data())
+                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(VmError::Dispatch)?
+            {
+                RequestPreparation::Rejected(completion) => Err(completion),
+                RequestPreparation::Prepared(prepared) => {
                     let instance_settings = self
                         .instances
                         .get(&instance)
@@ -1135,7 +1224,7 @@ impl<'plan> Vm<'plan> {
                         })?
                         .clone();
                     let emitting_id = queued.envelope.meta().sys().id();
-                    Some(Intent {
+                    Ok(Intent {
                         call_ref: ids::call_ref(
                             ids::delivery_ref(&queued.edge, emitting_id),
                             prepared.digest(),
@@ -1151,8 +1240,8 @@ impl<'plan> Vm<'plan> {
                 }
             }
         };
-        match queued_id {
-            None => {
+        match queued_intent {
+            Err(completion) => {
                 // Unframeable AND expired: the decode refusal wins —
                 // the call could never have been attempted. Facts
                 // first: the delivery leaves the queue only after
@@ -1167,10 +1256,6 @@ impl<'plan> Vm<'plan> {
                         return Ok(());
                     };
                     let executor = TransactionExecutor::new(self.plan, self.graph_version);
-                    let completion = Completion::process_exit(ProcessExit::DecodeFailed {
-                        message: String::from("the request cannot be framed"),
-                        line: None,
-                    });
                     let trigger = node::Trigger::Port(queued.port.clone());
                     executor
                         .connector_completion(slot, &instance, queued, &trigger, &completion)
@@ -1195,7 +1280,13 @@ impl<'plan> Vm<'plan> {
                 self.route_emissions(slot, &instance, prepared);
                 self.progress_closures();
             }
-            Some(intent) => {
+            Ok(intent) => {
+                // As above, establish the contract-owned representation
+                // before the open/close facts or mailbox state can move.
+                let completion = bindings
+                    .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
+                    .map_err(crate::boundary::DispatchError::Driver)
+                    .map_err(VmError::Dispatch)?;
                 let call_ref = intent.call_ref;
                 let connector_path = intent.connector_path.clone();
                 let emitting_id = intent.emitting_id;
@@ -1237,7 +1328,7 @@ impl<'plan> Vm<'plan> {
                         call_ref,
                         connector_path,
                         emitting_id,
-                        completion: Completion::process_exit(ProcessExit::TimeoutExpired),
+                        completion,
                     },
                     trigger: node::Trigger::Lifecycle(node::Lifecycle::Timeout),
                 });
@@ -1609,10 +1700,10 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    fn expire_closing(
+    fn expire_closing<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
-        driver: &mut dyn OutboundConnectorDriver,
+        bindings: &mut B,
         reference: &InstanceRef,
         cause: Id,
         deadline: ClosingDeadline,
@@ -1656,7 +1747,15 @@ impl<'plan> Vm<'plan> {
                     .map(|(call_ref, _)| *call_ref)
                     .collect();
                 for call_ref in calls {
-                    driver.cancel(&call_ref);
+                    let pending = self
+                        .pending
+                        .get(&call_ref)
+                        .ok_or(VmError::MissingPending(call_ref))?;
+                    let connector = &self.plan.nodes[pending.slot.index()].path;
+                    bindings
+                        .cancel(connector, &call_ref)
+                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(VmError::Dispatch)?;
                 }
             }
             ClosingDeadline::Settlement => {
@@ -1668,26 +1767,27 @@ impl<'plan> Vm<'plan> {
                     .map(|(call_ref, _)| *call_ref)
                     .collect();
                 for call_ref in calls {
+                    let pending = self
+                        .pending
+                        .get(&call_ref)
+                        .ok_or(VmError::MissingPending(call_ref))?;
+                    let connector = self.plan.nodes[pending.slot.index()].path.clone();
+                    let completion = bindings
+                        .scheduler_completion(&connector, SchedulerCompletion::OutcomeUnknown)
+                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(VmError::Dispatch)?;
                     match journal
                         .abandon_outbound(&call_ref)
                         .map_err(VmError::Journal)?
                     {
                         crate::journal::CloseVerdict::AlreadyClosed => {}
                         crate::journal::CloseVerdict::Won => {
-                            let pending = self
-                                .pending
-                                .get(&call_ref)
-                                .ok_or(VmError::MissingPending(call_ref))?;
                             self.settled.push_back(SettledEntry {
                                 event: BoundaryEvent {
                                     call_ref,
-                                    connector_path: self.plan.nodes[pending.slot.index()]
-                                        .path
-                                        .clone(),
+                                    connector_path: connector.clone(),
                                     emitting_id: pending.delivery.envelope.meta().sys().id(),
-                                    completion: Completion::process_exit(
-                                        ProcessExit::OutcomeUnknown,
-                                    ),
+                                    completion,
                                 },
                                 trigger: node::Trigger::Lifecycle(node::Lifecycle::Recover),
                             });
@@ -2345,9 +2445,10 @@ impl<'plan> Vm<'plan> {
     /// driver hears — and the request is held until the call
     /// settles, its mailbox claimed for the whole wait: the worker is
     /// free, the node is not.
-    fn open_call(
+    fn open_call<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
+        bindings: &mut B,
         slot: Slot,
         instance: &InstanceRef,
         delivery: &Delivery,
@@ -2370,17 +2471,14 @@ impl<'plan> Vm<'plan> {
         // one value carried by the intent — nobody recomputes. An
         // unframeable request completes on `exit` before any open
         // fact exists: stderr is not a lifecycle channel.
-        let prepared = match crate::boundary::prepare_request(
-            crate::boundary::RequestCodec::of(spec),
-            delivery.envelope.data(),
-        ) {
-            Ok(prepared) => prepared,
-            Err(message) => {
+        let prepared = match bindings
+            .prepare_request(&planned.path, delivery.envelope.data())
+            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(VmError::Dispatch)?
+        {
+            RequestPreparation::Prepared(prepared) => prepared,
+            RequestPreparation::Rejected(completion) => {
                 let executor = TransactionExecutor::new(self.plan, self.graph_version);
-                let completion = Completion::process_exit(ProcessExit::DecodeFailed {
-                    message,
-                    line: None,
-                });
                 let trigger = node::Trigger::Port(delivery.port.clone());
                 let mut outcome = executor
                     .connector_completion(slot, instance, delivery, &trigger, &completion)

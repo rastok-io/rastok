@@ -31,7 +31,8 @@ crash recovery are later work.
 M1.5 C0 separated Connector/Contract/Driver vocabulary without an identity
 move; C1 now publishes stable Connector ids and role requirements in
 categorical plan-package v10, with separate compiler `ContractCatalog` and
-runtime `DriverRegistry`. C2 is the mixed-family global binder.
+runtime `DriverRegistry`. C2 now binds every active role before the VM and
+routes mixed families without concrete-name dispatch; C3 opens `File`.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now

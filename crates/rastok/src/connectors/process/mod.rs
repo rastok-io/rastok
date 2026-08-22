@@ -11,7 +11,8 @@
 //! exactly the machinery a run does, minus this file.
 
 use crate::boundary::{
-    Completion, Intent, OutboundConnectorDriver, OutputOverflowReason, ProcessExit, Response,
+    Completion, Intent, OutboundConnectorDriver, OutputOverflowReason, ProcessExit,
+    RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
@@ -46,6 +47,7 @@ struct ProcessSettings {
 struct ProcessBinding {
     spec: rastok_core::plan::ConnectorSpec,
     static_settings: Option<ProcessSettings>,
+    request_codec: crate::boundary::RequestCodec,
 }
 
 impl ProcessBinding {
@@ -55,9 +57,11 @@ impl ProcessBinding {
             .iter()
             .any(|(_, setting)| matches!(setting, AttrSetting::Expr { .. }));
         if !dynamic {
+            let settings = ProcessSettings::try_from(spec)?;
             return Ok(Self {
                 spec: spec.clone(),
-                static_settings: Some(ProcessSettings::try_from(spec)?),
+                request_codec: settings.codec,
+                static_settings: Some(settings),
             });
         }
 
@@ -80,10 +84,11 @@ impl ProcessBinding {
             };
             *setting = AttrSetting::Value(value);
         }
-        ProcessSettings::try_from(&shape)?;
+        let shape_settings = ProcessSettings::try_from(&shape)?;
         Ok(Self {
             spec: spec.clone(),
             static_settings: None,
+            request_codec: shape_settings.codec,
         })
     }
 
@@ -391,43 +396,14 @@ pub struct Process<'plan> {
 pub struct ProcessBindError {
     /// The refusing connector.
     pub node: crate::node::Path,
-    reason: ProcessBindReason,
-}
-
-/// The two REAL bind authorities, kept apart (D-2026-08-12-1,
-/// review round): a Process spec whose settings refuse, or a world
-/// this Process-only Driver cannot cover — the distinction M1.5's global
-/// binder removes.
-#[derive(Debug)]
-pub enum ProcessBindReason {
-    /// The Process spec itself refuses.
-    Settings(ProcessSettingsError),
-    /// A CALLABLE connector of another contract: its intents would
-    /// arrive at this Driver and strand open.
-    UnservedConnector {
-        /// The foreign contract's name.
-        contract: crate::connector::ConnectorId,
-    },
-}
-
-impl core::fmt::Display for ProcessBindReason {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Settings(error) => error.fmt(f),
-            Self::UnservedConnector { contract } => write!(
-                f,
-                "the Process-only binding cannot serve callable `{contract}` — leaving it \
-                 unbound would strand calls open"
-            ),
-        }
-    }
+    reason: ProcessSettingsError,
 }
 
 impl ProcessBindError {
     /// The typed reason — callers can dispatch on it instead of
     /// parsing prose.
     #[must_use]
-    pub fn reason(&self) -> &ProcessBindReason {
+    pub fn reason(&self) -> &ProcessSettingsError {
         &self.reason
     }
 }
@@ -582,74 +558,111 @@ enum Chunk {
     ReadFailed,
 }
 
+/// Statically linked factory for `rastok/process@1`.
+#[derive(Debug)]
+pub struct ProcessFactory {
+    id: crate::connector::ConnectorId,
+}
+
+impl ProcessFactory {
+    /// Constructs the factory after checking the built-in stable id through
+    /// the same canonical parser used for package and plugin identities.
+    ///
+    /// # Errors
+    ///
+    /// The built-in constant ceased to be a canonical Connector id.
+    pub fn try_new() -> Result<Self, crate::connector::ConnectorIdError> {
+        Ok(Self {
+            id: crate::connector::ConnectorId::parse(crate::connector::PROCESS_CONNECTOR_ID)?,
+        })
+    }
+}
+
+impl super::ConnectorDriverFactory for ProcessFactory {
+    fn connector_id(&self) -> &crate::connector::ConnectorId {
+        &self.id
+    }
+
+    fn roles(&self) -> crate::connector::ConnectorRoles {
+        crate::connector::ConnectorRoles::Outbound
+    }
+
+    fn bind<'plan>(
+        &self,
+        plan: &'plan crate::plan::ValidatedExecutionPlan,
+        nodes: &[crate::node::Path],
+    ) -> Result<Box<dyn super::BoundConnectorDriver + 'plan>, super::DriverFactoryError> {
+        Process::try_bind(plan, nodes)
+            .map(|driver| Box::new(driver) as Box<dyn super::BoundConnectorDriver + 'plan>)
+            .map_err(|error| super::DriverFactoryError::new(error.to_string()))
+    }
+}
+
+impl super::BoundConnectorDriver for Process<'_> {
+    fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+        None
+    }
+
+    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+        Some(self)
+    }
+}
+
 impl<'plan> Process<'plan> {
-    /// Binds a Driver to every `Process` connector of one
-    /// VALIDATED plan, resolving all settings up front: a
+    /// Binds a specialized Driver to every `Process` connector of one
+    /// validated plan, resolving all settings up front: a
     /// configuration defect refuses HERE — before any journaled
     /// open — and `SpawnFailed` is reserved for the OS actually
     /// refusing a launch (D-2026-08-12-1, review rounds).
     ///
     /// # Errors
     ///
-    /// The first connector that cannot bind, with its typed reason:
-    /// an unresolved attribute, a value outside its domain, an
-    /// undeclared emitted error, a budget beyond this host's `Vec`
-    /// REPRESENTABILITY (never a memory promise — allocation is
-    /// judged at intake), or a CALLABLE connector of another
-    /// contract this Process-only Driver cannot serve (a pure source is
-    /// skipped).
+    /// The first Process connector whose resolved settings refuse. Other
+    /// contract families are deliberately ignored: application-wide coverage
+    /// belongs to [`super::RuntimeBindings`], never to one specialized Driver.
     pub fn try_new(
         plan: &'plan crate::plan::ValidatedExecutionPlan,
     ) -> Result<Self, ProcessBindError> {
+        let nodes: Vec<_> = plan
+            .plan()
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                node.connector()
+                    .filter(|spec| spec.contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID)
+                    .map(|_| node.path.clone())
+            })
+            .collect();
+        Self::try_bind(plan, &nodes)
+    }
+
+    fn try_bind(
+        plan: &'plan crate::plan::ValidatedExecutionPlan,
+        nodes: &[crate::node::Path],
+    ) -> Result<Self, ProcessBindError> {
         let mut bindings = std::collections::BTreeMap::new();
-        for node in &plan.plan().nodes {
-            if let NodeKind::Connector(spec) = &node.kind {
-                // A specialized Driver — but the world it serves has ONE
-                // OutboundConnectorDriver, so a CALLABLE connector of
-                // another contract would receive its intents HERE
-                // and strand them open: the binding refuses it. A
-                // pure source (no incoming edge) is merely skipped.
-                // M1.5's global binder removes this specialization with
-                // obligations BY ROLE: an outbound caller binds to exactly
-                // one OutboundConnectorDriver, an inbound source to exactly
-                // one InboundConnectorDriver, and a both-role Connector to
-                // both (m1-slice, the connector items).
-                if spec.contract.as_str() != crate::connector::PROCESS_CONNECTOR_ID {
-                    let slot = crate::plan::Slot::new(
-                        u32::try_from(
-                            plan.plan()
-                                .nodes
-                                .iter()
-                                .position(|candidate| candidate.path == node.path)
-                                .unwrap_or(usize::MAX),
-                        )
-                        .unwrap_or(u32::MAX),
-                    );
-                    let callable = plan
-                        .plan()
-                        .edges
-                        .iter()
-                        .any(|edge| edge.to.as_ref().is_some_and(|to| to.node == Some(slot)));
-                    if callable {
-                        return Err(ProcessBindError {
-                            node: node.path.clone(),
-                            reason: ProcessBindReason::UnservedConnector {
-                                contract: spec.contract.clone(),
-                            },
-                        });
-                    }
-                    continue;
+        for path in nodes {
+            let Some(node) = plan.plan().nodes.iter().find(|node| &node.path == path) else {
+                return Err(ProcessBindError {
+                    node: path.clone(),
+                    reason: ProcessSettingsError::Unresolved("connector binding path"),
+                });
+            };
+            let NodeKind::Connector(spec) = &node.kind else {
+                return Err(ProcessBindError {
+                    node: path.clone(),
+                    reason: ProcessSettingsError::Unresolved("connector binding kind"),
+                });
+            };
+            match ProcessBinding::try_from(spec) {
+                Ok(resolved) => {
+                    bindings.insert(node.path.clone(), resolved);
                 }
-                match ProcessBinding::try_from(spec) {
-                    Ok(resolved) => {
-                        bindings.insert(node.path.clone(), resolved);
-                    }
-                    Err(reason) => {
-                        return Err(ProcessBindError {
-                            node: node.path.clone(),
-                            reason: ProcessBindReason::Settings(reason),
-                        });
-                    }
+                Err(reason) => {
+                    return Err(ProcessBindError {
+                        node: node.path.clone(),
+                        reason,
+                    });
                 }
             }
         }
@@ -958,6 +971,30 @@ fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, ProcessFailure> {
 }
 
 impl OutboundConnectorDriver for Process<'_> {
+    fn prepare_request(
+        &mut self,
+        connector: &crate::node::Path,
+        data: &Data,
+    ) -> RequestPreparation {
+        let Some(binding) = self.bindings.get(connector) else {
+            return RequestPreparation::Rejected(
+                ProcessFailure::SpawnFailed {
+                    message: format!("no Process binding owns `{connector}`"),
+                }
+                .into_completion(),
+            );
+        };
+        crate::boundary::prepare_process_request(binding.request_codec, data)
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        _connector: &crate::node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion {
+        crate::boundary::process_scheduler_completion(completion)
+    }
+
     fn start(&mut self, intent: &Intent, request: &Envelope) {
         match self.launch(intent, request) {
             Ok(run) => self.runs.push(run),
@@ -1111,9 +1148,9 @@ graph real : App {
         vm.inject(&mut journal, submission).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
-            vm.drain(&mut journal).unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
             let report = vm.pump(&mut journal, &mut world).unwrap();
-            vm.drain(&mut journal).unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
             if vm.is_stable() {
                 break;
             }

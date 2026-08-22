@@ -128,8 +128,9 @@ The repository opens publicly with this milestone (15 October 2026).
   proof connector: one-file `read` and atomic `replace`, with directories and
   `watch` deliberately outside this slice. See the
   [ordered M1.5 backlog](docs/architecture/m1.5-connectors-backlog.md).
-  C0's pure Driver-seam refactor and C1's categorical v10 identity/role
-  transport are landed; C2 is the mixed-family global binder.
+  C0's pure Driver-seam refactor, C1's categorical v10 identity/role
+  transport, and C2's mixed-family pre-journal binder are landed; C3 opens
+  the `File` contract and invocation settings.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

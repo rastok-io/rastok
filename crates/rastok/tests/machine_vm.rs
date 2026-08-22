@@ -7,7 +7,9 @@
 // correct report is a panic.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use rastok::boundary::{InboundSubmission, Intent, OutboundConnectorDriver};
+use rastok::boundary::{
+    DriverRouteError, InboundSubmission, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
+};
 use rastok::envelope::{Data, Envelope};
 use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use rastok::journal::Journal;
@@ -18,8 +20,8 @@ use rastok::plan::{
 use rastok::runtime::vm::{Vm, VmError};
 
 use rastok::boundary::{
-    Completion, Draft, InboundEnvelopeProvenance, PortOutput, ProcessExit, Response,
-    SubmissionSequence,
+    Completion, Draft, InboundEnvelopeProvenance, PortOutput, ProcessExit, RequestPreparation,
+    Response, SchedulerCompletion, SubmissionSequence,
 };
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
@@ -67,6 +69,58 @@ struct EchoWorld {
     fail_next: bool,
 }
 
+struct ProjectionRefusal {
+    inner: EchoWorld,
+    refuse_scheduler_completion: bool,
+}
+
+impl OutboundConnectorBindings for ProjectionRefusal {
+    fn prepare_request(
+        &mut self,
+        connector: &node::Path,
+        data: &Data,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        Ok(OutboundConnectorDriver::prepare_request(
+            &mut self.inner,
+            connector,
+            data,
+        ))
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError> {
+        if self.refuse_scheduler_completion {
+            return Err(DriverRouteError::UnavailableOutbound(connector.clone()));
+        }
+        Ok(OutboundConnectorDriver::scheduler_completion(
+            &mut self.inner,
+            connector,
+            completion,
+        ))
+    }
+
+    fn cancel(
+        &mut self,
+        _: &node::Path,
+        call_ref: &rastok::boundary::CallRef,
+    ) -> Result<(), DriverRouteError> {
+        OutboundConnectorDriver::cancel(&mut self.inner, call_ref);
+        Ok(())
+    }
+
+    fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError> {
+        OutboundConnectorDriver::start(&mut self.inner, intent, request);
+        Ok(())
+    }
+
+    fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
+        Ok(OutboundConnectorDriver::events(&mut self.inner))
+    }
+}
+
 /// A boundary seam that records deterministic cancellation order. It can
 /// either confirm each cancellation with an observed normal exit or remain
 /// silent so bounded settlement has to mint `OutcomeUnknown`.
@@ -79,6 +133,18 @@ struct ClosingWorld {
 }
 
 impl OutboundConnectorDriver for ClosingWorld {
+    fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        _: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion {
+        rastok::boundary::process_scheduler_completion(completion)
+    }
+
     fn start(&mut self, intent: &Intent, _: &Envelope) {
         self.started.push(intent.call_ref);
     }
@@ -128,6 +194,18 @@ graph bounded_closing : App {
 "#;
 
 impl OutboundConnectorDriver for EchoWorld {
+    fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        _: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion {
+        rastok::boundary::process_scheduler_completion(completion)
+    }
+
     fn start(&mut self, intent: &Intent, request: &Envelope) {
         let _ = request;
         self.seen.push(intent.clone());
@@ -275,9 +353,9 @@ fn run_probe() -> (MemJournal, Vec<rastok::runtime::vm::BoundaryOutput>) {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(vm.is_stable());
     (journal, vm.outputs().to_vec())
 }
@@ -1230,9 +1308,9 @@ graph dynamic_binding : App {
     vm.inject(&mut journal, text_submission("salut")).unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        vm.drain(&mut journal).unwrap();
+        vm.drain_with_bindings(&mut journal, &mut process).unwrap();
         vm.pump(&mut journal, &mut process).unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.drain_with_bindings(&mut journal, &mut process).unwrap();
         if vm.is_stable() {
             break;
         }
@@ -1636,10 +1714,10 @@ graph nested_lifetimes : App {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let cause = vm.inject(&mut journal, text_submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    let mut world = EchoWorld::default();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(vm.has_open_obligations());
 
-    let mut world = EchoWorld::default();
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
     assert!(
         journal.records().iter().all(|record| !matches!(
@@ -1724,13 +1802,13 @@ graph draining : App {
     let mut world = EchoWorld::default();
 
     vm.inject(&mut journal, text_submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(vm.has_open_obligations());
     assert_eq!(vm.outputs().len(), 1, "the seed creates collect first");
 
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
 
     assert_eq!(vm.outputs().len(), 2);
     assert!(journal.records().iter().any(|record| matches!(
@@ -1762,7 +1840,7 @@ fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
     };
 
     vm.inject(&mut journal, text_submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     assert_eq!(world.started.len(), 1);
 
@@ -1798,7 +1876,7 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
     let mut world = ClosingWorld::default();
 
     vm.inject(&mut journal, text_submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
     assert_eq!(world.cancelled.len(), 1);
@@ -1881,7 +1959,7 @@ fn bounded_closing_interleavings_are_model_checked() {
             ..ClosingWorld::default()
         };
         vm.inject(&mut journal, text_submission("one")).unwrap();
-        vm.drain(&mut journal).unwrap();
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
         vm.pump(&mut journal, &mut world).unwrap();
         let call = world.started[0];
         let reply = || Response {
@@ -1902,7 +1980,7 @@ fn bounded_closing_interleavings_are_model_checked() {
         if matches!(reply_at, ReplyAt::BeforeDrain) {
             world.answers.push(reply());
             vm.pump(&mut journal, &mut world).unwrap();
-            vm.drain(&mut journal).unwrap();
+            vm.drain_with_bindings(&mut journal, &mut world).unwrap();
         }
         vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
         if matches!(reply_at, ReplyAt::DuringSettlement) {
@@ -1988,7 +2066,7 @@ fn external_arrival_waits_for_the_clean_successor_generation() {
     };
 
     vm.inject(&mut journal, text_submission("first")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
     let second = vm
@@ -2072,7 +2150,7 @@ graph two_calls : App {
 
     vm.inject(&mut journal, text_submission("first")).unwrap();
     vm.inject(&mut journal, text_submission("queued")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
     assert_eq!(
         world.started.len(),
@@ -2651,9 +2729,9 @@ fn stderr_and_terminal_status_leave_on_independent_ports() {
         ..EchoWorld::default()
     };
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     // stderr is ordinary data on `err`; the non-zero child status is an
     // independent, typed `Exited` terminal fact.
     assert!(vm.outputs().is_empty());
@@ -2680,8 +2758,9 @@ fn malformed_terminal_facts_are_refused_loudly() {
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut opener = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut opener).unwrap();
     let open = journal.open_calls();
     let mut world = ScriptedWorld {
         answers: vec![
@@ -2727,6 +2806,18 @@ struct ScriptedWorld {
 }
 
 impl OutboundConnectorDriver for ScriptedWorld {
+    fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        _: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion {
+        rastok::boundary::process_scheduler_completion(completion)
+    }
+
     fn start(&mut self, _: &Intent, _: &Envelope) {}
     fn events(&mut self) -> Vec<Response> {
         std::mem::take(&mut self.answers)
@@ -2917,12 +3008,12 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(vm.has_open_obligations());
     // Nobody answers; the budget expires at the discrete advance.
-    vm.advance(&mut journal, &mut EchoWorld::default(), 5_000_000_000)
-        .unwrap();
+    vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable(), "the expiry released the machine");
     assert_eq!(vm.now(), 5_000_000_000);
     // The closure is a Timeout fact and the completion transaction
@@ -2940,8 +3031,42 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
     assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
     // The claim lifted: a second submission opens a second call.
     vm.inject(&mut journal, submission("encore")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert_eq!(journal.open_calls().len(), 1);
+}
+
+#[test]
+fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
+    let compilation = compile(
+        &[TIMED_PROBE],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut bindings = ProjectionRefusal {
+        inner: EchoWorld::default(),
+        refuse_scheduler_completion: false,
+    };
+    vm.inject(&mut journal, submission("salut")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+    let facts_before = journal.records().len();
+    assert_eq!(journal.open_calls().len(), 1);
+
+    bindings.refuse_scheduler_completion = true;
+    assert!(matches!(
+        vm.advance(&mut journal, &mut bindings, 5_000_000_000),
+        Err(VmError::Dispatch(rastok::boundary::DispatchError::Driver(
+            DriverRouteError::UnavailableOutbound(_)
+        )))
+    ));
+    assert_eq!(journal.records().len(), facts_before);
+    assert_eq!(journal.open_calls().len(), 1, "the call remains replayable");
+
+    bindings.refuse_scheduler_completion = false;
+    vm.advance(&mut journal, &mut bindings, 5_000_000_000)
+        .unwrap();
+    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
 }
 
 #[test]
@@ -2962,7 +3087,7 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("un")).unwrap();
     vm.inject(&mut journal, submission("deux")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert_eq!(journal.open_calls().len(), 1, "one open, one queued");
     // Nobody answers; both budgets expire at the same sweep.
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
@@ -3067,7 +3192,7 @@ on in { out = data.text }
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert_eq!(journal.open_calls().len(), 2, "both calls opened");
     // Only beta's budget is due at 100ms.
     vm.advance(&mut journal, &mut world, 100_000_000).unwrap();
@@ -3091,13 +3216,12 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     // The driver answers first; the expiry then loses the race —
     // one closure fact, one completion transaction, no duplicate.
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain(&mut journal).unwrap();
-    vm.advance(&mut journal, &mut EchoWorld::default(), 5_000_000_000)
-        .unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     assert!(vm.is_stable());
     let closures = journal
         .records()
@@ -3123,12 +3247,12 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     let call_ref = journal.open_calls()[0].call_ref;
     // The budget expires first…
-    vm.advance(&mut journal, &mut EchoWorld::default(), 5_000_000_000)
-        .unwrap();
+    vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
     // …then the world answers a closed call.
     let mut late = ScriptedWorld {
         answers: vec![Response {
@@ -3167,7 +3291,7 @@ fn a_refused_expiry_stays_armed_and_replays() {
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("salut")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(
         vm.advance(&mut journal, &mut world, 5_000_000_000).is_err(),
         "the refused closure surfaces"
@@ -3192,7 +3316,7 @@ fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("un")).unwrap();
     vm.inject(&mut journal, submission("deux")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert_eq!(journal.inner.open_calls().len(), 1, "one open, one queued");
     journal.refuse_opens = true;
     assert!(vm.advance(&mut journal, &mut world, 5_000_000_000).is_err());
@@ -3282,14 +3406,14 @@ fn a_suspended_call_keeps_its_mailbox_claimed() {
     let mut world = EchoWorld::default();
     vm.inject(&mut journal, submission("un")).unwrap();
     vm.inject(&mut journal, submission("deux")).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     // Two requests reached the connector, but only one call is
     // open: the second waits for the mailbox claim to lift.
     assert_eq!(journal.open_calls().len(), 1);
     assert!(vm.has_open_obligations());
     // Settle, then the claim lifts and the second call opens.
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert_eq!(journal.open_calls().len(), 1, "the second call is now open");
     vm.pump(&mut journal, &mut world).unwrap();
     vm.drain(&mut journal).unwrap();

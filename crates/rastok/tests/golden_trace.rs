@@ -11,7 +11,8 @@
 
 use rastok::boundary::{
     Completion, Draft, InboundEnvelopeProvenance, InboundSubmission, Intent,
-    OutboundConnectorDriver, ProcessExit, Response, SubmissionSequence,
+    OutboundConnectorDriver, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
+    SubmissionSequence,
 };
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
@@ -51,6 +52,18 @@ struct EchoWorld {
 }
 
 impl OutboundConnectorDriver for EchoWorld {
+    fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        _: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion {
+        rastok::boundary::process_scheduler_completion(completion)
+    }
+
     fn start(&mut self, intent: &Intent, _request: &Envelope) {
         self.answers.push(Response {
             call_ref: intent.call_ref,
@@ -97,9 +110,9 @@ fn run(source: &str) -> Vec<Record> {
         },
     )
     .unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     vm.pump(&mut journal, &mut world).unwrap();
-    vm.drain(&mut journal).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
     assert!(vm.is_stable());
     journal.records().to_vec()
 }

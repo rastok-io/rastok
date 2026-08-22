@@ -417,7 +417,7 @@ fn drive(
         .map_err(|error| format!("the submission was refused: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
-        vm.drain(journal)
+        vm.drain_with_bindings(journal, driver)
             .map_err(|error| format!("a step faulted: {error}"))?;
         let report = vm
             .pump(journal, driver)
@@ -428,7 +428,7 @@ fn drive(
                  produced a completion outside its declared contract"
             ));
         }
-        vm.drain(journal)
+        vm.drain_with_bindings(journal, driver)
             .map_err(|error| format!("a step faulted: {error}"))?;
         if vm.is_stable() {
             return Ok(());
@@ -626,12 +626,12 @@ fn interleave_battery(
         .map_err(|error| format!("the interleave submission was refused: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
-        vm.drain(&mut journal)
+        vm.drain_with_bindings(&mut journal, driver.as_mut())
             .map_err(|error| format!("a step faulted: {error}"))?;
         let report = vm
             .pump(&mut journal, driver.as_mut())
             .map_err(|error| format!("the boundary round faulted: {error}"))?;
-        vm.drain(&mut journal)
+        vm.drain_with_bindings(&mut journal, driver.as_mut())
             .map_err(|error| format!("a step faulted: {error}"))?;
         if vm.is_stable() {
             break;

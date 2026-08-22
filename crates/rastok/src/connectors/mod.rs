@@ -7,8 +7,8 @@
 mod process;
 mod registry;
 
-pub use process::{Process, ProcessBindError, ProcessBindReason, ProcessSettingsError};
+pub use process::{Process, ProcessBindError, ProcessFactory, ProcessSettingsError};
 pub use registry::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverBindingError, DriverFactoryError,
-    DriverRegistrationError, DriverRegistry,
+    DriverRegistrationError, DriverRegistry, RuntimeBindings,
 };

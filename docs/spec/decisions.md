@@ -123,6 +123,32 @@ it with `inbound_seq` to mint each root. It is neither a network address nor a
 per-submission id. This vocabulary change preserves the root recipe and every
 causal byte.
 
+**C2 binding checkpoint (2026-08-22).** `RuntimeBindings::try_new` is the
+single application binder. It groups active Connector Nodes by exact
+`ConnectorId`, resolves each factory once, and requires the returned shared
+object to expose exactly the roles its factory advertised. An inbound-capable
+Node is active by role; an outbound Node is active when an edge can deliver to
+it. An outbound-only pure source is therefore skipped rather than mistaken
+for an unserved caller. Missing ids, insufficient advertised roles, a
+factory refusal, and an advertised/actual role contradiction are distinct
+pre-execution failures.
+
+After binding, the VM knows only `OutboundConnectorBindings`: Node paths route
+request preparation, starts, cancellations, scheduler-owned terminal facts,
+and responses to the selected family. Request framing and the typed projection
+of `TimeoutExpired`/`OutcomeUnknown` belong to that bound contract; the VM
+never matches `Process` or another concrete Connector id. The completion gate
+continues to judge every returned value solely from the validated resolved
+port table. `ProcessFactory` is explicitly registered by the CLI and binding
+finishes before either the VM or journal is constructed. A direct single
+Driver still implements the aggregate interface automatically for focused
+conformance tests; registry-backed Lab composition remains C5.
+
+The mixed-family proof executes two different fake contract ids through one
+VM, while a both-role proof reaches both interfaces on one shared bound
+object. Binding failures start no Driver effect and create no journal. C2
+moves no semantic hash, package byte, causal trace, or format version.
+
 ## D-2026-08-18-1 — Nodes own instances; key, lifetime, and state scope are separate
 
 The unreleased named-partition model fused three independent concerns: a key

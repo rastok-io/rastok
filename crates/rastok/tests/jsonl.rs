@@ -47,14 +47,16 @@ fn drive(
         },
     )
     .expect("the injection lands");
-    vm.drain(&mut journal).expect("the request opens");
+    vm.drain_with_bindings(&mut journal, &mut world)
+        .expect("the request opens");
     for _ in 0..200 {
         if vm.is_stable() && !vm.has_open_obligations() {
             break;
         }
         vm.pump(&mut journal, &mut world)
             .expect("the world answers");
-        vm.drain(&mut journal).expect("the reply routes");
+        vm.drain_with_bindings(&mut journal, &mut world)
+            .expect("the reply routes");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(vm.is_stable(), "the run must settle");

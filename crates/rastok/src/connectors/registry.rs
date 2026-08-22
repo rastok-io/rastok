@@ -4,8 +4,13 @@
 //! This registry owns implementation factories.  Their stable Connector ids
 //! meet only at binding; registration order is never selection policy.
 
-use crate::boundary::{InboundConnectorDriver, OutboundConnectorDriver};
+use crate::boundary::{
+    CallRef, Completion, DriverRouteError, InboundConnectorDriver, InboundSubmission, Intent,
+    OutboundConnectorBindings, OutboundConnectorDriver, RequestPreparation, Response,
+    SchedulerCompletion,
+};
 use crate::connector::{ConnectorId, ConnectorRoles};
+use crate::envelope::{Data, Envelope};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
 use std::collections::BTreeMap;
@@ -16,10 +21,12 @@ use std::collections::BTreeMap;
 /// Returning role views from one object makes the duplex invariant explicit:
 /// a both-role factory cannot accidentally register two unrelated states.
 pub trait BoundConnectorDriver {
-    /// The inbound role view, when implemented.
+    /// The inbound role view, when implemented. Presence is immutable for the
+    /// lifetime of this bound object; returning `None` after binding is an
+    /// integrity fault.
     fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver>;
 
-    /// The outbound role view, when implemented.
+    /// The outbound role view under the same stable-presence invariant.
     fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver>;
 }
 
@@ -37,6 +44,9 @@ pub trait ConnectorDriverFactory {
     /// # Errors
     ///
     /// Returns a factory-specific refusal before a VM or journal exists.
+    /// Binding may validate plan facts and allocate local state, but it must
+    /// not observe or mutate the external world or launch Driver work. Those
+    /// effects begin only through the bound role methods.
     fn bind<'plan>(
         &self,
         plan: &'plan ValidatedExecutionPlan,
@@ -135,6 +145,253 @@ impl DriverRegistry {
     }
 }
 
+#[derive(Debug)]
+struct FamilyRequirement {
+    nodes: Vec<(node::Path, ConnectorRoles)>,
+    required: ConnectorRoles,
+}
+
+struct BoundFamily<'plan> {
+    driver: Box<dyn BoundConnectorDriver + 'plan>,
+    uses_inbound: bool,
+    outbound_path: Option<node::Path>,
+}
+
+/// Complete runtime association between active plan Connectors and physical
+/// Drivers.
+///
+/// Construction is the only registry lookup. Thereafter the VM routes by
+/// exact Node path and role; no concrete contract name or registration order
+/// participates in execution.
+pub struct RuntimeBindings<'plan> {
+    families: BTreeMap<ConnectorId, BoundFamily<'plan>>,
+    outbound: BTreeMap<node::Path, ConnectorId>,
+    calls: BTreeMap<CallRef, ConnectorId>,
+}
+
+impl core::fmt::Debug for RuntimeBindings<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("RuntimeBindings")
+            .field("families", &self.families.keys().collect::<Vec<_>>())
+            .field("outbound", &self.outbound)
+            .field("calls", &self.calls)
+            .finish()
+    }
+}
+
+impl<'plan> RuntimeBindings<'plan> {
+    /// Binds every runnable inbound Connector and every callable outbound
+    /// Connector before a VM or journal exists.
+    ///
+    /// An outbound-only Node with no incoming edge cannot open a call and is
+    /// deliberately skipped. An inbound-capable Node is runnable by role and
+    /// therefore binds even when no graph edge targets it.
+    ///
+    /// # Errors
+    ///
+    /// Missing, role-incomplete, lying, or factory-refused implementations
+    /// remain distinct typed failures.
+    pub fn try_new(
+        plan: &'plan ValidatedExecutionPlan,
+        registry: &DriverRegistry,
+    ) -> Result<Self, DriverBindingError> {
+        let mut requirements: BTreeMap<ConnectorId, FamilyRequirement> = BTreeMap::new();
+        for (index, planned) in plan.plan().nodes.iter().enumerate() {
+            let Some(spec) = planned.connector() else {
+                continue;
+            };
+            let callable = plan.plan().edges.iter().any(|edge| {
+                edge.to
+                    .as_ref()
+                    .and_then(|endpoint| endpoint.node)
+                    .is_some_and(|slot| slot.index() == index)
+            });
+            if !spec.roles.has_inbound() && !(spec.roles.has_outbound() && callable) {
+                continue;
+            }
+            requirements
+                .entry(spec.contract.clone())
+                .and_modify(|requirement| {
+                    requirement.required = union_roles(requirement.required, spec.roles);
+                    requirement.nodes.push((planned.path.clone(), spec.roles));
+                })
+                .or_insert_with(|| FamilyRequirement {
+                    nodes: vec![(planned.path.clone(), spec.roles)],
+                    required: spec.roles,
+                });
+        }
+
+        let mut families = BTreeMap::new();
+        let mut outbound = BTreeMap::new();
+        for (id, requirement) in requirements {
+            let factory = registry.require(&id, requirement.required)?;
+            let paths: Vec<_> = requirement
+                .nodes
+                .iter()
+                .map(|(path, _)| path.clone())
+                .collect();
+            let mut driver =
+                factory
+                    .bind(plan, &paths)
+                    .map_err(|error| DriverBindingError::Factory {
+                        id: id.clone(),
+                        detail: error.detail().to_string(),
+                    })?;
+            let actual = roles_of(driver.as_mut());
+            let advertised = factory.roles();
+            if actual != Some(advertised) {
+                return Err(DriverBindingError::BoundRolesMismatch {
+                    id,
+                    advertised,
+                    actual,
+                });
+            }
+
+            let uses_inbound = requirement.required.has_inbound();
+            let mut outbound_path = None;
+            for (path, roles) in requirement.nodes {
+                if roles.has_outbound() {
+                    outbound_path.get_or_insert_with(|| path.clone());
+                    outbound.insert(path, id.clone());
+                }
+            }
+            families.insert(
+                id,
+                BoundFamily {
+                    driver,
+                    uses_inbound,
+                    outbound_path,
+                },
+            );
+        }
+        Ok(Self {
+            families,
+            outbound,
+            calls: BTreeMap::new(),
+        })
+    }
+
+    /// Polls runnable inbound families in stable Connector-id order.
+    ///
+    /// # Errors
+    ///
+    /// A role view proven during binding disappeared.
+    pub fn next_inbound(&mut self) -> Result<Option<InboundSubmission>, DriverRouteError> {
+        for (id, family) in &mut self.families {
+            if !family.uses_inbound {
+                continue;
+            }
+            let Some(driver) = family.driver.inbound() else {
+                return Err(DriverRouteError::UnavailableInbound(id.clone()));
+            };
+            if let Some(submission) = driver.next() {
+                return Ok(Some(submission));
+            }
+        }
+        Ok(None)
+    }
+
+    fn outbound_driver(
+        &mut self,
+        connector: &node::Path,
+    ) -> Result<&mut dyn OutboundConnectorDriver, DriverRouteError> {
+        let Some(id) = self.outbound.get(connector) else {
+            return Err(DriverRouteError::UnboundOutbound(connector.clone()));
+        };
+        let Some(family) = self.families.get_mut(id) else {
+            return Err(DriverRouteError::UnboundOutbound(connector.clone()));
+        };
+        family
+            .driver
+            .outbound()
+            .ok_or_else(|| DriverRouteError::UnavailableOutbound(connector.clone()))
+    }
+}
+
+impl OutboundConnectorBindings for RuntimeBindings<'_> {
+    fn prepare_request(
+        &mut self,
+        connector: &node::Path,
+        data: &Data,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        Ok(self
+            .outbound_driver(connector)?
+            .prepare_request(connector, data))
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError> {
+        Ok(self
+            .outbound_driver(connector)?
+            .scheduler_completion(connector, completion))
+    }
+
+    fn cancel(
+        &mut self,
+        connector: &node::Path,
+        call_ref: &CallRef,
+    ) -> Result<(), DriverRouteError> {
+        self.outbound_driver(connector)?.cancel(call_ref);
+        Ok(())
+    }
+
+    fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError> {
+        let connector = &intent.connector_path;
+        let Some(id) = self.outbound.get(connector).cloned() else {
+            return Err(DriverRouteError::UnboundOutbound(connector.clone()));
+        };
+        self.outbound_driver(connector)?.start(intent, request);
+        self.calls.insert(intent.call_ref, id);
+        Ok(())
+    }
+
+    fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
+        let mut responses = Vec::new();
+        for (id, family) in &mut self.families {
+            let Some(path) = &family.outbound_path else {
+                continue;
+            };
+            let Some(driver) = family.driver.outbound() else {
+                return Err(DriverRouteError::UnavailableOutbound(path.clone()));
+            };
+            for response in driver.events() {
+                if let Some(expected) = self.calls.get(&response.call_ref)
+                    && expected != id
+                {
+                    return Err(DriverRouteError::CrossFamilyResponse {
+                        call_ref: response.call_ref,
+                        expected: expected.clone(),
+                        actual: id.clone(),
+                    });
+                }
+                responses.push(response);
+            }
+        }
+        Ok(responses)
+    }
+}
+
+fn union_roles(left: ConnectorRoles, right: ConnectorRoles) -> ConnectorRoles {
+    if left == right {
+        left
+    } else {
+        ConnectorRoles::InboundAndOutbound
+    }
+}
+
+fn roles_of(driver: &mut dyn BoundConnectorDriver) -> Option<ConnectorRoles> {
+    match (driver.inbound().is_some(), driver.outbound().is_some()) {
+        (true, true) => Some(ConnectorRoles::InboundAndOutbound),
+        (true, false) => Some(ConnectorRoles::Inbound),
+        (false, true) => Some(ConnectorRoles::Outbound),
+        (false, false) => None,
+    }
+}
+
 /// Why one factory cannot enter a deterministic Driver registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverRegistrationError {
@@ -172,6 +429,22 @@ pub enum DriverBindingError {
         /// Roles advertised by the factory.
         available: ConnectorRoles,
     },
+    /// The factory refused its selected plan Nodes before execution began.
+    Factory {
+        /// Stable contract id.
+        id: ConnectorId,
+        /// Factory-specific typed-boundary explanation.
+        detail: String,
+    },
+    /// The object returned by a factory contradicts its advertised roles.
+    BoundRolesMismatch {
+        /// Stable contract id.
+        id: ConnectorId,
+        /// Factory claim used for deterministic selection.
+        advertised: ConnectorRoles,
+        /// Role views actually exposed; `None` means neither.
+        actual: Option<ConnectorRoles>,
+    },
 }
 
 impl core::fmt::Display for DriverBindingError {
@@ -186,6 +459,23 @@ impl core::fmt::Display for DriverBindingError {
                 formatter,
                 "Driver `{id}` exposes {available}, but the plan requires {required}"
             ),
+            Self::Factory { id, detail } => {
+                write!(formatter, "Driver `{id}` refused binding: {detail}")
+            }
+            Self::BoundRolesMismatch {
+                id,
+                advertised,
+                actual,
+            } => match actual {
+                Some(actual) => write!(
+                    formatter,
+                    "Driver `{id}` advertises {advertised}, but its bound object exposes {actual}"
+                ),
+                None => write!(
+                    formatter,
+                    "Driver `{id}` advertises {advertised}, but its bound object exposes no role"
+                ),
+            },
         }
     }
 }
@@ -196,11 +486,22 @@ impl std::error::Error for DriverBindingError {}
 mod tests {
     use super::{
         BoundConnectorDriver, ConnectorDriverFactory, DriverBindingError, DriverFactoryError,
-        DriverRegistrationError, DriverRegistry,
+        DriverRegistrationError, DriverRegistry, RuntimeBindings,
     };
+    use crate::boundary::{
+        Completion, Draft, InboundEnvelopeProvenance, InboundSubmission, Intent,
+        OutboundConnectorBindings, OutboundConnectorDriver, ProcessExit, RequestPreparation,
+        Response, SchedulerCompletion, SubmissionSequence,
+    };
+    use crate::compiler::compile;
     use crate::connector::{ConnectorId, ConnectorRoles};
+    use crate::contract::ContractCatalog;
+    use crate::envelope::{Data, Envelope, Namespace, Value};
+    use crate::journal::MemJournal;
     use crate::node;
-    use crate::plan::ValidatedExecutionPlan;
+    use crate::plan::{GraphVersion, ValidatedExecutionPlan};
+    use crate::runtime::vm::Vm;
+    use std::sync::{Arc, Mutex};
 
     struct FakeFactory {
         id: ConnectorId,
@@ -270,6 +571,374 @@ mod tests {
                 .try_with(fake(id.as_str(), ConnectorRoles::InboundAndOutbound))
                 .unwrap_err(),
             DriverRegistrationError::Duplicate(id),
+        );
+    }
+
+    #[derive(Default)]
+    struct EmptyInbound;
+
+    impl crate::boundary::InboundConnectorDriver for EmptyInbound {
+        fn next(&mut self) -> Option<InboundSubmission> {
+            None
+        }
+    }
+
+    struct RoutingDriver {
+        family: String,
+        starts: Arc<Mutex<Vec<String>>>,
+        answers: Vec<Response>,
+    }
+
+    impl OutboundConnectorDriver for RoutingDriver {
+        fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+            crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
+        }
+
+        fn scheduler_completion(
+            &mut self,
+            _: &node::Path,
+            completion: SchedulerCompletion,
+        ) -> Completion {
+            crate::boundary::process_scheduler_completion(completion)
+        }
+
+        fn start(&mut self, intent: &Intent, _: &Envelope) {
+            self.starts
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", self.family, intent.connector_path));
+            self.answers.push(Response {
+                call_ref: intent.call_ref,
+                completion: Completion::process(
+                    vec![Data::materialized(Value::Text(self.family.clone()))],
+                    Vec::new(),
+                    ProcessExit::Exited {
+                        exit_code: 0,
+                        signal: None,
+                    },
+                ),
+            });
+        }
+
+        fn events(&mut self) -> Vec<Response> {
+            core::mem::take(&mut self.answers)
+        }
+    }
+
+    struct RoutingBound {
+        inbound: Option<EmptyInbound>,
+        outbound: Option<RoutingDriver>,
+    }
+
+    impl BoundConnectorDriver for RoutingBound {
+        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+            self.inbound
+                .as_mut()
+                .map(|driver| driver as &mut dyn crate::boundary::InboundConnectorDriver)
+        }
+
+        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+            self.outbound
+                .as_mut()
+                .map(|driver| driver as &mut dyn OutboundConnectorDriver)
+        }
+    }
+
+    struct RoutingFactory {
+        id: ConnectorId,
+        advertised: ConnectorRoles,
+        actual: Option<ConnectorRoles>,
+        starts: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ConnectorDriverFactory for RoutingFactory {
+        fn connector_id(&self) -> &ConnectorId {
+            &self.id
+        }
+
+        fn roles(&self) -> ConnectorRoles {
+            self.advertised
+        }
+
+        fn bind<'plan>(
+            &self,
+            _: &'plan ValidatedExecutionPlan,
+            _: &[node::Path],
+        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+            let inbound = self
+                .actual
+                .filter(|roles| roles.has_inbound())
+                .map(|_| EmptyInbound);
+            let outbound =
+                self.actual
+                    .filter(|roles| roles.has_outbound())
+                    .map(|_| RoutingDriver {
+                        family: self.id.as_str().to_owned(),
+                        starts: Arc::clone(&self.starts),
+                        answers: Vec::new(),
+                    });
+            Ok(Box::new(RoutingBound { inbound, outbound }))
+        }
+    }
+
+    fn routing_factory(
+        id: &str,
+        advertised: ConnectorRoles,
+        actual: Option<ConnectorRoles>,
+        starts: &Arc<Mutex<Vec<String>>>,
+    ) -> Box<dyn ConnectorDriverFactory> {
+        Box::new(RoutingFactory {
+            id: ConnectorId::parse(id).unwrap(),
+            advertised,
+            actual,
+            starts: Arc::clone(starts),
+        })
+    }
+
+    fn two_family_plan_with_first_roles(first_roles: ConnectorRoles) -> ValidatedExecutionPlan {
+        let source = r#"
+graph mixed : App {
+  input in: text
+  output out: text
+  connector first : Process {
+    mode = job ; command = "cat" ; codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+  connector second : Process {
+    mode = job ; command = "cat" ; codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> first -> second -> .
+  first.err -> nothing ; first.exit -> nothing
+  second.err -> nothing ; second.exit -> nothing
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the routing probe compiles");
+        let mut raw = compilation.plan.plan().clone();
+        for planned in &mut raw.nodes {
+            let Some(spec) = (match &mut planned.kind {
+                crate::plan::NodeKind::Connector(spec) => Some(spec),
+                crate::plan::NodeKind::Operator => None,
+            }) else {
+                continue;
+            };
+            spec.contract = ConnectorId::parse(match planned.path.to_string().as_str() {
+                "first" => "test/alpha@1",
+                "second" => "test/beta@1",
+                other => panic!("unexpected probe node `{other}`"),
+            })
+            .unwrap();
+            if planned.path.to_string() == "first" {
+                spec.roles = first_roles;
+            }
+        }
+        ValidatedExecutionPlan::try_new(raw).expect("foreign contracts remain structural")
+    }
+
+    fn two_family_plan() -> ValidatedExecutionPlan {
+        two_family_plan_with_first_roles(ConnectorRoles::Outbound)
+    }
+
+    struct DuplexDriver {
+        observations: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl crate::boundary::InboundConnectorDriver for DuplexDriver {
+        fn next(&mut self) -> Option<InboundSubmission> {
+            self.observations.lock().unwrap().push("inbound");
+            None
+        }
+    }
+
+    impl OutboundConnectorDriver for DuplexDriver {
+        fn prepare_request(&mut self, _: &node::Path, data: &Data) -> RequestPreparation {
+            self.observations.lock().unwrap().push("outbound");
+            crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
+        }
+
+        fn scheduler_completion(
+            &mut self,
+            _: &node::Path,
+            completion: SchedulerCompletion,
+        ) -> Completion {
+            crate::boundary::process_scheduler_completion(completion)
+        }
+
+        fn start(&mut self, _: &Intent, _: &Envelope) {}
+
+        fn events(&mut self) -> Vec<Response> {
+            Vec::new()
+        }
+    }
+
+    impl BoundConnectorDriver for DuplexDriver {
+        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+            Some(self)
+        }
+
+        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+            Some(self)
+        }
+    }
+
+    struct DuplexFactory {
+        id: ConnectorId,
+        observations: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl ConnectorDriverFactory for DuplexFactory {
+        fn connector_id(&self) -> &ConnectorId {
+            &self.id
+        }
+
+        fn roles(&self) -> ConnectorRoles {
+            ConnectorRoles::InboundAndOutbound
+        }
+
+        fn bind<'plan>(
+            &self,
+            _: &'plan ValidatedExecutionPlan,
+            _: &[node::Path],
+        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+            Ok(Box::new(DuplexDriver {
+                observations: Arc::clone(&self.observations),
+            }))
+        }
+    }
+
+    #[test]
+    fn a_both_role_family_exposes_one_shared_bound_object() {
+        let plan = two_family_plan_with_first_roles(ConnectorRoles::InboundAndOutbound);
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let starts = Arc::new(Mutex::new(Vec::new()));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(DuplexFactory {
+                id: ConnectorId::parse("test/alpha@1").unwrap(),
+                observations: Arc::clone(&observations),
+            }))
+            .unwrap()
+            .try_with(routing_factory(
+                "test/beta@1",
+                ConnectorRoles::Outbound,
+                Some(ConnectorRoles::Outbound),
+                &starts,
+            ))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+
+        assert!(bindings.next_inbound().unwrap().is_none());
+        let preparation = OutboundConnectorBindings::prepare_request(
+            &mut bindings,
+            &node::Path::new(["first"]).unwrap(),
+            &Data::materialized(Value::Text(String::from("request"))),
+        )
+        .unwrap();
+        assert!(matches!(preparation, RequestPreparation::Prepared(_)));
+        assert_eq!(*observations.lock().unwrap(), ["inbound", "outbound"]);
+    }
+
+    #[test]
+    fn two_connector_families_bind_and_route_without_vm_name_dispatch() {
+        let plan = two_family_plan();
+        let starts = Arc::new(Mutex::new(Vec::new()));
+        let registry = DriverRegistry::default()
+            .try_with(routing_factory(
+                "test/alpha@1",
+                ConnectorRoles::Outbound,
+                Some(ConnectorRoles::Outbound),
+                &starts,
+            ))
+            .unwrap()
+            .try_with(routing_factory(
+                "test/beta@1",
+                ConnectorRoles::Outbound,
+                Some(ConnectorRoles::Outbound),
+                &starts,
+            ))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        vm.inject(
+            &mut journal,
+            InboundSubmission {
+                provenance: InboundEnvelopeProvenance::single(node::Path::new(["test"]).unwrap()),
+                port: node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::materialized(Value::Text(String::from("request"))),
+                    ext: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+        )
+        .unwrap();
+        for _ in 0..2 {
+            vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+            vm.pump(&mut journal, &mut bindings).unwrap();
+        }
+        vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+
+        assert_eq!(
+            *starts.lock().unwrap(),
+            [
+                String::from("test/alpha@1:first"),
+                String::from("test/beta@1:second"),
+            ]
+        );
+        assert_eq!(
+            vm.outputs()[0].envelope.data(),
+            &Data::materialized(Value::Text(String::from("test/beta@1")))
+        );
+    }
+
+    #[test]
+    fn binding_refuses_missing_wrong_and_extra_roles_before_execution() {
+        let plan = two_family_plan();
+        let starts = Arc::new(Mutex::new(Vec::new()));
+        assert!(matches!(
+            RuntimeBindings::try_new(&plan, &DriverRegistry::default()),
+            Err(DriverBindingError::Missing { .. })
+        ));
+
+        let wrong = DriverRegistry::default()
+            .try_with(routing_factory(
+                "test/alpha@1",
+                ConnectorRoles::Inbound,
+                Some(ConnectorRoles::Inbound),
+                &starts,
+            ))
+            .unwrap();
+        assert!(matches!(
+            RuntimeBindings::try_new(&plan, &wrong),
+            Err(DriverBindingError::MissingRoles { .. })
+        ));
+
+        let extra = DriverRegistry::default()
+            .try_with(routing_factory(
+                "test/alpha@1",
+                ConnectorRoles::Outbound,
+                Some(ConnectorRoles::InboundAndOutbound),
+                &starts,
+            ))
+            .unwrap()
+            .try_with(routing_factory(
+                "test/beta@1",
+                ConnectorRoles::Outbound,
+                Some(ConnectorRoles::Outbound),
+                &starts,
+            ))
+            .unwrap();
+        assert!(matches!(
+            RuntimeBindings::try_new(&plan, &extra),
+            Err(DriverBindingError::BoundRolesMismatch { .. })
+        ));
+        assert!(
+            starts.lock().unwrap().is_empty(),
+            "no Driver effect started"
         );
     }
 }

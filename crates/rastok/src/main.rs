@@ -135,16 +135,31 @@ fn run(paths: &[String]) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
     };
-    let version = GraphVersion(1);
-    let mut journal = MemJournal::new(version);
-    let mut vm = Vm::boot(&compilation.plan, version);
-    let mut world = match connectors::Process::try_new(&compilation.plan) {
-        Ok(world) => world,
+    let process_factory = match connectors::ProcessFactory::try_new() {
+        Ok(factory) => factory,
+        Err(error) => {
+            eprintln!("error: the built-in Process Driver id is invalid: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let registry = match connectors::DriverRegistry::default().try_with(Box::new(process_factory)) {
+        Ok(registry) => registry,
         Err(error) => {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
+    let mut world = match connectors::RuntimeBindings::try_new(&compilation.plan, &registry) {
+        Ok(bindings) => bindings,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Binding is complete before either mutable execution authority exists.
+    let version = GraphVersion(1);
+    let mut journal = MemJournal::new(version);
+    let mut vm = Vm::boot(&compilation.plan, version);
     let inbound_path = match node::Path::new(["cli"]) {
         Ok(path) => path,
         Err(_) => return ExitCode::FAILURE,
@@ -185,7 +200,7 @@ fn run(paths: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
         loop {
-            if let Err(error) = vm.drain(&mut journal) {
+            if let Err(error) = vm.drain_with_bindings(&mut journal, &mut world) {
                 eprintln!("error: {error}");
                 return ExitCode::FAILURE;
             }
@@ -217,7 +232,7 @@ fn run(paths: &[String]) -> ExitCode {
                 }
             }
         }
-        if let Err(error) = vm.drain(&mut journal) {
+        if let Err(error) = vm.drain_with_bindings(&mut journal, &mut world) {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }

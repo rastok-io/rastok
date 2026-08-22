@@ -9,7 +9,8 @@
 
 use crate::boundary::{
     Completion, Draft, InboundEnvelopeProvenance, InboundSubmission, Intent,
-    OutboundConnectorDriver, PortOutput, Response, SubmissionSequence,
+    OutboundConnectorDriver, PortOutput, RequestPreparation, Response, SchedulerCompletion,
+    SubmissionSequence,
 };
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
@@ -97,6 +98,7 @@ fn run_scenario(
     let mut vm = Vm::boot(plan, graph_version);
     let mut driver = MockOutboundConnectorDriver {
         mocks,
+        codecs: process_codecs(plan),
         pending: Vec::new(),
         faults: Vec::new(),
     };
@@ -168,7 +170,7 @@ fn settle(
 ) {
     let mut rested = false;
     for _ in 0..64 {
-        if let Err(error) = vm.drain(journal) {
+        if let Err(error) = vm.drain_with_bindings(journal, driver) {
             failures.push(format!("a step faulted: {error}"));
             return;
         }
@@ -198,7 +200,7 @@ fn settle(
             "the machine did not settle within 64 boundary rounds",
         ));
     }
-    if let Err(error) = vm.drain(journal) {
+    if let Err(error) = vm.drain_with_bindings(journal, driver) {
         failures.push(format!("a step faulted: {error}"));
     }
 }
@@ -351,6 +353,7 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
 /// function of the request.
 struct MockOutboundConnectorDriver<'lab> {
     mocks: BTreeMap<node::Path, &'lab Mock>,
+    codecs: BTreeMap<node::Path, crate::boundary::RequestCodec>,
     pending: Vec<Response>,
     faults: Vec<String>,
 }
@@ -565,6 +568,25 @@ impl MockOutboundConnectorDriver<'_> {
 }
 
 impl OutboundConnectorDriver for MockOutboundConnectorDriver<'_> {
+    fn prepare_request(&mut self, connector: &node::Path, data: &Data) -> RequestPreparation {
+        let Some(codec) = self.codecs.get(connector).copied() else {
+            return RequestPreparation::Rejected(Completion::process_exit(
+                crate::boundary::ProcessExit::SpawnFailed {
+                    message: format!("no mock request framing is bound for `{connector}`"),
+                },
+            ));
+        };
+        crate::boundary::prepare_process_request(codec, data)
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        _: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion {
+        crate::boundary::process_scheduler_completion(completion)
+    }
+
     fn start(&mut self, intent: &Intent, request: &Envelope) {
         if let Some(completion) = self.answer(intent, request) {
             self.pending.push(Response {
@@ -577,6 +599,28 @@ impl OutboundConnectorDriver for MockOutboundConnectorDriver<'_> {
     fn events(&mut self) -> Vec<Response> {
         std::mem::take(&mut self.pending)
     }
+}
+
+fn process_codecs(
+    plan: &ValidatedExecutionPlan,
+) -> BTreeMap<node::Path, crate::boundary::RequestCodec> {
+    plan.plan()
+        .nodes
+        .iter()
+        .filter_map(|planned| {
+            let spec = planned.connector()?;
+            let crate::plan::AttrSetting::Word(word) = spec.attribute("codec")? else {
+                return None;
+            };
+            let codec = match word.as_str() {
+                "bytes" => crate::boundary::RequestCodec::Bytes,
+                "jsonl" => crate::boundary::RequestCodec::Jsonl,
+                "lines" => crate::boundary::RequestCodec::Lines,
+                _ => return None,
+            };
+            Some((planned.path.clone(), codec))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -603,6 +647,7 @@ mod tests {
         mocks.insert(path.clone(), mock);
         let mut driver = MockOutboundConnectorDriver {
             mocks,
+            codecs: BTreeMap::from([(path.clone(), crate::boundary::RequestCodec::Lines)]),
             pending: Vec::new(),
             faults: Vec::new(),
         };
