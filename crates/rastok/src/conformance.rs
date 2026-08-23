@@ -3,36 +3,29 @@
 // the same reason they stop at the Driver layer.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 //! The connector conformance harness — the ten contract cases of
-//! `stdlib.md` §1 as one reusable battery over the
-//! [`OutboundConnectorDriver`] seam.
+//! `stdlib.md` §1 as one reusable battery over the role-aware runtime binding
+//! seam.
 //!
-//! A new connector brings three things: its contract sheet, an
-//! Driver, and a [`Profile`] — a minimal probe unit, one happy
+//! A new connector brings three things: its contract sheet, a registered
+//! Driver factory, and a [`Profile`] — a minimal probe unit, one happy
 //! input, one provocation per provocable terminal case, and a stated
 //! reason for every terminal case the harness cannot reach.
 //!
-//! **What the battery holds executable today, stated exactly** —
-//! the M0 subset of the ten contract cases, not yet all ten:
-//! sheet presence and well-formedness (cases 1–6 and 9 are
-//! declarative; the sheet cannot yet express port types, the
-//! correlator, the instance model, or the terminal envelope — those
-//! widen with the sheet model); the silence discipline and, when the
-//! profile opts in, response-to-request correlation under two
-//! interleaved calls (case 7); the typed-completion discipline with
-//! per-case provocations (case 8); journal-before-
-//! effect and close-once observed on the record, the scheduler-minted
-//! timeout, and the no-late-causal-fact rule after a cancel
-//! (case 10). Single-instance only (case 9 is M0's singleton).
-//! The same seam serves a std Driver today and an embedded one
-//! later — the battery grows with the milestones toward the full
-//! portability contract, and [`assert_conformant`] keeps every gap
-//! it cannot yet close explicit.
+//! The battery proves sheet shape and exact resolved `exit` type, stable
+//! Connector identity and outbound role binding, silence before start,
+//! response correlation under interleaved calls, typed completion coverage,
+//! journal-before-effect, close-once, scheduler-owned timeout, and the
+//! no-late-causal-fact rule after cancellation. Every portable terminal case
+//! is either provoked or carries a named reason why this host-independent
+//! battery cannot force it. The same registry seam serves native, embedded,
+//! statically selected, and future plugin-hosted Drivers.
 
 use crate::boundary::{
-    Draft, InboundEnvelopeProvenance, InboundSubmission, OutboundConnectorDriver,
+    Draft, InboundEnvelopeProvenance, InboundSubmission, OutboundConnectorBindings,
     SubmissionSequence,
 };
 use crate::compiler::compile;
+use crate::connectors::{DriverRegistry, RuntimeBindings};
 use crate::contract::{ConnectorContract, ContractCatalog};
 use crate::datatype::DataType;
 use crate::envelope::{Data, Namespace, Value};
@@ -41,17 +34,6 @@ use crate::node;
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::Vm;
 use std::collections::BTreeSet;
-
-/// Builds one fresh Driver per battery run. A trait rather than a
-/// closure because the Driver may borrow the probe's plan — the
-/// generic method carries that lifetime cleanly.
-pub trait OutboundConnectorDriverFactory {
-    /// A fresh Driver for one compiled probe.
-    fn make<'plan>(
-        &mut self,
-        plan: &'plan ValidatedExecutionPlan,
-    ) -> Box<dyn OutboundConnectorDriver + 'plan>;
-}
 
 /// One way to force one declared terminal case out of the Driver.
 #[derive(Debug, Clone)]
@@ -73,6 +55,8 @@ pub struct Profile {
     pub source: String,
     /// The happy submission line.
     pub input: &'static str,
+    /// The terminal case produced by the happy path.
+    pub happy_exit_case: &'static str,
     /// One provocation per provocable declared terminal case.
     pub provocations: Vec<Provocation>,
     /// Declared terminal cases this Driver cannot be provoked into, each
@@ -84,11 +68,10 @@ pub struct Profile {
     pub mute_source: Option<String>,
     /// The interleaved-correlation probe: a unit in which ONE
     /// submission opens two calls simultaneously (two connectors,
-    /// distinct request bytes per branch) against an echoing
-    /// driver — each closed call's response must equal its own
-    /// request bytes, so a Driver that crosses two concurrent
-    /// replies is caught. `None` skips the battery and the
-    /// correlation case stays unproven beyond silence.
+    /// distinct request bytes per branch). Each closed call's result
+    /// must equal the connector-local expectation, so a Driver that
+    /// crosses two concurrent replies is caught. `None` skips the
+    /// battery and the correlation case stays unproven beyond silence.
     pub interleave: Option<InterleaveProbe>,
 }
 
@@ -105,6 +88,19 @@ pub struct InterleaveProbe {
     pub a: &'static str,
     /// The second branch's payload — must differ from `a`.
     pub b: &'static str,
+    /// Expected `out` value for each connector path. This makes the
+    /// correlation check protocol-neutral: Process text and File bytes pass
+    /// through the same proof.
+    pub expected: Vec<InterleaveExpectation>,
+}
+
+/// One connector-local result expected by an interleaved probe.
+#[derive(Debug, Clone)]
+pub struct InterleaveExpectation {
+    /// Connector whose call must carry this result.
+    pub connector: node::Path,
+    /// Exact `out` representation expected on that call.
+    pub data: Data,
 }
 
 /// The harness verdict: what was proven, what was declared
@@ -129,11 +125,7 @@ impl Report {
 
 /// Runs the whole battery over one Driver.
 #[must_use]
-pub fn verify(
-    profile: &Profile,
-    registry: &ContractCatalog,
-    factory: &mut dyn OutboundConnectorDriverFactory,
-) -> Report {
+pub fn verify(profile: &Profile, registry: &ContractCatalog, drivers: &DriverRegistry) -> Report {
     let mut report = Report::default();
     sheet_completeness(profile.contract, &mut report);
 
@@ -161,13 +153,18 @@ pub fn verify(
     // has nothing to say. An event out of nowhere is an invented
     // correlation.
     {
-        let mut driver = factory.make(&compilation.plan);
-        let uninvited = driver.events();
-        if !uninvited.is_empty() {
-            report.violations.push(format!(
-                "the Driver produced {} event(s) without any started call",
-                uninvited.len()
-            ));
+        match bind(&compilation.plan, drivers) {
+            Err(violation) => report.violations.push(violation),
+            Ok(mut bindings) => match bindings.events() {
+                Err(error) => report
+                    .violations
+                    .push(format!("the unstarted Driver could not be polled: {error}")),
+                Ok(uninvited) if !uninvited.is_empty() => report.violations.push(format!(
+                    "the Driver produced {} event(s) without any started call",
+                    uninvited.len()
+                )),
+                Ok(_) => {}
+            },
         }
     }
 
@@ -180,8 +177,14 @@ pub fn verify(
     {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-        let mut driver = factory.make(&compilation.plan);
-        match drive(&mut vm, &mut journal, driver.as_mut(), profile.input) {
+        let mut bindings = match bind(&compilation.plan, drivers) {
+            Ok(bindings) => bindings,
+            Err(violation) => {
+                report.violations.push(violation);
+                return report;
+            }
+        };
+        match drive(&mut vm, &mut journal, &mut bindings, profile.input) {
             Err(violation) => report.violations.push(violation),
             Ok(()) => {
                 audit_journal(&journal, &mut report);
@@ -192,11 +195,15 @@ pub fn verify(
                     ));
                 } else {
                     match root_exit_case(&vm).as_deref() {
-                        Some("Exited") if exit_cases.iter().any(|case| case == "Exited") => {
-                            report.proven_cases.push("Exited");
+                        Some(case)
+                            if case == profile.happy_exit_case
+                                && exit_cases.iter().any(|known| known == case) =>
+                        {
+                            report.proven_cases.push(profile.happy_exit_case);
                         }
                         Some(case) => report.violations.push(format!(
-                            "the happy path terminated as `{case}`, expected `Exited`"
+                            "the happy path terminated as `{case}`, expected `{}`",
+                            profile.happy_exit_case
                         )),
                         None => report
                             .violations
@@ -210,7 +217,7 @@ pub fn verify(
     // Case 8, the provable half: every provocation must produce its
     // declared terminal case at the root sink.
     for provocation in &profile.provocations {
-        match run_provocation(provocation, registry, factory) {
+        match run_provocation(provocation, registry, drivers) {
             Ok(()) => {
                 if !report.proven_cases.contains(&provocation.exit_case) {
                     report.proven_cases.push(provocation.exit_case);
@@ -223,7 +230,7 @@ pub fn verify(
     // The timeout and cancel disciplines: only the machine mints a
     // timeout, and a cancelled call gains no late causal fact.
     if let Some(mute_source) = &profile.mute_source {
-        match mute_battery(mute_source, registry, factory) {
+        match mute_battery(mute_source, registry, drivers) {
             Ok(()) => {
                 if exit_cases.iter().any(|case| case == "TimeoutExpired")
                     && !report.proven_cases.contains(&"TimeoutExpired")
@@ -238,7 +245,7 @@ pub fn verify(
     // Case 7, the correlation half: two calls in flight, distinct
     // request bytes; every closure must answer its OWN request.
     if let Some(probe) = &profile.interleave
-        && let Err(violation) = interleave_battery(probe, registry, factory)
+        && let Err(violation) = interleave_battery(probe, registry, drivers)
     {
         report.violations.push(violation);
     }
@@ -345,35 +352,26 @@ fn resolved_exit_cases(
     contract: &ConnectorContract,
     plan: &ValidatedExecutionPlan,
 ) -> Result<Vec<String>, String> {
-    let spec = plan
+    let (index, _planned) = plan
         .nodes
         .iter()
-        .filter_map(crate::plan::Node::connector)
-        .find(|spec| spec.contract.as_str() == contract.id)
+        .enumerate()
+        .find(|planned| {
+            planned
+                .1
+                .connector()
+                .is_some_and(|spec| spec.contract.as_str() == contract.id)
+        })
         .ok_or_else(|| format!("the probe instantiates no `{}` connector", contract.name))?;
-    let exit = if contract.name == "Process" {
-        // The harness reads the same exact union carried by the v7 resolved
-        // port table; there is no parallel error-name list or variant bridge.
-        crate::boundary::process_exit_type()
-            .map_err(|error| format!("the ProcessExit contract is invalid: {error}"))?
-    } else {
-        let words = spec
-            .attributes
-            .iter()
-            .filter_map(|(name, setting)| match setting {
-                crate::plan::AttrSetting::Word(word) => Some((name.clone(), word.clone())),
-                crate::plan::AttrSetting::Value(_) | crate::plan::AttrSetting::Expr { .. } => None,
-            })
-            .collect();
-        let ports = contract.resolve_ports(&words).map_err(|error| {
-            format!("the resolved contract has no complete port table: {error}")
-        })?;
-        ports
-            .into_iter()
-            .find(|port| port.port.name() == "exit")
-            .and_then(|port| port.ty)
-            .ok_or_else(|| String::from("the resolved contract has no typed `exit` port"))?
-    };
+    let slot = u32::try_from(index)
+        .map(crate::plan::Slot::new)
+        .map_err(|_| String::from("the probe has more nodes than the plan slot domain"))?;
+    let exit = plan
+        .resolved_ports()
+        .node(slot)
+        .and_then(|ports| ports.iter().find(|port| port.port().name() == "exit"))
+        .map(|port| port.ty().clone())
+        .ok_or_else(|| String::from("the validated plan has no typed `exit` port"))?;
     let DataType::TaggedUnion(union) = &exit else {
         return Err(String::from(
             "the resolved `exit` port is not a tagged union",
@@ -384,6 +382,14 @@ fn resolved_exit_cases(
         .iter()
         .map(|case| case.name().to_string())
         .collect())
+}
+
+fn bind<'plan>(
+    plan: &'plan ValidatedExecutionPlan,
+    drivers: &DriverRegistry,
+) -> Result<RuntimeBindings<'plan>, String> {
+    RuntimeBindings::try_new(plan, drivers)
+        .map_err(|error| format!("the conformance composition cannot bind: {error}"))
 }
 
 fn submission(text: &str) -> InboundSubmission {
@@ -410,7 +416,7 @@ fn submission(text: &str) -> InboundSubmission {
 fn drive(
     vm: &mut Vm<'_>,
     journal: &mut MemJournal,
-    driver: &mut dyn OutboundConnectorDriver,
+    driver: &mut dyn OutboundConnectorBindings,
     input: &str,
 ) -> Result<(), String> {
     vm.inject(journal, submission(input))
@@ -490,7 +496,7 @@ fn audit_journal(journal: &MemJournal, report: &mut Report) {
 fn run_provocation(
     provocation: &Provocation,
     registry: &ContractCatalog,
-    factory: &mut dyn OutboundConnectorDriverFactory,
+    drivers: &DriverRegistry,
 ) -> Result<(), String> {
     let compilation = compile(&[provocation.source.as_str()], registry).map_err(|bag| {
         format!(
@@ -501,8 +507,8 @@ fn run_provocation(
     })?;
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    let mut driver = factory.make(&compilation.plan);
-    drive(&mut vm, &mut journal, driver.as_mut(), provocation.input)
+    let mut bindings = bind(&compilation.plan, drivers)?;
+    drive(&mut vm, &mut journal, &mut bindings, provocation.input)
         .map_err(|violation| format!("the `{}` provocation: {violation}", provocation.exit_case))?;
     match root_exit_case(&vm) {
         Some(case) if case == provocation.exit_case => Ok(()),
@@ -541,14 +547,14 @@ fn root_exit_case(vm: &Vm<'_>) -> Option<String> {
 fn mute_battery(
     source: &str,
     registry: &ContractCatalog,
-    factory: &mut dyn OutboundConnectorDriverFactory,
+    drivers: &DriverRegistry,
 ) -> Result<(), String> {
     let compilation = compile(&[source], registry)
         .map_err(|bag| format!("the mute probe does not compile: {:?}", bag.diagnostics()))?;
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    let mut driver = factory.make(&compilation.plan);
-    drive(&mut vm, &mut journal, driver.as_mut(), "conformance")
+    let mut bindings = bind(&compilation.plan, drivers)?;
+    drive(&mut vm, &mut journal, &mut bindings, "conformance")
         .map_err(|violation| format!("the mute battery: {violation}"))?;
     let timed_out = journal.records().iter().any(|record| {
         matches!(
@@ -569,7 +575,7 @@ fn mute_battery(
     for _ in 0..3 {
         std::thread::sleep(std::time::Duration::from_millis(20));
         let report = vm
-            .pump(&mut journal, driver.as_mut())
+            .pump(&mut journal, &mut bindings)
             .map_err(|error| format!("a post-cancel round faulted: {error}"))?;
         if report.settled != 0 {
             return Err("a cancelled call settled again — a late causal fact".into());
@@ -581,19 +587,18 @@ fn mute_battery(
     Ok(())
 }
 
-/// The interleaved-correlation battery: one submission opens two
-/// calls with distinct request bytes (the machine serializes calls
-/// per connector, so simultaneity needs two connectors served by
-/// the one Driver); for an echoing Driver, each
-/// response completion's `out` draft must carry exactly its own intent's
-/// prepared bytes, with its own terminal `exit`. A Driver that swaps two
-/// concurrent responses — correct call references, wrong payloads — is caught here and
-/// nowhere else, and the journal must show both opens before the
-/// first closure, or the battery never actually interleaved.
+/// The interleaved-correlation battery: one submission opens two calls with
+/// distinct request bytes (the machine serializes calls per connector, so
+/// simultaneity needs two connectors served by one Driver). Each completion
+/// must carry the result declared for its own connector, with its own terminal
+/// `exit`. A Driver that swaps two concurrent responses — correct call
+/// references, wrong payloads — is caught here and nowhere else, and the
+/// journal must show both opens before the first closure, or the battery never
+/// actually interleaved.
 fn interleave_battery(
     probe: &InterleaveProbe,
     registry: &ContractCatalog,
-    factory: &mut dyn OutboundConnectorDriverFactory,
+    drivers: &DriverRegistry,
 ) -> Result<(), String> {
     let compilation = compile(&[probe.source.as_str()], registry).map_err(|bag| {
         format!(
@@ -603,9 +608,24 @@ fn interleave_battery(
     })?;
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    let mut driver = factory.make(&compilation.plan);
+    let mut bindings = bind(&compilation.plan, drivers)?;
     if probe.a == probe.b {
         return Err("the interleave payloads must differ, or a swap is invisible".into());
+    }
+    let mut expected = std::collections::BTreeMap::new();
+    for expectation in &probe.expected {
+        if expected
+            .insert(expectation.connector.clone(), expectation.data.clone())
+            .is_some()
+        {
+            return Err(format!(
+                "the interleave profile expects `{}` more than once",
+                expectation.connector
+            ));
+        }
+    }
+    if expected.len() < 2 {
+        return Err("the interleave profile must distinguish at least two connectors".into());
     }
     let data = vec![
         (String::from("a"), Value::Text(String::from(probe.a))),
@@ -626,12 +646,12 @@ fn interleave_battery(
         .map_err(|error| format!("the interleave submission was refused: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
-        vm.drain_with_bindings(&mut journal, driver.as_mut())
+        vm.drain_with_bindings(&mut journal, &mut bindings)
             .map_err(|error| format!("a step faulted: {error}"))?;
         let report = vm
-            .pump(&mut journal, driver.as_mut())
+            .pump(&mut journal, &mut bindings)
             .map_err(|error| format!("the boundary round faulted: {error}"))?;
-        vm.drain_with_bindings(&mut journal, driver.as_mut())
+        vm.drain_with_bindings(&mut journal, &mut bindings)
             .map_err(|error| format!("a step faulted: {error}"))?;
         if vm.is_stable() {
             break;
@@ -641,7 +661,7 @@ fn interleave_battery(
                 return Err("the interleave run wedged".into());
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
-            vm.advance(&mut journal, driver.as_mut(), vm.now() + 10_000_000)
+            vm.advance(&mut journal, &mut bindings, vm.now() + 10_000_000)
                 .map_err(|error| format!("the advance faulted: {error}"))?;
         }
     }
@@ -649,6 +669,7 @@ fn interleave_battery(
     let mut opens_before_first_close = 0usize;
     let mut any_close_seen = false;
     let mut requests = BTreeSet::new();
+    let mut answered = BTreeSet::new();
     for record in journal.records() {
         let Record::Outbound(outbound) = record else {
             continue;
@@ -676,22 +697,20 @@ fn interleave_battery(
                 outbound.intent.call_ref
             ));
         };
-        let framed_request = String::from_utf8_lossy(outbound.intent.prepared.bytes());
-        let request = framed_request
-            .strip_suffix('\n')
-            .unwrap_or(&framed_request)
-            .to_owned();
-        let response = match data {
-            Data::Materialized(Value::Text(text)) => text.clone(),
-            other => format!("{other:?}"),
-        };
-        if response != request {
+        let Some(expected_data) = expected.get(&outbound.intent.connector_path) else {
             return Err(format!(
-                "call {} answered with another call's payload: request {request:?}, \
-                 response {response:?} — the Driver crossed two concurrent replies",
-                outbound.intent.call_ref
+                "interleave call {} came from unexpected connector `{}`",
+                outbound.intent.call_ref, outbound.intent.connector_path
+            ));
+        };
+        if data != expected_data {
+            return Err(format!(
+                "call {} on `{}` answered with another call's payload: expected \
+                 {expected_data:?}, got {data:?} — the Driver crossed two concurrent replies",
+                outbound.intent.call_ref, outbound.intent.connector_path
             ));
         }
+        answered.insert(outbound.intent.connector_path.clone());
     }
     if closed < 2 {
         return Err(format!(
@@ -709,6 +728,13 @@ fn interleave_battery(
         return Err(
             "the interleave requests were byte-identical; a swap would be invisible".into(),
         );
+    }
+    if answered.len() != expected.len() {
+        return Err(format!(
+            "the interleave battery answered {} of {} expected connectors",
+            answered.len(),
+            expected.len()
+        ));
     }
     Ok(())
 }

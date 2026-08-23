@@ -1,7 +1,7 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-22 for the M1.4 R7 closure checkpoint. The
+> of the build; updated 2026-08-23 for the M1.5 C5 composition checkpoint. The
 > former named-partition P1-P3 implementation is superseded; categorical v10
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
@@ -107,8 +107,10 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 ├── stdlib.rs         # the standard CATALOGUE instancing those contracts (PROCESS,
 │                     #   declared connector names, built-in/deferred frontends)
 ├── golden.rs         # Trace, Divergence — projection, seal, named diff
-├── connectors/       # one module per Connector family
-│   └── process/      # Process: bind effective settings, then async Driver
+├── connectors/       # registry/global binder plus one module per family
+│   ├── registry.rs   # exact-id factories and role-aware RuntimeBindings
+│   ├── process/      # Process: bind effective settings, then async Driver
+│   └── file/         # File: pure operation framing, then filesystem Driver
 ├── conformance.rs    # Driver contract harness over the production seam
 ├── lab.rs            # run → ScenarioRun { report, records } ; mock Drivers
 ├── render.rs         # Sources + rustc-shaped diagnostic rendering
@@ -405,6 +407,7 @@ whatever its execution format.
 | **`connectors::ProcessFactory` / `Process`** | the explicit `rastok/process@1` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; family module C0; registry binding C2 |
 | **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@1`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
 | **`connectors::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
+| **Connector conformance profiles** | one role-aware battery over `DriverRegistry`/`RuntimeBindings`; exact resolved terminal union, silence, typed completion coverage, correlation, journal-before-effect, close-once and explicit unprovable cases | [stdlib.md §1](../spec/stdlib.md); D-2026-08-22-1 C5 checkpoint | M1.5 C5 (Process + File) |
 | **Catalogue remainder** (HttpServer, HttpClient, Clock, Calendar, Memory) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |
 
@@ -415,7 +418,7 @@ A Driver set plus the production machine — never a second engine.
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
 | **`lab::run`** | driving the production `Vm` through each checked scenario: inject, advance, settle, expectation windows over the machine's observation log, the three quantifiers; every uncovered call, faulting predicate or guard, and unsettled machine is a named failure | `hir::Lab` + plan → `Vec<ScenarioRun { report, records }>` — the records feed the golden workflow | [simulation-semantics.md §2, §5–6](../spec/simulation-semantics.md) | M0 |
-| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual clock* IS `Vm::advance` (no `VirtualClock` type); the internal mock Driver answers behind the same `OutboundConnectorDriver` seam as the real Driver — replies only, the VM still writes every OUTBOUND; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0; vocabulary renamed in M1.5 C0 |
+| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual clock* IS `Vm::advance` (no `VirtualClock` type); explicit mock factories bind by the same exact Connector id/roles and reuse each family's pure request protocol — replies only, the VM still writes every OUTBOUND; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0; multi-family registry parity M1.5 C5 |
 | **Coverage** | the statically enumerable failure-space checklist | plan + scenarios → coverage report | [simulation-semantics.md §7](../spec/simulation-semantics.md) | later |
 | **Unsupported surfaces** | `integration`, `theorem`, `experiment`: parse, then refuse explicitly | reachable syntax → `unsupported` diagnostic | [simulation-semantics.md §10–11](../spec/simulation-semantics.md) | guarded |
 
@@ -567,7 +570,7 @@ The chronological detail and commit evidence remain in
   hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
   profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.
-- **Next:** M1.5 C5 composition/conformance over Process and File, then Loop,
+- **Next:** M1.5 C6 closure/plugin-manifest audit, then HTTP, Loop,
   counters, and `--watch`
   remain guarded in the order recorded by the
   [M1.5 backlog](m1.5-connectors-backlog.md).

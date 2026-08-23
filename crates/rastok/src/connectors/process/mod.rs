@@ -112,6 +112,69 @@ impl ProcessBinding {
     }
 }
 
+/// Pure, plan-bound half of the Process protocol, shared by the real Driver
+/// and the Lab's scripted Driver. It owns framing and setting validation, but
+/// can neither spawn nor observe a child process.
+#[derive(Debug)]
+pub(crate) struct ProcessRequestBindings {
+    bindings: std::collections::BTreeMap<crate::node::Path, ProcessBinding>,
+}
+
+impl ProcessRequestBindings {
+    pub(crate) fn try_bind(
+        plan: &crate::plan::ValidatedExecutionPlan,
+        nodes: &[crate::node::Path],
+    ) -> Result<Self, ProcessBindError> {
+        let mut bindings = std::collections::BTreeMap::new();
+        for path in nodes {
+            let Some(node) = plan.plan().nodes.iter().find(|node| &node.path == path) else {
+                return Err(ProcessBindError {
+                    node: path.clone(),
+                    reason: ProcessSettingsError::Unresolved("connector binding path"),
+                });
+            };
+            let NodeKind::Connector(spec) = &node.kind else {
+                return Err(ProcessBindError {
+                    node: path.clone(),
+                    reason: ProcessSettingsError::Unresolved("connector binding kind"),
+                });
+            };
+            match ProcessBinding::try_from(spec) {
+                Ok(resolved) => {
+                    bindings.insert(node.path.clone(), resolved);
+                }
+                Err(reason) => {
+                    return Err(ProcessBindError {
+                        node: node.path.clone(),
+                        reason,
+                    });
+                }
+            }
+        }
+        Ok(Self { bindings })
+    }
+
+    fn get(&self, connector: &crate::node::Path) -> Option<&ProcessBinding> {
+        self.bindings.get(connector)
+    }
+
+    pub(crate) fn prepare_request(
+        &self,
+        connector: &crate::node::Path,
+        data: &Data,
+    ) -> RequestPreparation {
+        let Some(binding) = self.get(connector) else {
+            return RequestPreparation::Rejected(
+                ProcessFailure::SpawnFailed {
+                    message: format!("no Process binding owns `{connector}`"),
+                }
+                .into_completion(),
+            );
+        };
+        crate::boundary::prepare_process_request(binding.request_codec, data)
+    }
+}
+
 /// A violated `Process` invariant — typed, so the refusal names the
 /// exact door instead of concatenating prose at the fault site.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -385,7 +448,7 @@ pub struct Process<'plan> {
     /// Every Process connector's binding. Plan rows resolve before the
     /// journal exists; instance rows arrive as already-evaluated values on the
     /// intent and are converted once per logical instance.
-    bindings: std::collections::BTreeMap<crate::node::Path, ProcessBinding>,
+    bindings: ProcessRequestBindings,
     runs: Vec<Run>,
     answers: Vec<Response>,
 }
@@ -640,32 +703,7 @@ impl<'plan> Process<'plan> {
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
     ) -> Result<Self, ProcessBindError> {
-        let mut bindings = std::collections::BTreeMap::new();
-        for path in nodes {
-            let Some(node) = plan.plan().nodes.iter().find(|node| &node.path == path) else {
-                return Err(ProcessBindError {
-                    node: path.clone(),
-                    reason: ProcessSettingsError::Unresolved("connector binding path"),
-                });
-            };
-            let NodeKind::Connector(spec) = &node.kind else {
-                return Err(ProcessBindError {
-                    node: path.clone(),
-                    reason: ProcessSettingsError::Unresolved("connector binding kind"),
-                });
-            };
-            match ProcessBinding::try_from(spec) {
-                Ok(resolved) => {
-                    bindings.insert(node.path.clone(), resolved);
-                }
-                Err(reason) => {
-                    return Err(ProcessBindError {
-                        node: node.path.clone(),
-                        reason,
-                    });
-                }
-            }
-        }
+        let bindings = ProcessRequestBindings::try_bind(plan, nodes)?;
         Ok(Self {
             _plan: plan,
             bindings,
@@ -977,15 +1015,7 @@ impl OutboundConnectorDriver for Process<'_> {
         data: &Data,
         _resolved_settings: &std::collections::BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        let Some(binding) = self.bindings.get(connector) else {
-            return RequestPreparation::Rejected(
-                ProcessFailure::SpawnFailed {
-                    message: format!("no Process binding owns `{connector}`"),
-                }
-                .into_completion(),
-            );
-        };
-        crate::boundary::prepare_process_request(binding.request_codec, data)
+        self.bindings.prepare_request(connector, data)
     }
 
     fn scheduler_completion(

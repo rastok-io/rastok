@@ -15,12 +15,21 @@ use crate::boundary::{
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
 };
+use crate::connector::{ConnectorId, ConnectorRoles};
+use crate::connectors::{
+    BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
+    FileRequestBindings, ProcessRequestBindings, RuntimeBindings,
+};
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::{Observed, Vm};
 use crate::{expr, node, runtime};
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+
+type MockFaults = Rc<RefCell<Vec<String>>>;
 
 /// The verdict of one scenario: green when `failures` is empty.
 #[derive(Debug, Clone, PartialEq)]
@@ -87,22 +96,31 @@ fn run_scenario(
 ) -> ScenarioRun {
     // Nearest wins, whole-mock replacement: a scenario mock for a
     // connector shadows the simulation-level one entirely.
-    let mut mocks: BTreeMap<node::Path, &Mock> = BTreeMap::new();
+    let mut mocks: BTreeMap<node::Path, Mock> = BTreeMap::new();
     for mock in shared_mocks {
-        mocks.insert(mock.connector.clone(), mock);
+        mocks.insert(mock.connector.clone(), mock.clone());
     }
     for mock in &scenario.mocks {
-        mocks.insert(mock.connector.clone(), mock);
+        mocks.insert(mock.connector.clone(), mock.clone());
     }
     let mut journal = MemJournal::new(graph_version);
     let mut vm = Vm::boot(plan, graph_version);
-    let mut driver = MockOutboundConnectorDriver {
-        mocks,
-        codecs: process_codecs(plan),
-        pending: Vec::new(),
-        faults: Vec::new(),
-    };
     let mut failures = Vec::new();
+    let (mut driver, faults) = match mock_bindings(plan, mocks) {
+        Ok(bound) => bound,
+        Err(error) => {
+            failures.push(format!("the Lab Driver composition refused: {error}"));
+            return ScenarioRun {
+                report: ScenarioReport {
+                    simulation: String::from(simulation),
+                    scenario: scenario.name.clone(),
+                    label: scenario.label.clone(),
+                    failures,
+                },
+                records: Vec::new(),
+            };
+        }
+    };
     let mut window_start = 0usize;
     for step in &scenario.steps {
         match step {
@@ -126,7 +144,7 @@ fn run_scenario(
                             failures.push(format!("the injection was refused: {error}"));
                             continue;
                         }
-                        settle(&mut vm, &mut journal, &mut driver, &mut failures);
+                        settle(&mut vm, &mut journal, &mut driver, &faults, &mut failures);
                     }
                     Err(message) => failures.push(message),
                 }
@@ -137,7 +155,7 @@ fn run_scenario(
                 if let Err(error) = vm.advance(&mut journal, &mut driver, target) {
                     failures.push(format!("the advance faulted: {error}"));
                 }
-                settle(&mut vm, &mut journal, &mut driver, &mut failures);
+                settle(&mut vm, &mut journal, &mut driver, &faults, &mut failures);
             }
             ScenarioStep::Expect(expectation) => {
                 if let Some(message) =
@@ -165,7 +183,8 @@ fn run_scenario(
 fn settle(
     vm: &mut Vm<'_>,
     journal: &mut MemJournal,
-    driver: &mut MockOutboundConnectorDriver<'_>,
+    driver: &mut RuntimeBindings<'_>,
+    faults: &MockFaults,
     failures: &mut Vec<String>,
 ) {
     let mut rested = false;
@@ -181,7 +200,7 @@ fn settle(
                 return;
             }
         };
-        failures.append(&mut driver.faults);
+        failures.extend(faults.borrow_mut().drain(..));
         for (response, reason) in &report.rejected {
             failures.push(format!(
                 "a reply to {:?} was refused before closure: {reason}",
@@ -347,21 +366,146 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
     }
 }
 
-/// The scripted driver: answers journaled intents from mock
-/// branches — first match in text order — and reports every
-/// uncovered call loudly. Deterministic and stateless, a pure
-/// function of the request.
-struct MockOutboundConnectorDriver<'lab> {
-    mocks: BTreeMap<node::Path, &'lab Mock>,
-    codecs: BTreeMap<node::Path, crate::boundary::RequestCodec>,
-    pending: Vec<Response>,
-    faults: Vec<String>,
+#[derive(Debug, Clone, Copy)]
+enum MockProtocolKind {
+    Process,
+    File,
 }
 
-impl MockOutboundConnectorDriver<'_> {
+#[derive(Debug)]
+enum MockProtocol {
+    Process(ProcessRequestBindings),
+    File(FileRequestBindings),
+}
+
+impl MockProtocol {
+    fn prepare_request(
+        &self,
+        connector: &node::Path,
+        data: &Data,
+        settings: &BTreeMap<String, Value>,
+    ) -> RequestPreparation {
+        match self {
+            Self::Process(bindings) => bindings.prepare_request(connector, data),
+            Self::File(bindings) => bindings.prepare_request(connector, data, settings),
+        }
+    }
+
+    fn scheduler_completion(&self, completion: SchedulerCompletion) -> Completion {
+        match self {
+            Self::Process(_) => crate::boundary::process_scheduler_completion(completion),
+            Self::File(_) => crate::boundary::file_scheduler_completion(completion),
+        }
+    }
+}
+
+struct MockConnectorFactory {
+    id: ConnectorId,
+    kind: MockProtocolKind,
+    mocks: BTreeMap<node::Path, Mock>,
+    faults: MockFaults,
+}
+
+impl core::fmt::Debug for MockConnectorFactory {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("MockConnectorFactory")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ConnectorDriverFactory for MockConnectorFactory {
+    fn connector_id(&self) -> &ConnectorId {
+        &self.id
+    }
+
+    fn roles(&self) -> ConnectorRoles {
+        ConnectorRoles::Outbound
+    }
+
+    fn bind<'plan>(
+        &self,
+        plan: &'plan ValidatedExecutionPlan,
+        nodes: &[node::Path],
+    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        let protocol = match self.kind {
+            MockProtocolKind::Process => ProcessRequestBindings::try_bind(plan, nodes)
+                .map(MockProtocol::Process)
+                .map_err(|error| DriverFactoryError::new(error.to_string()))?,
+            MockProtocolKind::File => FileRequestBindings::try_bind(plan, nodes)
+                .map(MockProtocol::File)
+                .map_err(|error| DriverFactoryError::new(error.to_string()))?,
+        };
+        Ok(Box::new(MockOutboundConnectorDriver {
+            mocks: self.mocks.clone(),
+            protocol,
+            pending: Vec::new(),
+            faults: Rc::clone(&self.faults),
+        }))
+    }
+}
+
+fn mock_bindings<'plan>(
+    plan: &'plan ValidatedExecutionPlan,
+    mocks: BTreeMap<node::Path, Mock>,
+) -> Result<(RuntimeBindings<'plan>, MockFaults), String> {
+    let faults = Rc::new(RefCell::new(Vec::new()));
+    let families: BTreeSet<_> = plan
+        .plan()
+        .nodes
+        .iter()
+        .filter_map(|planned| {
+            planned
+                .connector()
+                .filter(|spec| spec.roles.has_outbound())
+                .map(|spec| spec.contract.clone())
+        })
+        .collect();
+    let mut registry = DriverRegistry::default();
+    for id in families {
+        let kind = match id.as_str() {
+            crate::connector::PROCESS_CONNECTOR_ID => MockProtocolKind::Process,
+            crate::connector::FILE_CONNECTOR_ID => MockProtocolKind::File,
+            _ => {
+                return Err(format!(
+                    "no scripted outbound factory is registered for `{id}`"
+                ));
+            }
+        };
+        registry = registry
+            .try_with(Box::new(MockConnectorFactory {
+                id,
+                kind,
+                mocks: mocks.clone(),
+                faults: Rc::clone(&faults),
+            }))
+            .map_err(|error| error.to_string())?;
+    }
+    let bindings = RuntimeBindings::try_new(plan, &registry).map_err(|error| error.to_string())?;
+    Ok((bindings, faults))
+}
+
+/// The scripted Driver: answers journaled intents from mock branches — first
+/// match in text order — and reports every uncovered call loudly. Its protocol
+/// preparation is the same pure binding used by the real family Driver; only
+/// the external effect is replaced.
+struct MockOutboundConnectorDriver {
+    mocks: BTreeMap<node::Path, Mock>,
+    protocol: MockProtocol,
+    pending: Vec<Response>,
+    faults: MockFaults,
+}
+
+impl MockOutboundConnectorDriver {
+    fn fault(&self, message: String) {
+        self.faults.borrow_mut().push(message);
+    }
+
     fn answer(&mut self, intent: &Intent, request: &Envelope) -> Option<Completion> {
-        let Some(mock) = self.mocks.get(&intent.connector_path) else {
-            self.faults.push(format!(
+        let Some(mock) = self.mocks.get(&intent.connector_path).cloned() else {
+            self.fault(format!(
                 "an uncovered call reached `{}` (digest {:02x?}…); mock it or script silence",
                 intent.connector_path,
                 &intent.request_digest()[..4]
@@ -390,8 +534,7 @@ impl MockOutboundConnectorDriver<'_> {
                     };
                     let result = expr::eval(guard, &lazy);
                     if let Some(fault) = slot.take_fault() {
-                        self.faults
-                            .push(format!("the mock request is unreadable: {fault}"));
+                        self.fault(format!("the mock request is unreadable: {fault}"));
                         return None;
                     }
                     match result {
@@ -400,14 +543,14 @@ impl MockOutboundConnectorDriver<'_> {
                         // of the scenario, never a silent
                         // fall-through to the next branch.
                         Ok(other) => {
-                            self.faults.push(format!(
+                            self.fault(format!(
                                 "a mock guard of `{}` is not a bool (got {other:?})",
                                 intent.connector_path
                             ));
                             return None;
                         }
                         Err(error) => {
-                            self.faults.push(format!(
+                            self.fault(format!(
                                 "a mock guard of `{}` faulted: {error}",
                                 intent.connector_path
                             ));
@@ -421,7 +564,7 @@ impl MockOutboundConnectorDriver<'_> {
             }
             return self.reply(handler, request, env, &slot);
         }
-        self.faults.push(format!(
+        self.fault(format!(
             "no mock branch of `{}` matched the request; add a catch-all or script silence",
             intent.connector_path
         ));
@@ -447,7 +590,7 @@ impl MockOutboundConnectorDriver<'_> {
                         env.insert(name.clone(), value);
                     }
                     Err(message) => {
-                        self.faults.push(message);
+                        self.fault(message);
                         return None;
                     }
                 },
@@ -463,13 +606,13 @@ impl MockOutboundConnectorDriver<'_> {
                         }),
                         Ok(None) => {}
                         Err(message) => {
-                            self.faults.push(message);
+                            self.fault(message);
                             return None;
                         }
                     }
                 }
                 Statement::Stop => {
-                    self.faults.push(String::from(
+                    self.fault(String::from(
                         "a mock cannot supervise instance Closing in this build",
                     ));
                     return None;
@@ -482,8 +625,7 @@ impl MockOutboundConnectorDriver<'_> {
         match Completion::try_new(outputs) {
             Ok(completion) => Some(completion),
             Err(error) => {
-                self.faults
-                    .push(format!("the mock completion is invalid: {error}"));
+                self.fault(format!("the mock completion is invalid: {error}"));
                 None
             }
         }
@@ -567,21 +709,14 @@ impl MockOutboundConnectorDriver<'_> {
     }
 }
 
-impl OutboundConnectorDriver for MockOutboundConnectorDriver<'_> {
+impl OutboundConnectorDriver for MockOutboundConnectorDriver {
     fn prepare_request(
         &mut self,
         connector: &node::Path,
         data: &Data,
-        _: &BTreeMap<String, Value>,
+        settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        let Some(codec) = self.codecs.get(connector).copied() else {
-            return RequestPreparation::Rejected(Completion::process_exit(
-                crate::boundary::ProcessExit::SpawnFailed {
-                    message: format!("no mock request framing is bound for `{connector}`"),
-                },
-            ));
-        };
-        crate::boundary::prepare_process_request(codec, data)
+        self.protocol.prepare_request(connector, data, settings)
     }
 
     fn scheduler_completion(
@@ -589,7 +724,7 @@ impl OutboundConnectorDriver for MockOutboundConnectorDriver<'_> {
         _: &node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        crate::boundary::process_scheduler_completion(completion)
+        self.protocol.scheduler_completion(completion)
     }
 
     fn start(&mut self, intent: &Intent, request: &Envelope) {
@@ -606,26 +741,14 @@ impl OutboundConnectorDriver for MockOutboundConnectorDriver<'_> {
     }
 }
 
-fn process_codecs(
-    plan: &ValidatedExecutionPlan,
-) -> BTreeMap<node::Path, crate::boundary::RequestCodec> {
-    plan.plan()
-        .nodes
-        .iter()
-        .filter_map(|planned| {
-            let spec = planned.connector()?;
-            let crate::plan::AttrSetting::Word(word) = spec.attribute("codec")? else {
-                return None;
-            };
-            let codec = match word.as_str() {
-                "bytes" => crate::boundary::RequestCodec::Bytes,
-                "jsonl" => crate::boundary::RequestCodec::Jsonl,
-                "lines" => crate::boundary::RequestCodec::Lines,
-                _ => return None,
-            };
-            Some((planned.path.clone(), codec))
-        })
-        .collect()
+impl BoundConnectorDriver for MockOutboundConnectorDriver {
+    fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+        None
+    }
+
+    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+        Some(self)
+    }
 }
 
 #[cfg(test)]
@@ -646,15 +769,20 @@ mod tests {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a valid unit");
-        let mock = &compilation.labs[0].simulations[0].mocks[0];
+        let mock = compilation.labs[0].simulations[0].mocks[0].clone();
         let path = node::Path::new(["echo"]).unwrap();
-        let mut mocks: BTreeMap<node::Path, &crate::compiler::hir::Mock> = BTreeMap::new();
+        let mut mocks = BTreeMap::new();
         mocks.insert(path.clone(), mock);
+        let faults = Rc::new(RefCell::new(Vec::new()));
+        let nodes = [path.clone()];
         let mut driver = MockOutboundConnectorDriver {
             mocks,
-            codecs: BTreeMap::from([(path.clone(), crate::boundary::RequestCodec::Lines)]),
+            protocol: MockProtocol::Process(
+                ProcessRequestBindings::try_bind(&compilation.plan, &nodes)
+                    .expect("the Process mock binding is valid"),
+            ),
             pending: Vec::new(),
-            faults: Vec::new(),
+            faults: Rc::clone(&faults),
         };
         let id = crate::envelope::Id::derive(0x01, &[b"request", &0u64.to_le_bytes()]);
         let request = Envelope::new(
@@ -676,7 +804,8 @@ mod tests {
             resolved_settings: BTreeMap::new(),
         };
         let outcome = driver.answer(&intent, &request);
-        (outcome, driver.faults)
+        let reported = faults.borrow().clone();
+        (outcome, reported)
     }
 
     #[test]

@@ -92,6 +92,16 @@ production the world-half is *recorded* ; in simulation there is no world —
 > Connector's normal response path (trigger `p:in`, parent = the request).
 > The mock replaces the Driver, **not the bookkeeping**.
 
+Mock composition uses the same categorical boundary as production. The Lab
+registers one mock factory for each exact Connector contract id used by the
+plan, proves its required roles through `RuntimeBindings`, and reuses that
+family's pure plan-bound request framing and scheduler-terminal projection.
+Only the external effect after the OUTBOUND open is replaced. Consequently a
+mock cannot change contract identity, skip binding, choose a different request
+digest, weaken a port type, mint an envelope, or write a journal record. One
+simulation may mock several Connector families; this does not create a second
+machine or a second plan.
+
 Two-mode equivalence, stated journal-relative : *same world-half in →
 byte-identical **causal cores** out*
 (delivery-semantics §1 : a record = causal core + observation annotations ;

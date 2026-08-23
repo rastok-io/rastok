@@ -133,8 +133,11 @@ The repository opens publicly with this milestone (15 October 2026).
   `rastok/file@1` sheet plus pre-intent invocation settings are landed. C4's
   real one-file Driver now performs bounded complete reads and native atomic
   replacement only after OUTBOUND open, with portable exits, cooperative
-  cancellation and no-recall replay. C5 is the active conformance/composition
-  gate across Process and File.
+  cancellation and no-recall replay. C5 now runs Process and File through one
+  role-aware conformance battery, binds multi-family Lab mocks through the same
+  categorical registry, proves real/Lab plan identity and Process-only,
+  File-only and combined static builds. C6 is the active closure and
+  future-plugin-manifest audit; it freezes no native plugin ABI.
 - `File`, HTTP client and server boundaries under their contract
   sheets, each on the conformance harness.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected

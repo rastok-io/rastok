@@ -1,6 +1,6 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.5 C2.** B5 removed the
+> **Status: normative and executable through M1.5 C5.** B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
@@ -398,7 +398,7 @@ run can inject selected values as new roots.
 | Read attributes | `max_read: ByteSize = "8MiB"` (plan; portable maximum 4 GiB) |
 | Outcome cases | `Completed`; `NotFound`; `NotAFile`; `PermissionDenied`; `InvalidPath`; `ReadLimitExceeded { limit: uint }`; `AtomicReplaceUnavailable`; `IoFailed`; scheduler `TimeoutExpired`; bounded-Closing `OutcomeUnknown` |
 | Instances | ordinary Node instances; a dynamic `path` is evaluated for each invocation and is not instance addressing |
-| Journal / sim | request preparation and typed rejection occur before OUTBOUND open; C4's real Driver executes only the sealed operation after open; replay never recalls it without recovery triage |
+| Journal / sim | request preparation and typed rejection occur before OUTBOUND open; C4's real Driver executes only the sealed operation after open; replay never recalls it without recovery triage; C5's mock factory reuses the same pure File request binding and only replaces the post-open effect |
 
 `path` is a logical UTF-8 path relative to the physical root supplied to the
 bound Driver. The physical root is deployment data, not plan identity. `/` is

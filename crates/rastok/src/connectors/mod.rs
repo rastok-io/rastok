@@ -8,7 +8,9 @@ mod file;
 mod process;
 mod registry;
 
+pub(crate) use file::FileRequestBindings;
 pub use file::{File, FileBindError, FileFactory, FileSettingsError};
+pub(crate) use process::ProcessRequestBindings;
 pub use process::{Process, ProcessBindError, ProcessFactory, ProcessSettingsError};
 pub use registry::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverBindingError, DriverFactoryError,

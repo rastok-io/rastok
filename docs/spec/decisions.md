@@ -246,6 +246,37 @@ host failure to `IoFailed`. C4 changes no plan format, semantic hash, package,
 or causal trace; File request digests begin to exist only for newly executed
 File calls.
 
+**C5 conformance/composition checkpoint (2026-08-23).** The conformance
+battery now accepts a `DriverRegistry`, performs the same global
+`RuntimeBindings` pass as the application, and derives the terminal union from
+the validated resolved port table. Its happy case and interleaving oracle are
+profile data rather than Process assumptions. The real Process and File
+factories both pass that one battery; every portable terminal case is either
+provoked or carries an explicit host-independent reason why it cannot be.
+
+The Lab also composes mock Drivers through exact contract ids and role binding.
+For each supported family, its mock factory reuses the real Driver's pure
+plan-bound request preparation and scheduler-terminal projection; only the
+post-open external effect is scripted. The production VM still opens and
+closes every OUTBOUND record and applies the resolved completion gate. A mixed
+Process/File scenario proves both calls on the journal, while the same graph
+compiled without the Lab has the identical semantic hash and validated plan.
+A malformed File mock output refuses at check as `E-PORT-TYPE`.
+
+Static build composition is explicit and tested in three forms:
+Process-only, File-only and their combined registry. A reduced registry does
+not claim a family it did not register, and the VM contains no Process/File
+dispatch. No semantic hash, package byte, causal trace or format version moves
+at C5.
+
+The promised cost comparison is recorded without inventing elapsed time. Over
+Rust sources and tests, the one-time C0–C2 architecture span
+`147d8c3..475e7c7` changed 3,335 inserted and 1,061 deleted lines; the
+File-specific C3–C4 span `475e7c7..1c6e11d` changed 2,482 inserted and 94
+deleted lines. These are reviewable change-size facts, not person-hours. The
+repository captured no trustworthy active-time measurement, so the historical
+“half-day connector” claim remains unproven and is not repeated.
+
 ## D-2026-08-18-1 — Nodes own instances; key, lifetime, and state scope are separate
 
 The unreleased named-partition model fused three independent concerns: a key

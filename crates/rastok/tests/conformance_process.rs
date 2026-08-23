@@ -12,10 +12,13 @@ use rastok::boundary::{
     Response, SchedulerCompletion,
 };
 use rastok::conformance::{
-    InterleaveProbe, OutboundConnectorDriverFactory, Profile, Provocation, assert_conformant,
-    verify,
+    InterleaveExpectation, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
 };
-use rastok::connectors::Process;
+use rastok::connector::{ConnectorId, ConnectorRoles, PROCESS_CONNECTOR_ID};
+use rastok::connectors::{
+    BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
+    ProcessFactory,
+};
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Envelope, Value};
 use rastok::plan::ValidatedExecutionPlan;
@@ -161,15 +164,12 @@ graph pair : App {
 }
 "#;
 
-struct ProcessFactory;
-
-impl OutboundConnectorDriverFactory for ProcessFactory {
-    fn make<'plan>(
-        &mut self,
-        plan: &'plan ValidatedExecutionPlan,
-    ) -> Box<dyn OutboundConnectorDriver + 'plan> {
-        Box::new(Process::try_new(plan).expect("the plan binds"))
-    }
+fn process_registry() -> DriverRegistry {
+    DriverRegistry::default()
+        .try_with(Box::new(
+            ProcessFactory::try_new().expect("the Process id is canonical"),
+        ))
+        .expect("Process is registered once")
 }
 
 fn process_profile() -> Profile {
@@ -177,6 +177,7 @@ fn process_profile() -> Profile {
         contract: &PROCESS,
         source: HAPPY.into(),
         input: "salut",
+        happy_exit_case: "Exited",
         provocations: vec![
             Provocation {
                 exit_case: "Exited",
@@ -216,6 +217,16 @@ fn process_profile() -> Profile {
             source: PAIR.into(),
             a: "volt 231",
             b: "volt 232",
+            expected: vec![
+                InterleaveExpectation {
+                    connector: rastok::node::Path::new(["left"]).expect("the probe path is valid"),
+                    data: Data::materialized(Value::Text(String::from("volt 231"))),
+                },
+                InterleaveExpectation {
+                    connector: rastok::node::Path::new(["right"]).expect("the probe path is valid"),
+                    data: Data::materialized(Value::Text(String::from("volt 232"))),
+                },
+            ],
         }),
     }
 }
@@ -225,7 +236,7 @@ fn process_passes_the_whole_battery() {
     let report = verify(
         &process_profile(),
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
-        &mut ProcessFactory,
+        &process_registry(),
     );
     assert_conformant(&report, &["CaptureFailed", "OutcomeUnknown"]);
     assert_eq!(
@@ -286,16 +297,35 @@ impl OutboundConnectorDriver for Liar {
     }
 }
 
-struct LiarFactory;
+impl BoundConnectorDriver for Liar {
+    fn inbound(&mut self) -> Option<&mut dyn rastok::boundary::InboundConnectorDriver> {
+        None
+    }
 
-impl OutboundConnectorDriverFactory for LiarFactory {
-    fn make<'plan>(
-        &mut self,
+    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+        Some(self)
+    }
+}
+
+struct LiarFactory(ConnectorId);
+
+impl ConnectorDriverFactory for LiarFactory {
+    fn connector_id(&self) -> &ConnectorId {
+        &self.0
+    }
+
+    fn roles(&self) -> ConnectorRoles {
+        ConnectorRoles::Outbound
+    }
+
+    fn bind<'plan>(
+        &self,
         _plan: &'plan ValidatedExecutionPlan,
-    ) -> Box<dyn OutboundConnectorDriver + 'plan> {
-        Box::new(Liar {
+        _nodes: &[rastok::node::Path],
+    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        Ok(Box::new(Liar {
             pending: Vec::new(),
-        })
+        }))
     }
 }
 
@@ -305,15 +335,21 @@ fn a_malformed_terminal_case_fails_the_battery() {
         contract: &PROCESS,
         source: HAPPY.into(),
         input: "salut",
+        happy_exit_case: "Exited",
         provocations: Vec::new(),
         unprovable: Vec::new(),
         mute_source: None,
         interleave: None,
     };
+    let drivers = DriverRegistry::default()
+        .try_with(Box::new(LiarFactory(
+            ConnectorId::parse(PROCESS_CONNECTOR_ID).expect("the Process id is canonical"),
+        )))
+        .expect("the liar registers once");
     let report = verify(
         &profile,
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
-        &mut LiarFactory,
+        &drivers,
     );
     assert!(!report.conformant());
     assert!(
@@ -352,7 +388,8 @@ impl OutboundConnectorDriver for Swapper {
     }
 
     fn start(&mut self, intent: &Intent, _request: &Envelope) {
-        let echoed = String::from_utf8_lossy(intent.prepared.bytes()).into_owned();
+        let framed = String::from_utf8_lossy(intent.prepared.bytes());
+        let echoed = framed.strip_suffix('\n').unwrap_or(&framed).to_owned();
         self.pending.push(Response {
             call_ref: intent.call_ref,
             completion: Completion::process(
@@ -377,16 +414,35 @@ impl OutboundConnectorDriver for Swapper {
     }
 }
 
-struct SwapperFactory;
+impl BoundConnectorDriver for Swapper {
+    fn inbound(&mut self) -> Option<&mut dyn rastok::boundary::InboundConnectorDriver> {
+        None
+    }
 
-impl OutboundConnectorDriverFactory for SwapperFactory {
-    fn make<'plan>(
-        &mut self,
+    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+        Some(self)
+    }
+}
+
+struct SwapperFactory(ConnectorId);
+
+impl ConnectorDriverFactory for SwapperFactory {
+    fn connector_id(&self) -> &ConnectorId {
+        &self.0
+    }
+
+    fn roles(&self) -> ConnectorRoles {
+        ConnectorRoles::Outbound
+    }
+
+    fn bind<'plan>(
+        &self,
         _plan: &'plan ValidatedExecutionPlan,
-    ) -> Box<dyn OutboundConnectorDriver + 'plan> {
-        Box::new(Swapper {
+        _nodes: &[rastok::node::Path],
+    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        Ok(Box::new(Swapper {
             pending: Vec::new(),
-        })
+        }))
     }
 }
 
@@ -396,6 +452,7 @@ fn crossed_concurrent_replies_fail_the_battery() {
         contract: &PROCESS,
         source: HAPPY.into(),
         input: "salut",
+        happy_exit_case: "Exited",
         provocations: Vec::new(),
         unprovable: Vec::new(),
         mute_source: None,
@@ -403,12 +460,27 @@ fn crossed_concurrent_replies_fail_the_battery() {
             source: PAIR.into(),
             a: "volt 231",
             b: "volt 232",
+            expected: vec![
+                InterleaveExpectation {
+                    connector: rastok::node::Path::new(["left"]).expect("the probe path is valid"),
+                    data: Data::materialized(Value::Text(String::from("volt 231"))),
+                },
+                InterleaveExpectation {
+                    connector: rastok::node::Path::new(["right"]).expect("the probe path is valid"),
+                    data: Data::materialized(Value::Text(String::from("volt 232"))),
+                },
+            ],
         }),
     };
+    let drivers = DriverRegistry::default()
+        .try_with(Box::new(SwapperFactory(
+            ConnectorId::parse(PROCESS_CONNECTOR_ID).expect("the Process id is canonical"),
+        )))
+        .expect("the swapper registers once");
     let report = verify(
         &profile,
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
-        &mut SwapperFactory,
+        &drivers,
     );
     assert!(
         report

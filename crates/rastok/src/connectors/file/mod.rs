@@ -104,6 +104,81 @@ impl FileBinding {
     }
 }
 
+/// Pure, plan-bound half of the File protocol, shared by the real Driver and
+/// the Lab's scripted Driver. It validates settings and seals operation bytes,
+/// but holds no physical root and cannot observe the filesystem.
+#[derive(Debug)]
+pub(crate) struct FileRequestBindings {
+    bindings: BTreeMap<crate::node::Path, FileBinding>,
+}
+
+impl FileRequestBindings {
+    pub(crate) fn try_bind(
+        plan: &crate::plan::ValidatedExecutionPlan,
+        nodes: &[crate::node::Path],
+    ) -> Result<Self, FileBindError> {
+        let mut bindings = BTreeMap::new();
+        for path in nodes {
+            let Some(node) = plan.plan().nodes.iter().find(|node| &node.path == path) else {
+                return Err(FileBindError {
+                    node: path.clone(),
+                    reason: FileSettingsError::Unresolved("connector binding path"),
+                });
+            };
+            let NodeKind::Connector(spec) = &node.kind else {
+                return Err(FileBindError {
+                    node: path.clone(),
+                    reason: FileSettingsError::Unresolved("connector binding kind"),
+                });
+            };
+            let binding = FileBinding::try_from(spec).map_err(|reason| FileBindError {
+                node: path.clone(),
+                reason,
+            })?;
+            bindings.insert(path.clone(), binding);
+        }
+        Ok(Self { bindings })
+    }
+
+    fn get(&self, connector: &crate::node::Path) -> Option<&FileBinding> {
+        self.bindings.get(connector)
+    }
+
+    fn prepare(
+        &self,
+        connector: &crate::node::Path,
+        data: &Data,
+        settings: &BTreeMap<String, Value>,
+    ) -> Result<PreparedRequest, FileExit> {
+        let binding = self.get(connector).ok_or(FileExit::IoFailed)?;
+        let path = validate_logical_path(binding.path(settings)?)?;
+        let operation = match binding.mode {
+            FileMode::Read { max_read } => FileOperation::Read { path, max_read },
+            FileMode::Replace => {
+                let prepared =
+                    crate::boundary::prepare_bytes(data).map_err(|_| FileExit::IoFailed)?;
+                FileOperation::Replace {
+                    path,
+                    bytes: prepared.bytes().to_vec(),
+                }
+            }
+        };
+        operation.encode()
+    }
+
+    pub(crate) fn prepare_request(
+        &self,
+        connector: &crate::node::Path,
+        data: &Data,
+        settings: &BTreeMap<String, Value>,
+    ) -> RequestPreparation {
+        match self.prepare(connector, data, settings) {
+            Ok(prepared) => RequestPreparation::Prepared(prepared),
+            Err(exit) => RequestPreparation::Rejected(Completion::file_exit(exit)),
+        }
+    }
+}
+
 /// A violated `File` binding invariant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileSettingsError {
@@ -233,7 +308,7 @@ struct WorkerResult {
 pub struct File<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
     root: PathBuf,
-    bindings: BTreeMap<crate::node::Path, FileBinding>,
+    bindings: FileRequestBindings,
     runs: BTreeMap<crate::boundary::CallRef, Arc<AtomicBool>>,
     sender: mpsc::Sender<WorkerResult>,
     receiver: mpsc::Receiver<WorkerResult>,
@@ -264,26 +339,7 @@ impl<'plan> File<'plan> {
         nodes: &[crate::node::Path],
         root: PathBuf,
     ) -> Result<Self, FileBindError> {
-        let mut bindings = BTreeMap::new();
-        for path in nodes {
-            let Some(node) = plan.plan().nodes.iter().find(|node| &node.path == path) else {
-                return Err(FileBindError {
-                    node: path.clone(),
-                    reason: FileSettingsError::Unresolved("connector binding path"),
-                });
-            };
-            let NodeKind::Connector(spec) = &node.kind else {
-                return Err(FileBindError {
-                    node: path.clone(),
-                    reason: FileSettingsError::Unresolved("connector binding kind"),
-                });
-            };
-            let binding = FileBinding::try_from(spec).map_err(|reason| FileBindError {
-                node: path.clone(),
-                reason,
-            })?;
-            bindings.insert(path.clone(), binding);
-        }
+        let bindings = FileRequestBindings::try_bind(plan, nodes)?;
         let (sender, receiver) = mpsc::channel();
         Ok(Self {
             _plan: plan,
@@ -295,28 +351,6 @@ impl<'plan> File<'plan> {
             answers: Vec::new(),
         })
     }
-
-    fn prepare(
-        &self,
-        connector: &crate::node::Path,
-        data: &Data,
-        settings: &BTreeMap<String, Value>,
-    ) -> Result<PreparedRequest, FileExit> {
-        let binding = self.bindings.get(connector).ok_or(FileExit::IoFailed)?;
-        let path = validate_logical_path(binding.path(settings)?)?;
-        let operation = match binding.mode {
-            FileMode::Read { max_read } => FileOperation::Read { path, max_read },
-            FileMode::Replace => {
-                let prepared =
-                    crate::boundary::prepare_bytes(data).map_err(|_| FileExit::IoFailed)?;
-                FileOperation::Replace {
-                    path,
-                    bytes: prepared.bytes().to_vec(),
-                }
-            }
-        };
-        operation.encode()
-    }
 }
 
 impl OutboundConnectorDriver for File<'_> {
@@ -326,10 +360,8 @@ impl OutboundConnectorDriver for File<'_> {
         data: &Data,
         resolved_settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        match self.prepare(connector, data, resolved_settings) {
-            Ok(prepared) => RequestPreparation::Prepared(prepared),
-            Err(exit) => RequestPreparation::Rejected(Completion::file_exit(exit)),
-        }
+        self.bindings
+            .prepare_request(connector, data, resolved_settings)
     }
 
     fn scheduler_completion(

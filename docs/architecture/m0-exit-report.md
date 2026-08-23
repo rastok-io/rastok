@@ -77,6 +77,9 @@ The pressures that accumulated during the build, in order of force:
    proved out.
 4. **Connectors are the velocity bottleneck of the next milestone.**
    The contract sheets exist; a reusable conformance harness over the
-   `Partner` seam turns each new adapter into a half-day task.
+   then-named `Partner` seam was expected to turn each new adapter into a
+   half-day task. M1.5 C5 later separated the reusable registry/binder tax from
+   File-specific work and found no trustworthy elapsed-time evidence; the
+   half-day wording remains a historical hypothesis, not a measured claim.
 
 These pressures are the M0.5 scope ([`m0.5-slice.md`](m0.5-slice.md)).
