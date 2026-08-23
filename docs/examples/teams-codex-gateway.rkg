@@ -2,10 +2,10 @@
 // teams-codex-gateway.rkg
 //
 // Teams <-> Codex bridge — larger M1 target-surface example.
-// It is intentionally ahead of the executable subset: Http/File/Memory,
-// keyed owners, lifetime/closing, Loop, Process(service), jq, and IDENT!
-// frontends remain guarded as of 2026-08-18. This is a design reference,
-// not a current fixture.
+// It is intentionally ahead of the executable subset: keyed owners,
+// lifetime/closing and File(read/replace) execute, but Http/Memory,
+// append-style File logging, Loop, Process(service), and jq remain guarded as
+// of 2026-08-23. This is a design reference, not a current fixture.
 //
 // Demonstrates :
 //   - graph composability : `sessions` = a per-key sub-graph, declared in place
@@ -61,6 +61,8 @@ graph sessions {
   }
 
   connector codex_logs : File {
+    // Prospective append/log profile, not the executable one-file
+    // read/atomic-replace contract of rastok/file@1.
     path = "/var/codex/" + session_key + "/codex.stderr.log"
     codec = text
   }

@@ -223,6 +223,12 @@ Notes the numbers carry:
   and the heap peak changes by −8 B; these are code-layout jitter because the
   resolved Driver identity is not consulted on an Operator relay. The causal
   trace stays byte-identical.
+- C2–C6 remain in the std assembly/Driver layer and move no embedded package,
+  semantic hash or causal trace. The C6 closure run on 2026-08-23 reproduces
+  C1 exactly: package decode 16 989 ticks, relay 2 757 average / 2 690 minimum /
+  2 974 maximum, heap watermark 106 780 B, 67 records, and `SPIKE_OK` with
+  semantic hash `190f0efc…`. The data-only `DriverManifest` therefore does not
+  leak plugin discovery or registry assembly into the kernel.
 - Flash grew from 193 KiB to 516.4 KiB (`.text` 481 404 B +
   `.rodata` 47 356 B, re-measured after C1 on 2026-08-22): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the

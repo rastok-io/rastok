@@ -1,7 +1,7 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-23 for the M1.5 C5
-> composition checkpoint.** The former named-partition P1-P3 implementation is superseded.
+> Planning aid — non-normative. **Updated 2026-08-23 for the M1.5 C6
+> closure checkpoint.** The former named-partition P1-P3 implementation is superseded.
 > Categorical v10 transport retains v9's owner model and adds stable Connector
 > identities/roles; hierarchical route/journal instance
 > references are executable; all five lifetime profiles and explicitly bounded
@@ -63,6 +63,7 @@ they are not promised crate names.
 | M1.5 C3 File contract and invocation settings | `rastok/file@1` fixes one-file `read`/atomic-`replace`, exact typed ports, portable `FileExit`, required invocation-capable logical path and bounded reads. Dynamic Connector rows are checked once, transported in v10, re-derived Registry-free and evaluated into values before request preparation/open; no Driver chooses defaults or receives AST. | `stdlib::FILE`, `contract`, `compiler::{check,hir,lower}`, `boundary::{file_port_type,file_exit_type}`, `plan::validation`, `runtime::vm` | sheet/core product agreement, source/package round-trip, unsupported-surface refusals, forged-sheet refusal, VM proof that Driver and intent receive the same resolved path; no filesystem access or identity move |
 | M1.5 C4 real File Driver | The physical root stays deployment-only; pure preparation seals the exact one-file operation before OUTBOUND open. Blocking workers execute bounded all-or-nothing read or native same-directory atomic replace, project only portable FileExit, and obey generic cancel/late/replay rules. | `connectors::{FileFactory,File}`, `boundary::{PreparedRequest,FileExit,Completion}`, `Dispatcher` | real filesystem success/absence/shape/budget/replace, pre-open invalid path, cancellation, portable permission mapping, replay after file mutation; no identity move |
 | M1.5 C5 conformance and composition | Real and mock families bind by the same exact id/roles. Family-neutral conformance derives terminal types from the validated plan; Lab factories reuse real pure request protocols while only scripting post-open effects. Static builds explicitly select Process, File or both. | `conformance::{Profile,verify}`, `connectors::{DriverRegistry,RuntimeBindings}`, `lab`, Process/File request bindings | both real factories through one battery; mixed Lab hash/plan parity and journaled calls; malformed mock pin refusal; three static registry compositions; no identity move |
+| M1.5 C6 closure and future discovery seam | A capability manifest describes canonical Connector ids and roles without loading implementation code; actual execution still requires an ordinary factory and binding. One documented contribution path serves static builds and future plugin hosts without freezing a serialized manifest, loader, trust model or ABI. | `connectors::{DriverManifest,DriverRegistry}`, [connector-drivers.md](connector-drivers.md), maintained module diagram | canonical ordering/duplicate refusal without factories; active-doc vocabulary audit; full portability gates; no identity move |
 
 ## M1.3 foundation (landed in ordered gates)
 

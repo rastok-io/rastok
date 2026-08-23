@@ -131,8 +131,8 @@ integrity check, never as routing authority. Changing `data` or metadata after
 entry never migrates the current instance.
 
 `meta.sys.id` is therefore a valid key and naturally means one instance per
-entering envelope. Ingress identity is minted by its logical producer before
-target routing; the ingress replica is not the target shard.
+entering envelope. Inbound-envelope identity is minted by its logical producer
+before target routing; the provenance replica is not the target shard.
 
 The **selected** key is exposed as contextual `instance.key`, not copied into
 `meta.sys`. `meta.sys` belongs to the immutable envelope and travels unchanged;
@@ -451,7 +451,7 @@ generation. Every selected Graph and Node owner records exactly one lazy
 deadline is armed. Before `l:start`, the runtime purely evaluates and validates
 that owner's per-instance `val`s and instance-bound Connector settings into a
 candidate bundle. A failure leaves the delivery unconsumed, commits no
-`l:start`, and performs no adapter effect. Once the bundle is valid, the
+`l:start`, and performs no Driver effect. Once the bundle is valid, the
 runtime commits the `l:start` lifecycle transaction before the port
 transaction or any external resource effect. `on start` and `on stop` are
 ordinary handlers owned by the Node and require a causal input envelope;

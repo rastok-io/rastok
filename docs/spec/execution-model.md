@@ -135,7 +135,7 @@ Admission of a delivery into an absent address starts a new **instance**:
 1. reserve capacity and the zero-based generation derived from journal history
    for that address, then seal that instance reference in the producer route;
 2. purely evaluate and validate per-instance bindings; failure consumes
-   nothing, starts nothing, and performs no adapter effect;
+   nothing, starts nothing, and performs no Driver effect;
 3. commit `l:start` with the admitted envelope as cause and the reserved
    instance reference;
 4. commit the envelope's port transaction only after the start;

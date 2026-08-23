@@ -54,16 +54,23 @@ Rastok is at an early experimental stage. Its specification and
 implementation architecture are under active review, and the runtime
 does not yet make a production-readiness claim.
 
-The current target is one continuous mechanical proof:
+The current executable proof is one continuous path:
 
 ```text
 Rastok DSL source
   -> validated executable plan
   -> deterministic state machine
   -> state-machine execution in a native in-memory VM
-  -> one real Process boundary
-  -> journaled, auditable Lab scenario with a useful golden diff
+  -> mixed real Process and File boundaries selected through one Driver registry
+  -> journaled, auditable multi-family Lab scenarios with useful golden diffs
 ```
+
+Connector contracts have stable semantic ids and inbound/outbound roles.
+Current binaries compose Drivers explicitly at build/assembly time; minimal,
+embedded and full builds may select different sets without changing the plan
+model. A future plugin host can use the same registry boundary, but Rastok does
+not yet ship a plugin loader or freeze a native ABI. Contributors follow the
+[Connector Driver guide](docs/architecture/connector-drivers.md).
 
 ## Documentation authority
 

@@ -1,7 +1,7 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-23 for the M1.5 C5 composition checkpoint. The
+> of the build; updated 2026-08-23 for the M1.5 C6 closure checkpoint. The
 > former named-partition P1-P3 implementation is superseded; categorical v10
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
@@ -109,6 +109,7 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 ├── golden.rs         # Trace, Divergence — projection, seal, named diff
 ├── connectors/       # registry/global binder plus one module per family
 │   ├── registry.rs   # exact-id factories and role-aware RuntimeBindings
+│   ├── manifest.rs   # pre-load data-only Connector id/role capabilities
 │   ├── process/      # Process: bind effective settings, then async Driver
 │   └── file/         # File: pure operation framing, then filesystem Driver
 ├── conformance.rs    # Driver contract harness over the production seam
@@ -403,6 +404,7 @@ whatever its execution format.
 | Component | Owns | Spec | Status |
 |---|---|---|---|
 | **`connectors::DriverRegistry`** | exact `ConnectorId` → implementation factory mapping and role-availability checks; duplicate ids refuse | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
+| **`connectors::DriverManifest`** | data-only, canonically ordered stable id/role claims readable before implementation code loads; no factory, artifact locator, ABI or trust policy | [decisions.md D-2026-08-22-1](../spec/decisions.md); [connector-drivers.md](connector-drivers.md) | M1.5 C6 |
 | **`connectors::RuntimeBindings`** | the pre-VM association of every runnable inbound and callable outbound Node with one family object; exact role-view proof; Node-path and call-family routing without concrete contract matching | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
 | **`connectors::ProcessFactory` / `Process`** | the explicit `rastok/process@1` factory and real job-mode Outbound Driver: pre-binds every effective setting before the VM/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; family module C0; registry binding C2 |
 | **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@1`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
@@ -570,7 +572,8 @@ The chronological detail and commit evidence remain in
   hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
   profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.
-- **Next:** M1.5 C6 closure/plugin-manifest audit, then HTTP, Loop,
-  counters, and `--watch`
-  remain guarded in the order recorded by the
-  [M1.5 backlog](m1.5-connectors-backlog.md).
+- **M1.5 closure:** Process and File bind through one registry, conformance and
+  Lab protocol path. `DriverManifest` proves the pre-load id/role seam without
+  freezing discovery or ABI, and [connector-drivers.md](connector-drivers.md)
+  is the contributor path. HTTP, Loop, counters, and `--watch` remain guarded
+  in the order recorded by [`m1-slice.md`](m1-slice.md).

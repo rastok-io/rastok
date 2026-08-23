@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.5 C1 identities, 2026-08-22)
+title Rastok — bird's-eye module overview (M1.5 C6 closure, 2026-08-23)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -346,23 +346,27 @@ package "golden — canonical projection, seal, and diff" as P_GOLD {
 }
 
 package "connectors — concrete external-effect Drivers" as P_CONN {
+  class DriverManifest <<struct>>
+  DriverManifest : pre-load canonical id and role claims; no code or ABI
   class DriverRegistry <<struct>>
   DriverRegistry : exact id-to-factory and role binding
+  class RuntimeBindings <<struct>>
+  RuntimeBindings : complete pre-VM Node-to-role association
   interface ConnectorDriverFactory <<trait>>
   ConnectorDriverFactory : binds one contract implementation
   class Process <<struct>>
   Process : pre-bound async process Driver; out*, err*, then typed exit
   class ProcessBindError <<struct>>
   ProcessBindError : refuses an unserved or unresolved plan before VM boot
-  class "HttpServer, HttpClient, Clock,\nCalendar, Memory, File" as CATALOGUE <<guarded>>
+  class File <<struct>>
+  File : one-file bounded read and atomic replace Driver
+  class "HttpServer, HttpClient, Clock,\nCalendar, Memory" as CATALOGUE <<guarded>>
   CATALOGUE : declared names — sheets and Drivers land by slice
 }
 
 package "conformance — Driver contract harness" as P_CONF {
-  interface OutboundConnectorDriverFactory <<trait>>
-  OutboundConnectorDriverFactory : builds the Driver behind the production OutboundConnectorDriver seam
   class Profile <<struct>>
-  Profile : provocations and declared proof surface
+  Profile : happy case, provocations, correlation oracle, honest gaps
   class Report <<struct>>
   Report : passed, failed, and honestly unproven cases
 }
@@ -431,13 +435,15 @@ P_J ..> P_IDENT : seals instance references
 P_GOLD ..> P_J : projects
 P_GOLD ..> P_CBOR : encodes / decodes
 P_GOLD ..> P_IDENT : tagged values
-P_CONN ..> P_BND : implements OutboundConnectorDriver
+P_CONN ..> P_BND : implements Driver roles
 P_CONN ..> P_PLAN : binds validated plan
 P_CONN ..> P_CONNECTOR : registers exact ids / roles
-P_CONF ..> P_BND : exercises OutboundConnectorDriver
+P_CONF ..> P_BND : exercises boundary protocols
 P_CONF ..> P_CONTRACT : reads contract
+P_CONF ..> P_CONN : binds through DriverRegistry
 P_LAB ..> P_COMP : uses
 P_LAB ..> P_RT : drives the Vm
+P_LAB ..> P_CONN : registers mock factories
 P_LAB ..> P_BND : mocks OutboundConnectorDriver
 P_LAB ..> P_J : uses
 P_CLI ..> P_COMP : uses

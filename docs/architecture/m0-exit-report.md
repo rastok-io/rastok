@@ -22,10 +22,10 @@ clean checkout on a second machine and operating system.
 |---|---|
 | The compiler refuses wrong programs with stable diagnostics | registry-driven codes grown change-by-change ([diagnostics.md](../spec/diagnostics.md)); parse/check fixtures with blessed goldens; a semantic refusal rendered with source line and underline, exercised through the CLI |
 | The machine is atomic and loses nothing | reserve → evaluate → reserve-capacity → commit → apply protocol; fault-injection tests replay refused commits, opens, closures, and expiries without loss or duplication |
-| Effects are journaled before they happen | OUTBOUND open precedes every partner start; closures are gated against the contract's error set BEFORE becoming causal facts; close-once arbitrates every race |
+| Effects are journaled before they happen | OUTBOUND open precedes every start through the then-named `Partner` seam (now `OutboundConnectorDriver`); closures are gated against the then-current contract error set BEFORE becoming causal facts; close-once arbitrates every race |
 | Time is the machine's, not the world's | budgets arm at delivery (queue time counts), only the scheduler mints a timeout, a cancelled call kills its process group; the response/expiry race is genuine and journaled |
 | Behavior is sealed at the byte | deterministic CBOR projection per [identity.md §3](../spec/identity.md), blake3 seals, golden traces with a structural diff against the STORED golden; the encoder is pinned to RFC 8949 test vectors |
-| The lab proves the machine, not a double | scenarios run on the production `Vm` behind the same `Partner` seam as the real adapter; misspelled targets, non-boolean predicates, uncovered calls, and unsettled machines are all named failures |
+| The lab proves the machine, not a double | scenarios run on the production `Vm` behind the same then-named `Partner` seam as the real boundary implementation; misspelled targets, non-boolean predicates, uncovered calls, and unsettled machines are all named failures |
 | Determinism holds across machines | 2026-08-04, commit `a05b77e`: clean clone on Debian 13 x86_64, throwaway toolchain 1.97.1 — full gate green, and the semantic hash and canonical seals byte-identical to the macOS development machine |
 
 Final state: 209 tests (golden traces and CLI drives included), zero
@@ -39,8 +39,8 @@ Eleven adversarial review passes ran against the slice; the last
 declared the series closed. Their material effect, visible in the
 history: the lab was made incapable of false greens; envelope writes
 became checked targets instead of runtime string interpretation; the
-Process boundary was rebuilt around prepared bytes, an asynchronous
-partner, and protocol-terminated pipes; the timeout moved wholly into
+Process boundary was rebuilt around prepared bytes, an asynchronous external
+responder, and protocol-terminated pipes; the timeout moved wholly into
 the scheduler with delivery-armed budgets; identity gained the
 resolved contract, the budget reference, and sugar-insensitive write
 hashing. Where implementation exposed a contradiction inside the

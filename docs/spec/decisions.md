@@ -277,6 +277,33 @@ deleted lines. These are reviewable change-size facts, not person-hours. The
 repository captured no trustworthy active-time measurement, so the historical
 “half-day connector” claim remains unproven and is not repeated.
 
+**C6 closure and future-plugin checkpoint (2026-08-23).** A
+`DriverManifest` is now the data-only capability projection a future build
+description, native-plugin sidecar or out-of-process handshake must produce.
+It contains a canonically Connector-id-ordered set of `(ConnectorId,
+ConnectorRoles)` entries and rejects duplicate ids; it contains no factory,
+function pointer, crate, artifact path, Host, Worker or loader decision. The
+manifest can therefore be inspected without executing implementation code.
+Its serialized file syntax is deliberately not frozen.
+
+A manifest claim is never an executable binding. After any future loader has
+made code available, the resulting factory must still enter the ordinary
+`DriverRegistry`; `RuntimeBindings` independently proves the exact id,
+required advertised roles and actual bound role views before execution. M1.5
+freezes neither a Rust/native ABI nor artifact discovery, trust/signing,
+isolation, lifecycle or hot reload. Static registration remains the only
+shipped assembly mechanism.
+
+The contributor path is now one path for every physical assembly: Contract
+sheet and Registry-free validation, family-owned pure request protocol and
+effectful Driver, exact-id factory, real conformance profile, Lab mock factory
+over the same protocol, then reduced/combined composition proof. The
+WHITEPAPER, active specifications, architecture map and maintained module
+diagram use that vocabulary. Historical M0 artifacts retain superseded names
+only where they are explicitly marked historical. C6 changes no language,
+plan, semantic hash, package, causal trace or format version; M1.5 closes at
+this checkpoint.
+
 ## D-2026-08-18-1 — Nodes own instances; key, lifetime, and state scope are separate
 
 The unreleased named-partition model fused three independent concerns: a key
@@ -466,13 +493,13 @@ the virtual-shard proof seam is `u64::from_be_bytes(blake3(address)[0..8]) mod
 virtual_shard_count`; generation, Worker count, Host, and scheduler order do
 not participate.
 
-Ingress is now a prepare/commit operation. Preparation mints the final root
-envelope, including `meta.sys`, without consuming its sequence; the VM then
-selects and validates the complete destination owner chain outermost first,
+Inbound admission is now a prepare/commit operation. Preparation mints the
+final root envelope, including `meta.sys`, without consuming its sequence; the
+VM then selects and validates the complete destination owner chain outermost first,
 checks mailbox capacity, and only then commits the inbound fact and its route.
 A normal transaction follows the same select/check/commit discipline. Thus a
 key may honestly read the complete immutable envelope, and failure of a key,
-owner value, or instance-bound Connector setting commits no ingress,
+owner value, or instance-bound Connector setting commits no inbound fact,
 `l:start`, cursor, state, or external effect.
 
 Every routed delivery now seals a full target instance reference, including
@@ -930,9 +957,9 @@ an implementation never maps by similar spelling:
 | `ExecFailed { exit_code, stderr }` | the observed child status becomes ordinary `Exited { exit_code, signal }`; stderr is independently framed into `err*` and never remains in the exit payload |
 | declared `StderrLine` | no exit case; every observed stderr frame is ordinary data on `err` |
 
-In particular, a non-zero process code changes from an adapter-classified
+In particular, a non-zero process code changes from a Driver-classified
 failure into an observed terminal fact. Retry or alert policy belongs to the
-graph after narrowing `exit`, not to the Process adapter.
+graph after narrowing `exit`, not to the Process Driver.
 
 **One marked frontend form.** A value region owned by a dedicated
 reader/compiler is introduced by:

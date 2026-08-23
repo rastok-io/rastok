@@ -150,7 +150,8 @@ second injection) : one delivery matches (C2) → **pass**.
    Absent fields are omitted ; durable journal bytes may use another
    representation.
 5. **The same-shape contract, visible** : records 3-4 and 8-9 exist although
-   `notify` was mocked — the mock replaced the partner, not the bookkeeping.
+   `notify` was mocked — the mock Driver replaced the external interaction,
+   not the bookkeeping.
 6. **Nothing else** : no spans, no durations, no host names — the parallel
    plane leaves no fingerprint.
 

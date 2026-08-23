@@ -1273,9 +1273,9 @@ nature:
   dedicated alias. Broadcast needs no `Fanout` alias because the atomic
   multi-emit statement `(a, b, c) = x` expresses it directly.)
 - **Connectors are runtime primitives.** They bridge the graph to
-  the outside world through native code (HTTP libraries, process
+  the outside world through Driver code (HTTP libraries, process
   spawning, database drivers, file I/O). A new Connector requires a
-  Rust (or Wasm) module registered with the runtime; it cannot be
+  semantic Contract and a registered native or sandboxed Driver; it cannot be
   defined in DSL alone. This is the *syscall surface* of Rastok.
 
 In OS terms: Operators are userspace functions composed from DSL primitives;
@@ -1431,6 +1431,37 @@ graph as an arrival whose order relative to other arrivals is a race.
 Those arrival orders are recorded per hop in the journal — which is
 exactly what makes replay deterministic (envelope.md §2.0/§8). The
 Connector draws the boundary; the journal captures what crosses it.
+
+**The Contract is not the Driver.** Source names resolve through a compiler
+catalogue to a stable versioned contract id such as `rastok/process@1`. The
+Contract declares inbound/outbound roles, typed ports, attributes and
+lifecycle rules. A Driver is one physical implementation of those semantics.
+Before execution, a runtime registry binds every active Connector Node by the
+exact id and proves that the implementation exposes every required role.
+Neither crate names, shared-library paths, build features, Hosts nor Workers
+enter the plan or causal identity.
+
+```text
+RKG Connector ──▶ Contract catalogue ──▶ validated plan (id + roles + facts)
+                                                │
+static factories ──▶ Driver registry ──bind─────┘
+future plugin host ─┘                    │
+                                        ▼
+                               one VM + one journal
+```
+
+Static composition is the implementation available today: embedded, minimal
+and full standalone builds may link different Driver sets while consuming the
+same plan model. A future plugin sidecar can publish a data-only capability
+manifest — canonical contract ids and roles — before code is loaded, then
+register an ordinary factory through the same boundary. Rastok does not yet
+freeze a native plugin ABI, artifact format, trust policy or hot-reload
+lifecycle. Discovery is physical assembly, not a second execution model.
+
+The Lab follows the same rule. A mock Driver binds under the same id and roles,
+uses the same family request protocol and resolved result types, and replaces
+only the post-journal external interaction. It never replaces the VM or its
+bookkeeping.
 
 **Lifecycle-bound resources carry invocation scopes, not hidden addressing
 dimensions.** A static Connector Node may run at several logical addresses,
@@ -1732,12 +1763,13 @@ one Worker, synchronous pump. An embedded/no_std deployment may remain exactly
 that. Neither source semantics nor journal identity depends on the existence
 of an OS process boundary.
 
-Ingress is a logical producer with its own stable replica identity. Whether a
-listener physically lives beside the Coordinator or in a Worker is an adapter
-and deployment choice. It mints the complete inbound envelope, evaluates the
-first target address, journals that route, and only then delivers. Workers
-perform outbound effects through Connector adapters. A child spawned by the
-`Process` Connector is workload isolation, not itself a Rastok Worker.
+An inbound Connector is a logical producer with its own stable replica
+provenance. Whether its Driver physically lives beside the Coordinator or in a
+Worker is a deployment choice. The Driver proposes a draft; runtime authority
+assigns its sequence, mints the complete inbound envelope, evaluates the first
+target address, journals that route, and only then delivers. Workers perform
+outbound effects through bound Outbound Connector Drivers. A child spawned by
+the `Process` Connector is workload isolation, not itself a Rastok Worker.
 
 ### 4.2 Durability scopes
 
@@ -2060,7 +2092,7 @@ The ontology is a mirror:
 |---|---|
 | App | Lab |
 | Graph | Simulation — closes it (`on app`) |
-| Connector | Mock — replaces the partner, never the bookkeeping |
+| Connector | Mock Driver — replaces the external interaction, never the bookkeeping |
 | deployed App + real profile | Experiment — meets the real world |
 | a concrete execution | Scenario |
 | an observation | Expect |
@@ -2129,7 +2161,7 @@ opaque block.
 
 The assurance layers do not substitute for each other: **a theorem
 reasons about a graph under declared Connector contracts; an experiment
-checks whether real adapters and partners still honor those contracts.**
+checks whether real Drivers and external systems still honor those contracts.**
 Evidence grows incrementally:
 
 ```
@@ -2173,9 +2205,10 @@ Key properties:
 - **Mock/Inject/Expect** reads vertically as a Gherkin scenario
   (simulation-semantics.md is the normative spec of this surface).
 - **Mocks mirror Connector boundaries**: a mock is written in the same
-  handler grammar as a node body, but it replaces only the external partner,
-  not the Connector's journal bookkeeping. The graph in test is the same graph
-  in production.
+  handler grammar as a node body, but its factory binds through the same exact
+  contract id, roles and family request protocol as the real Driver. It
+  replaces only the external interaction, not the Connector's journal
+  bookkeeping. The graph in test is the same graph in production.
 - **Intermediate assertions** (`expect` on any internal port) test
   transformations without isolating nodes; observation is read-only and
   legal anywhere.
@@ -2689,7 +2722,7 @@ simulations designed to become executable evidence as the runtime
 lands. The current evidence gates are listed in
 [ROADMAP.md](ROADMAP.md).
 
-As of M1.4 R7, the one-worker reference executes canonical keyed/lifetime
+As of M1.5 C6, the one-worker reference executes canonical keyed/lifetime
 instances, bounded Closing, nested Graph composition, and instance-local
 bounded joins from source through package validation and public Lab scenarios.
 The closure audit also proves that moving a stable virtual shard between
@@ -2697,7 +2730,11 @@ physical Host/Worker assignments changes neither semantic identity, causal
 journal bytes, nor replay input. This is milestone evidence, not a
 production-readiness or cluster-runtime claim; distributed leases, fencing,
 recovery, and scheduling remain later physical implementations of the same
-logical addresses.
+logical addresses. Process and File now execute as two real outbound Driver
+families through one exact-id/role registry and one VM boundary; the Lab
+composes both through the same binding and protocol. Static Driver selection is
+implemented. A data-only capability manifest proves the future discovery seam,
+but no plugin loader or native ABI is claimed.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual
@@ -2783,6 +2820,10 @@ wins.
     simulations close graphs, experiments exercise real boundaries,
     challenges search bounded spaces, and future theorems may establish
     proofs.**
+20. **A Connector contract names semantics; a Driver supplies one physical
+    implementation. Exact ids and roles meet once at binding. Static builds and
+    future plugin hosts must feed the same registry, while the VM remains
+    ignorant of concrete Connector families.**
 
 These maxims are not arbitrary slogans. Each one resolves a specific
 architectural ambiguity, and contributors are expected to know them.

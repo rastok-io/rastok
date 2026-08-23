@@ -21,6 +21,11 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`m1.5-connectors-backlog.md`](m1.5-connectors-backlog.md) for the ordered
   landing of stable Connector contracts, role-based Drivers, static/runtime
   binding and the first second-family proof with `File`;
+- [`m1.5-exit-report.md`](m1.5-exit-report.md) for the C6 architecture,
+  identity ledger, plugin non-claims and remaining Connector limits;
+- [`connector-drivers.md`](connector-drivers.md) for the current contribution
+  path from semantic Contract through real/Lab Driver conformance and static
+  composition, plus the deliberately narrow future-plugin seam;
 - [`build-order.md`](build-order.md) for the dependency-driven stage
   sequence used to build the M0 modules;
 - [`components.md`](components.md) for the component blueprint: owned

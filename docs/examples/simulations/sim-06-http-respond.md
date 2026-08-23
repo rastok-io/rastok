@@ -15,7 +15,7 @@
 | `timeout` = the open-request budget; expiry → `RequestExpired` on `exit`, 504, `l:timeout`, call-closed | stdlib.md §3.1 (outcome contract) |
 | A late graph answer = **orphan**, discarded-and-journaled, never two HTTP responses | stdlib.md §3.1 |
 | Typed Connector outcomes use ordinary `exit` ports with resolved journal policy | delivery-semantics.md §5 |
-| The pending-connection table is volatile ; response delivery is best-effort | HttpServer adapter obligation |
+| The pending-connection table is volatile ; response delivery is best-effort | HttpServer Driver obligation |
 | Mock `after <duration>` = dated emission, swept by `advance` | simulation-semantics.md §5.1 |
 | `expect nothing` / `count == N` windows | simulation-semantics.md §5.2 |
 | Open requests are **bounded** → immediate 503, `Overloaded` journaled ; the engaged are protected | stdlib.md §3.1, delivery-semantics.md §2 |
@@ -141,8 +141,8 @@ lab sim06 {
 
 The ingress mock block is intended to carry **driver settings only, bounds
 only** — the fixture still does the injecting. In the
-lowering the mock IS the lab's adapter, and the pending table lives in the
-adapter, so its cap is declared where it lives. The machine's
+lowering the mock supplies the Lab Driver, and the pending table lives in the
+Driver, so its cap is declared where it lives. The machine's
 refusal is a real mechanism that must be *produced*, never scripted — the
 mocks supply the world (arrivals, slowness), the bound supplies the
 testable scale, and the 503 that comes out is earned by the real pending

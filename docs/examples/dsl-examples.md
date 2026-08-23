@@ -19,19 +19,20 @@ The parser is a forward lexeme stream. Categorical plan-package v10 retains
 v9's lexical owners, Node-owned instance policy, scoped edges and phased
 immutable expressions plus the complete v7 M1.3 type/value/expression
 registry; it also carries stable Connector ids and required roles. As of
-2026-08-22,
+2026-08-23,
 `Process(mode = job)` with `lines`/`jsonl`/`bytes`, multiport completion,
 the three metadata zones, `IDENT!` frontends, structural and tagged types,
-typed narrowing, and all five Graph/Node lifetime profiles execute. The former
+typed narrowing, all five Graph/Node lifetime profiles, and the one-file
+`File(read|replace)` Driver execute. The former
 named-partition P0-P3 implementation is superseded by the
 `instances`/`lifetime` model. Hierarchical routing, keyed/nested Graph
 dispatch, Graph lifecycle facts, explicit bounded closing, and bounded
 presence joins execute. R7 has audited the removed surface and physical
 placement neutrality without claiming a cluster runtime. Graph
-lifecycle-handler lowering, HTTP/File adapters, Loop, Process service mode,
-and guest engines are still pending or guarded. Thus these are parser- and
-design-reference snippets, not a claim that every section runs today. The
-small executable fixtures under
+lifecycle-handler lowering, HTTP Drivers, File append/watch/directory
+profiles, Loop, Process service mode, and guest engines are still pending or
+guarded. Thus these are parser- and design-reference snippets, not a claim
+that every section runs today. The small executable fixtures under
 [`examples/`](../../examples/) are the run/simulate proofs.
 
 ## 1. Minimal — HTTP echo + log
@@ -55,6 +56,8 @@ graph hello_echo {
   }
 
   connector log : File {
+    // Prospective append/log profile. The executable rastok/file@1 surface is
+    // one explicit read or atomic replace per invocation.
     path = "/var/log/rastok/echo.ndjson"
     codec = ndjson
     append = true
@@ -122,6 +125,7 @@ graph sessions {
   }
 
   connector codex_logs : File {
+    // Prospective append/log profile; not executable File(read|replace).
     path = "/var/codex/" + session_key + "/codex.stderr.log"
     codec = text
   }
@@ -493,11 +497,13 @@ graph meta_control_plane {
   }
 
   connector urgent_log : File {
+    // Prospective append/log profile; not executable File(read|replace).
     path = "/var/log/rastok/urgent.ndjson"
     codec = ndjson
   }
 
   connector normal_log : File {
+    // Prospective append/log profile; not executable File(read|replace).
     path = "/var/log/rastok/normal.ndjson"
     codec = ndjson
   }

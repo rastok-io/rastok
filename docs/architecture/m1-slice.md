@@ -35,6 +35,10 @@ runtime `DriverRegistry`. C2 now binds every active role before the VM and
 routes mixed families without concrete-name dispatch; C3 opens `File`, C4
 executes its bounded read/atomic-replace effects behind the generic boundary,
 and C5 proves one conformance/Lab/static-composition path for both families.
+C6 closes M1.5 with one contributor guide, a data-only pre-load capability
+manifest and an active-document/diagram audit, without freezing a plugin ABI;
+the [M1.5 exit report](m1.5-exit-report.md) records the final evidence and
+identity ledger.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -351,7 +355,10 @@ step touches `vm.rs` once.
    the same exact-id/role/protocol binding as real Drivers, and proves
    Process-only, File-only and combined static builds. Git diff size separates
    File work from the one-time binder tax; no elapsed-time evidence exists, so
-   the historical half-day claim is not repeated.
+   the historical half-day claim is not repeated. C6 closes the slice with the
+   single [Connector Driver contribution path](connector-drivers.md) and a
+   canonical id/role manifest that contains no executable code; static
+   registration remains the only shipped loader.
 7. **`HttpClient`** — outbound calls under declared budgets, on the
    harness. Decision point before code: hand-rolled bounded HTTP/1.1
    versus a vetted dependency, and whether TLS enters M1 at all (the
@@ -377,8 +384,9 @@ step touches `vm.rs` once.
   Lab, and — where bytes move — a deliberately re-blessed golden
   with its `decisions.md` entry;
 - the whole gate green throughout, semantic-hash moves pinned;
-- `File`, `HttpClient`, `HttpServer` each landing with a conformance
-  profile — three data points on the half-day claim;
+- `HttpClient` and `HttpServer` each landing on the conformance path already
+  proved by Process/File, with reviewable change-size evidence; no elapsed-time
+  claim without an actual time log;
 - the gallery running green under `rastok simulate`, the demo flow
   among it;
 - the benchmark re-run cheap by construction: tasks and referees

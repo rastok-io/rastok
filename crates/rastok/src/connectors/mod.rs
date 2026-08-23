@@ -5,11 +5,13 @@
 //! while the catalogue grows without returning to one monolithic file.
 
 mod file;
+mod manifest;
 mod process;
 mod registry;
 
 pub(crate) use file::FileRequestBindings;
 pub use file::{File, FileBindError, FileFactory, FileSettingsError};
+pub use manifest::{DriverManifest, DriverManifestEntry, DriverManifestError};
 pub(crate) use process::ProcessRequestBindings;
 pub use process::{Process, ProcessBindError, ProcessFactory, ProcessSettingsError};
 pub use registry::{

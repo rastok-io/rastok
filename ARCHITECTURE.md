@@ -2,9 +2,9 @@
 
 > Implementation blueprint — non-normative and under review.
 
-This document explains how the current Rastok specification is intended
-to become an executable system. It defines implementation boundaries,
-dependency direction, and the first end-to-end slice. It does not add
+This document explains how the current Rastok specification becomes an
+executable system. It defines implementation boundaries, dependency direction,
+and the current executable foundation. It does not add
 language or runtime semantics.
 
 ## Authority and change discipline
@@ -27,25 +27,28 @@ specification wins. A semantic change must update the specification,
 architecture, implementation, and verification evidence together; an
 architecture document must never silently redefine the contract.
 
-## First mechanical proof
+## Current executable foundation
 
-The current milestone is deliberately narrow:
+The architecture has grown from the first mechanical proof without creating a
+second engine:
 
 ```text
 .rkg source
   → parsed and checked program
-  → canonical executable plan
-  → in-memory single-worker execution
-  → one real Process boundary
-  → deterministic Lab scenario and useful golden diff
+  → categorical validated plan with logical instances and resolved port types
+  → synchronous one-worker execution over a causal journal
+  → exact-id/role binding of real Process and File Driver families
+  → deterministic multi-family Lab scenarios and useful golden diffs
 ```
 
-The detailed slice and its evidence are defined in
-[`docs/architecture/m0-slice.md`](docs/architecture/m0-slice.md).
+The original proof remains in
+[`docs/architecture/m0-exit-report.md`](docs/architecture/m0-exit-report.md);
+the current state and evidence are indexed by
+[`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
 [`ROADMAP.md`](ROADMAP.md) remains the source for milestone gates.
 
-The first slice does not require clustering, a durable disk journal,
-live Saga or Loop managers, a complete connector catalogue, a registry,
+The current slice does not require clustering, a durable disk journal,
+live Saga or Loop managers, a complete Connector catalogue, a plugin loader,
 a web console, or enterprise deployment features. Those capabilities
 must grow from demonstrated boundaries rather than be represented by
 empty crates.
@@ -88,8 +91,8 @@ promise of one crate per box:
 | Planner and canonicalizer | immutable executable plan, stable identity and ordering | live execution state |
 | Runtime core | state transitions, scheduling decisions, effect intents | direct host calls |
 | Journal boundary | ordered typed inputs and outcomes | hidden semantic decisions |
-| Effect dispatcher | routing an intent to the selected handler | connector-specific policy |
-| Process adapter | the first real external Process interaction | general runtime semantics |
+| Runtime Connector binding | exact-id and role association before VM/journal construction | compiler catalogue or first-registration-wins selection |
+| Process and File Drivers | physical external interactions behind their typed Contracts | general runtime semantics or journal authority |
 | Lab runner | controlled handlers, virtual inputs, scripted faults | a second execution engine |
 | Diagnostics and golden diff | stable human-facing evidence | mutation of execution |
 
@@ -110,8 +113,8 @@ entry points
                                              ▲
 source front end ─▶ checker ─▶ planner ──────┘
 
-connector adapters depend on boundary contracts;
-the semantic core never depends on connector implementations.
+Connector Drivers depend on boundary contracts;
+the semantic core never depends on concrete Driver implementations.
 ```
 
 Shared types should be owned by the layer that defines their invariant,
@@ -140,8 +143,8 @@ presentation boundary.
 
 ## Crate policy
 
-M0 stays in the `rastok` bootstrap crate while the real dependency graph
-is being discovered. A responsibility becomes a separate crate only
+The std/compiler/Driver layer stays in the `rastok` crate while its real
+dependency graph is being discovered. A responsibility becomes a separate crate only
 when at least one concrete pressure exists:
 
 - independent reuse by another executable;
@@ -154,12 +157,12 @@ runtime crates, once justified, remain in this repository so that
 specification, implementation, and conformance changes can be atomic.
 
 The first split happened at M0.5 under exactly this rule:
-`rastok-core` (no_std + alloc — vocabulary, envelope, CEL, plan,
+`rastok-core` (no_std + alloc — vocabulary, envelope, expressions, plan,
 journal, boundary, machine) separated from the std layer when the
 "dependency that must not leak" pressure became concrete — the OS
 must never enter the kernel, and a bare-metal target must be able to
 run the same engine. The frontier is machine-checked: CI builds
-`rastok-core` for a Cortex-M target on every push, and the std crate
+`rastok-core` for Cortex-M33, Cortex-M3 and RV32IMAC on every push, and the std crate
 re-exports the kernel so callers see one surface.
 
 M1.3 deliberately revisits one name and ownership boundary inside that
@@ -179,9 +182,9 @@ layer; their library types never leak into the no_std kernel. See the
   logical responsibilities inside the executable.
 - [App/Lab effect cycle](docs/architecture/04-app-lab-effect-cycle.svg)
   — the shared semantic step and its two handlers.
-- [Module and type blueprint](docs/architecture/05-rastok-packages.svg)
-  — Rust modules, key types and traits, and build artifacts
-  (indicative, not a public API).
+- [Archived pre-build module and type blueprint](docs/architecture/05-rastok-packages.svg)
+  — the M0 design artifact, retaining superseded names as history rather than
+  current API.
 - [Module overview](docs/architecture/06-rastok-modules-overview.svg)
   — the bird's-eye companion: every module and type with a one-line
   description, module-level dependencies only.
@@ -193,11 +196,11 @@ instructions live in [`tools/diagrams/`](tools/diagrams/README.md).
 
 The blueprint does not yet select:
 
-- the parser implementation or concrete syntax-tree library;
-- the final internal module layout;
-- the physical journal format;
-- the Process transport and wire protocol;
-- a public embedding API.
+- the physical durable-journal layout and recovery deployment;
+- the first production Inbound Driver's acknowledgement protocol;
+- an HTTP/TLS dependency boundary;
+- a serialized plugin manifest syntax, loader, trust policy or native ABI;
+- a public embedding API beyond the current library surface.
 
 Each decision should be made at the smallest point where executable
 evidence exposes its real constraints, and then recorded here or in a

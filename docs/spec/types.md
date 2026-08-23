@@ -398,7 +398,7 @@ field. A contextual write to a union performs its one legal wrapping at
 check/lowering time: for example, `out = 5` targeting `int32 | text` records
 the `int32` branch, and `signal = null` records the null branch of `int32?`.
 The checker refuses zero or several matching branches with `E-PORT-TYPE`.
-The VM and Connector adapters never infer, repair or re-index a union
+The VM and Connector Drivers never infer, repair or re-index a union
 discriminant; their final conformance gate only verifies the already wrapped
 value. An already wrapped structural union may cross an ordinary edge only
 when source and target have the identical resolved union type; conversion to

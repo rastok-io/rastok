@@ -120,7 +120,7 @@ The repository opens publicly with this milestone (15 October 2026).
   proved not to change semantic hash, journal bytes, or replay input. The
   one-worker reference remains the only runtime claimed; cluster leases and
   recovery are later work.
-- M1.5 is active: contracts gain stable versioned identities, compiler
+- M1.5 is closed: contracts have stable versioned identities, compiler
   `ContractCatalog` and runtime `DriverRegistry` become separate authorities,
   and one pre-journal binder serves mixed connector families through explicit
   inbound/outbound Driver roles. Static composition is first-class and keeps
@@ -136,10 +136,13 @@ The repository opens publicly with this milestone (15 October 2026).
   cancellation and no-recall replay. C5 now runs Process and File through one
   role-aware conformance battery, binds multi-family Lab mocks through the same
   categorical registry, proves real/Lab plan identity and Process-only,
-  File-only and combined static builds. C6 is the active closure and
-  future-plugin-manifest audit; it freezes no native plugin ABI.
-- `File`, HTTP client and server boundaries under their contract
-  sheets, each on the conformance harness.
+  File-only and combined static builds. C6 closes the slice with a data-only
+  capability manifest, one documented Connector contribution path, and a
+  repository-wide vocabulary/diagram audit. It freezes no serialized plugin
+  manifest syntax or native plugin ABI. The evidence and identity ledger are
+  in the [M1.5 exit report](docs/architecture/m1.5-exit-report.md).
+- HTTP client and server boundaries under their contract sheets and the
+  conformance harness established by Process and File.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected
   typed exit case rather than a privileged error channel.
 - Per-flow cost counters, carried by the journal.

@@ -1,9 +1,9 @@
 # Reference simulation 2 — two-port join, with a `JoinExpired` eviction
 
-> **Status: executable join semantics, reference-only adapters.** M1.4 R6
+> **Status: executable join semantics, reference-only Drivers.** M1.4 R6
 > executes the presence, FIFO, instance-local correlation and typed-expiry
 > rules below. The complete scenario remains a paper derivation until its
-> `HttpServer` and `Memory` adapters land; the public executable proof lives in
+> `HttpServer` and `Memory` Drivers land; the public executable proof lives in
 > `crates/rastok/tests/instances_lab.rs`.
 
 ## 1. What this sim exercises (the checklist)
