@@ -1,0 +1,24 @@
+# Time-boxed HTTP/3 dependency spike for M1.6.
+# Deliberately outside the product workspace: quiche and its TLS stack remain
+# spike-only until the dependency decision is recorded.
+[package]
+name = "rastok-spike-quiche-http3"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Exact pin: the spike is evidence about this concrete dependency surface,
+# not an implicit promise to accept a future quiche API.
+quiche = "=0.29.3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

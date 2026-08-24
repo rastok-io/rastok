@@ -360,9 +360,13 @@ step touches `vm.rs` once.
    canonical id/role manifest that contains no executable code; static
    registration remains the only shipped loader.
 7. **`HttpClient`** — outbound calls under declared budgets, on the
-   harness. Decision point before code: hand-rolled bounded HTTP/1.1
-   versus a vetted dependency, and whether TLS enters M1 at all (the
-   October demo runs mocked; a `decisions.md` entry either way).
+   harness. The isolated [quiche HTTP/3 spike](../../spikes/quiche-http3/README.md)
+   proves one viable synchronous Driver seam, including verified TLS, `h3`
+   ALPN and concurrent stream correlation, without changing the product
+   workspace. Its [measured result](../../spikes/quiche-http3/RESULTS.md) is a
+   GO for candidacy rather than adoption: the gate before code remains a
+   product-shaped comparison with `h3` + Quinn, one HTTP/1.1-2 backend choice,
+   and one explicit TLS-stack decision.
 8. **`HttpServer`, ack mode** — the inbound side: inbound-envelope provenance,
    submission sequence, backpressure at the boundary.
 9. **The Loop aspect** — the bounded-iteration primitive, alive on a

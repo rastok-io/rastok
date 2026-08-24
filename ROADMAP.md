@@ -142,7 +142,11 @@ The repository opens publicly with this milestone (15 October 2026).
   manifest syntax or native plugin ABI. The evidence and identity ledger are
   in the [M1.5 exit report](docs/architecture/m1.5-exit-report.md).
 - HTTP client and server boundaries under their contract sheets and the
-  conformance harness established by Process and File.
+  conformance harness established by Process and File. The isolated
+  [quiche HTTP/3 spike](spikes/quiche-http3/README.md) proves the low-level
+  client/server pump and records its dependency cost without adding quiche to
+  the product workspace; adoption still requires a product-shaped comparison
+  with `h3` + Quinn and one deliberate TLS-stack choice.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected
   typed exit case rather than a privileged error channel.
 - Per-flow cost counters, carried by the journal.
