@@ -497,6 +497,23 @@ connector's configuration, else `application/octet-stream`; a
 codec/content-type contradiction is a typed boundary outcome, never a silently
 false header.
 
+### 5.3 `meta.ext.session_id` — logical boundary-session correlation
+
+D-2026-08-25-1 reserves `session_id: text?` as the M1.6 session-contract
+projection. A WebSocket Client/Server Driver writes the same value on every
+peer message and on the sole terminal session `exit`. It is derived from the
+journal's opaque logical `SessionRef`; it is never a file descriptor, socket
+address, negotiated HTTP version, Host or Worker id.
+
+The field is in `meta.ext`, not the closed `meta.sys` spine, because it is
+boundary-protocol context that a graph may deliberately preserve or replace
+when routing a stored/root-mixed response. Direct replies retain causal
+session routing independently of the writable projection. An explicit
+`correlate = meta.ext.session_id` asks the Connector to verify and use that
+logical token; it never authorizes a physical address lookup from graph data.
+The exact value encoding and identity recipe land with M1.6 H1 and are not an
+executable claim in the current package format.
+
 ## 6. Writing `meta.sys` — there is no write
 
 `meta.sys` is **read-only, absolutely — including in simulation**. The

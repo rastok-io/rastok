@@ -22,7 +22,7 @@ contract id, for example `rastok/file@1`.
                          compile time
 
   RKG Connector ──symbol──▶ ContractCatalog ──check/lower──▶ validated plan
-                                 │                         id + roles + facts
+                                 │                    id + roles + exchange
                                  │
                                  └── declarative sheet; no Driver code
 
@@ -34,7 +34,7 @@ contract id, for example `rastok/file@1`.
        │                          │                                │
        └─ DriverManifest           │                      ┌─────────┴─────────┐
           (data only)              │                      │                   │
-                                                   inbound drafts      outbound calls
+                                                   inbound facts       outbound intents
                                                            │                   │
                                                            └──── VM + journal ┘
 
@@ -44,7 +44,7 @@ contract id, for example `rastok/file@1`.
                                       only the post-open world is scripted
 ```
 
-## The two roles
+## Two roles, three exchange shapes
 
 `InboundConnectorDriver` proposes external arrivals. It does not mint root
 envelopes: sequencing, routing, admission, identity and journal commit remain
@@ -58,13 +58,29 @@ A contract may require either role or both. A both-role factory returns one
 bound object exposing both views over shared protocol state; registering two
 unrelated objects is not equivalent.
 
+Roles describe direction across the Rastok boundary. M1.6 adds an orthogonal
+closed exchange fact describing lifecycle and cardinality:
+
+```text
+Event      : one spontaneous fact ──▶ one inbound root; no per-event exit
+Invocation : one admitted request ──▶ ordered outputs ──▶ one typed exit
+Session    : one open ──▶ messages in both directions* ──▶ one typed exit
+```
+
+The currently executable Driver protocol is invocation-shaped. M1.6 H1 widens
+it generically for sessions and replaces the pull-only inbound proposal with a
+two-phase accepted/pending/rejected protocol before any live network Driver is
+claimed. It does not add `DuplexConnectorDriver` or make the VM aware of
+WebSocket.
+
 The model covers the intended catalogue without new role kinds:
 
 | Family | Typical role |
 |---|---|
-| `Process(job)`, `File(read/replace)`, HTTP client, LLM, database call | outbound |
-| HTTP server, Clock, Calendar | inbound |
-| queue consumer/producer, duplex session, future `File.watch` plus writes | both, when one contract really shares one protocol state |
+| `Process(job)`, `File(read/replace)`, HTTP client, LLM, database call | outbound invocation |
+| HTTP server | inbound invocation |
+| Clock, Calendar | inbound event |
+| WebSocket client/server, queue consumer/producer, future `File.watch` plus writes | both-role session, when one contract really shares one protocol state |
 
 Whether `File.watch` widens `rastok/file@1` or becomes a separate contract is
 deliberately unresolved; the role model does not decide contract versioning.
@@ -74,25 +90,28 @@ deliberately unresolved; the role model does not decide contract versioning.
 ### 1. Publish the Contract
 
 Add or extend one `ConnectorContract` sheet and give it one canonical
-`ConnectorId`. Declare exact roles and all effective ports. Attribute defaults,
-domains and their latest evaluation phase belong to the sheet; a Driver never
-chooses a semantic default.
+`ConnectorId`. Declare exact roles, exchange shape and all effective ports.
+Attribute defaults, domains and their latest evaluation phase belong to the
+sheet; a Driver never chooses a semantic default.
 
 If decoded plans must be validated without the compiler catalogue, add the
 small Registry-free core mirror and a product test proving every sheet row
 agrees with it. Unsupported modes refuse by name rather than executing a
 nearby behavior.
 
-### 2. Separate pure request protocol from the effect
+### 2. Separate pure exchange protocol from the effect
 
 Put the family under `crates/rastok/src/connectors/<family>/`. Binding resolves
 and validates every plan/boot/instance fact before external work. Invocation
 settings arrive as typed values. Pure request preparation produces the exact
 sealed request or a typed pre-open rejection.
 
-Keep that protocol callable by both the real Driver and the Lab mock. Only the
-operation after OUTBOUND open — filesystem access, process spawn, network
-call — differs between those worlds.
+Keep that protocol callable by both the real Driver and the Lab mock. For an
+invocation it prepares one request and projects one completion. For a session
+it prepares open/write facts, correlates inbound messages to one logical
+`SessionRef`, and projects one terminal exit. Only the operation after the
+journal boundary — filesystem access, process spawn, socket open/write —
+differs between those worlds.
 
 ### 3. Implement the Driver roles
 
@@ -101,9 +120,13 @@ their edge. Translate OS/library outcomes to the contract's portable tagged
 union; do not leak raw errno, host paths or library error types into causal
 values unless the contract explicitly declares them.
 
-The Driver answers or stays silent. The runtime owns envelope birth,
-backpressure, journal ordering, timeout, close-once, bounded Closing and typed
-port validation.
+The Driver answers, proposes a session fact, or stays silent. The runtime owns
+envelope birth, backpressure, journal ordering, timeout, close-once, bounded
+Closing and typed port validation. An HTTP response, successful upgrade or
+explicit application acknowledgement cannot precede the runtime's acceptance
+callback. Transport ACK/window progress is only pacing and stays within the
+Driver's bounded intake; WebSocket has no built-in per-message application
+acknowledgement.
 
 ### 4. Register one factory
 
@@ -123,13 +146,20 @@ physical root. A graph never selects or discovers that root.
 
 ### 5. Supply a conformance profile
 
-Run the real factory through the shared conformance battery. Provide:
+Run the real factory through the shared conformance battery. Select the
+invocation or session profile and provide:
 
 - one minimal source and happy terminal case;
 - one deterministic provocation for every portably forceable terminal case;
 - a written reason for every case that cannot be forced portably;
 - a silence/timeout probe when applicable;
 - an interleaving probe that makes crossed concurrent replies observable.
+
+A session additionally proves open/close exactly once, bidirectional message
+correlation, bounded pressure, post-exit silence, and recovery without blind
+message replay. Fragmentation and control frames are family integration tests,
+not application outputs. An event profile proves sequence/admission and has no
+fabricated completion or per-event exit.
 
 Add family-focused integration tests for physical behavior the generic battery
 cannot force. A new family is not complete merely because its happy path runs.

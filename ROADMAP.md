@@ -141,12 +141,19 @@ The repository opens publicly with this milestone (15 October 2026).
   repository-wide vocabulary/diagram audit. It freezes no serialized plugin
   manifest syntax or native plugin ABI. The evidence and identity ledger are
   in the [M1.5 exit report](docs/architecture/m1.5-exit-report.md).
-- HTTP client and server boundaries under their contract sheets and the
-  conformance harness established by Process and File. The isolated
-  [quiche HTTP/3 spike](spikes/quiche-http3/README.md) proves the low-level
-  client/server pump and records its dependency cost without adding quiche to
-  the product workspace; adoption still requires a product-shaped comparison
-  with `h3` + Quinn and one deliberate TLS-stack choice.
+- M1.6 opens the hosted network boundary with four contracts:
+  `HttpClient`, `HttpServer`, `WebSocketClient`, and `WebSocketServer`.
+  HTTP/1.1, HTTP/2 and HTTP/3 are physical bindings of the same HTTP
+  contracts; WebSocket is a long-lived session with many messages and one
+  typed terminal `exit`, never one fake invocation per frame. The ordered
+  [M1.6 backlog](docs/architecture/m1.6-http-websocket-backlog.md) first lands
+  the generic event/invocation/session lifecycle and two-phase inbound admission,
+  then the sheets, hosted engine, all three HTTP versions and the Codex
+  WebSocket gateway. The isolated
+  [quiche HTTP/3 spike](spikes/quiche-http3/README.md) makes quiche the
+  presumptive H3 candidate without adding it to the product workspace; one
+  product-shaped `h3` + Quinn comparison and an explicit TLS-stack decision
+  remain adoption gates.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected
   typed exit case rather than a privileged error channel.
 - Per-flow cost counters, carried by the journal.

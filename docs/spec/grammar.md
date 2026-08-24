@@ -12,6 +12,10 @@
 > sheet and bare `stop` execute through M1.4 R5. R6 executes nested Graph
 > composition and instance-local `on (a, b, …)` joins with `where`, `within`,
 > and `last`; `having` remains a named gate.
+> D-2026-08-25-1 freezes `WebSocketClient` / `WebSocketServer` as M1.6 target
+> names, but the current `ContractCatalog` does not admit them. H2 supplies
+> their exact sheets and named availability; no network syntax is executable
+> merely because it appears below.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -241,6 +245,23 @@ HttpClient
   connector.in -> world               // envelope → outbound HTTP request
   world -> connector.out              // HTTP response → envelope
 ```
+
+WebSocket also uses separate client/server contracts, but its cardinality is
+session-shaped rather than one invocation per message:
+
+```text
+WebSocketServer                       WebSocketClient
+  world ──open──▶ session               connector ──open──▶ world
+  world ──message*──▶ connector.out      world ──message*──▶ connector.out
+  connector.in ──message*──▶ world       connector.in ──message*──▶ world
+  session ──one exit──▶ connector.exit   session ──one exit──▶ connector.exit
+```
+
+`in`, `out`, and `exit` are ordinary ports. HTTP/1.1 Upgrade, HTTP/2
+Extended CONNECT and HTTP/3 Extended CONNECT are Driver bindings; they do not
+introduce `Http2`, `Http3`, `WebSocketH2` or `WebSocketH3` node names. A
+session message is not an implicit statement form and does not receive a
+per-message invocation `exit`.
 
 ### Cardinality belongs to the Node definition
 
@@ -1137,9 +1158,10 @@ does not claim implementation or release status.
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
 | `Join` / `Barrier` | Guarded fan-in | the canonical form is an `on (a, b)` join handler (correlated by the owning Operator instance ; bounded by `last`/`within`) |
-| `WebSocket` | Connector node | planned |
+| `WebSocketServer` | Connector node | M1.6 target; accepted duplex sessions, many messages and one session `exit` |
+| `WebSocketClient` | Connector node | M1.6 target; opened duplex sessions, many messages and one session `exit` |
 | `Tcp` | Connector node | planned |
-| HTTP/2 | Binding option, not a node | planned ; express as Connector binding, not as a `Http2` node type |
+| HTTP/1.1, HTTP/2, HTTP/3 | Binding options, not nodes | M1.6 target; negotiation is physical unless a future contract explicitly requires a wire capability |
 
 Rule for DSL evolution : do not add a new node name to an `.rkg` example
 without adding it here and marking whether it is specified, design intent, or

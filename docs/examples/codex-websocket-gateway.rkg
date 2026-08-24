@@ -1,0 +1,95 @@
+// =============================================================================
+// codex-websocket-gateway.rkg
+//
+// M1.6 target-surface design reference. WebSocketClient/WebSocketServer and
+// Process(service) remain guarded until their backlog gates land. This file is
+// not an executable fixture yet.
+//
+// One accepted WebSocket connection = one logical session. Complete JSON
+// messages cross ordinary ports in both directions; `exit` occurs once when
+// the session terminates, not once per message. HTTP/1.1 Upgrade, HTTP/2
+// Extended CONNECT and HTTP/3 Extended CONNECT are Driver bindings of the
+// same WebSocketServer contract and do not appear in the graph.
+// =============================================================================
+
+
+// One supervised Codex service per logical WebSocket session.
+graph codex_sessions {
+  instances = { key = meta.ext.session_id }
+  lifetime = { kind = idle; after = duration("2h") }
+  closing = {
+    drain_for = duration("5s")
+    settle_for = duration("2s")
+  }
+
+  val session_id = instance.key
+  val codex_home = "/var/codex/" + session_id
+  val cwd = "/workspace/" + session_id
+
+  connector codex : Process {
+    command = "codex"
+    args = ["app-server"]
+    mode = service
+    cwd = cwd
+    env = {
+      "CODEX_HOME": codex_home
+      "RUST_LOG": "info"
+    }
+    codec = jsonl
+    protocol = "jsonrpc"
+    correlate = data.id
+    timeout = duration("120s")
+    effect = idempotent
+    behavior = probabilistic
+  }
+
+  // A correlated Process reply already descends from the triggering socket
+  // message. A spontaneous Process notification is a new inbound root, so we
+  // stamp the owning logical session explicitly before it leaves this keyed
+  // graph. The value is a journal-derived token, never a physical socket id.
+  operator to_socket {
+    on in {
+      meta.ext.session_id = instance.key
+      out = .
+    }
+  }
+
+  in -> codex.in
+  codex.out -> to_socket.in
+  to_socket.out -> out
+  codex.err -> nothing
+  codex.exit -> process_exit
+}
+
+
+graph codex_websocket_gateway : App {
+  connector clients : WebSocketServer {
+    listen = ":8443/codex"
+    codec = json
+    protocol = "jsonrpc"
+    max_message = "1MiB"
+    subprotocols = ["rastok.codex.v1"]
+    correlate = meta.ext.session_id
+    tls = {
+      certificate = secret("CODEX_GATEWAY_TLS_CERT")
+      private_key = secret("CODEX_GATEWAY_TLS_KEY")
+    }
+  }
+
+  // `clients.out` contains one complete peer message and carries the logical
+  // session id. `codex_sessions` therefore creates one clean state/process
+  // scope per connection. The explicit correlator routes its output back to
+  // the same live session even after internal root changes.
+  clients.out -> codex_sessions.in
+  codex_sessions.out -> clients.in
+
+  // Session termination and child-process termination are distinct facts.
+  // Either may happen first; neither is an implicit `err` channel.
+  clients.exit -> .session_exit
+  codex_sessions.process_exit -> .process_exit
+}
+
+
+// H6 adds a Lab session script that opens two peers, interleaves their
+// messages, closes one, and proves that replies never cross and that no output
+// follows either session's terminal `exit`.

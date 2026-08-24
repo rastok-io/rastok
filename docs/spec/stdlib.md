@@ -1,6 +1,7 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.5 C6.** B5 removed the
+> **Status: normative and executable through M1.5 C6; M1.6 network targets
+> are frozen but not yet executable.** B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
@@ -39,9 +40,9 @@ contract identity.
 | 4 | **`effect`** | pre-declared by the trait, or per-instance (dev-declared) |
 | 5 | **`behavior`** | deterministic / probabilistic — §2; pre-declared or per-instance |
 | 6 | **Attributes** | the config surface with a contract-declared latest evaluation site (plan, boot, instance, or invocation); checking chooses the earliest legal actual site and transports it; `env()`/`secret()` are boot-only, while `timeout`/`on_timeout`/`restart` apply where calls/instances exist |
-| 7 | **Correlator** | what "a call" is in its protocol (execution-model §6.1: the Connector matches) |
+| 7 | **Correlator** | what one invocation or session is in its protocol, and how messages/answers find it (execution-model §6.1: the Connector matches) |
 | 8 | **Outcome coverage** | the finite typed cases each output may emit and the completion rule the future `rastok simulate --coverage` enumerates |
-| 9 | **Instances** | singleton / `instances.key` (each resource run may have a `run_id`) / per-call; Node-instance closing policy and each call's terminal exit |
+| 9 | **Instances** | singleton / `instances.key` (each resource run may have a `run_id`) / per-invocation or per-session; Node-instance closing policy and each exchange's terminal exit |
 | 10 | **Journal & sim** | which records it writes (INBOUND w/ `inbound_seq`; OUTBOUND open-closed); how it is mocked/injected |
 
 Case 8 deserves the emphasis: coverage must enumerate the cases a
@@ -54,12 +55,15 @@ fact: it closes one obligation and may carry several typed port outputs.
 
 The lifecycle scopes do not collapse into one another. A static Connector
 Node may have several logical instances; each Node instance may admit several
-calls. `stop` closes the Node instance, while the conventional typed `exit`
-port closes one call. One instance can therefore observe many exits before it
-stops. Instance closure refuses new admissions and later
-drains or cancels every open call under a bounded policy; it never replaces
-their individual terminal exits. The call identity, not merely the instance
-key, correlates every `out`/`err` frame with its one `exit`.
+events, invocations or sessions. An event is one spontaneous inbound root and
+has no per-event terminal obligation. `stop` closes the Node instance, while
+the conventional typed `exit` port closes one admitted invocation or session.
+One instance can therefore observe many exits before it stops. Instance
+closure refuses new admissions and later drains or cancels every open
+invocation or session under a bounded policy; it never replaces their
+individual terminal exits. An invocation correlates zero or more output
+frames with one `exit`; a session correlates messages in both directions with
+one session `exit`, never one exit per message (D-2026-08-25-1).
 
 **Naming rule**: stdlib traits carry **no suffix** — the keyword already says
 it (`connector c: Clock`). Applies to all future traits too (`Postgres`,
@@ -113,13 +117,15 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 *visibly shrinks* the probabilistic surface.
 
 
-## 3. The seven contracts
+## 3. The nine contracts
 
 ### 3.1 `HttpServer` — inbound HTTP, two modes
 
 | Case | Contract |
 |---|---|
+| Stable identity | `rastok/http-server@1` |
 | Role / Direction | HTTP endpoint; **inbound source** |
+| Exchange | invocation — one admitted request, at most one protocol response, one typed request-lifecycle `exit` |
 | Ports | `out` (decoded requests); `in` (mode `respond`: the graph's answers); `err`; `exit` (one terminal case per admitted request lifecycle) |
 | Populates | `meta.ext` : `content_type` (the request's full Content-Type), `request_id: text?`, `path: text`, `method: text` — written once at ingress; handlers may rewrite, never invent (D-2026-08-10-1) |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
@@ -140,7 +146,9 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 
 | Case | Contract |
 |---|---|
+| Stable identity | `rastok/http-client@1` |
 | Role / Direction | HTTP calls; **outbound caller** |
+| Exchange | invocation — one request, response outputs, one typed call `exit` |
 | Ports | `in` (requests), `out` (all usable HTTP responses, including non-2xx bodies), `err` (raw transport diagnostics only when the Driver actually has bytes), `exit` (one typed terminal outcome per call) |
 | Populates | `meta.ext` : `content_type` (the response's Content-Type), `status: int` — on the reply envelope |
 | effect / behavior | **per-instance, both mandatory** |
@@ -325,10 +333,16 @@ terminal envelope and `restart` policy; without `instances` = the explicit
 shared singleton. Lazy
 spawn (first delivery).
 
+When this deferred profile lands, it uses D-2026-08-25-1's generic `Session`
+exchange: one resident run carries many stdin/stdout messages and one terminal
+`ProcessExit`. It is not lowered as one Process job per line and needs no
+WebSocket-specific runtime path.
+
 ### 3.4 `Clock` — the metronome
 
 | Case | Contract |
 |---|---|
+| Exchange | event — each tick is one spontaneous inbound root and has no per-tick `exit` |
 | Role / Direction | periodic physical time; **inbound source** |
 | Ports | `out`: tick envelopes (`timestamp`) |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
@@ -342,6 +356,7 @@ spawn (first delivery).
 
 | Case | Contract |
 |---|---|
+| Exchange | event — each civil instant is one spontaneous inbound root and has no per-event `exit` |
 | Role / Direction | calendar instants; **inbound source** |
 | Ports | `out`: `data : struct { scheduled_at: timestamp }` |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
@@ -432,6 +447,59 @@ unstable messages and repeated paths are observations, not causal payload.
 Directory listing, recursion, removal and parent creation are not hidden File
 modes. A later watch contract must separately settle snapshot, replacement,
 deletion, overflow, resynchronization and acknowledgement semantics.
+
+### 3.8 `WebSocketServer` — accepted duplex sessions (M1.6 target)
+
+| Case | Contract |
+|---|---|
+| Stable identity | `rastok/websocket-server@1` |
+| Role / Direction | both roles over one shared bound listener/session table; accepts remote sessions, receives messages and writes graph replies |
+| Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per accepted session |
+| Ports | `out: T` receives complete peer messages; `in: T` sends complete messages; `exit: WebSocketExit` terminates a session; no implicit `err` |
+| Payload type | `codec = json` → `variant`; `text` → `text`; `bytes` → `bytes`; text/binary mismatch is a protocol refusal, never coercion |
+| Populates | `meta.ext.session_id: text` on every `out` and `exit`; selected handshake facts such as path/subprotocol only when declared by the final H2 sheet |
+| effect / behavior | `none` / `deterministic` for admission; graph-to-peer message effects remain journaled session writes |
+| Attributes | target set: `listen`, required `codec`, bounded `max_message`, `tls`, `auth`, allowed origins/subprotocols, and optional response `correlate`; exact domains/sites freeze at H2 |
+| Correlator | direct descendants reply by session lineage; root-mixing, stored or spontaneous paths use explicit `correlate`, normally `meta.ext.session_id` |
+| Outcome cases | target minimum: clean peer close, handshake rejection, protocol failure, transport loss, timeout, and empty `OutcomeUnknown`; exact closed names/payloads freeze at H2 |
+| Instances | one listener per Node instance may own many sessions; each session has one placement-neutral logical `SessionRef` |
+| Journal / sim | session open commits before upgrade success; each message remains bounded/pending until runtime acceptance; graph writes are sealed before bytes; Lab scripts the same open/messages/exit protocol |
+
+An HTTP/1.1 Upgrade, HTTP/2 Extended CONNECT and HTTP/3 Extended CONNECT are
+three physical bindings of this one contract. One complete WebSocket message
+is one envelope. Fragmentation, ping/pong and close-handshake frames remain
+inside the Driver. A message does not manufacture an invocation `exit`; only
+the session terminal does. No `out` may follow that terminal.
+
+`meta.ext.session_id` is the textual projection of the journal-derived
+logical `SessionRef`, not a socket descriptor, address, Worker id or library
+handle. It allows a graph to key a child scope or explicitly correlate a
+response without exposing physical placement. It is external-context data and
+may be copied deliberately; the runtime's causal route remains authoritative.
+The Driver overwrites any peer-supplied field at ingress. Correlation is scoped
+to this Connector's live session table; an unknown or closed target is an
+orphan write, discarded-and-journaled without misrouting or a second exit.
+
+### 3.9 `WebSocketClient` — opened duplex sessions (M1.6 target)
+
+| Case | Contract |
+|---|---|
+| Stable identity | `rastok/websocket-client@1` |
+| Role / Direction | both roles over one shared connection state; opens a remote session, writes graph messages and receives peer messages |
+| Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per opened session |
+| Ports | `in: T`, `out: T`, `exit: WebSocketExit`; types follow the same required codec table as WebSocketServer; no implicit `err` |
+| Populates | `meta.ext.session_id: text` on peer messages and terminal exit; negotiated subprotocol only if H2 admits it |
+| effect / behavior | per-instance, both mandatory, as for an external client boundary |
+| Attributes | target set: `url`, required `codec`, bounded `max_message`, `tls`, `auth`/headers, requested subprotocols and timeout; exact domains/sites freeze at H2 |
+| Correlator | v1 permits at most one live remote session per logical Node instance; no message-level request/reply correlation is invented |
+| Outcome cases | the same closed `WebSocketExit` authority as the server, with opening failures represented before or as the sole terminal according to H2 |
+| Instances | singleton by default; `instances.key` creates independent client sessions; input after a terminal opens the successor session under explicit lifecycle policy |
+| Journal / sim | open and each write are journal-before-effect; ambiguous writes are not blindly replayed; Lab scripts peer messages and terminal races |
+
+Reconnection is not a Driver retry. A graph may route selected exit cases
+through `Loop` to open a new session and may retransmit only under its
+application acknowledgement/idempotency protocol. The Driver never promises
+that a transport-level write means the peer application processed a message.
 
 ## 4. Standard vocabulary over core Operator semantics
 
@@ -658,3 +726,5 @@ case** — graph-side wiring, no new mechanism.
 - [envelope.md](envelope.md) — `inbound_seq`, terminal envelopes.
 - [effects-and-sagas.md](effects-and-sagas.md) — the `effect` axis;
   `behavior` is its sibling.
+- [M1.6 HTTP/WebSocket backlog](../architecture/m1.6-http-websocket-backlog.md)
+  — ordered gates from generic sessions through the hosted network proof.

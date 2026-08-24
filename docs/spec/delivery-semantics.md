@@ -6,6 +6,8 @@
 > transaction, ordering, the dated-events queue).
 > Reference simulations 3–4 exercise Loop retry × outbound WAL and saga
 > compensation × crash recovery.
+> D-2026-08-25-1 adds the normative M1.6 target for sessions in §4.5; its
+> record subforms and Driver acknowledgement API are not executable before H1.
 
 The question this doc answers : **what survives — a crash, a redelivery, a
 slow consumer, a dead process — and what exactly is promised at each
@@ -287,6 +289,59 @@ per-attempt** (who called what, when, with which key, how many times —
 journal, not reconstruction), and a fixture can write an unresolved `open`
 record to test this table — the crash becomes an ordinary simulation case.
 
+### 4.5 Sessions — one resource lifecycle, many message effects
+
+An invocation and a session share journal-before-effect, but not cardinality:
+
+```text
+invocation  open call ── request ── outputs* ── one exit
+
+session     open session
+              ├── inbound message*   (bounded proposal, then commit/decision)
+              ├── outbound write*    (intent before network bytes)
+              └── one session exit   (no message after it)
+```
+
+M1.6 adds `ConnectorExchange = Event | Invocation | Session`; it does not add
+a fourth causal record type. Session opening and inbound messages are INBOUND
+facts when initiated by the world. A client opening and every graph-to-world
+message are OUTBOUND intents. Session terminal publication is an ordinary
+Connector transaction folded against the same close-once authority. The exact
+v11 subforms and keys land together at H1 so no intermediate package can claim
+session behavior without carrying the facts needed to replay it.
+
+Every session has one opaque journal-derived `SessionRef`. It correlates
+messages and the sole terminal exit while excluding sockets, addresses,
+negotiated HTTP version and placement. A direct response may use retained
+lineage. When lineage roots mix or a message is stored, an explicit contract
+correlator supplies the logical session token; arrival order is never a
+correlator.
+
+An outbound message has a durable write obligation but **not** a graph-visible
+invocation exit. Local write settlement means only that the Driver accepted
+the bytes under the session protocol; it does not claim that the peer
+application processed them. If recovery cannot prove whether externally
+visible bytes were accepted, Rastok does not replay them blindly: the session
+closes through its typed unknown terminal and application-level
+acknowledgement/retry may create a new session.
+
+Inbound is explicitly two-phase. The Driver proposes an open or message while
+retaining it in bounded protocol state and withholding any application-level
+acknowledgement. The runtime then:
+
+1. commits the causal fact and tells the Driver **accepted**;
+2. leaves it **pending** when bounded admission is full; or
+3. returns a contract **rejection** without minting an envelope.
+
+Only the first or third result may advance a peer-visible application
+acknowledgement. For HTTP this governs 202/response timing; for WebSocket it
+governs successful upgrade and any acknowledgement defined by the application
+protocol. RFC 6455 has no per-message application acknowledgement. TCP ACKs
+and HTTP/2-3 receive-window updates are pacing, not processing claims; they may
+advance within the Driver's finite intake but cannot create an unbounded
+shadow queue. A pending proposal remains in that bounded protocol state until
+the runtime decides it.
+
 
 ## 5. Unwired ports — one typed model, explicit policy
 
@@ -332,7 +387,10 @@ traces and replay — an index, not history) :
         ingress_port = the graph input entered (default `in`, omitted) ;
         inbound_seq committed ATOMICALLY with the accept ;
         ordering rule : COMMIT-THEN-ACK (the record is durable before the
-        protocol acknowledgement leaves). A crash between the two → the
+        runtime returns accepted and any application/protocol acknowledgement
+        defined by that Connector leaves).
+        Backpressure leaves the Driver proposal pending; rejection mints no
+        envelope. A crash between commit and acknowledgement → the
         sender may resend → transport-level redelivery yields DISTINCT
         roots unless the Connector's protocol correlates resends —
         inbound dedup is a per-protocol duty, declared in the Connector
@@ -500,3 +558,5 @@ contract:
   compensate`, saga lifecycle ; §8.6/§8.7 closed by §7.3 above.
 - [loop.md](loop.md) — retry composition and the §7.3/§8 key rule.
 - [aspects.md](aspects.md) — aspect-level effect rules.
+- [M1.6 HTTP/WebSocket backlog](../architecture/m1.6-http-websocket-backlog.md)
+  — the H1 allocation that makes §4.5 executable.

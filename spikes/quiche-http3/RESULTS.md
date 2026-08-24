@@ -114,6 +114,11 @@ production server skeleton.
    prove which requests may be replayed.
 6. **Backend substitutability.** Compare the same product-shaped seam with
    `h3` + Quinn. The semantic Connector id and plan must remain identical.
+7. **WebSocket session transport.** Quiche exposes HTTP/3 Extended CONNECT but
+   does not implement the RFC 6455 message machine. Prove one bounded stream
+   adapter to the separately selected WebSocket codec, including settings
+   negotiation, masking, fragmentation, flow control and close races, before
+   claiming RFC 9220 support.
 
 This evidence supports including HTTP/3 in Rastok's hosted architecture from
 the beginning. It does not yet choose `quiche` as the implementation.

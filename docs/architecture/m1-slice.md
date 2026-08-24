@@ -39,6 +39,12 @@ C6 closes M1.5 with one contributor guide, a data-only pre-load capability
 manifest and an active-document/diagram audit, without freezing a plugin ABI;
 the [M1.5 exit report](m1.5-exit-report.md) records the final evidence and
 identity ledger.
+M1.6 is prepared under D-2026-08-25-1: HTTP/1.1, HTTP/2 and HTTP/3 remain
+physical bindings of the two HTTP contracts, while WebSocket Client/Server
+exercise a new generic session exchange with many messages and one terminal
+`exit`. Its [ordered backlog](m1.6-http-websocket-backlog.md) opens with the
+runtime lifecycle and two-phase inbound admission before any product network
+dependency is adopted.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -359,24 +365,30 @@ step touches `vm.rs` once.
    single [Connector Driver contribution path](connector-drivers.md) and a
    canonical id/role manifest that contains no executable code; static
    registration remains the only shipped loader.
-7. **`HttpClient`** — outbound calls under declared budgets, on the
-   harness. The isolated [quiche HTTP/3 spike](../../spikes/quiche-http3/README.md)
-   proves one viable synchronous Driver seam, including verified TLS, `h3`
-   ALPN and concurrent stream correlation, without changing the product
-   workspace. Its [measured result](../../spikes/quiche-http3/RESULTS.md) is a
-   GO for candidacy rather than adoption: the gate before code remains a
-   product-shaped comparison with `h3` + Quinn, one HTTP/1.1-2 backend choice,
-   and one explicit TLS-stack decision.
-8. **`HttpServer`, ack mode** — the inbound side: inbound-envelope provenance,
-   submission sequence, backpressure at the boundary.
-9. **The Loop aspect** — the bounded-iteration primitive, alive on a
+7. **M1.6 — HTTP/1.1-3 and WebSocket boundaries** — four stable contracts,
+   two Driver roles and three generic exchange shapes (`Event`, `Invocation`,
+   `Session`). `HttpClient` and
+   `HttpServer` keep invocation semantics; `WebSocketClient` and
+   `WebSocketServer` carry many bidirectional messages under one logical
+   session and one typed terminal `exit`. H0–H7 in the
+   [ordered backlog](m1.6-http-websocket-backlog.md) land the categorical
+   lifecycle, two-phase inbound acceptance, exact sheets, hosted network
+   engine, all three HTTP versions, WebSocket Extended CONNECT and the Codex
+   gateway proof. The isolated
+   [quiche HTTP/3 spike](../../spikes/quiche-http3/README.md) proves one viable
+   synchronous H3 seam, including verified TLS, ALPN and concurrent stream
+   correlation, without changing the product workspace. Its
+   [measured result](../../spikes/quiche-http3/RESULTS.md) is a GO for
+   candidacy rather than adoption: the product gate still compares `h3` +
+   Quinn, chooses one HTTP/1.1-2 engine and records the TLS-stack trade-off.
+8. **The Loop aspect** — the bounded-iteration primitive, alive on a
    graph.
-10. **Cost counters** — the `cost` map (stdlib §6.4) accumulated
+9. **Cost counters** — the `cost` map (stdlib §6.4) accumulated
     from the journal; a subscriber, not a core dependency.
-11. **`--watch`** — the HTML+SSE mini-visualization, strictly a
+10. **`--watch`** — the HTML+SSE mini-visualization, strictly a
     journal subscriber; the observation plane stays outside the
     core by construction.
-12. **Usage review and the example gallery** — continuous, seeded by
+11. **Usage review and the example gallery** — continuous, seeded by
     the benchmark's twenty reference solutions, closed by the
     October demo flow: one realistic end-to-end graph (ingest →
     decide → act → journal) running entirely against mocks.

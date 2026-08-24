@@ -1,7 +1,7 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-23 for the M1.5 C6
-> closure checkpoint.** The former named-partition P1-P3 implementation is superseded.
+> Planning aid — non-normative. **Updated 2026-08-25 for the M1.6 H0
+> preparation checkpoint.** The former named-partition P1-P3 implementation is superseded.
 > Categorical v10 transport retains v9's owner model and adds stable Connector
 > identities/roles; hierarchical route/journal instance
 > references are executable; all five lifetime profiles and explicitly bounded
@@ -64,6 +64,17 @@ they are not promised crate names.
 | M1.5 C4 real File Driver | The physical root stays deployment-only; pure preparation seals the exact one-file operation before OUTBOUND open. Blocking workers execute bounded all-or-nothing read or native same-directory atomic replace, project only portable FileExit, and obey generic cancel/late/replay rules. | `connectors::{FileFactory,File}`, `boundary::{PreparedRequest,FileExit,Completion}`, `Dispatcher` | real filesystem success/absence/shape/budget/replace, pre-open invalid path, cancellation, portable permission mapping, replay after file mutation; no identity move |
 | M1.5 C5 conformance and composition | Real and mock families bind by the same exact id/roles. Family-neutral conformance derives terminal types from the validated plan; Lab factories reuse real pure request protocols while only scripting post-open effects. Static builds explicitly select Process, File or both. | `conformance::{Profile,verify}`, `connectors::{DriverRegistry,RuntimeBindings}`, `lab`, Process/File request bindings | both real factories through one battery; mixed Lab hash/plan parity and journaled calls; malformed mock pin refusal; three static registry compositions; no identity move |
 | M1.5 C6 closure and future discovery seam | A capability manifest describes canonical Connector ids and roles without loading implementation code; actual execution still requires an ordinary factory and binding. One documented contribution path serves static builds and future plugin hosts without freezing a serialized manifest, loader, trust model or ABI. | `connectors::{DriverManifest,DriverRegistry}`, [connector-drivers.md](connector-drivers.md), maintained module diagram | canonical ordering/duplicate refusal without factories; active-doc vocabulary audit; full portability gates; no identity move |
+
+## Next allocation — M1.6 (prepared, not executable)
+
+| Gate | Normative responsibility | Intended owner boundary | Required evidence |
+|---|---|---|---|
+| M1.6 H1 generic exchange lifecycle | Add the orthogonal `Event \| Invocation \| Session` fact, placement-neutral `SessionRef`, session journal fold, two-phase inbound acceptance and exchange-specific conformance profiles without adding a third Driver role or async core API. | `contract`, core `connector`/`boundary`/`journal`/plan registry, std `connectors::registry`, Lab conformance | categorical package and causal-key allocation; pure-event no-exit proof; fake concurrent sessions; commit-before-ack; bounded pressure; close-once/post-exit silence; unchanged invocation behavior |
+| M1.6 H2–H6 network contracts and Drivers | Four exact sheets (`HttpClient`, `HttpServer`, `WebSocketClient`, `WebSocketServer`) share one hosted HTTP/1.1-3 engine; WebSocket framing maps complete messages onto a generic session and one terminal exit. | std `contract`/`stdlib`, `connectors::{http,websocket}`, hosted reactor/library boundary, family Lab binders | Registry-free sheet mirrors, all-version HTTP integration, RFC 6455/8441/9220 behavior, event/invocation/session conformance, Codex gateway, no dependency in core/no-std |
+
+The ordered evidence and dependency decision are in
+[`m1.6-http-websocket-backlog.md`](m1.6-http-websocket-backlog.md). Planned
+rows remain absent from the landed table above until their gate is executable.
 
 ## M1.3 foundation (landed in ordered gates)
 

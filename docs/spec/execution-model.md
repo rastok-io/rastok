@@ -11,7 +11,8 @@
 > admission, cancellation, settlement, terminal `OutcomeUnknown`, and
 > inner-first Graph closure. R6 executes nested composition and bounded joins;
 > R7 closes the one-worker slice and proves physical Worker assignment is not
-> a causal input.
+> a causal input. D-2026-08-25-1 adds the M1.6 target distinction between
+> invocation and session exchanges; §6.6 is not executable before H1.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -408,6 +409,33 @@ connector pay : HttpClient + Saga {
 The rule is symmetric (either side can be qualified) ; the common
 no-collision case stays terse. The general namespace and collision rules are
 defined in [aspects.md](aspects.md) §6.
+
+### 6.6 Session supervision (M1.6 target)
+
+A session is not a long call and its messages are not short calls. It is one
+resource scope nested inside the owning Node instance:
+
+```text
+session open ── message in/out* ── one typed session exit
+```
+
+The journal-derived `SessionRef` correlates the whole scope. Each outbound
+message still obeys journal-before-effect, but settling its local write
+obligation does not publish an invocation `exit`. Only clean close, protocol
+failure, transport loss, session timeout, or bounded-Closing uncertainty
+publishes the sole typed session `exit`; no message may follow it.
+
+Node-instance `stop` remains the outer boundary. M1.6 extends the bounded
+Closing fold to open sessions: stop closes admission, drains already admitted
+session messages, requests protocol close/cancellation in canonical
+`SessionRef` order, settles observations, emits the typed terminal or empty
+`OutcomeUnknown`, and only then permits `on stop`. This reuses the phases in
+§2.1 and does not let a session terminal replace the Node's `l:stop`.
+
+Handshake timeout and whole-session lifetime are contract/session facts.
+Application-message acknowledgement, retry and reconnection remain graph
+protocol. A transport write alone never proves that the peer application
+processed a message.
 
 
 ## 7. Join abandonment — `JoinExpired`

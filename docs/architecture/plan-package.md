@@ -55,6 +55,14 @@
 > not a package mutation, so C3 allocates no format tag and moves no existing
 > package or semantic identity.
 >
+> **M1.6 H1 is the next categorical allocation, not an implicit v10
+> extension.** D-2026-08-25-1 requires every Connector to carry its closed
+> `Event | Invocation | Session` exchange shape and requires
+> placement-neutral session references in causal records. H1 will allocate
+> v11 and enumerate all package/hash/trace moves before implementation. Until
+> then, v10 remains the only accepted package and cannot claim session
+> semantics.
+>
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
 > processing-time `tumbling` on Graph and Node owners. R5 adds the optional

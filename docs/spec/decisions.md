@@ -5,6 +5,135 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-25-1 — HTTP versions are Driver bindings; WebSocket is a session
+
+M1.6 opens the network boundary. Supporting HTTP/1.1, HTTP/2, HTTP/3 and
+WebSocket must not turn four wire protocols into four execution models, nor
+turn a long-lived duplex channel into a sequence of fictitious request/reply
+calls.
+
+**Driver roles and exchange shape answer different questions.** The two roles
+from D-2026-08-22-1 remain exhaustive: `InboundConnectorDriver` brings facts
+from the world and `OutboundConnectorDriver` performs journaled actions on the
+world. A separate closed fact, `ConnectorExchange`, describes the lifecycle of
+the interaction:
+
+- `Event` admits one spontaneous external fact as an inbound root and has no
+  per-event terminal obligation;
+- `Invocation` admits one request, may publish ordered outputs, and ends with
+  exactly one typed invocation `exit`;
+- `Session` opens once, carries zero or more messages in either direction,
+  and ends with exactly one typed session `exit`.
+
+This is cardinality, not another Driver role. `Clock` and `Calendar` use event
+semantics. `HttpClient`, `HttpServer` in ack/respond mode, `Process(job)` and
+`File` use invocation semantics.
+`WebSocketClient` and `WebSocketServer` use session semantics and require both
+Driver roles over one shared bound state. `Process(service)` will reuse the
+same session shape when that deferred profile lands; the VM must never grow a
+WebSocket-specific branch.
+
+**WebSocket has two contracts, one message model.** The stable target ids are
+`rastok/websocket-client@1` and `rastok/websocket-server@1`. Opening a remote
+connection and accepting one have different attributes and failure surfaces,
+so they are not profiles of one ambiguous node. Both expose ordinary `in`
+(graph to socket), `out` (socket to graph), and `exit` (one session terminal)
+ports. They do not acquire an implicit `err`: a protocol or transport failure
+is a typed `exit` case, while non-causal library diagnostics belong to
+observation. One complete WebSocket message becomes one envelope and one
+envelope sent to `in` becomes one complete message. Fragmentation and
+reassembly, ping/pong and the close handshake remain Driver protocol duties.
+
+Each accepted or opened session receives an opaque logical `SessionRef`
+derived from its journaled opening fact. It excludes file descriptors, socket
+addresses, negotiated HTTP version, Host, Worker and library handles. The
+reference is carried by causal routing and projected on session messages and
+the terminal envelope as `meta.ext.session_id`; it is never a physical socket
+id. A server reply on a join-free descendant path targets the session by
+lineage. A root-mixing path, a stored response, or a spontaneous producer must
+carry an explicit contract `correlate` value; no Driver guesses from arrival
+order. A client Connector owns at most one live remote session per logical
+Node instance in v1, while a server Connector may own many accepted sessions.
+The Driver overwrites any peer-supplied spelling of `session_id` at ingress
+and resolves a correlator only inside that Connector's live logical table. A
+write targeting an unknown or already closed reference is an orphan write:
+discarded and journaled for observation, never redirected to another session,
+never retried forever, and never allowed to manufacture a second exit.
+
+**Session writes are effects, not calls.** Every graph-to-socket message is
+journaled before any bytes are offered to the network. Its write obligation is
+closed by the session protocol without manufacturing an application `exit`
+per message. A write failure terminates the session through its sole typed
+`exit`. After a crash, a message whose external outcome is unknown is never
+silently replayed: the session terminates as unknown and the graph may open a
+new session and retry through an application acknowledgement or the `Loop`
+aspect. Reconnection and application-message replay are graph policy, not
+hidden Driver behavior.
+
+**Inbound acceptance is two-phase.** A Driver proposes a request, accepted
+session, or session message without minting an envelope. The runtime either
+commits it and acknowledges acceptance to the Driver, leaves it pending under
+backpressure, or rejects it with a contract result. An HTTP 202/response,
+WebSocket upgrade success, or explicit application acknowledgement may leave
+only after the corresponding causal fact commits. TCP acknowledgements and
+HTTP/2-3 receive-window updates are transport flow control, not evidence that
+Rastok accepted or processed a message; they may advance only within the
+Driver's declared bounded intake. WebSocket defines no per-message
+application acknowledgement — a graph that needs one sends an ordinary reply
+message after commit.
+The current pull-only `InboundConnectorDriver::next` API cannot prove this and
+is deliberately widened in M1.6 before a network Driver ships.
+
+**HTTP versions are physical bindings by default.** The semantic contracts
+are `rastok/http-client@1` and `rastok/http-server@1`; there is no `Http2` or
+`Http3` node. A compatible Driver may negotiate HTTP/1.1, HTTP/2 or HTTP/3,
+and the negotiated version is an observation rather than semantic identity.
+Fallback is allowed only before request bytes could have become externally
+visible. Zero-RTT is disabled in v1; enabling replayable early data requires a
+later idempotency decision. A future explicit contract requirement for a wire
+capability may restrict negotiation, but M1.6 does not infer such a requirement
+from the URL or from registration order.
+
+WebSocket uses RFC 6455 framing over an HTTP/1.1 Upgrade, RFC 8441 Extended
+CONNECT over HTTP/2, and RFC 9220 Extended CONNECT over HTTP/3. Applications
+see the same session contract on all three paths. A peer or build that lacks a
+required transport refuses or negotiates another compatible version before
+admission; it never executes a nearby protocol silently.
+
+**Network libraries stay behind hosted Drivers.** The isolated `quiche`
+0.29.3 spike is a GO for HTTP/3 candidacy: it proves verified TLS, `h3` ALPN,
+two correlated streams and a synchronous pump without changing the product
+workspace. It does not supply RFC 6455 framing. The implementation target is
+therefore a small hosted engine with an HTTP/1.1-2 backend, an HTTP/3 backend,
+and a separately tested WebSocket codec. `quiche` is the presumptive HTTP/3
+candidate and `tungstenite` the presumptive framing candidate; `h3` + Quinn
+remains the comparison that can win if one Rustls/TLS stack or integration
+cost outweighs the measured quiche advantages. Dependency versions, TLS
+providers and an async reactor are adopted only after the product-shaped gate
+records licenses, transitive cost, cancellation, flow control and exit
+strategy.
+
+Tokio, if selected for hosted socket readiness, is an implementation detail of
+the std Connector crate. It does not enter `rastok-core`, the plan, contract
+types or no-std builds. Embedded builds omit the network Drivers entirely and
+continue to validate a plan while refusing unavailable contracts at binding.
+
+**Simulation substitutes the network, not the protocol.** Lab factories use
+the same contract ids, exchange shapes, session correlation, typed exits,
+backpressure decisions and journal boundaries. They script peer messages and
+transport outcomes after the same open/commit gates. Conformance has separate
+profiles for invocations and sessions; a successful request battery cannot
+stand in for fragmentation, interleaving, close-once and post-exit silence.
+
+The exchange shape and session reference require categorical plan and causal
+transport additions. M1.6 allocates plan-package v11 and the causal additions
+to its H1 gate, with pre-declared semantic/package/trace moves. No identity
+moves occur in this decision-only checkpoint. Rejected alternatives are:
+one node per HTTP version, one generic `WebSocket` contract, one invocation per
+WebSocket message, forcing pure event sources into sessions, automatic
+reconnect/replay, a third `DuplexDriver` role, network-library types in the
+core, and an embedded HTTP dependency enabled by default.
+
 ## D-2026-08-22-1 — Contracts name capabilities; Drivers supply them by role
 
 M1.5 opens the connector catalogue with a second real family (`File`). The

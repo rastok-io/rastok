@@ -540,6 +540,14 @@ dying `codex` is a typed terminal error with a declared restart policy,
 not a 3 a.m. mystery; and the whole gateway is simulated — process,
 clock and Teams included — before it ever touches production.
 
+The HTTP Teams edge is not essential to the shape. The M1.6 design reference
+[codex-websocket-gateway.rkg](docs/examples/codex-websocket-gateway.rkg)
+replaces it with `WebSocketServer`: each accepted connection supplies one
+logical session reference, complete text/JSON messages cross ordinary
+`in`/`out` ports, and one `exit` reports the connection's termination. The
+same graph works whether the Driver negotiated HTTP/1.1 Upgrade, HTTP/2
+Extended CONNECT or HTTP/3 Extended CONNECT.
+
 ### 1.7 When Rastok is more platform than you need
 
 Honesty about scope buys trust, so let us draw the lower bound: a
@@ -1442,7 +1450,8 @@ Neither crate names, shared-library paths, build features, Hosts nor Workers
 enter the plan or causal identity.
 
 ```text
-RKG Connector ──▶ Contract catalogue ──▶ validated plan (id + roles + facts)
+RKG Connector ──▶ Contract catalogue ──▶ validated plan
+                                                (id + roles + exchange + facts)
                                                 │
 static factories ──▶ Driver registry ──bind─────┘
 future plugin host ─┘                    │
@@ -1468,22 +1477,32 @@ bookkeeping. Each Connector family owns that shared pure request protocol;
 the Lab composes family-provided binders instead of dispatching on contract
 names.
 
-**Lifecycle-bound resources carry invocation scopes, not hidden addressing
-dimensions.** A static Connector Node may run at several logical addresses,
-and one Node instance may admit several calls or sessions —
-concurrently when its resolved policy permits. Every admitted invocation has
-its own causal call identity and ends with exactly one ordinary typed `exit`;
-it may first produce zero or more `out` and `err` envelopes. A `Process`
-child, WebSocket interaction or database operation is therefore a resource
-scope inside the Node instance, not an automatically invented key.
+**Lifecycle-bound exchanges do not invent hidden addressing dimensions.** A
+static Connector Node may run at several logical addresses, and one Node
+instance may admit several exchanges concurrently when its resolved policy
+permits. There are three cardinalities behind the same two Driver roles:
+
+```text
+event       external fact ──▶ one inbound root; no per-event exit
+invocation  request ──▶ zero or more outputs ──▶ exactly one exit
+session     open ──▶ messages in both directions* ──▶ exactly one exit
+```
+
+Clock ticks and calendar instants are events. Every invocation has a causal
+call identity. Every session has a causal
+logical session reference independent of its socket, negotiated transport and
+physical placement. A Process job or database operation is an invocation; a
+WebSocket connection and the future Process service profile are sessions.
+Neither automatically invents a Node-instance key.
 
 `stop` and `exit` name the two distinct boundaries. `stop` closes the current
 Node instance; `exit` reports the observed termination of
-one admitted invocation. Many exits may occur before one stop. Closing a
-Node instance stops admission and must drain or cancel every open invocation
-under a bounded policy; it cannot erase their terminal obligations. Call
-identity correlates frames even when several invocations share the same
-instance, and no `out` or `err` for a call may follow its `exit`.
+one admitted exchange. Many exits may occur before one stop. Closing a Node
+instance stops admission and must drain or cancel every open invocation and
+session under a bounded policy; it cannot erase their terminal obligations.
+Call identity correlates invocation frames. Session identity correlates all
+messages under one open resource; a WebSocket message does not receive a fake
+per-message exit. No output may follow the corresponding terminal `exit`.
 
 For a `Process`, `Exited { exit_code, signal }`, `TimeoutExpired`,
 `SpawnFailed` and the former typed error codes are cases of `ProcessExit`.
