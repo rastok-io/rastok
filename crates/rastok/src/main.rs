@@ -21,7 +21,7 @@ use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok <check|run> <file.rkg>...\n       rastok simulate <file.rkg>... [--golden <dir>] [--bless]";
+const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>]\n       rastok simulate <file.rkg>... [--golden <dir>] [--bless]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -34,7 +34,28 @@ fn main() -> ExitCode {
     };
     match command {
         "check" => check(paths),
-        "run" => run(paths),
+        "run" => {
+            let mut files = Vec::new();
+            let mut file_root: Option<std::path::PathBuf> = None;
+            let mut rest = paths.iter();
+            while let Some(argument) = rest.next() {
+                match argument.as_str() {
+                    "--file-root" => match rest.next() {
+                        Some(dir) => file_root = Some(std::path::PathBuf::from(dir)),
+                        None => {
+                            eprintln!("{USAGE}");
+                            return ExitCode::from(2);
+                        }
+                    },
+                    _ => files.push(argument.clone()),
+                }
+            }
+            if files.is_empty() {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+            run(&files, file_root.as_deref())
+        }
         "simulate" => {
             let mut files = Vec::new();
             let mut golden_dir: Option<std::path::PathBuf> = None;
@@ -131,7 +152,7 @@ fn check(paths: &[String]) -> ExitCode {
 /// Runs the App against the real Drivers: each stdin line is one
 /// text submission; boundary envelopes print to stdout, root errors
 /// to stderr.
-fn run(paths: &[String]) -> ExitCode {
+fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
     };
@@ -142,13 +163,30 @@ fn run(paths: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let registry = match connectors::DriverRegistry::default().try_with(Box::new(process_factory)) {
-        Ok(registry) => registry,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let mut registry =
+        match connectors::DriverRegistry::default().try_with(Box::new(process_factory)) {
+            Ok(registry) => registry,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+    if let Some(root) = file_root {
+        let file_factory = match connectors::FileFactory::try_new(root) {
+            Ok(factory) => factory,
+            Err(error) => {
+                eprintln!("error: the built-in File Driver id is invalid: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        registry = match registry.try_with(Box::new(file_factory)) {
+            Ok(registry) => registry,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+    }
     let mut world = match connectors::RuntimeBindings::try_new(&compilation.plan, &registry) {
         Ok(bindings) => bindings,
         Err(error) => {

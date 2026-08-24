@@ -491,3 +491,25 @@ fn crossed_concurrent_replies_fail_the_battery() {
         report.violations
     );
 }
+
+#[test]
+fn identical_interleave_expectations_cannot_claim_correlation_proof() {
+    let mut profile = process_profile();
+    let probe = profile
+        .interleave
+        .as_mut()
+        .expect("the Process profile carries an interleave proof");
+    probe.expected[1].data = probe.expected[0].data.clone();
+
+    let report = verify(
+        &profile,
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        &process_registry(),
+    );
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|violation| { violation.contains("expected outputs must differ") })
+    );
+}

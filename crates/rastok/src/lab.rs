@@ -16,9 +16,11 @@ use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
 };
 use crate::connector::{ConnectorId, ConnectorRoles};
+#[cfg(test)]
+use crate::connectors::ProcessRequestBindings;
 use crate::connectors::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
-    FileRequestBindings, ProcessRequestBindings, RuntimeBindings,
+    RuntimeBindings, ScriptedConnectorProtocol, ScriptedProtocolBinder, scripted_protocol_binders,
 };
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
@@ -26,10 +28,11 @@ use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::{Observed, Vm};
 use crate::{expr, node, runtime};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 type MockFaults = Rc<RefCell<Vec<String>>>;
+type SharedMocks = Rc<BTreeMap<node::Path, Rc<Mock>>>;
 
 /// The verdict of one scenario: green when `failures` is empty.
 #[derive(Debug, Clone, PartialEq)]
@@ -366,43 +369,10 @@ fn draft(value: &EmitValue) -> Result<Draft, String> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum MockProtocolKind {
-    Process,
-    File,
-}
-
-#[derive(Debug)]
-enum MockProtocol {
-    Process(ProcessRequestBindings),
-    File(FileRequestBindings),
-}
-
-impl MockProtocol {
-    fn prepare_request(
-        &self,
-        connector: &node::Path,
-        data: &Data,
-        settings: &BTreeMap<String, Value>,
-    ) -> RequestPreparation {
-        match self {
-            Self::Process(bindings) => bindings.prepare_request(connector, data),
-            Self::File(bindings) => bindings.prepare_request(connector, data, settings),
-        }
-    }
-
-    fn scheduler_completion(&self, completion: SchedulerCompletion) -> Completion {
-        match self {
-            Self::Process(_) => crate::boundary::process_scheduler_completion(completion),
-            Self::File(_) => crate::boundary::file_scheduler_completion(completion),
-        }
-    }
-}
-
 struct MockConnectorFactory {
     id: ConnectorId,
-    kind: MockProtocolKind,
-    mocks: BTreeMap<node::Path, Mock>,
+    bind_protocol: ScriptedProtocolBinder,
+    mocks: SharedMocks,
     faults: MockFaults,
 }
 
@@ -411,7 +381,6 @@ impl core::fmt::Debug for MockConnectorFactory {
         formatter
             .debug_struct("MockConnectorFactory")
             .field("id", &self.id)
-            .field("kind", &self.kind)
             .finish_non_exhaustive()
     }
 }
@@ -430,14 +399,7 @@ impl ConnectorDriverFactory for MockConnectorFactory {
         plan: &'plan ValidatedExecutionPlan,
         nodes: &[node::Path],
     ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
-        let protocol = match self.kind {
-            MockProtocolKind::Process => ProcessRequestBindings::try_bind(plan, nodes)
-                .map(MockProtocol::Process)
-                .map_err(|error| DriverFactoryError::new(error.to_string()))?,
-            MockProtocolKind::File => FileRequestBindings::try_bind(plan, nodes)
-                .map(MockProtocol::File)
-                .map_err(|error| DriverFactoryError::new(error.to_string()))?,
-        };
+        let protocol = (self.bind_protocol)(plan, nodes)?;
         Ok(Box::new(MockOutboundConnectorDriver {
             mocks: self.mocks.clone(),
             protocol,
@@ -452,33 +414,15 @@ fn mock_bindings<'plan>(
     mocks: BTreeMap<node::Path, Mock>,
 ) -> Result<(RuntimeBindings<'plan>, MockFaults), String> {
     let faults = Rc::new(RefCell::new(Vec::new()));
-    let families: BTreeSet<_> = plan
-        .plan()
-        .nodes
-        .iter()
-        .filter_map(|planned| {
-            planned
-                .connector()
-                .filter(|spec| spec.roles.has_outbound())
-                .map(|spec| spec.contract.clone())
-        })
-        .collect();
+    let mocks = share_mocks(mocks);
     let mut registry = DriverRegistry::default();
-    for id in families {
-        let kind = match id.as_str() {
-            crate::connector::PROCESS_CONNECTOR_ID => MockProtocolKind::Process,
-            crate::connector::FILE_CONNECTOR_ID => MockProtocolKind::File,
-            _ => {
-                return Err(format!(
-                    "no scripted outbound factory is registered for `{id}`"
-                ));
-            }
-        };
+    for (spelling, bind_protocol) in scripted_protocol_binders() {
+        let id = ConnectorId::parse(spelling).map_err(|error| error.to_string())?;
         registry = registry
             .try_with(Box::new(MockConnectorFactory {
                 id,
-                kind,
-                mocks: mocks.clone(),
+                bind_protocol,
+                mocks: Rc::clone(&mocks),
                 faults: Rc::clone(&faults),
             }))
             .map_err(|error| error.to_string())?;
@@ -487,13 +431,22 @@ fn mock_bindings<'plan>(
     Ok((bindings, faults))
 }
 
+fn share_mocks(mocks: BTreeMap<node::Path, Mock>) -> SharedMocks {
+    Rc::new(
+        mocks
+            .into_iter()
+            .map(|(path, mock)| (path, Rc::new(mock)))
+            .collect(),
+    )
+}
+
 /// The scripted Driver: answers journaled intents from mock branches — first
 /// match in text order — and reports every uncovered call loudly. Its protocol
 /// preparation is the same pure binding used by the real family Driver; only
 /// the external effect is replaced.
 struct MockOutboundConnectorDriver {
-    mocks: BTreeMap<node::Path, Mock>,
-    protocol: MockProtocol,
+    mocks: SharedMocks,
+    protocol: Box<dyn ScriptedConnectorProtocol>,
     pending: Vec<Response>,
     faults: MockFaults,
 }
@@ -776,8 +729,8 @@ mod tests {
         let faults = Rc::new(RefCell::new(Vec::new()));
         let nodes = [path.clone()];
         let mut driver = MockOutboundConnectorDriver {
-            mocks,
-            protocol: MockProtocol::Process(
+            mocks: share_mocks(mocks),
+            protocol: Box::new(
                 ProcessRequestBindings::try_bind(&compilation.plan, &nodes)
                     .expect("the Process mock binding is valid"),
             ),

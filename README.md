@@ -72,6 +72,11 @@ model. A future plugin host can use the same registry boundary, but Rastok does
 not yet ship a plugin loader or freeze a native ABI. Contributors follow the
 [Connector Driver guide](docs/architecture/connector-drivers.md).
 
+The standalone runner links the Process Driver by default. Pass
+`--file-root <dir>` to `rastok run` to add the real File Driver with an
+explicit deployment root; that root is neither inferred from the graph nor
+part of plan identity.
+
 ## Documentation authority
 
 The repository keeps intent, contract, design, and evidence distinct:

@@ -1127,11 +1127,7 @@ impl Writer<'_> {
             } => {
                 self.tag(1);
                 self.str(contract_id);
-                self.tag(match roles {
-                    crate::connector::ConnectorRoles::Inbound => 1,
-                    crate::connector::ConnectorRoles::Outbound => 2,
-                    crate::connector::ConnectorRoles::InboundAndOutbound => 3,
-                });
+                self.tag(roles.tag());
             }
         }
         let mut vals: Vec<_> = node.vals.iter().collect();

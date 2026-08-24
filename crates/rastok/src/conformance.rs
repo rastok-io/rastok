@@ -627,6 +627,20 @@ fn interleave_battery(
     if expected.len() < 2 {
         return Err("the interleave profile must distinguish at least two connectors".into());
     }
+    if probe
+        .expected
+        .iter()
+        .enumerate()
+        .any(|(left, expectation)| {
+            probe.expected[left + 1..]
+                .iter()
+                .any(|other| expectation.data == other.data)
+        })
+    {
+        return Err(
+            "the interleave expected outputs must differ, or a swapped reply is invisible".into(),
+        );
+    }
     let data = vec![
         (String::from("a"), Value::Text(String::from(probe.a))),
         (String::from("b"), Value::Text(String::from(probe.b))),

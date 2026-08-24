@@ -572,26 +572,35 @@ pub fn file_scheduler_completion(completion: SchedulerCompletion) -> Completion 
 /// The typed refusal when the payload is neither raw encoded bytes nor the
 /// materialized bytes scalar.
 pub fn prepare_bytes(data: &envelope::Data) -> Result<PreparedRequest, String> {
+    Ok(PreparedRequest::seal(bytes_payload(data)?.to_vec()))
+}
+
+/// Borrows one opaque byte payload without framing or sealing it.
+///
+/// Connector-specific operation framers use this seam when the raw payload is
+/// only one field of their final [`PreparedRequest`]. It avoids constructing
+/// and hashing a discarded intermediate request.
+///
+/// # Errors
+///
+/// The typed refusal when the payload is neither raw encoded bytes nor the
+/// materialized bytes scalar.
+pub fn bytes_payload(data: &envelope::Data) -> Result<&[u8], String> {
     use envelope::{Data, Encoding, Value};
-    let bytes = match data {
+    match data {
         Data::Encoded {
             encoding: Encoding::Raw,
             bytes,
             ..
         }
-        | Data::Materialized(Value::Bytes(bytes)) => bytes.clone(),
-        Data::Encoded { encoding, .. } => {
-            return Err(alloc::format!(
-                "the bytes codec requires raw bytes; the request is {encoding:?}-encoded"
-            ));
-        }
-        Data::Materialized(other) => {
-            return Err(alloc::format!(
-                "the bytes codec requires bytes; the request data is {other:?}"
-            ));
-        }
-    };
-    Ok(PreparedRequest::seal(bytes))
+        | Data::Materialized(Value::Bytes(bytes)) => Ok(bytes),
+        Data::Encoded { encoding, .. } => Err(alloc::format!(
+            "the bytes codec requires raw bytes; the request is {encoding:?}-encoded"
+        )),
+        Data::Materialized(other) => Err(alloc::format!(
+            "the bytes codec requires bytes; the request data is {other:?}"
+        )),
+    }
 }
 
 /// Frames a request as ONE canonical JSON line (D-2026-08-11-1):
@@ -1370,8 +1379,14 @@ impl Dispatcher {
         bindings: &mut B,
         gate: &dyn CompletionGate,
     ) -> Result<PumpBatch, DispatchError> {
+        // A timeout or abandonment can close a call outside this response
+        // loop. Keep the local start cache equal to the journal's open fold,
+        // rather than retaining every historical call for the run's life.
+        let open = journal.open_calls();
+        let open_refs: BTreeSet<_> = open.iter().map(|intent| intent.call_ref).collect();
+        self.started.retain(|call_ref| open_refs.contains(call_ref));
         // Start phase: every open call not yet started.
-        for intent in journal.open_calls() {
+        for intent in &open {
             if self.started.contains(&intent.call_ref) {
                 continue;
             }
@@ -1379,14 +1394,13 @@ impl Dispatcher {
                 .find_envelope(intent.emitting_id)
                 .ok_or(DispatchError::MissingRequest(intent.call_ref))?;
             bindings
-                .start(&intent, &request)
+                .start(intent, &request)
                 .map_err(DispatchError::Driver)?;
             self.started.insert(intent.call_ref);
         }
         // Settle phase: won closures become routable events; losers
         // and strays stay visible.
         let mut batch = PumpBatch::default();
-        let open = journal.open_calls();
         for response in bindings.events().map_err(DispatchError::Driver)? {
             let Some(intent) = open
                 .iter()
@@ -1650,6 +1664,25 @@ mod tests {
             .pump(&mut journal, &mut driver, &OpenGate)
             .unwrap();
         assert!(driver.started.is_empty());
+    }
+
+    #[test]
+    fn scheduler_closures_are_pruned_from_the_start_cache() {
+        let (mut journal, intent) = seeded_journal();
+        let mut driver = Scripted::default();
+        let mut dispatcher = Dispatcher::new();
+        dispatcher
+            .pump(&mut journal, &mut driver, &OpenGate)
+            .unwrap();
+        assert!(dispatcher.started.contains(&intent.call_ref));
+        journal
+            .close_outbound(&intent.call_ref, Closure::Timeout)
+            .unwrap();
+
+        dispatcher
+            .pump(&mut journal, &mut driver, &OpenGate)
+            .unwrap();
+        assert!(dispatcher.started.is_empty());
     }
 
     #[test]

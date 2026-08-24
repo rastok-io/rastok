@@ -478,14 +478,7 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
                     .collect(),
             ),
         ),
-        (
-            6,
-            Cbor::Uint(match spec.roles {
-                crate::connector::ConnectorRoles::Inbound => 1,
-                crate::connector::ConnectorRoles::Outbound => 2,
-                crate::connector::ConnectorRoles::InboundAndOutbound => 3,
-            }),
-        ),
+        (6, Cbor::Uint(u64::from(spec.roles.tag()))),
     ]))
 }
 
@@ -1586,12 +1579,12 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
             _ => return Err(err("attribute")),
         }
     }
-    let roles = match get(pairs, 6, "connector roles")? {
-        Cbor::Uint(1) => crate::connector::ConnectorRoles::Inbound,
-        Cbor::Uint(2) => crate::connector::ConnectorRoles::Outbound,
-        Cbor::Uint(3) => crate::connector::ConnectorRoles::InboundAndOutbound,
-        _ => return Err(err("connector roles")),
+    let Cbor::Uint(role_tag) = get(pairs, 6, "connector roles")? else {
+        return Err(err("connector roles"));
     };
+    let role_tag = u8::try_from(*role_tag).map_err(|_| err("connector roles"))?;
+    let roles = crate::connector::ConnectorRoles::from_tag(role_tag)
+        .ok_or_else(|| err("connector roles"))?;
     Ok(ConnectorSpec {
         contract,
         roles,

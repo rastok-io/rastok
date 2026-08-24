@@ -72,6 +72,7 @@ struct EchoWorld {
 struct ProjectionRefusal {
     inner: EchoWorld,
     refuse_scheduler_completion: bool,
+    refuse_cancel: bool,
 }
 
 impl OutboundConnectorBindings for ProjectionRefusal {
@@ -106,9 +107,12 @@ impl OutboundConnectorBindings for ProjectionRefusal {
 
     fn cancel(
         &mut self,
-        _: &node::Path,
+        connector: &node::Path,
         call_ref: &rastok::boundary::CallRef,
     ) -> Result<(), DriverRouteError> {
+        if self.refuse_cancel {
+            return Err(DriverRouteError::UnavailableOutbound(connector.clone()));
+        }
         OutboundConnectorDriver::cancel(&mut self.inner, call_ref);
         Ok(())
     }
@@ -3142,6 +3146,7 @@ fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
     let mut bindings = ProjectionRefusal {
         inner: EchoWorld::default(),
         refuse_scheduler_completion: false,
+        refuse_cancel: false,
     };
     vm.inject(&mut journal, submission("salut")).unwrap();
     vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
@@ -3162,6 +3167,45 @@ fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
     vm.advance(&mut journal, &mut bindings, 5_000_000_000)
         .unwrap();
     assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
+}
+
+#[test]
+fn a_cancel_refusal_cannot_strand_an_expiring_call() {
+    let compilation = compile(
+        &[TIMED_PROBE],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("a valid plan");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut bindings = ProjectionRefusal {
+        inner: EchoWorld::default(),
+        refuse_scheduler_completion: false,
+        refuse_cancel: true,
+    };
+    vm.inject(&mut journal, submission("salut")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut bindings).unwrap();
+
+    assert!(matches!(
+        vm.advance(&mut journal, &mut bindings, 5_000_000_000),
+        Err(VmError::Dispatch(rastok::boundary::DispatchError::Driver(
+            DriverRouteError::UnavailableOutbound(_)
+        )))
+    ));
+    assert_eq!(
+        journal.open_calls().len(),
+        1,
+        "a refused cancellation leaves the call and deadline replayable"
+    );
+
+    bindings.refuse_cancel = false;
+    vm.advance(&mut journal, &mut bindings, 5_000_000_000)
+        .unwrap();
+    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
+    assert!(
+        vm.is_stable(),
+        "the claimed mailbox was eventually released"
+    );
 }
 
 #[test]

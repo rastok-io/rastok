@@ -73,6 +73,54 @@ fn run_echoes_a_line_through_a_real_child_process() {
 }
 
 #[test]
+fn run_can_bind_the_real_file_driver_with_an_explicit_root() {
+    let root = std::env::temp_dir().join(format!("rastok-cli-file-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("the File root is writable");
+    std::fs::write(root.join("artifact.bin"), b"file payload").expect("the fixture writes");
+    let source_path = root.join("file.rkg");
+    std::fs::write(
+        &source_path,
+        r#"graph file_cli : App {
+  input in: variant
+  output out: bytes
+  connector file : File {
+    mode = read
+    path = "artifact.bin"
+  }
+  . -> file -> .
+  file.exit -> nothing
+}
+"#,
+    )
+    .expect("the graph writes");
+
+    let mut child = rastok()
+        .arg("run")
+        .arg(&source_path)
+        .args(["--file-root"])
+        .arg(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    child
+        .stdin
+        .take()
+        .expect("a piped stdin")
+        .write_all(b"read\n")
+        .expect("stdin accepts");
+    let output = child.wait_with_output().expect("the run completes");
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "out: file payload\n"
+    );
+    std::fs::remove_dir_all(root).expect("the File root is removable");
+}
+
+#[test]
 fn simulate_runs_the_lab_and_reports_every_scenario() {
     let output = rastok()
         .arg("simulate")

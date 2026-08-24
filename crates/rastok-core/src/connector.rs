@@ -159,6 +159,27 @@ pub enum ConnectorRoles {
 }
 
 impl ConnectorRoles {
+    /// Stable categorical tag used by semantic identity and plan transport.
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::Inbound => 1,
+            Self::Outbound => 2,
+            Self::InboundAndOutbound => 3,
+        }
+    }
+
+    /// Decodes one stable categorical tag.
+    #[must_use]
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Inbound),
+            2 => Some(Self::Outbound),
+            3 => Some(Self::InboundAndOutbound),
+            _ => None,
+        }
+    }
+
     /// Whether these available roles satisfy all `required` roles.
     #[must_use]
     pub const fn includes(self, required: Self) -> bool {
@@ -232,5 +253,14 @@ mod tests {
         assert!(ConnectorRoles::InboundAndOutbound.includes(ConnectorRoles::Inbound));
         assert!(ConnectorRoles::InboundAndOutbound.includes(ConnectorRoles::Outbound));
         assert!(ConnectorRoles::InboundAndOutbound.includes(ConnectorRoles::InboundAndOutbound));
+        for role in [
+            ConnectorRoles::Inbound,
+            ConnectorRoles::Outbound,
+            ConnectorRoles::InboundAndOutbound,
+        ] {
+            assert_eq!(ConnectorRoles::from_tag(role.tag()), Some(role));
+        }
+        assert_eq!(ConnectorRoles::from_tag(0), None);
+        assert_eq!(ConnectorRoles::from_tag(4), None);
     }
 }

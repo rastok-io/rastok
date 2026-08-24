@@ -175,6 +175,30 @@ impl ProcessRequestBindings {
     }
 }
 
+impl super::ScriptedConnectorProtocol for ProcessRequestBindings {
+    fn prepare_request(
+        &self,
+        connector: &crate::node::Path,
+        data: &Data,
+        _: &std::collections::BTreeMap<String, Value>,
+    ) -> RequestPreparation {
+        self.prepare_request(connector, data)
+    }
+
+    fn scheduler_completion(&self, completion: SchedulerCompletion) -> Completion {
+        crate::boundary::process_scheduler_completion(completion)
+    }
+}
+
+pub(super) fn bind_scripted_protocol(
+    plan: &crate::plan::ValidatedExecutionPlan,
+    nodes: &[crate::node::Path],
+) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
+    ProcessRequestBindings::try_bind(plan, nodes)
+        .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
+        .map_err(|error| super::DriverFactoryError::new(error.to_string()))
+}
+
 /// A violated `Process` invariant — typed, so the refusal names the
 /// exact door instead of concatenating prose at the fault site.
 #[derive(Debug, Clone, PartialEq, Eq)]

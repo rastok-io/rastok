@@ -337,6 +337,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         call_ref: &CallRef,
     ) -> Result<(), DriverRouteError> {
         self.outbound_driver(connector)?.cancel(call_ref);
+        self.calls.remove(call_ref);
         Ok(())
     }
 
@@ -369,6 +370,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
                         actual: id.clone(),
                     });
                 }
+                self.calls.remove(&response.call_ref);
                 responses.push(response);
             }
         }
@@ -905,6 +907,10 @@ graph mixed : App {
         assert_eq!(
             vm.outputs()[0].envelope.data(),
             &Data::materialized(Value::Text(String::from("test/beta@1")))
+        );
+        assert!(
+            bindings.calls.is_empty(),
+            "settled calls do not accumulate in the routing table"
         );
     }
 

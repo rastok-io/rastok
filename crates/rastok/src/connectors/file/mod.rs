@@ -155,12 +155,8 @@ impl FileRequestBindings {
         let operation = match binding.mode {
             FileMode::Read { max_read } => FileOperation::Read { path, max_read },
             FileMode::Replace => {
-                let prepared =
-                    crate::boundary::prepare_bytes(data).map_err(|_| FileExit::IoFailed)?;
-                FileOperation::Replace {
-                    path,
-                    bytes: prepared.bytes().to_vec(),
-                }
+                let bytes = crate::boundary::bytes_payload(data).map_err(|_| FileExit::IoFailed)?;
+                return FileOperation::encode_replace(&path, bytes);
             }
         };
         operation.encode()
@@ -177,6 +173,30 @@ impl FileRequestBindings {
             Err(exit) => RequestPreparation::Rejected(Completion::file_exit(exit)),
         }
     }
+}
+
+impl super::ScriptedConnectorProtocol for FileRequestBindings {
+    fn prepare_request(
+        &self,
+        connector: &crate::node::Path,
+        data: &Data,
+        settings: &BTreeMap<String, Value>,
+    ) -> RequestPreparation {
+        self.prepare_request(connector, data, settings)
+    }
+
+    fn scheduler_completion(&self, completion: SchedulerCompletion) -> Completion {
+        crate::boundary::file_scheduler_completion(completion)
+    }
+}
+
+pub(super) fn bind_scripted_protocol(
+    plan: &crate::plan::ValidatedExecutionPlan,
+    nodes: &[crate::node::Path],
+) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
+    FileRequestBindings::try_bind(plan, nodes)
+        .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
+        .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }
 
 /// A violated `File` binding invariant.
@@ -470,37 +490,27 @@ impl FileOperation {
     /// material: magic, mode, big-endian path length, UTF-8 path, then either
     /// the read bound or a big-endian payload length and exact payload.
     fn encode(&self) -> Result<PreparedRequest, FileExit> {
-        let (tag, path, tail_len) = match self {
-            Self::Read { path, .. } => (READ_TAG, path, 8usize),
-            Self::Replace { path, bytes } => {
-                (REPLACE_TAG, path, 8usize.saturating_add(bytes.len()))
-            }
-        };
-        let path_len = u32::try_from(path.len()).map_err(|_| FileExit::InvalidPath)?;
-        let mut encoded = Vec::new();
-        encoded
-            .try_reserve(
-                REQUEST_MAGIC
-                    .len()
-                    .saturating_add(1)
-                    .saturating_add(4)
-                    .saturating_add(path.len())
-                    .saturating_add(tail_len),
-            )
-            .map_err(|_| FileExit::IoFailed)?;
-        encoded.extend_from_slice(REQUEST_MAGIC);
-        encoded.push(tag);
-        encoded.extend_from_slice(&path_len.to_be_bytes());
-        encoded.extend_from_slice(path.as_bytes());
         match self {
-            Self::Read { max_read, .. } => encoded.extend_from_slice(&max_read.to_be_bytes()),
-            Self::Replace { bytes, .. } => {
+            Self::Read { path, max_read } => encode_operation(READ_TAG, path, 8, |encoded| {
+                encoded.extend_from_slice(&max_read.to_be_bytes());
+                Ok(())
+            }),
+            Self::Replace { path, bytes } => Self::encode_replace(path, bytes),
+        }
+    }
+
+    fn encode_replace(path: &str, bytes: &[u8]) -> Result<PreparedRequest, FileExit> {
+        encode_operation(
+            REPLACE_TAG,
+            path,
+            8usize.saturating_add(bytes.len()),
+            |encoded| {
                 let length = u64::try_from(bytes.len()).map_err(|_| FileExit::IoFailed)?;
                 encoded.extend_from_slice(&length.to_be_bytes());
                 encoded.extend_from_slice(bytes);
-            }
-        }
-        Ok(PreparedRequest::seal(encoded))
+                Ok(())
+            },
+        )
     }
 
     fn decode(encoded: &[u8]) -> Option<Self> {
@@ -527,6 +537,32 @@ impl FileOperation {
     }
 }
 
+fn encode_operation(
+    tag: u8,
+    path: &str,
+    tail_len: usize,
+    append_tail: impl FnOnce(&mut Vec<u8>) -> Result<(), FileExit>,
+) -> Result<PreparedRequest, FileExit> {
+    let path_len = u32::try_from(path.len()).map_err(|_| FileExit::InvalidPath)?;
+    let mut encoded = Vec::new();
+    encoded
+        .try_reserve(
+            REQUEST_MAGIC
+                .len()
+                .saturating_add(1)
+                .saturating_add(4)
+                .saturating_add(path.len())
+                .saturating_add(tail_len),
+        )
+        .map_err(|_| FileExit::IoFailed)?;
+    encoded.extend_from_slice(REQUEST_MAGIC);
+    encoded.push(tag);
+    encoded.extend_from_slice(&path_len.to_be_bytes());
+    encoded.extend_from_slice(path.as_bytes());
+    append_tail(&mut encoded)?;
+    Ok(PreparedRequest::seal(encoded))
+}
+
 fn take(input: &[u8], length: usize) -> Option<(&[u8], &[u8])> {
     (input.len() >= length).then(|| input.split_at(length))
 }
@@ -546,8 +582,12 @@ fn take_u64(input: &[u8]) -> Option<(u64, &[u8])> {
 }
 
 fn validate_logical_path(path: &str) -> Result<String, FileExit> {
+    let bytes = path.as_bytes();
+    let has_windows_drive_prefix =
+        bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
     if path.is_empty()
         || path.starts_with('/')
+        || has_windows_drive_prefix
         || path.contains('\0')
         || path.contains('\\')
         || Path::new(path).is_absolute()
@@ -582,7 +622,9 @@ fn execute(
 fn execute_read(path: &Path, max_read: u64, cancelled: &AtomicBool) -> Option<Completion> {
     let mut file = match FsFile::open(path) {
         Ok(file) => file,
-        Err(error) => return Some(Completion::file_exit(classify_io(&error))),
+        Err(error) => {
+            return Some(Completion::file_exit(classify_open_failure(path, &error)));
+        }
     };
     match file.metadata() {
         Ok(metadata) if !metadata.is_file() => {
@@ -630,6 +672,13 @@ fn execute_read(path: &Path, max_read: u64, cancelled: &AtomicBool) -> Option<Co
         Some(Data::encoded(Encoding::Raw, bytes)),
         FileExit::Completed,
     ))
+}
+
+fn classify_open_failure(path: &Path, error: &std::io::Error) -> FileExit {
+    match std::fs::metadata(path) {
+        Ok(metadata) if !metadata.is_file() => FileExit::NotAFile,
+        _ => classify_io(error),
+    }
 }
 
 fn execute_replace(
@@ -787,9 +836,37 @@ mod tests {
             validate_logical_path("dir/file"),
             Ok(String::from("dir/file"))
         );
-        for path in ["", "/file", "a//b", "./a", "a/../b", "a\\b", "a\0b"] {
+        for path in [
+            "",
+            "/file",
+            "C:secret.txt",
+            "z:dir/file",
+            "a//b",
+            "./a",
+            "a/../b",
+            "a\\b",
+            "a\0b",
+        ] {
             assert_eq!(validate_logical_path(path), Err(FileExit::InvalidPath));
         }
+    }
+
+    #[test]
+    fn opening_a_directory_has_one_portable_terminal_case() {
+        let root = std::env::temp_dir().join(format!(
+            "rastok-file-open-classification-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("the test directory is writable");
+        let permission_denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+
+        assert_eq!(
+            classify_open_failure(&root, &permission_denied),
+            FileExit::NotAFile,
+            "Windows may refuse opening a directory before metadata is available from the handle"
+        );
+        std::fs::remove_dir_all(root).expect("the test directory is removable");
     }
 
     #[test]

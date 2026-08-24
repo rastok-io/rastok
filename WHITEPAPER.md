@@ -1457,11 +1457,16 @@ manifest — canonical contract ids and roles — before code is loaded, then
 register an ordinary factory through the same boundary. Rastok does not yet
 freeze a native plugin ABI, artifact format, trust policy or hot-reload
 lifecycle. Discovery is physical assembly, not a second execution model.
+The reference CLI makes that assembly visible: Process is linked by default,
+while an explicit `--file-root` adds File and supplies deployment data that
+never enters the graph or plan identity.
 
 The Lab follows the same rule. A mock Driver binds under the same id and roles,
 uses the same family request protocol and resolved result types, and replaces
 only the post-journal external interaction. It never replaces the VM or its
-bookkeeping.
+bookkeeping. Each Connector family owns that shared pure request protocol;
+the Lab composes family-provided binders instead of dispatching on contract
+names.
 
 **Lifecycle-bound resources carry invocation scopes, not hidden addressing
 dimensions.** A static Connector Node may run at several logical addresses,

@@ -1148,6 +1148,13 @@ impl<'plan> Vm<'plan> {
                 .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
                 .map_err(crate::boundary::DispatchError::Driver)
                 .map_err(VmError::Dispatch)?;
+            // Cancellation is a fallible Driver boundary. Prove it before
+            // close-once so a refusal leaves both the call and its deadline
+            // replayable; no terminal fact can strand a claimed mailbox.
+            bindings
+                .cancel(&connector, &call_ref)
+                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(VmError::Dispatch)?;
             match journal
                 .close_outbound(&call_ref, crate::journal::Closure::Timeout)
                 .map_err(VmError::Journal)?
@@ -1155,10 +1162,6 @@ impl<'plan> Vm<'plan> {
                 crate::journal::CloseVerdict::AlreadyClosed => return Ok(()),
                 crate::journal::CloseVerdict::Won => {}
             }
-            bindings
-                .cancel(&connector, &call_ref)
-                .map_err(crate::boundary::DispatchError::Driver)
-                .map_err(VmError::Dispatch)?;
             let intent = journal
                 .find_call(&call_ref)
                 .unwrap_or_else(|| unreachable!("a closed call is journaled"));
@@ -3169,28 +3172,12 @@ impl<'plan> Vm<'plan> {
                 crate::expr::EvalValue::from(key.clone()),
             );
         }
-        let data = DataSlot::new(envelope.data());
-        let mut settings = BTreeMap::new();
-        for (name, setting) in &spec.attributes {
-            let AttrSetting::Expr { site, expr } = setting else {
-                continue;
-            };
-            if *site == EvaluationSite::Invocation {
-                continue;
-            }
-            let value = resolve_payload(
-                eval_lazy(expr, &bindings, &data, &self.plan.assets).map_err(VmError::Fault)?,
-                &data,
-            )
-            .map_err(VmError::Fault)?;
-            if let Some(violation) = expr.ty.violation(name, &value) {
-                return Err(VmError::Fault(Fault::Unrepresentable(
-                    violation.to_string(),
-                )));
-            }
-            settings.insert(name.clone(), value);
-        }
-        Ok(settings)
+        self.evaluate_connector_setting_expressions(
+            spec,
+            EvaluationSite::Instance,
+            &bindings,
+            envelope,
+        )
     }
 
     fn resolve_invocation_settings(
@@ -3216,6 +3203,17 @@ impl<'plan> Vm<'plan> {
                 node: node.clone(),
                 reason: "an opening call lost its selected instance bundle",
             })?;
+        if !spec.attributes.iter().any(|(_, setting)| {
+            matches!(
+                setting,
+                AttrSetting::Expr {
+                    site: EvaluationSite::Invocation,
+                    ..
+                }
+            )
+        }) {
+            return Ok(settings);
+        }
         let mut bindings: BTreeMap<String, crate::expr::EvalValue> = values
             .iter()
             .map(|(name, value)| (name.clone(), crate::expr::EvalValue::from(value.clone())))
@@ -3224,16 +3222,38 @@ impl<'plan> Vm<'plan> {
             String::from("meta"),
             crate::expr::EvalValue::from(meta_value(envelope.meta())),
         );
+        settings.extend(self.evaluate_connector_setting_expressions(
+            spec,
+            EvaluationSite::Invocation,
+            &bindings,
+            envelope,
+        )?);
+        Ok(settings)
+    }
+
+    fn evaluate_connector_setting_expressions(
+        &self,
+        spec: &crate::plan::ConnectorSpec,
+        target_site: EvaluationSite,
+        bindings: &BTreeMap<String, crate::expr::EvalValue>,
+        envelope: &Envelope,
+    ) -> Result<BTreeMap<String, crate::value::Value>, VmError> {
         let data = DataSlot::new(envelope.data());
+        let mut settings = BTreeMap::new();
         for (name, setting) in &spec.attributes {
             let AttrSetting::Expr { site, expr } = setting else {
                 continue;
             };
-            if *site != EvaluationSite::Invocation {
+            let selected = match target_site {
+                EvaluationSite::Instance => *site != EvaluationSite::Invocation,
+                EvaluationSite::Invocation => *site == EvaluationSite::Invocation,
+                EvaluationSite::Plan | EvaluationSite::Boot => false,
+            };
+            if !selected {
                 continue;
             }
             let value = resolve_payload(
-                eval_lazy(expr, &bindings, &data, &self.plan.assets).map_err(VmError::Fault)?,
+                eval_lazy(expr, bindings, &data, &self.plan.assets).map_err(VmError::Fault)?,
                 &data,
             )
             .map_err(VmError::Fault)?;

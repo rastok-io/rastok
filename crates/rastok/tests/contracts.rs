@@ -954,11 +954,9 @@ fn mode_service_defers_before_validating_its_attributes() {
     );
 }
 
-/// Mutates the compiled plan's connector spec and BINDS the Driver:
-/// every configuration defect must refuse at `Process::try_new` —
-/// before any journaled open — never as a `SpawnFailed`
-/// impersonating the OS (D-2026-08-12-1, review rounds).
-fn bind_error(mutate: impl Fn(&mut rastok::plan::ConnectorSpec)) -> String {
+/// Mutates the compiled Process sheet. Registry-free plan validation is the
+/// first refusal; the Driver keeps the same exhaustive conversion as its belt.
+fn process_plan_error(mutate: impl Fn(&mut rastok::plan::ConnectorSpec)) -> String {
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
@@ -966,30 +964,28 @@ fn bind_error(mutate: impl Fn(&mut rastok::plan::ConnectorSpec)) -> String {
             mutate(spec);
         }
     }
-    let validated =
-        rastok::plan::ValidatedExecutionPlan::try_from(plan).expect("structurally valid");
-    rastok::connectors::Process::try_new(&validated)
-        .expect_err("the binding refuses")
+    rastok::plan::ValidatedExecutionPlan::try_from(plan)
+        .expect_err("the plan validator refuses the forged Process sheet")
         .to_string()
 }
 
 #[test]
-fn the_binding_refuses_every_stripped_default_individually() {
-    // Each Defaulted attribute is defended on its own, at BIND time.
+fn the_plan_gate_refuses_every_stripped_default_individually() {
+    // Every effective default is defended before binding or execution.
     for name in ["mode", "on_timeout", "args", "max_output"] {
-        let message = bind_error(|spec| {
+        let message = process_plan_error(|spec| {
             spec.attributes.retain(|(attr, _)| attr != name);
         });
         assert!(
-            message.contains("missing from the travelling sheet"),
+            message.contains("omits required effective attribute"),
             "`{name}` names the violated invariant: {message}"
         );
     }
 }
 
 #[test]
-fn the_binding_drops_no_argument_silently() {
-    let message = bind_error(|spec| {
+fn the_plan_gate_drops_no_argument_silently() {
+    let message = process_plan_error(|spec| {
         for (name, setting) in &mut spec.attributes {
             if name == "args" {
                 *setting = rastok::plan::AttrSetting::Value(rastok::value::Value::Array(vec![
@@ -999,21 +995,21 @@ fn the_binding_drops_no_argument_silently() {
             }
         }
     });
-    assert!(message.contains("not text"), "{message}");
+    assert!(message.contains("invalid effective `args`"), "{message}");
 }
 
 #[test]
-fn the_binding_rechecks_optional_process_settings() {
-    let bad_cwd = bind_error(|spec| {
+fn the_plan_gate_rechecks_optional_process_settings() {
+    let bad_cwd = process_plan_error(|spec| {
         spec.attributes.push((
             String::from("cwd"),
             rastok::plan::AttrSetting::Value(rastok::value::Value::Int(7)),
         ));
         spec.attributes.sort_by(|a, b| a.0.cmp(&b.0));
     });
-    assert!(bad_cwd.contains("cwd attribute is not text"), "{bad_cwd}");
+    assert!(bad_cwd.contains("invalid effective `cwd`"), "{bad_cwd}");
 
-    let bad_env = bind_error(|spec| {
+    let bad_env = process_plan_error(|spec| {
         spec.attributes.push((
             String::from("env"),
             rastok::plan::AttrSetting::Value(rastok::value::Value::Map(
@@ -1024,10 +1020,70 @@ fn the_binding_rechecks_optional_process_settings() {
         ));
         spec.attributes.sort_by(|a, b| a.0.cmp(&b.0));
     });
-    assert!(
-        bad_env.contains("env entry `COUNT` is not text"),
-        "{bad_env}"
+    assert!(bad_env.contains("invalid effective `env`"), "{bad_env}");
+}
+
+#[test]
+fn an_unreachable_process_still_carries_one_valid_sheet() {
+    let compilation = compile_one(&process_graph(FULL)).expect("valid");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    let connector_slot = rastok::plan::Slot::new(
+        u32::try_from(
+            plan.nodes
+                .iter()
+                .position(|node| matches!(node.kind, rastok::plan::NodeKind::Connector(_)))
+                .expect("the Process exists"),
+        )
+        .expect("the plan is small"),
     );
+    plan.edges.retain(|edge| {
+        edge.to
+            .as_ref()
+            .is_none_or(|to| to.node != Some(connector_slot))
+    });
+    plan.boundary.retain(|port| port.port.name() != "in");
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            for (name, setting) in &mut spec.attributes {
+                if name == "command" {
+                    *setting = rastok::plan::AttrSetting::Value(rastok::value::Value::Int(3));
+                }
+            }
+        }
+    }
+
+    assert!(matches!(
+        rastok::plan::ValidatedExecutionPlan::try_from(plan),
+        Err(rastok::plan::PlanValidationError::ContractAttributeMismatch {
+            attribute,
+            ..
+        }) if attribute == "command"
+    ));
+}
+
+#[test]
+fn a_forged_process_cannot_smuggle_an_unknown_attribute() {
+    let compilation = compile_one(&process_graph(FULL)).expect("valid");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            spec.attributes.push((
+                String::from("mystery"),
+                rastok::plan::AttrSetting::Value(rastok::value::Value::Text(String::from(
+                    "hidden",
+                ))),
+            ));
+            spec.attributes.sort_by(|left, right| left.0.cmp(&right.0));
+        }
+    }
+
+    assert!(matches!(
+        rastok::plan::ValidatedExecutionPlan::try_from(plan),
+        Err(rastok::plan::PlanValidationError::ContractAttributeMismatch {
+            attribute,
+            ..
+        }) if attribute == "mystery"
+    ));
 }
 
 #[test]
@@ -1137,6 +1193,23 @@ fn an_effectless_callee_never_validates() {
         ),
         "a callee needs an effect class"
     );
+}
+
+#[test]
+fn a_callable_connector_requires_the_outbound_role() {
+    let compilation = compile_one(&process_graph(FULL)).expect("valid");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            spec.contract = rastok::connector::ConnectorId::parse("test/inbound-only@1")
+                .expect("the test id is canonical");
+            spec.roles = rastok::connector::ConnectorRoles::Inbound;
+        }
+    }
+    assert!(matches!(
+        rastok::plan::ValidatedExecutionPlan::try_from(plan),
+        Err(rastok::plan::PlanValidationError::CallableConnectorWithoutOutboundRole { .. })
+    ));
 }
 
 #[test]

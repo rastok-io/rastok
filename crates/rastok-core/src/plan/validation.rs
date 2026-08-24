@@ -184,6 +184,12 @@ pub enum PlanValidationError {
         /// The declaring node.
         node: node::Path,
     },
+    /// A connector some edge delivers to does not expose the outbound role
+    /// required to execute that call.
+    CallableConnectorWithoutOutboundRole {
+        /// The declaring node.
+        node: node::Path,
+    },
     /// One node declares two handlers for one activation — the
     /// second would silently shadow the first at dispatch.
     DuplicateHandler {
@@ -664,6 +670,10 @@ impl core::fmt::Display for PlanValidationError {
                     "invalid plan: `{node}` receives deliveries but declares no effect class — a call cannot open without one"
                 )
             }
+            Self::CallableConnectorWithoutOutboundRole { node } => write!(
+                f,
+                "invalid plan: `{node}` receives deliveries but its contract has no outbound role"
+            ),
             Self::DuplicateHandler { node, activation } => {
                 write!(
                     f,
@@ -2144,23 +2154,170 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             // `Effect::None` there would be a machine fault, so it
             // never validates. A pure source (no incoming edge)
             // stays free to be effectless.
-            if spec.effect == node::Effect::None {
-                let slot = crate::plan::Slot::new(u32::try_from(node_index).unwrap_or(u32::MAX));
-                let receives = plan
-                    .edges
-                    .iter()
-                    .any(|edge| edge.to.as_ref().is_some_and(|to| to.node == Some(slot)));
-                if receives {
-                    return Err(PlanValidationError::EffectlessCallee {
-                        node: node.path.clone(),
-                    });
-                }
+            let slot = crate::plan::Slot::new(u32::try_from(node_index).unwrap_or(u32::MAX));
+            let receives = plan
+                .edges
+                .iter()
+                .any(|edge| edge.to.as_ref().is_some_and(|to| to.node == Some(slot)));
+            let has_family_role_gate = matches!(
+                spec.contract.as_str(),
+                crate::connector::PROCESS_CONNECTOR_ID | crate::connector::FILE_CONNECTOR_ID
+            );
+            if receives && !spec.roles.has_outbound() && !has_family_role_gate {
+                return Err(PlanValidationError::CallableConnectorWithoutOutboundRole {
+                    node: node.path.clone(),
+                });
+            }
+            if receives && spec.effect == node::Effect::None {
+                return Err(PlanValidationError::EffectlessCallee {
+                    node: node.path.clone(),
+                });
             }
             if spec.contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID {
                 if spec.roles != crate::connector::ConnectorRoles::Outbound {
                     return Err(PlanValidationError::ContractRoleMismatch {
                         node: node.path.clone(),
                     });
+                }
+                if !matches!(spec.effect, node::Effect::Class(_)) {
+                    return Err(PlanValidationError::ContractAttributeMismatch {
+                        node: node.path.clone(),
+                        attribute: String::from("effect"),
+                    });
+                }
+                match spec.attribute("mode") {
+                    Some(crate::plan::AttrSetting::Word(word)) if word == "job" => {}
+                    Some(_) => {
+                        return Err(PlanValidationError::ContractAttributeMismatch {
+                            node: node.path.clone(),
+                            attribute: String::from("mode"),
+                        });
+                    }
+                    None => {
+                        return Err(PlanValidationError::MissingContractAttribute {
+                            node: node.path.clone(),
+                            attribute: "mode",
+                        });
+                    }
+                }
+                match spec.attribute("on_timeout") {
+                    Some(crate::plan::AttrSetting::Word(word)) if word == "kill" => {}
+                    Some(_) => {
+                        return Err(PlanValidationError::ContractAttributeMismatch {
+                            node: node.path.clone(),
+                            attribute: String::from("on_timeout"),
+                        });
+                    }
+                    None => {
+                        return Err(PlanValidationError::MissingContractAttribute {
+                            node: node.path.clone(),
+                            attribute: "on_timeout",
+                        });
+                    }
+                }
+                match spec.attribute("command") {
+                    Some(crate::plan::AttrSetting::Value(crate::value::Value::Text(_))) => {}
+                    Some(crate::plan::AttrSetting::Expr { site, expr })
+                        if *site == EvaluationSite::Instance && expr.ty == DataType::Text => {}
+                    Some(_) => {
+                        return Err(PlanValidationError::ContractAttributeMismatch {
+                            node: node.path.clone(),
+                            attribute: String::from("command"),
+                        });
+                    }
+                    None => {
+                        return Err(PlanValidationError::MissingContractAttribute {
+                            node: node.path.clone(),
+                            attribute: "command",
+                        });
+                    }
+                }
+                match spec.attribute("args") {
+                    Some(crate::plan::AttrSetting::Value(crate::value::Value::Array(items)))
+                        if items
+                            .iter()
+                            .all(|item| matches!(item, crate::value::Value::Text(_))) => {}
+                    Some(crate::plan::AttrSetting::Expr { site, expr })
+                        if *site == EvaluationSite::Instance
+                            && expr.ty == DataType::array(DataType::Text) => {}
+                    Some(_) => {
+                        return Err(PlanValidationError::ContractAttributeMismatch {
+                            node: node.path.clone(),
+                            attribute: String::from("args"),
+                        });
+                    }
+                    None => {
+                        return Err(PlanValidationError::MissingContractAttribute {
+                            node: node.path.clone(),
+                            attribute: "args",
+                        });
+                    }
+                }
+                if let Some(cwd) = spec.attribute("cwd") {
+                    let valid = match cwd {
+                        crate::plan::AttrSetting::Value(crate::value::Value::Text(_)) => true,
+                        crate::plan::AttrSetting::Expr { site, expr } => {
+                            *site == EvaluationSite::Instance && expr.ty == DataType::Text
+                        }
+                        _ => false,
+                    };
+                    if !valid {
+                        return Err(PlanValidationError::ContractAttributeMismatch {
+                            node: node.path.clone(),
+                            attribute: String::from("cwd"),
+                        });
+                    }
+                }
+                if let Some(env) = spec.attribute("env") {
+                    let valid = match env {
+                        crate::plan::AttrSetting::Value(crate::value::Value::Map(entries)) => {
+                            entries
+                                .values()
+                                .all(|value| matches!(value, crate::value::Value::Text(_)))
+                        }
+                        crate::plan::AttrSetting::Expr { site, expr } => {
+                            *site == EvaluationSite::Instance
+                                && expr.ty == DataType::text_map(DataType::Text)
+                        }
+                        _ => false,
+                    };
+                    if !valid {
+                        return Err(PlanValidationError::ContractAttributeMismatch {
+                            node: node.path.clone(),
+                            attribute: String::from("env"),
+                        });
+                    }
+                }
+                if let Some(timeout) = spec.attribute("timeout") {
+                    let valid = match timeout {
+                        crate::plan::AttrSetting::Value(crate::value::Value::Duration(_)) => true,
+                        crate::plan::AttrSetting::Expr { site, expr } => {
+                            *site == EvaluationSite::Instance && expr.ty == DataType::DURATION
+                        }
+                        _ => false,
+                    };
+                    if !valid {
+                        return Err(PlanValidationError::ContractAttributeMismatch {
+                            node: node.path.clone(),
+                            attribute: String::from("timeout"),
+                        });
+                    }
+                }
+                match spec.attribute("max_output") {
+                    Some(crate::plan::AttrSetting::Value(crate::value::Value::Text(value)))
+                        if crate::connector::byte_size(value).is_some() => {}
+                    Some(_) => {
+                        return Err(PlanValidationError::ContractAttributeMismatch {
+                            node: node.path.clone(),
+                            attribute: String::from("max_output"),
+                        });
+                    }
+                    None => {
+                        return Err(PlanValidationError::MissingContractAttribute {
+                            node: node.path.clone(),
+                            attribute: "max_output",
+                        });
+                    }
                 }
                 let codec = match spec.attribute("codec") {
                     Some(crate::plan::AttrSetting::Word(word))
@@ -2196,6 +2353,26 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         });
                     }
                 };
+                for (name, _) in &spec.attributes {
+                    if !matches!(
+                        name.as_str(),
+                        "args"
+                            | "codec"
+                            | "err_codec"
+                            | "command"
+                            | "cwd"
+                            | "timeout"
+                            | "env"
+                            | "mode"
+                            | "max_output"
+                            | "on_timeout"
+                    ) {
+                        return Err(PlanValidationError::ContractAttributeMismatch {
+                            node: node.path.clone(),
+                            attribute: name.clone(),
+                        });
+                    }
+                }
                 let expected = [
                     (
                         "in",

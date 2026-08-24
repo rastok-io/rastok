@@ -304,6 +304,29 @@ only where they are explicitly marked historical. C6 changes no language,
 plan, semantic hash, package, causal trace or format version; M1.5 closes at
 this checkpoint.
 
+**Post-closure adversarial hardening (2026-08-24).** The closure review found
+no missing abstraction, but it did expose boundary doors that must fail before
+effects. A callable Connector without an outbound role now fails Registry-free
+plan validation, and the same validation checks the complete effective
+Process sheet even for an unreachable Node. Runtime role tags have one
+encode/decode authority. A scheduler timeout proves the Driver cancellation
+before winning close-once, so a cancellation refusal leaves both call and
+deadline replayable rather than stranding a mailbox.
+
+The File Driver rejects Windows drive-relative spellings as `InvalidPath`
+before joining them to its deployment root and normalizes an existing
+non-file to `NotAFile` even when the host refuses the initial open. Its replace
+preparation now copies the payload into, and hashes, only the final operation
+descriptor. The interleaving conformance profile requires distinct expected
+outputs as well as distinct requests, so a crossed reply cannot pass with an
+invisible oracle. Runtime call-family and Dispatcher start caches are retired
+when their journal obligation ends. Each family module supplies its own pure
+scripted-protocol binder; the Lab composes those binders without concrete-id
+dispatch and shares immutable mock trees. The standalone runner exposes File
+through explicit `--file-root <dir>` deployment data. These are refusal,
+portability, liveness, and assembly corrections only: no language, plan,
+semantic hash, package, causal trace, or format version changes.
+
 ## D-2026-08-18-1 — Nodes own instances; key, lifetime, and state scope are separate
 
 The unreleased named-partition model fused three independent concerns: a key

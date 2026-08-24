@@ -117,6 +117,10 @@ Static builds explicitly construct the desired `DriverRegistry`. Minimal,
 embedded and full standalone binaries may therefore link different families
 without changing the plan model or adding VM branches.
 
+The shipped standalone CLI is one such assembly: `rastok run` always registers
+Process, and `--file-root <dir>` additionally registers File with an explicit
+physical root. A graph never selects or discovers that root.
+
 ### 5. Supply a conformance profile
 
 Run the real factory through the shared conformance battery. Provide:
@@ -137,6 +141,10 @@ request preparation and scheduler-completion projection. Script only the
 external outcome after the journal has opened the call. Prove malformed mock
 outputs fail the ordinary resolved-port gate and that adding Lab source changes
 neither semantic hash nor validated plan.
+
+Put the pure scripted-protocol binder beside the real family module. The Lab
+registry composes these family-owned binders; it must not grow a parallel
+string match that re-implements the Connector catalogue.
 
 ### 7. Prove composition
 
