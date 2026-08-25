@@ -31,6 +31,12 @@ pub enum PortDataType {
     ProcessExit,
     /// Canonical terminal union of one File invocation.
     FileExit,
+    /// Canonical terminal union of one outbound HTTP call.
+    HttpClientExit,
+    /// Canonical terminal union of one admitted HTTP server request.
+    HttpServerExit,
+    /// Canonical terminal union shared by WebSocket client/server sessions.
+    WebSocketExit,
 }
 
 impl PortDataType {
@@ -41,6 +47,9 @@ impl PortDataType {
             Self::Variant => Ok(crate::datatype::DataType::Variant),
             Self::ProcessExit => crate::boundary::process_exit_type(),
             Self::FileExit => crate::boundary::file_exit_type(),
+            Self::HttpClientExit => crate::boundary::http_client_exit_type(),
+            Self::HttpServerExit => crate::boundary::http_server_exit_type(),
+            Self::WebSocketExit => crate::boundary::websocket_exit_type(),
         }
     }
 }
@@ -439,8 +448,12 @@ pub enum ValueDomain {
     Choice(&'static [&'static str]),
     /// A constant text value.
     Text,
+    /// A constant opaque byte value.
+    Bytes,
     /// A constant list of text values.
     TextList,
+    /// A non-empty, duplicate-free ordered list drawn from a closed text set.
+    ChoiceList(&'static [&'static str]),
     /// A constant duration value.
     Duration,
     /// A constant byte-size string (`"8MiB"`) — judged by
@@ -449,6 +462,8 @@ pub enum ValueDomain {
     ByteSize,
     /// A text-keyed map whose values are all text.
     TextMap,
+    /// A lossless HTTP header map: lowercase text names to ordered byte values.
+    HeaderMap,
     /// A Rastok expression path over runtime data (`correlate = data.id`) — not a
     /// boot-phase constant. Deferred-only.
     ExprPath,
@@ -468,10 +483,13 @@ impl ValueDomain {
             self,
             Self::Choice(_)
                 | Self::Text
+                | Self::Bytes
                 | Self::TextList
+                | Self::ChoiceList(_)
                 | Self::Duration
                 | Self::ByteSize
                 | Self::TextMap
+                | Self::HeaderMap
         )
     }
 
@@ -482,13 +500,18 @@ impl ValueDomain {
     pub fn expression_type(&self) -> Option<crate::datatype::DataType> {
         match self {
             Self::Text | Self::ByteSize => Some(crate::datatype::DataType::Text),
+            Self::Bytes => Some(crate::datatype::DataType::BYTES),
             Self::TextList => Some(crate::datatype::DataType::array(
+                crate::datatype::DataType::Text,
+            )),
+            Self::ChoiceList(_) => Some(crate::datatype::DataType::array(
                 crate::datatype::DataType::Text,
             )),
             Self::Duration => Some(crate::datatype::DataType::DURATION),
             Self::TextMap => Some(crate::datatype::DataType::text_map(
                 crate::datatype::DataType::Text,
             )),
+            Self::HeaderMap => Some(crate::plan::http_headers_type()),
             Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => None,
         }
     }
@@ -500,10 +523,23 @@ impl ValueDomain {
         match self {
             Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => false,
             Self::Text => matches!(value, crate::value::Value::Text(_)),
+            Self::Bytes => matches!(value, crate::value::Value::Bytes(_)),
             Self::TextList => match value {
                 crate::value::Value::Array(items) => items
                     .iter()
                     .all(|item| matches!(item, crate::value::Value::Text(_))),
+                _ => false,
+            },
+            Self::ChoiceList(words) => match value {
+                crate::value::Value::Array(items) if !items.is_empty() => {
+                    let mut seen = std::collections::BTreeSet::new();
+                    items.iter().all(|item| match item {
+                        crate::value::Value::Text(word) => {
+                            words.contains(&word.as_str()) && seen.insert(word.as_str())
+                        }
+                        _ => false,
+                    })
+                }
                 _ => false,
             },
             Self::Duration => matches!(value, crate::value::Value::Duration(_)),
@@ -516,6 +552,7 @@ impl ValueDomain {
                     .all(|value| matches!(value, crate::value::Value::Text(_))),
                 _ => false,
             },
+            Self::HeaderMap => crate::plan::http_headers_value_holds(value),
         }
     }
 }
@@ -830,6 +867,17 @@ fn validate_attributes(
                 if !expressible_name(word) {
                     return Err(SheetDefect::InexpressibleName(word));
                 }
+                if !unique.insert(*word) {
+                    return Err(SheetDefect::DuplicateChoice(spec.name));
+                }
+            }
+        }
+        if let ValueDomain::ChoiceList(words) = &spec.domain {
+            if words.is_empty() {
+                return Err(SheetDefect::EmptyChoice(spec.name));
+            }
+            let mut unique = std::collections::BTreeSet::new();
+            for word in *words {
                 if !unique.insert(*word) {
                     return Err(SheetDefect::DuplicateChoice(spec.name));
                 }

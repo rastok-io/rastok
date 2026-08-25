@@ -40,7 +40,7 @@ cannot coexist (one is a leaf, the other makes it a branch of the
 nested projection) — refused at check and re-verified by the
 package validator. `ext`'s vocabulary belongs to
 connector contract sheets (their `Populates` row, stdlib.md) plus
-the standard `content_type` and `session_id` leaves (§5.2–5.3); handlers may rewrite declared
+the standard protocol leaves (§5.2–5.4); handlers may rewrite declared
 ext fields, never invent one. Each zone's leaves are
 `scalar | array<scalar>` (flat — nested/heavy data goes in `data`);
 physically a field is ONE dotted string key inside its zone
@@ -516,6 +516,35 @@ The projection is the lowercase 32-hex-character spelling of the reference's
 derives inbound and outbound openings under identity domain `0x11`, and each
 graph-to-world message write under `0x12`; the exact framed recipes and causal
 record forms are fixed in [identity.md §3](identity.md).
+
+### 5.4 Standard HTTP and WebSocket projections
+
+D-2026-08-25-2 reserves the following optional leaves alongside
+`content_type` and `session_id`:
+
+| Leaf | Logical type | Meaning |
+|---|---|---|
+| `http_headers` | `map<text,array<bytes>>` | lossless fields; non-empty lowercase ASCII token names and value arrays, repeated values in wire order, no HTTP/2-3 pseudo-fields |
+| `http_method` | `text` | admitted request method |
+| `http_uri` | `text` | admitted or selected request URI under the contract |
+| `http_version` | `text` | observed `http/1.1`, `http/2`, or `http/3`; never semantic identity |
+| `http_status` | `int` | observed response status; the Driver validates the protocol's range |
+| `websocket_origin` | `text` | admitted Origin value when present |
+| `websocket_subprotocol` | `text` | the one negotiated subprotocol when present |
+
+The array in `http_headers` is required even for one value because HTTP field
+repetition and order can be semantically relevant (`set-cookie` is the
+canonical example). Header values are bytes rather than text; a Driver never
+destroys a valid non-UTF-8 field value to populate metadata. The Driver
+normalizes field names to lowercase after protocol validation. Pseudo-fields,
+connection handles, HPACK/QPACK indexes and library objects are physical
+protocol state and never become envelope data.
+
+These leaves are observations or response-routing material. A peer-provided
+spelling cannot override a runtime-minted `session_id`, and a graph write does
+not retroactively change which HTTP version or socket carried a committed
+exchange. The complete map participates in ordinary `meta.ext` typing,
+identity, merge and explicit-attribution rules once present.
 
 ## 6. Writing `meta.sys` — there is no write
 

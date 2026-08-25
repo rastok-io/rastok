@@ -44,8 +44,8 @@ graph sim03 : App {
       until = value <= 0
     }
     Loop.backoff = { curve = constant, delay = duration("5s") }
-    on out where meta.ext.status < 500                         // base case
-    on out where meta.ext.status >= 500 { }                    // response retry
+    on out where meta.ext.http_status < 500                    // base case
+    on out where meta.ext.http_status >= 500 { }               // response retry
     on exit where data is TimeoutExpired { }                   // no-response retry
   }
 

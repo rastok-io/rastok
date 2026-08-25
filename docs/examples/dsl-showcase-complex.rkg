@@ -1,12 +1,15 @@
 // Illustrative target-surface example. Process(job), keyed owners, lifetimes,
-// joins, and File(read/replace) are executable. HttpServer, Postgres, the
+// joins, File(read/replace), and the HttpServer sheet/Lab binding are executable. Postgres, the
 // append-style File usage below, Process(service), and jq/SQL guests remain
-// guarded as of 2026-08-23. This file is a design reference, not a current
+// guarded as of 2026-08-25. The network sheet binds only in the Lab until H3;
+// this file is a design reference, not a current
 // executable fixture.
 graph agent_gateway : App {
 
   connector webhook : HttpServer {
-    listen = "0.0.0.0:8080/inbound"
+    listen = "0.0.0.0:8080"
+    path = "/inbound"
+    codec = json
     // webhook.out carries the decoded inbound request
   }
 

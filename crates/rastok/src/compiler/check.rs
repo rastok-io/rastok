@@ -356,8 +356,8 @@ pub fn check(
         .iter()
         .map(|(field, ty)| (field.clone(), ty.clone()))
         .collect();
-    // Standard `content_type` and `session_id` are IMPLICIT — known to every
-    // consumer, never serialized; the schema carries sheet fields only.
+    // Standard EXT leaves are IMPLICIT — known to every consumer, never
+    // serialized; the schema carries application-defined fields only.
     let ext_schema: Vec<(String, DataType)> = checker
         .ext_fields
         .iter()
@@ -2254,9 +2254,12 @@ impl Checker<'_, '_> {
                     .with("meta.sys.parent_id", DataType::Variant)
                     .with("meta.sys.origin_id", DataType::Text)
                     .with("meta.sys.role", DataType::Text)
-                    .with("meta.sys.graph_version", DataType::INT)
-                    .with("meta.ext.content_type", DataType::Text)
-                    .with("meta.ext.session_id", DataType::Text);
+                    .with("meta.sys.graph_version", DataType::INT);
+                for field in crate::plan::STANDARD_EXT_FIELDS {
+                    if let Some(ty) = crate::plan::standard_ext_field_type(field) {
+                        signature = signature.with(format!("meta.ext.{field}"), ty);
+                    }
+                }
                 for (field, ty) in &app_fields {
                     signature = signature.with(format!("meta.app.{field}"), ty.clone());
                 }
@@ -2393,9 +2396,12 @@ impl Checker<'_, '_> {
                 .with("meta.sys.parent_id", DataType::Variant)
                 .with("meta.sys.origin_id", DataType::Text)
                 .with("meta.sys.role", DataType::Text)
-                .with("meta.sys.graph_version", DataType::INT)
-                .with("meta.ext.content_type", DataType::Text)
-                .with("meta.ext.session_id", DataType::Text);
+                .with("meta.sys.graph_version", DataType::INT);
+            for field in crate::plan::STANDARD_EXT_FIELDS {
+                if let Some(ty) = crate::plan::standard_ext_field_type(field) {
+                    signature = signature.with(format!("meta.ext.{field}"), ty);
+                }
+            }
             if let Some(key_type) = instance_key_type {
                 signature = signature.with("instance.key", key_type);
             }
@@ -2961,7 +2967,9 @@ impl Checker<'_, '_> {
                         // and `on compensate` — are not executable in
                         // this subset; admitting the words without
                         // their invariants would be a silent lie.
-                        if attribute.name == "effect" && word != "idempotent" {
+                        if attribute.name == "effect"
+                            && !matches!(word.as_str(), "none" | "idempotent")
+                        {
                             self.deferred("compensable and irreversible effects", span);
                         }
                         None
@@ -2997,9 +3005,12 @@ impl Checker<'_, '_> {
                 }
                 (
                     contract::ValueDomain::Text
+                    | contract::ValueDomain::Bytes
                     | contract::ValueDomain::TextList
+                    | contract::ValueDomain::ChoiceList(_)
                     | contract::ValueDomain::Duration
-                    | contract::ValueDomain::TextMap,
+                    | contract::ValueDomain::TextMap
+                    | contract::ValueDomain::HeaderMap,
                     AttrValue::Word(word),
                 ) => Some(format!(
                     "expected a Rastok expression fitting the {:?} domain; `{word}` is a bare word",
@@ -3042,6 +3053,32 @@ impl Checker<'_, '_> {
                     )
                     .with_span(decl.span)
                     .with_field("attribute", spec.name),
+                );
+            }
+        }
+        if matches!(
+            contract.id,
+            crate::connector::HTTP_CLIENT_CONNECTOR_ID
+                | crate::connector::HTTP_SERVER_CONNECTOR_ID
+                | crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID
+                | crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID
+        ) {
+            let certificate = node
+                .attributes()
+                .iter()
+                .any(|attribute| attribute.name == "tls_certificate");
+            let private_key = node
+                .attributes()
+                .iter()
+                .any(|attribute| attribute.name == "tls_private_key");
+            if certificate != private_key {
+                refuse(
+                    self.bag,
+                    "tls_certificate/tls_private_key",
+                    decl.span,
+                    String::from(
+                        "client/server identity requires both certificate bytes and private-key bytes",
+                    ),
                 );
             }
         }
@@ -3926,6 +3963,11 @@ impl Checker<'_, '_> {
             SynValue::Expr(expr) => self.constant(expr, signature, consts).map(AttrValue::Const),
             SynValue::BracedMap(entries) => {
                 let tree = self.map_value_tree(entries, signature, span)?;
+                self.reduce_constant(tree, span, consts)
+                    .map(AttrValue::Const)
+            }
+            SynValue::Frontend(_) => {
+                let tree = self.nested_value_tree(value, signature, span)?;
                 self.reduce_constant(tree, span, consts)
                     .map(AttrValue::Const)
             }
@@ -7701,7 +7743,7 @@ graph g : App {
 
     #[test]
     fn unavailable_and_unknown_connector_types_split() {
-        let declared = "graph g : App {\n  connector h : HttpServer { }\n  . -> h -> .\n}\n";
+        let declared = "graph g : App {\n  connector c : Clock { }\n  . -> c -> .\n}\n";
         let (_, bag) = check_source(declared);
         assert!(diagnostic_codes(&bag).contains(&E_CONNECTOR_UNAVAILABLE));
         assert!(bag.diagnostics()[0].message().contains("catalogue"));

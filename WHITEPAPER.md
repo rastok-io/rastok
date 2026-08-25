@@ -314,10 +314,13 @@ side never arrives, the bounded join reports the technical
 graph expense_approval : App {                     // `: App` marks the deployment entry
   output rejection
 
-  connector requests   : HttpServer { path = "/requests" }    // two independent sources
-  connector decisions  : HttpServer { path = "/decisions" }
+  connector requests   : HttpServer { listen = "0.0.0.0:8080" ; path = "/requests" ; codec = json }
+  connector decisions  : HttpServer { listen = "0.0.0.0:8080" ; path = "/decisions" ; codec = json }
   connector accounting : HttpClient {
     url             = "https://accounting.internal/entries"
+    method          = "POST"
+    codec           = json
+    timeout         = duration("10s")
     effect          = irreversible
     behavior        = deterministic
     idempotency_key = meta.ext.request_id
@@ -487,9 +490,14 @@ graph sessions {                       // declaration = instantiation
 }
 
 graph agent_gateway : App {
-  connector teams_in  : HttpServer { path = "/api/messages" }
+  connector teams_in  : HttpServer {
+    listen = "0.0.0.0:8080" ; path = "/api/messages" ; codec = json
+  }
   connector teams_out : HttpClient {
     url             = "https://smba.trafficmanager.net/"
+    method          = "POST"
+    codec           = json
+    timeout         = duration("10s")
     effect          = irreversible
     behavior        = deterministic
     idempotency_key = meta.sys.id
@@ -2746,7 +2754,7 @@ simulations designed to become executable evidence as the runtime
 lands. The current evidence gates are listed in
 [ROADMAP.md](ROADMAP.md).
 
-As of M1.5 C6, the one-worker reference executes canonical keyed/lifetime
+As of M1.6 H2, the one-worker reference executes canonical keyed/lifetime
 instances, bounded Closing, nested Graph composition, and instance-local
 bounded joins from source through package validation and public Lab scenarios.
 The closure audit also proves that moving a stable virtual shard between
@@ -2758,7 +2766,12 @@ logical addresses. Process and File now execute as two real outbound Driver
 families through one exact-id/role registry and one VM boundary; the Lab
 composes both through the same binding and protocol. Static Driver selection is
 implemented. A data-only capability manifest proves the future discovery seam,
-but no plugin loader or native ABI is claimed.
+but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
+contracts now cross source, checked v11 plan, Registry-free validation and
+family-owned Lab binding with codec-selected ports, lossless protocol metadata
+and typed terminal unions. This is deliberately a sheet/Lab checkpoint: no
+live socket or product network dependency is claimed before H3's hosted-engine
+adoption gate.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

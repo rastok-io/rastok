@@ -79,8 +79,8 @@ connector pay : HttpClient + Loop {
     max = duration("5s")
   }
 
-  on out where meta.ext.status < 500
-  on out where meta.ext.status >= 500 { }
+  on out where meta.ext.http_status < 500
+  on out where meta.ext.http_status >= 500 { }
   on exit where data is ConnectFailed || data is TimeoutExpired { }
 }
 ```
@@ -279,8 +279,8 @@ connector reserve : HttpClient + Saga + Loop {
     until = value <= 0
   }
 
-  on out where meta.ext.status < 500
-  on out where meta.ext.status >= 500 { }
+  on out where meta.ext.http_status < 500
+  on out where meta.ext.http_status >= 500 { }
   on exit where data is ConnectFailed || data is TimeoutExpired { }
   on compensate { /* inverse request */ }
 }

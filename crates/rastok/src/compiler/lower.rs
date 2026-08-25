@@ -847,6 +847,7 @@ fn graph_constant_environment(
 fn typed_effect(node: &HirNode) -> node::Effect {
     let word = attribute_word(node, "effect");
     match word {
+        "none" => node::Effect::None,
         "idempotent" => node::Effect::Class(node::EffectClass::Idempotent),
         "compensable" => node::Effect::Class(node::EffectClass::Compensable),
         "irreversible" => node::Effect::Class(node::EffectClass::Irreversible),

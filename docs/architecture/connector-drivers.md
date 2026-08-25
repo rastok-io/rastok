@@ -1,6 +1,6 @@
 # Contributing a Connector Driver
 
-> Current contributor path through M1.6 H1. The normative contract lives in
+> Current contributor path through M1.6 H2. The normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
 > [D-2026-08-22-1](../spec/decisions.md). This guide explains how the pieces
 > meet in the implementation; it does not define a second Connector model.

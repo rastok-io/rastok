@@ -62,6 +62,13 @@
 > enumerated before implementation. Format v10 is categorically refused; no
 > decoder guesses the missing exchange fact.
 >
+> **M1.6 H2 uses v11 unchanged.** The four network sheets produce ordinary
+> Connector ids, roles, exchanges, effective attributes and resolved ports
+> through forms already categorical in v11. Standard HTTP/WebSocket
+> `meta.ext` leaves are implicit typed vocabulary rather than a serialized
+> schema claim. H2 therefore moves no existing package, semantic hash or
+> causal trace and adds no format tag.
+>
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
 > processing-time `tumbling` on Graph and Node owners. R5 adds the optional
@@ -260,9 +267,9 @@ plan       := {1: [node*], 2: [port_decl*], 3: [edge*], 4: [handler*],
                                                   // 2 is the App boundary
                                                   // 5/6 are travelling zone schemas:
                                                   //   [[field (text), type]*], sorted, prefix-free
-                                                  //   (D-2026-08-10-1); absent = empty; ext's
-                                                  //   content_type:text and session_id:text
-                                                  //   leaves are implicit
+                                                  //   (D-2026-08-10-1); absent = empty; the
+                                                  //   standard ext leaves of envelope.md
+                                                  //   §5.2–5.4 are implicit
                                                   // 7 is raw asset content in digest order
                                                   // 8 is mandatory and re-derived at decode
                                                   // 9 is mandatory, including the root Graph

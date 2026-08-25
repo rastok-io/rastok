@@ -12,10 +12,10 @@
 > sheet and bare `stop` execute through M1.4 R5. R6 executes nested Graph
 > composition and instance-local `on (a, b, …)` joins with `where`, `within`,
 > and `last`; `having` remains a named gate.
-> D-2026-08-25-1 freezes `WebSocketClient` / `WebSocketServer` as M1.6 target
-> names, but the current `ContractCatalog` does not admit them. H2 supplies
-> their exact sheets and named availability; no network syntax is executable
-> merely because it appears below.
+> D-2026-08-25-2 makes `HttpClient`, `HttpServer`, `WebSocketClient`, and
+> `WebSocketServer` exact H2 sheets from source through validated plan and
+> Lab binding. Live sockets remain gated by H3–H6; `HttpServer(mode = respond)`
+> is a named H5 deferral rather than a nearby executable behavior.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -107,7 +107,9 @@ There is **one** keyword for composite units. No `pipeline`, `flow`,
 graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly one per deployed unit
   durability = local                 // app-level attributes live here
 
-  connector inbound : HttpServer { path = "/teams/webhook" ; codec = json }
+  connector inbound : HttpServer {
+    listen = "0.0.0.0:8080" ; path = "/teams/webhook" ; codec = json
+  }
 
   graph sessions {                   // a graph DECLARES → it IS a composite Node
     instances = { key = meta.app.session_key }
@@ -121,6 +123,7 @@ graph teams_gateway : App {          // the DEPLOYMENT ENTRY POINT — exactly o
   }
 
   connector outbound : HttpClient { url = env("TEAMS_URL") ; codec = json
+                                    timeout = duration("10s")
                                     effect = idempotent ; behavior = deterministic }
 
   inbound.out -> sessions.in         // graphs WIRE BY NAME, like every node
@@ -321,7 +324,7 @@ graph sessions {
 graph teams_inbound {
   // Top-level → implicitly singleton.
   connector inbound : HttpServer {
-    listen = ":8080"
+    listen = "0.0.0.0:8080"
     codec  = json
   }
 
@@ -1134,8 +1137,8 @@ does not claim implementation or release status.
 
 | DSL node / concept | Role | Spec status / next step |
 |---|---|---|
-| `HttpServer` | Connector node | specified in the initial stdlib catalog |
-| `HttpClient` | Connector node | specified in the initial stdlib catalog ; response/DLQ semantics follow the delivery spec |
+| `HttpServer` | Connector node | exact H2 inbound-Call sheet; `ack` admitted, `respond` deferred to H5 |
+| `HttpClient` | Connector node | exact H2 outbound-Call sheet; live HTTP versions execute at H4 |
 | `Process` | Connector node | specified in the initial stdlib catalog ; codec/protocol matrix must remain narrow |
 | `File` | Connector node | executable C3 sheet: explicit one-file `read` / atomic `replace`; `watch` and directory operations are named deferrals |
 | `Postgres` | Connector node | deferred; must use the standard Connector contract |
@@ -1158,10 +1161,10 @@ does not claim implementation or release status.
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
 | `Join` / `Barrier` | Guarded fan-in | the canonical form is an `on (a, b)` join handler (correlated by the owning Operator instance ; bounded by `last`/`within`) |
-| `WebSocketServer` | Connector node | M1.6 target; accepted duplex sessions, many messages and one session `exit` |
-| `WebSocketClient` | Connector node | M1.6 target; opened duplex sessions, many messages and one session `exit` |
+| `WebSocketServer` | Connector node | exact H2 both-role Session sheet; accepted duplex network execution at H6 |
+| `WebSocketClient` | Connector node | exact H2 both-role Session sheet; opened duplex network execution at H6 |
 | `Tcp` | Connector node | planned |
-| HTTP/1.1, HTTP/2, HTTP/3 | Binding options, not nodes | M1.6 target; negotiation is physical unless a future contract explicitly requires a wire capability |
+| HTTP/1.1, HTTP/2, HTTP/3 | Binding options, not nodes | H2 sheet vocabulary; live negotiation remains physical and lands in H4–H6 |
 
 Rule for DSL evolution : do not add a new node name to an `.rkg` example
 without adding it here and marking whether it is specified, design intent, or

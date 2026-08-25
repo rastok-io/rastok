@@ -343,6 +343,15 @@ with the terminal `exit`. A collector may aggregate them, but only under an
 explicit bound. These choices do not change the logical port types or the
 one-exit-per-call invariant.
 
+The H2 network sheets are an explicit contrast. Their `json | text | bytes`
+codec selects `variant | text | bytes` for both `in` and `out`, and one
+complete HTTP body or WebSocket message is one value without line framing.
+They declare no `err`: usable HTTP bodies stay on `out`, while protocol and
+transport termination is a case of the connector's tagged `exit` union.
+Lossless HTTP fields live in metadata as `map<text,array<bytes>>`; the array
+preserves repeated-value order and avoids pretending every valid field value
+is UTF-8.
+
 ## 4. Parametric Connector contracts
 
 A resolved type is concrete **for one Connector instantiation in one

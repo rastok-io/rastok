@@ -281,13 +281,87 @@ pub fn file_attribute_site(
     }
 }
 
+fn network_body_type(codec: Option<&str>) -> Option<DataType> {
+    match codec {
+        Some("json") => Some(DataType::Variant),
+        Some("text") => Some(DataType::Text),
+        Some("bytes") => Some(DataType::BYTES),
+        _ => None,
+    }
+}
+
+/// Registry-free effective port type for every M1.6 network sheet.
+#[must_use]
+pub fn network_port_type(
+    contract: &crate::connector::ConnectorId,
+    port: &str,
+    codec: Option<&str>,
+) -> Option<DataType> {
+    let body = || network_body_type(codec);
+    match (contract.as_str(), port) {
+        (crate::connector::HTTP_CLIENT_CONNECTOR_ID, "in" | "out")
+        | (crate::connector::HTTP_SERVER_CONNECTOR_ID, "in" | "out")
+        | (crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID, "in" | "out")
+        | (crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID, "in" | "out") => body(),
+        (crate::connector::HTTP_CLIENT_CONNECTOR_ID, "exit") => http_client_exit_type().ok(),
+        (crate::connector::HTTP_SERVER_CONNECTOR_ID, "exit") => http_server_exit_type().ok(),
+        (crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID, "exit")
+        | (crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID, "exit") => websocket_exit_type().ok(),
+        _ => None,
+    }
+}
+
+/// Registry-free evaluation-site mirror for the four M1.6 network sheets.
+#[must_use]
+pub fn network_attribute_site(
+    contract: &crate::connector::ConnectorId,
+    attribute: &str,
+) -> Option<crate::plan::EvaluationSite> {
+    use crate::plan::EvaluationSite::{Instance, Invocation, Plan};
+
+    match contract.as_str() {
+        crate::connector::HTTP_CLIENT_CONNECTOR_ID => match attribute {
+            "behavior" | "codec" | "effect" | "max_body" | "versions" | "zero_rtt" => Some(Plan),
+            "timeout" | "tls_ca" | "tls_certificate" | "tls_private_key" => Some(Instance),
+            "auth_bearer" | "headers" | "idempotency_key" | "method" | "url" => Some(Invocation),
+            _ => None,
+        },
+        crate::connector::HTTP_SERVER_CONNECTOR_ID => match attribute {
+            "behavior" | "codec" | "effect" | "max_body" | "mode" | "path" | "versions"
+            | "zero_rtt" => Some(Plan),
+            "auth_bearer" | "headers" | "listen" | "timeout" | "tls_certificate"
+            | "tls_private_key" => Some(Instance),
+            "correlate" => Some(Invocation),
+            _ => None,
+        },
+        crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID => match attribute {
+            "behavior" | "codec" | "effect" | "max_message" | "versions" | "zero_rtt" => Some(Plan),
+            "auth_bearer" | "handshake_timeout" | "headers" | "subprotocols" | "tls_ca"
+            | "tls_certificate" | "tls_private_key" | "url" => Some(Instance),
+            _ => None,
+        },
+        crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID => match attribute {
+            "behavior" | "codec" | "effect" | "max_message" | "path" | "versions" | "zero_rtt" => {
+                Some(Plan)
+            }
+            "allowed_origins" | "auth_bearer" | "handshake_timeout" | "headers" | "listen"
+            | "subprotocols" | "tls_certificate" | "tls_private_key" => Some(Instance),
+            "correlate" => Some(Invocation),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Registry-free evaluation-site mirror for every built-in Connector.
 #[must_use]
 pub fn connector_attribute_site(
     contract: &crate::connector::ConnectorId,
     attribute: &str,
 ) -> Option<crate::plan::EvaluationSite> {
-    process_attribute_site(contract, attribute).or_else(|| file_attribute_site(contract, attribute))
+    process_attribute_site(contract, attribute)
+        .or_else(|| file_attribute_site(contract, attribute))
+        .or_else(|| network_attribute_site(contract, attribute))
 }
 
 /// The canonical logical type of the conventional `Process.exit` port.
@@ -383,6 +457,88 @@ pub fn file_exit_type() -> Result<DataType, TypeError> {
     ])?))
 }
 
+fn protocol_code_type() -> DataType {
+    // The source expression language's ordinary integer is the portable
+    // carrier. Drivers prove the protocol-specific u16 range at ingress.
+    DataType::INT
+}
+
+fn empty_case(name: &str) -> Result<TaggedCase, TypeError> {
+    TaggedCase::new(name, StructType::new(Vec::new())?)
+}
+
+/// Portable terminal union of one outbound HTTP call.
+pub fn http_client_exit_type() -> Result<DataType, TypeError> {
+    let completed = TaggedCase::new(
+        "Completed",
+        StructType::new(alloc::vec![TypeField::new("status", protocol_code_type())])?,
+    )?;
+    let body_too_large = TaggedCase::new(
+        "BodyTooLarge",
+        StructType::new(alloc::vec![TypeField::new("limit", DataType::UINT)])?,
+    )?;
+    Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
+        completed,
+        empty_case("DnsFailed")?,
+        empty_case("ConnectFailed")?,
+        empty_case("TlsFailed")?,
+        empty_case("ProtocolFailed")?,
+        empty_case("TimeoutExpired")?,
+        body_too_large,
+        empty_case("DecodeFailed")?,
+        empty_case("OutcomeUnknown")?,
+    ])?))
+}
+
+/// Portable terminal union of one admitted HTTP server request.
+pub fn http_server_exit_type() -> Result<DataType, TypeError> {
+    let completed = TaggedCase::new(
+        "Completed",
+        StructType::new(alloc::vec![TypeField::new("status", protocol_code_type())])?,
+    )?;
+    Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
+        completed,
+        empty_case("MalformedRequest")?,
+        empty_case("AuthFailed")?,
+        empty_case("RequestExpired")?,
+        empty_case("Overloaded")?,
+        empty_case("PeerDisconnected")?,
+        empty_case("OutcomeUnknown")?,
+    ])?))
+}
+
+/// Portable terminal union shared by WebSocket client and server sessions.
+pub fn websocket_exit_type() -> Result<DataType, TypeError> {
+    let closed = TaggedCase::new(
+        "Closed",
+        StructType::new(alloc::vec![
+            TypeField::new("code", protocol_code_type()),
+            TypeField::new("reason", DataType::Text),
+        ])?,
+    )?;
+    let handshake_rejected = TaggedCase::new(
+        "HandshakeRejected",
+        StructType::new(alloc::vec![TypeField::new("status", protocol_code_type())])?,
+    )?;
+    let message_too_large = TaggedCase::new(
+        "MessageTooLarge",
+        StructType::new(alloc::vec![TypeField::new("limit", DataType::UINT)])?,
+    )?;
+    Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
+        closed,
+        empty_case("DnsFailed")?,
+        empty_case("ConnectFailed")?,
+        empty_case("TlsFailed")?,
+        handshake_rejected,
+        empty_case("ProtocolFailed")?,
+        empty_case("TransportLost")?,
+        empty_case("TimeoutExpired")?,
+        message_too_large,
+        empty_case("DecodeFailed")?,
+        empty_case("OutcomeUnknown")?,
+    ])?))
+}
+
 /// The semantic terminal facts emitted by `Process`.
 ///
 /// This Rust enum is a Driver-side construction aid, not a second logical
@@ -458,6 +614,180 @@ pub enum FileExit {
     /// Cancellation was requested, but no terminal observation arrived
     /// within the instance's explicit settlement budget.
     OutcomeUnknown,
+}
+
+/// Portable terminal facts of one outbound HTTP call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpClientExit {
+    /// A complete HTTP response was observed. Every status is usable data.
+    Completed {
+        /// Three-digit HTTP status code.
+        status: u16,
+    },
+    /// Name resolution failed before request bytes became visible.
+    DnsFailed,
+    /// The transport connection could not be established.
+    ConnectFailed,
+    /// Verified TLS negotiation failed.
+    TlsFailed,
+    /// HTTP framing or negotiation failed.
+    ProtocolFailed,
+    /// The scheduler's call budget won the close race.
+    TimeoutExpired,
+    /// The declared response-body bound was exceeded.
+    BodyTooLarge {
+        /// Declared response-body limit.
+        limit: u64,
+    },
+    /// A complete body did not inhabit the selected codec.
+    DecodeFailed,
+    /// Cancellation settled without a portable terminal observation.
+    OutcomeUnknown,
+}
+
+/// Portable terminal facts of one admitted HTTP server request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpServerExit {
+    /// The protocol response became terminal.
+    Completed {
+        /// Status returned to the remote caller.
+        status: u16,
+    },
+    /// The request could not be parsed under the HTTP contract.
+    MalformedRequest,
+    /// Contract authentication rejected the request.
+    AuthFailed,
+    /// A held respond-mode request exceeded its budget.
+    RequestExpired,
+    /// Bounded admission could not accept the request.
+    Overloaded,
+    /// The peer disappeared before the response became terminal.
+    PeerDisconnected,
+    /// Recovery cannot prove which terminal observation the peer saw.
+    OutcomeUnknown,
+}
+
+/// Portable terminal facts shared by WebSocket client and server sessions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebSocketExit {
+    /// The close handshake supplied a portable code and UTF-8 reason.
+    Closed {
+        /// RFC 6455 close code.
+        code: u16,
+        /// Peer-provided close reason, possibly empty.
+        reason: String,
+    },
+    /// Name resolution failed while opening a client session.
+    DnsFailed,
+    /// The transport connection could not be established.
+    ConnectFailed,
+    /// Verified TLS negotiation failed.
+    TlsFailed,
+    /// The HTTP handshake refused the session.
+    HandshakeRejected {
+        /// HTTP refusal status.
+        status: u16,
+    },
+    /// WebSocket framing or negotiation failed.
+    ProtocolFailed,
+    /// An established transport disappeared without a clean close.
+    TransportLost,
+    /// The session/opening budget won its close race.
+    TimeoutExpired,
+    /// One complete message exceeded the declared bound.
+    MessageTooLarge {
+        /// Declared complete-message limit.
+        limit: u64,
+    },
+    /// A complete message did not inhabit the selected codec.
+    DecodeFailed,
+    /// Recovery cannot prove which terminal observation the peer saw.
+    OutcomeUnknown,
+}
+
+fn tagged_value(case: &str, payload: Vec<(String, crate::value::Value)>) -> crate::value::Value {
+    crate::value::Value::TaggedUnion(alloc::boxed::Box::new(crate::value::TaggedUnionValue {
+        case: String::from(case),
+        payload,
+    }))
+}
+
+impl HttpClientExit {
+    /// Projects the Driver fact into the ordinary canonical tagged value.
+    #[must_use]
+    pub fn into_value(self) -> crate::value::Value {
+        use crate::value::Value;
+        match self {
+            Self::Completed { status } => tagged_value(
+                "Completed",
+                alloc::vec![(String::from("status"), Value::Int(i64::from(status)))],
+            ),
+            Self::DnsFailed => tagged_value("DnsFailed", Vec::new()),
+            Self::ConnectFailed => tagged_value("ConnectFailed", Vec::new()),
+            Self::TlsFailed => tagged_value("TlsFailed", Vec::new()),
+            Self::ProtocolFailed => tagged_value("ProtocolFailed", Vec::new()),
+            Self::TimeoutExpired => tagged_value("TimeoutExpired", Vec::new()),
+            Self::BodyTooLarge { limit } => tagged_value(
+                "BodyTooLarge",
+                alloc::vec![(String::from("limit"), Value::Uint(limit))],
+            ),
+            Self::DecodeFailed => tagged_value("DecodeFailed", Vec::new()),
+            Self::OutcomeUnknown => tagged_value("OutcomeUnknown", Vec::new()),
+        }
+    }
+}
+
+impl HttpServerExit {
+    /// Projects the Driver fact into the ordinary canonical tagged value.
+    #[must_use]
+    pub fn into_value(self) -> crate::value::Value {
+        use crate::value::Value;
+        match self {
+            Self::Completed { status } => tagged_value(
+                "Completed",
+                alloc::vec![(String::from("status"), Value::Int(i64::from(status)))],
+            ),
+            Self::MalformedRequest => tagged_value("MalformedRequest", Vec::new()),
+            Self::AuthFailed => tagged_value("AuthFailed", Vec::new()),
+            Self::RequestExpired => tagged_value("RequestExpired", Vec::new()),
+            Self::Overloaded => tagged_value("Overloaded", Vec::new()),
+            Self::PeerDisconnected => tagged_value("PeerDisconnected", Vec::new()),
+            Self::OutcomeUnknown => tagged_value("OutcomeUnknown", Vec::new()),
+        }
+    }
+}
+
+impl WebSocketExit {
+    /// Projects the Driver fact into the ordinary canonical tagged value.
+    #[must_use]
+    pub fn into_value(self) -> crate::value::Value {
+        use crate::value::Value;
+        match self {
+            Self::Closed { code, reason } => tagged_value(
+                "Closed",
+                alloc::vec![
+                    (String::from("code"), Value::Int(i64::from(code))),
+                    (String::from("reason"), Value::Text(reason)),
+                ],
+            ),
+            Self::DnsFailed => tagged_value("DnsFailed", Vec::new()),
+            Self::ConnectFailed => tagged_value("ConnectFailed", Vec::new()),
+            Self::TlsFailed => tagged_value("TlsFailed", Vec::new()),
+            Self::HandshakeRejected { status } => tagged_value(
+                "HandshakeRejected",
+                alloc::vec![(String::from("status"), Value::Int(i64::from(status)))],
+            ),
+            Self::ProtocolFailed => tagged_value("ProtocolFailed", Vec::new()),
+            Self::TransportLost => tagged_value("TransportLost", Vec::new()),
+            Self::TimeoutExpired => tagged_value("TimeoutExpired", Vec::new()),
+            Self::MessageTooLarge { limit } => tagged_value(
+                "MessageTooLarge",
+                alloc::vec![(String::from("limit"), Value::Uint(limit))],
+            ),
+            Self::DecodeFailed => tagged_value("DecodeFailed", Vec::new()),
+            Self::OutcomeUnknown => tagged_value("OutcomeUnknown", Vec::new()),
+        }
+    }
 }
 
 impl FileExit {
@@ -578,6 +908,35 @@ pub fn prepare_request(
         RequestCodec::Lines => prepare_lines(data),
         RequestCodec::Jsonl => prepare_jsonl(data),
         RequestCodec::Bytes => prepare_bytes(data),
+    }
+}
+
+/// Frames one HTTP body or complete WebSocket message without transport
+/// delimiters. HTTP versions, WebSocket fragmentation and frame headers are
+/// physical Driver concerns; this function owns only the sheet's logical
+/// `json | text | bytes` codec.
+///
+/// # Errors
+///
+/// The payload does not inhabit the selected logical codec.
+pub fn network_payload_bytes(codec: &str, data: &envelope::Data) -> Result<Vec<u8>, String> {
+    use envelope::{Data, Value};
+    match (codec, data) {
+        ("bytes", _) => Ok(bytes_payload(data)?.to_vec()),
+        ("text", Data::Materialized(Value::Text(text))) => Ok(text.as_bytes().to_vec()),
+        ("text", Data::Encoded { encoding, .. }) => Err(alloc::format!(
+            "the text codec requires materialized text; the payload is {encoding:?}-encoded"
+        )),
+        ("text", Data::Materialized(other)) => Err(alloc::format!(
+            "the text codec requires text; the payload is {other:?}"
+        )),
+        ("json", Data::Materialized(value)) => crate::json::write_value(value)
+            .map(String::into_bytes)
+            .map_err(|error| alloc::format!("the payload has no JSON form: {}", error.message)),
+        ("json", Data::Encoded { encoding, .. }) => Err(alloc::format!(
+            "the json codec frames the JSON model; the payload is {encoding:?}-encoded"
+        )),
+        (unknown, _) => Err(alloc::format!("unknown network body codec `{unknown}`")),
     }
 }
 
@@ -917,6 +1276,33 @@ impl Completion {
     #[must_use]
     pub fn file_exit(exit: FileExit) -> Self {
         Self::file(None, exit)
+    }
+
+    fn terminal_value(value: crate::value::Value) -> Self {
+        Self {
+            outputs: alloc::vec![PortOutput {
+                port: node::Port::conventional_exit(),
+                data: envelope::Data::materialized(value),
+            }],
+        }
+    }
+
+    /// Builds an HTTP-client completion containing only its terminal fact.
+    #[must_use]
+    pub fn http_client_exit(exit: HttpClientExit) -> Self {
+        Self::terminal_value(exit.into_value())
+    }
+
+    /// Builds an HTTP-server completion containing only its terminal fact.
+    #[must_use]
+    pub fn http_server_exit(exit: HttpServerExit) -> Self {
+        Self::terminal_value(exit.into_value())
+    }
+
+    /// Builds a WebSocket completion containing only its terminal fact.
+    #[must_use]
+    pub fn websocket_exit(exit: WebSocketExit) -> Self {
+        Self::terminal_value(exit.into_value())
     }
 }
 
@@ -1875,6 +2261,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn network_codecs_frame_one_body_or_message_without_transport_delimiters() {
+        use crate::envelope::{Data, Encoding, Value};
+
+        assert_eq!(
+            network_payload_bytes(
+                "json",
+                &Data::materialized(Value::Struct(alloc::vec![(
+                    String::from("answer"),
+                    Value::Int(42),
+                )])),
+            )
+            .unwrap(),
+            br#"{"answer":42}"#
+        );
+        assert_eq!(
+            network_payload_bytes(
+                "text",
+                &Data::materialized(Value::Text(String::from("line\n"))),
+            )
+            .unwrap(),
+            b"line\n"
+        );
+        assert_eq!(
+            network_payload_bytes("bytes", &Data::encoded(Encoding::Raw, [0, 0xff, b'\n']))
+                .unwrap(),
+            [0, 0xff, b'\n']
+        );
+        assert!(
+            network_payload_bytes("json", &Data::encoded(Encoding::Raw, b"{}".to_vec())).is_err()
+        );
+    }
+
     use super::*;
     use crate::envelope::{Data, Encoding, Namespace};
     use crate::journal::{MemJournal, ids};
@@ -2300,6 +2719,69 @@ mod tests {
         ] {
             let value = exit.into_value();
             assert!(ty.accepts(&value), "{value:?} must inhabit FileExit");
+        }
+    }
+
+    #[test]
+    fn every_network_exit_projection_inhabits_its_closed_union() {
+        let client_ty = http_client_exit_type().expect("the HttpClientExit type");
+        for exit in [
+            HttpClientExit::Completed { status: 418 },
+            HttpClientExit::DnsFailed,
+            HttpClientExit::ConnectFailed,
+            HttpClientExit::TlsFailed,
+            HttpClientExit::ProtocolFailed,
+            HttpClientExit::TimeoutExpired,
+            HttpClientExit::BodyTooLarge { limit: 42 },
+            HttpClientExit::DecodeFailed,
+            HttpClientExit::OutcomeUnknown,
+        ] {
+            let value = exit.into_value();
+            assert!(
+                client_ty.accepts(&value),
+                "{value:?} must inhabit HttpClientExit"
+            );
+        }
+
+        let server_ty = http_server_exit_type().expect("the HttpServerExit type");
+        for exit in [
+            HttpServerExit::Completed { status: 202 },
+            HttpServerExit::MalformedRequest,
+            HttpServerExit::AuthFailed,
+            HttpServerExit::RequestExpired,
+            HttpServerExit::Overloaded,
+            HttpServerExit::PeerDisconnected,
+            HttpServerExit::OutcomeUnknown,
+        ] {
+            let value = exit.into_value();
+            assert!(
+                server_ty.accepts(&value),
+                "{value:?} must inhabit HttpServerExit"
+            );
+        }
+
+        let websocket_ty = websocket_exit_type().expect("the WebSocketExit type");
+        for exit in [
+            WebSocketExit::Closed {
+                code: 1000,
+                reason: String::from("done"),
+            },
+            WebSocketExit::DnsFailed,
+            WebSocketExit::ConnectFailed,
+            WebSocketExit::TlsFailed,
+            WebSocketExit::HandshakeRejected { status: 403 },
+            WebSocketExit::ProtocolFailed,
+            WebSocketExit::TransportLost,
+            WebSocketExit::TimeoutExpired,
+            WebSocketExit::MessageTooLarge { limit: 42 },
+            WebSocketExit::DecodeFailed,
+            WebSocketExit::OutcomeUnknown,
+        ] {
+            let value = exit.into_value();
+            assert!(
+                websocket_ty.accepts(&value),
+                "{value:?} must inhabit WebSocketExit"
+            );
         }
     }
 }

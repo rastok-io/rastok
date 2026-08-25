@@ -52,8 +52,8 @@ connector pay : HttpClient + Loop {
     until = value <= 0
   }
   Loop.backoff = { curve = exponential, initial = duration("200ms") }
-  on out where meta.ext.status < 500
-  on out where meta.ext.status >= 500 { }
+  on out where meta.ext.http_status < 500
+  on out where meta.ext.http_status >= 500 { }
   on exit where data is ConnectFailed || data is TimeoutExpired { }
 }
 

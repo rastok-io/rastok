@@ -1,7 +1,7 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.6 H1's generic exchange
-> lifecycle; the four M1.6 network contracts remain frozen targets.** B5 removed the
+> **Status: normative and executable through M1.6 H2's four network sheets
+> and family-owned Lab bindings; live network I/O remains gated by H3–H6.** B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
@@ -124,16 +124,17 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Case | Contract |
 |---|---|
 | Stable identity | `rastok/http-server@1` |
-| Role / Direction | HTTP endpoint; **inbound source** |
-| Exchange | invocation — one admitted request, at most one protocol response, one typed request-lifecycle `exit` |
-| Ports | `out` (decoded requests); `in` (mode `respond`: the graph's answers); `err`; `exit` (one terminal case per admitted request lifecycle) |
-| Populates | `meta.ext` : `content_type` (the request's full Content-Type), `request_id: text?`, `path: text`, `method: text` — written once at ingress; handlers may rewrite, never invent (D-2026-08-10-1) |
+| Role / Direction | HTTP endpoint; **inbound** Driver role |
+| Exchange | call — one admitted request, at most one protocol response, one typed request-lifecycle `exit` |
+| Ports | `out: T` decoded request; `in: T` graph response in `respond`; `exit: HttpServerExit`; no implicit `err` |
+| Payload type | required `codec`: `json → variant`, `text → text`, `bytes → bytes`; one complete body is one value |
+| Populates | `meta.ext.content_type`, `http_headers`, `http_method`, `http_uri`, `http_version`; a response carries `http_status` when applicable |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
-| Attributes | `path`, `mode = ack (default) \| respond`, `codec`, `auth`, `timeout` (respond: the open-request budget), **`correlate = <Rastok expression path on the response>`** (respond; default: lineage) |
+| Attributes | common: `listen: text` required (instance), `path: text = "/"` (plan), required `codec` (plan), `max_body: ByteSize = "8MiB"` (plan), optional `auth_bearer: text` and lossless response `headers` (instance), optional paired `tls_certificate`/`tls_private_key: bytes` (instance), ordered `versions = ["http/3", "http/2", "http/1.1"]` (plan), `zero_rtt = disabled` (plan); `mode = ack` default, while `respond` adds optional invocation `correlate` and required instance `timeout` but remains deferred to H5 |
 | Correlator | mode `respond`: **default = lineage** (`origin_id == R.id`) — valid on join-free return paths ONLY. **A return path crossing a root-mixing join ⇒ explicit `correlate` required (compile error otherwise)**: the join output inherits the TRIGGER's origin, creating a race. The author carries the token (`meta.app.request_id = meta.sys.id`) and attributes it through joins with the explicit-attribution rule; matching = correlate-value == the open request's root id. An orphan response (no open request — it already expired, the 504 went out) is **discarded-and-journaled** (the call-closed rule's cousin). |
-| Outcome cases | The resolved `exit` union includes a successful terminal case plus `MalformedRequest`, `AuthFailed`, `RequestExpired` and `Overloaded`; none is inferred from a port named `err`. Exact case names and payloads land with the HttpServer slice. |
+| Outcome cases | `Completed { status: int }`, `MalformedRequest`, `AuthFailed`, `RequestExpired`, `Overloaded`, `PeerDisconnected`, `OutcomeUnknown` |
 | Instances | singleton |
-| Journal / sim | INBOUND records, `inbound_seq` atomic with the accept; fixture injects at `out` |
+| Journal / sim | two-phase INBOUND proposal; commit precedes 202/response; the H2 Lab binding is effectless and uses scenario injection rather than a fake socket |
 
 - **`ack`** (webhook): 202 immediately — "received", not "processed";
   replies to the user travel through an outbound Connector.
@@ -148,15 +149,16 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 |---|---|
 | Stable identity | `rastok/http-client@1` |
 | Role / Direction | HTTP calls; **outbound caller** |
-| Exchange | invocation — one request, response outputs, one typed call `exit` |
-| Ports | `in` (requests), `out` (all usable HTTP responses, including non-2xx bodies), `err` (raw transport diagnostics only when the Driver actually has bytes), `exit` (one typed terminal outcome per call) |
-| Populates | `meta.ext` : `content_type` (the response's Content-Type), `status: int` — on the reply envelope |
-| effect / behavior | **per-instance, both mandatory** |
-| Attributes | `url`/`base_url`+`path`, `method`, `codec`, `auth`, `tls`, `timeout`, `on_timeout = bypass (default) \| kill`, `idempotency_key` (mandatory when `irreversible`) |
+| Exchange | call — one request, response outputs, one typed call `exit` |
+| Ports | `in: T` request body, `out: T` every usable response body including non-2xx, `exit: HttpClientExit`; no implicit `err` |
+| Payload type | required `codec`: `json → variant`, `text → text`, `bytes → bytes`; no line delimiter is added |
+| Populates | response `meta.ext.content_type`, `http_headers`, `http_status: int`, and `http_version` |
+| effect / behavior | **both mandatory on each node; plan-evaluated** |
+| Attributes | required invocation `url: text`; invocation `method: text = "GET"`, optional lossless `headers`, `auth_bearer`, `idempotency_key`; required plan `codec`; plan `max_body: ByteSize = "8MiB"`; required positive instance `timeout`; optional instance `tls_ca`, plus paired `tls_certificate`/`tls_private_key`; ordered plan `versions = ["http/3", "http/2", "http/1.1"]`; `zero_rtt = disabled` |
 | Correlator | protocol-native: HTTP request ↔ response |
-| Outcome cases | Every call emits exactly one `exit`: a successful response completion or `ConnectFailed`, `TimeoutExpired`, `DecodeFailed`, or recovery's `OutcomeUnknown`. A completed HTTP response — 2xx or otherwise — also remains on `out`, with its code in `meta.ext.status`; retry policy explicitly selects response codes and/or exit cases instead of inheriting a universal `transient` bit. Exact case names and payloads land with the HttpClient slice. |
+| Outcome cases | `Completed { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Instances | singleton by default; the common Node attribute `instances.key` may key the Connector |
-| Journal / sim | OUTBOUND open (key, digest) / closed / discarded; mocked in scenarios |
+| Journal / sim | method, resolved URL, canonical headers, exact body and idempotency material seal before OUTBOUND open; the family Lab twin scripts only the post-open outcome |
 
 ### 3.3 `Process` — child processes, two modes
 
@@ -448,7 +450,7 @@ Directory listing, recursion, removal and parent creation are not hidden File
 modes. A later watch contract must separately settle snapshot, replacement,
 deletion, overflow, resynchronization and acknowledgement semantics.
 
-### 3.8 `WebSocketServer` — accepted duplex sessions (M1.6 target)
+### 3.8 `WebSocketServer` — accepted duplex sessions
 
 | Case | Contract |
 |---|---|
@@ -457,11 +459,11 @@ deletion, overflow, resynchronization and acknowledgement semantics.
 | Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per accepted session |
 | Ports | `out: T` receives complete peer messages; `in: T` sends complete messages; `exit: WebSocketExit` terminates a session; no implicit `err` |
 | Payload type | `codec = json` → `variant`; `text` → `text`; `bytes` → `bytes`; text/binary mismatch is a protocol refusal, never coercion |
-| Populates | `meta.ext.session_id: text` on every `out` and `exit`; selected handshake facts such as path/subprotocol only when declared by the final H2 sheet |
+| Populates | `meta.ext.session_id: text` on every `out` and `exit`, plus `http_headers`, `http_uri`, `http_version`, `websocket_origin`, and selected `websocket_subprotocol` from the admitted handshake |
 | effect / behavior | `none` / `deterministic` for admission; graph-to-peer message effects remain journaled session writes |
-| Attributes | target set: `listen`, required `codec`, bounded `max_message`, `tls`, `auth`, allowed origins/subprotocols, and optional response `correlate`; exact domains/sites freeze at H2 |
+| Attributes | required instance `listen: text` and positive `handshake_timeout: duration`; plan `path: text = "/"`, required `codec`, `max_message: ByteSize = "8MiB"`, ordered `versions = ["http/3", "http/2", "http/1.1"]`, `zero_rtt = disabled`; optional instance lossless `headers`, `auth_bearer`, `allowed_origins: array<text>`, `subprotocols: array<text>`, paired certificate/key bytes; optional invocation `correlate: text` |
 | Correlator | direct descendants reply by session lineage; root-mixing, stored or spontaneous paths use explicit `correlate`, normally `meta.ext.session_id` |
-| Outcome cases | target minimum: clean peer close, handshake rejection, protocol failure, transport loss, timeout, and empty `OutcomeUnknown`; exact closed names/payloads freeze at H2 |
+| Outcome cases | `WebSocketExit`: `Closed { code: int, reason: text }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `HandshakeRejected { status: int }`, `ProtocolFailed`, `TransportLost`, `TimeoutExpired`, `MessageTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Instances | one listener per Node instance may own many sessions; each session has one placement-neutral logical `SessionRef` |
 | Journal / sim | session open commits before upgrade success; each message remains bounded/pending until runtime acceptance; graph writes are sealed before bytes; Lab scripts the same open/messages/exit protocol |
 
@@ -480,7 +482,7 @@ The Driver overwrites any peer-supplied field at ingress. Correlation is scoped
 to this Connector's live session table; an unknown or closed target is an
 orphan write, discarded-and-journaled without misrouting or a second exit.
 
-### 3.9 `WebSocketClient` — opened duplex sessions (M1.6 target)
+### 3.9 `WebSocketClient` — opened duplex sessions
 
 | Case | Contract |
 |---|---|
@@ -488,11 +490,11 @@ orphan write, discarded-and-journaled without misrouting or a second exit.
 | Role / Direction | both roles over one shared connection state; opens a remote session, writes graph messages and receives peer messages |
 | Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per opened session |
 | Ports | `in: T`, `out: T`, `exit: WebSocketExit`; types follow the same required codec table as WebSocketServer; no implicit `err` |
-| Populates | `meta.ext.session_id: text` on peer messages and terminal exit; negotiated subprotocol only if H2 admits it |
-| effect / behavior | per-instance, both mandatory, as for an external client boundary |
-| Attributes | target set: `url`, required `codec`, bounded `max_message`, `tls`, `auth`/headers, requested subprotocols and timeout; exact domains/sites freeze at H2 |
+| Populates | `meta.ext.session_id: text`, `http_headers`, `http_uri`, `http_version`, and selected `websocket_subprotocol` |
+| effect / behavior | both mandatory on each node and plan-evaluated, as for an external client boundary |
+| Attributes | required instance `url: text` and positive `handshake_timeout: duration`; required plan `codec`; plan `max_message: ByteSize = "8MiB"`, ordered `versions = ["http/3", "http/2", "http/1.1"]`, `zero_rtt = disabled`; optional instance lossless `headers`, `auth_bearer`, `subprotocols: array<text>`, `tls_ca`, and paired certificate/key bytes |
 | Correlator | v1 permits at most one live remote session per logical Node instance; no message-level request/reply correlation is invented |
-| Outcome cases | the same closed `WebSocketExit` authority as the server, with opening failures represented before or as the sole terminal according to H2 |
+| Outcome cases | the same closed `WebSocketExit` authority as the server; an opening failure is the sole terminal of the attempted session |
 | Instances | singleton by default; `instances.key` creates independent client sessions; input after a terminal opens the successor session under explicit lifecycle policy |
 | Journal / sim | open and each write are journal-before-effect; ambiguous writes are not blindly replayed; Lab scripts peer messages and terminal races |
 

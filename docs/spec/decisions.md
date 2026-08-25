@@ -5,6 +5,92 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-25-2 — Four network sheets precede every network engine
+
+H2 publishes the semantic network boundary before adopting a socket, TLS,
+HTTP, QUIC or WebSocket implementation. A validated sheet determines the
+stable Connector id, Driver roles, exchange lifecycle, complete effective
+port table, setting phase, body/message codec, bounded intake and portable
+terminal union. A hosted Driver may implement those facts; it may not fill in
+one that the plan omitted or reinterpret one according to its library.
+
+| Id | Roles | Exchange | Ports |
+|---|---|---|---|
+| `rastok/http-client@1` | outbound | call | `in: T`, `out: T`, `exit: HttpClientExit` |
+| `rastok/http-server@1` | inbound | call | `in: T`, `out: T`, `exit: HttpServerExit` |
+| `rastok/websocket-client@1` | both, one shared binding | session | `in: T`, `out: T`, `exit: WebSocketExit` |
+| `rastok/websocket-server@1` | both, one shared binding | session | `in: T`, `out: T`, `exit: WebSocketExit` |
+
+For all four, required `codec = json | text | bytes` selects
+`T = variant | text | bytes`. One HTTP body or one complete WebSocket message
+is one value: these codecs add no `lines`/`jsonl` delimiter. Network contracts
+have no implicit `err`; response bodies, including non-2xx HTTP bodies, are
+ordinary `out`, while transport/protocol/lifecycle facts are cases of the one
+terminal `exit`. Non-portable library and OS detail remains observation.
+
+`versions` is a non-empty, duplicate-free ordered subset of `http/1.1`,
+`http/2`, and `http/3`; its default preference is
+`["http/3", "http/2", "http/1.1"]`. The first mutually supported version may
+be selected only before request/session bytes become externally visible. The
+chosen version is projected as observation and does not change contract or
+graph identity. `zero_rtt` is fixed to the sole value `disabled`; no Driver
+may treat a different spelling as ordinary one-RTT traffic.
+
+HTTP headers use one lossless portable shape:
+`map<text,array<bytes>>`. Field names and their value arrays are non-empty;
+names are lowercase ASCII HTTP tokens, repeated values retain wire order, and
+pseudo-fields remain Driver protocol state. Standard `meta.ext` projections
+are `content_type: text`,
+`http_headers: map<text,array<bytes>>`, `http_method: text`,
+`http_uri: text`, `http_version: text`, `http_status: int`,
+`session_id: text`, `websocket_origin: text`, and
+`websocket_subprotocol: text`. A Driver overwrites peer-provided session
+identity and derives protocol observations from the admitted exchange.
+
+TLS is verified, never opportunistically plaintext. Optional `tls_ca` is
+trust-anchor material; `tls_certificate` and `tls_private_key` are byte
+settings that must occur together. Absence selects deployment trust roots or
+no client identity on a client; a server without an in-plan pair requires a
+deployment-provided server identity for every TLS version it offers. It never
+means disabled verification or an opportunistic plaintext downgrade.
+`auth_bearer` is an explicit token setting. H3 records the accepted
+certificate encodings and root/identity assembly with the selected TLS engine;
+it cannot weaken these sheet rules.
+
+The exact terminal unions are:
+
+- `HttpClientExit = Completed { status: int } | DnsFailed | ConnectFailed |
+  TlsFailed | ProtocolFailed | TimeoutExpired |
+  BodyTooLarge { limit: uint } | DecodeFailed | OutcomeUnknown`;
+- `HttpServerExit = Completed { status: int } | MalformedRequest |
+  AuthFailed | RequestExpired | Overloaded | PeerDisconnected |
+  OutcomeUnknown`;
+- `WebSocketExit = Closed { code: int, reason: text } | DnsFailed |
+  ConnectFailed | TlsFailed | HandshakeRejected { status: int } |
+  ProtocolFailed | TransportLost | TimeoutExpired |
+  MessageTooLarge { limit: uint } | DecodeFailed | OutcomeUnknown`.
+
+Every usable HTTP response, regardless of status class, publishes its body on
+`out` with `meta.ext.http_status`; `Completed.status` closes the same call.
+Automatic status retries are not part of the Connector. HttpServer `ack` is
+the executable H2 profile; `respond` remains a named H5 deferral because it
+must retain and settle a bounded remote response obligation. The WebSocket
+contracts expose complete messages only; fragmentation, control frames and
+handshake mechanics remain Driver duties.
+
+H2 supplies family-owned Lab bindings but no live network. The HttpClient Lab
+twin seals the same method, URL, headers, body and idempotency material that
+the real Driver will receive. Passive server/session bindings prove exact
+catalogue-to-registry composition without pretending to implement a socket.
+The Registry-free core independently rejects altered roles, exchanges,
+attributes, phases and ports.
+
+H2 changes neither categorical package format nor an existing identity
+recipe. It makes formerly invalid network programs valid and extends the
+standard `meta.ext` vocabulary, so only new programs can mention these facts.
+All pre-H2 semantic hashes, v11 package bytes and causal traces must remain
+unchanged. No product network dependency is added.
+
 ## D-2026-08-25-1 — HTTP versions are Driver bindings; WebSocket is a session
 
 M1.6 opens the network boundary. Supporting HTTP/1.1, HTTP/2, HTTP/3 and

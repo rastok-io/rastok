@@ -1,9 +1,10 @@
 // =============================================================================
 // codex-websocket-gateway.rkg
 //
-// M1.6 target-surface design reference. WebSocketClient/WebSocketServer and
-// Process(service) remain guarded until their backlog gates land. This file is
-// not an executable fixture yet.
+// M1.6 target-surface design reference. The exact WebSocketServer sheet and
+// Lab binding landed at H2; live WebSocket execution and Process(service)
+// remain guarded until H6/their backlog gates. This file is not an executable
+// fixture yet.
 //
 // One accepted WebSocket connection = one logical session. Complete JSON
 // messages cross ordinary ports in both directions; `exit` occurs once when
@@ -64,16 +65,13 @@ graph codex_sessions {
 
 graph codex_websocket_gateway : App {
   connector clients : WebSocketServer {
-    listen = ":8443/codex"
+    listen = "0.0.0.0:8443"
+    path = "/codex"
     codec = json
-    protocol = "jsonrpc"
+    handshake_timeout = duration("10s")
     max_message = "1MiB"
     subprotocols = ["rastok.codex.v1"]
     correlate = meta.ext.session_id
-    tls = {
-      certificate = secret("CODEX_GATEWAY_TLS_CERT")
-      private_key = secret("CODEX_GATEWAY_TLS_KEY")
-    }
   }
 
   // `clients.out` contains one complete peer message and carries the logical

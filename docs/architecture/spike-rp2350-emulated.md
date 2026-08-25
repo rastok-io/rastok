@@ -39,7 +39,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). Its current M1.6 H1 measurement embeds the blessed **v11
+  spike-only). Its current M1.6 H2 measurement embeds the blessed **v11
   exchange-lifecycle package** of `examples/echo.rkg` as a `static`, opens it with
   `rastok_core::plan::decode` — which now validates
   structurally and re-encodes for canonicity — boots the `Vm` over a
@@ -82,20 +82,20 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (974-byte v11 package; re-measured after M1.6 H1 on 2026-08-25) | 16 906 | 845.3 k | 5.64 ms |
+| `plan::decode` (974-byte v11 package; re-measured after M1.6 H2 on 2026-08-25) | 16 907 | 845.4 k | 5.64 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-25 after H1) | 2 641 (min 2 551 / max 2 877) | **132.1 k avg / 143.9 k max** | **0.880 ms avg / 0.959 ms max** |
+| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-25 after H2) | 2 641 (min 2 551 / max 2 877) | **132.1 k avg / 143.9 k max** | **0.880 ms avg / 0.959 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 91.0 | 4.6 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-25 after H1) | 129 660 B (126.6 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 484 156 + 47 568 = 531 724 B (519.3 KiB; re-measured 2026-08-25 after H1) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-25 after H2) | 129 660 B (126.6 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 491 180 + 48 832 = 540 012 B (527.4 KiB; re-measured 2026-08-25 after H2) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
 
-- The slowest measured relay transaction meets its criterion with a **1.009× margin**,
+- The slowest measured relay transaction meets its criterion with a **1.043× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
 - Package decode grew from v1's 1 468 ticks to 15 334 across the
@@ -241,6 +241,11 @@ Notes the numbers carry:
   Event/Call record. Final relay is 2 641 average / 2 551 minimum / 2 877
   maximum; heap is 129 660 B. Decode is 16 906 ticks, flash is 531 724 B, 67
   records remain, and `SPIKE_OK` prints the exact H1 hash.
+- H2 publishes four exact network sheets without adding a network engine or
+  changing the embedded Process package. Registry-free network metadata,
+  header and terminal-union validation add 8 288 B of linked `.text +
+  .rodata`; decode changes by one tick, while the relay distribution, heap
+  peak, record count, semantic hash and causal trace remain unchanged.
 - Flash grew from 193 KiB to 516.4 KiB (`.text` 481 404 B +
   `.rodata` 47 356 B, re-measured after C1 on 2026-08-22): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
@@ -297,7 +302,7 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-25 after M1.6 H1.**
+instrumentation and last re-measured 2026-08-25 after M1.6 H2.**
 These measurements price complete hierarchical routing, causal instance
 references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four

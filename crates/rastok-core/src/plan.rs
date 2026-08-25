@@ -16,14 +16,80 @@ pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
 /// Standard `meta.ext` leaves known to every graph without travelling in the
 /// plan schema. They are protocol context, not fields owned by one Connector
 /// sheet. The list is closed for one package format and sorted by spelling.
-pub const STANDARD_EXT_FIELDS: &[&str] = &["content_type", "session_id"];
+pub const STANDARD_EXT_FIELDS: &[&str] = &[
+    "content_type",
+    "http_headers",
+    "http_method",
+    "http_status",
+    "http_uri",
+    "http_version",
+    "session_id",
+    "websocket_origin",
+    "websocket_subprotocol",
+];
 
 /// Logical type of one standard implicit `meta.ext` leaf.
 #[must_use]
 pub fn standard_ext_field_type(field: &str) -> Option<DataType> {
-    STANDARD_EXT_FIELDS
-        .contains(&field)
-        .then_some(DataType::Text)
+    match field {
+        "content_type"
+        | "http_method"
+        | "http_uri"
+        | "http_version"
+        | "session_id"
+        | "websocket_origin"
+        | "websocket_subprotocol" => Some(DataType::Text),
+        "http_headers" => Some(http_headers_type()),
+        "http_status" => Some(DataType::INT),
+        _ => None,
+    }
+}
+
+/// Lossless logical projection of HTTP fields: lowercase names map to values
+/// in wire order, and field bytes are never forced through UTF-8.
+#[must_use]
+pub fn http_headers_type() -> DataType {
+    DataType::text_map(DataType::array(DataType::BYTES))
+}
+
+/// Whether one spelling is the canonical lowercase HTTP field-name used by
+/// the portable header projection. HTTP pseudo-fields are protocol state and
+/// never enter the application header map.
+#[must_use]
+pub fn http_header_name_holds(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+/// Whether a materialized value is a canonical lossless HTTP header map.
+#[must_use]
+pub fn http_headers_value_holds(value: &crate::value::Value) -> bool {
+    http_headers_type().accepts(value)
+        && matches!(value, crate::value::Value::Map(fields)
+        if fields.iter().all(|(name, values)| {
+            http_header_name_holds(name)
+                && matches!(values, crate::value::Value::Array(values) if !values.is_empty())
+        }))
 }
 pub use type_resolution::{ResolvedPort, ResolvedPortTable, TypeOrigin};
 pub use validation::{PlanValidationError, ValidatedExecutionPlan};

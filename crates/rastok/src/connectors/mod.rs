@@ -5,9 +5,11 @@
 //! while the catalogue grows without returning to one monolithic file.
 
 mod file;
+mod http;
 mod manifest;
 mod process;
 mod registry;
+mod websocket;
 
 pub use file::{File, FileBindError, FileFactory, FileSettingsError};
 pub use manifest::{DriverManifest, DriverManifestEntry, DriverManifestError};
@@ -45,7 +47,7 @@ pub(crate) type ScriptedProtocolBinder =
     ) -> Result<Box<dyn ScriptedConnectorProtocol>, registry::DriverFactoryError>;
 
 /// Every built-in family's scripted twin, declared beside its real module.
-pub(crate) fn scripted_protocol_binders() -> [(&'static str, ScriptedProtocolBinder); 2] {
+pub(crate) fn scripted_protocol_binders() -> [(&'static str, ScriptedProtocolBinder); 3] {
     [
         (
             crate::connector::PROCESS_CONNECTOR_ID,
@@ -55,5 +57,18 @@ pub(crate) fn scripted_protocol_binders() -> [(&'static str, ScriptedProtocolBin
             crate::connector::FILE_CONNECTOR_ID,
             file::bind_scripted_protocol,
         ),
+        (
+            crate::connector::HTTP_CLIENT_CONNECTOR_ID,
+            http::bind_scripted_protocol,
+        ),
     ]
+}
+
+/// Family-owned effectless Drivers required to bind inbound and session
+/// network contracts in the Lab before hosted socket implementations land.
+pub(crate) fn passive_lab_factories()
+-> Result<Vec<Box<dyn ConnectorDriverFactory>>, DriverFactoryError> {
+    let mut factories = http::lab_factories()?;
+    factories.extend(websocket::lab_factories()?);
+    Ok(factories)
 }

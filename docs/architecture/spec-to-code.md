@@ -1,7 +1,7 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-25 for the M1.6 H1
-> exchange-lifecycle checkpoint.** The former named-partition P1-P3 implementation is superseded.
+> Planning aid — non-normative. **Updated 2026-08-25 for the M1.6 H2
+> network-sheet checkpoint.** The former named-partition P1-P3 implementation is superseded.
 > Categorical v11 transport retains v9's owner model and adds stable Connector
 > identities/roles/exchange lifecycles; hierarchical route/journal instance
 > references are executable; all five lifetime profiles and explicitly bounded
@@ -70,11 +70,12 @@ they are not promised crate names.
 | Gate | Normative responsibility | Intended owner boundary | Required evidence |
 |---|---|---|---|
 | M1.6 H1 generic exchange lifecycle | Add the orthogonal `Event \| Call \| Session` fact, placement-neutral `SessionRef`, session journal fold, two-phase inbound acceptance and exchange-specific conformance profiles without adding a third Driver role or async core API. | `contract`, core `connector`/`boundary`/`journal`/plan registry, std `connectors::registry`, Lab conformance | categorical package and causal-key allocation; pure-event no-exit proof; fake concurrent sessions; commit-before-ack; bounded pressure; close-once/post-exit silence; unchanged call behavior |
-| M1.6 H2–H6 network contracts and Drivers | Four exact sheets (`HttpClient`, `HttpServer`, `WebSocketClient`, `WebSocketServer`) share one hosted HTTP/1.1-3 engine; WebSocket framing maps complete messages onto a generic session and one terminal exit. | std `contract`/`stdlib`, `connectors::{http,websocket}`, hosted reactor/library boundary, family Lab binders | Registry-free sheet mirrors, all-version HTTP integration, RFC 6455/8441/9220 behavior, event/call/session conformance, Codex gateway, no dependency in core/no-std |
+| M1.6 H2 exact network sheets | Four stable sheets (`HttpClient`, `HttpServer`, `WebSocketClient`, `WebSocketServer`) own roles/exchange, codec-selected ports, setting phases, ordered HTTP versions, bounded bodies/messages, lossless metadata and portable terminal unions before a socket library is selected. | std `contract`/`stdlib`, core Registry-free boundary/validation mirrors, family `connectors::{http,websocket}` Lab binders | per-row sheet/mirror product, forged-package refusals, source→validated-plan and Lab binding for all four; no format/identity/dependency move |
+| M1.6 H3–H6 hosted network Drivers | The four H2 sheets share one hosted HTTP/1.1-3 engine; WebSocket framing maps complete messages onto a generic session and one terminal exit. | hosted reactor/library boundary under `connectors::{http,websocket}` | all-version HTTP integration, RFC 6455/8441/9220 behavior, event/call/session conformance, Codex gateway, no dependency in core/no-std |
 
 The ordered evidence and dependency decision are in
-[`m1.6-http-websocket-backlog.md`](m1.6-http-websocket-backlog.md). Planned
-H1 is landed. H2–H6 remain planned rows until their gates are executable.
+[`m1.6-http-websocket-backlog.md`](m1.6-http-websocket-backlog.md). H1 and H2
+are landed; H3–H6 remain planned rows until their gates are executable.
 
 ## M1.3 foundation (landed in ordered gates)
 

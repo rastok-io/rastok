@@ -169,6 +169,17 @@ fact, so all four pre-H1 causal traces remain byte-identical. The new session
 identity domains `0x11` and `0x12` are pinned below and contain no socket,
 protocol-version or placement fact.
 
+**M1.6 H2 network-sheet checkpoint (2026-08-25).** D-2026-08-25-2 adds four
+previously invalid Connector contracts and reserves their standard protocol
+metadata. It changes no identity recipe and no categorical field: a new
+network graph seals its exact stable contract id, effective defaults, ports,
+types and settings through the existing v11 forms, while a negotiated HTTP
+version remains an observation. Every pre-H2 semantic hash, package body and
+causal trace is therefore byte-identical; no golden is re-blessed. The
+connector-free gauge remains the negative scope witness. Future H3–H6 network
+facts use H1's already allocated Call/Session forms rather than extending a
+package merely to name a library or wire version.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a

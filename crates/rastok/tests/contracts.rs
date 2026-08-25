@@ -34,6 +34,10 @@ fn file_graph(body: &str) -> String {
     )
 }
 
+fn network_graph(kind: &str, body: &str, wiring: &str) -> String {
+    format!("graph g : App {{\n  connector network : {kind} {{\n{body}\n  }}\n{wiring}\n}}\n")
+}
+
 const FULL: &str =
     "    command = \"cat\" ; codec = lines\n    effect = idempotent ; behavior = deterministic";
 
@@ -45,6 +49,210 @@ fn refusal_with(source: &str, code: &str, needle: &str) {
             .any(|d| d.code().as_str() == code && d.message().contains(needle)),
         "wanted {code} containing {needle:?}, got: {bag:?}"
     );
+}
+
+#[test]
+fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
+    let cases = [
+        (
+            "HttpClient",
+            "    url = \"https://example.test/v1\"\n    headers = { \"content-type\": [data] }\n    tls_certificate = base64! { Y2VydA== }\n    tls_private_key = base64! { a2V5 }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+            "  . -> network -> .",
+            rastok::connector::HTTP_CLIENT_CONNECTOR_ID,
+            rastok::connector::ConnectorExchange::Call,
+        ),
+        (
+            "HttpServer",
+            "    listen = \"127.0.0.1:8080\"\n    codec = bytes",
+            "  network -> .",
+            rastok::connector::HTTP_SERVER_CONNECTOR_ID,
+            rastok::connector::ConnectorExchange::Call,
+        ),
+        (
+            "WebSocketClient",
+            "    url = \"wss://example.test/socket\"\n    handshake_timeout = duration(\"5s\")\n    codec = text\n    effect = idempotent ; behavior = deterministic",
+            "  . -> network -> .",
+            rastok::connector::WEBSOCKET_CLIENT_CONNECTOR_ID,
+            rastok::connector::ConnectorExchange::Session,
+        ),
+        (
+            "WebSocketServer",
+            "    listen = \"127.0.0.1:8081\"\n    handshake_timeout = duration(\"5s\")\n    codec = json",
+            "  . -> network -> .",
+            rastok::connector::WEBSOCKET_SERVER_CONNECTOR_ID,
+            rastok::connector::ConnectorExchange::Session,
+        ),
+    ];
+    for (kind, body, wiring, expected_id, expected_exchange) in cases {
+        let source = network_graph(kind, body, wiring);
+        let compilation =
+            compile_one(&source).unwrap_or_else(|bag| panic!("{kind} should compile: {bag:#?}"));
+        let node = compilation
+            .plan
+            .plan()
+            .nodes
+            .iter()
+            .find(|node| node.path.to_string() == "network")
+            .expect("the network connector");
+        let spec = node.connector().expect("a connector spec");
+        assert_eq!(spec.contract.as_str(), expected_id);
+        assert_eq!(spec.exchange, expected_exchange);
+        assert_eq!(
+            spec.attribute("zero_rtt"),
+            Some(&rastok::plan::AttrSetting::Word(String::from("disabled")))
+        );
+        assert!(spec.attribute("versions").is_some());
+        let package = rastok::plan::encode(&compilation.plan, &compilation.hash);
+        let (decoded, hash) = rastok::plan::decode(&package)
+            .unwrap_or_else(|error| panic!("the {kind} v11 package must decode: {error}"));
+        assert_eq!(hash, compilation.hash);
+        assert_eq!(*decoded, *compilation.plan);
+    }
+}
+
+#[test]
+fn network_defaults_are_effective_before_identity() {
+    let omitted = network_graph(
+        "HttpClient",
+        "    url = \"https://example.test/v1\"\n    timeout = duration(\"5s\")\n    codec = json\n    effect = idempotent ; behavior = deterministic",
+        "  . -> network -> .",
+    );
+    let explicit = network_graph(
+        "HttpClient",
+        "    url = \"https://example.test/v1\"\n    method = \"GET\"\n    timeout = duration(\"5s\")\n    codec = json\n    max_body = \"8MiB\"\n    versions = [\"http/3\", \"http/2\", \"http/1.1\"]\n    zero_rtt = disabled\n    effect = idempotent ; behavior = deterministic",
+        "  . -> network -> .",
+    );
+    let omitted = compile_one(&omitted).expect("the omitted defaults compile");
+    let explicit = compile_one(&explicit).expect("the exact defaults compile");
+    assert_eq!(omitted.hash, explicit.hash);
+    assert_eq!(*omitted.plan, *explicit.plan);
+}
+
+#[test]
+fn unfinished_network_features_refuse_instead_of_selecting_a_nearby_behavior() {
+    let respond = network_graph(
+        "HttpServer",
+        "    mode = respond\n    listen = \"127.0.0.1:8080\"\n    timeout = duration(\"5s\")\n    codec = json",
+        "  . -> network -> .",
+    );
+    refusal_with(
+        &respond,
+        "E-CHECK-DEFERRED",
+        "the HttpServer respond mode (M1.6 H5)",
+    );
+
+    let bad_tls = network_graph(
+        "HttpClient",
+        "    url = \"https://example.test\"\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic\n    tls_certificate = base64! { Y2VydA== }",
+        "  . -> network -> .",
+    );
+    refusal_with(
+        &bad_tls,
+        "E-CONTRACT-ATTR",
+        "requires both certificate bytes and private-key bytes",
+    );
+
+    let bad_version = network_graph(
+        "HttpClient",
+        "    url = \"https://example.test\"\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic\n    versions = [\"http/4\"]",
+        "  . -> network -> .",
+    );
+    refusal_with(&bad_version, "E-CONTRACT-ATTR", "ChoiceList");
+
+    let early_data = network_graph(
+        "WebSocketClient",
+        "    url = \"wss://example.test/socket\"\n    handshake_timeout = duration(\"5s\")\n    codec = text\n    effect = idempotent ; behavior = deterministic\n    zero_rtt = enabled",
+        "  . -> network -> .",
+    );
+    refusal_with(&early_data, "E-CONTRACT-ATTR", "fixed to `disabled`");
+}
+
+fn forged_http_client_error(
+    mutate: impl Fn(&mut rastok::plan::Node),
+) -> rastok::plan::PlanValidationError {
+    let source = network_graph(
+        "HttpClient",
+        "    url = \"https://example.test/v1\"\n    timeout = duration(\"5s\")\n    codec = json\n    effect = idempotent ; behavior = deterministic",
+        "  . -> network -> .",
+    );
+    let compilation = compile_one(&source).expect("the HttpClient sheet checks");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    let network = plan
+        .nodes
+        .iter_mut()
+        .find(|node| node.path.to_string() == "network")
+        .expect("the network connector");
+    mutate(network);
+    rastok::plan::ValidatedExecutionPlan::try_from(plan)
+        .expect_err("the Registry-free network mirror refuses the forgery")
+}
+
+fn connector_mut(node: &mut rastok::plan::Node) -> &mut rastok::plan::ConnectorSpec {
+    match &mut node.kind {
+        rastok::plan::NodeKind::Connector(spec) => spec,
+        rastok::plan::NodeKind::Operator => panic!("the test selected a connector"),
+    }
+}
+
+#[test]
+fn the_core_rejects_network_sheet_forgeries_without_a_contract_catalog() {
+    let missing = forged_http_client_error(|node| {
+        connector_mut(node)
+            .attributes
+            .retain(|(name, _)| name != "versions");
+    });
+    assert!(matches!(
+        missing,
+        rastok::plan::PlanValidationError::MissingContractAttribute {
+            attribute: "versions",
+            ..
+        }
+    ));
+
+    let unsupported = forged_http_client_error(|node| {
+        let spec = connector_mut(node);
+        let setting = spec
+            .attributes
+            .iter_mut()
+            .find(|(name, _)| name == "zero_rtt")
+            .expect("the materialized default");
+        setting.1 = rastok::plan::AttrSetting::Word(String::from("enabled"));
+    });
+    assert!(matches!(
+        unsupported,
+        rastok::plan::PlanValidationError::ContractAttributeMismatch {
+            attribute,
+            ..
+        } if attribute == "zero_rtt"
+    ));
+
+    let wrong_exit = forged_http_client_error(|node| {
+        node.ports
+            .iter_mut()
+            .find(|port| port.port.name() == "exit")
+            .expect("the terminal port")
+            .ty = Some(rastok::datatype::DataType::Text);
+    });
+    assert!(matches!(
+        wrong_exit,
+        rastok::plan::PlanValidationError::ContractPortMismatch { .. }
+    ));
+
+    let half_identity = forged_http_client_error(|node| {
+        let spec = connector_mut(node);
+        spec.attributes.push((
+            String::from("tls_certificate"),
+            rastok::plan::AttrSetting::Value(rastok::value::Value::Bytes(b"cert".to_vec())),
+        ));
+        spec.attributes.sort_by(|left, right| left.0.cmp(&right.0));
+    });
+    assert!(matches!(
+        half_identity,
+        rastok::plan::PlanValidationError::ContractAttributeMismatch {
+            attribute,
+            ..
+        } if attribute == "tls_certificate/tls_private_key"
+    ));
 }
 
 // ---------- the metamodel holds its own door ----------

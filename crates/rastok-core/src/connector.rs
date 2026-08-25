@@ -14,6 +14,18 @@ pub const PROCESS_CONNECTOR_ID: &str = "rastok/process@1";
 /// The standard single-file contract's stable major-version identity.
 pub const FILE_CONNECTOR_ID: &str = "rastok/file@1";
 
+/// The standard outbound HTTP call contract's stable identity.
+pub const HTTP_CLIENT_CONNECTOR_ID: &str = "rastok/http-client@1";
+
+/// The standard inbound HTTP request contract's stable identity.
+pub const HTTP_SERVER_CONNECTOR_ID: &str = "rastok/http-server@1";
+
+/// The standard outbound WebSocket session contract's stable identity.
+pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "rastok/websocket-client@1";
+
+/// The standard accepted WebSocket session contract's stable identity.
+pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "rastok/websocket-server@1";
+
 /// Portable upper bound of one declared byte budget: 4 GiB inclusive.
 pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
 

@@ -20,7 +20,8 @@ use crate::connector::{ConnectorId, ConnectorRoles};
 use crate::connectors::ProcessRequestBindings;
 use crate::connectors::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
-    RuntimeBindings, ScriptedConnectorProtocol, ScriptedProtocolBinder, scripted_protocol_binders,
+    RuntimeBindings, ScriptedConnectorProtocol, ScriptedProtocolBinder, passive_lab_factories,
+    scripted_protocol_binders,
 };
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
@@ -425,6 +426,11 @@ fn mock_bindings<'plan>(
                 mocks: Rc::clone(&mocks),
                 faults: Rc::clone(&faults),
             }))
+            .map_err(|error| error.to_string())?;
+    }
+    for factory in passive_lab_factories().map_err(|error| error.to_string())? {
+        registry = registry
+            .try_with(factory)
             .map_err(|error| error.to_string())?;
     }
     let bindings = RuntimeBindings::try_new(plan, &registry).map_err(|error| error.to_string())?;
@@ -900,6 +906,106 @@ lab m0_probe {
     #[test]
     fn the_lab_is_repeatable() {
         assert_eq!(reports(), reports());
+    }
+
+    #[test]
+    fn every_h2_network_family_binds_through_its_lab_twin() {
+        let sources = [
+            r#"
+graph network_call : App {
+  connector network : HttpClient {
+    url = "https://example.test/v1"
+    timeout = duration("5s")
+    codec = json
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> network -> .
+}
+"#,
+            r#"
+graph http_source : App {
+  connector network : HttpServer {
+    listen = "127.0.0.1:8080"
+    codec = json
+  }
+  network -> .
+}
+"#,
+            r#"
+graph websocket_client_source : App {
+  connector network : WebSocketClient {
+    url = "wss://example.test/socket"
+    handshake_timeout = duration("5s")
+    codec = json
+    effect = idempotent ; behavior = deterministic
+  }
+  network -> .
+}
+"#,
+            r#"
+graph websocket_server_source : App {
+  connector network : WebSocketServer {
+    listen = "127.0.0.1:8081"
+    handshake_timeout = duration("5s")
+    codec = json
+  }
+  network -> .
+}
+"#,
+        ];
+        for source in sources {
+            let compilation = compile(
+                &[source],
+                &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            )
+            .unwrap_or_else(|bag| panic!("the H2 source and Lab must check: {bag:#?}"));
+            mock_bindings(&compilation.plan, BTreeMap::new())
+                .unwrap_or_else(|error| panic!("the family-owned Lab twin must bind: {error}"));
+        }
+    }
+
+    #[test]
+    fn the_http_client_lab_twin_runs_after_the_same_pre_open_framing() {
+        let source = r#"
+graph h2_http : App {
+  connector client : HttpClient {
+    url = "https://example.test/v1"
+    method = "POST"
+    timeout = duration("5s")
+    codec = json
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> client -> .
+}
+
+lab h2_http {
+  simulation sheet on app {
+    mock client {
+      on in {
+        out = .
+        exit = Completed { status = 200 }
+      }
+    }
+    scenario call "the network is replaced, not the contract" {
+      app.in = { request = true }
+      expect "the response is ordinary data" app.out count == 1
+      expect "one HTTP terminal closes the call" app.exit where data is Completed
+    }
+  }
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .unwrap_or_else(|bag| panic!("the H2 HttpClient Lab must check: {bag:#?}"));
+        let reports = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        assert_eq!(reports.len(), 1);
+        assert!(
+            reports[0].report.passed(),
+            "the H2 Lab scenario failed: {:#?}",
+            reports[0].report.failures
+        );
     }
 
     #[test]

@@ -102,6 +102,14 @@ digest, weaken a port type, mint an envelope, or write a journal record. One
 simulation may mock several Connector families; this does not create a second
 machine or a second plan.
 
+At M1.6 H2, all four HTTP/WebSocket families already walk this exact binding
+door without a live socket. HttpClient's mock seals the resolved method, URL,
+lossless headers, body and idempotency material before the ordinary OUTBOUND
+open. The server and session factories are effectless role/exchange twins;
+scenario injection still enters through the production VM admission path.
+This proves sheet and composition parity, not HTTP or WebSocket wire
+conformance, which remains H3–H6 evidence.
+
 Two-mode equivalence, stated journal-relative : *same world-half in →
 byte-identical **causal cores** out*
 (delivery-semantics §1 : a record = causal core + observation annotations ;

@@ -1162,9 +1162,12 @@ fn instance_key_signature(
         .with("meta.sys.parent_id", DataType::Variant)
         .with("meta.sys.origin_id", DataType::Text)
         .with("meta.sys.role", DataType::Text)
-        .with("meta.sys.graph_version", DataType::INT)
-        .with("meta.ext.content_type", DataType::Text)
-        .with("meta.ext.session_id", DataType::Text);
+        .with("meta.sys.graph_version", DataType::INT);
+    for field in crate::plan::STANDARD_EXT_FIELDS {
+        if let Some(ty) = crate::plan::standard_ext_field_type(field) {
+            signature = signature.with(alloc::format!("meta.ext.{field}"), ty);
+        }
+    }
     for (field, ty) in &plan.app_schema {
         signature = signature.with(format!("meta.app.{field}"), ty.clone());
     }
@@ -1449,6 +1452,293 @@ fn tree_type_at(tree: &expr::Tree, location: String) -> Result<(), PlanValidatio
     } else {
         Err(PlanValidationError::UnrepresentableConstant)
     }
+}
+
+fn setting_has_type(setting: &crate::plan::AttrSetting, ty: &DataType) -> bool {
+    match setting {
+        crate::plan::AttrSetting::Value(value) => ty.accepts(value),
+        crate::plan::AttrSetting::Expr { expr, .. } => &expr.ty == ty,
+        crate::plan::AttrSetting::Word(_) => false,
+    }
+}
+
+fn network_setting_holds(name: &str, setting: &crate::plan::AttrSetting) -> bool {
+    match name {
+        "codec" => matches!(
+            setting,
+            crate::plan::AttrSetting::Word(word)
+                if matches!(word.as_str(), "bytes" | "json" | "text")
+        ),
+        "mode" => matches!(
+            setting,
+            crate::plan::AttrSetting::Word(word) if word == "ack"
+        ),
+        "zero_rtt" => matches!(
+            setting,
+            crate::plan::AttrSetting::Word(word) if word == "disabled"
+        ),
+        "versions" => match setting {
+            crate::plan::AttrSetting::Value(crate::value::Value::Array(items))
+                if !items.is_empty() =>
+            {
+                let mut seen = BTreeSet::new();
+                items.iter().all(|item| match item {
+                    crate::value::Value::Text(version) => {
+                        matches!(version.as_str(), "http/1.1" | "http/2" | "http/3")
+                            && seen.insert(version.as_str())
+                    }
+                    _ => false,
+                })
+            }
+            _ => false,
+        },
+        "max_body" | "max_message" => matches!(
+            setting,
+            crate::plan::AttrSetting::Value(crate::value::Value::Text(value))
+                if crate::connector::byte_size(value).is_some()
+        ),
+        "timeout" | "handshake_timeout" => match setting {
+            crate::plan::AttrSetting::Value(crate::value::Value::Duration(value)) => *value > 0,
+            crate::plan::AttrSetting::Expr { expr, .. } => expr.ty == DataType::DURATION,
+            _ => false,
+        },
+        "auth_bearer" | "correlate" | "idempotency_key" | "listen" | "method" | "path" | "url" => {
+            setting_has_type(setting, &DataType::Text)
+        }
+        "tls_ca" | "tls_certificate" | "tls_private_key" => {
+            setting_has_type(setting, &DataType::BYTES)
+        }
+        "allowed_origins" | "subprotocols" => {
+            setting_has_type(setting, &DataType::array(DataType::Text))
+        }
+        "headers" => match setting {
+            crate::plan::AttrSetting::Value(value) => crate::plan::http_headers_value_holds(value),
+            crate::plan::AttrSetting::Expr { expr, .. } => {
+                expr.ty == crate::plan::http_headers_type()
+            }
+            crate::plan::AttrSetting::Word(_) => false,
+        },
+        _ => false,
+    }
+}
+
+fn validate_network_connector(
+    node: &Node,
+    spec: &crate::plan::ConnectorSpec,
+) -> Result<bool, PlanValidationError> {
+    use crate::connector::{ConnectorExchange, ConnectorRoles};
+    use crate::plan::UnwiredPolicy;
+
+    struct ContractShape {
+        roles: ConnectorRoles,
+        exchange: ConnectorExchange,
+        required: &'static [&'static str],
+        allowed: &'static [&'static str],
+        ports: &'static [(&'static str, node::Direction, UnwiredPolicy)],
+    }
+
+    let contract = spec.contract.as_str();
+    let shape = match contract {
+        crate::connector::HTTP_CLIENT_CONNECTOR_ID => ContractShape {
+            roles: ConnectorRoles::Outbound,
+            exchange: ConnectorExchange::Call,
+            required: &[
+                "codec", "max_body", "method", "timeout", "url", "versions", "zero_rtt",
+            ],
+            allowed: &[
+                "auth_bearer",
+                "codec",
+                "headers",
+                "idempotency_key",
+                "max_body",
+                "method",
+                "timeout",
+                "tls_ca",
+                "tls_certificate",
+                "tls_private_key",
+                "url",
+                "versions",
+                "zero_rtt",
+            ],
+            ports: &[
+                ("in", node::Direction::Input, UnwiredPolicy::RequireWire),
+                ("out", node::Direction::Output, UnwiredPolicy::RequireWire),
+                ("exit", node::Direction::Output, UnwiredPolicy::RootSink),
+            ],
+        },
+        crate::connector::HTTP_SERVER_CONNECTOR_ID => ContractShape {
+            roles: ConnectorRoles::Inbound,
+            exchange: ConnectorExchange::Call,
+            required: &[
+                "codec", "listen", "max_body", "mode", "path", "versions", "zero_rtt",
+            ],
+            allowed: &[
+                "auth_bearer",
+                "codec",
+                "headers",
+                "listen",
+                "max_body",
+                "mode",
+                "path",
+                "tls_certificate",
+                "tls_private_key",
+                "versions",
+                "zero_rtt",
+            ],
+            ports: &[
+                ("in", node::Direction::Input, UnwiredPolicy::RequireWire),
+                ("out", node::Direction::Output, UnwiredPolicy::RequireWire),
+                ("exit", node::Direction::Output, UnwiredPolicy::RootSink),
+            ],
+        },
+        crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID => ContractShape {
+            roles: ConnectorRoles::InboundAndOutbound,
+            exchange: ConnectorExchange::Session,
+            required: &[
+                "codec",
+                "handshake_timeout",
+                "max_message",
+                "url",
+                "versions",
+                "zero_rtt",
+            ],
+            allowed: &[
+                "auth_bearer",
+                "codec",
+                "handshake_timeout",
+                "headers",
+                "max_message",
+                "subprotocols",
+                "tls_ca",
+                "tls_certificate",
+                "tls_private_key",
+                "url",
+                "versions",
+                "zero_rtt",
+            ],
+            ports: &[
+                ("in", node::Direction::Input, UnwiredPolicy::RequireWire),
+                ("out", node::Direction::Output, UnwiredPolicy::RequireWire),
+                ("exit", node::Direction::Output, UnwiredPolicy::RootSink),
+            ],
+        },
+        crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID => ContractShape {
+            roles: ConnectorRoles::InboundAndOutbound,
+            exchange: ConnectorExchange::Session,
+            required: &[
+                "codec",
+                "handshake_timeout",
+                "listen",
+                "max_message",
+                "path",
+                "versions",
+                "zero_rtt",
+            ],
+            allowed: &[
+                "allowed_origins",
+                "auth_bearer",
+                "codec",
+                "correlate",
+                "handshake_timeout",
+                "headers",
+                "listen",
+                "max_message",
+                "path",
+                "subprotocols",
+                "tls_certificate",
+                "tls_private_key",
+                "versions",
+                "zero_rtt",
+            ],
+            ports: &[
+                ("in", node::Direction::Input, UnwiredPolicy::RequireWire),
+                ("out", node::Direction::Output, UnwiredPolicy::RequireWire),
+                ("exit", node::Direction::Output, UnwiredPolicy::RootSink),
+            ],
+        },
+        _ => return Ok(false),
+    };
+
+    if spec.roles != shape.roles {
+        return Err(PlanValidationError::ContractRoleMismatch {
+            node: node.path.clone(),
+        });
+    }
+    if spec.exchange != shape.exchange {
+        return Err(PlanValidationError::ContractExchangeMismatch {
+            node: node.path.clone(),
+        });
+    }
+    let axes_hold = match contract {
+        crate::connector::HTTP_SERVER_CONNECTOR_ID
+        | crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID => {
+            spec.effect == node::Effect::None && spec.behavior == node::Behavior::Deterministic
+        }
+        _ => matches!(spec.effect, node::Effect::Class(_)),
+    };
+    if !axes_hold {
+        return Err(PlanValidationError::ContractAttributeMismatch {
+            node: node.path.clone(),
+            attribute: String::from("effect/behavior"),
+        });
+    }
+
+    for required in shape.required {
+        if spec.attribute(required).is_none() {
+            return Err(PlanValidationError::MissingContractAttribute {
+                node: node.path.clone(),
+                attribute: required,
+            });
+        }
+    }
+    for (name, setting) in &spec.attributes {
+        if !shape.allowed.contains(&name.as_str()) || !network_setting_holds(name, setting) {
+            return Err(PlanValidationError::ContractAttributeMismatch {
+                node: node.path.clone(),
+                attribute: name.clone(),
+            });
+        }
+    }
+    if spec.attribute("tls_certificate").is_some() != spec.attribute("tls_private_key").is_some() {
+        return Err(PlanValidationError::ContractAttributeMismatch {
+            node: node.path.clone(),
+            attribute: String::from("tls_certificate/tls_private_key"),
+        });
+    }
+
+    let codec = match spec.attribute("codec") {
+        Some(crate::plan::AttrSetting::Word(codec)) => Some(codec.as_str()),
+        _ => None,
+    };
+    for (name, direction, unwired) in shape.ports {
+        let Some(port) = node.ports.iter().find(|port| port.port.name() == *name) else {
+            return Err(PlanValidationError::MissingContractPort {
+                node: node.path.clone(),
+                port: name,
+            });
+        };
+        if port.direction != *direction
+            || port.unwired != *unwired
+            || port.ty != crate::boundary::network_port_type(&spec.contract, name, codec)
+        {
+            return Err(PlanValidationError::ContractPortMismatch {
+                node: node.path.clone(),
+                port: port.port.clone(),
+            });
+        }
+    }
+    if let Some(port) = node.ports.iter().find(|port| {
+        !shape
+            .ports
+            .iter()
+            .any(|(name, _, _)| *name == port.port.name())
+    }) {
+        return Err(PlanValidationError::UnexpectedContractPort {
+            node: node.path.clone(),
+            port: port.port.clone(),
+        });
+    }
+    Ok(true)
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
@@ -2213,7 +2503,10 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     node: node.path.clone(),
                 });
             }
-            if receives && spec.effect == node::Effect::None {
+            if receives
+                && spec.exchange == crate::connector::ConnectorExchange::Call
+                && spec.effect == node::Effect::None
+            {
                 return Err(PlanValidationError::EffectlessCallee {
                     node: node.path.clone(),
                 });
@@ -2627,6 +2920,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     });
                 }
             }
+            validate_network_connector(node, spec)?;
             // Built-in sheets above retain their more specific missing-row
             // diagnostics. Foreign families still cannot bypass the generic
             // exchange lifecycle carried by v11.

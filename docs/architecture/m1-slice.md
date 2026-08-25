@@ -44,9 +44,12 @@ the closed `Event | Call | Session` lifecycle, and the generic runtime owns
 placement-neutral session references, causal session folds and two-phase
 bounded inbound admission. HTTP/1.1, HTTP/2 and HTTP/3 remain
 physical bindings of the two HTTP contracts, while WebSocket Client/Server
-will exercise that generic exchange with many messages and one terminal
-`exit`. The remaining [ordered backlog](m1.6-http-websocket-backlog.md) starts
-with the exact H2 sheets before any product network dependency is adopted.
+exercise that generic exchange with many messages and one terminal `exit`.
+H2 is landed under D-2026-08-25-2: the four exact sheets, codec-selected
+ports, portable terminal unions, protocol metadata and family Lab binders now
+cross source → validated plan without adopting a product network dependency.
+The remaining [ordered backlog](m1.6-http-websocket-backlog.md) starts at H3's
+hosted-engine adoption gate.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
