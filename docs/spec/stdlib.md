@@ -1,7 +1,8 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.6 H2's four network sheets
-> and family-owned Lab bindings; live network I/O remains gated by H3–H6.** B5 removed the
+> **Status: normative and executable through M1.6 H3's network contracts,
+> Lab bindings and private hosted-engine seam; live network I/O remains gated
+> by H4–H6.** B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
@@ -141,7 +142,9 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 - **`respond`** (API): the request stays open; correlation by lineage;
   timeout → 504; bounded → 503. Exposing an API is first-class.
 - The async HTTP library is the **runtime's** choice — the contract is
-  lib-agnostic.
+  lib-agnostic. The H3 hosted assembly currently uses Hyper for HTTP/1.1-2
+  and quiche for HTTP/3 behind one bounded private pump; this is a Driver
+  choice and is absent from plan identity.
 
 ### 3.2 `HttpClient` — outbound HTTP
 
@@ -159,6 +162,15 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Outcome cases | `Completed { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Instances | singleton by default; the common Node attribute `instances.key` may key the Connector |
 | Journal / sim | method, resolved URL, canonical headers, exact body and idempotency material seal before OUTBOUND open; the family Lab twin scripts only the post-open outcome |
+
+For hosted clients, absent `tls_ca` selects Rastok's compiled exact Mozilla
+root corpus. Present `tls_ca` replaces it with a PEM certificate bundle or one
+DER certificate. `tls_certificate` accepts a PEM chain or one DER leaf, and
+`tls_private_key` accepts an unencrypted PEM PKCS#8/PKCS#1/SEC1 key or an
+auto-detected unencrypted DER key. Both H1-H2's Rustls stack and H3's
+BoringSSL stack consume these same bytes and validate a certificate/key pair
+before socket I/O. A deployment may select another Driver, but it may not
+weaken verification or reinterpret the plan bytes.
 
 ### 3.3 `Process` — child processes, two modes
 
@@ -472,6 +484,10 @@ three physical bindings of this one contract. One complete WebSocket message
 is one envelope. Fragmentation, ping/pong and close-handshake frames remain
 inside the Driver. A message does not manufacture an invocation `exit`; only
 the session terminal does. No `out` may follow that terminal.
+
+H3 proves the bounded Tungstenite message machine on a synthetic stream and
+through Hyper's HTTP/1.1 Upgrade. RFC 8441 and RFC 9220 remain H6 gates: the
+common codec is not evidence that either Extended CONNECT adapter exists.
 
 `meta.ext.session_id` is the textual projection of the journal-derived
 logical `SessionRef`, not a socket descriptor, address, Worker id or library

@@ -1478,6 +1478,18 @@ The reference CLI makes that assembly visible: Process is linked by default,
 while an explicit `--file-root` adds File and supplies deployment data that
 never enters the graph or plan identity.
 
+Hosted network Drivers use the same separation. The synchronous Driver/VM
+edge feeds one bounded private pump: finite work and result queues, a separate
+priority control lane, and a shared byte budget. HTTP/1.1 and HTTP/2 currently
+target Hyper with Rustls; HTTP/3 targets quiche with BoringSSL; WebSocket
+messages target Tungstenite. Those are replaceable physical bindings, not
+semantic Node types. They are enabled by static build features and all async,
+socket, TLS and library values remain below the Connector module. The two TLS
+stacks deliberately consume one exact compiled root corpus and the same
+in-memory identity encodings. A minimal or embedded build omits them without
+changing a plan. HTTP/1.1 Upgrade is not evidence for the distinct HTTP/2 or
+HTTP/3 Extended CONNECT adapters.
+
 The Lab follows the same rule. A mock Driver binds under the same id and roles,
 uses the same family request protocol and resolved result types, and replaces
 only the post-journal external interaction. It never replaces the VM or its
@@ -2754,7 +2766,7 @@ simulations designed to become executable evidence as the runtime
 lands. The current evidence gates are listed in
 [ROADMAP.md](ROADMAP.md).
 
-As of M1.6 H2, the one-worker reference executes canonical keyed/lifetime
+As of M1.6 H3, the one-worker reference executes canonical keyed/lifetime
 instances, bounded Closing, nested Graph composition, and instance-local
 bounded joins from source through package validation and public Lab scenarios.
 The closure audit also proves that moving a stable virtual shard between
@@ -2769,9 +2781,13 @@ implemented. A data-only capability manifest proves the future discovery seam,
 but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
 contracts now cross source, checked v11 plan, Registry-free validation and
 family-owned Lab binding with codec-selected ports, lossless protocol metadata
-and typed terminal unions. This is deliberately a sheet/Lab checkpoint: no
-live socket or product network dependency is claimed before H3's hosted-engine
-adoption gate.
+and typed terminal unions. H3 additionally pins one bounded private hosted
+pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
+for WebSocket framing. It proves all three HTTP engines coexist, compares
+h3/Quinn on real UDP and proves bounded WebSocket framing plus HTTP/1.1
+Upgrade. This is deliberately an engine checkpoint: H4-H6 still own live
+contract Drivers, protocol fallback, server acknowledgement and both Extended
+CONNECT adapters.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

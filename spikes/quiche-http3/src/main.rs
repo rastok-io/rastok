@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::UdpSocket;
+use std::time::Duration;
 
 use quiche::h3::NameValue;
 
@@ -42,7 +43,7 @@ impl fmt::Display for SpikeReport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "SPIKE_OK alpn=h3 requests=2 reverse_replies=true datagrams={} client_packets={}/{} server_packets={}/{}",
+            "SPIKE_OK udp=real alpn=h3 requests=2 reverse_replies=true datagrams={} client_packets={}/{} server_packets={}/{}",
             self.datagrams,
             self.client_sent_packets,
             self.client_received_packets,
@@ -67,13 +68,19 @@ struct Datagram {
 struct QuicPair {
     client: quiche::Connection,
     server: quiche::Connection,
+    client_socket: UdpSocket,
+    server_socket: UdpSocket,
     datagrams: usize,
 }
 
 impl QuicPair {
     fn connect() -> SpikeResult<Self> {
-        let client_addr: SocketAddr = "127.0.0.1:44330".parse()?;
-        let server_addr: SocketAddr = "127.0.0.1:44331".parse()?;
+        let client_socket = UdpSocket::bind("127.0.0.1:0")?;
+        let server_socket = UdpSocket::bind("127.0.0.1:0")?;
+        client_socket.set_read_timeout(Some(Duration::from_secs(1)))?;
+        server_socket.set_read_timeout(Some(Duration::from_secs(1)))?;
+        let client_addr = client_socket.local_addr()?;
+        let server_addr = server_socket.local_addr()?;
 
         let mut client_config = transport_config()?;
         client_config.load_verify_locations_from_file(CERTIFICATE)?;
@@ -106,6 +113,8 @@ impl QuicPair {
         Ok(Self {
             client,
             server,
+            client_socket,
+            server_socket,
             datagrams: 0,
         })
     }
@@ -115,7 +124,7 @@ impl QuicPair {
 
         if !self.client.is_established() || !self.server.is_established() {
             return Err(failure(
-                "the in-memory QUIC flight became idle before TLS established",
+                "the loopback QUIC flight became idle before TLS established",
             ));
         }
         if self.client.application_proto() != b"h3" || self.server.application_proto() != b"h3" {
@@ -135,11 +144,21 @@ impl QuicPair {
         for _ in 0..MAX_PUMP_ROUNDS {
             let client_flight = emit_flight(&mut self.client)?;
             let client_count = client_flight.len();
-            deliver_flight(&mut self.server, client_flight)?;
+            deliver_over_udp(
+                &self.client_socket,
+                &self.server_socket,
+                &mut self.server,
+                client_flight,
+            )?;
 
             let server_flight = emit_flight(&mut self.server)?;
             let server_count = server_flight.len();
-            deliver_flight(&mut self.client, server_flight)?;
+            deliver_over_udp(
+                &self.server_socket,
+                &self.client_socket,
+                &mut self.client,
+                server_flight,
+            )?;
 
             self.datagrams = self
                 .datagrams
@@ -151,7 +170,7 @@ impl QuicPair {
             }
         }
 
-        Err(failure("the in-memory QUIC pump did not become idle"))
+        Err(failure("the loopback QUIC pump did not become idle"))
     }
 }
 
@@ -189,15 +208,25 @@ fn emit_flight(connection: &mut quiche::Connection) -> SpikeResult<Vec<Datagram>
     Err(failure("one QUIC flight exceeded its datagram budget"))
 }
 
-fn deliver_flight(connection: &mut quiche::Connection, flight: Vec<Datagram>) -> SpikeResult<()> {
-    for mut datagram in flight {
-        let received = connection.recv(
-            &mut datagram.bytes,
-            quiche::RecvInfo {
-                from: datagram.send.from,
-                to: datagram.send.to,
-            },
-        )?;
+fn deliver_over_udp(
+    sender: &UdpSocket,
+    receiver: &UdpSocket,
+    connection: &mut quiche::Connection,
+    mut flight: Vec<Datagram>,
+) -> SpikeResult<()> {
+    for datagram in &flight {
+        let sent = sender.send_to(&datagram.bytes, datagram.send.to)?;
+        if sent != datagram.bytes.len() {
+            return Err(failure("the UDP socket only sent part of one datagram"));
+        }
+    }
+
+    let local = receiver.local_addr()?;
+    for datagram in &mut flight {
+        let (received_from_socket, from) = receiver.recv_from(&mut datagram.bytes)?;
+        datagram.bytes.truncate(received_from_socket);
+        let received =
+            connection.recv(&mut datagram.bytes, quiche::RecvInfo { from, to: local })?;
         if received != datagram.bytes.len() {
             return Err(failure("quiche only consumed part of one UDP datagram"));
         }

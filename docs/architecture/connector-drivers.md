@@ -1,6 +1,6 @@
 # Contributing a Connector Driver
 
-> Current contributor path through M1.6 H2. The normative contract lives in
+> Current contributor path through M1.6 H3. The normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
 > [D-2026-08-22-1](../spec/decisions.md). This guide explains how the pieces
 > meet in the implementation; it does not define a second Connector model.
@@ -79,6 +79,44 @@ two-phase accepted/pending/rejected protocol before any live network Driver is
 claimed. It does not add `DuplexConnectorDriver` or make the VM aware of
 WebSocket.
 
+## The hosted network seam
+
+Network Drivers do not each choose a runtime or expose an async interface to
+the VM. H3 gives client and server implementations one private physical pump
+interface; each bound engine owns its current-thread runtime:
+
+```text
+ synchronous Driver / VM
+          │
+          ├── bounded work queue ───────────────┐
+          ├── bounded control queue (priority)  │
+          │                                     ▼
+          │                          current-thread Tokio pump
+          │                           ┌────────┼─────────┐
+          │                        Hyper H1  Hyper H2  quiche H3
+          │                           └────────┼─────────┘
+          │                                  sockets
+          │                                     │
+          └── bounded fact queue ◀───────────────┘
+                    shared byte budget
+```
+
+The control lane is separate so saturation by calls/messages cannot starve a
+cancel. Queue slots and bytes are both finite. Work bytes remain charged while
+queued and while the runtime owns the work; fact bytes remain charged until
+the synchronous side drains them. Protocol receive windows must not exceed the
+same per-engine physical budget. Dropping the synchronous handle cancels and
+joins its pump. These rules apply equally to inbound and outbound Drivers; they
+do not change the two semantic roles.
+
+Static features select physical code only: `hosted-http12` supplies
+Hyper/Rustls, `hosted-http3` supplies quiche/BoringSSL,
+`hosted-websocket` supplies Tungstenite, and `hosted-network` combines them.
+No library type leaves `connectors/network`, enters a plan, or enters
+`rastok-core`. HTTP/1.1 WebSocket Upgrade is proved; HTTP/2 and HTTP/3
+Extended CONNECT remain separate H6 adapters and must not be inferred from
+the shared message codec.
+
 The model covers the intended catalogue without new role kinds:
 
 | Family | Typical role |
@@ -126,6 +164,11 @@ Implement only the required role interfaces and keep host-specific details at
 their edge. Translate OS/library outcomes to the contract's portable tagged
 union; do not leak raw errno, host paths or library error types into causal
 values unless the contract explicitly declares them.
+
+A hosted network implementation uses the shared bounded pump. Async work,
+socket handles, Hyper/quiche/Tungstenite values and TLS contexts remain below
+that module. The Driver-facing side is synchronous and exchanges owned Rastok
+facts because queued or asynchronous boundaries must own their data.
 
 The Driver answers, proposes a session fact, or stays silent. The runtime owns
 envelope birth, backpressure, journal ordering, timeout, close-once, bounded

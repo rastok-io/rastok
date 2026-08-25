@@ -6,7 +6,7 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-25): items 1, 2 and the replacement item 3 are landed, as are
+**Current checkpoint (2026-08-26): items 1, 2 and the replacement item 3 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 M1.4 has been normatively rebased by D-2026-08-18-1 before public release.
 The executable P0–P3 named-`partition` / `per` draft is not the target source
@@ -48,8 +48,12 @@ exercise that generic exchange with many messages and one terminal `exit`.
 H2 is landed under D-2026-08-25-2: the four exact sheets, codec-selected
 ports, portable terminal unions, protocol metadata and family Lab binders now
 cross source → validated plan without adopting a product network dependency.
-The remaining [ordered backlog](m1.6-http-websocket-backlog.md) starts at H3's
-hosted-engine adoption gate.
+H3 is landed under D-2026-08-26-1: one bounded private pump interface hosts
+the statically selectable Hyper/Rustls H1-H2, quiche/BoringSSL H3 and
+Tungstenite machinery without entering the core or changing package, semantic
+or causal identity. The remaining
+[ordered backlog](m1.6-http-websocket-backlog.md) starts at H4's live
+HttpClient Driver.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -379,13 +383,12 @@ step touches `vm.rs` once.
    [ordered backlog](m1.6-http-websocket-backlog.md) land the categorical
    lifecycle, two-phase inbound acceptance, exact sheets, hosted network
    engine, all three HTTP versions, WebSocket Extended CONNECT and the Codex
-   gateway proof. The isolated
-   [quiche HTTP/3 spike](../../spikes/quiche-http3/README.md) proves one viable
-   synchronous H3 seam, including verified TLS, ALPN and concurrent stream
-   correlation, without changing the product workspace. Its
-   [measured result](../../spikes/quiche-http3/RESULTS.md) is a GO for
-   candidacy rather than adoption: the product gate still compares `h3` +
-   Quinn, chooses one HTTP/1.1-2 engine and records the TLS-stack trade-off.
+   gateway proof. H3 now selects the bounded private pump, Hyper/Rustls for
+   HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite for messages. The
+   real-UDP [quiche spike](../../spikes/quiche-http3/README.md) and
+   [h3 + Quinn comparison](../../spikes/h3-quinn-http3/README.md) prove the
+   adoption and substitution paths without moving package, semantic or causal
+   identity; H4 remains the first live network Driver.
 8. **The Loop aspect** — the bounded-iteration primitive, alive on a
    graph.
 9. **Cost counters** — the `cost` map (stdlib §6.4) accumulated

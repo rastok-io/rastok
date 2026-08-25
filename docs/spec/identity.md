@@ -176,9 +176,14 @@ network graph seals its exact stable contract id, effective defaults, ports,
 types and settings through the existing v11 forms, while a negotiated HTTP
 version remains an observation. Every pre-H2 semantic hash, package body and
 causal trace is therefore byte-identical; no golden is re-blessed. The
-connector-free gauge remains the negative scope witness. Future H3–H6 network
-facts use H1's already allocated Call/Session forms rather than extending a
-package merely to name a library or wire version.
+connector-free gauge remains the negative scope witness.
+
+**M1.6 H3 hosted-engine checkpoint (2026-08-26).** Cargo features select the
+bounded pump and private HTTP/QUIC/TLS/WebSocket libraries; none is a semantic
+or causal fact. Every pre-H3 hash, package and trace remains byte-identical and
+the connector-free gauge remains the negative scope witness. Future H4–H6
+network facts use H1's already allocated Call/Session forms rather than
+extending a package merely to name a library or negotiated wire version.
 
 ## 2. `graph_version` and the manifest
 

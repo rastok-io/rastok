@@ -107,8 +107,9 @@ door without a live socket. HttpClient's mock seals the resolved method, URL,
 lossless headers, body and idempotency material before the ordinary OUTBOUND
 open. The server and session factories are effectless role/exchange twins;
 scenario injection still enters through the production VM admission path.
+H3's private hosted-engine adoption changes none of these simulation rules.
 This proves sheet and composition parity, not HTTP or WebSocket wire
-conformance, which remains H3–H6 evidence.
+conformance, which remains H4–H6 evidence.
 
 Two-mode equivalence, stated journal-relative : *same world-half in →
 byte-identical **causal cores** out*

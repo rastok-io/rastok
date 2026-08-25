@@ -8,8 +8,9 @@
 > compensation × crash recovery.
 > D-2026-08-25-1 adds sessions in §4.5. H1 makes their generic causal
 > subforms and two-phase Driver decision API executable. H2 publishes the
-> concrete HTTP/WebSocket sheets and Lab bindings; network I/O remains gated
-> by H3–H6.
+> concrete HTTP/WebSocket sheets and Lab bindings. H3 selects only a private
+> bounded hosted-engine seam; contract-bound network I/O remains gated by
+> H4–H6.
 
 The question this doc answers : **what survives — a crash, a redelivery, a
 slow consumer, a dead process — and what exactly is promised at each

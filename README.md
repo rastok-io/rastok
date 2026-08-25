@@ -72,10 +72,12 @@ model. A future plugin host can use the same registry boundary, but Rastok does
 not yet ship a plugin loader or freeze a native ABI. Contributors follow the
 [Connector Driver guide](docs/architecture/connector-drivers.md).
 
-The four M1.6 HTTP/WebSocket contracts now compile through exact sheets,
-Registry-free plan validation and family-owned Lab bindings. They do not yet
-open live sockets; hosted HTTP/1.1–3 and WebSocket Drivers start at the next
-evidence gate.
+The four M1.6 HTTP/WebSocket contracts compile through exact sheets,
+Registry-free plan validation and family-owned Lab bindings. The hosted
+physical seam is also selected: one bounded private pump, Hyper/Rustls for
+HTTP/1.1–2, quiche/BoringSSL for HTTP/3, and Tungstenite for WebSocket
+messages. No live network Driver is claimed yet; H4–H6 attach those engines to
+the journaled contract boundary and separately prove Extended CONNECT.
 
 The standalone runner links the Process Driver by default. Pass
 `--file-root <dir>` to `rastok run` to add the real File Driver with an

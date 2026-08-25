@@ -1,0 +1,30 @@
+# Product-shaped comparison for the M1.6 H3 dependency decision.
+# Deliberately outside the product workspace: h3/Quinn remains comparison
+# evidence unless the adoption record selects it.
+[package]
+name = "rastok-spike-h3-quinn-http3"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+bytes = "=1.12.1"
+h3 = "=0.0.8"
+h3-quinn = "=0.0.10"
+http = "=1.5.0"
+quinn = { version = "=0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "=2.2.0"
+tokio = { version = "=1.53.1", default-features = false, features = ["macros", "net", "rt-multi-thread", "time"] }
+webpki-roots = "=1.0.9"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

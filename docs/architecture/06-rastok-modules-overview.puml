@@ -370,7 +370,11 @@ package "connectors — concrete external-effect Drivers" as P_CONN {
   ProcessBindError : refuses an unserved or unresolved plan before VM boot
   class File <<struct>>
   File : one-file bounded read and atomic replace Driver
-  class "HttpServer, HttpClient, Clock,\nCalendar, Memory" as CATALOGUE <<guarded>>
+  class "HTTP / WebSocket sheets" as NETWORK_SHEETS <<data>>
+  NETWORK_SHEETS : four exact contracts and family-owned Lab twins
+  class HostedNetworkEngine <<private>>
+  HostedNetworkEngine : bounded pump; Hyper H1-H2, quiche H3, Tungstenite
+  class "Clock, Calendar, Memory" as CATALOGUE <<guarded>>
   CATALOGUE : declared names — sheets and Drivers land by slice
 }
 

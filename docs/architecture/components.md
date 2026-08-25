@@ -1,7 +1,7 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-25 for the M1.6 H2 sheet checkpoint. The
+> of the build; updated 2026-08-26 for the M1.6 H3 hosted-engine checkpoint. The
 > former named-partition P1-P3 implementation is superseded; categorical v11
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
@@ -411,7 +411,8 @@ whatever its execution format.
 | **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@1`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
 | **`connectors::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
 | **Network contract sheets** | exact `rastok/http-client@1`, `http-server@1`, `websocket-client@1`, and `websocket-server@1` roles/exchanges, codec-selected ports, phased settings, lossless HTTP metadata and portable terminal unions; the Registry-free mirror refuses forged rows without consulting the compiler catalogue | [stdlib.md §3.1–3.2, §3.8–3.9](../spec/stdlib.md); D-2026-08-25-2 | M1.6 H2 |
-| **`connectors::{http,websocket}` Lab bindings** | HttpClient's deterministic pre-open request descriptor and effectless exact-role factories for HttpServer/WebSocket; no socket, protocol progress or live-network claim | [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.6 H2; hosted Drivers H3–H6 |
+| **`connectors::{http,websocket}` Lab bindings** | HttpClient's deterministic pre-open request descriptor and effectless exact-role factories for HttpServer/WebSocket; no socket, protocol progress or live-network claim | [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.6 H2; hosted Drivers H4–H6 |
+| **private `connectors::network` seam** | feature-selected bounded synchronous/async pump; Hyper/Rustls H1-H2, quiche/BoringSSL H3, shared trust bytes and bounded Tungstenite message machine; all runtime/library types stop below the Driver boundary | [connector-drivers.md](connector-drivers.md); D-2026-08-26-1 | M1.6 H3 engine evidence; live Drivers H4–H6 |
 | **Connector conformance profiles** | one role-aware battery over `DriverRegistry`/`RuntimeBindings`; exact resolved terminal union, silence, typed completion coverage, correlation, journal-before-effect, close-once and explicit unprovable cases | [stdlib.md §1](../spec/stdlib.md); D-2026-08-22-1 C5 checkpoint | M1.5 C5 (Process + File) |
 | **Catalogue remainder** (`Clock`, `Calendar`, `Memory`) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |

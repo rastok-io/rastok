@@ -7,6 +7,12 @@
 mod file;
 mod http;
 mod manifest;
+#[cfg(any(
+    feature = "hosted-http12",
+    feature = "hosted-http3",
+    feature = "hosted-websocket"
+))]
+mod network;
 mod process;
 mod registry;
 mod websocket;

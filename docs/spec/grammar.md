@@ -14,7 +14,8 @@
 > and `last`; `having` remains a named gate.
 > D-2026-08-25-2 makes `HttpClient`, `HttpServer`, `WebSocketClient`, and
 > `WebSocketServer` exact H2 sheets from source through validated plan and
-> Lab binding. Live sockets remain gated by H3–H6; `HttpServer(mode = respond)`
+> Lab binding. H3 selects only their private hosted-engine seam. Live Drivers
+> remain gated by H4–H6; `HttpServer(mode = respond)`
 > is a named H5 deferral rather than a nearby executable behavior.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.

@@ -5,6 +5,106 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-26-1 — One bounded hosted pump, Hyper/Rustls for H1-H2, quiche for H3
+
+M1.6 H3 adopts the physical networking substrate without attaching a live
+Driver to any semantic contract yet. The VM remains synchronous. Every hosted
+network client and server uses the same private pump interface in
+`crates/rastok/src/connectors/network`. Each bound engine owns one dedicated
+current-thread Tokio runtime, bounded work/control/event channels, and one
+shared byte semaphore. Work and control have distinct finite lanes and control
+is selected first, so a full request queue cannot starve cancellation. Work
+bytes remain charged while queued and while the network runtime owns the work;
+event bytes remain charged until the synchronous side drains them. Dropping
+the synchronous handle signals shutdown, closes both directions and joins the
+thread. Protocol flow-control windows may be tighter, never wider than the
+declared physical byte budget. All-feature evidence drives real Hyper H1 and
+H2 exchanges and constructs the quiche H3 configuration from inside this same
+pump interface; the standalone H3 spikes then prove real UDP progress.
+
+The selected static hosted assembly is:
+
+| Capability | Pinned implementation | Selected features | License / declared MSRV |
+|---|---|---|---|
+| Reactor/readiness | `tokio 1.53.1` | `io-util, macros, net, rt, sync, time`; no multi-thread scheduler | MIT / 1.71 |
+| HTTP/1.1 and HTTP/2 | `hyper 1.11.0`, `hyper-util 0.1.20`, `http-body-util 0.1.5` | client, server, H1, H2 and Tokio I/O only | MIT / 1.63–1.64 |
+| H1-H2 TLS | `rustls 0.23.43`, `tokio-rustls 0.26.4` | Ring, std, TLS 1.2 and 1.3 | Apache-2.0/ISC/MIT / 1.71 |
+| HTTP/3 and QUIC | `quiche 0.29.3`, `boring 4.22.0` | `boringssl-boring-crate`; defaults off | BSD-2-Clause + Apache-2.0 / 1.88 + 1.80 |
+| WebSocket message machine | `tungstenite 0.30.0`, `tokio-tungstenite 0.30.0` | handshake only; TLS supplied outside it | MIT/Apache-2.0 / 1.85 |
+| Trust material | `webpki-root-certs 1.0.9` | complete DER Mozilla root corpus | CDLA-Permissive-2.0 / 1.70 |
+| Glue | `bytes 1.12.1`, `futures-util 0.3.34`, `rustls-pemfile 2.2.0` | minimum used features | permissive licenses |
+
+The Cargo features are deliberately physical and orthogonal:
+`hosted-http12`, `hosted-http3`, `hosted-websocket`, and their union
+`hosted-network`. A build may omit BoringSSL, Hyper or Tungstenite without
+changing a Connector id, sheet, plan or semantic hash. The feature closures
+on the adoption host contain respectively 68, 71, 55 and 128 unique Cargo
+tree entries including Rastok and build dependencies. BoringSSL requires a C
+and C++ toolchain, CMake, bindgen and clang; Rustls Ring also compiles its
+small native/assembly support. No selected dependency enters `rastok-core` or
+an embedded target.
+
+**The deliberate TLS duplication is accepted.** H1-H2 use Rustls with the
+Ring provider; H3 uses the BoringSSL context required by the selected quiche
+feature. Both consume the same exact compiled Mozilla certificate corpus.
+Absent `tls_ca` selects that corpus. Present `tls_ca` replaces it with a PEM
+certificate bundle or one DER certificate; it never disables verification.
+`tls_certificate` accepts a PEM chain or one DER leaf.
+`tls_private_key` accepts an unencrypted PEM PKCS#8/PKCS#1/SEC1 key or an
+auto-detected unencrypted DER key. The pair is parsed and checked in memory
+before a socket exists. Rustls advertises `h2,http/1.1`; quiche advertises
+`h3`. Rustls early data is false/zero and quiche's enabling API is never
+called, preserving H2's categorical `zero_rtt = disabled`. The staged quiche
+configuration caps connection and per-stream receive credit at the engine byte
+budget, caps peer bidirectional streams at the work-queue capacity, reserves at
+least three peer unidirectional streams for HTTP/3 control and QPACK, and uses
+a finite 30-second transport idle timeout. These are physical safeguards, not
+new semantic settings; H4-H5 must retain finite bounds when live Drivers land.
+
+**quiche wins the H3 comparison for this gate.** Its direct synchronous QUIC
+state machine maps cleanly onto the bounded pump, exposes client and server
+from one version, and is deployed by Cloudflare. The real-UDP spike proves
+verified TLS, H3 ALPN, two concurrent streams, reverse completion and
+reclamation. A fresh release build took 21.58 seconds and produced a
+2,114,216-byte stripped evidence binary with 64 locked packages.
+The competing `h3 0.0.8` + `h3-quinn 0.0.10` + `quinn 0.11.11` spike is
+smaller in native-tooling complexity, shares Rustls, built in 12.55 seconds,
+and produced a 2,729,488-byte stripped binary with 85 locked packages. It
+also interoperated as a verified public-root client with Cloudflare's quiche
+endpoint. It is not selected because the [upstream h3 project](https://github.com/hyperium/h3)
+still labels its API highly experimental and its current close/reclamation
+behavior has [active edge cases](https://github.com/hyperium/h3/issues/338).
+That is an integration-risk judgment, not a throughput
+claim; the isolated comparison remains the substitution path if maturity or
+the dual-TLS cost changes. No third-party type is part of Rastok's public
+Driver contract.
+
+With the same `strip -x` measurement, the currently shipped CLI grows from
+3,881,384 to 3,998,528 bytes under all three staged features (+117,144 bytes),
+because H4-H6 have not yet linked live factories; the quiche spike is the
+honest lower-bound evidence for an exercised H3 image. H4-H7 must re-measure
+once actual Drivers are reachable. Removal is mechanical: disable a physical
+feature or replace its private backend while retaining the same pump and
+semantic sheets.
+
+Tungstenite is proved with finite read/write/message/frame limits over a
+synthetic duplex byte stream and through Hyper's real HTTP/1.1 Upgrade path.
+That does **not** prove RFC 8441 or RFC 9220. HTTP/2 and HTTP/3 WebSocket remain
+H6 gates until their Extended CONNECT stream adapters, settings negotiation,
+flow control and close races pass independently. Likewise H3 adopts engines,
+not live HttpClient/HttpServer behavior: journal-before-effect, portable
+outcomes and negotiation/fallback remain H4-H5.
+
+H3 changes physical dependencies and build outputs only. It changes no
+contract, plan/package format, semantic identity recipe or causal record; no
+existing hash, package golden or trace is authorized to move.
+
+Rejected alternatives are making the VM async, one runtime per protocol,
+unbounded async queues, Tokio types in `rastok-core`, h3/Quinn as the present
+H3 backend, native platform roots whose contents vary by host, one TLS
+provider forced across all protocols, enabling 0-RTT, or treating a successful
+Tungstenite HTTP/1.1 proof as evidence for Extended CONNECT.
+
 ## D-2026-08-25-2 — Four network sheets precede every network engine
 
 H2 publishes the semantic network boundary before adopting a socket, TLS,
