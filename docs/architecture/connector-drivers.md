@@ -1,6 +1,6 @@
 # Contributing a Connector Driver
 
-> Current contributor path after M1.5. The normative contract lives in
+> Current contributor path through M1.6 H1. The normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
 > [D-2026-08-22-1](../spec/decisions.md). This guide explains how the pieces
 > meet in the implementation; it does not define a second Connector model.
@@ -46,29 +46,35 @@ contract id, for example `rastok/file@1`.
 
 ## Two roles, three exchange shapes
 
-`InboundConnectorDriver` proposes external arrivals. It does not mint root
-envelopes: sequencing, routing, admission, identity and journal commit remain
-runtime authorities.
+`InboundConnectorDriver` retains and proposes one bounded external arrival at
+a time. It does not mint root envelopes: sequencing, routing, admission,
+identity and journal commit remain runtime authorities. The runtime answers
+accepted only after commit, pending without a callback under pressure, or a
+portable rejection.
 
-`OutboundConnectorDriver` prepares and starts calls only after the runtime has
-opened their OUTBOUND records, then reports correlated typed completions. It
-does not write records or manufacture scheduler outcomes such as timeouts.
+`OutboundConnectorDriver` exposes exactly one exchange-specific outbound view:
+`CallConnectorDriver` prepares/starts calls and reports correlated typed
+completions; `SessionConnectorDriver` prepares/starts an opening and its
+individual writes, then reports correlated open/write/terminal observations.
+Neither writes records or manufactures scheduler outcomes such as timeouts.
 
 A contract may require either role or both. A both-role factory returns one
 bound object exposing both views over shared protocol state; registering two
-unrelated objects is not equivalent.
+unrelated objects is not equivalent. Event is exactly inbound; Session is
+outbound or both-role because its open/write/terminal observations use the
+exchange-specific outbound view.
 
 Roles describe direction across the Rastok boundary. M1.6 adds an orthogonal
 closed exchange fact describing lifecycle and cardinality:
 
 ```text
 Event      : one spontaneous fact ──▶ one inbound root; no per-event exit
-Invocation : one admitted request ──▶ ordered outputs ──▶ one typed exit
+Call       : one admitted request ──▶ ordered outputs ──▶ one typed exit
 Session    : one open ──▶ messages in both directions* ──▶ one typed exit
 ```
 
-The currently executable Driver protocol is invocation-shaped. M1.6 H1 widens
-it generically for sessions and replaces the pull-only inbound proposal with a
+H1 makes all three exchange shapes explicit and executable at the generic
+Driver/journal boundary. It replaces the pull-only inbound proposal with a
 two-phase accepted/pending/rejected protocol before any live network Driver is
 claimed. It does not add `DuplexConnectorDriver` or make the VM aware of
 WebSocket.
@@ -77,8 +83,8 @@ The model covers the intended catalogue without new role kinds:
 
 | Family | Typical role |
 |---|---|
-| `Process(job)`, `File(read/replace)`, HTTP client, LLM, database call | outbound invocation |
-| HTTP server | inbound invocation |
+| `Process(job)`, `File(read/replace)`, HTTP client, LLM, database call | outbound call |
+| HTTP server | inbound call |
 | Clock, Calendar | inbound event |
 | WebSocket client/server, queue consumer/producer, future `File.watch` plus writes | both-role session, when one contract really shares one protocol state |
 
@@ -102,12 +108,13 @@ nearby behavior.
 ### 2. Separate pure exchange protocol from the effect
 
 Put the family under `crates/rastok/src/connectors/<family>/`. Binding resolves
-and validates every plan/boot/instance fact before external work. Invocation
-settings arrive as typed values. Pure request preparation produces the exact
+and validates every plan/boot/instance fact before external work. Call-time
+settings arrive as typed values (the plan names this evaluation site
+`Invocation`). Pure request preparation produces the exact
 sealed request or a typed pre-open rejection.
 
-Keep that protocol callable by both the real Driver and the Lab mock. For an
-invocation it prepares one request and projects one completion. For a session
+Keep that protocol callable by both the real Driver and the Lab mock. For a
+call it prepares one request and projects one completion. For a session
 it prepares open/write facts, correlates inbound messages to one logical
 `SessionRef`, and projects one terminal exit. Only the operation after the
 journal boundary — filesystem access, process spawn, socket open/write —
@@ -147,7 +154,7 @@ physical root. A graph never selects or discovers that root.
 ### 5. Supply a conformance profile
 
 Run the real factory through the shared conformance battery. Select the
-invocation or session profile and provide:
+call or session profile and provide:
 
 - one minimal source and happy terminal case;
 - one deterministic provocation for every portably forceable terminal case;

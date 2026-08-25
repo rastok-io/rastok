@@ -247,7 +247,7 @@ HttpClient
 ```
 
 WebSocket also uses separate client/server contracts, but its cardinality is
-session-shaped rather than one invocation per message:
+session-shaped rather than one Call per message:
 
 ```text
 WebSocketServer                       WebSocketClient

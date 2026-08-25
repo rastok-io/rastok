@@ -8,7 +8,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::boundary::{
-    DriverRouteError, InboundSubmission, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
+    CallConnectorDriver, DriverRouteError, InboundSession, InboundSubmission, Intent,
+    OutboundConnectorBindings, SessionOpenIntent, SessionRef, SessionWriteIntent, SessionWriteRef,
 };
 use rastok::envelope::{Data, Envelope};
 use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
@@ -26,7 +27,7 @@ use rastok::boundary::{
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Encoding, Namespace, Value};
-use rastok::journal::{MemJournal, OutboundStatus, Record};
+use rastok::journal::{CloseVerdict, MemJournal, OutboundRecord, OutboundStatus, Record};
 
 fn int_address(owner: &str, value: i64) -> InstanceAddress {
     let owner = OwnerPath::new([owner]).expect("valid owner path");
@@ -82,7 +83,7 @@ impl OutboundConnectorBindings for ProjectionRefusal {
         data: &Data,
         resolved_settings: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
-        Ok(OutboundConnectorDriver::prepare_request(
+        Ok(CallConnectorDriver::prepare_request(
             &mut self.inner,
             connector,
             data,
@@ -98,7 +99,7 @@ impl OutboundConnectorBindings for ProjectionRefusal {
         if self.refuse_scheduler_completion {
             return Err(DriverRouteError::UnavailableOutbound(connector.clone()));
         }
-        Ok(OutboundConnectorDriver::scheduler_completion(
+        Ok(CallConnectorDriver::scheduler_completion(
             &mut self.inner,
             connector,
             completion,
@@ -113,17 +114,17 @@ impl OutboundConnectorBindings for ProjectionRefusal {
         if self.refuse_cancel {
             return Err(DriverRouteError::UnavailableOutbound(connector.clone()));
         }
-        OutboundConnectorDriver::cancel(&mut self.inner, call_ref);
+        CallConnectorDriver::cancel(&mut self.inner, call_ref);
         Ok(())
     }
 
     fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError> {
-        OutboundConnectorDriver::start(&mut self.inner, intent, request);
+        CallConnectorDriver::start(&mut self.inner, intent, request);
         Ok(())
     }
 
     fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
-        Ok(OutboundConnectorDriver::events(&mut self.inner))
+        Ok(CallConnectorDriver::events(&mut self.inner))
     }
 }
 
@@ -138,7 +139,7 @@ struct ClosingWorld {
     confirm_cancel: bool,
 }
 
-impl OutboundConnectorDriver for ClosingWorld {
+impl CallConnectorDriver for ClosingWorld {
     fn prepare_request(
         &mut self,
         _: &node::Path,
@@ -204,7 +205,7 @@ graph bounded_closing : App {
 }
 "#;
 
-impl OutboundConnectorDriver for EchoWorld {
+impl CallConnectorDriver for EchoWorld {
     fn prepare_request(
         &mut self,
         _: &node::Path,
@@ -261,7 +262,7 @@ struct FileSettingsWorld {
     prepared: Vec<std::collections::BTreeMap<String, Value>>,
 }
 
-impl OutboundConnectorDriver for FileSettingsWorld {
+impl CallConnectorDriver for FileSettingsWorld {
     fn prepare_request(
         &mut self,
         _: &node::Path,
@@ -477,11 +478,12 @@ fn the_m0_probe_runs_end_to_end() {
                     format!("tx:{owner}")
                 }
             }
-            Record::Outbound(o) => match o.status {
+            Record::Outbound(OutboundRecord::Call(o)) => match o.status {
                 OutboundStatus::Open => String::from("outbound:open"),
                 OutboundStatus::Closed(_) => String::from("outbound:closed"),
                 OutboundStatus::Abandoned => String::from("outbound:abandoned"),
             },
+            Record::Outbound(OutboundRecord::Session(_)) => String::from("session"),
         })
         .collect();
     assert_eq!(
@@ -1949,12 +1951,13 @@ fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
     assert_eq!(root_exit_cases(&vm), ["Exited"]);
     assert!(journal.records().iter().any(|record| matches!(
         record,
-        Record::Outbound(outbound)
+        Record::Outbound(OutboundRecord::Call(outbound))
             if matches!(outbound.status, OutboundStatus::Closed(_))
     )));
     assert!(journal.records().iter().all(|record| !matches!(
         record,
-        Record::Outbound(outbound) if outbound.status == OutboundStatus::Abandoned
+        Record::Outbound(OutboundRecord::Call(outbound))
+            if outbound.status == OutboundStatus::Abandoned
     )));
 }
 
@@ -1988,7 +1991,8 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
             .iter()
             .filter(|record| matches!(
                 record,
-                Record::Outbound(outbound) if outbound.status == OutboundStatus::Abandoned
+                Record::Outbound(OutboundRecord::Call(outbound))
+                    if outbound.status == OutboundStatus::Abandoned
             ))
             .count(),
         1,
@@ -2106,7 +2110,8 @@ fn bounded_closing_interleavings_are_model_checked() {
                 .iter()
                 .filter(|record| matches!(
                     record,
-                    Record::Outbound(outbound) if outbound.intent.call_ref == call
+                    Record::Outbound(OutboundRecord::Call(outbound))
+                        if outbound.intent.call_ref == call
                 ))
                 .count(),
             2,
@@ -2899,7 +2904,7 @@ struct ScriptedWorld {
     answers: Vec<Response>,
 }
 
-impl OutboundConnectorDriver for ScriptedWorld {
+impl CallConnectorDriver for ScriptedWorld {
     fn prepare_request(
         &mut self,
         _: &node::Path,
@@ -2990,6 +2995,13 @@ impl Journal for FlakyJournal {
     ) -> Result<rastok::journal::PreparedInbound, rastok::journal::Error> {
         self.inner.prepare_inbound(submission)
     }
+    fn prepare_session_inbound(
+        &self,
+        submission: InboundSubmission,
+        session: InboundSession,
+    ) -> Result<rastok::journal::PreparedInbound, rastok::journal::Error> {
+        self.inner.prepare_session_inbound(submission, session)
+    }
     fn commit_inbound(
         &mut self,
         prepared: rastok::journal::PreparedInbound,
@@ -3018,6 +3030,31 @@ impl Journal for FlakyJournal {
         }
         self.inner.open_outbound(intent)
     }
+    fn open_outbound_session(
+        &mut self,
+        intent: SessionOpenIntent,
+    ) -> Result<(), rastok::journal::Error> {
+        self.inner.open_outbound_session(intent)
+    }
+    fn confirm_session_open(
+        &mut self,
+        session: &SessionRef,
+    ) -> Result<CloseVerdict, rastok::journal::Error> {
+        self.inner.confirm_session_open(session)
+    }
+    fn open_session_write(
+        &mut self,
+        intent: SessionWriteIntent,
+    ) -> Result<(), rastok::journal::Error> {
+        self.inner.open_session_write(intent)
+    }
+    fn settle_session_write(
+        &mut self,
+        write_ref: &SessionWriteRef,
+        abandoned: bool,
+    ) -> Result<CloseVerdict, rastok::journal::Error> {
+        self.inner.settle_session_write(write_ref, abandoned)
+    }
     fn close_outbound(
         &mut self,
         call_ref: &rastok::boundary::CallRef,
@@ -3045,6 +3082,12 @@ impl Journal for FlakyJournal {
     }
     fn open_calls(&self) -> Vec<Intent> {
         self.inner.open_calls()
+    }
+    fn live_sessions(&self) -> Vec<SessionRef> {
+        self.inner.live_sessions()
+    }
+    fn open_session_writes(&self) -> Vec<SessionWriteIntent> {
+        self.inner.open_session_writes()
     }
 }
 
@@ -3240,7 +3283,7 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Outbound(o) => Some(&o.status),
+            Record::Outbound(OutboundRecord::Call(o)) => Some(&o.status),
             _ => None,
         })
         .collect();
@@ -3368,7 +3411,8 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
         .filter(|record| {
             matches!(
                 record,
-                Record::Outbound(o) if matches!(o.status, OutboundStatus::Closed(_))
+                Record::Outbound(OutboundRecord::Call(o))
+                    if matches!(o.status, OutboundStatus::Closed(_))
             )
         })
         .count();

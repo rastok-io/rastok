@@ -63,7 +63,7 @@ jobs:
             -semihosting-config enable=on,target=native -icount shift=0 \
             | tee spike.out
           grep -q "SPIKE_OK" spike.out
-          grep -q "semantic_hash: 190f0efc73f5f7c7d98416fd2e34b7f76833a91056289f4123f70c60b3411d5b" spike.out
+          grep -q "semantic_hash: e50026eeb0b8dc77fe2f5e52de6dfaa33b50cc351211cd87c21081d28aa43709" spike.out
 
   # The benchmark's proofs: the runner's own tests, every reference
   # solution green against its referee, and the dry rehearsal of the

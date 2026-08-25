@@ -146,10 +146,11 @@ The repository opens publicly with this milestone (15 October 2026).
   HTTP/1.1, HTTP/2 and HTTP/3 are physical bindings of the same HTTP
   contracts; WebSocket is a long-lived session with many messages and one
   typed terminal `exit`, never one fake invocation per frame. The ordered
-  [M1.6 backlog](docs/architecture/m1.6-http-websocket-backlog.md) first lands
-  the generic event/invocation/session lifecycle and two-phase inbound admission,
-  then the sheets, hosted engine, all three HTTP versions and the Codex
-  WebSocket gateway. The isolated
+  [M1.6 backlog](docs/architecture/m1.6-http-websocket-backlog.md) has landed
+  H1's generic `Event | Call | Session` lifecycle, placement-neutral session
+  references and two-phase inbound admission. The exact network sheets,
+  hosted engine, all three HTTP versions, and the Codex WebSocket gateway
+  remain ahead. The isolated
   [quiche HTTP/3 spike](spikes/quiche-http3/README.md) makes quiche the
   presumptive H3 candidate without adding it to the product workspace; one
   product-shaped `h3` + Quinn comparison and an explicit TLS-stack decision

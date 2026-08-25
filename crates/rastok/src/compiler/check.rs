@@ -356,9 +356,8 @@ pub fn check(
         .iter()
         .map(|(field, ty)| (field.clone(), ty.clone()))
         .collect();
-    // The standard `content_type` is IMPLICIT — known to every
-    // consumer, never serialized (D-2026-08-10-4); the schema
-    // carries the sheets' fields only.
+    // Standard `content_type` and `session_id` are IMPLICIT — known to every
+    // consumer, never serialized; the schema carries sheet fields only.
     let ext_schema: Vec<(String, DataType)> = checker
         .ext_fields
         .iter()
@@ -377,7 +376,7 @@ struct Checker<'bag, 'registry> {
     bag: &'bag mut Bag,
     registry: &'registry contract::ContractCatalog,
     /// The `ext` vocabulary the instantiated connectors' sheets
-    /// declare — the standard `content_type` is always known.
+    /// declare — standard external-context leaves are always known.
     ext_fields: std::collections::BTreeSet<String>,
     /// The graph's `meta.app` writes — the INFERENCE source: field,
     /// written type, and site (D-2026-08-10-1). Lab writes never
@@ -2256,7 +2255,8 @@ impl Checker<'_, '_> {
                     .with("meta.sys.origin_id", DataType::Text)
                     .with("meta.sys.role", DataType::Text)
                     .with("meta.sys.graph_version", DataType::INT)
-                    .with("meta.ext.content_type", DataType::Text);
+                    .with("meta.ext.content_type", DataType::Text)
+                    .with("meta.ext.session_id", DataType::Text);
                 for (field, ty) in &app_fields {
                     signature = signature.with(format!("meta.app.{field}"), ty.clone());
                 }
@@ -2394,7 +2394,8 @@ impl Checker<'_, '_> {
                 .with("meta.sys.origin_id", DataType::Text)
                 .with("meta.sys.role", DataType::Text)
                 .with("meta.sys.graph_version", DataType::INT)
-                .with("meta.ext.content_type", DataType::Text);
+                .with("meta.ext.content_type", DataType::Text)
+                .with("meta.ext.session_id", DataType::Text);
             if let Some(key_type) = instance_key_type {
                 signature = signature.with("instance.key", key_type);
             }
@@ -2642,6 +2643,7 @@ impl Checker<'_, '_> {
                 // canonical id before a successful HIR can be lowered.
                 contract_id: trait_name,
                 roles: crate::connector::ConnectorRoles::Outbound,
+                exchange: crate::connector::ConnectorExchange::Call,
                 attributes: Vec::new(),
             },
             vals: Vec::new(),
@@ -2705,11 +2707,15 @@ impl Checker<'_, '_> {
             }
         };
         if let NodeRole::Connector {
-            contract_id, roles, ..
+            contract_id,
+            roles,
+            exchange,
+            ..
         } = &mut node.role
         {
             *contract_id = contract.id.to_string();
             *roles = contract.roles;
+            *exchange = contract.exchange;
         }
         // Name, direction and sink policy do not depend on attribute
         // values. Materialize that part immediately so a bad selector or
@@ -5504,11 +5510,10 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Whether an `ext` field belongs to the declared vocabulary:
-    /// the standard `content_type` plus whatever the instantiated
-    /// connectors' sheets declare (none in the M0 catalogue yet).
+    /// Whether an `ext` field belongs to the declared vocabulary: a standard
+    /// external-context leaf or one declared by an instantiated sheet.
     fn ext_field_known(&self, field: &str) -> bool {
-        field == "content_type" || self.ext_fields.contains(field)
+        crate::plan::standard_ext_field_type(field).is_some() || self.ext_fields.contains(field)
     }
 
     /// Records every `meta.*` path a compiled expression reads —

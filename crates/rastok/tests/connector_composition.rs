@@ -6,7 +6,7 @@
 use rastok::compiler::compile;
 use rastok::connectors::{DriverRegistry, FileFactory, ProcessFactory, RuntimeBindings};
 use rastok::contract::ContractCatalog;
-use rastok::journal::{OutboundStatus, Record};
+use rastok::journal::{OutboundRecord, OutboundStatus, Record};
 use rastok::plan::GraphVersion;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -190,7 +190,7 @@ fn one_lab_world_uses_both_families_without_changing_the_plan() {
 
     let mut states: BTreeMap<String, (bool, bool)> = BTreeMap::new();
     for record in &runs[0].records {
-        let Record::Outbound(outbound) = record else {
+        let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
             continue;
         };
         let state = states

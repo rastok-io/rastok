@@ -234,6 +234,33 @@ lab g {
 }
 
 #[test]
+fn session_id_is_a_standard_text_projection_not_a_sheet_schema_claim() {
+    let source = r#"
+graph g : App {
+  input in: variant
+  operator o {
+    on in {
+      out = {
+        meta.app.session = meta.ext.session_id
+        data = data
+      }
+    }
+  }
+  . -> o -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the standard session projection is visible as text");
+    assert!(
+        compilation.plan.plan().ext_schema.is_empty(),
+        "an implicit standard leaf never becomes a transported sheet claim"
+    );
+}
+
+#[test]
 fn the_lab_never_moves_the_production_hash() {
     // The proof D-2026-08-10-1 demands: adding a Lab — fixtures,
     // mocks, expectations — changes neither the plan nor the

@@ -11,8 +11,8 @@
 //! exactly the machinery a run does, minus this file.
 
 use crate::boundary::{
-    Completion, Intent, OutboundConnectorDriver, OutputOverflowReason, ProcessExit,
-    RequestPreparation, Response, SchedulerCompletion,
+    CallConnectorDriver, Completion, Intent, OutboundConnectorDriver, OutputOverflowReason,
+    ProcessExit, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
@@ -455,7 +455,7 @@ impl ProcessSettings {
 /// The Driver is asynchronous, as the [`OutboundConnectorDriver`] contract
 /// demands: a Driver answers or stays silent — it never times itself out. Only
 /// the scheduler mints TimeoutExpired; when the machine closes a
-/// call, [`OutboundConnectorDriver::cancel`] kills the child. Every pipe drains on
+/// call, [`CallConnectorDriver::cancel`] kills the child. Every pipe drains on
 /// its own detached thread through a channel, so a descendant that
 /// inherits the pipes can never hang this process: readers are never
 /// joined, only drained.
@@ -1032,7 +1032,7 @@ fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, ProcessFailure> {
     Ok(items)
 }
 
-impl OutboundConnectorDriver for Process<'_> {
+impl CallConnectorDriver for Process<'_> {
     fn prepare_request(
         &mut self,
         connector: &crate::node::Path,
@@ -1272,7 +1272,8 @@ graph real : App {
         let closed = journal.records().iter().any(|record| {
             matches!(
                 record,
-                Record::Outbound(o) if matches!(o.status, OutboundStatus::Closed(_))
+                Record::Outbound(crate::journal::OutboundRecord::Call(o))
+                    if matches!(o.status, OutboundStatus::Closed(_))
             )
         });
         assert!(closed, "the call closed against a real child process");
@@ -1484,7 +1485,7 @@ graph mute : App {
         // never a driver-fabricated failure response.
         assert!(journal.records().iter().any(|record| matches!(
             record,
-            Record::Outbound(o)
+            Record::Outbound(crate::journal::OutboundRecord::Call(o))
                 if matches!(o.status, OutboundStatus::Closed(crate::journal::Closure::Timeout))
         )));
     }
@@ -1523,12 +1524,13 @@ graph closing : App {
         );
         assert!(journal.records().iter().any(|record| matches!(
             record,
-            Record::Outbound(outbound)
+            Record::Outbound(crate::journal::OutboundRecord::Call(outbound))
                 if matches!(outbound.status, OutboundStatus::Closed(crate::journal::Closure::Response(_)))
         )));
         assert!(journal.records().iter().all(|record| !matches!(
             record,
-            Record::Outbound(outbound) if outbound.status == OutboundStatus::Abandoned
+            Record::Outbound(crate::journal::OutboundRecord::Call(outbound))
+                if outbound.status == OutboundStatus::Abandoned
         )));
     }
 

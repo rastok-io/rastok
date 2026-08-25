@@ -1,7 +1,7 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.5 C6; M1.6 network targets
-> are frozen but not yet executable.** B5 removed the
+> **Status: normative and executable through M1.6 H1's generic exchange
+> lifecycle; the four M1.6 network contracts remain frozen targets.** B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.

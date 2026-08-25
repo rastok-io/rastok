@@ -19,23 +19,28 @@
 //! [`identity.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/identity.md
 
 use crate::boundary::{
-    CallRef, Completion, InboundEnvelopeProvenance, InboundSubmission, Intent, SubmissionSequence,
+    CallRef, Completion, InboundEnvelopeProvenance, InboundSession, InboundSubmission, Intent,
+    SessionOpenIntent, SessionRef, SessionWriteIntent, SessionWriteRef, SubmissionSequence,
 };
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::identity::{InstanceAddress, InstanceRef};
 use crate::node;
 use crate::plan::{GraphVersion, OwnerPath};
 use crate::value::Value;
+use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
 /// Deterministic identity recipes — the injective blake3 framing of
 /// `envelope.md` §2, with its domain tags.
 pub mod ids {
-    use super::{CallRef, Id, InboundEnvelopeProvenance, InstanceRef, node};
+    use super::{
+        CallRef, Id, InboundEnvelopeProvenance, InstanceRef, SessionRef, SessionWriteRef, node,
+    };
     use alloc::string::ToString;
+    use alloc::vec::Vec;
 
     /// Domain tag of a root derivation: 2 fields.
     const ROOT: u8 = 0x01;
@@ -45,6 +50,10 @@ pub mod ids {
     /// the envelope id domains (`0x01`–`0x04` are reserved by the
     /// spec); a call ref is never an envelope id.
     const CALL: u8 = 0x10;
+    /// Domain tag of a logical session reference.
+    const SESSION: u8 = 0x11;
+    /// Domain tag of one write obligation within a session.
+    const SESSION_WRITE: u8 = 0x12;
     /// Domain tag of a delivery reference.
     const DELIVERY: u8 = 0x20;
     /// Domain tag of an instance-lifetime obligation. Outside envelope-id
@@ -141,6 +150,65 @@ pub mod ids {
     pub fn call_ref(delivery_ref: Id, request_digest: &[u8; 32]) -> CallRef {
         CallRef::new(Id::derive(CALL, &[delivery_ref.as_bytes(), request_digest]))
     }
+
+    /// Logical reference of one inbound-opened session. The opening root is
+    /// already journal-derived; the subtype frame keeps the recipe disjoint
+    /// from outbound openings under the shared session domain.
+    #[must_use]
+    pub fn inbound_session_ref(provenance: &InboundEnvelopeProvenance, opening: Id) -> SessionRef {
+        let subtype = [1];
+        let mut parts = Vec::with_capacity(
+            provenance
+                .connector_path()
+                .segments()
+                .len()
+                .saturating_add(2),
+        );
+        parts.push(subtype.as_slice());
+        parts.extend(
+            provenance
+                .connector_path()
+                .segments()
+                .iter()
+                .map(|segment| segment.as_bytes()),
+        );
+        parts.push(opening.as_bytes());
+        SessionRef::new(Id::derive(SESSION, &parts))
+    }
+
+    /// Logical reference of one outbound-opened session.
+    #[must_use]
+    pub fn outbound_session_ref(
+        connector: &node::Path,
+        emitting: Id,
+        request_digest: &[u8; 32],
+    ) -> SessionRef {
+        let subtype = [2];
+        let mut parts = Vec::with_capacity(connector.segments().len().saturating_add(3));
+        parts.push(subtype.as_slice());
+        parts.extend(
+            connector
+                .segments()
+                .iter()
+                .map(|segment| segment.as_bytes()),
+        );
+        parts.push(emitting.as_bytes());
+        parts.push(request_digest);
+        SessionRef::new(Id::derive(SESSION, &parts))
+    }
+
+    /// Identity of one graph-to-world session write.
+    #[must_use]
+    pub fn session_write_ref(
+        session: SessionRef,
+        emitting: Id,
+        message_digest: &[u8; 32],
+    ) -> SessionWriteRef {
+        SessionWriteRef::new(Id::derive(
+            SESSION_WRITE,
+            &[session.id().as_bytes(), emitting.as_bytes(), message_digest],
+        ))
+    }
 }
 
 /// Extend-only timer-kind registry stored in transaction key 37.
@@ -193,6 +261,17 @@ pub struct InboundRecord {
     /// Singleton owners are explicit because generation is never derivable
     /// from a route's static endpoint alone.
     pub routes: Vec<RouteTarget>,
+    /// Session opening/message fact, omitted for Event and Call ingress.
+    pub session: Option<Box<SessionIngressRecord>>,
+}
+
+/// Resolved session meaning of one committed inbound fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionIngressRecord {
+    /// This record opened the named session.
+    Open(SessionRef),
+    /// This record delivered one message in the named live session.
+    Message(SessionRef),
 }
 
 /// One pre-commit target selection for a single inbound envelope.
@@ -256,6 +335,11 @@ pub struct TransactionRecord {
     /// cursor. Port-triggered and call-completion transactions derive their
     /// cause from `consumed` and omit this field.
     pub cause: Option<crate::envelope::Id>,
+    /// The logical session terminated by this Connector transaction. Omitted
+    /// on every non-session firing. Kept beside the other optional 16-byte
+    /// causal reference so the 32-bit kernel does not pay two padding gaps.
+    /// The transaction's last emission must be the sole conventional `exit`.
+    pub session_exit: Option<SessionRef>,
     /// The consumed input positions; canonically sorted at commit.
     pub consumed: Vec<ConsumedPosition>,
     /// Envelope ids contributing to a presence-completing join, in the
@@ -291,14 +375,51 @@ pub struct RoutedDelivery {
     pub target: InstanceRef,
 }
 
-/// One fact of a call's WAL (`delivery-semantics.md` §4): the open
-/// fact, or its closure — two records, never one rewritten.
+/// One external-world WAL fact. Call and Session subforms remain under the
+/// same OUTBOUND causal record kind; neither can be mistaken for the other.
 #[derive(Debug, Clone, PartialEq)]
-pub struct OutboundRecord {
+pub enum OutboundRecord {
+    /// One fact of a Call's open/close WAL.
+    Call(CallRecord),
+    /// One fact of a Session opening or message-write WAL.
+    Session(SessionRecord),
+}
+
+/// One fact of a Call's WAL (`delivery-semantics.md` §4): the open fact, or
+/// its closure — two records, never one rewritten.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallRecord {
     /// The canonical call fields.
     pub intent: Intent,
     /// Which fact this record states.
     pub status: OutboundStatus,
+}
+
+/// One causal OUTBOUND fact inside the Session fold.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRecord {
+    /// Connector that owns the logical session.
+    pub connector_path: node::Path,
+    /// Session whose fold this fact advances.
+    pub session_ref: SessionRef,
+    /// Exact transition stated by this record.
+    pub status: SessionStatus,
+}
+
+/// Append-only states of outbound Session work.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionStatus {
+    /// Journal-before-effect opening intent for a client-like session.
+    Opening(SessionOpenIntent),
+    /// The opening effect succeeded and messages may flow.
+    Opened,
+    /// One graph-to-world message became an open write obligation.
+    WriteOpen(SessionWriteIntent),
+    /// The Driver locally accepted the message bytes.
+    WriteSettled(SessionWriteRef),
+    /// Recovery cannot prove the message's external visibility; it must not
+    /// be replayed blindly.
+    WriteAbandoned(SessionWriteRef),
 }
 
 /// The sealed causal states of an outbound call. A late reply after
@@ -358,6 +479,7 @@ pub struct PreparedInbound {
     submission: InboundSubmission,
     seq: u64,
     envelope: Envelope,
+    session: Option<SessionIngressRecord>,
 }
 
 impl PreparedInbound {
@@ -371,6 +493,12 @@ impl PreparedInbound {
     #[must_use]
     pub const fn envelope(&self) -> &Envelope {
         &self.envelope
+    }
+
+    /// Resolved session fact, including the ref derived for an opening.
+    #[must_use]
+    pub const fn session(&self) -> Option<SessionIngressRecord> {
+        self.session
     }
 }
 
@@ -453,6 +581,28 @@ pub enum Error {
     /// An intent whose call ref does not derive from its own
     /// canonical fields — a forged or corrupted causal fact.
     CorruptIntent,
+    /// A session opening ref does not derive from its canonical fields.
+    CorruptSessionOpen,
+    /// A session write ref does not derive from its canonical fields.
+    CorruptSessionWrite,
+    /// A session ref is unknown or no longer live.
+    UnknownSession,
+    /// An opening attempted to reuse a session ref already present in the
+    /// journal fold.
+    DuplicateSessionOpen,
+    /// A session write ref has no matching open fact.
+    UnknownSessionWrite,
+    /// A session write was opened twice or settled more than once.
+    DuplicateSessionWriteTransition,
+    /// A terminal was attempted while one or more message writes were still
+    /// causally open.
+    OpenSessionWrites,
+    /// A session terminal transaction omitted, repeated, or followed its
+    /// conventional `exit` emission.
+    InvalidSessionExit,
+    /// A session terminal envelope omitted or contradicted the logical
+    /// `meta.ext.session_id` projection owned by its `SessionRef`.
+    SessionProjectionMismatch,
     /// The backing store failed to commit — the durable-journal
     /// escape hatch; the in-memory journal never raises it.
     Storage(String),
@@ -521,6 +671,27 @@ impl fmt::Display for Error {
             Self::CorruptIntent => {
                 f.write_str("the call ref does not derive from the intent's canonical fields")
             }
+            Self::CorruptSessionOpen => f.write_str(
+                "the session ref does not derive from the opening intent's canonical fields",
+            ),
+            Self::CorruptSessionWrite => f.write_str(
+                "the session write ref does not derive from the intent's canonical fields",
+            ),
+            Self::UnknownSession => f.write_str("the session is unknown or already terminal"),
+            Self::DuplicateSessionOpen => f.write_str("the session opening is already journaled"),
+            Self::UnknownSessionWrite => f.write_str("no open session write has this reference"),
+            Self::DuplicateSessionWriteTransition => {
+                f.write_str("the session write already made this lifecycle transition")
+            }
+            Self::OpenSessionWrites => {
+                f.write_str("the session still has unsettled message writes")
+            }
+            Self::InvalidSessionExit => f.write_str(
+                "a session terminal transaction requires exactly one final `exit` emission",
+            ),
+            Self::SessionProjectionMismatch => f.write_str(
+                "a session terminal envelope must project its logical `session_id` exactly",
+            ),
             Self::Storage(detail) => write!(f, "the journal store failed: {detail}"),
         }
     }
@@ -540,6 +711,20 @@ pub trait Journal {
     ///
     /// Sequence mismatch or exhaustion, as for [`Self::append_inbound`].
     fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error>;
+
+    /// Mints one session opening/message envelope without committing it. The
+    /// journal derives or verifies the logical session ref and overwrites the
+    /// reserved `meta.ext.session_id` projection.
+    ///
+    /// # Errors
+    ///
+    /// The same sequence failures as [`Self::prepare_inbound`], or an unknown,
+    /// terminal, or duplicate session transition.
+    fn prepare_session_inbound(
+        &self,
+        submission: InboundSubmission,
+        session: InboundSession,
+    ) -> Result<PreparedInbound, Error>;
 
     /// Atomically commits one prepared ingress and its destination routes.
     /// A durable implementation must compare-and-advance the prepared
@@ -606,6 +791,39 @@ pub trait Journal {
     /// the intent's own canonical fields.
     fn open_outbound(&mut self, intent: Intent) -> Result<(), Error>;
 
+    /// Journals one outbound session opening before the Driver acts.
+    ///
+    /// # Errors
+    ///
+    /// A corrupt or duplicate session reference.
+    fn open_outbound_session(&mut self, intent: SessionOpenIntent) -> Result<(), Error>;
+
+    /// Confirms that one outbound opening established a live session.
+    ///
+    /// # Errors
+    ///
+    /// The session is unknown or already terminal.
+    fn confirm_session_open(&mut self, session: &SessionRef) -> Result<CloseVerdict, Error>;
+
+    /// Journals one session message before the Driver may offer its bytes.
+    ///
+    /// # Errors
+    ///
+    /// The session is unavailable or the write identity is corrupt/duplicate.
+    fn open_session_write(&mut self, intent: SessionWriteIntent) -> Result<(), Error>;
+
+    /// Settles one local session write obligation. `abandoned` means recovery
+    /// cannot prove external visibility and therefore must not replay it.
+    ///
+    /// # Errors
+    ///
+    /// The session/write is unknown.
+    fn settle_session_write(
+        &mut self,
+        write_ref: &SessionWriteRef,
+        abandoned: bool,
+    ) -> Result<CloseVerdict, Error>;
+
     /// Settles the race to close a call by appending the closure
     /// fact: the first closure wins and becomes causal; every later
     /// one is told [`CloseVerdict::AlreadyClosed`] and must treat its
@@ -635,6 +853,12 @@ pub trait Journal {
     /// The calls whose open fact has no closure fact yet, in open
     /// order.
     fn open_calls(&self) -> Vec<Intent>;
+
+    /// Live sessions in canonical reference order.
+    fn live_sessions(&self) -> Vec<SessionRef>;
+
+    /// Session message writes whose open fact has no settlement fact.
+    fn open_session_writes(&self) -> Vec<SessionWriteIntent>;
 }
 
 /// The M0 in-memory journal. It preserves the logical boundaries a
@@ -651,6 +875,9 @@ pub struct MemJournal {
     /// Active durable close roots. The set is a replay-derived fast rejection:
     /// ordinary admission never walks an owner chain when no close fact exists.
     active_close_roots: BTreeSet<InstanceRef>,
+    /// Replay-derived Session fold. It is an index over the three ordinary
+    /// causal record kinds, never a fourth record stream.
+    sessions: BTreeMap<SessionRef, SessionLifecycle>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -659,6 +886,20 @@ struct InstanceLifecycle {
     active: bool,
     parent: Option<InstanceRef>,
     closing: bool,
+}
+
+#[derive(Debug, Clone)]
+struct SessionLifecycle {
+    connector_path: node::Path,
+    phase: SessionPhase,
+    writes: BTreeMap<SessionWriteRef, bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionPhase {
+    Opening,
+    Open,
+    Exited,
 }
 
 impl MemJournal {
@@ -673,6 +914,7 @@ impl MemJournal {
             next_seq: BTreeMap::new(),
             instance_lifecycles: BTreeMap::new(),
             active_close_roots: BTreeSet::new(),
+            sessions: BTreeMap::new(),
         }
     }
 
@@ -686,7 +928,9 @@ impl MemJournal {
 
     fn statuses_of(&self, call_ref: &CallRef) -> impl Iterator<Item = &OutboundStatus> {
         self.records.iter().filter_map(move |record| match record {
-            Record::Outbound(outbound) if outbound.intent.call_ref == *call_ref => {
+            Record::Outbound(OutboundRecord::Call(outbound))
+                if outbound.intent.call_ref == *call_ref =>
+            {
                 Some(&outbound.status)
             }
             _ => None,
@@ -784,10 +1028,12 @@ impl MemJournal {
             Record::Outbound(_) => false,
         })
     }
-}
 
-impl Journal for MemJournal {
-    fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error> {
+    fn prepare_inbound_fact(
+        &self,
+        submission: InboundSubmission,
+        session: Option<InboundSession>,
+    ) -> Result<PreparedInbound, Error> {
         let next = self
             .next_seq
             .get(&submission.provenance)
@@ -805,19 +1051,62 @@ impl Journal for MemJournal {
         };
         seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
         let id = ids::root_id(&submission.provenance, seq);
+        let resolved_session = match session {
+            None => None,
+            Some(InboundSession::Open) => {
+                let reference = ids::inbound_session_ref(&submission.provenance, id);
+                if self.sessions.contains_key(&reference) {
+                    return Err(Error::DuplicateSessionOpen);
+                }
+                Some(SessionIngressRecord::Open(reference))
+            }
+            Some(InboundSession::Message(reference)) => {
+                let Some(lifecycle) = self.sessions.get(&reference) else {
+                    return Err(Error::UnknownSession);
+                };
+                if lifecycle.phase != SessionPhase::Open
+                    || lifecycle.connector_path != *submission.provenance.connector_path()
+                {
+                    return Err(Error::UnknownSession);
+                }
+                Some(SessionIngressRecord::Message(reference))
+            }
+        };
+        let mut ext = submission.draft.ext.clone();
+        if let Some(session) = resolved_session {
+            let reference = match session {
+                SessionIngressRecord::Open(reference)
+                | SessionIngressRecord::Message(reference) => reference,
+            };
+            ext.insert(
+                String::from("session_id"),
+                crate::envelope::MetaValue::Scalar(crate::envelope::Scalar::Text(
+                    reference.to_string(),
+                )),
+            );
+        }
         let sys = MetaSys::root(id, self.graph_version.0);
-        // The world's half seeds `ext` only: `app` is the
-        // application's zone and starts empty at ingress
-        // (D-2026-08-10-1).
-        let envelope = Envelope::new(
-            Meta::new(sys).with_ext(submission.draft.ext.clone()),
-            submission.draft.data.clone(),
-        );
+        let envelope = Envelope::new(Meta::new(sys).with_ext(ext), submission.draft.data.clone());
         Ok(PreparedInbound {
             submission,
             seq,
             envelope,
+            session: resolved_session,
         })
+    }
+}
+
+impl Journal for MemJournal {
+    fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error> {
+        self.prepare_inbound_fact(submission, None)
+    }
+
+    fn prepare_session_inbound(
+        &self,
+        submission: InboundSubmission,
+        session: InboundSession,
+    ) -> Result<PreparedInbound, Error> {
+        self.prepare_inbound_fact(submission, Some(session))
     }
 
     fn commit_inbound(
@@ -837,6 +1126,24 @@ impl Journal for MemJournal {
             });
         }
         let following = prepared.seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
+        match prepared.session {
+            Some(SessionIngressRecord::Open(reference)) => {
+                if self.sessions.contains_key(&reference) {
+                    return Err(Error::DuplicateSessionOpen);
+                }
+            }
+            Some(SessionIngressRecord::Message(reference)) => {
+                let Some(lifecycle) = self.sessions.get(&reference) else {
+                    return Err(Error::UnknownSession);
+                };
+                if lifecycle.phase != SessionPhase::Open
+                    || lifecycle.connector_path != *prepared.submission.provenance.connector_path()
+                {
+                    return Err(Error::UnknownSession);
+                }
+            }
+            None => {}
+        }
         for route in &routes {
             let expected = self.instance_ref_for_admission(route.target.address())?;
             if route.target != expected {
@@ -853,7 +1160,21 @@ impl Journal for MemJournal {
             seq: prepared.seq,
             envelope: prepared.envelope.clone(),
             routes,
+            // Session framing is absent on the overwhelmingly common Event
+            // and Call records. Box the rare extension so `None` does not
+            // widen every causal `Record` retained by an embedded journal.
+            session: prepared.session.map(Box::new),
         };
+        if let Some(SessionIngressRecord::Open(reference)) = prepared.session {
+            self.sessions.insert(
+                reference,
+                SessionLifecycle {
+                    connector_path: prepared.submission.provenance.connector_path().clone(),
+                    phase: SessionPhase::Open,
+                    writes: BTreeMap::new(),
+                },
+            );
+        }
         self.next_seq
             .insert(prepared.submission.provenance, following);
         self.records.push(Record::Inbound(record.clone()));
@@ -982,6 +1303,44 @@ impl Journal for MemJournal {
                 });
             }
         }
+        if let Some(session_ref) = transaction.session_exit {
+            let Some(session) = self.sessions.get(&session_ref) else {
+                return Err(Error::UnknownSession);
+            };
+            if session.phase == SessionPhase::Exited
+                || session.connector_path.segments() != transaction.owner_path.segments()
+            {
+                return Err(Error::UnknownSession);
+            }
+            if session.writes.values().any(|settled| !settled) {
+                return Err(Error::OpenSessionWrites);
+            }
+            let exits = transaction
+                .emissions
+                .iter()
+                .filter(|emission| emission.port.name() == "exit")
+                .count();
+            if exits != 1
+                || transaction
+                    .emissions
+                    .last()
+                    .is_none_or(|emission| emission.port.name() != "exit")
+            {
+                return Err(Error::InvalidSessionExit);
+            }
+            let projected = transaction
+                .emissions
+                .last()
+                .and_then(|emission| emission.envelope.meta().ext().get("session_id"));
+            if !matches!(
+                projected,
+                Some(crate::envelope::MetaValue::Scalar(
+                    crate::envelope::Scalar::Text(value)
+                )) if value == &session_ref.to_string()
+            ) {
+                return Err(Error::SessionProjectionMismatch);
+            }
+        }
         // Canonicalize the declaratively sorted collections so an
         // invalid ordering is not constructible through the journal.
         transaction.consumed.sort();
@@ -1006,8 +1365,14 @@ impl Journal for MemJournal {
             lifecycle.closing = true;
         }
         let address = transaction.instance.address().clone();
+        let session_exit = transaction.session_exit;
         self.records.push(Record::Transaction(transaction));
         self.instance_lifecycles.insert(address, lifecycle);
+        if let Some(session_ref) = session_exit
+            && let Some(session) = self.sessions.get_mut(&session_ref)
+        {
+            session.phase = SessionPhase::Exited;
+        }
         Ok(())
     }
 
@@ -1042,11 +1407,123 @@ impl Journal for MemJournal {
         if self.statuses_of(&intent.call_ref).next().is_some() {
             return Err(Error::DuplicateOpen);
         }
-        self.records.push(Record::Outbound(OutboundRecord {
-            intent,
-            status: OutboundStatus::Open,
-        }));
+        self.records
+            .push(Record::Outbound(OutboundRecord::Call(CallRecord {
+                intent,
+                status: OutboundStatus::Open,
+            })));
         Ok(())
+    }
+
+    fn open_outbound_session(&mut self, intent: SessionOpenIntent) -> Result<(), Error> {
+        let derived = ids::outbound_session_ref(
+            &intent.connector_path,
+            intent.emitting_id,
+            intent.request_digest(),
+        );
+        if derived != intent.session_ref {
+            return Err(Error::CorruptSessionOpen);
+        }
+        if self.sessions.contains_key(&intent.session_ref) {
+            return Err(Error::DuplicateSessionOpen);
+        }
+        let reference = intent.session_ref;
+        let connector_path = intent.connector_path.clone();
+        self.records
+            .push(Record::Outbound(OutboundRecord::Session(SessionRecord {
+                connector_path: connector_path.clone(),
+                session_ref: reference,
+                status: SessionStatus::Opening(intent),
+            })));
+        self.sessions.insert(
+            reference,
+            SessionLifecycle {
+                connector_path,
+                phase: SessionPhase::Opening,
+                writes: BTreeMap::new(),
+            },
+        );
+        Ok(())
+    }
+
+    fn confirm_session_open(&mut self, session_ref: &SessionRef) -> Result<CloseVerdict, Error> {
+        let Some(session) = self.sessions.get_mut(session_ref) else {
+            return Err(Error::UnknownSession);
+        };
+        match session.phase {
+            SessionPhase::Opening => session.phase = SessionPhase::Open,
+            SessionPhase::Open => return Ok(CloseVerdict::AlreadyClosed),
+            SessionPhase::Exited => return Err(Error::UnknownSession),
+        }
+        let connector_path = session.connector_path.clone();
+        self.records
+            .push(Record::Outbound(OutboundRecord::Session(SessionRecord {
+                connector_path,
+                session_ref: *session_ref,
+                status: SessionStatus::Opened,
+            })));
+        Ok(CloseVerdict::Won)
+    }
+
+    fn open_session_write(&mut self, intent: SessionWriteIntent) -> Result<(), Error> {
+        let derived = ids::session_write_ref(
+            intent.session_ref,
+            intent.emitting_id,
+            intent.message_digest(),
+        );
+        if derived != intent.write_ref {
+            return Err(Error::CorruptSessionWrite);
+        }
+        let Some(session) = self.sessions.get_mut(&intent.session_ref) else {
+            return Err(Error::UnknownSession);
+        };
+        if session.phase != SessionPhase::Open || session.connector_path != intent.connector_path {
+            return Err(Error::UnknownSession);
+        }
+        if session.writes.contains_key(&intent.write_ref) {
+            return Err(Error::DuplicateSessionWriteTransition);
+        }
+        session.writes.insert(intent.write_ref, false);
+        self.records
+            .push(Record::Outbound(OutboundRecord::Session(SessionRecord {
+                connector_path: intent.connector_path.clone(),
+                session_ref: intent.session_ref,
+                status: SessionStatus::WriteOpen(intent),
+            })));
+        Ok(())
+    }
+
+    fn settle_session_write(
+        &mut self,
+        write_ref: &SessionWriteRef,
+        abandoned: bool,
+    ) -> Result<CloseVerdict, Error> {
+        let Some((session_ref, session)) = self
+            .sessions
+            .iter_mut()
+            .find(|(_, session)| session.writes.contains_key(write_ref))
+        else {
+            return Err(Error::UnknownSessionWrite);
+        };
+        let Some(settled) = session.writes.get_mut(write_ref) else {
+            return Err(Error::UnknownSessionWrite);
+        };
+        if *settled {
+            return Ok(CloseVerdict::AlreadyClosed);
+        }
+        *settled = true;
+        let status = if abandoned {
+            SessionStatus::WriteAbandoned(*write_ref)
+        } else {
+            SessionStatus::WriteSettled(*write_ref)
+        };
+        self.records
+            .push(Record::Outbound(OutboundRecord::Session(SessionRecord {
+                connector_path: session.connector_path.clone(),
+                session_ref: *session_ref,
+                status,
+            })));
+        Ok(CloseVerdict::Won)
     }
 
     fn close_outbound(
@@ -1056,7 +1533,7 @@ impl Journal for MemJournal {
     ) -> Result<CloseVerdict, Error> {
         let mut intent = None;
         for record in &self.records {
-            let Record::Outbound(outbound) = record else {
+            let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
                 continue;
             };
             if outbound.intent.call_ref != *call_ref {
@@ -1074,17 +1551,18 @@ impl Journal for MemJournal {
         };
         // Append the closure as a new fact; the open fact stays
         // byte-identical — the attempt trace survives.
-        self.records.push(Record::Outbound(OutboundRecord {
-            intent,
-            status: OutboundStatus::Closed(closure),
-        }));
+        self.records
+            .push(Record::Outbound(OutboundRecord::Call(CallRecord {
+                intent,
+                status: OutboundStatus::Closed(closure),
+            })));
         Ok(CloseVerdict::Won)
     }
 
     fn abandon_outbound(&mut self, call_ref: &CallRef) -> Result<CloseVerdict, Error> {
         let mut intent = None;
         for record in &self.records {
-            let Record::Outbound(outbound) = record else {
+            let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
                 continue;
             };
             if outbound.intent.call_ref != *call_ref {
@@ -1100,10 +1578,11 @@ impl Journal for MemJournal {
         let Some(intent) = intent else {
             return Err(Error::UnknownCall);
         };
-        self.records.push(Record::Outbound(OutboundRecord {
-            intent,
-            status: OutboundStatus::Abandoned,
-        }));
+        self.records
+            .push(Record::Outbound(OutboundRecord::Call(CallRecord {
+                intent,
+                status: OutboundStatus::Abandoned,
+            })));
         Ok(CloseVerdict::Won)
     }
 
@@ -1124,7 +1603,9 @@ impl Journal for MemJournal {
 
     fn find_call(&self, call_ref: &CallRef) -> Option<Intent> {
         self.records.iter().find_map(|record| match record {
-            Record::Outbound(outbound) if outbound.intent.call_ref == *call_ref => {
+            Record::Outbound(OutboundRecord::Call(outbound))
+                if outbound.intent.call_ref == *call_ref =>
+            {
                 Some(outbound.intent.clone())
             }
             _ => None,
@@ -1134,7 +1615,7 @@ impl Journal for MemJournal {
     fn open_calls(&self) -> Vec<Intent> {
         let mut open: Vec<Intent> = Vec::new();
         for record in &self.records {
-            let Record::Outbound(outbound) = record else {
+            let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
                 continue;
             };
             match outbound.status {
@@ -1146,6 +1627,38 @@ impl Journal for MemJournal {
         }
         open
     }
+
+    fn live_sessions(&self) -> Vec<SessionRef> {
+        self.sessions
+            .iter()
+            .filter_map(|(reference, lifecycle)| {
+                (lifecycle.phase == SessionPhase::Open).then_some(*reference)
+            })
+            .collect()
+    }
+
+    fn open_session_writes(&self) -> Vec<SessionWriteIntent> {
+        let open: BTreeSet<_> = self
+            .sessions
+            .values()
+            .flat_map(|session| {
+                session
+                    .writes
+                    .iter()
+                    .filter_map(|(reference, settled)| (!settled).then_some(*reference))
+            })
+            .collect();
+        self.records
+            .iter()
+            .filter_map(|record| match record {
+                Record::Outbound(OutboundRecord::Session(SessionRecord {
+                    status: SessionStatus::WriteOpen(intent),
+                    ..
+                })) if open.contains(&intent.write_ref) => Some(intent.clone()),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -1153,6 +1666,7 @@ mod tests {
     use super::*;
     use crate::boundary::Draft;
     use crate::envelope::{Data, Encoding, Namespace};
+    use alloc::format;
     use alloc::string::ToString;
     use alloc::vec;
 
@@ -1186,6 +1700,20 @@ mod tests {
         }
     }
 
+    fn project_session(envelope: &Envelope, session: SessionRef) -> Envelope {
+        let mut ext = envelope.meta().ext().clone();
+        ext.insert(
+            String::from("session_id"),
+            crate::envelope::MetaValue::Scalar(crate::envelope::Scalar::Text(session.to_string())),
+        );
+        Envelope::new(
+            Meta::new(envelope.meta().sys().clone())
+                .with_app(envelope.meta().app().clone())
+                .with_ext(ext),
+            envelope.data().clone(),
+        )
+    }
+
     fn intent(connector: &str, digest: u8) -> Intent {
         let connector_path = node::Path::new([connector]).unwrap();
         let emitting_id = Id::derive(0x02, &[b"cause"]);
@@ -1200,6 +1728,31 @@ mod tests {
             idempotency_key: Some(String::from("op-1")),
             effect: node::EffectClass::Idempotent,
             resolved_settings: BTreeMap::new(),
+        }
+    }
+
+    fn session_open(connector: &str, digest: u8) -> SessionOpenIntent {
+        let connector_path = node::Path::new([connector]).unwrap();
+        let emitting_id = Id::derive(0x02, &[b"session-cause", &[digest]]);
+        let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
+        SessionOpenIntent {
+            session_ref: ids::outbound_session_ref(&connector_path, emitting_id, prepared.digest()),
+            emitting_id,
+            connector_path,
+            prepared,
+        }
+    }
+
+    fn session_write(session_ref: SessionRef, connector: &str, digest: u8) -> SessionWriteIntent {
+        let connector_path = node::Path::new([connector]).unwrap();
+        let emitting_id = Id::derive(0x02, &[b"message-cause", &[digest]]);
+        let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 3]);
+        SessionWriteIntent {
+            write_ref: ids::session_write_ref(session_ref, emitting_id, prepared.digest()),
+            session_ref,
+            emitting_id,
+            connector_path,
+            prepared,
         }
     }
 
@@ -1220,6 +1773,7 @@ mod tests {
             instance,
             parent_instance,
             close_scope: None,
+            session_exit: None,
             trigger: node::Trigger::Lifecycle(lifecycle),
             cause: None,
             consumed: vec![],
@@ -1488,6 +2042,22 @@ mod tests {
     }
 
     #[test]
+    fn the_session_recipes_are_pinned_byte_for_byte() {
+        let opening = Id::from_bytes([3; 16]);
+        let inbound = ids::inbound_session_ref(&provenance("gateway"), opening);
+        let connector = node::Path::new(["chat", "socket"]).unwrap();
+        let emitting = Id::from_bytes([4; 16]);
+        let digest = [5; 32];
+        let outbound = ids::outbound_session_ref(&connector, emitting, &digest);
+        let write = ids::session_write_ref(outbound, Id::from_bytes([6; 16]), &[7; 32]);
+        assert_eq!(
+            format!("{inbound}|{outbound}|{write}"),
+            "45e41992da920539378d903e21f963a0|835d72e38dc56aaf373d9613449d7354|\
+             19b7714f0076f09221da8c3d9a22f2f8"
+        );
+    }
+
+    #[test]
     fn the_recipes_separate_every_component() {
         let base = ids::emission_id(
             &node::Path::new(["a"]).unwrap(),
@@ -1623,11 +2193,11 @@ mod tests {
         // byte-identical to what it was before the closure.
         assert_eq!(journal.records().len(), 2);
         assert_eq!(journal.records()[0], open_before);
-        let Record::Outbound(open) = &journal.records()[0] else {
+        let Record::Outbound(OutboundRecord::Call(open)) = &journal.records()[0] else {
             panic!("expected the open fact");
         };
         assert_eq!(open.status, OutboundStatus::Open);
-        let Record::Outbound(closed) = &journal.records()[1] else {
+        let Record::Outbound(OutboundRecord::Call(closed)) = &journal.records()[1] else {
             panic!("expected the closure fact");
         };
         assert_eq!(closed.status, OutboundStatus::Closed(Closure::Timeout));
@@ -1670,10 +2240,10 @@ mod tests {
         );
         assert!(matches!(
             journal.records().last(),
-            Some(Record::Outbound(OutboundRecord {
+            Some(Record::Outbound(OutboundRecord::Call(CallRecord {
                 status: OutboundStatus::Abandoned,
                 ..
-            }))
+            })))
         ));
     }
 
@@ -1701,6 +2271,7 @@ mod tests {
                 instance: instance("shout", 0),
                 parent_instance: None,
                 close_scope: None,
+                session_exit: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![
@@ -1750,6 +2321,7 @@ mod tests {
                 instance: instance("shout", 0),
                 parent_instance: None,
                 close_scope: None,
+                session_exit: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![ConsumedPosition {
@@ -1788,5 +2360,165 @@ mod tests {
         );
         assert!(journal.find_call(&intent("echo", 1).call_ref).is_some());
         assert_eq!(journal.open_calls().len(), 1);
+    }
+
+    #[test]
+    fn inbound_sessions_are_concurrent_correlated_and_silent_after_exit() {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let first = journal
+            .prepare_session_inbound(
+                submission("socket", SubmissionSequence::Next),
+                InboundSession::Open,
+            )
+            .unwrap();
+        let first = journal.commit_inbound(first, vec![]).unwrap();
+        let Some(SessionIngressRecord::Open(first_ref)) = first.record.session.as_deref().copied()
+        else {
+            panic!("the opening commit carries its session ref")
+        };
+        assert_eq!(
+            first.envelope.meta().ext().get("session_id"),
+            Some(&crate::envelope::MetaValue::Scalar(
+                crate::envelope::Scalar::Text(first_ref.to_string())
+            )),
+            "the journal, never the peer, projects session identity"
+        );
+
+        let second = journal
+            .prepare_session_inbound(
+                submission("socket", SubmissionSequence::Next),
+                InboundSession::Open,
+            )
+            .unwrap();
+        let second = journal.commit_inbound(second, vec![]).unwrap();
+        let Some(SessionIngressRecord::Open(second_ref)) =
+            second.record.session.as_deref().copied()
+        else {
+            panic!("the second opening carries its session ref")
+        };
+        assert_ne!(first_ref, second_ref);
+
+        let message = journal
+            .prepare_session_inbound(
+                submission("socket", SubmissionSequence::Next),
+                InboundSession::Message(first_ref),
+            )
+            .unwrap();
+        let message = journal.commit_inbound(message, vec![]).unwrap();
+        assert_eq!(
+            message.record.session.as_deref().copied(),
+            Some(SessionIngressRecord::Message(first_ref))
+        );
+        assert_eq!(
+            message.envelope.meta().ext().get("session_id"),
+            Some(&crate::envelope::MetaValue::Scalar(
+                crate::envelope::Scalar::Text(first_ref.to_string())
+            ))
+        );
+        assert_eq!(journal.live_sessions(), vec![first_ref, second_ref]);
+
+        activate(&mut journal, instance("socket", 0));
+        let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Closing);
+        terminal.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
+        terminal.session_exit = Some(first_ref);
+        terminal.emissions.push(Emission {
+            port: node::Port::conventional_exit(),
+            index: 0,
+            envelope: first.envelope,
+        });
+        journal.commit(terminal).unwrap();
+        assert_eq!(journal.live_sessions(), vec![second_ref]);
+        assert_eq!(
+            journal.prepare_session_inbound(
+                submission("socket", SubmissionSequence::Next),
+                InboundSession::Message(first_ref),
+            ),
+            Err(Error::UnknownSession),
+            "a terminal session can never speak again"
+        );
+    }
+
+    #[test]
+    fn session_writes_settle_once_and_exit_only_after_every_write() {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let opening = session_open("socket", 1);
+        let session = opening.session_ref;
+        journal.open_outbound_session(opening).unwrap();
+        assert_eq!(
+            journal.confirm_session_open(&session).unwrap(),
+            CloseVerdict::Won
+        );
+        assert_eq!(
+            journal.confirm_session_open(&session).unwrap(),
+            CloseVerdict::AlreadyClosed
+        );
+
+        let first = session_write(session, "socket", 2);
+        let second = session_write(session, "socket", 3);
+        journal.open_session_write(first.clone()).unwrap();
+        journal.open_session_write(second.clone()).unwrap();
+        assert_eq!(journal.open_session_writes().len(), 2);
+        assert_eq!(
+            journal
+                .settle_session_write(&second.write_ref, false)
+                .unwrap(),
+            CloseVerdict::Won
+        );
+        assert_eq!(
+            journal
+                .settle_session_write(&second.write_ref, false)
+                .unwrap(),
+            CloseVerdict::AlreadyClosed
+        );
+
+        activate(&mut journal, instance("socket", 0));
+        let envelope = journal
+            .append_inbound(submission("world", SubmissionSequence::Next))
+            .unwrap()
+            .envelope;
+        let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Closing);
+        terminal.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
+        terminal.session_exit = Some(session);
+        terminal.emissions.push(Emission {
+            port: node::Port::conventional_exit(),
+            index: 0,
+            envelope: project_session(&envelope, session),
+        });
+        assert_eq!(
+            journal.commit(terminal.clone()),
+            Err(Error::OpenSessionWrites)
+        );
+
+        assert_eq!(
+            journal
+                .settle_session_write(&first.write_ref, true)
+                .unwrap(),
+            CloseVerdict::Won,
+            "crash ambiguity becomes an abandoned write fact, never a blind replay"
+        );
+        assert!(journal.open_session_writes().is_empty());
+        let mut output_after_exit = terminal.clone();
+        output_after_exit.emissions.push(Emission {
+            port: node::Port::conventional_out(),
+            index: 0,
+            envelope: envelope.clone(),
+        });
+        assert_eq!(
+            journal.commit(output_after_exit),
+            Err(Error::InvalidSessionExit)
+        );
+        let mut missing_projection = terminal.clone();
+        missing_projection.emissions[0].envelope = envelope;
+        assert_eq!(
+            journal.commit(missing_projection),
+            Err(Error::SessionProjectionMismatch)
+        );
+        journal.commit(terminal.clone()).unwrap();
+        assert_eq!(journal.commit(terminal), Err(Error::UnknownSession));
+        assert_eq!(
+            journal.open_session_write(session_write(session, "socket", 4)),
+            Err(Error::UnknownSession),
+            "post-exit writes stay silent at the world boundary"
+        );
     }
 }

@@ -5,14 +5,17 @@
 //! meet only at binding; registration order is never selection policy.
 
 use crate::boundary::{
-    CallRef, Completion, DriverRouteError, InboundConnectorDriver, InboundSubmission, Intent,
-    OutboundConnectorBindings, OutboundConnectorDriver, RequestPreparation, Response,
-    SchedulerCompletion,
+    CallConnectorDriver, CallRef, Completion, DriverRouteError, InboundConnectorDriver,
+    InboundDecision, InboundProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
+    RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
+    SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent, SessionRef, SessionWriteIntent,
 };
-use crate::connector::{ConnectorId, ConnectorRoles};
+use crate::connector::{ConnectorExchange, ConnectorId, ConnectorRoles};
 use crate::envelope::{Data, Envelope};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
+use crate::runtime::vm::{Vm, VmError};
+use crate::{boundary::InboundAdmission, journal::Journal};
 use std::collections::BTreeMap;
 
 /// One bound implementation object, potentially exposing both roles over the
@@ -147,14 +150,58 @@ impl DriverRegistry {
 
 #[derive(Debug)]
 struct FamilyRequirement {
-    nodes: Vec<(node::Path, ConnectorRoles)>,
+    nodes: Vec<(node::Path, ConnectorRoles, ConnectorExchange)>,
     required: ConnectorRoles,
 }
 
 struct BoundFamily<'plan> {
     driver: Box<dyn BoundConnectorDriver + 'plan>,
     uses_inbound: bool,
+    exchange: ConnectorExchange,
+    pending_inbound: Option<InboundProposal>,
     outbound_path: Option<node::Path>,
+    session_path: Option<node::Path>,
+}
+
+/// One retained proposal paired with the exact Driver family that owns it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutedInboundProposal {
+    connector: ConnectorId,
+    proposal: InboundProposal,
+}
+
+/// Failure of one inbound Driver/VM boundary round.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InboundPumpError {
+    /// The bound Driver registry contradicted its retained routing state.
+    Driver(DriverRouteError),
+    /// The VM or journal raised a fail-stop integrity fault.
+    Machine(VmError),
+}
+
+impl core::fmt::Display for InboundPumpError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Driver(error) => error.fmt(formatter),
+            Self::Machine(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for InboundPumpError {}
+
+impl RoutedInboundProposal {
+    /// Stable family that must receive the eventual decision callback.
+    #[must_use]
+    pub fn connector(&self) -> &ConnectorId {
+        &self.connector
+    }
+
+    /// Retained proposal presented for atomic VM admission.
+    #[must_use]
+    pub fn proposal(&self) -> &InboundProposal {
+        &self.proposal
+    }
 }
 
 /// Complete runtime association between active plan Connectors and physical
@@ -165,8 +212,13 @@ struct BoundFamily<'plan> {
 /// participates in execution.
 pub struct RuntimeBindings<'plan> {
     families: BTreeMap<ConnectorId, BoundFamily<'plan>>,
+    /// Last inbound family polled. Cycling from this key prevents one
+    /// backpressured transport from blocking an unrelated family.
+    inbound_cursor: Option<ConnectorId>,
     outbound: BTreeMap<node::Path, ConnectorId>,
     calls: BTreeMap<CallRef, ConnectorId>,
+    session_outbound: BTreeMap<node::Path, ConnectorId>,
+    sessions: BTreeMap<SessionRef, ConnectorId>,
 }
 
 impl core::fmt::Debug for RuntimeBindings<'_> {
@@ -174,8 +226,11 @@ impl core::fmt::Debug for RuntimeBindings<'_> {
         formatter
             .debug_struct("RuntimeBindings")
             .field("families", &self.families.keys().collect::<Vec<_>>())
+            .field("inbound_cursor", &self.inbound_cursor)
             .field("outbound", &self.outbound)
             .field("calls", &self.calls)
+            .field("session_outbound", &self.session_outbound)
+            .field("sessions", &self.sessions)
             .finish()
     }
 }
@@ -214,23 +269,34 @@ impl<'plan> RuntimeBindings<'plan> {
                 .entry(spec.contract.clone())
                 .and_modify(|requirement| {
                     requirement.required = union_roles(requirement.required, spec.roles);
-                    requirement.nodes.push((planned.path.clone(), spec.roles));
+                    requirement
+                        .nodes
+                        .push((planned.path.clone(), spec.roles, spec.exchange));
                 })
                 .or_insert_with(|| FamilyRequirement {
-                    nodes: vec![(planned.path.clone(), spec.roles)],
+                    nodes: vec![(planned.path.clone(), spec.roles, spec.exchange)],
                     required: spec.roles,
                 });
         }
 
         let mut families = BTreeMap::new();
         let mut outbound = BTreeMap::new();
+        let mut session_outbound = BTreeMap::new();
         for (id, requirement) in requirements {
             let factory = registry.require(&id, requirement.required)?;
             let paths: Vec<_> = requirement
                 .nodes
                 .iter()
-                .map(|(path, _)| path.clone())
+                .map(|(path, _, _)| path.clone())
                 .collect();
+            let exchange = requirement.nodes[0].2;
+            if requirement
+                .nodes
+                .iter()
+                .any(|(_, _, candidate)| *candidate != exchange)
+            {
+                return Err(DriverBindingError::ConflictingExchange { id });
+            }
             let mut driver =
                 factory
                     .bind(plan, &paths)
@@ -247,13 +313,27 @@ impl<'plan> RuntimeBindings<'plan> {
                     actual,
                 });
             }
+            if requirement.required.has_outbound() {
+                let actual_exchange = outbound_exchange_of(driver.as_mut());
+                if actual_exchange != Some(exchange) {
+                    return Err(DriverBindingError::BoundExchangeMismatch {
+                        id,
+                        required: exchange,
+                        actual: actual_exchange,
+                    });
+                }
+            }
 
             let uses_inbound = requirement.required.has_inbound();
             let mut outbound_path = None;
-            for (path, roles) in requirement.nodes {
-                if roles.has_outbound() {
+            let mut session_path = None;
+            for (path, roles, _) in requirement.nodes {
+                if roles.has_outbound() && exchange == ConnectorExchange::Call {
                     outbound_path.get_or_insert_with(|| path.clone());
                     outbound.insert(path, id.clone());
+                } else if roles.has_outbound() && exchange == ConnectorExchange::Session {
+                    session_path.get_or_insert_with(|| path.clone());
+                    session_outbound.insert(path, id.clone());
                 }
             }
             families.insert(
@@ -261,14 +341,20 @@ impl<'plan> RuntimeBindings<'plan> {
                 BoundFamily {
                     driver,
                     uses_inbound,
+                    exchange,
+                    pending_inbound: None,
                     outbound_path,
+                    session_path,
                 },
             );
         }
         Ok(Self {
             families,
+            inbound_cursor: None,
             outbound,
             calls: BTreeMap::new(),
+            session_outbound,
+            sessions: BTreeMap::new(),
         })
     }
 
@@ -277,35 +363,187 @@ impl<'plan> RuntimeBindings<'plan> {
     /// # Errors
     ///
     /// A role view proven during binding disappeared.
-    pub fn next_inbound(&mut self) -> Result<Option<InboundSubmission>, DriverRouteError> {
-        for (id, family) in &mut self.families {
-            if !family.uses_inbound {
+    pub fn next_inbound(&mut self) -> Result<Option<RoutedInboundProposal>, DriverRouteError> {
+        let ids: Vec<_> = self
+            .families
+            .iter()
+            .filter_map(|(id, family)| family.uses_inbound.then_some(id.clone()))
+            .collect();
+        let start = self
+            .inbound_cursor
+            .as_ref()
+            .and_then(|cursor| ids.iter().position(|id| id == cursor))
+            .map_or(0, |position| position.saturating_add(1) % ids.len().max(1));
+        for offset in 0..ids.len() {
+            let id = &ids[(start + offset) % ids.len()];
+            let Some(family) = self.families.get_mut(id) else {
+                // `ids` was derived from this map without mutating it. Keep
+                // the public boundary total even if that local invariant is
+                // accidentally broken later.
                 continue;
+            };
+            if let Some(proposal) = &family.pending_inbound {
+                self.inbound_cursor = Some(id.clone());
+                return Ok(Some(RoutedInboundProposal {
+                    connector: id.clone(),
+                    proposal: proposal.clone(),
+                }));
             }
             let Some(driver) = family.driver.inbound() else {
                 return Err(DriverRouteError::UnavailableInbound(id.clone()));
             };
-            if let Some(submission) = driver.next() {
-                return Ok(Some(submission));
+            if let Some(proposal) = driver.proposal() {
+                let framing_matches = match family.exchange {
+                    ConnectorExchange::Event | ConnectorExchange::Call => {
+                        proposal.session.is_none()
+                    }
+                    ConnectorExchange::Session => proposal.session.is_some(),
+                };
+                if !framing_matches {
+                    return Err(DriverRouteError::InboundExchangeMismatch {
+                        connector: id.clone(),
+                        exchange: family.exchange,
+                    });
+                }
+                family.pending_inbound = Some(proposal.clone());
+                self.inbound_cursor = Some(id.clone());
+                return Ok(Some(RoutedInboundProposal {
+                    connector: id.clone(),
+                    proposal,
+                }));
             }
         }
         Ok(None)
     }
 
+    /// Resolves one retained proposal after committed acceptance or a typed
+    /// contract rejection. Pending admission makes no callback.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a stale, crossed-family, or otherwise unknown proposal.
+    pub fn decide_inbound(
+        &mut self,
+        routed: &RoutedInboundProposal,
+        decision: InboundDecision,
+    ) -> Result<(), DriverRouteError> {
+        let Some(family) = self.families.get_mut(&routed.connector) else {
+            return Err(DriverRouteError::UnknownInboundProposal {
+                connector: routed.connector.clone(),
+                reference: routed.proposal.reference,
+            });
+        };
+        let Some(pending) = &family.pending_inbound else {
+            return Err(DriverRouteError::UnknownInboundProposal {
+                connector: routed.connector.clone(),
+                reference: routed.proposal.reference,
+            });
+        };
+        if pending != &routed.proposal {
+            return Err(DriverRouteError::UnknownInboundProposal {
+                connector: routed.connector.clone(),
+                reference: routed.proposal.reference,
+            });
+        }
+        if let InboundDecision::Accepted(accepted) = decision
+            && let Some(session) = accepted.session
+        {
+            if let Some(expected) = self.sessions.get(&session)
+                && expected != &routed.connector
+            {
+                return Err(DriverRouteError::CrossFamilySession {
+                    session,
+                    expected: expected.clone(),
+                    actual: routed.connector.clone(),
+                });
+            }
+            self.sessions.insert(session, routed.connector.clone());
+        }
+        let Some(driver) = family.driver.inbound() else {
+            return Err(DriverRouteError::UnavailableInbound(
+                routed.connector.clone(),
+            ));
+        };
+        driver.decide(routed.proposal.reference, decision);
+        family.pending_inbound = None;
+        Ok(())
+    }
+
+    /// Runs one bounded inbound proposal through VM admission.
+    ///
+    /// Acceptance reaches the Driver only after the journal commit. Pending
+    /// admission retains both the proposal and Driver-side transport unit;
+    /// rejection releases it with a portable typed reason.
+    ///
+    /// # Errors
+    ///
+    /// Driver routing contradictions and fail-stop VM/journal faults remain
+    /// distinct.
+    pub fn pump_inbound(
+        &mut self,
+        vm: &mut Vm<'plan>,
+        journal: &mut dyn Journal,
+    ) -> Result<Option<InboundAdmission>, InboundPumpError> {
+        let Some(routed) = self.next_inbound().map_err(InboundPumpError::Driver)? else {
+            return Ok(None);
+        };
+        let admission = vm
+            .admit_inbound(journal, routed.proposal())
+            .map_err(InboundPumpError::Machine)?;
+        match admission {
+            InboundAdmission::Accepted(accepted) => self
+                .decide_inbound(&routed, InboundDecision::Accepted(accepted))
+                .map_err(InboundPumpError::Driver)?,
+            InboundAdmission::Rejected(reason) => self
+                .decide_inbound(&routed, InboundDecision::Rejected(reason))
+                .map_err(InboundPumpError::Driver)?,
+            InboundAdmission::Pending => {}
+        }
+        Ok(Some(admission))
+    }
+
     fn outbound_driver(
         &mut self,
         connector: &node::Path,
-    ) -> Result<&mut dyn OutboundConnectorDriver, DriverRouteError> {
+    ) -> Result<&mut dyn CallConnectorDriver, DriverRouteError> {
         let Some(id) = self.outbound.get(connector) else {
             return Err(DriverRouteError::UnboundOutbound(connector.clone()));
         };
         let Some(family) = self.families.get_mut(id) else {
             return Err(DriverRouteError::UnboundOutbound(connector.clone()));
         };
-        family
+        let outbound = family
             .driver
             .outbound()
-            .ok_or_else(|| DriverRouteError::UnavailableOutbound(connector.clone()))
+            .ok_or_else(|| DriverRouteError::UnavailableOutbound(connector.clone()))?;
+        outbound
+            .call()
+            .ok_or_else(|| DriverRouteError::UnavailableCall(connector.clone()))
+    }
+
+    fn session_driver(
+        &mut self,
+        connector: &node::Path,
+    ) -> Result<(ConnectorId, &mut dyn SessionConnectorDriver), DriverRouteError> {
+        let id = self.session_family(connector)?;
+        let Some(family) = self.families.get_mut(&id) else {
+            return Err(DriverRouteError::UnboundSession(connector.clone()));
+        };
+        let outbound = family
+            .driver
+            .outbound()
+            .ok_or_else(|| DriverRouteError::UnavailableOutbound(connector.clone()))?;
+        let driver = outbound
+            .session()
+            .ok_or_else(|| DriverRouteError::UnavailableSession(connector.clone()))?;
+        Ok((id, driver))
+    }
+
+    fn session_family(&self, connector: &node::Path) -> Result<ConnectorId, DriverRouteError> {
+        self.session_outbound
+            .get(connector)
+            .cloned()
+            .ok_or_else(|| DriverRouteError::UnboundSession(connector.clone()))
     }
 }
 
@@ -360,6 +598,9 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
             let Some(driver) = family.driver.outbound() else {
                 return Err(DriverRouteError::UnavailableOutbound(path.clone()));
             };
+            let Some(driver) = driver.call() else {
+                return Err(DriverRouteError::UnavailableCall(path.clone()));
+            };
             for response in driver.events() {
                 if let Some(expected) = self.calls.get(&response.call_ref)
                     && expected != id
@@ -378,6 +619,129 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
     }
 }
 
+impl SessionConnectorBindings for RuntimeBindings<'_> {
+    fn prepare_session_open(
+        &mut self,
+        connector: &node::Path,
+        data: &Data,
+        resolved_settings: &BTreeMap<String, crate::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        Ok(self.session_driver(connector)?.1.prepare_session_open(
+            connector,
+            data,
+            resolved_settings,
+        ))
+    }
+
+    fn open_session(
+        &mut self,
+        intent: &SessionOpenIntent,
+        request: &Envelope,
+    ) -> Result<(), DriverRouteError> {
+        let (id, driver) = self.session_driver(&intent.connector_path)?;
+        driver.open_session(intent, request);
+        self.sessions.insert(intent.session_ref, id);
+        Ok(())
+    }
+
+    fn prepare_session_write(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+        data: &Data,
+        resolved_settings: &BTreeMap<String, crate::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        let actual = self.session_family(connector)?;
+        if let Some(expected) = self.sessions.get(&session)
+            && expected != &actual
+        {
+            return Err(DriverRouteError::CrossFamilySession {
+                session,
+                expected: expected.clone(),
+                actual,
+            });
+        }
+        let (_, driver) = self.session_driver(connector)?;
+        Ok(driver.prepare_session_write(connector, session, data, resolved_settings))
+    }
+
+    fn write_session(
+        &mut self,
+        intent: &SessionWriteIntent,
+        message: &Envelope,
+    ) -> Result<(), DriverRouteError> {
+        let actual = self.session_family(&intent.connector_path)?;
+        let Some(expected) = self.sessions.get(&intent.session_ref) else {
+            return Err(DriverRouteError::UncorrelatedSession(intent.session_ref));
+        };
+        if expected != &actual {
+            return Err(DriverRouteError::CrossFamilySession {
+                session: intent.session_ref,
+                expected: expected.clone(),
+                actual,
+            });
+        }
+        let (_, driver) = self.session_driver(&intent.connector_path)?;
+        driver.write_session(intent, message);
+        Ok(())
+    }
+
+    fn close_session(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+    ) -> Result<(), DriverRouteError> {
+        let actual = self.session_family(connector)?;
+        let Some(expected) = self.sessions.get(&session) else {
+            return Err(DriverRouteError::UncorrelatedSession(session));
+        };
+        if expected != &actual {
+            return Err(DriverRouteError::CrossFamilySession {
+                session,
+                expected: expected.clone(),
+                actual,
+            });
+        }
+        let (_, driver) = self.session_driver(connector)?;
+        driver.close_session(session);
+        Ok(())
+    }
+
+    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
+        let mut events = Vec::new();
+        for (id, family) in &mut self.families {
+            let Some(path) = &family.session_path else {
+                continue;
+            };
+            let Some(outbound) = family.driver.outbound() else {
+                return Err(DriverRouteError::UnavailableOutbound(path.clone()));
+            };
+            let Some(driver) = outbound.session() else {
+                return Err(DriverRouteError::UnavailableSession(path.clone()));
+            };
+            for event in driver.session_events() {
+                let session = match &event {
+                    SessionDriverEvent::Opened(session)
+                    | SessionDriverEvent::WriteSettled { session, .. }
+                    | SessionDriverEvent::Exited { session, .. } => *session,
+                };
+                let Some(expected) = self.sessions.get(&session) else {
+                    return Err(DriverRouteError::UncorrelatedSession(session));
+                };
+                if expected != id {
+                    return Err(DriverRouteError::CrossFamilySession {
+                        session,
+                        expected: expected.clone(),
+                        actual: id.clone(),
+                    });
+                }
+                events.push(event);
+            }
+        }
+        Ok(events)
+    }
+}
+
 fn union_roles(left: ConnectorRoles, right: ConnectorRoles) -> ConnectorRoles {
     if left == right {
         left
@@ -392,6 +756,15 @@ fn roles_of(driver: &mut dyn BoundConnectorDriver) -> Option<ConnectorRoles> {
         (true, false) => Some(ConnectorRoles::Inbound),
         (false, true) => Some(ConnectorRoles::Outbound),
         (false, false) => None,
+    }
+}
+
+fn outbound_exchange_of(driver: &mut dyn BoundConnectorDriver) -> Option<ConnectorExchange> {
+    let outbound = driver.outbound()?;
+    match (outbound.call().is_some(), outbound.session().is_some()) {
+        (true, false) => Some(ConnectorExchange::Call),
+        (false, true) => Some(ConnectorExchange::Session),
+        (false, false) | (true, true) => None,
     }
 }
 
@@ -448,6 +821,22 @@ pub enum DriverBindingError {
         /// Role views actually exposed; `None` means neither.
         actual: Option<ConnectorRoles>,
     },
+    /// One stable contract id was assigned contradictory exchange facts by a
+    /// forged plan.
+    ConflictingExchange {
+        /// Ambiguous semantic contract id.
+        id: ConnectorId,
+    },
+    /// The bound outbound role exposes the wrong or an ambiguous exchange
+    /// protocol view.
+    BoundExchangeMismatch {
+        /// Contract being bound.
+        id: ConnectorId,
+        /// Exchange carried by the validated plan.
+        required: ConnectorExchange,
+        /// Sole exchange view actually exposed, if any.
+        actual: Option<ConnectorExchange>,
+    },
 }
 
 impl core::fmt::Display for DriverBindingError {
@@ -479,6 +868,24 @@ impl core::fmt::Display for DriverBindingError {
                     "Driver `{id}` advertises {advertised}, but its bound object exposes no role"
                 ),
             },
+            Self::ConflictingExchange { id } => write!(
+                formatter,
+                "Connector contract `{id}` carries more than one exchange lifecycle"
+            ),
+            Self::BoundExchangeMismatch {
+                id,
+                required,
+                actual,
+            } => match actual {
+                Some(actual) => write!(
+                    formatter,
+                    "Driver `{id}` exposes the {actual} exchange, but the plan requires {required}"
+                ),
+                None => write!(
+                    formatter,
+                    "Driver `{id}` does not expose exactly one {required} exchange view"
+                ),
+            },
         }
     }
 }
@@ -492,19 +899,21 @@ mod tests {
         DriverRegistrationError, DriverRegistry, RuntimeBindings,
     };
     use crate::boundary::{
-        Completion, Draft, InboundEnvelopeProvenance, InboundSubmission, Intent,
-        OutboundConnectorBindings, OutboundConnectorDriver, ProcessExit, RequestPreparation,
-        Response, SchedulerCompletion, SubmissionSequence,
+        CallConnectorDriver, Completion, Draft, InboundDecision, InboundEnvelopeProvenance,
+        InboundProposal, InboundProposalRef, InboundSubmission, Intent, OutboundConnectorBindings,
+        OutboundConnectorDriver, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
+        SessionConnectorBindings, SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent,
+        SessionRef, SessionWriteIntent, SubmissionSequence,
     };
     use crate::compiler::compile;
-    use crate::connector::{ConnectorId, ConnectorRoles};
+    use crate::connector::{ConnectorExchange, ConnectorId, ConnectorRoles};
     use crate::contract::ContractCatalog;
     use crate::envelope::{Data, Envelope, Namespace, Value};
-    use crate::journal::MemJournal;
+    use crate::journal::{Journal, MemJournal, ids};
     use crate::node;
     use crate::plan::{GraphVersion, ValidatedExecutionPlan};
     use crate::runtime::vm::Vm;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
     use std::sync::{Arc, Mutex};
 
     struct FakeFactory {
@@ -582,9 +991,11 @@ mod tests {
     struct EmptyInbound;
 
     impl crate::boundary::InboundConnectorDriver for EmptyInbound {
-        fn next(&mut self) -> Option<InboundSubmission> {
+        fn proposal(&mut self) -> Option<InboundProposal> {
             None
         }
+
+        fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {}
     }
 
     struct RoutingDriver {
@@ -593,7 +1004,7 @@ mod tests {
         answers: Vec<Response>,
     }
 
-    impl OutboundConnectorDriver for RoutingDriver {
+    impl CallConnectorDriver for RoutingDriver {
         fn prepare_request(
             &mut self,
             _: &node::Path,
@@ -752,18 +1163,70 @@ graph mixed : App {
         two_family_plan_with_first_roles(ConnectorRoles::Outbound)
     }
 
+    fn session_family_plan() -> ValidatedExecutionPlan {
+        let base = two_family_plan_with_first_roles(ConnectorRoles::InboundAndOutbound);
+        let mut raw = base.plan().clone();
+        let first = raw
+            .nodes
+            .iter_mut()
+            .find(|planned| planned.path.to_string() == "first")
+            .expect("the first connector exists");
+        let crate::plan::NodeKind::Connector(spec) = &mut first.kind else {
+            panic!("the first node is a connector")
+        };
+        spec.exchange = ConnectorExchange::Session;
+        ValidatedExecutionPlan::try_new(raw).expect("the foreign Session contract is structural")
+    }
+
+    fn inbound_event_plan() -> ValidatedExecutionPlan {
+        let source = r#"
+graph inbound : App {
+  input in: text
+  output out: text
+  connector source : Process {
+    mode = job ; command = "cat" ; codec = lines
+    effect = idempotent ; behavior = deterministic
+  }
+  operator relay { input in: text ; on in { out = data } }
+  . -> relay -> .
+  source.out -> nothing ; source.err -> nothing
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the inbound probe compiles");
+        let mut raw = compilation.plan.plan().clone();
+        let source = raw
+            .nodes
+            .iter_mut()
+            .find(|planned| planned.path.to_string() == "source")
+            .expect("the source connector exists");
+        let crate::plan::NodeKind::Connector(spec) = &mut source.kind else {
+            panic!("the source node is a connector")
+        };
+        spec.contract = ConnectorId::parse("test/event-source@1").unwrap();
+        spec.roles = ConnectorRoles::Inbound;
+        spec.exchange = ConnectorExchange::Event;
+        source.ports.retain(|port| port.port.name() != "exit");
+        ValidatedExecutionPlan::try_new(raw).expect("the foreign Event contract is structural")
+    }
+
     struct DuplexDriver {
         observations: Arc<Mutex<Vec<&'static str>>>,
     }
 
     impl crate::boundary::InboundConnectorDriver for DuplexDriver {
-        fn next(&mut self) -> Option<InboundSubmission> {
+        fn proposal(&mut self) -> Option<InboundProposal> {
             self.observations.lock().unwrap().push("inbound");
             None
         }
+
+        fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {}
     }
 
-    impl OutboundConnectorDriver for DuplexDriver {
+    impl CallConnectorDriver for DuplexDriver {
         fn prepare_request(
             &mut self,
             _: &node::Path,
@@ -854,6 +1317,522 @@ graph mixed : App {
         .unwrap();
         assert!(matches!(preparation, RequestPreparation::Prepared(_)));
         assert_eq!(*observations.lock().unwrap(), ["inbound", "outbound"]);
+    }
+
+    struct SessionDuplexDriver {
+        observations: Arc<Mutex<Vec<&'static str>>>,
+        events: Vec<SessionDriverEvent>,
+        closed: BTreeSet<SessionRef>,
+    }
+
+    impl crate::boundary::InboundConnectorDriver for SessionDuplexDriver {
+        fn proposal(&mut self) -> Option<InboundProposal> {
+            self.observations.lock().unwrap().push("inbound");
+            None
+        }
+
+        fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {
+            self.observations.lock().unwrap().push("decision");
+        }
+    }
+
+    impl SessionConnectorDriver for SessionDuplexDriver {
+        fn prepare_session_open(
+            &mut self,
+            _: &node::Path,
+            data: &Data,
+            _: &BTreeMap<String, crate::value::Value>,
+        ) -> RequestPreparation {
+            crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
+        }
+
+        fn open_session(&mut self, intent: &SessionOpenIntent, _: &Envelope) {
+            self.observations.lock().unwrap().push("open");
+            self.events
+                .insert(0, SessionDriverEvent::Opened(intent.session_ref));
+        }
+
+        fn prepare_session_write(
+            &mut self,
+            _: &node::Path,
+            _: SessionRef,
+            data: &Data,
+            _: &BTreeMap<String, crate::value::Value>,
+        ) -> RequestPreparation {
+            crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
+        }
+
+        fn write_session(&mut self, intent: &SessionWriteIntent, _: &Envelope) {
+            self.observations.lock().unwrap().push("write");
+            self.events.insert(
+                0,
+                SessionDriverEvent::WriteSettled {
+                    session: intent.session_ref,
+                    write: intent.write_ref,
+                },
+            );
+        }
+
+        fn close_session(&mut self, session: SessionRef) {
+            if self.closed.insert(session) {
+                self.observations.lock().unwrap().push("close");
+                self.events.insert(
+                    0,
+                    SessionDriverEvent::Exited {
+                        session,
+                        exit: crate::boundary::PortOutput {
+                            port: node::Port::conventional_exit(),
+                            data: Data::materialized(
+                                ProcessExit::Exited {
+                                    exit_code: 0,
+                                    signal: None,
+                                }
+                                .into_value(),
+                            ),
+                        },
+                    },
+                );
+            }
+        }
+
+        fn session_events(&mut self) -> Vec<SessionDriverEvent> {
+            core::mem::take(&mut self.events)
+        }
+    }
+
+    impl OutboundConnectorDriver for SessionDuplexDriver {
+        fn call(&mut self) -> Option<&mut dyn CallConnectorDriver> {
+            None
+        }
+
+        fn session(&mut self) -> Option<&mut dyn SessionConnectorDriver> {
+            Some(self)
+        }
+    }
+
+    impl BoundConnectorDriver for SessionDuplexDriver {
+        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+            Some(self)
+        }
+
+        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+            Some(self)
+        }
+    }
+
+    struct SessionDuplexFactory {
+        id: ConnectorId,
+        observations: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl ConnectorDriverFactory for SessionDuplexFactory {
+        fn connector_id(&self) -> &ConnectorId {
+            &self.id
+        }
+
+        fn roles(&self) -> ConnectorRoles {
+            ConnectorRoles::InboundAndOutbound
+        }
+
+        fn bind<'plan>(
+            &self,
+            _: &'plan ValidatedExecutionPlan,
+            _: &[node::Path],
+        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+            Ok(Box::new(SessionDuplexDriver {
+                observations: Arc::clone(&self.observations),
+                events: Vec::new(),
+                closed: BTreeSet::new(),
+            }))
+        }
+    }
+
+    #[test]
+    fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
+        let plan = session_family_plan();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let starts = Arc::new(Mutex::new(Vec::new()));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(SessionDuplexFactory {
+                id: ConnectorId::parse("test/alpha@1").unwrap(),
+                observations: Arc::clone(&observations),
+            }))
+            .unwrap()
+            .try_with(routing_factory(
+                "test/beta@1",
+                ConnectorRoles::Outbound,
+                Some(ConnectorRoles::Outbound),
+                &starts,
+            ))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        assert!(bindings.next_inbound().unwrap().is_none());
+
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let request = journal
+            .append_inbound(InboundSubmission {
+                provenance: InboundEnvelopeProvenance::single(node::Path::new(["world"]).unwrap()),
+                port: node::Port::new("in").unwrap(),
+                draft: Draft {
+                    data: Data::materialized(Value::Text(String::from("hello"))),
+                    ext: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            })
+            .unwrap()
+            .envelope;
+        let connector = node::Path::new(["first"]).unwrap();
+        let opening = |byte| {
+            let prepared = crate::boundary::PreparedRequest::seal(vec![byte]);
+            let emitting_id = crate::envelope::Id::from_bytes([byte; 16]);
+            SessionOpenIntent {
+                session_ref: ids::outbound_session_ref(&connector, emitting_id, prepared.digest()),
+                emitting_id,
+                connector_path: connector.clone(),
+                prepared,
+            }
+        };
+        let first = opening(1);
+        let second = opening(2);
+        for intent in [&first, &second] {
+            journal.open_outbound_session(intent.clone()).unwrap();
+            SessionConnectorBindings::open_session(&mut bindings, intent, &request).unwrap();
+        }
+        assert_eq!(
+            SessionConnectorBindings::session_events(&mut bindings).unwrap(),
+            [
+                SessionDriverEvent::Opened(second.session_ref),
+                SessionDriverEvent::Opened(first.session_ref),
+            ],
+            "reverse arrival remains correlated by SessionRef"
+        );
+        journal.confirm_session_open(&first.session_ref).unwrap();
+        journal.confirm_session_open(&second.session_ref).unwrap();
+
+        let write = |session: SessionRef, byte| {
+            let prepared = crate::boundary::PreparedRequest::seal(vec![byte]);
+            let emitting_id = crate::envelope::Id::from_bytes([byte; 16]);
+            SessionWriteIntent {
+                write_ref: ids::session_write_ref(session, emitting_id, prepared.digest()),
+                session_ref: session,
+                emitting_id,
+                connector_path: connector.clone(),
+                prepared,
+            }
+        };
+        let first_write = write(first.session_ref, 3);
+        let second_write = write(second.session_ref, 4);
+        for intent in [&first_write, &second_write] {
+            journal.open_session_write(intent.clone()).unwrap();
+            SessionConnectorBindings::write_session(&mut bindings, intent, &request).unwrap();
+        }
+        assert_eq!(
+            SessionConnectorBindings::session_events(&mut bindings).unwrap(),
+            [
+                SessionDriverEvent::WriteSettled {
+                    session: second.session_ref,
+                    write: second_write.write_ref,
+                },
+                SessionDriverEvent::WriteSettled {
+                    session: first.session_ref,
+                    write: first_write.write_ref,
+                },
+            ]
+        );
+        assert_eq!(
+            *observations.lock().unwrap(),
+            ["inbound", "open", "open", "write", "write"]
+        );
+    }
+
+    #[test]
+    fn a_session_driver_passes_the_exchange_specific_conformance_profile() {
+        let plan = session_family_plan();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let starts = Arc::new(Mutex::new(Vec::new()));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(SessionDuplexFactory {
+                id: ConnectorId::parse("test/alpha@1").unwrap(),
+                observations,
+            }))
+            .unwrap()
+            .try_with(routing_factory(
+                "test/beta@1",
+                ConnectorRoles::Outbound,
+                Some(ConnectorRoles::Outbound),
+                &starts,
+            ))
+            .unwrap();
+        let contract = Box::leak(Box::new(crate::contract::ConnectorContract {
+            id: "test/alpha@1",
+            name: "SessionProbe",
+            roles: ConnectorRoles::InboundAndOutbound,
+            exchange: ConnectorExchange::Session,
+            ..crate::stdlib::PROCESS.clone()
+        }));
+        let terminal = Data::materialized(
+            ProcessExit::Exited {
+                exit_code: 0,
+                signal: None,
+            }
+            .into_value(),
+        );
+        let profile = crate::conformance::SessionProfile {
+            contract,
+            plan: &plan,
+            connector: node::Path::new(["first"]).unwrap(),
+            openings: [
+                Data::materialized(Value::Text(String::from("open-a"))),
+                Data::materialized(Value::Text(String::from("open-b"))),
+            ],
+            writes: [
+                Data::materialized(Value::Text(String::from("write-a"))),
+                Data::materialized(Value::Text(String::from("write-b"))),
+            ],
+            terminal,
+            resolved_settings: BTreeMap::new(),
+        };
+
+        let report = crate::conformance::verify_session(&profile, &registry);
+        crate::conformance::assert_conformant(&report, &[]);
+        assert_eq!(
+            report.proven_cases,
+            [
+                "session-open",
+                "session-write",
+                "session-ambiguity",
+                "session-exit",
+            ]
+        );
+    }
+
+    #[derive(Default)]
+    struct InboundQueueState {
+        proposals: VecDeque<InboundProposal>,
+        decisions: Vec<(InboundProposalRef, InboundDecision)>,
+    }
+
+    struct RetainedInboundDriver {
+        state: Arc<Mutex<InboundQueueState>>,
+    }
+
+    impl crate::boundary::InboundConnectorDriver for RetainedInboundDriver {
+        fn proposal(&mut self) -> Option<InboundProposal> {
+            self.state.lock().unwrap().proposals.front().cloned()
+        }
+
+        fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+            let mut state = self.state.lock().unwrap();
+            let retained = state
+                .proposals
+                .pop_front()
+                .expect("a decision follows a retained proposal");
+            assert_eq!(retained.reference, reference);
+            state.decisions.push((reference, decision));
+        }
+    }
+
+    impl BoundConnectorDriver for RetainedInboundDriver {
+        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+            Some(self)
+        }
+
+        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+            None
+        }
+    }
+
+    struct RetainedInboundFactory {
+        id: ConnectorId,
+        state: Arc<Mutex<InboundQueueState>>,
+    }
+
+    impl ConnectorDriverFactory for RetainedInboundFactory {
+        fn connector_id(&self) -> &ConnectorId {
+            &self.id
+        }
+
+        fn roles(&self) -> ConnectorRoles {
+            ConnectorRoles::Inbound
+        }
+
+        fn bind<'plan>(
+            &self,
+            _: &'plan ValidatedExecutionPlan,
+            _: &[node::Path],
+        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+            Ok(Box::new(RetainedInboundDriver {
+                state: Arc::clone(&self.state),
+            }))
+        }
+    }
+
+    fn inbound_proposal(reference: u64, port: &str) -> InboundProposal {
+        InboundProposal {
+            reference: InboundProposalRef::new(reference),
+            submission: InboundSubmission {
+                provenance: InboundEnvelopeProvenance::single(node::Path::new(["source"]).unwrap()),
+                port: node::Port::new(port).unwrap(),
+                draft: Draft {
+                    data: Data::materialized(Value::Text(format!("event-{reference}"))),
+                    ext: Namespace::new(),
+                },
+                sequence: SubmissionSequence::Next,
+            },
+            session: None,
+        }
+    }
+
+    #[test]
+    fn inbound_proposals_ack_after_commit_and_remain_retained_under_pressure() {
+        let plan = inbound_event_plan();
+        let state = Arc::new(Mutex::new(InboundQueueState {
+            proposals: (0..=1024)
+                .map(|reference| inbound_proposal(reference, "in"))
+                .collect(),
+            decisions: Vec::new(),
+        }));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(RetainedInboundFactory {
+                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                state: Arc::clone(&state),
+            }))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+
+        for expected in 0..1024 {
+            let Some(crate::boundary::InboundAdmission::Accepted(accepted)) = bindings
+                .pump_inbound(&mut vm, &mut journal)
+                .expect("the bounded intake stays healthy")
+            else {
+                panic!("proposal {expected} should fit")
+            };
+            let state = state.lock().unwrap();
+            assert_eq!(state.decisions.len(), expected as usize + 1);
+            assert_eq!(state.decisions.last().unwrap().0.get(), expected);
+            assert!(matches!(
+                state.decisions.last().unwrap().1,
+                InboundDecision::Accepted(observed) if observed == accepted
+            ));
+            assert!(journal.find_envelope(accepted.envelope).is_some());
+        }
+
+        let records_before = journal.records().len();
+        assert_eq!(
+            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            Some(crate::boundary::InboundAdmission::Pending)
+        );
+        assert_eq!(journal.records().len(), records_before);
+        assert_eq!(state.lock().unwrap().decisions.len(), 1024);
+        let retained = bindings.next_inbound().unwrap().unwrap();
+        assert_eq!(retained.proposal().reference.get(), 1024);
+        assert_eq!(
+            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            Some(crate::boundary::InboundAdmission::Pending),
+            "re-polling cannot replace or acknowledge the retained proposal"
+        );
+        assert_eq!(journal.records().len(), records_before);
+        assert_eq!(state.lock().unwrap().decisions.len(), 1024);
+    }
+
+    #[test]
+    fn an_inbound_contract_rejection_releases_the_exact_proposal_without_a_fact() {
+        let plan = inbound_event_plan();
+        let state = Arc::new(Mutex::new(InboundQueueState {
+            proposals: VecDeque::from([inbound_proposal(7, "missing")]),
+            decisions: Vec::new(),
+        }));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(RetainedInboundFactory {
+                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                state: Arc::clone(&state),
+            }))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        assert_eq!(
+            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            Some(crate::boundary::InboundAdmission::Rejected(
+                crate::boundary::InboundRejection::UnknownPort
+            ))
+        );
+        assert!(journal.records().is_empty());
+        assert_eq!(
+            state.lock().unwrap().decisions,
+            [(
+                InboundProposalRef::new(7),
+                InboundDecision::Rejected(crate::boundary::InboundRejection::UnknownPort)
+            )]
+        );
+    }
+
+    #[test]
+    fn inbound_session_framing_cannot_contradict_the_exchange_fact() {
+        let plan = inbound_event_plan();
+        let mut proposal = inbound_proposal(9, "in");
+        proposal.session = Some(crate::boundary::InboundSession::Open);
+        let state = Arc::new(Mutex::new(InboundQueueState {
+            proposals: VecDeque::from([proposal]),
+            decisions: Vec::new(),
+        }));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(RetainedInboundFactory {
+                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                state,
+            }))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+
+        assert!(matches!(
+            bindings.next_inbound(),
+            Err(crate::boundary::DriverRouteError::InboundExchangeMismatch {
+                exchange: ConnectorExchange::Event,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn an_event_driver_passes_the_exchange_specific_conformance_profile() {
+        let plan = inbound_event_plan();
+        let state = Arc::new(Mutex::new(InboundQueueState {
+            proposals: VecDeque::from([inbound_proposal(4, "in")]),
+            decisions: Vec::new(),
+        }));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(RetainedInboundFactory {
+                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                state,
+            }))
+            .unwrap();
+        let ports = crate::stdlib::PROCESS
+            .ports
+            .iter()
+            .filter(|port| port.name != "exit")
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let contract = Box::leak(Box::new(crate::contract::ConnectorContract {
+            id: "test/event-source@1",
+            name: "EventSource",
+            roles: ConnectorRoles::Inbound,
+            exchange: ConnectorExchange::Event,
+            ports: Box::leak(ports),
+            common: crate::stdlib::PROCESS.common,
+            selector: crate::stdlib::PROCESS.selector.clone(),
+        }));
+        let profile = crate::conformance::EventProfile {
+            contract,
+            plan: &plan,
+            expected_outputs: vec![Data::materialized(Value::Text(String::from("event-4")))],
+        };
+
+        let report = crate::conformance::verify_event(&profile, &registry);
+        crate::conformance::assert_conformant(&report, &[]);
+        assert_eq!(report.proven_cases, ["event-admission"]);
     }
 
     #[test]

@@ -283,6 +283,28 @@ pub enum PlanValidationError {
         /// Connector node.
         node: node::Path,
     },
+    /// A built-in Connector claims an exchange lifecycle that its stable
+    /// contract id does not define.
+    ContractExchangeMismatch {
+        /// Connector node.
+        node: node::Path,
+    },
+    /// The conventional terminal row contradicts the generic exchange fact.
+    ExchangeTerminalMismatch {
+        /// Connector node.
+        node: node::Path,
+        /// Exchange whose terminal cardinality was contradicted.
+        exchange: crate::connector::ConnectorExchange,
+    },
+    /// The role set cannot expose this exchange's complete generic protocol.
+    ExchangeRoleMismatch {
+        /// Connector node.
+        node: node::Path,
+        /// Incompatible exchange.
+        exchange: crate::connector::ConnectorExchange,
+        /// Incompatible roles.
+        roles: crate::connector::ConnectorRoles,
+    },
     /// A resolved built-in Connector row disagrees with its self-contained
     /// contract rule (direction, routing policy, or effective type).
     ContractPortMismatch {
@@ -732,6 +754,22 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: `{node}` carries roles outside its stable connector contract"
             ),
+            Self::ContractExchangeMismatch { node } => write!(
+                f,
+                "invalid plan: `{node}` carries an exchange outside its stable connector contract"
+            ),
+            Self::ExchangeTerminalMismatch { node, exchange } => write!(
+                f,
+                "invalid plan: `{node}` carries a terminal `exit` table incompatible with {exchange}"
+            ),
+            Self::ExchangeRoleMismatch {
+                node,
+                exchange,
+                roles,
+            } => write!(
+                f,
+                "invalid plan: `{node}` carries {roles} roles incompatible with its {exchange} exchange"
+            ),
             Self::ContractPortMismatch { node, port } => write!(
                 f,
                 "invalid plan: `{node}.{port}` disagrees with the resolved connector contract"
@@ -1125,7 +1163,8 @@ fn instance_key_signature(
         .with("meta.sys.origin_id", DataType::Text)
         .with("meta.sys.role", DataType::Text)
         .with("meta.sys.graph_version", DataType::INT)
-        .with("meta.ext.content_type", DataType::Text);
+        .with("meta.ext.content_type", DataType::Text)
+        .with("meta.ext.session_id", DataType::Text);
     for (field, ty) in &plan.app_schema {
         signature = signature.with(format!("meta.app.{field}"), ty.clone());
     }
@@ -1180,9 +1219,11 @@ fn meta_target_known(
             }
         }
         crate::envelope::WriteTarget::Ext(field) => {
-            // The standard field is IMPLICIT — known to every
-            // consumer, never serialized (D-2026-08-10-4).
-            if field == "content_type" || plan.ext_schema.iter().any(|(known, _)| known == field) {
+            // Standard leaves are IMPLICIT — known to every consumer and
+            // never serialized beside sheet-owned fields.
+            if crate::plan::standard_ext_field_type(field).is_some()
+                || plan.ext_schema.iter().any(|(known, _)| known == field)
+            {
                 Ok(())
             } else {
                 Err(PlanValidationError::UnknownMetaField {
@@ -1196,7 +1237,7 @@ fn meta_target_known(
 /// One zone schema, held whole (D-2026-08-10-1): SORTED and unique
 /// by field, flat keys prefix-free, every type inside the metadata
 /// leaf rule (`scalar | array<scalar>` | `variant`), and the standard
-/// `content_type` pinned to text.
+/// standard leaves pinned to text.
 fn schema_well_formed(
     zone: &'static str,
     schema: &[(alloc::string::String, DataType)],
@@ -1227,22 +1268,26 @@ fn schema_well_formed(
                 field: field.clone(),
             });
         }
-        // In EXT the standard field is implicit and reserved — a
-        // serialized entry would create a second authority, and a
-        // BRANCH under it would shadow the implicit leaf (a prefix
-        // collision with the implicit leaf, named as such). In APP
-        // it is an ordinary application field (D-2026-08-10-4).
-        if zone == "ext" && field == "content_type" {
+        // In EXT standard fields are implicit and reserved — a serialized
+        // entry would create a second authority, and a BRANCH under one would
+        // shadow its implicit leaf. In APP the spellings remain ordinary.
+        if zone == "ext" && crate::plan::standard_ext_field_type(field).is_some() {
             return Err(PlanValidationError::UnknownMetaField {
                 zone,
                 field: field.clone(),
             });
         }
-        if zone == "ext" && field.starts_with("content_type.") {
-            return Err(PlanValidationError::MetaPrefixCollision {
-                leaf: alloc::string::String::from("content_type"),
-                branch: field.clone(),
-            });
+        if zone == "ext" {
+            for standard in crate::plan::STANDARD_EXT_FIELDS {
+                if field.starts_with(standard)
+                    && field.as_bytes().get(standard.len()) == Some(&b'.')
+                {
+                    return Err(PlanValidationError::MetaPrefixCollision {
+                        leaf: alloc::string::String::from(*standard),
+                        branch: field.clone(),
+                    });
+                }
+            }
         }
         if let Some((previous, _)) = index.checked_sub(1).and_then(|i| schema.get(i))
             && previous >= field
@@ -1407,7 +1452,7 @@ fn tree_type_at(tree: &expr::Tree, location: String) -> Result<(), PlanValidatio
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
-/// v10 encoder can observe the plan.
+/// v11 encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -2179,6 +2224,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         node: node.path.clone(),
                     });
                 }
+                if spec.exchange != crate::connector::ConnectorExchange::Call {
+                    return Err(PlanValidationError::ContractExchangeMismatch {
+                        node: node.path.clone(),
+                    });
+                }
                 if !matches!(spec.effect, node::Effect::Class(_)) {
                     return Err(PlanValidationError::ContractAttributeMismatch {
                         node: node.path.clone(),
@@ -2435,6 +2485,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         node: node.path.clone(),
                     });
                 }
+                if spec.exchange != crate::connector::ConnectorExchange::Call {
+                    return Err(PlanValidationError::ContractExchangeMismatch {
+                        node: node.path.clone(),
+                    });
+                }
                 if spec.effect != node::Effect::Class(crate::node::EffectClass::Idempotent)
                     || spec.behavior != node::Behavior::Deterministic
                 {
@@ -2571,6 +2626,41 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         port: port.port.clone(),
                     });
                 }
+            }
+            // Built-in sheets above retain their more specific missing-row
+            // diagnostics. Foreign families still cannot bypass the generic
+            // exchange lifecycle carried by v11.
+            let exits = node
+                .ports
+                .iter()
+                .filter(|port| {
+                    port.port.name() == "exit" && port.direction == node::Direction::Output
+                })
+                .count();
+            let terminal_shape_holds = match spec.exchange {
+                crate::connector::ConnectorExchange::Event => exits == 0,
+                crate::connector::ConnectorExchange::Call
+                | crate::connector::ConnectorExchange::Session => exits == 1,
+            };
+            if !terminal_shape_holds {
+                return Err(PlanValidationError::ExchangeTerminalMismatch {
+                    node: node.path.clone(),
+                    exchange: spec.exchange,
+                });
+            }
+            let roles_hold = match spec.exchange {
+                crate::connector::ConnectorExchange::Event => {
+                    spec.roles == crate::connector::ConnectorRoles::Inbound
+                }
+                crate::connector::ConnectorExchange::Call => true,
+                crate::connector::ConnectorExchange::Session => spec.roles.has_outbound(),
+            };
+            if !roles_hold {
+                return Err(PlanValidationError::ExchangeRoleMismatch {
+                    node: node.path.clone(),
+                    exchange: spec.exchange,
+                    roles: spec.roles,
+                });
             }
             let mut attributes = BTreeSet::new();
             for (name, _) in &spec.attributes {

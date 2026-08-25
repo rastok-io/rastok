@@ -9,8 +9,8 @@
 //! worker that may observe or mutate the filesystem.
 
 use crate::boundary::{
-    Completion, FileExit, Intent, OutboundConnectorDriver, PreparedRequest, RequestPreparation,
-    Response, SchedulerCompletion,
+    CallConnectorDriver, Completion, FileExit, Intent, OutboundConnectorDriver, PreparedRequest,
+    RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Encoding, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
@@ -373,7 +373,7 @@ impl<'plan> File<'plan> {
     }
 }
 
-impl OutboundConnectorDriver for File<'_> {
+impl CallConnectorDriver for File<'_> {
     fn prepare_request(
         &mut self,
         connector: &crate::node::Path,

@@ -11,7 +11,7 @@
 > structural-union and tagged-union targets is executable in memory. Tagged
 > constructors and contextual structural-union wrapping are checked,
 > executable and transported; `err` uses the same emission path as any port.
-> Categorical plan-package v10 retains v9's owner model and v7's complete
+> Categorical plan-package v11 retains v9's owner model and v7's complete
 > type/value/expression registry and total effective port table, then adds the
 > parent-linked lexical owner tree plus instance-key/lifetime descriptors
 > without changing this logical algebra. The unpublished named-partition v8
@@ -295,7 +295,7 @@ declared or inferred; it never represents “no effective type” with an
 Every Node has typed input and output ports under this one mechanism.
 `in`, `out` and `err` are conventional default names, not another port
 category. Connector contracts conventionally use `exit` for the terminal
-outcome of one admitted invocation. A contract may add any number of other
+outcome of one admitted call. A contract may add any number of other
 outputs (`rejected`, `audit`, ...), all judged by the same conformance
 relation.
 
@@ -316,21 +316,21 @@ removing its special channel: terminal error codes are tagged-union cases on
 diagnostic bytes remain ordinary values on `err`; this connector-specific
 meaning does not turn every Operator `err` into stderr.
 
-### 3.1 Invocation exit is not instance stop
+### 3.1 Call exit is not instance stop
 
 The scopes are nested but distinct:
 
 ```text
 Node definition
   -> logical Node instance*              ended by stop
-       -> Connector invocation*           ended by exit
+       -> Connector call*                 ended by exit
             -> out* + err* + one exit
 ```
 
-A Node instance may run several invocations, including concurrent ones when
+A Node instance may run several calls, including concurrent ones when
 its resolved concurrency policy permits it. Their outputs carry call identity
 and the owning instance generation needed for causal correlation. `exit` is
-the terminal barrier for one invocation: no output for that call may follow
+the terminal barrier for one call: no output for that call may follow
 it. `stop` begins closure of the current Node instance. Closure must
 refuse new calls and settle every admitted obligation by draining or
 cancelling it under a bounded declared policy; it cannot substitute one
@@ -341,7 +341,7 @@ values become visible. A line-framed stream may therefore emit many envelopes
 on `out` or `err`, whereas an on-exit policy may commit the ordered emissions
 with the terminal `exit`. A collector may aggregate them, but only under an
 explicit bound. These choices do not change the logical port types or the
-one-exit-per-invocation invariant.
+one-exit-per-call invariant.
 
 ## 4. Parametric Connector contracts
 
@@ -437,7 +437,7 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (the current v10 rejects older `.rkp` versions rather than
+- a package-format reader (the current v11 rejects older `.rkp` versions rather than
   translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.

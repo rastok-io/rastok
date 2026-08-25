@@ -259,7 +259,7 @@ graph g : App {
     assert_eq!(boundary.origin(), plan::TypeOrigin::Declared);
 
     let package = plan::encode(&compilation.plan, &compilation.hash);
-    let (decoded, _) = plan::decode(&package).expect("the source pin survives v10");
+    let (decoded, _) = plan::decode(&package).expect("the source pin survives v11");
     assert_eq!(
         decoded
             .resolved_ports()
@@ -1735,7 +1735,7 @@ graph attributed : App {
 }
 
 #[test]
-fn a_future_lifecycle_handler_cannot_enter_v10_early() {
+fn a_future_lifecycle_handler_cannot_enter_v11_early() {
     let mut plan = raw_probe();
     plan.handlers[0].activation =
         rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Compensate);

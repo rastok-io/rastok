@@ -1,9 +1,9 @@
-//! Stable Connector identities and role requirements.
+//! Stable Connector identities, role requirements, and exchange lifecycles.
 //!
 //! A Connector id is semantic plan data.  It names a contract independently
-//! of the crate, Driver binary, Host or Worker that implements it.  Roles are
-//! likewise contract facts: runtime registration may satisfy them, but may
-//! not reinterpret them.
+//! of the crate, Driver binary, Host or Worker that implements it. Roles and
+//! exchange lifecycles are likewise contract facts: runtime registration may
+//! satisfy them, but may not reinterpret them.
 
 use alloc::boxed::Box;
 use core::fmt;
@@ -144,6 +144,55 @@ impl fmt::Display for ConnectorIdError {
 
 impl core::error::Error for ConnectorIdError {}
 
+/// The cardinality and terminal lifecycle of one Connector interaction.
+///
+/// This is orthogonal to [`ConnectorRoles`]: roles say which side may move a
+/// fact across the world boundary, while this value says whether those facts
+/// are independent events, one bounded call, or members of one long-lived
+/// session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ConnectorExchange {
+    /// One spontaneous inbound fact with no per-event terminal obligation.
+    Event,
+    /// One admitted operation with zero or more outputs and exactly one exit.
+    Call,
+    /// One open scope carrying messages and exactly one terminal exit.
+    Session,
+}
+
+impl ConnectorExchange {
+    /// Stable categorical tag used by semantic identity and plan transport.
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self {
+            Self::Event => 1,
+            Self::Call => 2,
+            Self::Session => 3,
+        }
+    }
+
+    /// Decodes one stable categorical tag.
+    #[must_use]
+    pub const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            1 => Some(Self::Event),
+            2 => Some(Self::Call),
+            3 => Some(Self::Session),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for ConnectorExchange {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Event => "event",
+            Self::Call => "call",
+            Self::Session => "session",
+        })
+    }
+}
+
 /// The runtime roles one Connector contract requires.
 ///
 /// There is deliberately no empty value: a Connector without either world
@@ -216,7 +265,7 @@ impl fmt::Display for ConnectorRoles {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConnectorId, ConnectorIdError, ConnectorRoles};
+    use super::{ConnectorExchange, ConnectorId, ConnectorIdError, ConnectorRoles};
 
     #[test]
     fn connector_ids_accept_one_canonical_spelling_only() {
@@ -262,5 +311,18 @@ mod tests {
         }
         assert_eq!(ConnectorRoles::from_tag(0), None);
         assert_eq!(ConnectorRoles::from_tag(4), None);
+    }
+
+    #[test]
+    fn exchange_tags_are_closed_and_extend_only() {
+        for exchange in [
+            ConnectorExchange::Event,
+            ConnectorExchange::Call,
+            ConnectorExchange::Session,
+        ] {
+            assert_eq!(ConnectorExchange::from_tag(exchange.tag()), Some(exchange));
+        }
+        assert_eq!(ConnectorExchange::from_tag(0), None);
+        assert_eq!(ConnectorExchange::from_tag(4), None);
     }
 }

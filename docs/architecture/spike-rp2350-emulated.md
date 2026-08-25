@@ -39,8 +39,8 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). Its current M1.5 C2 measurement embeds the blessed **v10
-  Connector-identity package** of `examples/echo.rkg` as a `static`, opens it with
+  spike-only). Its current M1.6 H1 measurement embeds the blessed **v11
+  exchange-lifecycle package** of `examples/echo.rkg` as a `static`, opens it with
   `rastok_core::plan::decode` — which now validates
   structurally and re-encodes for canonicity — boots the `Vm` over a
   `MemJournal`, and runs inject → step rounds: the bare-metal
@@ -82,15 +82,15 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (972-byte v10 package; re-measured after M1.5 C2 on 2026-08-22) | 16 987 | 849.4 k | 5.66 ms |
+| `plan::decode` (974-byte v11 package; re-measured after M1.6 H1 on 2026-08-25) | 16 906 | 845.3 k | 5.64 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-22 after C2) | 2 757 (min 2 690 / max 2 974) | **137.9 k avg / 148.7 k max** | **0.919 ms avg / 0.991 ms max** |
+| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-25 after H1) | 2 641 (min 2 551 / max 2 877) | **132.1 k avg / 143.9 k max** | **0.880 ms avg / 0.959 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 91.0 | 4.6 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-22 after C2) | 106 780 B (104.3 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 471 372 + 46 544 = 517 916 B (505.8 KiB; re-measured 2026-08-22 after C2) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-25 after H1) | 129 660 B (126.6 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 484 156 + 47 568 = 531 724 B (519.3 KiB; re-measured 2026-08-25 after H1) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
@@ -229,6 +229,18 @@ Notes the numbers carry:
   2 974 maximum, heap watermark 106 780 B, 67 records, and `SPIKE_OK` with
   semantic hash `190f0efc…`. The data-only `DriverManifest` therefore does not
   leak plugin discovery or registry assembly into the kernel.
+- H1 publishes categorical v11: every Connector carries its
+  `Event | Call | Session` exchange, while placement-neutral session refs and
+  write obligations extend only the causal records that use them. Echo's
+  package grows 972 B → 974 B and its semantic hash moves deliberately to
+  `e50026ee…`; its pre-session trace remains byte-identical. The first direct
+  build measured a 3 014-tick relay maximum and a 131 196-byte heap peak,
+  missing both precommitted bounds narrowly. The measured correction removes
+  a full transaction-record clone from the Operator hot path and boxes the
+  rare optional inbound-session fact so `None` does not widen every retained
+  Event/Call record. Final relay is 2 641 average / 2 551 minimum / 2 877
+  maximum; heap is 129 660 B. Decode is 16 906 ticks, flash is 531 724 B, 67
+  records remain, and `SPIKE_OK` prints the exact H1 hash.
 - Flash grew from 193 KiB to 516.4 KiB (`.text` 481 404 B +
   `.rodata` 47 356 B, re-measured after C1 on 2026-08-22): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
@@ -242,7 +254,7 @@ Notes the numbers carry:
   and the consolidated reform's five-field spine and ext zone
   roughly cancelled out.
 - The semantic hash printed by the emulated kernel is byte-identical
-  to the host's: `190f0efc…` — the identity function is the same
+  to the host's: `e50026ee…` — the identity function is the same
   function everywhere. (Eight declared identity moves so far: with
   D-2026-08-10-7 — a compiled tree seals its static type with its
   root — then twice on 2026-08-12 with D-2026-08-12-1: the default
@@ -252,7 +264,8 @@ Notes the numbers carry:
   Process framing and atomic typed completion part of executable identity;
   B8 sealed complete resolved types and removed the last transport bridges;
   R5 added the typed `OutcomeUnknown` settlement case to `ProcessExit`; C1
-  replaced the source contract name with its stable id and required role.)
+  replaced the source contract name with its stable id and required role; H1
+  added the closed exchange lifecycle.)
 - The journal-growth incident of the first run stands: with a
   128 KiB arena, a ~44 KiB `Vec` doubling of the in-memory journal
   dies around round 60 — linear history growth, as designed; a
@@ -284,13 +297,13 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-22 after M1.5 C2.**
+instrumentation and last re-measured 2026-08-25 after M1.6 H1.**
 These measurements price complete hierarchical routing, causal instance
 references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four
-criteria of record hold: no patched dependencies, 148.7 k instructions for
-the slowest measured relay transaction against the 150 k bound (1.009×), a
-104.3 KiB true high-water mark against 128 KiB, and 516.4 KiB of flash against
+criteria of record hold: no patched dependencies, 143.9 k instructions for
+the slowest measured relay transaction against the 150 k bound (1.043×), a
+126.6 KiB true high-water mark against 128 KiB, and 519.3 KiB of flash against
 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as

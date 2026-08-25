@@ -24,7 +24,7 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`m1.5-exit-report.md`](m1.5-exit-report.md) for the C6 architecture,
   identity ledger, plugin non-claims and remaining Connector limits;
 - [`m1.6-http-websocket-backlog.md`](m1.6-http-websocket-backlog.md) for the
-  ordered event/invocation/session foundation, HTTP/1.1-3 Drivers and
+  ordered Event/Call/Session foundation, HTTP/1.1-3 Drivers and
   WebSocket Codex gateway gates;
 - [`connector-drivers.md`](connector-drivers.md) for the current contribution
   path from semantic Contract through real/Lab Driver conformance and static
@@ -35,9 +35,9 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for current categorical v10, its retained
+- [`plan-package.md`](plan-package.md) for current categorical v11, its retained
   v9 owner/instance and v7 type/value/expression registries, stable Connector
-  identities/roles, and the validation boundary;
+  identities/roles/exchange lifecycles, and the validation boundary;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
 - [`spike-rp2350-emulated.md`](spike-rp2350-emulated.md) for the measured

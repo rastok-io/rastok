@@ -6,8 +6,9 @@
 > transaction, ordering, the dated-events queue).
 > Reference simulations 3–4 exercise Loop retry × outbound WAL and saga
 > compensation × crash recovery.
-> D-2026-08-25-1 adds the normative M1.6 target for sessions in §4.5; its
-> record subforms and Driver acknowledgement API are not executable before H1.
+> D-2026-08-25-1 adds sessions in §4.5. H1 makes their generic causal
+> subforms and two-phase Driver decision API executable; concrete WebSocket
+> contracts and network I/O remain gated by H2–H6.
 
 The question this doc answers : **what survives — a crash, a redelivery, a
 slow consumer, a dead process — and what exactly is promised at each
@@ -206,7 +207,7 @@ One arriving later is a discarded observation.
 A response closure seals the ordered `(port, data)` drafts that won the race;
 they have no envelope identities yet. The following Connector transaction
 mints and commits every output envelope together. The final draft is the
-invocation's unique typed `exit` barrier.
+call's unique typed `exit` barrier.
 
 The request **digest** is the boundary's integrity seal : a retry must
 re-derive a byte-identical request, or the graph changed under the call —
@@ -264,7 +265,7 @@ At restart, `open` outbound records without closure = the set of unknowns :
 | emission delivered, **no** outbound record | the call never left → call now. Trivial. |
 | open + `effect = idempotent` | recall, blindly (safe by declaration) |
 | open + `idempotency_key` present | recall with the **byte-same key** (§4.3) |
-| open + `compensable`, **no key** | do NOT guess: emit **`OutcomeUnknown`** on the Connector contract's typed invocation-exit port (normally `exit`; trigger **`l:recover`**, parent = request) and close the record as `abandoned` — no eternal re-triage, no duplicate case. The graph/saga decides: verify, compensate, or park; a deliberate retry is a NEW call. |
+| open + `compensable`, **no key** | do NOT guess: emit **`OutcomeUnknown`** on the Connector contract's typed call-exit port (normally `exit`; trigger **`l:recover`**, parent = request) and close the record as `abandoned` — no eternal re-triage, no duplicate case. The graph/saga decides: verify, compensate, or park; a deliberate retry is a NEW call. |
 
 The same empty case is the last resort of explicit bounded Closing when
 cancellation produced no confirmed terminal outcome before `settle_for`.
@@ -291,10 +292,10 @@ record to test this table — the crash becomes an ordinary simulation case.
 
 ### 4.5 Sessions — one resource lifecycle, many message effects
 
-An invocation and a session share journal-before-effect, but not cardinality:
+A call and a session share journal-before-effect, but not cardinality:
 
 ```text
-invocation  open call ── request ── outputs* ── one exit
+call        open call ── request ── outputs* ── one exit
 
 session     open session
               ├── inbound message*   (bounded proposal, then commit/decision)
@@ -302,12 +303,12 @@ session     open session
               └── one session exit   (no message after it)
 ```
 
-M1.6 adds `ConnectorExchange = Event | Invocation | Session`; it does not add
+M1.6 adds `ConnectorExchange = Event | Call | Session`; it does not add
 a fourth causal record type. Session opening and inbound messages are INBOUND
 facts when initiated by the world. A client opening and every graph-to-world
 message are OUTBOUND intents. Session terminal publication is an ordinary
 Connector transaction folded against the same close-once authority. The exact
-v11 subforms and keys land together at H1 so no intermediate package can claim
+v11 subforms and keys landed together at H1, so no intermediate package can claim
 session behavior without carrying the facts needed to replay it.
 
 Every session has one opaque journal-derived `SessionRef`. It correlates
@@ -318,7 +319,7 @@ correlator supplies the logical session token; arrival order is never a
 correlator.
 
 An outbound message has a durable write obligation but **not** a graph-visible
-invocation exit. Local write settlement means only that the Driver accepted
+call exit. Local write settlement means only that the Driver accepted
 the bytes under the session protocol; it does not claim that the peer
 application processed them. If recovery cannot prove whether externally
 visible bytes were accepted, Rastok does not replay them blindly: the session

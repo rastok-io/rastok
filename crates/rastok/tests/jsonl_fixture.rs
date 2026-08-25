@@ -68,7 +68,10 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE MOVE 2026-08-22 (M1.5 C1): `rastok/process@1` and its required
 // outbound role replace the source-level `Process` symbol in canonical HIR;
 // categorical v10 carries both. The causal trace is unchanged.
-const JSONL_HASH: &str = "9643616e343b2001d3050aca99dfb1279373c2a59fb366d5a5f54ef44429e6b6";
+// DELIBERATE MOVE 2026-08-25 (M1.6 H1): the Call exchange lifecycle becomes
+// explicit canonical HIR and categorical v11 plan data. Session-only causal
+// fields are omitted, so this fixture's trace remains byte-identical.
+const JSONL_HASH: &str = "036f7ea5346fac883a3bad155fbdf41b303f6e54bef93f8c850ff5f138f769de";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

@@ -26,8 +26,8 @@ pub struct Hir {
     /// (D-2026-08-10-1). DERIVED from the writes: the hash never
     /// seals it twice.
     pub app_schema: Vec<(String, DataType)>,
-    /// The `meta.ext` vocabulary: the sheets' fields only — the
-    /// standard `content_type` is implicit, never carried.
+    /// The `meta.ext` vocabulary: the sheets' fields only — standard
+    /// `content_type` and `session_id` are implicit, never carried.
     pub ext_schema: Vec<(String, DataType)>,
     /// The build-time assets the checker resolved (D-2026-08-10-5).
     pub assets: Vec<crate::plan::AssetBlob>,
@@ -93,6 +93,8 @@ pub enum NodeRole {
         contract_id: String,
         /// Runtime roles declared by that contract.
         roles: crate::connector::ConnectorRoles,
+        /// Interaction lifecycle declared by that contract.
+        exchange: crate::connector::ConnectorExchange,
         /// Checked attributes, in declaration order.
         attributes: Vec<Attribute>,
     },

@@ -2,7 +2,7 @@
 
 > **Status:** normative. The Node-owned instance model in
 > [instances.md](instances.md) supersedes the unreleased P0–P3
-> named-partition implementation. Categorical plan-package v10 retains the v9
+> named-partition implementation. Categorical plan-package v11 retains the v9
 > realigned owner tree and instance policies. R3 routes every delivery through
 > one hierarchical instance reference shared by journal, mailbox, state,
 > calls, timers, lifecycle, and cursors. R4 executes persistent, idle, fixed,
@@ -11,8 +11,9 @@
 > admission, cancellation, settlement, terminal `OutcomeUnknown`, and
 > inner-first Graph closure. R6 executes nested composition and bounded joins;
 > R7 closes the one-worker slice and proves physical Worker assignment is not
-> a causal input. D-2026-08-25-1 adds the M1.6 target distinction between
-> invocation and session exchanges; §6.6 is not executable before H1.
+> a causal input. D-2026-08-25-1 adds the M1.6 distinction between Event,
+> Call and Session exchanges; H1 makes §6.6's generic session fold executable,
+> while concrete network contracts remain gated by H2.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -292,7 +293,7 @@ Concretely, the supervision plane maintains **one queue of dated events** :
 | Dated event | Armed by | Delivered as |
 |---|---|---|
 | clock tick | `Clock` (`system_clock` incl.) | a root tick envelope (inbound) |
-| per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the contract's typed invocation-exit port (`exit` for Process) |
+| per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the contract's typed call-exit port (`exit` for Process) |
 | join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's declared typed expiry output (conventionally `expired`) |
 | instance lifetime expiry | `lifetime = { … }` | the instance's `on stop` sequence (parent = **the envelope that armed the deadline** — last admission for `idle`, creator for `fixed`, creating admission for its tumbling box) |
 | loop backoff delay | `Loop.backoff` ([loop.md](loop.md) §4) | the re-injected call (trigger `l:next`) |
@@ -410,7 +411,7 @@ The rule is symmetric (either side can be qualified) ; the common
 no-collision case stays terse. The general namespace and collision rules are
 defined in [aspects.md](aspects.md) §6.
 
-### 6.6 Session supervision (M1.6 target)
+### 6.6 Session supervision (generic H1 fold; network integration H2–H6)
 
 A session is not a long call and its messages are not short calls. It is one
 resource scope nested inside the owning Node instance:
@@ -421,7 +422,7 @@ session open ── message in/out* ── one typed session exit
 
 The journal-derived `SessionRef` correlates the whole scope. Each outbound
 message still obeys journal-before-effect, but settling its local write
-obligation does not publish an invocation `exit`. Only clean close, protocol
+obligation does not publish a call `exit`. Only clean close, protocol
 failure, transport loss, session timeout, or bounded-Closing uncertainty
 publishes the sole typed session `exit`; no message may follow it.
 

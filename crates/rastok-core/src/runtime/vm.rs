@@ -19,10 +19,10 @@
 
 use crate::boundary::{
     BoundaryEvent, CallRef, ClosingDeadline, Completion, DatedPayload, Dispatcher,
+    InboundAcceptance, InboundAdmission, InboundProposal, InboundRejection, InboundSession,
     InboundSubmission, InstanceDeadline, Intent, OutboundConnectorBindings, RequestPreparation,
     Response, SchedulerCompletion,
 };
-use crate::datatype::DataType;
 use crate::envelope::{Data, Envelope, Id};
 use crate::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use crate::journal::{Journal, RouteTarget, RoutedDelivery, ids};
@@ -92,6 +92,14 @@ pub enum VmError {
     /// Checked sources always materialize conventional `in`; the raw API is
     /// verified, not trusted.
     UnknownIngress(node::Port),
+    /// An ingress draft carries metadata outside the declared vocabulary or
+    /// outside a declared field's type.
+    IngressMetadataViolation {
+        /// Rejected metadata field.
+        field: String,
+        /// Stable human-readable contract judgement.
+        reason: String,
+    },
     /// An ingress draft that violates a pin — the ingress port's own
     /// or a destination's it would fan out to. The CLIENT's value is
     /// wrong, not the plan; refused before any append, with the
@@ -179,6 +187,12 @@ impl fmt::Display for VmError {
             }
             Self::UnknownIngress(port) => {
                 write!(f, "`{port}` is not an input of this graph")
+            }
+            Self::IngressMetadataViolation { field, reason } => {
+                write!(
+                    f,
+                    "the draft metadata field `meta.ext.{field}` is invalid: {reason}"
+                )
             }
             Self::IngressPinViolation {
                 ingress, violation, ..
@@ -683,6 +697,50 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         submission: InboundSubmission,
     ) -> Result<Id, VmError> {
+        self.inject_submission(journal, submission, None)
+            .map(|accepted| accepted.envelope)
+    }
+
+    /// Attempts one retained Driver proposal against bounded admission.
+    /// `Accepted` is returned only after the inbound record and every route
+    /// committed. `Pending` and `Rejected` leave the journal untouched.
+    ///
+    /// # Errors
+    ///
+    /// Storage failures and machine-integrity faults remain fail-stop errors;
+    /// portable peer/data refusals are represented by [`InboundAdmission`].
+    pub fn admit_inbound(
+        &mut self,
+        journal: &mut dyn Journal,
+        proposal: &InboundProposal,
+    ) -> Result<InboundAdmission, VmError> {
+        match self.inject_submission(journal, proposal.submission.clone(), proposal.session) {
+            Ok(accepted) => Ok(InboundAdmission::Accepted(accepted)),
+            Err(VmError::MailboxFull { .. } | VmError::InstanceClosing { .. }) => {
+                Ok(InboundAdmission::Pending)
+            }
+            Err(VmError::UnknownIngress(_)) => {
+                Ok(InboundAdmission::Rejected(InboundRejection::UnknownPort))
+            }
+            Err(VmError::IngressPinViolation { .. }) => {
+                Ok(InboundAdmission::Rejected(InboundRejection::InvalidPayload))
+            }
+            Err(VmError::IngressMetadataViolation { .. }) => Ok(InboundAdmission::Rejected(
+                InboundRejection::InvalidMetadata,
+            )),
+            Err(VmError::Journal(crate::journal::Error::UnknownSession)) => Ok(
+                InboundAdmission::Rejected(InboundRejection::SessionUnavailable),
+            ),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn inject_submission(
+        &mut self,
+        journal: &mut dyn Journal,
+        submission: InboundSubmission,
+        session: Option<InboundSession>,
+    ) -> Result<InboundAcceptance, VmError> {
         // The submission's port is verified against the materialized graph
         // table. Source sugar may spell `.`, but no runtime string creates an
         // implicit ingress.
@@ -702,28 +760,34 @@ impl<'plan> Vm<'plan> {
         // field no sheet declares — the same grid the checker
         // enforces on sources, applied to the API.
         for (field, value) in &submission.draft.ext {
+            // Session correlation is derived by the accepting journal fact.
+            // Peer spelling is ignored and overwritten, never trusted as a
+            // causal session identity.
+            if session.is_some() && field == "session_id" {
+                continue;
+            }
             // Name AND type, one shared rule (D-2026-08-10-1): the
             // standard field is implicitly `text`, sheet fields
             // answer to their declared types.
-            let ty = if field == "content_type" {
-                Some(DataType::Text)
-            } else {
+            let ty = crate::plan::standard_ext_field_type(field).or_else(|| {
                 self.plan
                     .plan()
                     .ext_schema
                     .iter()
                     .find(|(known, _)| known == field)
                     .map(|(_, ty)| ty.clone())
-            };
+            });
             let Some(ty) = ty else {
-                return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
-                    alloc::format!("`meta.ext.{field}` is outside the declared schema"),
-                )));
+                return Err(VmError::IngressMetadataViolation {
+                    field: field.clone(),
+                    reason: String::from("the field is outside the declared schema"),
+                });
             };
             if !crate::runtime::meta_conforms(value, &ty) {
-                return Err(VmError::Fault(crate::runtime::Fault::Unrepresentable(
-                    alloc::format!("`meta.ext.{field}` is declared {ty:?}; this value is not"),
-                )));
+                return Err(VmError::IngressMetadataViolation {
+                    field: field.clone(),
+                    reason: alloc::format!("the field is declared {ty:?}; this value is not"),
+                });
             }
         }
         // The pins, held BEFORE any append: a materialized draft is
@@ -747,9 +811,11 @@ impl<'plan> Vm<'plan> {
         // zero-id provisional envelope would be a semantic lie. Destination
         // admission and the accepting record commit only after this complete
         // envelope has selected every route.
-        let inbound = journal
-            .prepare_inbound(submission)
-            .map_err(VmError::Journal)?;
+        let inbound = match session {
+            Some(session) => journal.prepare_session_inbound(submission, session),
+            None => journal.prepare_inbound(submission),
+        }
+        .map_err(VmError::Journal)?;
         let mut candidates = BTreeMap::new();
         let prepared =
             self.prepare_routes(journal, &from, None, inbound.envelope(), &mut candidates)?;
@@ -759,8 +825,20 @@ impl<'plan> Vm<'plan> {
             .commit_inbound(inbound, recorded_routes)
             .map_err(VmError::Journal)?;
         let id = committed.envelope.meta().sys().id();
+        let session = committed
+            .record
+            .session
+            .as_deref()
+            .copied()
+            .map(|session| match session {
+                crate::journal::SessionIngressRecord::Open(reference)
+                | crate::journal::SessionIngressRecord::Message(reference) => reference,
+            });
         self.route_prepared(prepared, &candidates, &committed.envelope, None);
-        Ok(id)
+        Ok(InboundAcceptance {
+            envelope: id,
+            session,
+        })
     }
 
     /// Executes exactly one node transaction, if any work is ready:
@@ -1567,6 +1645,7 @@ impl<'plan> Vm<'plan> {
             instance: reference.clone(),
             parent_instance: None,
             close_scope: Some(reference.clone()),
+            session_exit: None,
             trigger: node::Trigger::Lifecycle(node::Lifecycle::Closing),
             cause: Some(cause.meta().sys().id()),
             consumed: vec![],
@@ -1834,6 +1913,7 @@ impl<'plan> Vm<'plan> {
                     instance: work.instance.clone(),
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
+                    session_exit: None,
                     trigger: node::Trigger::Lifecycle(work.lifecycle),
                     cause: Some(work.cause.meta().sys().id()),
                     consumed: vec![],
@@ -2300,16 +2380,14 @@ impl<'plan> Vm<'plan> {
         let prepared =
             self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
         outcome.record.routes = self.routed_deliveries(&prepared);
-        journal
-            .commit(outcome.record.clone())
-            .map_err(VmError::Journal)?;
+        // The journal owns the full transaction after commit. Retain only the
+        // small delta the in-memory state fold still needs; cloning the whole
+        // record would duplicate every emitted envelope on the relay hot path.
+        let state_delta = outcome.record.state_delta.clone();
+        journal.commit(outcome.record).map_err(VmError::Journal)?;
         self.scheduler.mailboxes.pop(slot, instance);
-        self.state.apply_unchecked(
-            self.plan.plan(),
-            slot,
-            instance,
-            &outcome.record.state_delta,
-        );
+        self.state
+            .apply_unchecked(self.plan.plan(), slot, instance, &state_delta);
         if let Some(scope) = close_request {
             self.activate_close(&scope, delivery.envelope.clone());
             self.arm_closing_deadlines(&scope, delivery.envelope.meta().sys().id());

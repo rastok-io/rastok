@@ -71,11 +71,68 @@ impl CallRef {
     pub const fn new(id: envelope::Id) -> Self {
         Self(id)
     }
+
+    /// The derived identity bytes used as an input to other causal recipes.
+    #[must_use]
+    pub const fn id(self) -> envelope::Id {
+        self.0
+    }
 }
 
 impl fmt::Display for CallRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+/// Placement-neutral identity of one committed Connector session.
+///
+/// The value is derived from the opening fact by the journal. It never wraps
+/// a socket, address, negotiated protocol, Host, Worker, or library handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SessionRef(envelope::Id);
+
+impl SessionRef {
+    /// Wraps a journal-derived identity; the recipe lives in [`crate::journal::ids`].
+    #[must_use]
+    pub const fn new(id: envelope::Id) -> Self {
+        Self(id)
+    }
+
+    /// The raw derived identity used by canonical causal encodings.
+    #[must_use]
+    pub const fn id(self) -> envelope::Id {
+        self.0
+    }
+}
+
+impl fmt::Display for SessionRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// Identity of one journaled graph-to-world write inside a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SessionWriteRef(envelope::Id);
+
+impl SessionWriteRef {
+    /// Wraps a journal-derived write identity.
+    #[must_use]
+    pub const fn new(id: envelope::Id) -> Self {
+        Self(id)
+    }
+
+    /// The raw derived identity used by canonical causal encodings.
+    #[must_use]
+    pub const fn id(self) -> envelope::Id {
+        self.0
+    }
+}
+
+impl fmt::Display for SessionWriteRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
     }
 }
 
@@ -698,6 +755,54 @@ impl Intent {
     }
 }
 
+/// Journal-before-effect intent that opens one outbound session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionOpenIntent {
+    /// Session identity derived from the remaining canonical fields.
+    pub session_ref: SessionRef,
+    /// Envelope whose delivery requested the opening.
+    pub emitting_id: envelope::Id,
+    /// Connector node that will own the session.
+    pub connector_path: node::Path,
+    /// Exact handshake request bytes and their integrity seal.
+    pub prepared: PreparedRequest,
+}
+
+impl SessionOpenIntent {
+    /// The boundary integrity seal over the exact opening bytes.
+    #[must_use]
+    pub fn request_digest(&self) -> &[u8; 32] {
+        self.prepared.digest()
+    }
+}
+
+/// One graph-to-world message intent inside a committed session.
+///
+/// Like [`Intent`], the exact prepared bytes are journaled by digest before a
+/// Driver may act. Unlike a Call, settling this write does not publish a
+/// graph-visible `exit`; only the enclosing session has a terminal exit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionWriteIntent {
+    /// Derived identity of this write obligation.
+    pub write_ref: SessionWriteRef,
+    /// Logical session being addressed.
+    pub session_ref: SessionRef,
+    /// Envelope whose emission requested the write.
+    pub emitting_id: envelope::Id,
+    /// Connector node owning the live session.
+    pub connector_path: node::Path,
+    /// Exact prepared message bytes and their integrity seal.
+    pub prepared: PreparedRequest,
+}
+
+impl SessionWriteIntent {
+    /// The boundary integrity seal over the exact message bytes.
+    #[must_use]
+    pub fn message_digest(&self) -> &[u8; 32] {
+        self.prepared.digest()
+    }
+}
+
 /// One ordinary output proposed by an external driver.
 ///
 /// This is deliberately not a journal [`crate::journal::Emission`]: the
@@ -892,8 +997,31 @@ pub enum DriverRouteError {
     UnboundOutbound(node::Path),
     /// A role view proven at bind time disappeared later.
     UnavailableOutbound(node::Path),
+    /// A Call exchange view proven at bind time disappeared later, or a
+    /// Session-only Driver was routed through the Call machine.
+    UnavailableCall(node::Path),
+    /// No outbound Session binding owns this planned Connector path.
+    UnboundSession(node::Path),
+    /// A Session exchange view proven at bind time disappeared later.
+    UnavailableSession(node::Path),
     /// An inbound role view proven at bind time disappeared later.
     UnavailableInbound(crate::connector::ConnectorId),
+    /// A caller attempted to decide a proposal other than the one retained
+    /// by that Connector family.
+    UnknownInboundProposal {
+        /// Family whose retained proposal was addressed.
+        connector: crate::connector::ConnectorId,
+        /// Proposal reference supplied by the caller.
+        reference: InboundProposalRef,
+    },
+    /// The inbound proposal's session framing contradicts the bound
+    /// contract's categorical exchange lifecycle.
+    InboundExchangeMismatch {
+        /// Driver family that proposed the fact.
+        connector: crate::connector::ConnectorId,
+        /// Exchange required by the validated plan.
+        exchange: crate::connector::ConnectorExchange,
+    },
     /// One Driver answered a call started through another Connector family.
     CrossFamilyResponse {
         /// Correlated call.
@@ -903,6 +1031,17 @@ pub enum DriverRouteError {
         /// Family that answered it.
         actual: crate::connector::ConnectorId,
     },
+    /// One Driver reported an event for a session owned by another family.
+    CrossFamilySession {
+        /// Correlated logical session.
+        session: SessionRef,
+        /// Family that admitted or opened it.
+        expected: crate::connector::ConnectorId,
+        /// Family that reported the observation.
+        actual: crate::connector::ConnectorId,
+    },
+    /// A Driver reported an observation for no admitted/opened session.
+    UncorrelatedSession(SessionRef),
 }
 
 impl fmt::Display for DriverRouteError {
@@ -915,9 +1054,35 @@ impl fmt::Display for DriverRouteError {
                 formatter,
                 "the outbound Driver role bound for `{connector}` is no longer available"
             ),
+            Self::UnavailableCall(connector) => write!(
+                formatter,
+                "the Call exchange Driver bound for `{connector}` is no longer available"
+            ),
+            Self::UnboundSession(connector) => {
+                write!(formatter, "no Session Driver binding owns `{connector}`")
+            }
+            Self::UnavailableSession(connector) => write!(
+                formatter,
+                "the Session exchange Driver bound for `{connector}` is no longer available"
+            ),
             Self::UnavailableInbound(id) => write!(
                 formatter,
                 "the inbound Driver role bound for `{id}` is no longer available"
+            ),
+            Self::UnknownInboundProposal {
+                connector,
+                reference,
+            } => write!(
+                formatter,
+                "Driver `{connector}` has no retained inbound proposal {}",
+                reference.get()
+            ),
+            Self::InboundExchangeMismatch {
+                connector,
+                exchange,
+            } => write!(
+                formatter,
+                "Driver `{connector}` proposed inbound framing outside its {exchange} exchange"
             ),
             Self::CrossFamilyResponse {
                 call_ref,
@@ -927,6 +1092,17 @@ impl fmt::Display for DriverRouteError {
                 formatter,
                 "Driver `{actual}` answered call {call_ref} started by `{expected}`"
             ),
+            Self::CrossFamilySession {
+                session,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "Driver `{actual}` reported session {session} owned by `{expected}`"
+            ),
+            Self::UncorrelatedSession(session) => {
+                write!(formatter, "no bound Driver owns session {session}")
+            }
         }
     }
 }
@@ -995,6 +1171,93 @@ pub struct InboundSubmission {
     pub draft: Draft,
     /// How the sequence is chosen.
     pub sequence: SubmissionSequence,
+}
+
+/// Session meaning of one inbound proposal before the accepting commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundSession {
+    /// The accepting commit opens a new logical session and derives its ref.
+    Open,
+    /// One message belongs to an already committed live session.
+    Message(SessionRef),
+}
+
+/// Driver-local identity of one bounded inbound proposal.
+///
+/// This value is deliberately non-causal: the Driver retains the proposal
+/// until the runtime decides it, while the accepting journal transaction
+/// mints the envelope and any [`SessionRef`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InboundProposalRef(u64);
+
+impl InboundProposalRef {
+    /// Creates one Driver-local proposal reference.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// The local numeric value, useful to a Driver's bounded queue.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// One bounded world fact offered without pre-minting an envelope.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InboundProposal {
+    /// Stable while the proposal remains pending in the Driver.
+    pub reference: InboundProposalRef,
+    /// Draft and provenance to commit if admission succeeds.
+    pub submission: InboundSubmission,
+    /// Session framing when this fact opens or belongs to a session. `None`
+    /// is an Event or Call ingress.
+    pub session: Option<InboundSession>,
+}
+
+/// Positive result returned only after the accepting journal commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InboundAcceptance {
+    /// Id of the committed root envelope.
+    pub envelope: envelope::Id,
+    /// Newly opened or existing session, when this was a session fact.
+    pub session: Option<SessionRef>,
+}
+
+/// Portable contract-level reasons why a proposed fact was not accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundRejection {
+    /// The proposed graph boundary input does not exist.
+    UnknownPort,
+    /// The payload violates an ingress or destination type.
+    InvalidPayload,
+    /// The external metadata violates the declared vocabulary or type.
+    InvalidMetadata,
+    /// The named session is unknown or already terminal.
+    SessionUnavailable,
+}
+
+/// A final decision delivered to the Driver for its retained proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundDecision {
+    /// The causal fact committed; peer-visible application acceptance may now
+    /// be sent.
+    Accepted(InboundAcceptance),
+    /// The proposal was refused without minting an envelope.
+    Rejected(InboundRejection),
+}
+
+/// Result of attempting one proposal against bounded runtime admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundAdmission {
+    /// The causal fact committed.
+    Accepted(InboundAcceptance),
+    /// No causal fact committed; the Driver must retain the proposal and
+    /// withhold its application acknowledgement.
+    Pending,
+    /// No causal fact committed; the Driver receives a terminal refusal.
+    Rejected(InboundRejection),
 }
 
 /// The payload and birth metadata of a submission; the runtime mints
@@ -1118,15 +1381,30 @@ pub enum LifecycleEvent {
 /// Supplies inbound submissions under backpressure: bounded, births
 /// drafts and never envelopes — a root cannot pre-exist its sequence.
 pub trait InboundConnectorDriver {
-    /// The next submission, if one is waiting.
-    fn next(&mut self) -> Option<InboundSubmission>;
+    /// The next retained proposal, if one is waiting. Repeated polls before a
+    /// decision must describe the same proposal reference and bytes.
+    fn proposal(&mut self) -> Option<InboundProposal>;
+
+    /// Releases one retained proposal after a committed acceptance or a
+    /// contract rejection. Pending admission deliberately makes no callback.
+    fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision);
 }
 
-/// Starts external calls and supplies their answers. A driver
+/// The outbound world role. Its exchange view is categorical: a bound object
+/// exposes Call or Session mechanics, never a bag of optional operations.
+pub trait OutboundConnectorDriver {
+    /// Call protocol view, when this bound contract is Call-shaped.
+    fn call(&mut self) -> Option<&mut dyn CallConnectorDriver>;
+
+    /// Session protocol view, when this bound contract is Session-shaped.
+    fn session(&mut self) -> Option<&mut dyn SessionConnectorDriver>;
+}
+
+/// Starts external calls and supplies their answers. A Call driver
 /// answers or stays silent — never a timeout and never an unknown
 /// outcome: budgets belong to the scheduler, triage to the recovery
 /// fold. Correlation uses the connector's own protocol.
-pub trait OutboundConnectorDriver {
+pub trait CallConnectorDriver {
     /// Frames one invocation under this bound contract before the machine
     /// opens its outbound record. The Driver chooses no defaults: binding has
     /// already resolved every effective non-plan setting for `connector`.
@@ -1160,6 +1438,123 @@ pub trait OutboundConnectorDriver {
 
     /// The answers that arrived since the last drain.
     fn events(&mut self) -> Vec<Response>;
+}
+
+impl<T> OutboundConnectorDriver for T
+where
+    T: CallConnectorDriver,
+{
+    fn call(&mut self) -> Option<&mut dyn CallConnectorDriver> {
+        Some(self)
+    }
+
+    fn session(&mut self) -> Option<&mut dyn SessionConnectorDriver> {
+        None
+    }
+}
+
+/// One observation emitted by a Session Driver after a journaled action.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionDriverEvent {
+    /// A journaled outbound opening established the logical session.
+    Opened(SessionRef),
+    /// One journaled message write was accepted by the local protocol stack.
+    WriteSettled {
+        /// Session that owns the message.
+        session: SessionRef,
+        /// Write obligation that settled.
+        write: SessionWriteRef,
+    },
+    /// The session reached its sole terminal fact. The output must target the
+    /// conventional `exit` port and is validated against the resolved sheet.
+    Exited {
+        /// Session that became terminal.
+        session: SessionRef,
+        /// Typed terminal payload proposed for ordinary graph emission.
+        exit: PortOutput,
+    },
+}
+
+/// Synchronous effect boundary for one long-lived exchange.
+///
+/// Inbound peer messages use [`InboundConnectorDriver`]'s retained proposal
+/// protocol over the same bound object. These methods cover the outbound
+/// opening/write half without adding a third role or async to the core.
+pub trait SessionConnectorDriver {
+    /// Frames one opening handshake or returns its typed terminal refusal.
+    fn prepare_session_open(
+        &mut self,
+        connector: &node::Path,
+        data: &envelope::Data,
+        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
+    ) -> RequestPreparation;
+
+    /// Executes an already-journaled opening intent.
+    fn open_session(&mut self, intent: &SessionOpenIntent, request: &Envelope);
+
+    /// Frames one complete graph-to-world session message.
+    fn prepare_session_write(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+        data: &envelope::Data,
+        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
+    ) -> RequestPreparation;
+
+    /// Offers one already-journaled complete message to the protocol stack.
+    fn write_session(&mut self, intent: &SessionWriteIntent, message: &Envelope);
+
+    /// Requests protocol closure. Default: no local action.
+    fn close_session(&mut self, session: SessionRef) {
+        let _ = session;
+    }
+
+    /// Session observations accumulated since the previous drain.
+    fn session_events(&mut self) -> Vec<SessionDriverEvent>;
+}
+
+/// Verified Session routing table consumed by the generic boundary pump.
+pub trait SessionConnectorBindings {
+    /// Frames one outbound session opening through its exact Driver.
+    fn prepare_session_open(
+        &mut self,
+        connector: &node::Path,
+        data: &envelope::Data,
+        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError>;
+
+    /// Executes an already-journaled opening intent.
+    fn open_session(
+        &mut self,
+        intent: &SessionOpenIntent,
+        request: &Envelope,
+    ) -> Result<(), DriverRouteError>;
+
+    /// Frames one outbound message for an existing logical session.
+    fn prepare_session_write(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+        data: &envelope::Data,
+        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError>;
+
+    /// Offers one already-journaled write to the protocol stack.
+    fn write_session(
+        &mut self,
+        intent: &SessionWriteIntent,
+        message: &Envelope,
+    ) -> Result<(), DriverRouteError>;
+
+    /// Requests closure through the owning Driver.
+    fn close_session(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+    ) -> Result<(), DriverRouteError>;
+
+    /// Collects Session observations from every bound Session family.
+    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError>;
 }
 
 /// The verified outbound routing table consumed by the core VM.
@@ -1220,7 +1615,7 @@ pub trait OutboundConnectorBindings {
 
 impl<T> OutboundConnectorBindings for T
 where
-    T: OutboundConnectorDriver + ?Sized,
+    T: CallConnectorDriver + ?Sized,
 {
     fn prepare_request(
         &mut self,
@@ -1228,7 +1623,7 @@ where
         data: &envelope::Data,
         resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
-        Ok(OutboundConnectorDriver::prepare_request(
+        Ok(CallConnectorDriver::prepare_request(
             self,
             connector,
             data,
@@ -1241,7 +1636,7 @@ where
         connector: &node::Path,
         completion: SchedulerCompletion,
     ) -> Result<Completion, DriverRouteError> {
-        Ok(OutboundConnectorDriver::scheduler_completion(
+        Ok(CallConnectorDriver::scheduler_completion(
             self, connector, completion,
         ))
     }
@@ -1251,17 +1646,17 @@ where
         _connector: &node::Path,
         call_ref: &CallRef,
     ) -> Result<(), DriverRouteError> {
-        OutboundConnectorDriver::cancel(self, call_ref);
+        CallConnectorDriver::cancel(self, call_ref);
         Ok(())
     }
 
     fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError> {
-        OutboundConnectorDriver::start(self, intent, request);
+        CallConnectorDriver::start(self, intent, request);
         Ok(())
     }
 
     fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
-        Ok(OutboundConnectorDriver::events(self))
+        Ok(CallConnectorDriver::events(self))
     }
 }
 
@@ -1502,7 +1897,7 @@ mod tests {
         replies: Vec<Response>,
     }
 
-    impl OutboundConnectorDriver for Scripted {
+    impl CallConnectorDriver for Scripted {
         fn prepare_request(
             &mut self,
             _: &node::Path,

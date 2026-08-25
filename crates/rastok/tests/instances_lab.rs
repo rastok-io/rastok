@@ -1,5 +1,5 @@
 //! Public M1.4 instance scenarios. These proofs enter through source, the
-//! checker, v10 lowering, and the Lab; no test reaches into VM state cells.
+//! checker, v11 lowering, and the Lab; no test reaches into VM state cells.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::expect_used, clippy::panic)]
 

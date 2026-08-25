@@ -8,8 +8,8 @@
 //! battery itself bites.
 
 use rastok::boundary::{
-    Completion, Intent, OutboundConnectorDriver, PortOutput, ProcessExit, RequestPreparation,
-    Response, SchedulerCompletion,
+    CallConnectorDriver, Completion, Intent, OutboundConnectorDriver, PortOutput, ProcessExit,
+    RequestPreparation, Response, SchedulerCompletion,
 };
 use rastok::conformance::{
     InterleaveExpectation, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
@@ -258,7 +258,7 @@ struct Liar {
     pending: Vec<Response>,
 }
 
-impl OutboundConnectorDriver for Liar {
+impl CallConnectorDriver for Liar {
     fn prepare_request(
         &mut self,
         _: &rastok::node::Path,
@@ -369,7 +369,7 @@ struct Swapper {
     pending: Vec<Response>,
 }
 
-impl OutboundConnectorDriver for Swapper {
+impl CallConnectorDriver for Swapper {
     fn prepare_request(
         &mut self,
         _: &rastok::node::Path,

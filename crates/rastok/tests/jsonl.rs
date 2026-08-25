@@ -580,6 +580,15 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                         rastok::datatype::DataType::Variant,
                     )),
                 },
+                rastok::plan::PortDecl {
+                    port: rastok::node::Port::conventional_exit(),
+                    direction: rastok::node::Direction::Output,
+                    unwired: rastok::plan::UnwiredPolicy::RootSink,
+                    ty: Some(
+                        rastok::boundary::process_exit_type()
+                            .expect("the standard terminal type is valid"),
+                    ),
+                },
             ];
             node.ports
                 .sort_by(|left, right| left.key().cmp(&right.key()));

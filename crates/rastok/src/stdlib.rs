@@ -10,7 +10,9 @@
 //!
 //! [`stdlib.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/stdlib.md
 
-use crate::connector::{ConnectorRoles, FILE_CONNECTOR_ID, PROCESS_CONNECTOR_ID};
+use crate::connector::{
+    ConnectorExchange, ConnectorRoles, FILE_CONNECTOR_ID, PROCESS_CONNECTOR_ID,
+};
 use crate::contract::{
     AttributeSpec, ConnectorContract, ContractCatalog, DefaultValue, EvaluationSite,
     FrontendContract, FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice,
@@ -28,6 +30,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
     id: PROCESS_CONNECTOR_ID,
     name: "Process",
     roles: ConnectorRoles::Outbound,
+    exchange: ConnectorExchange::Call,
     ports: &[
         PortContract {
             name: "in",
@@ -226,6 +229,7 @@ pub const FILE: ConnectorContract = ConnectorContract {
     id: FILE_CONNECTOR_ID,
     name: "File",
     roles: ConnectorRoles::Outbound,
+    exchange: ConnectorExchange::Call,
     ports: &[
         PortContract {
             name: "in",

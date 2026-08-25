@@ -40,7 +40,7 @@ cannot coexist (one is a leaf, the other makes it a branch of the
 nested projection) — refused at check and re-verified by the
 package validator. `ext`'s vocabulary belongs to
 connector contract sheets (their `Populates` row, stdlib.md) plus
-the standard `content_type` (§5.2); handlers may rewrite declared
+the standard `content_type` and `session_id` leaves (§5.2–5.3); handlers may rewrite declared
 ext fields, never invent one. Each zone's leaves are
 `scalar | array<scalar>` (flat — nested/heavy data goes in `data`);
 physically a field is ONE dotted string key inside its zone
@@ -511,8 +511,11 @@ when routing a stored/root-mixed response. Direct replies retain causal
 session routing independently of the writable projection. An explicit
 `correlate = meta.ext.session_id` asks the Connector to verify and use that
 logical token; it never authorizes a physical address lookup from graph data.
-The exact value encoding and identity recipe land with M1.6 H1 and are not an
-executable claim in the current package format.
+The projection is the lowercase 32-hex-character spelling of the reference's
+16 bytes. H1 makes this executable in categorical package v11. The journal
+derives inbound and outbound openings under identity domain `0x11`, and each
+graph-to-world message write under `0x12`; the exact framed recipes and causal
+record forms are fixed in [identity.md §3](identity.md).
 
 ## 6. Writing `meta.sys` — there is no write
 

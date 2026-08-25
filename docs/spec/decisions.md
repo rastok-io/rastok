@@ -20,18 +20,24 @@ the interaction:
 
 - `Event` admits one spontaneous external fact as an inbound root and has no
   per-event terminal obligation;
-- `Invocation` admits one request, may publish ordered outputs, and ends with
-  exactly one typed invocation `exit`;
+- `Call` admits one operation, may publish ordered outputs, and ends with
+  exactly one typed call `exit`;
 - `Session` opens once, carries zero or more messages in either direction,
   and ends with exactly one typed session `exit`.
 
 This is cardinality, not another Driver role. `Clock` and `Calendar` use event
 semantics. `HttpClient`, `HttpServer` in ack/respond mode, `Process(job)` and
-`File` use invocation semantics.
+`File` use call semantics.
 `WebSocketClient` and `WebSocketServer` use session semantics and require both
 Driver roles over one shared bound state. `Process(service)` will reuse the
 same session shape when that deferred profile lands; the VM must never grow a
 WebSocket-specific branch.
+The executable pairings are closed: Event is exactly inbound; Call may be
+inbound, outbound or both-role; Session is outbound or both-role because its
+opening, write-settlement and terminal observations enter through the
+exchange-specific outbound view. A future purely inbound session protocol
+would need an explicit terminal proposal form rather than silently losing its
+exit.
 
 **WebSocket has two contracts, one message model.** The stable target ids are
 `rastok/websocket-client@1` and `rastok/websocket-server@1`. Opening a remote
@@ -81,8 +87,9 @@ Rastok accepted or processed a message; they may advance only within the
 Driver's declared bounded intake. WebSocket defines no per-message
 application acknowledgement — a graph that needs one sends an ordinary reply
 message after commit.
-The current pull-only `InboundConnectorDriver::next` API cannot prove this and
-is deliberately widened in M1.6 before a network Driver ships.
+H1 replaces the former pull-only `InboundConnectorDriver::next` API with a
+retained proposal plus `Accepted | Pending | Rejected` decision, before a
+network Driver ships.
 
 **HTTP versions are physical bindings by default.** The semantic contracts
 are `rastok/http-client@1` and `rastok/http-server@1`; there is no `Http2` or
@@ -122,14 +129,42 @@ continue to validate a plan while refusing unavailable contracts at binding.
 the same contract ids, exchange shapes, session correlation, typed exits,
 backpressure decisions and journal boundaries. They script peer messages and
 transport outcomes after the same open/commit gates. Conformance has separate
-profiles for invocations and sessions; a successful request battery cannot
+profiles for calls and sessions; a successful request battery cannot
 stand in for fragmentation, interleaving, close-once and post-exit silence.
 
 The exchange shape and session reference require categorical plan and causal
 transport additions. M1.6 allocates plan-package v11 and the causal additions
 to its H1 gate, with pre-declared semantic/package/trace moves. No identity
-moves occur in this decision-only checkpoint. Rejected alternatives are:
-one node per HTTP version, one generic `WebSocket` contract, one invocation per
+moves occur in this decision-only checkpoint.
+
+**H1 identity checkpoint (declared before re-blessing).** Adding the closed
+exchange tag to canonical Connector HIR moves every semantic hash whose graph
+contains a Connector: the echo/spike Process graph, the JSONL Process fixture,
+and the compiler probe. The connector-free gauge hash is the negative witness
+and must remain `0d3ad43d…`. The categorical v10→v11 container moves all three
+package goldens (`echo.rkp`, `jsonl.rkp`, and `gauge.rkp`) plus the spike's
+embedded echo copy; the gauge body remains semantically identical. The new
+session causal fields are optional and omitted on existing Event/Call facts,
+so none of the four existing trace goldens may move. Exact replacement hashes
+and spike measurements are recorded only after the implementation passes its
+gates.
+
+**H1 landed checkpoint (2026-08-25).** The declared moves are exactly:
+compiler probe `52406fcf… → 2933618d…`, JSONL
+`9643616e… → 036f7ea5…`, and echo/spike
+`190f0efc… → e50026ee…`; connector-free gauge remains
+`0d3ad43d…`. The three package goldens and the embedded spike copy move to
+v11, while all four causal trace goldens remain byte-identical. The final
+Cortex-M33 run decodes the 974-byte package in 16 906 ticks, measures the
+relay at 2 641 average / 2 551 minimum / 2 877 maximum, peaks at 129 660 heap
+bytes, links 531 724 bytes of `.text + .rodata`, and prints `SPIKE_OK` with
+the exact new hash. The first measurement crossed both tight resource bounds;
+the correction removes a redundant whole-transaction clone and keeps the
+rare inbound-session extension out of every Event/Call record's inline size,
+without changing any canonical byte.
+
+Rejected alternatives are:
+one node per HTTP version, one generic `WebSocket` contract, one Call per
 WebSocket message, forcing pure event sources into sessions, automatic
 reconnect/replay, a third `DuplexDriver` role, network-library types in the
 core, and an embedded HTTP dependency enabled by default.

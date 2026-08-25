@@ -4,7 +4,7 @@
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as`, closed-struct and tagged-constructor trees execute, are
 > type-checked, and travel in the v7 registry with their resolved targets.
-> Categorical package v10 retains that registry unchanged. The
+> Categorical package v11 retains that registry unchanged. The
 > `IDENT!` frontend surface and full JSON-value reader described below are
 > executable. A `variant` must be narrowed before member or index access.
 

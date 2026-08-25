@@ -221,6 +221,8 @@ pub struct ConnectorContract {
     pub name: &'static str,
     /// External-world roles required from a runtime Driver registration.
     pub roles: crate::connector::ConnectorRoles,
+    /// Cardinality and terminal lifecycle of one interaction.
+    pub exchange: crate::connector::ConnectorExchange,
     /// Ports, their directions, effective type rules and unwired policy.
     pub ports: &'static [PortContract],
     /// The attributes common to every profile.
@@ -565,6 +567,23 @@ pub enum SheetDefect {
     MisdirectedDefault(&'static str),
     /// An input tried to carry an output-only unwired policy.
     InputHasSinkPolicy(&'static str),
+    /// The conventional terminal row contradicts the exchange lifecycle:
+    /// Event has none; Call and Session have exactly one output `exit`.
+    ExchangeTerminalMismatch {
+        /// Exchange declared by the sheet.
+        exchange: crate::connector::ConnectorExchange,
+        /// Number of conventional output terminal rows found.
+        exits: usize,
+    },
+    /// The role set cannot carry this exchange's complete generic protocol:
+    /// Event is exactly inbound, while Session needs the outbound view that
+    /// reports open/write/terminal observations.
+    ExchangeRoleMismatch {
+        /// Exchange declared by the sheet.
+        exchange: crate::connector::ConnectorExchange,
+        /// Incompatible Driver roles declared by the sheet.
+        roles: crate::connector::ConnectorRoles,
+    },
     /// A same-as rule names no port on the sheet.
     UnknownPortDependency {
         /// Dependent port.
@@ -660,6 +679,13 @@ impl core::fmt::Display for SheetDefect {
                     f,
                     "input port `{name}` cannot carry an unwired output policy"
                 )
+            }
+            Self::ExchangeTerminalMismatch { exchange, exits } => write!(
+                f,
+                "the {exchange} exchange declares {exits} terminal `exit` outputs"
+            ),
+            Self::ExchangeRoleMismatch { exchange, roles } => {
+                write!(f, "the {exchange} exchange cannot use {roles} Driver roles")
             }
             Self::UnknownPortDependency { port, dependency } => write!(
                 f,
@@ -1030,6 +1056,35 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                 }
             }
         }
+    }
+    let exits = contract
+        .ports
+        .iter()
+        .filter(|port| port.name == "exit" && port.direction == crate::node::Direction::Output)
+        .count();
+    let terminal_shape_holds = match contract.exchange {
+        crate::connector::ConnectorExchange::Event => exits == 0,
+        crate::connector::ConnectorExchange::Call
+        | crate::connector::ConnectorExchange::Session => exits == 1,
+    };
+    if !terminal_shape_holds {
+        return Err(SheetDefect::ExchangeTerminalMismatch {
+            exchange: contract.exchange,
+            exits,
+        });
+    }
+    let roles_hold = match contract.exchange {
+        crate::connector::ConnectorExchange::Event => {
+            contract.roles == crate::connector::ConnectorRoles::Inbound
+        }
+        crate::connector::ConnectorExchange::Call => true,
+        crate::connector::ConnectorExchange::Session => contract.roles.has_outbound(),
+    };
+    if !roles_hold {
+        return Err(SheetDefect::ExchangeRoleMismatch {
+            exchange: contract.exchange,
+            roles: contract.roles,
+        });
     }
     Ok(())
 }

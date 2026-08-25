@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.5 C6 closure, 2026-08-23)
+title Rastok — bird's-eye module overview (M1.6 H1, 2026-08-25)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -86,6 +86,8 @@ package "connector — stable contract identity" as P_CONNECTOR {
   ConnectorId : canonical namespace/name@major identity
   enum ConnectorRoles <<enum>>
   ConnectorRoles : inbound, outbound, or both
+  enum ConnectorExchange <<enum>>
+  ConnectorExchange : Event, Call, or Session lifecycle
 }
 
 package "expr — Rastok expression engine" as P_EXPR {
@@ -213,13 +215,13 @@ package "plan — serializable compiled execution model" as P_PLAN {
   GuestProgram : opaque compiled guest program
   class AssetBlob <<struct>>
   AssetBlob : content-addressed build-time asset bytes
-  class "encode / decode (categorical v10)" as PLAN_CODEC <<mod>>
+  class "encode / decode (categorical v11)" as PLAN_CODEC <<mod>>
   PLAN_CODEC : canonical validated plan package transport
 }
 
 package "contract — compiler-layer node contract metamodel" as P_CONTRACT {
   class ConnectorContract <<struct>>
-  ConnectorContract : id, roles, ports, attributes, and profiles
+  ConnectorContract : id, roles, exchange, ports, attributes, and profiles
   class AttributeSpec <<struct>>
   AttributeSpec : name, presence, and value domain
   enum Presence <<enum>>
@@ -245,9 +247,17 @@ package "stdlib — standard catalogue instances" as P_STD {
 
 package "boundary — contracts with the external world" as P_BND {
   interface InboundConnectorDriver <<trait>>
-  InboundConnectorDriver : supplies inbound submissions under backpressure
+  InboundConnectorDriver : retains proposals until accepted-after-commit or rejected
   interface OutboundConnectorDriver <<trait>>
-  OutboundConnectorDriver : starts calls, answers or stays silent, cancels on demand
+  OutboundConnectorDriver : exposes exactly one Call or Session protocol view
+  interface CallConnectorDriver <<trait>>
+  CallConnectorDriver : starts calls, answers or stays silent, cancels on demand
+  interface SessionConnectorDriver <<trait>>
+  SessionConnectorDriver : opens sessions, writes messages, reports one terminal exit
+  class SessionRef <<struct>>
+  SessionRef : placement-neutral journal-derived session identity
+  class SessionWriteRef <<struct>>
+  SessionWriteRef : one journaled graph-to-world message obligation
   interface CompletionGate <<trait>>
   CompletionGate : admits every typed port draft before call closure
   interface Clock <<trait>>
@@ -444,7 +454,7 @@ P_CONF ..> P_CONN : binds through DriverRegistry
 P_LAB ..> P_COMP : uses
 P_LAB ..> P_RT : drives the Vm
 P_LAB ..> P_CONN : registers mock factories
-P_LAB ..> P_BND : mocks OutboundConnectorDriver
+P_LAB ..> P_BND : mocks Call; probes Event / Session
 P_LAB ..> P_J : uses
 P_CLI ..> P_COMP : uses
 P_CLI ..> P_RT : uses

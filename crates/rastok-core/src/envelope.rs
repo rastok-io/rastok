@@ -362,8 +362,8 @@ pub enum WriteTarget {
     /// (D-2026-08-10-1).
     App(String),
     /// A field of the external-context zone — flat key, vocabulary
-    /// owned by the connector sheets plus the standard
-    /// `content_type` (D-2026-08-10-4).
+    /// owned by the connector sheets plus standard `content_type` and
+    /// `session_id` (D-2026-08-10-4, D-2026-08-25-1).
     Ext(String),
 }
 

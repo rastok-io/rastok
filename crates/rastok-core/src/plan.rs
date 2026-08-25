@@ -12,6 +12,19 @@ mod validation;
 
 pub(crate) use serialization::type_tree;
 pub use serialization::{DecodeError, FORMAT_VERSION, MAGIC, decode, encode};
+
+/// Standard `meta.ext` leaves known to every graph without travelling in the
+/// plan schema. They are protocol context, not fields owned by one Connector
+/// sheet. The list is closed for one package format and sorted by spelling.
+pub const STANDARD_EXT_FIELDS: &[&str] = &["content_type", "session_id"];
+
+/// Logical type of one standard implicit `meta.ext` leaf.
+#[must_use]
+pub fn standard_ext_field_type(field: &str) -> Option<DataType> {
+    STANDARD_EXT_FIELDS
+        .contains(&field)
+        .then_some(DataType::Text)
+}
 pub use type_resolution::{ResolvedPort, ResolvedPortTable, TypeOrigin};
 pub use validation::{PlanValidationError, ValidatedExecutionPlan};
 
@@ -135,9 +148,9 @@ pub struct ExecutionPlan {
     /// Sorted by field; prefix-free.
     pub app_schema: Vec<(alloc::string::String, DataType)>,
     /// The resolved `meta.ext` vocabulary — the instantiated
-    /// sheets' fields ONLY: the standard `content_type` is IMPLICIT
-    /// (`text`), known to every consumer and never serialized
-    /// (D-2026-08-10-4).
+    /// sheets' fields ONLY: the standard `content_type` and `session_id`
+    /// leaves are IMPLICIT (`text`), known to every consumer and never
+    /// serialized (D-2026-08-10-4, D-2026-08-25-1).
     pub ext_schema: Vec<(alloc::string::String, DataType)>,
     /// The build-time asset table (D-2026-08-10-5): content-addressed,
     /// DEDUPLICATED by digest; `expr::Expr::Asset` indexes it. Sorted
@@ -432,6 +445,8 @@ pub struct ConnectorSpec {
     pub contract: crate::connector::ConnectorId,
     /// Inbound/outbound runtime roles required by the contract.
     pub roles: crate::connector::ConnectorRoles,
+    /// Cardinality and terminal lifecycle required by the contract.
+    pub exchange: crate::connector::ConnectorExchange,
     /// The declared effect — typed at the HIR/plan frontier, where
     /// distinctions become irrevocable.
     pub effect: node::Effect,

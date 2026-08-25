@@ -474,7 +474,10 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             path: hir_node.path.clone(),
             kind: match &hir_node.role {
                 NodeRole::Connector {
-                    contract_id, roles, ..
+                    contract_id,
+                    roles,
+                    exchange,
+                    ..
                 } => NodeKind::Connector(ConnectorSpec {
                     contract: crate::connector::ConnectorId::parse(contract_id).map_err(|_| {
                         LowerError {
@@ -483,6 +486,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                         }
                     })?,
                     roles: *roles,
+                    exchange: *exchange,
                     effect: typed_effect(hir_node),
                     behavior: typed_behavior(hir_node),
                     attributes,
@@ -1123,11 +1127,15 @@ impl Writer<'_> {
         match &node.role {
             crate::compiler::hir::NodeRole::Operator => self.tag(0),
             crate::compiler::hir::NodeRole::Connector {
-                contract_id, roles, ..
+                contract_id,
+                roles,
+                exchange,
+                ..
             } => {
                 self.tag(1);
                 self.str(contract_id);
                 self.tag(roles.tag());
+                self.tag(exchange.tag());
             }
         }
         let mut vals: Vec<_> = node.vals.iter().collect();
@@ -1840,6 +1848,9 @@ graph m0_probe : App {
         // DELIBERATE MOVE 2026-08-22 (M1.5 C1): the source symbol
         // `Process` resolves to `rastok/process@1`, and the stable id plus
         // required outbound role are now canonical HIR identity.
+        // DELIBERATE MOVE 2026-08-25 (M1.6 H1): the contract's Call exchange
+        // lifecycle becomes explicit canonical HIR and categorical v11 plan
+        // data. Existing Call causal records do not move.
         let hash = compile(
             &[M0_PROBE],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -1848,7 +1859,7 @@ graph m0_probe : App {
         .hash;
         assert_eq!(
             hash.to_string(),
-            "52406fcf0951b8b8bf16188e677dfea2cd6b0b873a7ff10b1360501015bd28a6"
+            "2933618d21f03ae7b7835998f1f150aac5de27eb78e8aea9412db7dde76489b0"
         );
     }
 

@@ -1,8 +1,8 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-23 for the M1.5 C6 closure checkpoint. The
-> former named-partition P1-P3 implementation is superseded; categorical v10
+> of the build; updated 2026-08-25 for the M1.6 H1 exchange checkpoint. The
+> former named-partition P1-P3 implementation is superseded; categorical v11
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
@@ -10,8 +10,8 @@
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
 > distinguishes the retained v7 type/value/expression registry from the
-> categorical v10 plan transport (retaining v9's instance model and adding
-> stable Connector ids/roles), R3 causal routing rows, R4 lifetime
+> categorical v11 plan transport (retaining v9's instance model and adding
+> stable Connector ids/roles/exchange lifecycles), R3 causal routing rows, R4 lifetime
 > execution, R5 Closing, R6 joins, and R7 placement-neutrality proof.
 
 This document refines the responsibility table of
@@ -75,7 +75,7 @@ canonical record projection ─▶ golden compare
 | HIR | `compiler` (check) | canonicalize, lower | desugared, name-resolved, typed — the hash input ([identity.md §1](../spec/identity.md)); spans live in side tables; **the entire lab is excluded from the hash** |
 | canonical bytes, `plan::SemanticHash` | `compiler` (canonicalize) | `plan::Manifest`, golden headers | byte-stable across formatting, file order, and sugar spelling ([identity.md §1](../spec/identity.md)) |
 | `plan::ValidatedExecutionPlan` | `compiler` (lower, then validate) or `plan::decode` | `runtime`, `lab`, `plan::encode` | the only executable/package boundary: an immutable `ExecutionPlan` whose tables, `expr::Tree`s, slots, contracts, and structural budgets have already passed the plan gate |
-| `boundary::Intent` (open OUTBOUND) | `runtime` | dispatcher → `boundary::OutboundConnectorDriver` impls | the runtime carrier for the canonical call fields and already-resolved non-plan settings used to prepare this exact call; the causal open record seals emitting id, connector path, request digest and optional idempotency key before any Driver effect, while settings remain execution material rather than a parallel causal field ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
+| `boundary::{Intent,SessionOpenIntent,SessionWriteIntent}` (open OUTBOUND) | `runtime` | dispatcher/bindings → exchange-specific `boundary::OutboundConnectorDriver` views | canonical Call or Session effect fields and already-resolved non-plan settings; each causal open/write record seals its emitting id, connector path and exact request/message digest before Driver effect, while settings remain execution material rather than a parallel causal field ([delivery-semantics.md §4](../spec/delivery-semantics.md); [identity.md §3](../spec/identity.md)) |
 | `boundary::Completion` | `connectors` or the Lab's mock Driver | `runtime` (as an input event) | returns ordered ordinary port drafts plus one final typed `exit`, correlated by the internal `CallRef` — never by the business key; a Driver only answers and never decides a timeout or mints journal records |
 | `journal::Record` | **runtime mechanics only** | recovery, `golden::Trace` | Drivers and mocks supply events, never records; causal core and observation annotations kept separable ([identity.md §3](../spec/identity.md)) |
 | `diagnostics::Diagnostic` | every phase | entry points | stable code, spans, structured fields; accumulated values — never prints, never panics |
@@ -166,7 +166,7 @@ data out, the governing spec, and current status.
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
 | **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspects, Node-owned instance-key expressions, lifetime profiles, nested Graph composition, and instance-local joins | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.4 R1 surface through R6 public composition/joins; some dynamic owner values and Graph handlers remain named gates |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
-| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, handlers, expression trees, stable Connector ids/roles, `Slot` resolution, schemas and assets; key types re-derived and structural/runtime capability validated before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | categorical v10 C1 checkpoint; compiler-only data-key inference is explicit, unsupported dynamic source rows refuse closed |
+| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, handlers, expression trees, stable Connector ids/roles/exchange lifecycles, `Slot` resolution, schemas and assets; key types re-derived and structural/runtime capability validated before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | categorical v11 H1 checkpoint; compiler-only data-key inference is explicit, unsupported dynamic source rows refuse closed |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
 
 The facade returns `Result<Compilation, Diagnostics>` with
@@ -216,7 +216,7 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry, retained unchanged inside categorical v10 |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry, retained unchanged inside categorical v11 |
 
 `expr` never sees an envelope, Node, or placement boundary, and owns its own
 `expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
@@ -248,7 +248,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v10 preserves every Graph/Operator/Connector owner and parent relation separately from executable Node slots, validates scoped routes, solves every port, and carries canonical Connector ids/roles | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | M1.5 C1 v10 identity transport; retains M1.4's owner/instance model unchanged |
+| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v11 preserves every Graph/Operator/Connector owner and parent relation separately from executable Node slots, validates scoped routes, solves every port, and carries canonical Connector ids/roles/exchange lifecycles | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | M1.6 H1 v11 exchange transport; retains M1.4's owner/instance model unchanged |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -294,7 +294,7 @@ single-stepping and future journal-relative inspection structural.
 | **Mailboxes** | per-instance-reference FIFO order, arrival-order capture (the race outcome is journaled), bounded capacity | envelopes → ordered delivery within one address generation | [execution-model.md §2–3](../spec/execution-model.md) | M0 base; M1.4 R3 hierarchical rebase landed |
 | **TransactionExecutor** | the atomic node transaction: consumed input, state delta, emissions, and records commit together; scratch isolation while a handler runs | firing → transaction commit + emissions | [execution-model.md §1](../spec/execution-model.md) | M0 |
 | **EmissionBuffer** | per-port emission identity in text order (`emission_index`) | handler body → ordered emissions | [execution-model.md §4](../spec/execution-model.md) | M0 |
-| **Boundary completion** | one correlated completion closes an invocation and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically. M1.6 H1 adds the orthogonal many-message/one-exit session lifecycle without weakening this path. | completion drafts → one transaction of routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.3 B7; session extension prepared |
+| **Boundary completion** | one correlated completion closes a Call and carries ordered ordinary output drafts plus one final typed `exit`; the VM mints and commits all output envelopes atomically. The orthogonal Session path journals opening and individual write obligations, then publishes one terminal exit. | completion drafts or session facts → causal records and routed envelopes | [types.md](../spec/types.md); [m1.3 backlog](m1.3-type-system-backlog.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.3 B7 Call path; M1.6 H1 generic Session fold |
 | **Instance Closing** | durable close-scope arbitration; successor-generation admission; bounded drain, canonical cancellation and settlement; residual cursor retirement; inner-first stop and state reclamation | `closing` policy + lifecycle cause + journal fold → terminal exits and `l:stop` | [instances.md §7](../spec/instances.md); [execution-model.md §2.1](../spec/execution-model.md) | M1.4 R5 |
 | **`GuestExecutor`** | the existing runtime seam future guest engines implement: `run(&[u8], value, budget)` — pure, deterministic, budgeted, inside the node transaction; the bytes become a typed/versioned `GuestProgram` only when that slice lands | opaque program bytes → value or typed error | [stdlib.md §5](../spec/stdlib.md) | seam only; no engine/program type yet |
 | **`BootBindings`** | future `env()` / `secret()` resolution at boot; a missing or ill-typed binding will be a typed refusal, never a default; `Secret<T>` remains a design requirement, not a current type | plan + deployment profile → bound constants | [grammar.md](../spec/grammar.md) initializer positions | guarded / later |
@@ -303,15 +303,16 @@ single-stepping and future journal-relative inspection structural.
 
 Every nondeterministic thing is represented at one of these host
 boundaries, and what crosses into causality is recorded — the journal's
-*world-half* is the record of it. The current Lab substitutes the
-`OutboundConnectorDriver`, injects inbound drafts through `Vm::inject`, and drives virtual
-time through `Vm::advance`; the declared `Clock` and `Supervisor` traits
+*world-half* is the record of it. The current Lab substitutes Call Drivers,
+the exchange conformance suite supplies Event/Session Drivers, direct
+scenarios may still inject drafts through `Vm::inject`, and virtual time
+advances through `Vm::advance`; the declared `Clock` and `Supervisor` traits
 remain host seams rather than objects the M1 VM consumes directly.
 
 | Interface | Owns | Real side | Lab side | Spec | Status |
 |---|---|---|---|---|---|
-| **`InboundConnectorDriver`** | proposal of inbound **drafts** — payload, birth metadata, opaque `InboundEnvelopeProvenance`, and a sequence request `Next \| Explicit(seq)` (a fixture can replay a production slice with explicit sequences); bounded, with commit/backpressure translated outward. It never births an envelope: a root envelope **cannot pre-exist its sequence** — the root id derives from the provenance plus `inbound_seq`, and `origin_id = id` — so only the journal's accepting transaction mints it | future listener Drivers | scenario injection through `Vm::inject` (no `Fixture` type) | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) fixtures | trait vocabulary landed in M1.5 C0; provenance named in C1; commit acknowledgement widens with the first inbound Driver |
-| **`OutboundConnectorDriver`** | launching journaled `Intent`s and answering with `Response` events carrying the internal `CallRef` and one ordered `Completion`; correlation is the **Connector's protocol correlator** (HTTP natively, the process boundary in job mode, the declared expression in service mode); a Driver deduplicates on the idempotency key only *when its protocol cooperates*; `cancel(call_ref)` withdraws in-flight work when the machine closes a call (default: nothing) | `connectors::Process` | the Lab's mock Driver | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [stdlib.md §3.3](../spec/stdlib.md) | M1.3 B7 semantics; M1.5 C0 name |
+| **`InboundConnectorDriver`** | one retained `InboundProposal` — draft, provenance, sequence request and optional Session framing — until the runtime answers accepted-after-commit or rejected; pending admission makes no callback and therefore applies bounded backpressure. It never births an envelope: only the journal's accepting transaction mints root/session identity. | future Event/HTTP/WebSocket listeners | family-owned fake Drivers; direct scenario injection remains available through `Vm::inject` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) | M1.6 H1 two-phase protocol |
+| **`OutboundConnectorDriver`** | categorical exchange view: `CallConnectorDriver` launches journaled `Intent`s and answers by `CallRef`; `SessionConnectorDriver` launches journaled open/write intents and reports by `SessionRef`/`SessionWriteRef`. Cancellation/timeout remain runtime policy and no Driver writes causal records. | `connectors::{Process,File}` for Call; network Session Drivers next | Call mock plus generic Event/Session conformance fakes | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1](../spec/execution-model.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | Call semantics M1.3 B7; role name M1.5 C0; generic exchanges M1.6 H1 |
 | **`Clock`** | the only source of time. As built, M0 consumes no trait impl: `Vm::advance(journal, driver, target)` IS the virtual clock — the caller (a Lab step, the CLI's wall-mapping loop) chooses targets, due budgets fire in expiry order, and same-instant expiries all fire before the machine drains | declared trait; `advance` targets in M0 | `advance` calls | [execution-model.md §5, §8](../spec/execution-model.md) | M0 (target-driven) |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | not built; fault steps remain guarded | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | declared seam; current wiring boots only |
 
@@ -567,8 +568,8 @@ The chronological detail and commit evidence remain in
 - **M1.4 rebase:** D-2026-08-18-1 replaces the unreleased P0-P3 surface and
   transport with Node-owned `instances.key`, independent `lifetime`, private
   Node state, hierarchical logical addresses, and journal-derived instance
-  references. R1 checking, categorical v10 transport (retaining the v9 owner
-  model and adding Connector ids/roles), R3
+  references. R1 checking, categorical v11 transport (retaining the v9 owner
+  model and adding Connector ids/roles/exchange lifecycles), R3
   hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
   profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.

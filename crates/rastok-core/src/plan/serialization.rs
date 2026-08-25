@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v10: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v11: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -39,12 +39,12 @@ use crate::value::Value;
 /// The package's leading magic.
 pub const MAGIC: [u8; 4] = *b"RKPB";
 
-/// The format version this module writes and reads. V10 retains v9's complete
-/// owner/instance/type/value/expression transport and replaces source-level
-/// Connector names with canonical versioned ids plus explicit runtime roles.
+/// The format version this module writes and reads. V11 retains v10's complete
+/// transport and adds each Connector's closed exchange lifecycle beside its
+/// stable id and roles.
 /// A new format is a new version, and an old decoder refuses it by name,
 /// exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 10;
+pub const FORMAT_VERSION: u32 = 11;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -479,6 +479,7 @@ fn spec_tree(spec: &ConnectorSpec) -> Cbor {
             ),
         ),
         (6, Cbor::Uint(u64::from(spec.roles.tag()))),
+        (7, Cbor::Uint(u64::from(spec.exchange.tag()))),
     ]))
 }
 
@@ -1585,9 +1586,16 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
     let role_tag = u8::try_from(*role_tag).map_err(|_| err("connector roles"))?;
     let roles = crate::connector::ConnectorRoles::from_tag(role_tag)
         .ok_or_else(|| err("connector roles"))?;
+    let Cbor::Uint(exchange_tag) = get(pairs, 7, "connector exchange")? else {
+        return Err(err("connector exchange"));
+    };
+    let exchange_tag = u8::try_from(*exchange_tag).map_err(|_| err("connector exchange"))?;
+    let exchange = crate::connector::ConnectorExchange::from_tag(exchange_tag)
+        .ok_or_else(|| err("connector exchange"))?;
     Ok(ConnectorSpec {
         contract,
         roles,
+        exchange,
         effect,
         behavior,
         attributes,
@@ -2460,7 +2468,7 @@ mod tests {
     }
 
     #[test]
-    fn v10_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
+    fn v11_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
         let lifetimes = [
             InstanceLifetime::Persistent,
             InstanceLifetime::Idle(1),
@@ -2528,7 +2536,7 @@ mod tests {
     }
 
     #[test]
-    fn v10_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
+    fn v11_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
         let package = instance_package();
 
         let lying_key_type = mutate_package_body(&package, |body| {
@@ -2652,6 +2660,7 @@ mod tests {
                         )
                         .unwrap(),
                         roles: crate::connector::ConnectorRoles::Outbound,
+                        exchange: crate::connector::ConnectorExchange::Call,
                         effect: node::Effect::Class(node::EffectClass::Idempotent),
                         behavior: node::Behavior::Deterministic,
                         attributes: vec![

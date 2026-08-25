@@ -6,7 +6,7 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-22): items 1, 2 and the replacement item 3 are landed, as are
+**Current checkpoint (2026-08-25): items 1, 2 and the replacement item 3 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 M1.4 has been normatively rebased by D-2026-08-18-1 before public release.
 The executable P0–P3 named-`partition` / `per` draft is not the target source
@@ -39,12 +39,14 @@ C6 closes M1.5 with one contributor guide, a data-only pre-load capability
 manifest and an active-document/diagram audit, without freezing a plugin ABI;
 the [M1.5 exit report](m1.5-exit-report.md) records the final evidence and
 identity ledger.
-M1.6 is prepared under D-2026-08-25-1: HTTP/1.1, HTTP/2 and HTTP/3 remain
+M1.6 H1 is landed under D-2026-08-25-1: categorical package v11 now carries
+the closed `Event | Call | Session` lifecycle, and the generic runtime owns
+placement-neutral session references, causal session folds and two-phase
+bounded inbound admission. HTTP/1.1, HTTP/2 and HTTP/3 remain
 physical bindings of the two HTTP contracts, while WebSocket Client/Server
-exercise a new generic session exchange with many messages and one terminal
-`exit`. Its [ordered backlog](m1.6-http-websocket-backlog.md) opens with the
-runtime lifecycle and two-phase inbound admission before any product network
-dependency is adopted.
+will exercise that generic exchange with many messages and one terminal
+`exit`. The remaining [ordered backlog](m1.6-http-websocket-backlog.md) starts
+with the exact H2 sheets before any product network dependency is adopted.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -366,9 +368,9 @@ step touches `vm.rs` once.
    canonical id/role manifest that contains no executable code; static
    registration remains the only shipped loader.
 7. **M1.6 — HTTP/1.1-3 and WebSocket boundaries** — four stable contracts,
-   two Driver roles and three generic exchange shapes (`Event`, `Invocation`,
+   two Driver roles and three generic exchange shapes (`Event`, `Call`,
    `Session`). `HttpClient` and
-   `HttpServer` keep invocation semantics; `WebSocketClient` and
+   `HttpServer` keep Call semantics; `WebSocketClient` and
    `WebSocketServer` carry many bidirectional messages under one logical
    session and one typed terminal `exit`. H0–H7 in the
    [ordered backlog](m1.6-http-websocket-backlog.md) land the categorical

@@ -6,7 +6,7 @@
 > journal records.
 >
 > The registry below retains the executable v7 type/value/expression registry
-> inside categorical plan-package v10 and specifies the M1.4 instance-address
+> inside categorical plan-package v11 and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
 > typed key/lifetime policy and phased immutable expressions. R3 made
@@ -21,7 +21,10 @@
 > reassignment cannot alter canonical replay bytes. M1.5 C1 replaces source
 > Connector names with stable versioned ids and required roles, moving
 > Process semantic hashes and v10 packages while leaving causal records
-> unchanged. D-2026-08-14-1
+> unchanged. M1.6 H1 adds the closed Event/Call/Session exchange tag, moves
+> Connector semantic hashes and every package to v11, and leaves pre-session
+> causal records byte-identical because the new session keys are omitted.
+> D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
 > from the plan constraints and requires exact agreement with the transported
@@ -154,6 +157,18 @@ compiler probe `29c69b70… → 52406fcf…`, JSONL
 `0d3ad43d…`. V10 package containers move; existing causal traces do not,
 because Driver selection is neither a causal event nor a placement fact.
 
+**M1.6 H1 exchange checkpoint (2026-08-25).** The closed exchange lifecycle
+joins the Connector's canonical HIR identity and v11 plan row. Compiler probe
+moves `52406fcf… → 2933618d…`, JSONL moves
+`9643616e… → 036f7ea5…`, and echo/spike moves
+`190f0efc… → e50026ee…`; connector-free gauge remains
+`0d3ad43d…`. All three package goldens move categorically from v10 to v11,
+including gauge's container, and the spike embeds the 974-byte echo package.
+Keys 26, 50 and 51 are optional and absent from every existing Call/Event
+fact, so all four pre-H1 causal traces remain byte-identical. The new session
+identity domains `0x11` and `0x12` are pinned below and contain no socket,
+protocol-version or placement fact.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -281,7 +296,7 @@ travels inside the sealed `instance_address` below. That is a journaled routing
 fact derived once at admission, not a general license to seal wall-clock or
 timer fields.
 
-**INBOUND** (kind 1 — an envelope entered) — keys `20–25` :
+**INBOUND** (kind 1 — an envelope entered) — keys `20–26` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -291,10 +306,11 @@ timer fields.
 | 23 | replica | uint | the logical inbound Connector replica in `InboundEnvelopeProvenance`; sealed so the record autonomously reconstructs `(connector_path, replica, inbound_seq)`. It may be allocated by the leader responsible for that inbound Connector, but is never the target-routing shard and never changes when a destination moves Workers. |
 | 24 | ingress_port | text | the graph input the envelope entered — a causal fact : replay re-routes from this port ; **omitted for the default `in`** (absent = omitted), so pre-multiport records are byte-identical (D-2026-08-08-2) |
 | 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INBOUND record. |
+| 26 | session_ingress | array | present only for Session ingress: `[1, session_ref (bytes16)]` opens a session and `[2, session_ref (bytes16)]` admits one message into an already-open session. Omitted for Event and Call facts, preserving every pre-H1 record byte. |
 
 **TRANSACTION** (kind 2 — one Node firing or one Graph-owner lifecycle fact;
 the commit packet of
-execution-model §1) — keys `30–39`, `48`, and `49` :
+execution-model §1) — keys `30–39` and `48–50` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -310,8 +326,9 @@ execution-model §1) — keys `30–39`, `48`, and `49` :
 | 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction with no consumed mailbox cursor (`l:start`, `l:stop`, later `l:evict`); omitted when key 33 already identifies the cause. This keeps an empty lifecycle hook causally autonomous rather than relying on record order. |
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
 | 49 | close_scope_ref | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
+| 50 | session_exit_ref | bytes(16) | present exactly on the Connector transaction that terminates a Session. That transaction emits exactly one conventional `exit`, last; its envelope projects the same reference as `meta.ext.session_id`. The fold refuses a second exit, an exit with an open write, or any later message/write. |
 
-**OUTBOUND** (kind 3 — one external call's WAL record ;
+**OUTBOUND / Call** (kind 3 — one external call's WAL record ;
 delivery-semantics §4) — keys `40–47` :
 
 | Key | Field | CBOR type | Notes |
@@ -324,6 +341,22 @@ delivery-semantics §4) — keys `40–47` :
 | 45 | closure | array | present iff status ∈ {closed, abandoned} ; EXACT byteshape fixed BY `status` (`[1,outputs]` response · `[2]` timeout · `[]` abandoned ; sub-forms below), so `status` and `closure` never disagree |
 | 46 | edge_cursor | array | present only on an inter-shard delivery — the DURABLE LOGICAL cursor `[edge (text), source_instance_ref, seq (uint)]` (seq never restarts on leader change within that source generation; the transport `leader_epoch` fence is separate and NOT sealed); a transport cursor, NOT an envelope id, outside every id domain |
 | 47 | edge | text | the canonical edge of the causing delivery ; with key 40 (`emitting_id`) it reconstructs `delivery_ref` and hence `call_ref` (envelope.md §2) — the record stays autonomous |
+
+**OUTBOUND / Session** (kind 3 — opening and message-write WAL facts;
+delivery-semantics §4.5) — key `51` only. The value is one closed array form:
+
+| Tag | Fact | Exact array |
+|---|---|---|
+| 1 | opening intent | `[1, session_ref (bytes16), emitting_id (bytes16), connector_path (text), request_digest (bytes32)]` |
+| 2 | opening confirmed | `[2, session_ref (bytes16), connector_path (text)]` |
+| 3 | message-write intent | `[3, session_ref (bytes16), write_ref (bytes16), emitting_id (bytes16), connector_path (text), message_digest (bytes32)]` |
+| 4 | message-write settled | `[4, session_ref (bytes16), write_ref (bytes16), connector_path (text)]` |
+| 5 | message-write abandoned | `[5, session_ref (bytes16), write_ref (bytes16), connector_path (text)]` |
+
+Call and Session subforms are distinguishable without inspecting a contract:
+a Call record carries keys 40–47 and never key 51; a Session record carries
+key 51 and none of keys 40–47. An inbound Session terminal is represented by
+the ordinary Connector TRANSACTION key 50, never by a fourth record kind.
 
 Key 44's `status` is the internal state of the OUTBOUND WAL record, not a
 graph port and not a payload union. M1.3's conventional `exit` port therefore
@@ -445,6 +478,18 @@ cannot diverge on bytes for the same journal :
   `(instance_address, generation)`, while kinds 6/7 derive under domain
   `0x22` from `(instance_address, generation, timer_kind)`. The due µs is never
   sealed (annotation).
+- **`session_ref` and `session_write_ref`** use the same injective framed
+  derivation as every other identity in this registry: one domain byte, then
+  for each listed component `u32_le(length) ‖ bytes`. Owner path segments are
+  separate fields, never a dotted display string.
+  - inbound opening: `derive(0x11, 0x01 ‖ connector_path_segment* ‖ opening_root_id)`;
+  - outbound opening: `derive(0x11, 0x02 ‖ connector_path_segment* ‖ emitting_id ‖ request_digest)`;
+  - message write: `derive(0x12, session_ref ‖ emitting_id ‖ message_digest)`.
+  `SessionRef` and `SessionWriteRef` are opaque 16-byte logical references.
+  Socket, address, negotiated protocol, Host, Worker, placement and arrival
+  order never enter these recipes. Their lowercase hexadecimal text spelling
+  is the sole `meta.ext.session_id` projection; causal record fields always
+  carry the raw 16 bytes.
 - **`closure` (OUTBOUND key 45) — the EXACT byteshapes.**
   The rule is « one call = exactly one closure ». The SEALED
   causal `status` (key 44) is exactly `1 open · 2 closed · 4 abandoned`
@@ -492,7 +537,8 @@ any referenced envelope's spine (incl. the namespaced `app_meta`
 triples and `tier2` stamps), the INBOUND `(connector_path, replica,
 inbound_seq)` root recipe, the firing node/key/trigger, the consumed
 positions, the typed `state_delta`, the ordered emissions, the call
-key/digest/status and the discriminated `closure`. **Virtual time is
+key/digest/status and the discriminated `closure`, or the Session opening,
+message-write, settlement, abandonment and terminal reference. **Virtual time is
 NOT among them** (it is derivable — an annotation, above) :
 two runs differ in the seal because their *records and orders*
 differ, never because a time value differs. Conformance vectors (a corpus of
@@ -507,4 +553,4 @@ executions differ on this field ?* Yes → annotation. No → core.
 
 | Causal core (in the canonical form, compared bytewise) | Annotations (recorded if useful, excluded from the form and the seal) |
 |---|---|
-| record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call key/digest/status) ; every typed port payload | **virtual dated time** (derivable — annotation, simulation-semantics §6.1) ; wall-clock (`committed_at`) ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; all non-normative diagnostics |
+| record kind ; full `meta.sys` (id, parent_id, origin_id, role, graph_version) ; port ; `emission_index` ; the causal record fields (consumed set, state delta, ordered emissions, call/session identities and transitions) ; every typed port payload | **virtual dated time** (derivable — annotation, simulation-semantics §6.1) ; wall-clock (`committed_at`) ; execution durations ; cost / metrics ; host info ; runtime version ; thread ids ; socket ids ; negotiated protocol ; all non-normative diagnostics |

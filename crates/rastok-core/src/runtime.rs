@@ -742,6 +742,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
+                session_exit: None,
                 trigger,
                 cause: Some(delivery.envelope.meta().sys().id()),
                 consumed: vec![ConsumedPosition {
@@ -834,6 +835,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     instance: instance.clone(),
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
+                    session_exit: None,
                     trigger: trigger.clone(),
                     cause,
                     consumed,
@@ -893,6 +895,7 @@ impl<'plan> TransactionExecutor<'plan> {
                             instance: instance.clone(),
                             parent_instance: parent_instance.cloned(),
                             close_scope: None,
+                            session_exit: None,
                             trigger: trigger.clone(),
                             cause,
                             consumed,
@@ -1027,6 +1030,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 instance: instance.clone(),
                 parent_instance: parent_instance.cloned(),
                 close_scope: close_requested.then(|| instance.clone()),
+                session_exit: None,
                 trigger: trigger.clone(),
                 cause,
                 consumed,
@@ -1154,6 +1158,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
+                session_exit: None,
                 trigger: trigger.clone(),
                 cause: None,
                 consumed: vec![ConsumedPosition {
@@ -1388,19 +1393,16 @@ fn emitted_content(
                     envelope::WriteTarget::Ext(field) => {
                         // Explicit writes come LAST in the atomic
                         // order — they win over the derivation. The
-                        // standard field keeps its implicit `text`
-                        // contract even through a `variant` expression;
-                        // sheet fields answer to their declared
-                        // types.
+                        // standard fields keep their implicit `text` contract
+                        // even through a `variant` expression; sheet fields
+                        // answer to their declared types.
                         let converted = to_meta_value(&value)?;
-                        let ty = if field == "content_type" {
-                            Some(DataType::Text)
-                        } else {
+                        let ty = crate::plan::standard_ext_field_type(field).or_else(|| {
                             plan.ext_schema
                                 .iter()
                                 .find(|(known, _)| known == field)
                                 .map(|(_, ty)| ty.clone())
-                        };
+                        });
                         if let Some(ty) = ty
                             && !meta_conforms(&converted, &ty)
                         {

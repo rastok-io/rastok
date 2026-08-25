@@ -1483,24 +1483,24 @@ instance may admit several exchanges concurrently when its resolved policy
 permits. There are three cardinalities behind the same two Driver roles:
 
 ```text
-event       external fact ──▶ one inbound root; no per-event exit
-invocation  request ──▶ zero or more outputs ──▶ exactly one exit
-session     open ──▶ messages in both directions* ──▶ exactly one exit
+event    external fact ──▶ one inbound root; no per-event exit
+call     operation ──▶ zero or more outputs ──▶ exactly one exit
+session  open ──▶ messages in both directions* ──▶ exactly one exit
 ```
 
-Clock ticks and calendar instants are events. Every invocation has a causal
+Clock ticks and calendar instants are events. Every call has a causal
 call identity. Every session has a causal
 logical session reference independent of its socket, negotiated transport and
-physical placement. A Process job or database operation is an invocation; a
+physical placement. A Process job or database operation is a call; a
 WebSocket connection and the future Process service profile are sessions.
 Neither automatically invents a Node-instance key.
 
 `stop` and `exit` name the two distinct boundaries. `stop` closes the current
 Node instance; `exit` reports the observed termination of
 one admitted exchange. Many exits may occur before one stop. Closing a Node
-instance stops admission and must drain or cancel every open invocation and
+instance stops admission and must drain or cancel every open call and
 session under a bounded policy; it cannot erase their terminal obligations.
-Call identity correlates invocation frames. Session identity correlates all
+Call identity correlates call outputs. Session identity correlates all
 messages under one open resource; a WebSocket message does not receive a fake
 per-message exit. No output may follow the corresponding terminal `exit`.
 

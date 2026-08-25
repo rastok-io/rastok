@@ -55,13 +55,12 @@
 > not a package mutation, so C3 allocates no format tag and moves no existing
 > package or semantic identity.
 >
-> **M1.6 H1 is the next categorical allocation, not an implicit v10
-> extension.** D-2026-08-25-1 requires every Connector to carry its closed
-> `Event | Invocation | Session` exchange shape and requires
-> placement-neutral session references in causal records. H1 will allocate
-> v11 and enumerate all package/hash/trace moves before implementation. Until
-> then, v10 remains the only accepted package and cannot claim session
-> semantics.
+> **M1.6 H1 is categorical format v11, not an implicit v10 extension.**
+> D-2026-08-25-1 requires every Connector to carry its closed
+> `Event | Call | Session` exchange shape and placement-neutral session
+> references in causal records. The affected package/hash/trace sets were
+> enumerated before implementation. Format v10 is categorically refused; no
+> decoder guesses the missing exchange fact.
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
@@ -239,7 +238,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v10)
+## Body tables (format v11)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -262,7 +261,8 @@ plan       := {1: [node*], 2: [port_decl*], 3: [edge*], 4: [handler*],
                                                   // 5/6 are travelling zone schemas:
                                                   //   [[field (text), type]*], sorted, prefix-free
                                                   //   (D-2026-08-10-1); absent = empty; ext's
-                                                  //   content_type:text leaf is implicit
+                                                  //   content_type:text and session_id:text
+                                                  //   leaves are implicit
                                                   // 7 is raw asset content in digest order
                                                   // 8 is mandatory and re-derived at decode
                                                   // 9 is mandatory, including the root Graph
@@ -316,10 +316,12 @@ owner_val  := {1: name (text), 2: evaluation_site, 3: tree,
               // remain handler steps.
 spec       := {1: connector_id (text), 2: effect,
                3: behavior (uint: 1 deterministic · 2 probabilistic),
-               4: [[name (text), attr]*], 6: connector_roles}
+               4: [[name (text), attr]*], 6: connector_roles,
+               7: connector_exchange}
               // connector_id is canonical <namespace>/<name>@<major>
               // connector_roles := uint: 1 inbound · 2 outbound ·
               //                            3 inbound+outbound
+              // connector_exchange := uint: 1 event · 2 call · 3 session
               // key 5 (error_set) is RETIRED by B5 and never reused
 effect     := 0 | [1, class (uint: 1 idempotent · 2 compensable · 3 irreversible)]
 attr       := [1, word (text)] | [2, tagged_value]

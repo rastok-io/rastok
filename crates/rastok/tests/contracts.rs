@@ -69,11 +69,18 @@ fn sheet(common: &'static [AttributeSpec], selector: Option<ProfileSelector>) ->
             unwired: UnwiredPolicy::RootSink,
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         },
+        PortContract {
+            name: "exit",
+            direction: Direction::Output,
+            unwired: UnwiredPolicy::RootSink,
+            ty: PortTypeRule::Fixed(PortDataType::Variant),
+        },
     ];
     ConnectorContract {
         id: "test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: PORTS,
         common,
         selector,
@@ -102,6 +109,115 @@ fn a_duplicate_attribute_is_a_sheet_defect() {
             .try_with(sheet(DUP, None))
             .unwrap_err(),
         SheetDefect::DuplicateAttribute("x")
+    );
+}
+
+#[test]
+fn the_exchange_shape_owns_the_terminal_row_cardinality() {
+    let event_with_exit = ConnectorContract {
+        roles: rastok::connector::ConnectorRoles::Inbound,
+        exchange: rastok::connector::ConnectorExchange::Event,
+        ..sheet(&[], None)
+    };
+    assert_eq!(
+        ContractCatalog::default()
+            .try_with(event_with_exit)
+            .unwrap_err(),
+        SheetDefect::ExchangeTerminalMismatch {
+            exchange: rastok::connector::ConnectorExchange::Event,
+            exits: 1,
+        }
+    );
+
+    const EVENT_PORTS: &[PortContract] = &[PortContract {
+        name: "out",
+        direction: Direction::Output,
+        unwired: UnwiredPolicy::RequireWire,
+        ty: PortTypeRule::Fixed(PortDataType::Variant),
+    }];
+    let event = ConnectorContract {
+        id: "test/event@1",
+        name: "EventProbe",
+        roles: rastok::connector::ConnectorRoles::Inbound,
+        exchange: rastok::connector::ConnectorExchange::Event,
+        ports: EVENT_PORTS,
+        common: &[],
+        selector: None,
+    };
+    ContractCatalog::default()
+        .try_with(event.clone())
+        .expect("an Event has no fabricated per-event exit");
+
+    assert_eq!(
+        ContractCatalog::default()
+            .try_with(ConnectorContract {
+                id: "test/call@1",
+                name: "CallProbe",
+                roles: rastok::connector::ConnectorRoles::Outbound,
+                exchange: rastok::connector::ConnectorExchange::Call,
+                ..event
+            })
+            .unwrap_err(),
+        SheetDefect::ExchangeTerminalMismatch {
+            exchange: rastok::connector::ConnectorExchange::Call,
+            exits: 0,
+        }
+    );
+
+    ContractCatalog::default()
+        .try_with(ConnectorContract {
+            id: "test/session@1",
+            name: "SessionProbe",
+            roles: rastok::connector::ConnectorRoles::InboundAndOutbound,
+            exchange: rastok::connector::ConnectorExchange::Session,
+            ..sheet(&[], None)
+        })
+        .expect("a Session carries one terminal exit like a Call");
+}
+
+#[test]
+fn an_event_is_the_one_way_inbound_exchange() {
+    const EVENT_PORTS: &[PortContract] = &[PortContract {
+        name: "out",
+        direction: Direction::Output,
+        unwired: UnwiredPolicy::RequireWire,
+        ty: PortTypeRule::Fixed(PortDataType::Variant),
+    }];
+    let error = ContractCatalog::default()
+        .try_with(ConnectorContract {
+            id: "test/outbound-event@1",
+            name: "OutboundEvent",
+            roles: rastok::connector::ConnectorRoles::Outbound,
+            exchange: rastok::connector::ConnectorExchange::Event,
+            ports: EVENT_PORTS,
+            common: &[],
+            selector: None,
+        })
+        .unwrap_err();
+    assert_eq!(
+        error,
+        SheetDefect::ExchangeRoleMismatch {
+            exchange: rastok::connector::ConnectorExchange::Event,
+            roles: rastok::connector::ConnectorRoles::Outbound,
+        }
+    );
+
+    let error = ContractCatalog::default()
+        .try_with(ConnectorContract {
+            id: "test/inbound-session@1",
+            name: "InboundSession",
+            roles: rastok::connector::ConnectorRoles::Inbound,
+            exchange: rastok::connector::ConnectorExchange::Session,
+            ..sheet(&[], None)
+        })
+        .unwrap_err();
+    assert_eq!(
+        error,
+        SheetDefect::ExchangeRoleMismatch {
+            exchange: rastok::connector::ConnectorExchange::Session,
+            roles: rastok::connector::ConnectorRoles::Inbound,
+        },
+        "a Session needs the exchange-specific outbound observation view"
     );
 }
 
@@ -169,6 +285,7 @@ fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
         id: "test/cyclic@1",
         name: "Cyclic",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "first",
@@ -218,6 +335,7 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
         id: "test/parametric@1",
         name: "Parametric",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "in",
@@ -241,6 +359,12 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
                 name: "out",
                 direction: Direction::Output,
                 unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::SameAs("in"),
+            },
+            PortContract {
+                name: "exit",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RootSink,
                 ty: PortTypeRule::SameAs("in"),
             },
         ],
@@ -290,6 +414,7 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
         id: "test/ambiguous@1",
         name: "Ambiguous",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "out",
             direction: Direction::Output,
@@ -344,6 +469,7 @@ fn a_port_type_selector_is_structurally_plan_bound() {
         id: "test/late@1",
         name: "Late",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "out",
             direction: Direction::Output,
@@ -377,6 +503,7 @@ fn an_input_cannot_own_an_unwired_output_policy() {
         id: "test/invalid-sink@1",
         name: "InvalidSink",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "in",
             direction: Direction::Input,
@@ -1115,6 +1242,12 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
                     unwired: UnwiredPolicy::RootSink,
                     ty: Some(rastok::datatype::DataType::Variant),
                 },
+                rastok::plan::PortDecl {
+                    port: rastok::node::Port::new("exit").expect("a conventional port"),
+                    direction: rastok::node::Direction::Output,
+                    unwired: UnwiredPolicy::RootSink,
+                    ty: Some(rastok::datatype::DataType::Variant),
+                },
             ];
             node.ports
                 .sort_by(|left, right| left.key().cmp(&right.key()));
@@ -1209,6 +1342,28 @@ fn a_callable_connector_requires_the_outbound_role() {
     assert!(matches!(
         rastok::plan::ValidatedExecutionPlan::try_from(plan),
         Err(rastok::plan::PlanValidationError::CallableConnectorWithoutOutboundRole { .. })
+    ));
+}
+
+#[test]
+fn a_forged_event_cannot_claim_an_outbound_effect_role() {
+    let compilation = compile_one(&process_graph(FULL)).expect("valid");
+    let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Connector(spec) = &mut node.kind {
+            spec.contract = rastok::connector::ConnectorId::parse("test/outbound-event@1")
+                .expect("the test id is canonical");
+            spec.exchange = rastok::connector::ConnectorExchange::Event;
+            node.ports.retain(|port| port.port.name() != "exit");
+        }
+    }
+    assert!(matches!(
+        rastok::plan::ValidatedExecutionPlan::try_from(plan),
+        Err(rastok::plan::PlanValidationError::ExchangeRoleMismatch {
+            exchange: rastok::connector::ConnectorExchange::Event,
+            roles: rastok::connector::ConnectorRoles::Outbound,
+            ..
+        })
     ));
 }
 
@@ -1567,6 +1722,7 @@ fn an_inexpressible_sheet_name_is_a_sheet_defect() {
         id: "test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "bad port",
             direction: Direction::Input,

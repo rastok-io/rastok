@@ -8,7 +8,7 @@
 //! test double.
 
 use crate::boundary::{
-    Completion, Draft, InboundEnvelopeProvenance, InboundSubmission, Intent,
+    CallConnectorDriver, Completion, Draft, InboundEnvelopeProvenance, InboundSubmission, Intent,
     OutboundConnectorDriver, PortOutput, RequestPreparation, Response, SchedulerCompletion,
     SubmissionSequence,
 };
@@ -662,7 +662,7 @@ impl MockOutboundConnectorDriver {
     }
 }
 
-impl OutboundConnectorDriver for MockOutboundConnectorDriver {
+impl CallConnectorDriver for MockOutboundConnectorDriver {
     fn prepare_request(
         &mut self,
         connector: &node::Path,

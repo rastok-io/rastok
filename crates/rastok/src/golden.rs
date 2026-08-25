@@ -42,7 +42,9 @@
 //! through it too) — and it changes only when the spec does.
 
 use crate::envelope::{Data, Encoding, Envelope, Role};
-use crate::journal::{Closure, OutboundStatus, Record};
+use crate::journal::{
+    Closure, OutboundRecord, OutboundStatus, Record, SessionIngressRecord, SessionStatus,
+};
 use rastok_core::canonical_cbor::{Value as Cbor, decode, encode};
 use rastok_core::identity::encoding::{meta_tagged, value_tagged};
 use std::collections::BTreeMap;
@@ -287,6 +289,7 @@ fn key_name(key: u64) -> String {
         23 => "replica",
         24 => "ingress_port",
         25 => "routes",
+        26 => "session_ingress",
         30 => "node_path",
         31 => "instance_ref",
         32 => "trigger",
@@ -307,6 +310,8 @@ fn key_name(key: u64) -> String {
         47 => "edge",
         48 => "parent_instance_ref",
         49 => "close_scope_ref",
+        50 => "session_exit_ref",
+        51 => "session_fact",
         _ => return format!("key {key}"),
     };
     format!("{name}({key})")
@@ -348,6 +353,19 @@ fn record_tree(record: &Record) -> Cbor {
                     ),
                 );
             }
+            if let Some(session) = inbound.session.as_deref().copied() {
+                let (kind, reference) = match session {
+                    SessionIngressRecord::Open(reference) => (1, reference),
+                    SessionIngressRecord::Message(reference) => (2, reference),
+                };
+                pairs.insert(
+                    26,
+                    Cbor::Array(vec![
+                        Cbor::Uint(kind),
+                        Cbor::Bytes(reference.id().as_bytes().to_vec()),
+                    ]),
+                );
+            }
             Cbor::Map(pairs)
         }
         Record::Transaction(transaction) => {
@@ -362,6 +380,9 @@ fn record_tree(record: &Record) -> Cbor {
             }
             if let Some(scope) = &transaction.close_scope {
                 pairs.insert(49, scope.tree());
+            }
+            if let Some(session) = transaction.session_exit {
+                pairs.insert(50, Cbor::Bytes(session.id().as_bytes().to_vec()));
             }
             if let Some(cause) = transaction.cause {
                 pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));
@@ -466,7 +487,7 @@ fn record_tree(record: &Record) -> Cbor {
             }
             Cbor::Map(pairs)
         }
-        Record::Outbound(outbound) => {
+        Record::Outbound(OutboundRecord::Call(outbound)) => {
             let mut pairs = BTreeMap::from([
                 (10, Cbor::Uint(3)),
                 (
@@ -502,6 +523,43 @@ fn record_tree(record: &Record) -> Cbor {
             // call_ref, autonomously (identity.md §3).
             pairs.insert(47, Cbor::Text(outbound.intent.edge.clone()));
             Cbor::Map(pairs)
+        }
+        Record::Outbound(OutboundRecord::Session(session)) => {
+            let fact = match &session.status {
+                SessionStatus::Opening(intent) => Cbor::Array(vec![
+                    Cbor::Uint(1),
+                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(intent.emitting_id.as_bytes().to_vec()),
+                    Cbor::Text(session.connector_path.to_string()),
+                    Cbor::Bytes(intent.request_digest().to_vec()),
+                ]),
+                SessionStatus::Opened => Cbor::Array(vec![
+                    Cbor::Uint(2),
+                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Text(session.connector_path.to_string()),
+                ]),
+                SessionStatus::WriteOpen(intent) => Cbor::Array(vec![
+                    Cbor::Uint(3),
+                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(intent.write_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(intent.emitting_id.as_bytes().to_vec()),
+                    Cbor::Text(session.connector_path.to_string()),
+                    Cbor::Bytes(intent.message_digest().to_vec()),
+                ]),
+                SessionStatus::WriteSettled(reference) => Cbor::Array(vec![
+                    Cbor::Uint(4),
+                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(reference.id().as_bytes().to_vec()),
+                    Cbor::Text(session.connector_path.to_string()),
+                ]),
+                SessionStatus::WriteAbandoned(reference) => Cbor::Array(vec![
+                    Cbor::Uint(5),
+                    Cbor::Bytes(session.session_ref.id().as_bytes().to_vec()),
+                    Cbor::Bytes(reference.id().as_bytes().to_vec()),
+                    Cbor::Text(session.connector_path.to_string()),
+                ]),
+            };
+            Cbor::Map(BTreeMap::from([(10, Cbor::Uint(3)), (51, fact)]))
         }
     }
 }

@@ -7,7 +7,7 @@
 //! seam.
 //!
 //! A new connector brings three things: its contract sheet, a registered
-//! Driver factory, and a [`Profile`] — a minimal probe unit, one happy
+//! Driver factory, and an exchange-specific profile — a minimal probe unit, one happy
 //! input, one provocation per provocable terminal case, and a stated
 //! reason for every terminal case the harness cannot reach.
 //!
@@ -21,15 +21,18 @@
 //! statically selected, and future plugin-hosted Drivers.
 
 use crate::boundary::{
-    Draft, InboundEnvelopeProvenance, InboundSubmission, OutboundConnectorBindings,
-    SubmissionSequence,
+    Draft, InboundAdmission, InboundEnvelopeProvenance, InboundSubmission,
+    OutboundConnectorBindings, RequestPreparation, SessionConnectorBindings, SessionDriverEvent,
+    SessionOpenIntent, SessionWriteIntent, SubmissionSequence,
 };
 use crate::compiler::compile;
 use crate::connectors::{DriverRegistry, RuntimeBindings};
 use crate::contract::{ConnectorContract, ContractCatalog};
 use crate::datatype::DataType;
 use crate::envelope::{Data, Namespace, Value};
-use crate::journal::{Closure, MemJournal, OutboundStatus, Record};
+use crate::journal::{
+    self, CloseVerdict, Closure, Journal, MemJournal, OutboundRecord, OutboundStatus, Record,
+};
 use crate::node;
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::Vm;
@@ -73,6 +76,40 @@ pub struct Profile {
     /// crosses two concurrent replies is caught. `None` skips the
     /// battery and the correlation case stays unproven beyond silence.
     pub interleave: Option<InterleaveProbe>,
+}
+
+/// Backwards-compatible explicit name for the original one-request/one-exit
+/// conformance profile.
+pub type CallProfile = Profile;
+
+/// What an independent inbound Event offers the shared battery.
+#[derive(Debug)]
+pub struct EventProfile<'plan> {
+    /// The Event contract sheet under test.
+    pub contract: &'static ConnectorContract,
+    /// Validated probe containing the bound Event source and its route.
+    pub plan: &'plan ValidatedExecutionPlan,
+    /// Exact root outputs expected after the retained proposal commits.
+    pub expected_outputs: Vec<Data>,
+}
+
+/// What a many-message Session offers the shared battery.
+#[derive(Debug)]
+pub struct SessionProfile<'plan> {
+    /// The Session contract sheet under test.
+    pub contract: &'static ConnectorContract,
+    /// Validated probe containing the bound Session Connector.
+    pub plan: &'plan ValidatedExecutionPlan,
+    /// Exact Connector node exercised by the profile.
+    pub connector: node::Path,
+    /// Two distinct opening payloads; concurrency is the point of the probe.
+    pub openings: [Data; 2],
+    /// One graph-to-world message for each opened session.
+    pub writes: [Data; 2],
+    /// Expected happy terminal payload for each session.
+    pub terminal: Data,
+    /// Already-resolved settings presented to the pure framing seam.
+    pub resolved_settings: std::collections::BTreeMap<String, crate::value::Value>,
 }
 
 /// The probe of the interleaved-correlation battery. The battery
@@ -274,6 +311,438 @@ pub fn verify(profile: &Profile, registry: &ContractCatalog, drivers: &DriverReg
     report
 }
 
+/// Runs the Event-shaped battery: retained proposal, commit-before-decision,
+/// ordinary bounded routing, and no fabricated call/session fact.
+#[must_use]
+pub fn verify_event(profile: &EventProfile<'_>, drivers: &DriverRegistry) -> Report {
+    let mut report = Report::default();
+    sheet_completeness(profile.contract, &mut report);
+    if profile.contract.exchange != crate::connector::ConnectorExchange::Event {
+        report
+            .violations
+            .push("the Event profile names a non-Event contract".into());
+        return report;
+    }
+    let mut bindings = match bind(profile.plan, drivers) {
+        Ok(bindings) => bindings,
+        Err(violation) => {
+            report.violations.push(violation);
+            return report;
+        }
+    };
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(profile.plan, GraphVersion(1));
+    let admission = match bindings.pump_inbound(&mut vm, &mut journal) {
+        Ok(Some(admission)) => admission,
+        Ok(None) => {
+            report
+                .violations
+                .push("the Event Driver proposed no fact".into());
+            return report;
+        }
+        Err(error) => {
+            report
+                .violations
+                .push(format!("the Event proposal could not be admitted: {error}"));
+            return report;
+        }
+    };
+    let InboundAdmission::Accepted(accepted) = admission else {
+        report
+            .violations
+            .push(format!("the Event proposal did not commit: {admission:?}"));
+        return report;
+    };
+    if accepted.session.is_some() {
+        report
+            .violations
+            .push("an Event acceptance invented a SessionRef".into());
+    }
+    if journal.find_envelope(accepted.envelope).is_none() {
+        report
+            .violations
+            .push("the Driver was accepted before its envelope became journal-visible".into());
+    }
+    if let Err(error) = vm.drain_with_bindings(&mut journal, &mut bindings) {
+        report
+            .violations
+            .push(format!("the admitted Event could not drain: {error}"));
+    }
+    let outputs: Vec<_> = vm
+        .outputs()
+        .iter()
+        .map(|observed| observed.envelope.data().clone())
+        .collect();
+    if outputs != profile.expected_outputs {
+        report.violations.push(format!(
+            "the Event outputs differ: expected {:?}, got {outputs:?}",
+            profile.expected_outputs
+        ));
+    }
+    if journal
+        .records()
+        .iter()
+        .any(|record| matches!(record, Record::Outbound(_)))
+    {
+        report
+            .violations
+            .push("one Event fabricated an outbound lifecycle".into());
+    }
+    if report.conformant() {
+        report.proven_cases.push("event-admission");
+    }
+    report
+}
+
+/// Runs the generic Session protocol battery without a socket implementation:
+/// two concurrent opens, crossed observations, one write per session,
+/// write-ambiguity abandonment, terminal correlation, and post-exit silence.
+#[must_use]
+pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) -> Report {
+    let mut report = Report::default();
+    sheet_completeness(profile.contract, &mut report);
+    if profile.contract.exchange != crate::connector::ConnectorExchange::Session {
+        report
+            .violations
+            .push("the Session profile names a non-Session contract".into());
+        return report;
+    }
+    let Some((slot, planned)) = profile
+        .plan
+        .nodes
+        .iter()
+        .enumerate()
+        .find(|(_, planned)| planned.path == profile.connector)
+    else {
+        report.violations.push(format!(
+            "the Session probe has no `{}` node",
+            profile.connector
+        ));
+        return report;
+    };
+    let Some(spec) = planned.connector() else {
+        report
+            .violations
+            .push(format!("`{}` is not a Connector", profile.connector));
+        return report;
+    };
+    if spec.exchange != crate::connector::ConnectorExchange::Session
+        || spec.contract.as_str() != profile.contract.id
+    {
+        report.violations.push(format!(
+            "`{}` does not carry the profile's Session contract",
+            profile.connector
+        ));
+        return report;
+    }
+    let slot = match u32::try_from(slot) {
+        Ok(slot) => crate::plan::Slot::new(slot),
+        Err(_) => {
+            report
+                .violations
+                .push("the Session probe exceeds the plan slot domain".into());
+            return report;
+        }
+    };
+    let Some(exit_type) = profile.plan.resolved_ports().node(slot).and_then(|ports| {
+        ports
+            .iter()
+            .find(|port| port.port().name() == "exit")
+            .map(|port| port.ty())
+    }) else {
+        report
+            .violations
+            .push("the Session probe has no resolved `exit` type".into());
+        return report;
+    };
+    let mut bindings = match bind(profile.plan, drivers) {
+        Ok(bindings) => bindings,
+        Err(violation) => {
+            report.violations.push(violation);
+            return report;
+        }
+    };
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let seed = match journal.append_inbound(submission("session-conformance")) {
+        Ok(committed) => committed.envelope,
+        Err(error) => {
+            report
+                .violations
+                .push(format!("the Session seed could not commit: {error}"));
+            return report;
+        }
+    };
+
+    let mut sessions = Vec::new();
+    for (index, data) in profile.openings.iter().enumerate() {
+        let preparation = match SessionConnectorBindings::prepare_session_open(
+            &mut bindings,
+            &profile.connector,
+            data,
+            &profile.resolved_settings,
+        ) {
+            Ok(preparation) => preparation,
+            Err(error) => {
+                report.violations.push(format!(
+                    "Session opening {} could not prepare: {error}",
+                    index + 1
+                ));
+                return report;
+            }
+        };
+        let RequestPreparation::Prepared(prepared) = preparation else {
+            report.violations.push(format!(
+                "Session opening {} was rejected before the open proof",
+                index + 1
+            ));
+            return report;
+        };
+        let emitting_id = crate::envelope::Id::from_bytes([(index as u8).saturating_add(1); 16]);
+        let intent = SessionOpenIntent {
+            session_ref: journal::ids::outbound_session_ref(
+                &profile.connector,
+                emitting_id,
+                prepared.digest(),
+            ),
+            emitting_id,
+            connector_path: profile.connector.clone(),
+            prepared,
+        };
+        if let Err(error) = journal.open_outbound_session(intent.clone()) {
+            report.violations.push(format!(
+                "Session opening {} was not journaled: {error}",
+                index + 1
+            ));
+            return report;
+        }
+        if let Err(error) = SessionConnectorBindings::open_session(&mut bindings, &intent, &seed) {
+            report.violations.push(format!(
+                "Session opening {} could not start: {error}",
+                index + 1
+            ));
+            return report;
+        }
+        sessions.push(intent.session_ref);
+    }
+    let opening_events = match SessionConnectorBindings::session_events(&mut bindings) {
+        Ok(events) => events,
+        Err(error) => {
+            report
+                .violations
+                .push(format!("Session opening observations failed: {error}"));
+            return report;
+        }
+    };
+    let opened: BTreeSet<_> = opening_events
+        .iter()
+        .filter_map(|event| match event {
+            SessionDriverEvent::Opened(session) => Some(*session),
+            _ => None,
+        })
+        .collect();
+    if opening_events.len() != sessions.len()
+        || opened != sessions.iter().copied().collect::<BTreeSet<_>>()
+    {
+        report.violations.push(format!(
+            "concurrent Session openings lost or crossed correlation: {opening_events:?}"
+        ));
+        return report;
+    }
+    for session in &sessions {
+        if journal.confirm_session_open(session) != Ok(CloseVerdict::Won) {
+            report
+                .violations
+                .push(format!("Session {session} did not open exactly once"));
+            return report;
+        }
+    }
+
+    let mut expected_writes = BTreeSet::new();
+    for (index, (session, data)) in sessions.iter().zip(&profile.writes).enumerate() {
+        let preparation = match SessionConnectorBindings::prepare_session_write(
+            &mut bindings,
+            &profile.connector,
+            *session,
+            data,
+            &profile.resolved_settings,
+        ) {
+            Ok(preparation) => preparation,
+            Err(error) => {
+                report.violations.push(format!(
+                    "Session write {} could not prepare: {error}",
+                    index + 1
+                ));
+                return report;
+            }
+        };
+        let RequestPreparation::Prepared(prepared) = preparation else {
+            report
+                .violations
+                .push(format!("Session write {} was rejected", index + 1));
+            return report;
+        };
+        let emitting_id = crate::envelope::Id::from_bytes([(index as u8).saturating_add(11); 16]);
+        let intent = SessionWriteIntent {
+            write_ref: journal::ids::session_write_ref(*session, emitting_id, prepared.digest()),
+            session_ref: *session,
+            emitting_id,
+            connector_path: profile.connector.clone(),
+            prepared,
+        };
+        if let Err(error) = journal.open_session_write(intent.clone()) {
+            report.violations.push(format!(
+                "Session write {} was not journaled: {error}",
+                index + 1
+            ));
+            return report;
+        }
+        if let Err(error) = SessionConnectorBindings::write_session(&mut bindings, &intent, &seed) {
+            report.violations.push(format!(
+                "Session write {} could not start: {error}",
+                index + 1
+            ));
+            return report;
+        }
+        expected_writes.insert((*session, intent.write_ref));
+    }
+    let write_events = match SessionConnectorBindings::session_events(&mut bindings) {
+        Ok(events) => events,
+        Err(error) => {
+            report
+                .violations
+                .push(format!("Session write observations failed: {error}"));
+            return report;
+        }
+    };
+    let settled: BTreeSet<_> = write_events
+        .iter()
+        .filter_map(|event| match event {
+            SessionDriverEvent::WriteSettled { session, write } => Some((*session, *write)),
+            _ => None,
+        })
+        .collect();
+    if write_events.len() != expected_writes.len() || settled != expected_writes {
+        report.violations.push(format!(
+            "concurrent Session writes lost or crossed correlation: {write_events:?}"
+        ));
+        return report;
+    }
+    for (_, write) in &expected_writes {
+        if journal.settle_session_write(write, false) != Ok(CloseVerdict::Won) {
+            report
+                .violations
+                .push(format!("Session write {write} did not settle exactly once"));
+            return report;
+        }
+    }
+
+    // Crash ambiguity is a journal fact, never permission to replay bytes.
+    let ambiguous_data = &profile.writes[0];
+    let preparation = SessionConnectorBindings::prepare_session_write(
+        &mut bindings,
+        &profile.connector,
+        sessions[0],
+        ambiguous_data,
+        &profile.resolved_settings,
+    );
+    if let Ok(RequestPreparation::Prepared(prepared)) = preparation {
+        let emitting_id = crate::envelope::Id::from_bytes([21; 16]);
+        let intent = SessionWriteIntent {
+            write_ref: journal::ids::session_write_ref(sessions[0], emitting_id, prepared.digest()),
+            session_ref: sessions[0],
+            emitting_id,
+            connector_path: profile.connector.clone(),
+            prepared,
+        };
+        if journal.open_session_write(intent.clone()).is_err()
+            || journal.settle_session_write(&intent.write_ref, true) != Ok(CloseVerdict::Won)
+        {
+            report
+                .violations
+                .push("an ambiguous Session write did not close as abandoned".into());
+            return report;
+        }
+    } else {
+        report
+            .violations
+            .push("the ambiguity probe could not prepare its Session write".into());
+        return report;
+    }
+
+    for session in &sessions {
+        if let Err(error) =
+            SessionConnectorBindings::close_session(&mut bindings, &profile.connector, *session)
+        {
+            report
+                .violations
+                .push(format!("Session {session} could not close: {error}"));
+            return report;
+        }
+    }
+    let exits = match SessionConnectorBindings::session_events(&mut bindings) {
+        Ok(events) => events,
+        Err(error) => {
+            report
+                .violations
+                .push(format!("Session terminal observations failed: {error}"));
+            return report;
+        }
+    };
+    let mut terminal_sessions = BTreeSet::new();
+    for event in &exits {
+        let SessionDriverEvent::Exited { session, exit } = event else {
+            report
+                .violations
+                .push(format!("a non-terminal event followed close: {event:?}"));
+            continue;
+        };
+        if !terminal_sessions.insert(*session) || !sessions.contains(session) {
+            report.violations.push(format!(
+                "Session {session} produced a crossed or repeated exit"
+            ));
+        }
+        if exit.port.name() != "exit" || exit.data != profile.terminal {
+            report.violations.push(format!(
+                "Session {session} produced the wrong terminal payload: {exit:?}"
+            ));
+        }
+        match &exit.data {
+            Data::Materialized(value) if exit_type.accepts(value) => {}
+            Data::Materialized(_) => report.violations.push(format!(
+                "Session {session}'s exit violates its resolved type"
+            )),
+            Data::Encoded { .. } => report.violations.push(format!(
+                "Session {session}'s exit was not materialized for validation"
+            )),
+        }
+    }
+    if exits.len() != sessions.len() || terminal_sessions.len() != sessions.len() {
+        report.violations.push(format!(
+            "the Session Driver produced {} terminal events for {} sessions",
+            exits.len(),
+            sessions.len()
+        ));
+    }
+    match SessionConnectorBindings::session_events(&mut bindings) {
+        Ok(events) if events.is_empty() => {}
+        Ok(events) => report
+            .violations
+            .push(format!("the Driver spoke after Session exit: {events:?}")),
+        Err(error) => report
+            .violations
+            .push(format!("post-exit Session polling failed: {error}")),
+    }
+    if report.conformant() {
+        report.proven_cases.extend([
+            "session-open",
+            "session-write",
+            "session-ambiguity",
+            "session-exit",
+        ]);
+    }
+    report
+}
+
 /// Panics with the full violation list unless the battery is clean
 /// AND the unproven set is exactly the accepted one — the one-line
 /// assertion a connector's suite ends with. The second check keeps
@@ -302,14 +771,34 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
     if contract.name.is_empty() {
         report.violations.push("the sheet has no name".into());
     }
-    if !contract
+    let exits = contract
         .ports
         .iter()
-        .any(|port| port.name == "exit" && port.direction == crate::node::Direction::Output)
-    {
-        report
-            .violations
-            .push("the sheet declares no terminal `exit` output (case 8 is mandatory)".into());
+        .filter(|port| port.name == "exit" && port.direction == crate::node::Direction::Output)
+        .count();
+    let terminal_shape_holds = match contract.exchange {
+        crate::connector::ConnectorExchange::Event => exits == 0,
+        crate::connector::ConnectorExchange::Call
+        | crate::connector::ConnectorExchange::Session => exits == 1,
+    };
+    if !terminal_shape_holds {
+        report.violations.push(format!(
+            "the {} sheet declares {exits} terminal `exit` outputs",
+            contract.exchange
+        ));
+    }
+    let roles_hold = match contract.exchange {
+        crate::connector::ConnectorExchange::Event => {
+            contract.roles == crate::connector::ConnectorRoles::Inbound
+        }
+        crate::connector::ConnectorExchange::Call => true,
+        crate::connector::ConnectorExchange::Session => contract.roles.has_outbound(),
+    };
+    if !roles_hold {
+        report.violations.push(format!(
+            "the {} sheet declares incompatible {} roles",
+            contract.exchange, contract.roles
+        ));
     }
     for port in contract.ports {
         if node::Port::new(port.name).is_err() {
@@ -457,7 +946,7 @@ fn audit_journal(journal: &MemJournal, report: &mut Report) {
     let mut closed = BTreeSet::new();
     let mut any_closed = false;
     for record in journal.records() {
-        if let Record::Outbound(outbound) = record {
+        if let Record::Outbound(OutboundRecord::Call(outbound)) = record {
             let call = outbound.intent.call_ref;
             match &outbound.status {
                 OutboundStatus::Open => {
@@ -559,7 +1048,7 @@ fn mute_battery(
     let timed_out = journal.records().iter().any(|record| {
         matches!(
             record,
-            Record::Outbound(outbound)
+            Record::Outbound(OutboundRecord::Call(outbound))
                 if matches!(outbound.status, OutboundStatus::Closed(Closure::Timeout))
         )
     });
@@ -685,7 +1174,7 @@ fn interleave_battery(
     let mut requests = BTreeSet::new();
     let mut answered = BTreeSet::new();
     for record in journal.records() {
-        let Record::Outbound(outbound) = record else {
+        let Record::Outbound(OutboundRecord::Call(outbound)) = record else {
             continue;
         };
         if matches!(outbound.status, OutboundStatus::Open) {

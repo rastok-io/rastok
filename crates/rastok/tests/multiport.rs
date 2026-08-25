@@ -590,6 +590,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
         id: "test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "in",
@@ -619,6 +620,12 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
                 name: "response",
                 direction: Direction::Output,
                 unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "exit",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RootSink,
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
         ],
@@ -650,7 +657,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
         .iter()
         .find(|node| node.path.to_string() == "probe")
         .expect("the connector");
-    assert_eq!(probe.ports.len(), 5, "the complete contract table travels");
+    assert_eq!(probe.ports.len(), 6, "the complete contract table travels");
     assert!(probe.ports.iter().all(|port| port.ty.is_some()));
 }
 
@@ -666,6 +673,7 @@ fn a_named_connector_edge_defers_by_name() {
         id: "test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "in",
@@ -695,6 +703,12 @@ fn a_named_connector_edge_defers_by_name() {
                 name: "response",
                 direction: Direction::Output,
                 unwired: UnwiredPolicy::RequireWire,
+                ty: PortTypeRule::Fixed(PortDataType::Variant),
+            },
+            PortContract {
+                name: "exit",
+                direction: Direction::Output,
+                unwired: UnwiredPolicy::RootSink,
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
         ],
@@ -1275,6 +1289,7 @@ fn a_defective_sheet_is_held_at_the_door() {
         id: "test/bad@1",
         name: "Bad",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "out",
             direction: Direction::Input,
@@ -1288,6 +1303,7 @@ fn a_defective_sheet_is_held_at_the_door() {
         id: "test/bad@1",
         name: "Bad",
         roles: rastok::connector::ConnectorRoles::Outbound,
+        exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "request",
