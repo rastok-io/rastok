@@ -1,6 +1,6 @@
 # Contributing a Connector Driver
 
-> Current contributor path through M1.6 H3. The normative contract lives in
+> Current contributor path through M1.6 H4.1. The normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
 > [D-2026-08-22-1](../spec/decisions.md). This guide explains how the pieces
 > meet in the implementation; it does not define a second Connector model.
@@ -128,7 +128,18 @@ H4 is the first live consumer of this seam. The hosted HttpClient uses H1
 origin-form requests, a pooled multiplexed H2 sender and verified quiche H3
 while preserving one semantic request descriptor and one Call completion
 shape. Request/response bodies and headers are finite, and the selected wire
-version appears only in `meta.ext.http_version`.
+version appears only in `meta.ext.http_version`. The flat family module
+`connectors::http_client` owns semantic request binding; the private
+`connectors::network::http_client` owns sockets and protocol engines.
+
+H4.1 makes the header boundary contributor-facing and typed. A family sheet
+declares well-known request fields in the sparse `headers` struct and leaves
+extensions in `custom_headers: map<text,array<text>>`; the family binder must
+combine and validate them before OUTBOUND open. Exact peer response bytes stay
+in `meta.ext.http_headers`, while valid standard observations such as
+`content_type: media_type` receive their typed projection. Shared modules are
+named after the responsibility they own (`websocket_protocol`, `network`), not
+after the vague fact that several families happen to use them.
 
 The model covers the intended catalogue without new role kinds:
 

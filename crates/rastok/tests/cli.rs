@@ -211,3 +211,59 @@ fn bless_without_golden_is_a_usage_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--bless requires --golden"), "{stderr}");
 }
+
+#[test]
+fn resolve_openapi_updates_and_checks_one_generated_project_source() {
+    let root = std::env::temp_dir().join(format!("rastok-cli-openapi-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("the project root is writable");
+    std::fs::write(
+        root.join("app.rkg"),
+        r#"graph api : App {
+  connector payment : HttpClient {
+    url = "https://api.example.test/payments"
+    method = "POST"
+    timeout = duration("1s")
+    codec = json
+    effect = idempotent
+    behavior = deterministic
+  }
+}"#,
+    )
+    .expect("the Rastok source writes");
+    std::fs::write(
+        root.join("openapi.yaml"),
+        r#"openapi: 3.1.0
+paths:
+  /payments:
+    post:
+      responses: {}
+components:
+  schemas:
+    Payment:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: { type: string, format: uuid }
+"#,
+    )
+    .expect("the OpenAPI source writes");
+
+    let output = rastok()
+        .arg("--resolve-open-api")
+        .arg(&root)
+        .output()
+        .expect("the resolver runs");
+    assert!(output.status.success(), "{output:?}");
+    assert!(root.join("openapi.generated.rkg").exists());
+
+    let checked = rastok()
+        .arg("--resolve-open-api")
+        .arg(&root)
+        .arg("--check")
+        .output()
+        .expect("check mode runs");
+    assert!(checked.status.success(), "{checked:?}");
+    std::fs::remove_dir_all(root).expect("the project root is removable");
+}

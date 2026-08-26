@@ -78,14 +78,23 @@ physical seam is also selected: one bounded private pump, Hyper/Rustls for
 HTTP/1.1–2, quiche/BoringSSL for HTTP/3, and Tungstenite for WebSocket
 messages. H4 now attaches the live HttpClient to that seam over all three HTTP
 versions with exact pre-open requests, visibility-safe fallback, bounded
-bodies and typed response observations. H5–H6 still own the server and
-WebSocket Drivers and separately prove Extended CONNECT.
+bodies and typed response observations. H4.1 makes HTTP schema intent
+explicit: `media_type` is an open logical scalar, known request headers are a
+typed struct, extensions live in `custom_headers`, and response protocol facts
+are projected into `meta.ext`. H5–H6 still own the server and WebSocket
+Drivers and separately prove Extended CONNECT.
 
 The standalone runner links the Process Driver by default and also links the
 HttpClient Driver when either hosted HTTP feature is selected. Pass
 `--file-root <dir>` to `rastok run` to add the real File Driver with an
 explicit deployment root; that root is neither inferred from the graph nor
 part of plan identity.
+
+For projects described by OpenAPI 3.0 or 3.1, run
+`rastok --resolve-open-api <project-dir>` to discover static HTTP endpoints
+and deterministically create or update `openapi.generated.rkg`. The command
+never rewrites authored sources; `--check` refuses missing or stale generated
+types for CI and LLM-driven workflows.
 
 ## Documentation authority
 

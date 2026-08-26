@@ -160,6 +160,12 @@ The repository opens publicly with this milestone (15 October 2026).
   backpressure and the generic Call conformance battery. H5-H6 still own the
   live HttpServer, WebSocket Drivers and Codex gateway; H3's successful
   HTTP/1.1 Upgrade is explicitly not an Extended CONNECT claim.
+  H4.1 has now landed the schema-facing HTTP contract: canonical open
+  `media_type`, typed standard request headers plus an open custom-header map,
+  typed response metadata, strict OpenAPI 3.0/3.1 projection, and the
+  project-wide `--resolve-open-api` generated-source workflow. Its categorical
+  v12 package move is isolated from the still-pending H5 server and H6
+  WebSocket execution gates.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected
   typed exit case rather than a privileged error channel.
 - Per-flow cost counters, carried by the journal.

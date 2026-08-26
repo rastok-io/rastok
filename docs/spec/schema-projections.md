@@ -5,8 +5,9 @@
 > [`DataType`](types.md). A Connector may implement a strict subset, but it may
 > not reinterpret or weaken a refusal. Library iteration order and physical
 > container layout never become type identity. The v7 registry transports
-> every resulting logical type and union discriminant; categorical package v11
-> retains that registry unchanged alongside v9's instance ownership. B9
+> every resulting logical type and union discriminant; categorical package v12
+> retains that registry and adds the open `media_type` scalar alongside v9's
+> instance ownership. B9
 > implements the adapters in `rastok::schema_projection` and pins their reverse
 > projections, physical union mappings and refusal corpus.
 
@@ -186,7 +187,44 @@ Run-end encoding projects to its decoded value type. Extension types,
 tensors and schemas requiring recursive or custom interpretation refuse in
 V1 unless a future registered projection owns an exact contract.
 
-## 5. Conformance evidence
+## 5. OpenAPI 3.0 and 3.1 project resolution
+
+`rastok --resolve-open-api <project-dir>` is a compiler-tool boundary over the
+same algebra, not a second schema language. It parses project `.rkg` sources,
+discovers statically named `HttpClient` method/URL and `HttpServer` paths,
+selects the unique OpenAPI 3.0/3.1 document describing each endpoint, and
+writes `openapi.generated.rkg`. The generated file is deterministic ordinary
+Rastok source; authored files are never rewritten. `--check` refuses a missing
+or stale generated file, which lets a build or an LLM-driven edit loop verify
+that checked-in types still describe the selected specifications.
+
+The admitted schema subset is deliberately exact:
+
+- local `#/components/schemas/...` references are expanded; recursive
+  references refuse;
+- `oneOf` becomes a structural union only when its projected branches are
+  disjoint; a discriminator refuses until a lossless named mapping exists;
+- OpenAPI 3.0 `nullable: true` and the OpenAPI 3.1 two-member
+  `["null", T]` type form become `T?`;
+- `integer` requires `int32` or `int64`; `number` is exact `number` unless
+  `float` or `double` is explicit;
+- strings project to `text`, `uuid`, `date`, `timestamp`, `bytes`, or the
+  Rastok extension format `media-type` → `media_type`;
+- an object is either a closed struct whose complete property set is required,
+  or a pure `map<text,V>`. Optional-field absence, open structs, mixed named
+  and additional fields, directional `readOnly`/`writeOnly` shapes, uncarried
+  constraints, recursion and unknown formats refuse rather than weaken to
+  `variant`.
+
+Endpoint discovery itself is strict: a dynamic URL/path cannot be guessed,
+zero matching specifications is missing, and two matches are ambiguous. The
+resolver generates all components from every selected document and rejects a
+same-named component with different structure. A component that collides with
+an authored type also refuses: the generated file never shadows, edits or
+silently adopts user-owned source. Generated type aliases are structural; a
+graph still chooses where to pin or narrow its Connector ports.
+
+## 6. Conformance evidence
 
 Each projection implementation must ship table-driven fixtures that prove:
 
@@ -200,7 +238,9 @@ Each projection implementation must ship table-driven fixtures that prove:
 6. JSON structural-union narrowing distinguishes zero, one and multiple
    matching branches.
 
-The executable corpus is `crates/rastok/tests/schema_projections.rs`. It tests
+The executable corpus is `crates/rastok/tests/schema_projections.rs` plus the
+OpenAPI projection/resolver tests in `rastok::schema_projection::openapi` and
+`rastok::openapi`. It tests
 the public projection boundary, not private parser choreography; package/type
 round trips and runtime conformance remain independently pinned by the v7 and
 multiport suites.

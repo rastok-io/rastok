@@ -55,7 +55,11 @@ or causal identity. H4 is landed under D-2026-08-26-2: one live HttpClient
 Driver consumes the H2 sheet over all three HTTP versions, stops fallback at
 request visibility, bounds both body directions, publishes lossless response
 metadata and passes the generic Call battery without moving package, semantic
-or causal identity. The remaining
+or causal identity. H4.1 is landed under D-2026-08-26-3: categorical package
+v12 adds the open `media_type` logical scalar and constructor; typed standard
+and custom request headers, response metadata projection, strict OpenAPI
+projection and the deterministic project resolver now share the one Rastok
+type algebra. The remaining
 [ordered backlog](m1.6-http-websocket-backlog.md) starts at H5's live
 HttpServer Driver.
 The original item 3 was replaced before public
@@ -394,7 +398,9 @@ step touches `vm.rs` once.
    adoption and substitution paths without moving package, semantic or causal
    identity. H4 now supplies the first live network Driver: HttpClient over
    H1/H2/H3 with exact pre-open request bytes, bounded response projection and
-   visibility-safe fallback.
+   visibility-safe fallback. H4.1 adds typed HTTP schema intent and the
+   project-wide OpenAPI generated-source resolver before H5/H6 execute server
+   and WebSocket traffic.
 8. **The Loop aspect** — the bounded-iteration primitive, alive on a
    graph.
 9. **Cost counters** — the `cost` map (stdlib §6.4) accumulated

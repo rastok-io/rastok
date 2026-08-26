@@ -1,6 +1,6 @@
 # Rastok logical data types
 
-> **Status: normative and executable through M1.3 B9.** A construct outside
+> **Status: normative and executable through M1.6 H4.1.** A construct outside
 > the admitted profiles continues to refuse by name and path; it never falls
 > back to a weaker payload type.
 >
@@ -11,7 +11,7 @@
 > structural-union and tagged-union targets is executable in memory. Tagged
 > constructors and contextual structural-union wrapping are checked,
 > executable and transported; `err` uses the same emission path as any port.
-> Categorical plan-package v11 retains v9's owner model and v7's complete
+> Categorical plan-package v12 retains v9's owner model and v7's complete
 > type/value/expression registry and total effective port table, then adds the
 > parent-linked lexical owner tree plus instance-key/lifetime descriptors
 > without changing this logical algebra. The unpublished named-partition v8
@@ -63,7 +63,8 @@ DataType = scalar
 
 Scalars include `null`, `bool`, signed and unsigned integers with an
 explicit width, floating-point values with an explicit width, exact
-`decimal(p,s)`, exact `number`, `text`, `bytes` and the logical families anchored on
+`decimal(p,s)`, exact `number`, `text`, open canonical `media_type`, `bytes`
+and the logical families anchored on
 Arrow semantics (`date`, `time`, `timestamp`, `timestamp_ntz`,
 `duration`, `interval`, `uuid`). Fixed-size binary and fixed-size lists
 carry their size as a type parameter. Integer and floating widths,
@@ -83,6 +84,7 @@ The canonical scalar constructors and source aliases are exact:
 | `number` | exact integer-or-decimal, never binary floating point | `number` |
 | `bytes(length?)` | absent = variable; fixed `1 ≤ length ≤ 2³¹-1` | `bytes`, `bytes(n)` |
 | `text`, `bool`, `null`, `uuid` | no parameter | same word |
+| `media_type` | one concrete RFC media type; wildcards are ranges and refuse | `media_type`; values use `media_type(text)` or a contextually typed literal |
 | `date(unit)` | `day | millisecond`; `date` defaults to `day` | `date`, `date(unit)` |
 | `time(unit)` | `second | millisecond | microsecond | nanosecond`; `time` defaults to `nanosecond` | `time`, `time(unit)` |
 | `timestamp(unit, zone)` | the four time units; `zone = utc | named(text)` | `timestamp`, `timestamp(unit, "zone")` |
@@ -173,6 +175,17 @@ it does not make unrelated fields dynamically typed.
 `table` is not a type. It is the relational view of
 `array<struct<...>>`; Arrow/Polars/SQL representations do not add a
 second logical family.
+
+`media_type` is an **open** logical scalar, not a closed enum of today's IANA
+registry. Its materialized carrier is canonical `Value::Text`: type, subtype,
+suffix and parameter names are lowercase ASCII, parameters are sorted,
+duplicates and wildcards refuse, and parameter values retain their semantic
+case. The standard library publishes a completion catalogue only. A vendor
+value such as `application/vnd.example+json` remains legal without a Rastok
+release. Media ranges and quality weights (notably HTTP `Accept`) are a
+different future type. Since the carrier is text, `media_type` assigns to
+`text`; the reverse direction requires `media_type(text)` or a checked
+contextual literal and may fail. It is a canonical map/instance-key leaf.
 
 Named type declarations are structural aliases. Their fully resolved
 expansion is the type identity, so renaming an alias does not change a
@@ -446,7 +459,7 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (the current v11 rejects older `.rkp` versions rather than
+- a package-format reader (the current v12 rejects older `.rkp` versions rather than
   translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.

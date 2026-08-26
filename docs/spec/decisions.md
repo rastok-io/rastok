@@ -5,6 +5,98 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-26-3 — Type the HTTP schema boundary and resolve OpenAPI losslessly
+
+HTTP content types are no longer anonymous `text`. Rastok adds the open logical
+scalar `media_type`, carried by canonical UTF-8 text but validated as one
+concrete Internet media type. Type, subtype, suffix and parameter names are
+case-normalized, parameters are ordered, duplicate names and wildcards refuse,
+and `media_type(text)` is the one expression constructor. The standard-library
+catalogue offers common completion candidates without closing the domain:
+vendor and newly registered media types remain legal. `Accept` remains an
+ordinary custom header until a distinct range-and-quality type exists; a
+concrete `media_type` is deliberately not stretched to mean a media range.
+
+`meta.ext.content_type` now has logical type `media_type?`. Whole-payload
+`asset` and `base64!` arguments are canonicalized at check, direct metadata
+writes are contextually narrowed, and the live HttpClient projects a valid
+response Content-Type through the same parser. Invalid peer spellings remain
+available byte-for-byte in `meta.ext.http_headers` but do not fabricate the
+typed projection.
+
+Request configuration separates two concerns. `headers` is a sparse typed
+struct; its first standard field is `content_type: media_type`. The table may
+grow with independently typed well-known fields. `custom_headers` is the open
+extension namespace, `map<text,array<text>>`: source may use conventional HTTP
+casing, names normalize to lowercase before the request digest, and a
+case-insensitive collision or attempt to override Driver-owned fields refuses.
+Both maps still become the pre-open lossless `map<text,array<bytes>>`
+descriptor shared by HTTP/1.1, HTTP/2 and HTTP/3. There is no parallel
+`mime_type` spelling.
+
+Project tooling gains `rastok --resolve-open-api <project-dir> [--check]`.
+It parses every Rastok source with the host parser, discovers static
+HttpClient URL/method and HttpServer path declarations, finds the unique
+OpenAPI 3.0/3.1 document describing each endpoint, and writes the deterministic
+`openapi.generated.rkg`. It never edits an authored file. All selected
+components pass through the one `DataType` algebra; recursion, optional-field
+absence, unsupported constraints, ambiguous unions and unrepresentable source
+names refuse rather than weakening to `variant`. `--check` makes stale output
+a build failure. A generated name that collides with an authored type refuses
+instead of shadowing or adopting it. The generated file is ordinary Rastok
+source and is reparsed by the real grammar in the tool's conformance test.
+
+The RFC parser is exact-pinned `mediatype 0.23.0` (MIT, no_std,
+allocation-only, default features disabled, no transitive runtime dependency and no
+`unsafe` in that crate). Upstream declares no MSRV, so Rastok makes no
+second-hand promise: the workspace toolchain and three no_std ISA builds are
+the executable compatibility gate. The crate is small and single-purpose;
+Rastok owns canonicalization and the public error surface, so replacing an
+unmaintained or incompatible release would not change `DataType`.
+
+Project documents use exact-pinned `serde_yaml_ng 0.10.0` (MIT, declared MSRV
+1.64) and `serde_json 1.0.151` (MIT OR Apache-2.0, declared MSRV 1.71) only in
+the std compiler/tool; neither reaches the no_std core or runtime plan.
+`serde_json` uses its ordinary std feature. `serde_yaml_ng` has no optional
+feature surface and brings `indexmap`, `itoa`, `ryu`, `serde` and the small
+`unsafe-libyaml` parser into hosted tooling only. None is exposed through a
+Rastok API. The maintenance posture is deliberately conservative: exact pins,
+the lockfile, deterministic fixtures and the private reader boundary are the
+gate, and the exit path is to replace that reader while retaining the same
+internal OpenAPI tree and refusal surface. These dependencies remove
+RFC/schema-parser risk that would otherwise sit in this repository; license
+inventory and three-ISA no_std gates keep their cost and boundary visible.
+
+This is categorical plan-package **v12**. V11 is refused rather than guessed;
+the append-only allocations are type-tree tag 18 for `media_type`, expression
+function id 6 for `media_type(…)`, semantic-HIR DataType tag 26 and semantic
+function id 6. Every package golden moves because the container version is
+sealed. Semantic hashes move only for programs whose checked trees now carry
+the new logical type or typed-header contract; causal traces move only when
+such a semantic hash is present in their envelope identity. These moves are
+enumerated before re-blessing, with the non-network gauge fixture retained as
+the scope witness.
+
+**Landed identity checkpoint.** The source witness
+`base64!("image/png") { AAEC }` moves `fc8cddb6… → ee1dab9e…` because its
+checked metadata write is now `media_type`, not anonymous text. A typed-header
+HttpClient has the newly allocated identity `c66bd9da…`; it has no pre-H4.1
+equivalent because the old open `headers` bag is deliberately rejected rather
+than reinterpreted. The unchanged no-new-field network witnesses retain
+HttpClient `481662aa…`, HttpServer `63a257e2…`, WebSocketClient `d4f92e15…`,
+and WebSocketServer `d36bcbf4…`. Compiler probe `2933618d…`, JSONL
+`036f7ea5…`, echo/spike `e50026ee…`, and connector-free gauge `0d3ad43d…`
+all keep their semantic hashes. Exactly `echo.rkp` (974 B), `jsonl.rkp`
+(1 018 B), `gauge.rkp` (313 B), and the spike's binary echo copy move from
+v11 to v12; their bodies and sizes are unchanged, with only version and
+checksum differing. No causal trace is re-blessed.
+
+The Connector code layout follows contracts rather than vague sharing names:
+flat `http_client`, `http_server`, `websocket_client` and `websocket_server`
+modules own family assembly; `websocket_protocol` names the actual shared
+protocol state, and private `network` owns only sockets, TLS, pumps and codecs.
+`common`/`shared` modules were rejected because they do not state an invariant.
+
 ## D-2026-08-26-2 — One live HttpClient contract over HTTP/1.1, HTTP/2 and HTTP/3
 
 M1.6 H4 binds the already-published `rastok/http-client@1` contract to the
@@ -29,7 +121,8 @@ projection are separately bounded by the physical Driver configuration.
 Every syntactically and protocol-valid response, including non-2xx status,
 emits one `out` followed by exactly one `Completed { status }` on `exit`.
 `out` carries `meta.ext.http_status`, `http_version`, lossless
-`http_headers: map<text,array<bytes>>`, and UTF-8 `content_type` when present.
+`http_headers: map<text,array<bytes>>`, and canonical typed `content_type`
+when present (superseded from anonymous UTF-8 text by D-2026-08-26-3).
 The selected wire version is observation only: equal bodies decode to equal
 payload values and never move semantic identity. Invalid body content maps to
 `DecodeFailed`; DNS, connection, verified TLS, protocol and body-limit facts
@@ -240,7 +333,8 @@ HTTP headers use one lossless portable shape:
 `map<text,array<bytes>>`. Field names and their value arrays are non-empty;
 names are lowercase ASCII HTTP tokens, repeated values retain wire order, and
 pseudo-fields remain Driver protocol state. Standard `meta.ext` projections
-are `content_type: text`,
+are `content_type: media_type` (superseded from `text` by
+D-2026-08-26-3),
 `http_headers: map<text,array<bytes>>`, `http_method: text`,
 `http_uri: text`, `http_version: text`, `http_status: int`,
 `session_id: text`, `websocket_origin: text`, and
@@ -2272,7 +2366,9 @@ idiom).
 The canonical name is `content_type` (never `mime_type` — the value
 is the FULL Content-Type, parameters included, so the old name
 contradicted its own definition; the NiFi-lineage rename note dies).
-Type `text?`; read as `meta.ext.content_type`. There is no
+Type `media_type?` under D-2026-08-26-3 (superseding this entry's original
+`text?` carrier without changing placement or payload coupling); read as
+`meta.ext.content_type`. There is no
 `meta.sys.content_type` and no `Data::Encoded.content_type`; an
 `app` field named `content_type` carries NO standard semantics — it
 is ordinary application vocabulary like any other name; the `meta.sys` spine drops to FIVE

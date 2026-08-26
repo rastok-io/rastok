@@ -1,13 +1,15 @@
 // The binary wires the OS to the machine: filesystem and process
 // are its business — the frontier lints stop at this file.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-//! The `rastok` binary: `check`, `run`, `simulate`.
+//! The `rastok` binary: `check`, `run`, `simulate`, and project OpenAPI
+//! resolution.
 //!
 //! One deployed unit in, evidence out. `check` compiles and prints
 //! the semantic hash; `run` executes the App against the real
 //! Drivers, stdin lines in, boundary envelopes out; `simulate` runs
 //! the unit's lab and reports every scenario. Diagnostics render in
-//! the rustc shape through [`rastok::render`].
+//! the rustc shape through [`rastok::render`]. `--resolve-open-api` owns one
+//! deterministic generated source without rewriting authored project files.
 
 use rastok::boundary::{Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence};
 use rastok::compiler::Compilation;
@@ -21,7 +23,7 @@ use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>]\n       rastok simulate <file.rkg>... [--golden <dir>] [--bless]";
+const USAGE: &str = "usage: rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>]\n       rastok simulate <file.rkg>... [--golden <dir>] [--bless]\n       rastok --resolve-open-api <project-dir> [--check]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,6 +35,7 @@ fn main() -> ExitCode {
         }
     };
     match command {
+        "--resolve-open-api" => resolve_open_api(paths),
         "check" => check(paths),
         "run" => {
             let mut files = Vec::new();
@@ -83,6 +86,44 @@ fn main() -> ExitCode {
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
+        }
+    }
+}
+
+fn resolve_open_api(arguments: &[String]) -> ExitCode {
+    let mut root: Option<&std::path::Path> = None;
+    let mut mode = rastok::openapi::ResolveMode::Write;
+    for argument in arguments {
+        if argument == "--check" {
+            mode = rastok::openapi::ResolveMode::Check;
+        } else if root.replace(std::path::Path::new(argument)).is_some() {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    }
+    let Some(root) = root else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    };
+    match rastok::openapi::resolve_project(root, mode) {
+        Ok(report) => {
+            let action = match (mode, report.changed) {
+                (rastok::openapi::ResolveMode::Write, true) => "updated",
+                (rastok::openapi::ResolveMode::Write, false) => "unchanged",
+                (rastok::openapi::ResolveMode::Check, _) => "current",
+            };
+            println!(
+                "ok: {} is {action} ({} endpoint(s), {} OpenAPI document(s), {} type(s))",
+                report.output.display(),
+                report.endpoints,
+                report.specifications,
+                report.types
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
         }
     }
 }

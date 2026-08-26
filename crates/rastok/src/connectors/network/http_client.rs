@@ -2,7 +2,7 @@ use crate::boundary::{
     CallConnectorDriver, CallRef, CallStart, Completion, HttpClientExit, Intent,
     OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
 };
-use crate::connectors::http::{
+use crate::connectors::http_client::{
     HttpClientPlanBinding, HttpClientRequestBindings, HttpRequest, HttpVersion, decode_request,
 };
 use crate::connectors::network::pump::{
@@ -628,8 +628,12 @@ fn completion_for(result: CallResult, request: &HttpRequest) -> Option<(Completi
             let mut ext = Namespace::new();
             if let Some(content_type) = headers
                 .get("content-type")
-                .and_then(|values| values.first())
+                .and_then(|values| match values.as_slice() {
+                    [only] => Some(only),
+                    _ => None,
+                })
                 .and_then(|value| String::from_utf8(value.clone()).ok())
+                .and_then(|value| crate::datatype::canonical_media_type(&value).ok())
             {
                 ext.insert(
                     String::from("content_type"),
@@ -1695,7 +1699,7 @@ graph bounded_request : App {
         let request = request(String::from("https://example.test/value"), b"request");
         let headers = BTreeMap::from([(
             String::from("content-type"),
-            vec![b"application/octet-stream".to_vec()],
+            vec![b" Application/Octet-Stream ".to_vec()],
         )]);
         let completions =
             [HttpVersion::Http1, HttpVersion::Http2, HttpVersion::Http3].map(|version| {
@@ -1715,6 +1719,12 @@ graph bounded_request : App {
         assert!(outputs.iter().all(|outputs| outputs.len() == 2));
         let expected = Data::materialized(Value::Bytes(b"same-value".to_vec()));
         assert!(outputs.iter().all(|outputs| outputs[0].data == expected));
+        assert!(outputs.iter().all(|outputs| {
+            outputs[0].ext.get("content_type")
+                == Some(&MetaValue::Scalar(Scalar::Text(String::from(
+                    "application/octet-stream",
+                ))))
+        }));
         let versions = outputs.map(|outputs| {
             outputs[0]
                 .ext
@@ -1730,6 +1740,27 @@ graph bounded_request : App {
                 MetaValue::Scalar(Scalar::Text(String::from("http/3"))),
             ],
         );
+
+        for values in [
+            vec![b"not a media type".to_vec()],
+            vec![b"text/plain".to_vec(), b"application/json".to_vec()],
+        ] {
+            let completion = completion_for(
+                CallResult::Response {
+                    status: 200,
+                    version: HttpVersion::Http1,
+                    headers: BTreeMap::from([(String::from("content-type"), values)]),
+                    body: b"same-value".to_vec(),
+                },
+                &request,
+            )
+            .expect("an invalid typed projection does not discard the response")
+            .0;
+            let outputs = completion.into_outputs();
+            assert_eq!(outputs.len(), 2);
+            assert_eq!(outputs[0].ext.get("content_type"), None);
+            assert!(outputs[0].ext.contains_key("http_headers"));
+        }
     }
 
     #[cfg(feature = "hosted-http12")]

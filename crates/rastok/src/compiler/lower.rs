@@ -976,6 +976,7 @@ impl Writer<'_> {
         match ty {
             DataType::Bool => self.tag(1),
             DataType::Text => self.tag(5),
+            DataType::MediaType => self.tag(26),
             DataType::Null => self.tag(9),
             DataType::Variant => self.tag(10),
             DataType::Integer(integer) => {
@@ -1400,6 +1401,7 @@ impl Writer<'_> {
                     expr::Function::Timestamp => 2,
                     expr::Function::Size => 3,
                     expr::Function::Decimal => 4,
+                    expr::Function::MediaType => 6,
                 });
                 self.count(args.len());
                 for arg in args {
@@ -1852,6 +1854,8 @@ graph m0_probe : App {
         // DELIBERATE MOVE 2026-08-25 (M1.6 H1): the contract's Call exchange
         // lifecycle becomes explicit canonical HIR and categorical v11 plan
         // data. Existing Call causal records do not move.
+        // H4.1 moves only this Process package container to v12; the probe
+        // uses no newly typed media field, so its semantic hash stays fixed.
         let hash = compile(
             &[M0_PROBE],
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),

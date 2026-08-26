@@ -5,8 +5,9 @@
 > **allocation of `graph_version`**, and the **canonical byte form** of
 > journal records.
 >
-> The registry below retains the executable v7 type/value/expression registry
-> inside categorical plan-package v11 and specifies the M1.4 instance-address
+> The registry below retains the executable v7 value registry inside
+> categorical plan-package v12, extends the type/expression registry with the
+> open `media_type` scalar and its constructor, and specifies the M1.4 instance-address
 > extension under D-2026-08-18-1. V9 refuses the old unpublished v8
 > named-partition draft and carries the parent-linked owner tree, scoped edges,
 > typed key/lifetime policy and phased immutable expressions. R3 made
@@ -192,6 +193,30 @@ observations on newly minted output envelopes. The new metadata-map carrier
 reuses value tags 18/19/8 and existing scalar tags, so no old metadata value
 changes bytes. H4 therefore moves no package, semantic hash or pre-existing
 causal trace; all goldens and the gauge witness remain byte-identical.
+
+**M1.6 H4.1 HTTP-schema checkpoint (2026-08-26).** D-2026-08-26-3
+allocates categorical package v12 because `media_type` becomes a first-class
+logical type (type-tree tag 18, semantic-HIR type tag 26) and
+`media_type(text)` becomes a first-class expression function (plan and
+semantic-HIR function id 6). `Value::Text` remains the sole materialized
+carrier, so no value tag moves. Every package container moves categorically
+from v11 to v12. Semantic hashes move only where a checked type, metadata
+write, frontend content type, or HTTP sheet now contains `media_type` or the
+typed `headers` / `custom_headers` split. Existing causal records move only if
+the semantic hash sealed in their envelope identity moves. The connector-free
+gauge remains the negative scope witness.
+
+The landed ledger is exact. A source witness whose whole payload is
+`base64!("image/png") { AAEC }` moves `fc8cddb6… → ee1dab9e…` because the
+checked content-type write now carries the new logical type. The first typed
+HttpClient-header witness is new identity `c66bd9da…`, not a reinterpretation
+of the removed untyped header map. Network witnesses that use none of the new
+typed fields remain HttpClient `481662aa…`, HttpServer `63a257e2…`,
+WebSocketClient `d4f92e15…`, and WebSocketServer `d36bcbf4…`. Compiler probe
+`2933618d…`, JSONL `036f7ea5…`, echo/spike `e50026ee…`, and gauge
+`0d3ad43d…` remain fixed. The three package goldens — echo 974 B, JSONL
+1 018 B, gauge 313 B — plus the spike's binary echo copy change only their
+v11→v12 envelope version and checksum; no stored causal trace moves.
 
 ## 2. `graph_version` and the manifest
 
@@ -478,7 +503,7 @@ cannot diverge on bytes for the same journal :
   representations of envelope.md §5, `raw | avro | arrow-ipc`,
   extend-only, never renumbered : `1 = raw (identity bytes, no codec)
   · 2 = avro · 3 = arrow-ipc`. **A JSON payload is `[raw, bytes]` with
-  `meta.ext.content_type = application/json`, NOT a separate tag** (the specification
+  `meta.ext.content_type = media_type("application/json")`, NOT a separate tag** (the specification
   excludes a JSON tag) ; `json / protobuf / parquet / msgpack` are
   *boundary* codecs a Connector speaks on the wire, never internal
   `data` representations — so two runtimes cannot seal the same JSON as

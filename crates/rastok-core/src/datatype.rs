@@ -10,8 +10,83 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
+use mediatype::{MediaType, ReadParams};
 
 use crate::value::{Value, ValueDefect, ValueKind, ValuePathSegment, map_key_label};
+
+/// Stable refusal returned by the open `media_type` logical scalar.
+///
+/// Third-party parser details deliberately do not cross the core boundary:
+/// callers only need to distinguish malformed syntax, wildcard ranges and a
+/// duplicate parameter whose last-one-wins interpretation would be
+/// non-canonical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaTypeError {
+    /// The spelling is not one complete RFC media type.
+    Invalid,
+    /// `*/*` and subtype wildcards are media ranges, not concrete media types.
+    Wildcard,
+    /// The same case-insensitive parameter name was written twice.
+    DuplicateParameter(String),
+}
+
+impl fmt::Display for MediaTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invalid => f.write_str("invalid media type"),
+            Self::Wildcard => f.write_str("a media range is not a concrete media type"),
+            Self::DuplicateParameter(name) => {
+                write!(f, "media-type parameter `{name}` appears twice")
+            }
+        }
+    }
+}
+
+impl core::error::Error for MediaTypeError {}
+
+/// Parses and seals one concrete media type into Rastok's canonical spelling.
+///
+/// Type, subtype, suffix and parameter names are lowercase ASCII; parameter
+/// names are sorted, duplicate names refuse and values retain their semantic
+/// case while equivalent quoted spellings collapse. HTTP `Accept` ranges are
+/// intentionally outside this scalar and will get their own `media_range`
+/// type if a contract needs them.
+///
+/// # Errors
+///
+/// Returns a stable [`MediaTypeError`] for malformed syntax, a wildcard range
+/// or a duplicate parameter.
+pub fn canonical_media_type(text: &str) -> Result<String, MediaTypeError> {
+    let text = text.trim_matches(|character: char| character.is_ascii_whitespace());
+    let parsed = MediaType::parse(text).map_err(|_| MediaTypeError::Invalid)?;
+    if parsed.ty.as_str() == "*" || parsed.subty.as_str() == "*" {
+        return Err(MediaTypeError::Wildcard);
+    }
+    let mut parameters = BTreeMap::<String, String>::new();
+    for (name, value) in parsed.params() {
+        let name = name.as_str().to_ascii_lowercase();
+        let value = mediatype::Value::quote(value.unquoted_str().as_ref()).into_owned();
+        if parameters.insert(name.clone(), value).is_some() {
+            return Err(MediaTypeError::DuplicateParameter(name));
+        }
+    }
+    let mut canonical = alloc::format!(
+        "{}/{}",
+        parsed.ty.as_str().to_ascii_lowercase(),
+        parsed.subty.as_str().to_ascii_lowercase()
+    );
+    if let Some(suffix) = parsed.suffix {
+        canonical.push('+');
+        canonical.push_str(&suffix.as_str().to_ascii_lowercase());
+    }
+    for (name, value) in parameters {
+        canonical.push_str("; ");
+        canonical.push_str(&name);
+        canonical.push('=');
+        canonical.push_str(&value);
+    }
+    Ok(canonical)
+}
 
 /// Significant-digit budget of the canonical decimal128 value domain.
 pub const DECIMAL_MAX_DIGITS: u32 = 38;
@@ -620,6 +695,8 @@ pub enum DataType {
     Number,
     /// UTF-8 text.
     Text,
+    /// Canonical concrete Internet media type carried by UTF-8 text.
+    MediaType,
     /// Variable or fixed bytes.
     Bytes(BinaryType),
     /// Canonical temporal family.
@@ -854,6 +931,7 @@ enum TypeOrderKey<'a> {
     Decimal(&'a DecimalType),
     Number,
     Text,
+    MediaType,
     Bytes(&'a BinaryType),
     Temporal(&'a TemporalType),
     Uuid,
@@ -909,6 +987,7 @@ impl DataType {
             Self::Decimal(decimal) => TypeOrderKey::Decimal(decimal),
             Self::Number => TypeOrderKey::Number,
             Self::Text => TypeOrderKey::Text,
+            Self::MediaType => TypeOrderKey::MediaType,
             Self::Bytes(binary) => TypeOrderKey::Bytes(binary),
             Self::Temporal(temporal) => TypeOrderKey::Temporal(temporal),
             Self::Uuid => TypeOrderKey::Uuid,
@@ -961,6 +1040,7 @@ impl DataType {
             (Self::Variant, _) => false,
             (Self::Integer(source), Self::Integer(target)) => integer_assignable(*source, *target),
             (Self::Integer(_) | Self::Decimal(_), Self::Number) => true,
+            (Self::MediaType, Self::Text) => true,
             (Self::Float(source), Self::Float(target)) => source.bits() <= target.bits(),
             (Self::Bytes(BinaryType::Fixed(_)), Self::Bytes(BinaryType::Variable)) => true,
             (Self::Array(source), Self::Array(target)) => {
@@ -1208,6 +1288,11 @@ impl DataType {
                     })
                 }
             }
+            (Self::MediaType, Value::Text(value)) => canonical_media_type(&value)
+                .map(Value::Text)
+                .map_err(|_| NarrowingFailure::NoMatch {
+                    target: Box::new(self.clone()),
+                }),
             (Self::TaggedUnion(_), value @ Value::TaggedUnion(_)) => {
                 if self.accepts(&value) {
                     Ok(value)
@@ -1379,6 +1464,13 @@ impl DataType {
             (Self::Bool, Value::Bool(_))
             | (Self::Text, Value::Text(_))
             | (Self::Null, Value::Null) => None,
+            (Self::MediaType, Value::Text(text)) => {
+                if canonical_media_type(text).as_deref() == Ok(text.as_str()) {
+                    None
+                } else {
+                    refusal(name, path, self, value, ConformanceReason::InvalidMediaType)
+                }
+            }
             (Self::Temporal(TemporalType::Date(unit)), Value::Date(days)) => {
                 if date_accepts(*unit, *days) {
                     None
@@ -1624,6 +1716,7 @@ impl DataType {
                 | Self::Integer(_)
                 | Self::Decimal(_)
                 | Self::Text
+                | Self::MediaType
                 | Self::Bytes(_)
                 | Self::Temporal(TemporalType::Date(_))
                 | Self::Temporal(TemporalType::Time(_))
@@ -1670,6 +1763,7 @@ impl DataType {
             | (Self::Number, Self::Integer(_) | Self::Decimal(_))
             | (Self::Integer(_) | Self::Decimal(_), Self::Number) => true,
             (Self::Float(_), Self::Float(_)) => true,
+            (Self::MediaType, Self::Text) | (Self::Text, Self::MediaType) => true,
             (Self::Decimal(left), Self::Decimal(right)) => left.scale() == right.scale(),
             (Self::Temporal(TemporalType::Date(_)), Self::Temporal(TemporalType::Date(_)))
             | (Self::Temporal(TemporalType::Time(_)), Self::Temporal(TemporalType::Time(_)))
@@ -2059,6 +2153,7 @@ impl fmt::Display for DataType {
             }
             Self::Number => f.write_str("number"),
             Self::Text => f.write_str("text"),
+            Self::MediaType => f.write_str("media_type"),
             Self::Bytes(BinaryType::Variable) => f.write_str("bytes"),
             Self::Bytes(BinaryType::Fixed(length)) => write!(f, "bytes({})", length.get()),
             Self::Temporal(temporal) => write!(f, "{temporal:?}"),
@@ -2084,6 +2179,8 @@ pub enum ConformanceReason {
     MalformedValue(ValueDefect),
     /// The value category cannot inhabit the declared type.
     TypeMismatch,
+    /// A text carrier is not the canonical spelling of a concrete media type.
+    InvalidMediaType,
     /// A signed integer lies outside the declared width.
     SignedIntegerOutOfRange {
         /// Offending value.
@@ -2194,6 +2291,9 @@ impl fmt::Display for ConformanceViolation {
                 "` is declared {}; a {} cannot enter it",
                 self.expected, self.found
             ),
+            ConformanceReason::InvalidMediaType => {
+                write!(f, "` is not a canonical concrete media type")
+            }
             ConformanceReason::SignedIntegerOutOfRange { value, bits } => {
                 write!(f, "` is an int{bits}; {value} leaves that range")
             }
@@ -2315,6 +2415,8 @@ mod tests {
                 DataType::Float(FloatType::Binary16),
                 DataType::Float(FloatType::Binary64),
             ),
+            (DataType::Text, DataType::MediaType),
+            (DataType::MediaType, DataType::Bytes(BinaryType::Variable)),
             (
                 DataType::Bytes(BinaryType::Variable),
                 DataType::Bytes(BinaryType::Fixed(
@@ -2907,6 +3009,36 @@ mod tests {
                 scale: 2,
             })
         );
+    }
+
+    #[test]
+    fn media_types_are_open_canonical_text_not_a_closed_enum() {
+        assert_eq!(
+            canonical_media_type(" Application/Problem+JSON ; Charset=UTF-8 "),
+            Ok(String::from("application/problem+json; charset=UTF-8"))
+        );
+        assert_eq!(
+            DataType::MediaType.narrow(
+                Value::Text(String::from("application/vnd.example+json")),
+                None,
+            ),
+            Ok(Value::Text(String::from("application/vnd.example+json")))
+        );
+        assert!(matches!(
+            DataType::MediaType.narrow(Value::Text(String::from("image/*")), None),
+            Err(NarrowingFailure::NoMatch { .. })
+        ));
+        assert_eq!(
+            canonical_media_type("text/plain; charset=utf-8; CHARSET=ascii"),
+            Err(MediaTypeError::DuplicateParameter(String::from("charset")))
+        );
+        assert_eq!(
+            canonical_media_type("not a media type"),
+            Err(MediaTypeError::Invalid)
+        );
+        assert!(DataType::MediaType.is_assignable_to(&DataType::Text));
+        assert!(!DataType::Text.is_assignable_to(&DataType::MediaType));
+        assert!(DataType::MediaType.is_canonical_key());
     }
 
     #[test]

@@ -2274,6 +2274,7 @@ fn simple_scalar(word: &str) -> Option<ScalarType> {
         "number" => ScalarType::Number,
         "bytes" => ScalarType::Bytes,
         "text" => ScalarType::Text,
+        "media_type" => ScalarType::MediaType,
         "null" => ScalarType::Null,
         "date" => ScalarType::Date,
         "timestamp" => ScalarType::Timestamp,

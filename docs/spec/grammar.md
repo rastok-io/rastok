@@ -268,6 +268,18 @@ introduce `Http2`, `Http3`, `WebSocketH2` or `WebSocketH3` node names. A
 session message is not an implicit statement form and does not receive a
 per-message invocation `exit`.
 
+HTTP-derived Connector attributes keep well-known and extension fields
+separate without inventing a second literal syntax:
+
+```rastok
+headers = { content_type = media_type("application/json") }
+custom_headers = { "X-Trace-Id": ["one"] }
+```
+
+The first struct is width-subtyped by the sheet; the second is the open
+`map<text,array<text>>` namespace. Driver-owned and typed header names cannot
+be restated through `custom_headers`.
+
 ### Cardinality belongs to the Node definition
 
 A Graph is a Node, so it declares its own addressing exactly like an Operator
@@ -1021,7 +1033,7 @@ wire an absent key is omitted, never serialized as `key: null`.
 An envelope's data is a single **typed value** from the value-type tree
 ([WHITEPAPER §2.1](../../WHITEPAPER.md)) : `variant` (dynamic, the JSON
 model), a `scalar` (`text`, `bytes`, the numeric `int`/`long`/`float`/
-`double`/`number`, `bool`, plus logical `date`/`timestamp`/`uuid`/
+`double`/`number`, `bool`, plus logical `media_type`/`date`/`timestamp`/`uuid`/
 `decimal`/`duration`), or a `composite` (`struct`, `map`, `array`). In
 the DSL an explicit data literal uses the tagged-block / list pattern :
 
@@ -1033,7 +1045,8 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 | `text`    | `"…"` ; `text! { … }`                         | Rastok string, or the verbatim frontend — first newline excluded, margin set by the closing delimiter, no interpolation |
 | `bytes`   | `base64! { … }` ; `asset("path")`             | RFC 4648 standard, mandatory padding, ASCII whitespace ignored ; or build-time repo bytes (D-2026-08-10-5). `hex` and `bytes …` forms are DEAD |
 | `variant` | `json! <json-value>`                           | the complete JSON value grammar (object, array, string, exact number, boolean, null); always `variant`; duplicate keys refuse |
-| whole payload | `asset("path", "content_type")` ; `base64!("ct") { … }` | fresh bytes + `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
+| `media_type` | `media_type("application/json")` | open canonical concrete Internet media type; wildcards/ranges refuse |
+| whole payload | `asset("path", "content_type")` ; `base64!("ct") { … }` | fresh bytes + canonical `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
 
 The `<type> file { … }` forms are DEAD — `asset` replaces them for
 build-time resources ; runtime files and URLs are Connectors'
@@ -1287,7 +1300,7 @@ Required Rust extensions for the parser to land :
 | Instance | One logical execution context of a Node owner. Its address is the owner path plus the outer-to-inner stack of keyed instance frames. A singleton owner has no local key frame. See [instances.md](instances.md). |
 | Lifetime | The policy that says when an instance closes. It is independent from key selection: keyed and singleton owners may both be persistent or finite-lived. |
 | State read-modify-write | **Imperative within a transaction.** `x` (bare in DSL, or `$x` inside `jq! { … }`) starts at the value the previous transaction committed (or the default); assignments mutate it in place, so later reads see the new value (RHS = Rastok expression; no `++`-style shortcuts). The transaction commits atomically at its end. The Lustre `pre` is *inter-transaction*, not intra. |
-| Value types | The data's type tree : `variant` (dynamic, JSON model), scalars (`text`/`bytes`/numeric + logical `date`/`timestamp`/`uuid`/`decimal`/`duration`), composites (`struct`/`map`/`array`), `enum` (closed symbols), `union` (sum type). `table` is the relational view of `array<struct>`, not a type. See [Data](#data--typed-values-and-literals). |
+| Value types | The data's type tree : `variant` (dynamic, JSON model), scalars (`text`/`media_type`/`bytes`/numeric + logical `date`/`timestamp`/`uuid`/`decimal`/`duration`), composites (`struct`/`map`/`array`), `enum` (closed symbols), `union` (sum type). `table` is the relational view of `array<struct>`, not a type. See [Data](#data--typed-values-and-literals). |
 | Envelope | `meta + data`. `meta` is three zones of typed scalars (`meta.sys` read-only/runtime, `meta.app` application-owned, `meta.ext` external context — D-2026-08-10-1) ; `data` is the typed payload. See [WHITEPAPER.md §2.1](../../WHITEPAPER.md). |
 | Edge config | The `{ ... }` block after an arrow, configuring `capacity / backpressure / close / trace`. |
 | Tagged frontend | `name! <region>` — source owned by a registered reader/compiler. |
@@ -1381,7 +1394,7 @@ TYPE_KW    = { "variant",                                             // the val
                "int8", "int16", "int32", "int64",
                "uint8", "uint16", "uint32", "uint64",
                "float16", "float32", "float64",                    // canonical explicit widths
-               "bytes", "text", "null",
+               "bytes", "text", "media_type", "null",
                "decimal", "date", "timestamp", "timestamp_ntz",      // scalar logical
                "time", "interval", "uuid", "duration" }
 // Frontend names are deliberately NOT a keyword set. IDENT BANG selects
@@ -1410,7 +1423,7 @@ LITERAL_KW = { "true", "false", "null", "nothing",
 `IDENT BANG` introduces every tagged frontend (`jq! { ... }`,
 `jq!(req) { ... }`, `base64!(ct) { ... }`). No frontend name is a
 keyword. Expression-space constructors (`bounded(64)`, `asset(...)`,
-`decimal(...)`) are ordinary calls.
+`decimal(...)`, `media_type(...)`) are ordinary calls.
 `TYPE_KW` names the value-type tree — `variant` (the explicit dynamic case), the
 composites, and the scalar physical / logical types. `LITERAL_KW` are enum-like
 idents allowed as scalar values.
@@ -1599,7 +1612,7 @@ base_type         ::= scalar_type
                     | "union" "{" tagged_case ( ","? tagged_case )* "}" // tagged union; case names are semantic discriminants
                     | IDENT                                           // named type / Schema / declared enum|union
 scalar_type       ::= "bool" | signed_type | unsigned_type | float_type | "number"
-                    | "bytes" ( "(" INT ")" )? | "text" | "null"
+                    | "bytes" ( "(" INT ")" )? | "text" | "media_type" | "null"
                     | "decimal" "(" INT "," SIGNED_INT ")"
                     | "date" ( "(" date_unit ")" )?
                     | "time" ( "(" time_unit ")" )?
@@ -1725,7 +1738,8 @@ expr_continuation ::= expr                                             // the re
 
 expr              ::= /* a Rastok expression (homegrown parser+checker+eval).
                        CEL-compatible subset : literals, member/index access, operators, ternary,
-                       exists/all/map/filter/has/size macros, duration()/timestamp(),
+                       exists/all/map/filter/has/size macros,
+                       duration()/timestamp()/media_type(),
                        optional_types (`.?` / `.orValue()`), declared join aggregates.
                        Macro iteration over a MAP is in SORTED-KEY order (an
                        evaluator guarantee — golden-trace stability).
@@ -1792,7 +1806,7 @@ map_entry         ::= STRING ":" value                                // text ke
 // Built-ins (`json!`, `text!`, `base64!`, `jq!`, `sql!`) and registered
 // frontends share this syntax. The host chooses the production without a
 // Registry lookup; the resolved frontend then supplies its reader/framer,
-// type contract and compiler. `asset`, `duration` and `decimal` remain
+// type contract and compiler. `asset`, `duration`, `decimal` and `media_type` remain
 // ordinary expression calls.
 //
 // REGION TAXONOMY. Expression regions remain intrinsic. JSON is a

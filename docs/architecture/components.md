@@ -1,8 +1,8 @@
 # Component blueprint
 
 > Implementation blueprint — non-normative. Originally written ahead
-> of the build; updated 2026-08-26 for the M1.6 H3 hosted-engine checkpoint. The
-> former named-partition P1-P3 implementation is superseded; categorical v11
+> of the build; updated 2026-08-26 for the M1.6 H4.1 HTTP-schema checkpoint. The
+> former named-partition P1-P3 implementation is superseded; categorical v12
 > owner transport and hierarchical instance routing are executable evidence.
 > The M0 deviations remain recorded in
 > [`m0-exit-notes.md`](m0-exit-notes.md), while the chronological M1
@@ -10,7 +10,7 @@
 > replacement of the type/value and boundary seams is tracked in
 > [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md); this file
 > distinguishes the retained v7 type/value/expression registry from the
-> categorical v11 plan transport (retaining v9's instance model and adding
+> categorical v12 plan transport (retaining v9's instance model and adding
 > stable Connector ids/roles/exchange lifecycles), R3 causal routing rows, R4 lifetime
 > execution, R5 Closing, R6 joins, and R7 placement-neutrality proof.
 
@@ -102,8 +102,9 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 │                     #   syntax, hir (graph + lab), check, lower
 ├── contract.rs       # compiler contracts: node attributes plus tagged frontend
 │                     #   framing/readers, all admitted through Registry
-├── schema_projection/# strict JSON Schema, Avro and Arrow boundary adapters;
+├── schema_projection/# strict JSON Schema, Avro, Arrow and OpenAPI adapters;
 │                     #   path-specific loss and physical union mappings
+├── openapi.rs         # deterministic project endpoint/type resolver
 ├── stdlib.rs         # the standard CATALOGUE instancing those contracts (PROCESS,
 │                     #   declared connector names, built-in/deferred frontends)
 ├── golden.rs         # Trace, Divergence — projection, seal, named diff
@@ -111,11 +112,15 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 │   ├── registry.rs   # exact-id factories and role-aware RuntimeBindings
 │   ├── manifest.rs   # pre-load data-only Connector id/role capabilities
 │   ├── process/      # Process: bind effective settings, then async Driver
-│   └── file/         # File: pure operation framing, then filesystem Driver
+│   ├── file/         # File: pure operation framing, then filesystem Driver
+│   ├── http_client.rs, http_server.rs
+│   ├── websocket_client.rs, websocket_server.rs
+│   ├── websocket_protocol.rs # shared RFC 6455 message responsibility
+│   └── network/      # private sockets/TLS/pumps/protocol codecs
 ├── conformance.rs    # Driver contract harness over the production seam
 ├── lab.rs            # run → ScenarioRun { report, records } ; mock Drivers
 ├── render.rs         # Sources + rustc-shaped diagnostic rendering
-└── main.rs           # thin bin : check | run | simulate (--golden / --bless)
+└── main.rs           # thin bin : check | run | simulate | --resolve-open-api
 ```
 
 Two deviations from the pre-build sketch, both deliberate: the golden
@@ -166,7 +171,7 @@ data out, the governing spec, and current status.
 | **Desugarer** | the finite sugar table — afterwards there is one way to say each thing | resolved unit → core-form graph | [grammar.md](../spec/grammar.md) | M0 |
 | **Type checker** | envelope/data types, `sys`/`app`/`ext` metadata grid, named structural types, contract attributes/defaults/profiles and resolved port rules, typed `is`/`as` narrowing, aspects, Node-owned instance-key expressions, lifetime profiles, nested Graph composition, and instance-local joins | core-form graph → `Hir` + diagnostics | [grammar.md](../spec/grammar.md); [instances.md](../spec/instances.md); [expressions.md](../spec/expressions.md); [aspects.md](../spec/aspects.md); [effects-and-sagas.md](../spec/effects-and-sagas.md) | M1.4 R1 surface through R6 public composition/joins; some dynamic owner values and Graph handlers remain named gates |
 | **Canonicalizer** | the canonical byte form of the resolved HIR; the semantic hash | `Hir` → canonical bytes + `plan::SemanticHash` | [identity.md §1](../spec/identity.md) | M0, extended in M1 |
-| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, handlers, expression trees, stable Connector ids/roles/exchange lifecycles, `Slot` resolution, schemas and assets; key types re-derived and structural/runtime capability validated before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | categorical v11 H1 checkpoint; compiler-only data-key inference is explicit, unsupported dynamic source rows refuse closed |
+| **Lowering + plan gate** | parent-linked Graph/Operator/Connector owner table, lexically scoped edges, handlers, expression trees, stable Connector ids/roles/exchange lifecycles, `Slot` resolution, schemas and assets; key types re-derived and structural/runtime capability validated before success | `Hir` → `plan::ValidatedExecutionPlan` | [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [execution-model.md](../spec/execution-model.md); [plan-package.md](plan-package.md) | categorical v12 H4.1 checkpoint; compiler-only data-key inference is explicit, unsupported dynamic source rows refuse closed |
 | **Tagged frontends** | registered name, framing and reader policy; built-in JSON/text/base64 decoding; deferred guest/data compiler identity; the host never tokenizes an owned body | `IDENT!` region → typed value, named deferral, or future compiled guest program | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md) | B4 framing/readers; guest execution guarded |
 
 The facade returns `Result<Compilation, Diagnostics>` with
@@ -216,7 +221,7 @@ Two compiler rules with consequences elsewhere:
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry, retained unchanged inside categorical v11 |
+| **`expr`** | the expression compiler/evaluator over core `DataType` and `Value`; its evaluator-only carrier may additionally hold the lazy payload witness | (text, `Signature`) → `Tree`; (`Tree`, `Bindings`) → evaluation result; (`Tree`, boot constants) → core value | [expressions.md](../spec/expressions.md); [execution-model.md §5](../spec/execution-model.md) (no ambient time) | M1.3 B3 core + v7 registry, extended in categorical v12 only by `media_type(text)` |
 
 `expr` never sees an envelope, Node, or placement boundary, and owns its own
 `expr::Diagnostic` (the compiler adapts it into `diagnostics::Diagnostic`).
@@ -248,7 +253,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v11 preserves every Graph/Operator/Connector owner and parent relation separately from executable Node slots, validates scoped routes, solves every port, and carries canonical Connector ids/roles/exchange lifecycles | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | M1.6 H1 v11 exchange transport; retains M1.4's owner/instance model unchanged |
+| **`plan::ValidatedExecutionPlan`** | the executable/package form — a private raw `ExecutionPlan` plus a total effective `ResolvedPortTable`; v12 preserves every Graph/Operator/Connector owner and parent relation separately from executable Node slots, validates scoped routes, solves every port, and carries canonical Connector ids/roles/exchange lifecycles plus the open `media_type` type/constructor | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [plan-package.md](plan-package.md) | M1.6 H4.1 v12 transport; retains M1.4's owner/instance and H1 exchange models unchanged |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data
@@ -411,9 +416,9 @@ whatever its execution format.
 | **`stdlib::FILE` contract** | compiler sheet and Registry-free core mirror for `rastok/file@1`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
 | **`connectors::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
 | **Network contract sheets** | exact `rastok/http-client@1`, `http-server@1`, `websocket-client@1`, and `websocket-server@1` roles/exchanges, codec-selected ports, phased settings, lossless HTTP metadata and portable terminal unions; the Registry-free mirror refuses forged rows without consulting the compiler catalogue | [stdlib.md §3.1–3.2, §3.8–3.9](../spec/stdlib.md); D-2026-08-25-2 | M1.6 H2 |
-| **`connectors::{http,websocket}` Lab bindings** | HttpClient's deterministic pre-open request descriptor and effectless exact-role factories for HttpServer/WebSocket; no socket, protocol progress or live-network claim | [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.6 H2; hosted Drivers H4–H6 |
+| **flat HTTP/WebSocket family modules** | `http_client`, `http_server`, `websocket_client` and `websocket_server` own contract-specific binding; `websocket_protocol` alone owns shared message framing. HttpClient's descriptor combines typed/custom headers before open; server/session factories still make no premature live claim. | [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.6 H2/H4.1; hosted Drivers H4–H6 |
 | **private `connectors::network` seam** | feature-selected bounded synchronous/async pump; Hyper/Rustls H1-H2, quiche/BoringSSL H3, shared trust bytes and bounded Tungstenite message machine; all runtime/library types stop below the Driver boundary | [connector-drivers.md](connector-drivers.md); D-2026-08-26-1 | M1.6 H3 engine evidence; live HttpClient H4; remaining Drivers H5–H6 |
-| **`connectors::HttpClientFactory` / hosted HttpClient** | exact pre-open HTTP request descriptor; bounded `CallStart` admission; H1 origin-form, pooled H2 and verified quiche H3; visibility-safe fallback; codec/body/header gates; lossless response metadata and portable typed exits | [stdlib.md §3.2](../spec/stdlib.md); D-2026-08-26-2 | M1.6 H4 |
+| **`connectors::http_client` / hosted HttpClient** | exact pre-open HTTP request descriptor; typed standard/custom request headers; bounded `CallStart` admission; H1 origin-form, pooled H2 and verified quiche H3; visibility-safe fallback; codec/body/header gates; lossless and typed response metadata plus portable exits | [stdlib.md §3.2](../spec/stdlib.md); D-2026-08-26-2/-3 | M1.6 H4/H4.1 |
 | **Connector conformance profiles** | one role-aware battery over `DriverRegistry`/`RuntimeBindings`; exact resolved terminal union, silence, typed completion coverage, correlation, journal-before-effect, close-once and explicit unprovable cases | [stdlib.md §1](../spec/stdlib.md); D-2026-08-22-1 C5 checkpoint | M1.5 C5 (Process + File) |
 | **Catalogue remainder** (`Clock`, `Calendar`, `Memory`) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |
@@ -572,8 +577,8 @@ The chronological detail and commit evidence remain in
 - **M1.4 rebase:** D-2026-08-18-1 replaces the unreleased P0-P3 surface and
   transport with Node-owned `instances.key`, independent `lifetime`, private
   Node state, hierarchical logical addresses, and journal-derived instance
-  references. R1 checking, categorical v11 transport (retaining the v9 owner
-  model and adding Connector ids/roles/exchange lifecycles), R3
+  references. R1 checking, categorical v9 owner transport (retained through
+  v12), R3
   hierarchical routing/mailbox/state/cursor proofs, R4's five lifecycle
   profiles, and R5's bounded Closing protocol have landed. The reference VM remains synchronous and
   one-worker.

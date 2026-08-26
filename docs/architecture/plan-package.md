@@ -81,6 +81,14 @@
 > local pacing and adds no record. No package, semantic hash or existing trace
 > moves.
 >
+> **M1.6 H4.1 is categorical format v12.** D-2026-08-26-3 adds the
+> canonical open `media_type` logical scalar and its expression constructor.
+> V11 cannot spell either fact and is refused rather than guessed. The
+> append-only allocations are type tag 18 and call id 6. `Value::Text` remains
+> the materialized carrier, so no journal value tag is added. Typed/custom
+> header attributes otherwise reuse the existing struct/map/array expression
+> and phased-setting rows.
+>
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
 > processing-time `tumbling` on Graph and Node owners. R5 adds the optional
@@ -172,7 +180,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (10)                 │
+        │ 1 : format_version   uint      (12)                 │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -257,7 +265,7 @@ invariants the runtime dereferences without checking. Refusals are
 typed and total; there is no silent migration — a new format is a
 new version, and an old decoder refuses it by name.
 
-## Body tables (format v11)
+## Body tables (format v12)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -443,6 +451,7 @@ type       := 1                                   — null
             | [15, [type+]]                       — structural union
             | [16, [[case (text), [[field, type]*]]+]] — tagged union
             | 17                                  — variant
+            | 18                                  — canonical open media_type
 signedness := 1 signed · 2 unsigned
 width      := uint: integer 8|16|32|64; float 16|32|64
 scale      := canonical signed CBOR integer
@@ -465,8 +474,8 @@ expr       := [1, tagged_value]                   — literal
             | [4, binop (uint), expr, expr]       — binary  (1 mul … 13 or, declaration order)
             | [5, expr, expr, expr]               — ternary
             | [6, expr, expr]                     — index
-            | [7, fn (uint), [expr*]]             — call    (1 duration · 2 timestamp · 3 size · 4 decimal;
-                                                  //   5 asset is a decoder-recognized pre-binding
+            | [7, fn (uint), [expr*]]             — call    (1 duration · 2 timestamp · 3 size · 4 decimal ·
+                                                  //   5 asset · 6 media_type; asset is a decoder-recognized pre-binding
                                                   //   form that validation refuses)
             | [8, [expr*]]                        — list literal
             | [9, [[key (text), expr]*]]          — map literal (already construction-sorted)
@@ -497,6 +506,9 @@ budgets before constructing a type.
 including interval tag 24 and both union selectors under tag 21. A typed
 decimal may carry its declared scale, including scale zero; the integer fold
 remains a document/constructor reader rule, not a schema-blind package rule.
+`media_type` deliberately reuses tagged-value text tag 8; its surrounding
+resolved type requires the canonical concrete spelling and prevents arbitrary
+text from entering the scalar.
 The surrounding `type` in the expression/state/schema context supplies width,
 precision, units, fixed sizes and timezone rather than duplicating those
 parameters in every materialized value.

@@ -37,7 +37,7 @@ second engine:
   → parsed and checked program
   → categorical validated plan with logical instances and resolved port types
   → synchronous one-worker execution over a causal journal
-  → exact-id/role binding of real Process and File Driver families
+  → exact-id/role binding of real Process, File and HttpClient Driver families
   → deterministic multi-family Lab scenarios and useful golden diffs
 ```
 
@@ -92,7 +92,8 @@ promise of one crate per box:
 | Runtime core | state transitions, scheduling decisions, effect intents | direct host calls |
 | Journal boundary | ordered typed inputs and outcomes | hidden semantic decisions |
 | Runtime Connector binding | exact-id and role association before VM/journal construction | compiler catalogue or first-registration-wins selection |
-| Process and File Drivers | physical external interactions behind their typed Contracts | general runtime semantics or journal authority |
+| Process, File and network Drivers | physical external interactions behind typed Contracts; flat family modules own binding and private `network` owns sockets/TLS/protocol engines | general runtime semantics, compiler schema projection or journal authority |
+| Project schema tooling | strict OpenAPI discovery/projection and deterministic generated Rastok source | a second runtime type system or authored-source mutation |
 | Lab runner | controlled handlers, virtual inputs, scripted faults | a second execution engine |
 | Diagnostics and golden diff | stable human-facing evidence | mutation of execution |
 
@@ -171,6 +172,14 @@ while the CEL-compatible machinery becomes the `expr` consumer of that
 domain. JSON Schema, Avro and Arrow adapters stay in the std/boundary
 layer; their library types never leak into the no_std kernel. See the
 [M1.3 backlog](docs/architecture/m1.3-type-system-backlog.md).
+
+M1.6 H4.1 extends that same core algebra with the open canonical
+`media_type` scalar. OpenAPI remains a hosted compiler/tool adapter:
+`serde_json`/`serde_yaml_ng` and filesystem discovery stay in `rastok`, while
+only resolved `DataType` trees and categorical v12 plan data cross toward the
+core. Connector modules are flat by contract family; a shared module is named
+for its real responsibility (`websocket_protocol` or private `network`) rather
+than becoming a generic utility bucket.
 
 ## Views
 

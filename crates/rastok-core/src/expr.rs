@@ -646,6 +646,7 @@ fn builtin_type(name: &str) -> Option<DataType> {
         "double" => DataType::DOUBLE,
         "number" => DataType::Number,
         "text" => DataType::Text,
+        "media_type" => DataType::MediaType,
         "bytes" => DataType::BYTES,
         "duration" => DataType::DURATION,
         "timestamp" => DataType::TIMESTAMP,
@@ -900,6 +901,9 @@ pub enum Function {
     /// standard JSON number at its WRITTEN scale (D-2026-08-13-1);
     /// the integer fold applies to the written scale.
     Decimal,
+    /// `media_type("application/json")` — canonical open Internet media
+    /// type; ranges such as `*/*` are deliberately a different future type.
+    MediaType,
 }
 
 /// Compiles expression text against a signature into a typed tree.
@@ -1678,6 +1682,7 @@ impl<'a> ExprParser<'_, 'a> {
             "timestamp" => Function::Timestamp,
             "size" => Function::Size,
             "decimal" => Function::Decimal,
+            "media_type" => Function::MediaType,
             "now" => {
                 return Err(Diagnostic {
                     kind: DiagnosticKind::General,
@@ -1971,7 +1976,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                 }
                 Ok(DataType::BYTES)
             }
-            Function::Duration | Function::Timestamp | Function::Decimal => {
+            Function::Duration | Function::Timestamp | Function::Decimal | Function::MediaType => {
                 if args.len() != 1 {
                     return Err(fail(String::from("this function takes one argument")));
                 }
@@ -1982,6 +1987,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                 Ok(match function {
                     Function::Duration => DataType::DURATION,
                     Function::Decimal => DataType::Number,
+                    Function::MediaType => DataType::MediaType,
                     _ => DataType::TIMESTAMP,
                 })
             }
@@ -2431,6 +2437,15 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                             "`{text}` is not an exact decimal: {reason}"
                         ))),
                     }
+                }
+                (Function::MediaType, [EvalValue::Text(text)]) => {
+                    crate::datatype::canonical_media_type(text)
+                        .map(EvalValue::Text)
+                        .map_err(|reason| {
+                            fault(alloc::format!(
+                                "`{text}` is not a concrete media type: {reason}"
+                            ))
+                        })
                 }
                 (Function::Size, [EvalValue::Text(text)]) => {
                     Ok(EvalValue::Int(text.chars().count() as i64))

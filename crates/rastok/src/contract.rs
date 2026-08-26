@@ -462,8 +462,11 @@ pub enum ValueDomain {
     ByteSize,
     /// A text-keyed map whose values are all text.
     TextMap,
-    /// A lossless HTTP header map: lowercase text names to ordered byte values.
-    HeaderMap,
+    /// Known request fields as a typed, width-subtyped struct. V1 owns
+    /// `content_type: media_type`; absent fields remain absent.
+    TypedHttpHeaders,
+    /// Extension request fields: ordinary-case names to ordered UTF-8 lines.
+    CustomHttpHeaders,
     /// A Rastok expression path over runtime data (`correlate = data.id`) — not a
     /// boot-phase constant. Deferred-only.
     ExprPath,
@@ -489,7 +492,8 @@ impl ValueDomain {
                 | Self::Duration
                 | Self::ByteSize
                 | Self::TextMap
-                | Self::HeaderMap
+                | Self::TypedHttpHeaders
+                | Self::CustomHttpHeaders
         )
     }
 
@@ -511,8 +515,21 @@ impl ValueDomain {
             Self::TextMap => Some(crate::datatype::DataType::text_map(
                 crate::datatype::DataType::Text,
             )),
-            Self::HeaderMap => Some(crate::plan::http_headers_type()),
+            Self::TypedHttpHeaders => None,
+            Self::CustomHttpHeaders => Some(crate::plan::custom_http_headers_type()),
             Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => None,
+        }
+    }
+
+    /// Judges the resolved static type of one expression before a Driver can
+    /// observe it. Typed HTTP fields are width-subtyped; other implemented
+    /// expression domains own one exact type.
+    #[must_use]
+    pub fn admits_type(&self, ty: &crate::datatype::DataType) -> bool {
+        match self {
+            Self::TypedHttpHeaders => crate::plan::typed_http_headers_type_holds(ty),
+            Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => false,
+            _ => self.expression_type().as_ref() == Some(ty),
         }
     }
 
@@ -552,7 +569,8 @@ impl ValueDomain {
                     .all(|value| matches!(value, crate::value::Value::Text(_))),
                 _ => false,
             },
-            Self::HeaderMap => crate::plan::http_headers_value_holds(value),
+            Self::TypedHttpHeaders => crate::plan::typed_http_headers_value_holds(value),
+            Self::CustomHttpHeaders => crate::plan::custom_http_headers_value_holds(value),
         }
     }
 }

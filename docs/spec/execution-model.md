@@ -2,7 +2,7 @@
 
 > **Status:** normative. The Node-owned instance model in
 > [instances.md](instances.md) supersedes the unreleased P0–P3
-> named-partition implementation. Categorical plan-package v11 retains the v9
+> named-partition implementation. Categorical plan-package v12 retains the v9
 > realigned owner tree and instance policies. R3 routes every delivery through
 > one hierarchical instance reference shared by journal, mailbox, state,
 > calls, timers, lifecycle, and cursors. R4 executes persistent, idle, fixed,
@@ -14,8 +14,9 @@
 > a causal input. D-2026-08-25-1 adds the M1.6 distinction between Event,
 > Call and Session exchanges; H1 makes §6.6's generic session fold executable,
 > H2 publishes their concrete sheets and Lab bindings, H3 selects the private
-> bounded hosted-engine seam, and H4 executes HttpClient through the ordinary
-> Call lifecycle over H1/H2/H3. Server and Session execution remain gated by
+> bounded hosted-engine seam, H4 executes HttpClient through the ordinary
+> Call lifecycle over H1/H2/H3, and H4.1 types its schema/header boundary
+> without changing that lifecycle. Server and Session execution remain gated by
 > H5–H6.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc

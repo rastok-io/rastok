@@ -728,6 +728,9 @@ fn reverse_type(ty: &DataType, path: &str, name: &str) -> Result<Value, Projecti
         DataType::Float(FloatType::Binary32) => text("float"),
         DataType::Float(FloatType::Binary64) => text("double"),
         DataType::Text => text("string"),
+        DataType::MediaType => {
+            return unsupported_target(path, "Avro V1 has no media-type logical type");
+        }
         DataType::Bytes(BinaryType::Variable) => text("bytes"),
         DataType::Bytes(BinaryType::Fixed(length)) => object([
             (String::from("type"), text("fixed")),

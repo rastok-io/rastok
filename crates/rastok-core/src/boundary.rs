@@ -323,29 +323,33 @@ pub fn network_attribute_site(
         crate::connector::HTTP_CLIENT_CONNECTOR_ID => match attribute {
             "behavior" | "codec" | "effect" | "max_body" | "versions" | "zero_rtt" => Some(Plan),
             "timeout" | "tls_ca" | "tls_certificate" | "tls_private_key" => Some(Instance),
-            "auth_bearer" | "headers" | "idempotency_key" | "method" | "url" => Some(Invocation),
+            "auth_bearer" | "custom_headers" | "headers" | "idempotency_key" | "method" | "url" => {
+                Some(Invocation)
+            }
             _ => None,
         },
         crate::connector::HTTP_SERVER_CONNECTOR_ID => match attribute {
             "behavior" | "codec" | "effect" | "max_body" | "mode" | "path" | "versions"
             | "zero_rtt" => Some(Plan),
-            "auth_bearer" | "headers" | "listen" | "timeout" | "tls_certificate"
-            | "tls_private_key" => Some(Instance),
+            "auth_bearer" | "custom_headers" | "headers" | "listen" | "timeout"
+            | "tls_certificate" | "tls_private_key" => Some(Instance),
             "correlate" => Some(Invocation),
             _ => None,
         },
         crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID => match attribute {
             "behavior" | "codec" | "effect" | "max_message" | "versions" | "zero_rtt" => Some(Plan),
-            "auth_bearer" | "handshake_timeout" | "headers" | "subprotocols" | "tls_ca"
-            | "tls_certificate" | "tls_private_key" | "url" => Some(Instance),
+            "auth_bearer" | "custom_headers" | "handshake_timeout" | "headers" | "subprotocols"
+            | "tls_ca" | "tls_certificate" | "tls_private_key" | "url" => Some(Instance),
             _ => None,
         },
         crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID => match attribute {
             "behavior" | "codec" | "effect" | "max_message" | "path" | "versions" | "zero_rtt" => {
                 Some(Plan)
             }
-            "allowed_origins" | "auth_bearer" | "handshake_timeout" | "headers" | "listen"
-            | "subprotocols" | "tls_certificate" | "tls_private_key" => Some(Instance),
+            "allowed_origins" | "auth_bearer" | "custom_headers" | "handshake_timeout"
+            | "headers" | "listen" | "subprotocols" | "tls_certificate" | "tls_private_key" => {
+                Some(Instance)
+            }
             "correlate" => Some(Invocation),
             _ => None,
         },

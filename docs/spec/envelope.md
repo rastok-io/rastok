@@ -481,7 +481,7 @@ codec for `data`.
 
 ### 5.2 `meta.ext.content_type` — the payload-coupling invariant
 
-`content_type: text?` is the standard reserved `ext` field: the FULL
+`content_type: media_type?` is the standard reserved `ext` field: the FULL
 external Content-Type (parameters included), written by inbound
 connectors, by the whole-payload constructors (`asset`, `base64` —
 D-2026-08-10-5), or by a handler. It is coupled to the payload, not
@@ -499,6 +499,12 @@ connector's configuration, else `application/octet-stream`; a
 codec/content-type contradiction is a typed boundary outcome, never a silently
 false header.
 
+The value is one canonical concrete media type, not arbitrary text and not an
+HTTP media range. A boundary parses it through the same `media_type` authority
+used by the expression constructor. A malformed peer `Content-Type` remains
+available byte-for-byte in `meta.ext.http_headers`, but does not fabricate the
+typed `content_type` leaf.
+
 ### 5.3 `meta.ext.session_id` — logical boundary-session correlation
 
 D-2026-08-25-1 reserves `session_id: text?` as the M1.6 session-contract
@@ -514,7 +520,7 @@ session routing independently of the writable projection. An explicit
 `correlate = meta.ext.session_id` asks the Connector to verify and use that
 logical token; it never authorizes a physical address lookup from graph data.
 The projection is the lowercase 32-hex-character spelling of the reference's
-16 bytes. H1 makes this executable in categorical package v11. The journal
+16 bytes. H1 makes this executable in categorical package v12. The journal
 derives inbound and outbound openings under identity domain `0x11`, and each
 graph-to-world message write under `0x12`; the exact framed recipes and causal
 record forms are fixed in [identity.md §3](identity.md).
@@ -526,6 +532,7 @@ D-2026-08-25-2 reserves the following optional leaves alongside
 
 | Leaf | Logical type | Meaning |
 |---|---|---|
+| `content_type` | `media_type` | canonical concrete Content-Type including parameters; absent when a peer spelling is invalid |
 | `http_headers` | `map<text,array<bytes>>` | lossless fields; non-empty lowercase ASCII token names and value arrays, repeated values in wire order, no HTTP/2-3 pseudo-fields |
 | `http_method` | `text` | admitted request method |
 | `http_uri` | `text` | admitted or selected request URI under the contract |

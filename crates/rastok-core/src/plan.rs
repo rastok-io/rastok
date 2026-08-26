@@ -32,8 +32,8 @@ pub const STANDARD_EXT_FIELDS: &[&str] = &[
 #[must_use]
 pub fn standard_ext_field_type(field: &str) -> Option<DataType> {
     match field {
-        "content_type"
-        | "http_method"
+        "content_type" => Some(DataType::MediaType),
+        "http_method"
         | "http_uri"
         | "http_version"
         | "session_id"
@@ -90,6 +90,178 @@ pub fn http_headers_value_holds(value: &crate::value::Value) -> bool {
             http_header_name_holds(name)
                 && matches!(values, crate::value::Value::Array(values) if !values.is_empty())
         }))
+}
+
+/// Logical request-header fields with dedicated contract spelling.
+///
+/// The struct is intentionally width-subtyped: each written field has a
+/// precise type, while an absent standard field is absent rather than
+/// fabricated as `null`. Extending this table adds completion without turning
+/// the open HTTP field namespace into a closed enum.
+#[must_use]
+pub fn typed_http_headers_type_holds(ty: &DataType) -> bool {
+    let DataType::Struct(structure) = ty else {
+        return false;
+    };
+    structure.fields().iter().all(|field| match field.name() {
+        "content_type" => field.ty() == &DataType::MediaType,
+        _ => false,
+    })
+}
+
+/// Whether a typed request-header struct carries only canonical known fields.
+#[must_use]
+pub fn typed_http_headers_value_holds(value: &crate::value::Value) -> bool {
+    let crate::value::Value::Struct(fields) = value else {
+        return false;
+    };
+    fields.iter().all(|(name, value)| match name.as_str() {
+        "content_type" => DataType::MediaType.accepts(value),
+        _ => false,
+    })
+}
+
+/// User-facing map for extension request fields. Names retain ordinary HTTP
+/// casing in source, while values are explicit ordered UTF-8 field lines.
+#[must_use]
+pub fn custom_http_headers_type() -> DataType {
+    DataType::text_map(DataType::array(DataType::Text))
+}
+
+fn http_header_token_holds(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+fn managed_http_header(name: &str) -> bool {
+    matches!(
+        name,
+        "authorization"
+            | "connection"
+            | "content-length"
+            | "content-type"
+            | "host"
+            | "idempotency-key"
+            | "keep-alive"
+            | "proxy-connection"
+            | "sec-websocket-extensions"
+            | "sec-websocket-key"
+            | "sec-websocket-protocol"
+            | "sec-websocket-version"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+fn http_header_text_holds(value: &str) -> bool {
+    value
+        .as_bytes()
+        .iter()
+        .all(|byte| *byte == b'\t' || (0x20..=0x7e).contains(byte) || *byte >= 0x80)
+}
+
+/// Whether a materialized custom request-header map is portable and cannot
+/// override a field owned by a typed attribute or the HTTP engine.
+#[must_use]
+pub fn custom_http_headers_value_holds(value: &crate::value::Value) -> bool {
+    if !custom_http_headers_type().accepts(value) {
+        return false;
+    }
+    let crate::value::Value::Map(fields) = value else {
+        return false;
+    };
+    let mut canonical_names = alloc::collections::BTreeSet::new();
+    fields.iter().all(|(name, values)| {
+        let canonical = name.to_ascii_lowercase();
+        http_header_token_holds(name)
+            && !managed_http_header(&canonical)
+            && canonical_names.insert(canonical)
+            && matches!(values, crate::value::Value::Array(values)
+                if !values.is_empty() && values.iter().all(|value|
+                    matches!(value, crate::value::Value::Text(text)
+                        if http_header_text_holds(text))))
+    })
+}
+
+/// Merges typed and custom request fields into the one canonical lossless
+/// descriptor sealed before an external call opens.
+///
+/// Names become lowercase because HTTP field names are case-insensitive;
+/// collisions created by that normalization refuse instead of choosing a
+/// winner. The result uses [`http_headers_type`] and is suitable for the
+/// existing request digest and all HTTP versions.
+#[must_use]
+pub fn canonical_request_headers(
+    typed: &crate::value::Value,
+    custom: &crate::value::Value,
+) -> Option<crate::value::Value> {
+    if !typed_http_headers_value_holds(typed) || !custom_http_headers_value_holds(custom) {
+        return None;
+    }
+    let mut result = alloc::collections::BTreeMap::new();
+    let crate::value::Value::Struct(fields) = typed else {
+        return None;
+    };
+    for (name, value) in fields {
+        match (name.as_str(), value) {
+            ("content_type", crate::value::Value::Text(value)) => {
+                result.insert(
+                    String::from("content-type"),
+                    crate::value::Value::Array(alloc::vec![crate::value::Value::Bytes(
+                        value.as_bytes().to_vec(),
+                    )]),
+                );
+            }
+            _ => return None,
+        }
+    }
+    let crate::value::Value::Map(fields) = custom else {
+        return None;
+    };
+    for (name, values) in fields {
+        let name = name.to_ascii_lowercase();
+        let crate::value::Value::Array(values) = values else {
+            return None;
+        };
+        let values = values
+            .iter()
+            .map(|value| match value {
+                crate::value::Value::Text(value) => {
+                    Some(crate::value::Value::Bytes(value.as_bytes().to_vec()))
+                }
+                _ => None,
+            })
+            .collect::<Option<alloc::vec::Vec<_>>>()?;
+        if result
+            .insert(name, crate::value::Value::Array(values))
+            .is_some()
+        {
+            return None;
+        }
+    }
+    let value = crate::value::Value::Map(result);
+    http_headers_value_holds(&value).then_some(value)
 }
 pub use type_resolution::{ResolvedPort, ResolvedPortTable, TypeOrigin};
 pub use validation::{PlanValidationError, ValidatedExecutionPlan};

@@ -2,7 +2,7 @@
 skinparam shadowing false
 skinparam packageStyle rectangle
 
-title Rastok — bird's-eye module overview (M1.6 H1, 2026-08-25)
+title Rastok — bird's-eye module overview (M1.6 H4.1, 2026-08-26)
 
 note as LEGEND
   Representative load-bearing modules and types (public or
@@ -140,8 +140,13 @@ package "schema_projection — strict external schema boundary" as P_SCHEMA {
   LossReason : stable refusal category
   class ProjectionError <<struct>>
   ProjectionError : path, reason, and detail
-  class "json_schema / avro / arrow" as SCHEMA_API <<mod>>
+  class "json_schema / avro / arrow / openapi" as SCHEMA_API <<mod>>
   SCHEMA_API : exact logical projection and reverse capability check
+}
+
+package "openapi — deterministic project schema resolution" as P_OPENAPI {
+  class ProjectOpenApiResolver <<tool>>
+  ProjectOpenApiResolver : endpoint discovery and generated RKG ownership
 }
 
 package "trivia — one lexical comment fact" as P_TRIVIA {
@@ -215,7 +220,7 @@ package "plan — serializable compiled execution model" as P_PLAN {
   GuestProgram : opaque compiled guest program
   class AssetBlob <<struct>>
   AssetBlob : content-addressed build-time asset bytes
-  class "encode / decode (categorical v11)" as PLAN_CODEC <<mod>>
+  class "encode / decode (categorical v12)" as PLAN_CODEC <<mod>>
   PLAN_CODEC : canonical validated plan package transport
 }
 
@@ -370,8 +375,14 @@ package "connectors — concrete external-effect Drivers" as P_CONN {
   ProcessBindError : refuses an unserved or unresolved plan before VM boot
   class File <<struct>>
   File : one-file bounded read and atomic replace Driver
-  class "HTTP / WebSocket sheets" as NETWORK_SHEETS <<data>>
-  NETWORK_SHEETS : four exact contracts and family-owned Lab twins
+  class HttpClient <<struct>>
+  HttpClient : typed request binding and live H1-H3 Call Driver
+  class HttpServer <<struct>>
+  HttpServer : family binding; live Driver remains H5
+  class WebSocketClient <<struct>>
+  class WebSocketServer <<struct>>
+  class WebSocketProtocol <<private>>
+  WebSocketProtocol : shared bounded RFC 6455 message state
   class HostedNetworkEngine <<private>>
   HostedNetworkEngine : bounded pump; Hyper H1-H2, quiche H3, Tungstenite
   class "Clock, Calendar, Memory" as CATALOGUE <<guarded>>
@@ -409,7 +420,7 @@ package "render — rustc-shaped diagnostic rendering" as P_REN {
 }
 
 package "cli — binary assembly (main.rs)" as P_CLI {
-  class "check | run | simulate" as VERBS <<bin>>
+  class "check | run | simulate | resolve-open-api" as VERBS <<bin>>
   VERBS : wiring and verbs; owns nothing semantic
 }
 
@@ -430,6 +441,8 @@ P_EXPR ..> P_TRIVIA : shares comment facts
 P_JSON ..> P_DATA : produces core values
 P_SCHEMA ..> P_DATA : projects logical types
 P_SCHEMA ..> P_JSON : parses JSON schemas
+P_OPENAPI ..> P_SCHEMA : projects components
+P_OPENAPI ..> P_COMP : parses project sources
 P_IDENT ..> P_CBOR : emits tagged trees
 P_IDENT ..> P_ENV : tags envelope scalars
 P_IDENT ..> P_DATA : tags core values
@@ -466,5 +479,6 @@ P_CLI ..> P_LAB : uses
 P_CLI ..> P_CONN : wires
 P_CLI ..> P_GOLD : golden workflow
 P_CLI ..> P_REN : renders
+P_CLI ..> P_OPENAPI : resolves project schemas
 
 @enduml

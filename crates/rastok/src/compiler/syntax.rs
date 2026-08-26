@@ -743,6 +743,8 @@ pub enum ScalarType {
     Bytes,
     /// `text`
     Text,
+    /// `media_type`
+    MediaType,
     /// `null`
     Null,
     /// `decimal(p, s)`

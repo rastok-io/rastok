@@ -16,6 +16,10 @@ publish = false
 # Default features off at the workspace so the kernel's no_std path is
 # the baseline; the std layer re-enables what it wants.
 blake3 = { version = "1", default-features = false }
+# RFC media-type syntax is protocol vocabulary, not a parser Rastok should
+# recreate. The crate is no_std, allocation-only, MIT licensed and forbids
+# unsafe; Rastok still owns canonicalization and its logical type contract.
+mediatype = { version = "=0.23.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

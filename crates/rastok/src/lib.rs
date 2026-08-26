@@ -21,6 +21,7 @@ pub mod contract;
 pub mod diagnostics;
 pub mod golden;
 pub mod lab;
+pub mod openapi;
 pub mod render;
 pub mod schema_projection;
 pub mod stdlib;

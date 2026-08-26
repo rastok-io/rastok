@@ -4,7 +4,8 @@
 > executable module is `expr` and consumes core `DataType`/`Value`. Its
 > `is`/`as`, closed-struct and tagged-constructor trees execute, are
 > type-checked, and travel in the v7 registry with their resolved targets.
-> Categorical package v11 retains that registry unchanged. The
+> Categorical package v12 extends that registry only with the open
+> `media_type(text)` constructor. The
 > `IDENT!` frontend surface and full JSON-value reader described below are
 > executable. A `variant` must be narrowed before member or index access.
 
@@ -27,7 +28,8 @@ An expression:
 The admitted CEL-compatible core includes literals, paths,
 member/index access, arithmetic, comparisons, short-circuit logic,
 ternary expressions, lists, maps and the existing bounded functions.
-Rastok-owned extensions include exact `decimal(...)`, checked `as`,
+Rastok-owned extensions include exact `decimal(...)`, canonical
+`media_type(...)`, checked `as`,
 type/case tests through `is`, structs, tagged unions and the
 Arrow-anchored logical types.
 
@@ -67,7 +69,7 @@ the oracle detects accidental drift only in this named common subset.
 | literals/operators/ternary/list/map/`size` in the harness | differentially equal | pinned oracle test plus Rastok tests |
 | `//` comments and ordinary string escapes | compatible subset, with Rastok's line boundary made explicit | lexer and recovery tests |
 | `/* ... */` comments | Rastok extension | shared `trivia` recognizer |
-| `decimal(...)`, `is`, `as`, named types and union cases | Rastok extensions | `DataType`, `Value`, typed narrowing tests |
+| `decimal(...)`, `media_type(...)`, `is`, `as`, named types and union cases | Rastok extensions | `DataType`, `Value`, typed narrowing tests |
 | absence/optional access, macros/comprehensions and `in` | not admitted in this build | named compile-time refusals |
 | `variant`, structs, enums and structural/tagged unions | Rastok payload semantics, not CEL types | [`types.md`](types.md) |
 
@@ -77,6 +79,14 @@ independent expression evaluator, so self-tests alone could not provide the
 differential capability. The crate is exact-pinned and MIT licensed; the
 exit strategy is this versioned source corpus plus a replacement oracle
 adapter, with no production API or package-format consequence.
+
+`media_type(text)` parses one concrete Internet media type and returns the
+canonical open `media_type` scalar. It rejects malformed syntax, duplicate
+parameters and wildcard media ranges. A source literal written directly in a
+position already typed `media_type` is the only implicit convenience; a
+dynamic `text` or `variant` must call the constructor or use an explicit
+`as media_type`. This keeps a failed protocol parse visible instead of hiding
+it in assignment.
 
 ## 2. A tagged frontend is not an expression keyword
 

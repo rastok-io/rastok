@@ -23,6 +23,84 @@ use crate::contract::{
 use crate::node::Direction;
 use crate::plan::UnwiredPolicy;
 
+/// One completion candidate for the open `media_type` logical scalar.
+///
+/// This is deliberately a catalogue, not an enum: registered and vendor
+/// media types remain valid when they parse canonically even when they are
+/// absent here. Tooling may offer these stable names without turning today's
+/// list into tomorrow's compatibility constraint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaTypeCatalogEntry {
+    /// Completion-friendly Rastok spelling.
+    pub name: &'static str,
+    /// Canonical concrete media type.
+    pub value: &'static str,
+}
+
+/// Common Internet media types offered by standard tooling.
+pub const MEDIA_TYPE_CATALOG: &[MediaTypeCatalogEntry] = &[
+    MediaTypeCatalogEntry {
+        name: "application_cbor",
+        value: "application/cbor",
+    },
+    MediaTypeCatalogEntry {
+        name: "application_form_urlencoded",
+        value: "application/x-www-form-urlencoded",
+    },
+    MediaTypeCatalogEntry {
+        name: "application_json",
+        value: "application/json",
+    },
+    MediaTypeCatalogEntry {
+        name: "application_ndjson",
+        value: "application/x-ndjson",
+    },
+    MediaTypeCatalogEntry {
+        name: "application_octet_stream",
+        value: "application/octet-stream",
+    },
+    MediaTypeCatalogEntry {
+        name: "application_pdf",
+        value: "application/pdf",
+    },
+    MediaTypeCatalogEntry {
+        name: "application_problem_json",
+        value: "application/problem+json",
+    },
+    MediaTypeCatalogEntry {
+        name: "application_protobuf",
+        value: "application/protobuf",
+    },
+    MediaTypeCatalogEntry {
+        name: "application_xml",
+        value: "application/xml",
+    },
+    MediaTypeCatalogEntry {
+        name: "image_jpeg",
+        value: "image/jpeg",
+    },
+    MediaTypeCatalogEntry {
+        name: "image_png",
+        value: "image/png",
+    },
+    MediaTypeCatalogEntry {
+        name: "multipart_form_data",
+        value: "multipart/form-data",
+    },
+    MediaTypeCatalogEntry {
+        name: "text_csv",
+        value: "text/csv",
+    },
+    MediaTypeCatalogEntry {
+        name: "text_html",
+        value: "text/html",
+    },
+    MediaTypeCatalogEntry {
+        name: "text_plain_utf8",
+        value: "text/plain; charset=utf-8",
+    },
+];
+
 /// The `Process` sheet of `stdlib.md` §3.3 on the D-2026-08-12-1
 /// metamodel: the common attributes, and the `mode` selector picking
 /// `job` (default, available) or `service` (known to the contract,
@@ -405,7 +483,13 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
         AttributeSpec {
             name: "headers",
             presence: Presence::Optional,
-            domain: ValueDomain::HeaderMap,
+            domain: ValueDomain::TypedHttpHeaders,
+            latest_site: EvaluationSite::Invocation,
+        },
+        AttributeSpec {
+            name: "custom_headers",
+            presence: Presence::Optional,
+            domain: ValueDomain::CustomHttpHeaders,
             latest_site: EvaluationSite::Invocation,
         },
         AttributeSpec {
@@ -531,7 +615,13 @@ pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
         AttributeSpec {
             name: "headers",
             presence: Presence::Optional,
-            domain: ValueDomain::HeaderMap,
+            domain: ValueDomain::TypedHttpHeaders,
+            latest_site: EvaluationSite::Instance,
+        },
+        AttributeSpec {
+            name: "custom_headers",
+            presence: Presence::Optional,
+            domain: ValueDomain::CustomHttpHeaders,
             latest_site: EvaluationSite::Instance,
         },
         AttributeSpec {
@@ -672,7 +762,13 @@ pub const WEBSOCKET_CLIENT: ConnectorContract = ConnectorContract {
         AttributeSpec {
             name: "headers",
             presence: Presence::Optional,
-            domain: ValueDomain::HeaderMap,
+            domain: ValueDomain::TypedHttpHeaders,
+            latest_site: EvaluationSite::Instance,
+        },
+        AttributeSpec {
+            name: "custom_headers",
+            presence: Presence::Optional,
+            domain: ValueDomain::CustomHttpHeaders,
             latest_site: EvaluationSite::Instance,
         },
         AttributeSpec {
@@ -804,7 +900,13 @@ pub const WEBSOCKET_SERVER: ConnectorContract = ConnectorContract {
         AttributeSpec {
             name: "headers",
             presence: Presence::Optional,
-            domain: ValueDomain::HeaderMap,
+            domain: ValueDomain::TypedHttpHeaders,
+            latest_site: EvaluationSite::Instance,
+        },
+        AttributeSpec {
+            name: "custom_headers",
+            presence: Presence::Optional,
+            domain: ValueDomain::CustomHttpHeaders,
             latest_site: EvaluationSite::Instance,
         },
         AttributeSpec {
@@ -1145,6 +1247,42 @@ mod tests {
             crate::value::Value::Array(vec![crate::value::Value::Bytes(b"200".to_vec())]),
         )]));
         assert!(!crate::plan::http_headers_value_holds(&pseudo_field));
+        let typed = crate::value::Value::Struct(vec![(
+            String::from("content_type"),
+            crate::value::Value::Text(String::from("application/problem+json")),
+        )]);
+        let custom = crate::value::Value::Map(std::collections::BTreeMap::from([(
+            String::from("X-Trace-Id"),
+            crate::value::Value::Array(vec![crate::value::Value::Text(String::from("one"))]),
+        )]));
+        assert_eq!(
+            crate::plan::canonical_request_headers(&typed, &custom),
+            Some(crate::value::Value::Map(std::collections::BTreeMap::from(
+                [
+                    (
+                        String::from("content-type"),
+                        crate::value::Value::Array(vec![crate::value::Value::Bytes(
+                            b"application/problem+json".to_vec(),
+                        )]),
+                    ),
+                    (
+                        String::from("x-trace-id"),
+                        crate::value::Value::Array(vec![crate::value::Value::Bytes(
+                            b"one".to_vec(),
+                        )]),
+                    ),
+                ]
+            )))
+        );
+        let managed_custom = crate::value::Value::Map(std::collections::BTreeMap::from([(
+            String::from("Content-Type"),
+            crate::value::Value::Array(vec![crate::value::Value::Text(String::from(
+                "application/json",
+            ))]),
+        )]));
+        assert!(!crate::plan::custom_http_headers_value_holds(
+            &managed_custom
+        ));
         let client = crate::boundary::http_client_exit_type().expect("the client exit union");
         let server = crate::boundary::http_server_exit_type().expect("the server exit union");
         let websocket = crate::boundary::websocket_exit_type().expect("the session exit union");
@@ -1197,6 +1335,25 @@ mod tests {
                 "TlsFailed",
                 "TransportLost",
             ]
+        );
+    }
+
+    #[test]
+    fn the_media_type_catalog_is_open_but_every_completion_is_canonical() {
+        let mut names = std::collections::BTreeSet::new();
+        let mut values = std::collections::BTreeSet::new();
+        for entry in MEDIA_TYPE_CATALOG {
+            assert!(names.insert(entry.name), "duplicate catalogue name");
+            assert!(values.insert(entry.value), "duplicate catalogue value");
+            assert_eq!(
+                crate::datatype::canonical_media_type(entry.value),
+                Ok(entry.value.to_string())
+            );
+        }
+        assert_eq!(
+            crate::datatype::canonical_media_type("application/vnd.example+json"),
+            Ok(String::from("application/vnd.example+json")),
+            "a valid value outside the completion catalogue remains admitted"
         );
     }
 

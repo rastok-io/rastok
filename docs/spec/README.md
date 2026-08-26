@@ -36,7 +36,8 @@ semantic ownership rather than by release layer.
 
 `README.md` → `WHITEPAPER.md` (the conceptual model) → this file →
 [types.md](types.md) (logical payload types) →
-[schema-projections.md](schema-projections.md) (JSON Schema / Avro / Arrow profiles) →
+[schema-projections.md](schema-projections.md) (JSON Schema / Avro / Arrow /
+OpenAPI profiles and project resolution) →
 [expressions.md](expressions.md) (pure expressions + tagged frontends) →
 [grammar.md](grammar.md) (host surface and delimitation) →
 [envelope.md](envelope.md) (identity, metadata, storage) →

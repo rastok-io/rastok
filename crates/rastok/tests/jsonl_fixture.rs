@@ -71,6 +71,9 @@ fn compilation() -> rastok::compiler::Compilation {
 // DELIBERATE MOVE 2026-08-25 (M1.6 H1): the Call exchange lifecycle becomes
 // explicit canonical HIR and categorical v11 plan data. Session-only causal
 // fields are omitted, so this fixture's trace remains byte-identical.
+// DELIBERATE CONTAINER MOVE 2026-08-26 (M1.6 H4.1): categorical v12 adds
+// `media_type` to the type/expression registry. The graph does not use it, so
+// its semantic hash and causal trace remain byte-identical.
 const JSONL_HASH: &str = "036f7ea5346fac883a3bad155fbdf41b303f6e54bef93f8c850ff5f138f769de";
 
 #[test]

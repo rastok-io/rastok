@@ -1,4 +1,4 @@
-//! HTTP contract bindings shared by the Lab and hosted client Driver.
+//! HttpClient contract binding shared by the Lab and hosted Driver.
 //!
 //! The outbound request descriptor is already family-owned and deterministic:
 //! mocks and the real Driver agree on the exact method, URL,
@@ -7,14 +7,12 @@
 //! the ordinary Lab boundary, never through a fake socket.
 
 use crate::boundary::{
-    Completion, HttpClientExit, InboundConnectorDriver, InboundDecision, InboundProposal,
-    InboundProposalRef, PreparedRequest, RequestPreparation, SchedulerCompletion,
+    Completion, HttpClientExit, PreparedRequest, RequestPreparation, SchedulerCompletion,
 };
-use crate::connector::{ConnectorId, ConnectorRoles};
 use crate::envelope::Data;
 use crate::plan::{AttrSetting, NodeKind, ValidatedExecutionPlan};
 use crate::value::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
 pub use crate::connectors::network::http_client::{HttpClientConfig, HttpClientFactory};
@@ -174,11 +172,12 @@ impl HttpClientRequestBindings {
         if u64::try_from(body.len()).map_or(true, |length| length > max_body) {
             return Err(HttpRequestRejection::BodyTooLarge { limit: max_body });
         }
-        let headers =
-            Self::value(spec, resolved, "headers").unwrap_or_else(|| Value::Map(BTreeMap::new()));
-        if !crate::plan::http_headers_value_holds(&headers) {
-            return Err(HttpRequestRejection::DecodeFailed);
-        }
+        let typed_headers =
+            Self::value(spec, resolved, "headers").unwrap_or_else(|| Value::Struct(Vec::new()));
+        let custom_headers = Self::value(spec, resolved, "custom_headers")
+            .unwrap_or_else(|| Value::Map(BTreeMap::new()));
+        let headers = crate::plan::canonical_request_headers(&typed_headers, &custom_headers)
+            .ok_or(HttpRequestRejection::DecodeFailed)?;
         let request = Value::Struct(vec![
             (
                 String::from("auth_bearer"),
@@ -370,77 +369,10 @@ impl super::ScriptedConnectorProtocol for HttpClientRequestBindings {
     }
 }
 
-pub(super) fn bind_scripted_protocol(
+pub(crate) fn bind_scripted_protocol(
     plan: &ValidatedExecutionPlan,
     nodes: &[crate::node::Path],
 ) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
     HttpClientRequestBindings::try_bind(plan, nodes)
         .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
-}
-
-#[derive(Default)]
-struct PassiveInbound;
-
-impl InboundConnectorDriver for PassiveInbound {
-    fn proposal(&mut self) -> Option<InboundProposal> {
-        None
-    }
-
-    fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {}
-}
-
-struct HttpServerLabFactory {
-    id: ConnectorId,
-}
-
-impl super::ConnectorDriverFactory for HttpServerLabFactory {
-    fn connector_id(&self) -> &ConnectorId {
-        &self.id
-    }
-
-    fn roles(&self) -> ConnectorRoles {
-        ConnectorRoles::Inbound
-    }
-
-    fn bind<'plan>(
-        &self,
-        plan: &'plan ValidatedExecutionPlan,
-        nodes: &[crate::node::Path],
-    ) -> Result<Box<dyn super::BoundConnectorDriver + 'plan>, super::DriverFactoryError> {
-        let expected: BTreeSet<_> = nodes.iter().collect();
-        let actual: BTreeSet<_> = plan
-            .plan()
-            .nodes
-            .iter()
-            .filter(|node| {
-                node.connector().is_some_and(|spec| {
-                    spec.contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
-                })
-            })
-            .map(|node| &node.path)
-            .collect();
-        if expected != actual {
-            return Err(super::DriverFactoryError::new(
-                "the HttpServer Lab binder received an incomplete family",
-            ));
-        }
-        Ok(Box::new(PassiveInbound))
-    }
-}
-
-impl super::BoundConnectorDriver for PassiveInbound {
-    fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver> {
-        Some(self)
-    }
-
-    fn outbound(&mut self) -> Option<&mut dyn crate::boundary::OutboundConnectorDriver> {
-        None
-    }
-}
-
-pub(crate) fn lab_factories()
--> Result<Vec<Box<dyn super::ConnectorDriverFactory>>, super::DriverFactoryError> {
-    let id = ConnectorId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID)
-        .map_err(|error| super::DriverFactoryError::new(error.to_string()))?;
-    Ok(vec![Box::new(HttpServerLabFactory { id })])
 }

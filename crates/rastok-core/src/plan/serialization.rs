@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v11: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v12: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -44,7 +44,7 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 /// stable id and roles.
 /// A new format is a new version, and an old decoder refuses it by name,
 /// exactly as the format note promises.
-pub const FORMAT_VERSION: u32 = 11;
+pub const FORMAT_VERSION: u32 = 12;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -670,6 +670,7 @@ pub(crate) fn type_tree(ty: &DataType) -> Cbor {
         ]),
         DataType::Number => Cbor::Uint(6),
         DataType::Text => Cbor::Uint(7),
+        DataType::MediaType => Cbor::Uint(18),
         DataType::Bytes(binary) => Cbor::Array(vec![
             Cbor::Uint(8),
             match binary {
@@ -843,6 +844,7 @@ fn expr_tree(expr: &expr::Expr) -> Cbor {
                 // D-2026-08-13-1 allocated call id 4 to the exact-number
                 // constructor; v7 preserves that append-only spelling.
                 expr::Function::Decimal => 4,
+                expr::Function::MediaType => 6,
             }),
             Cbor::Array(args.iter().map(expr_tree).collect()),
         ]),
@@ -1226,6 +1228,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 | DataType::Bool
                 | DataType::Number
                 | DataType::Text
+                | DataType::MediaType
                 | DataType::Uuid
                 | DataType::Variant => max = max.max(level),
             },
@@ -1313,6 +1316,7 @@ fn data_type_level(ty: &DataType) -> usize {
             | DataType::Bool
             | DataType::Number
             | DataType::Text
+            | DataType::MediaType
             | DataType::Uuid
             | DataType::Variant => max = max.max(level),
         }
@@ -1819,6 +1823,7 @@ fn type_from(tree: &Cbor) -> Result<DataType, DecodeError> {
         Cbor::Uint(2) => Ok(DataType::Bool),
         Cbor::Uint(6) => Ok(DataType::Number),
         Cbor::Uint(7) => Ok(DataType::Text),
+        Cbor::Uint(18) => Ok(DataType::MediaType),
         Cbor::Uint(10) => Ok(DataType::Uuid),
         Cbor::Uint(17) => Ok(DataType::Variant),
         Cbor::Array(parts) => type_parts_from(parts),
@@ -2017,6 +2022,7 @@ fn expr_from(tree: &Cbor) -> Result<expr::Expr, DecodeError> {
                 3 => expr::Function::Size,
                 4 => expr::Function::Decimal,
                 5 => expr::Function::Asset,
+                6 => expr::Function::MediaType,
                 _ => return Err(err("function")),
             },
             args: args.iter().map(expr_from).collect::<Result<Vec<_>, _>>()?,
@@ -2468,7 +2474,7 @@ mod tests {
     }
 
     #[test]
-    fn v11_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
+    fn v12_retains_one_spelling_for_owner_lifetimes_sites_and_dynamic_attributes() {
         let lifetimes = [
             InstanceLifetime::Persistent,
             InstanceLifetime::Idle(1),
@@ -2536,7 +2542,7 @@ mod tests {
     }
 
     #[test]
-    fn v11_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
+    fn v12_package_sabotage_cannot_change_an_instance_key_or_lifetime() {
         let package = instance_package();
 
         let lying_key_type = mutate_package_body(&package, |body| {
@@ -2817,6 +2823,7 @@ mod tests {
             ),
             (DataType::Number, Cbor::Uint(6)),
             (DataType::Text, Cbor::Uint(7)),
+            (DataType::MediaType, Cbor::Uint(18)),
             (
                 DataType::BYTES,
                 Cbor::Array(vec![Cbor::Uint(8), Cbor::Null]),
@@ -3060,6 +3067,10 @@ mod tests {
                     name: text("Failed"),
                     payload: Box::new(DataType::Struct(payload)),
                 }),
+            },
+            expr::Expr::Call {
+                function: expr::Function::MediaType,
+                args: vec![expr::Expr::Literal(Value::Text(text("application/json")))],
             },
         ];
         for form in forms {

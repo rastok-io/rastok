@@ -550,6 +550,9 @@ fn reverse_type(
             scale: i32::from(decimal.scale()),
         },
         DataType::Text => ArrowType::Text(ArrowTextKind::Utf8),
+        DataType::MediaType => {
+            return unsupported_target(path, "Arrow V1 has no media-type logical extension");
+        }
         DataType::Bytes(BinaryType::Variable) => ArrowType::Binary(ArrowBinaryKind::Binary),
         DataType::Bytes(BinaryType::Fixed(length)) => ArrowType::FixedBinary(length.get()),
         DataType::Temporal(TemporalType::Date(unit)) => ArrowType::Date(*unit),

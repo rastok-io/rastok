@@ -1,6 +1,6 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.6 H4's live H1/H2/H3
+> **Status: normative and executable through M1.6 H4.1's live HTTP/1.1–3
 > HttpClient; HttpServer and WebSocket network I/O remain gated by H5–H6.**
 > B5 removed the
 > former draft `error_set` and made the complete resolved port table the
@@ -120,6 +120,35 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 
 ## 3. The nine contracts
 
+### HTTP field and media-type vocabulary
+
+All four HTTP-derived sheets expose the same two configuration attributes:
+
+```rastok
+headers = {
+  content_type = media_type("application/json")
+}
+custom_headers = {
+  "X-Trace-Id": ["one"]
+}
+```
+
+`headers` is a sparse typed struct. Its current field is
+`content_type: media_type`; future well-known fields join only with their own
+logical type. `custom_headers` is `map<text,array<text>>`, preserving an
+author's conventional HTTP casing at the source boundary and explicit field
+line order. Before an external open, names normalize to lowercase and values
+become the lossless byte-header descriptor. Case-insensitive collisions and
+attempts to override Driver-owned fields (`Host`, `Content-Length`,
+authorization/idempotency machinery, hop-by-hop or WebSocket protocol fields,
+and typed `Content-Type`) refuse. `Accept` remains custom until Rastok owns a
+distinct media-range/quality type.
+
+`media_type` is open. Tooling offers a completion catalogue for common
+`application/*`, `text/*` and image values, but any canonical concrete media
+type is admitted; the catalogue is not an enum and never gates compilation.
+There is no parallel `mime_type` spelling.
+
 ### 3.1 `HttpServer` — inbound HTTP, two modes
 
 | Case | Contract |
@@ -129,9 +158,9 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Exchange | call — one admitted request, at most one protocol response, one typed request-lifecycle `exit` |
 | Ports | `out: T` decoded request; `in: T` graph response in `respond`; `exit: HttpServerExit`; no implicit `err` |
 | Payload type | required `codec`: `json → variant`, `text → text`, `bytes → bytes`; one complete body is one value |
-| Populates | `meta.ext.content_type`, `http_headers`, `http_method`, `http_uri`, `http_version`; a response carries `http_status` when applicable |
+| Populates | canonical `meta.ext.content_type: media_type`, lossless `http_headers`, `http_method`, `http_uri`, `http_version`; a response carries `http_status` when applicable |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
-| Attributes | common: `listen: text` required (instance), `path: text = "/"` (plan), required `codec` (plan), `max_body: ByteSize = "8MiB"` (plan), optional `auth_bearer: text` and lossless response `headers` (instance), optional paired `tls_certificate`/`tls_private_key: bytes` (instance), ordered `versions = ["http/3", "http/2", "http/1.1"]` (plan), `zero_rtt = disabled` (plan); `mode = ack` default, while `respond` adds optional invocation `correlate` and required instance `timeout` but remains deferred to H5 |
+| Attributes | common: `listen: text` required (instance), `path: text = "/"` (plan), required `codec` (plan), `max_body: ByteSize = "8MiB"` (plan), optional typed `headers` and open `custom_headers` plus `auth_bearer: text` (instance), optional paired `tls_certificate`/`tls_private_key: bytes` (instance), ordered `versions = ["http/3", "http/2", "http/1.1"]` (plan), `zero_rtt = disabled` (plan); `mode = ack` default, while `respond` adds optional invocation `correlate` and required instance `timeout` but remains deferred to H5 |
 | Correlator | mode `respond`: **default = lineage** (`origin_id == R.id`) — valid on join-free return paths ONLY. **A return path crossing a root-mixing join ⇒ explicit `correlate` required (compile error otherwise)**: the join output inherits the TRIGGER's origin, creating a race. The author carries the token (`meta.app.request_id = meta.sys.id`) and attributes it through joins with the explicit-attribution rule; matching = correlate-value == the open request's root id. An orphan response (no open request — it already expired, the 504 went out) is **discarded-and-journaled** (the call-closed rule's cousin). |
 | Outcome cases | `Completed { status: int }`, `MalformedRequest`, `AuthFailed`, `RequestExpired`, `Overloaded`, `PeerDisconnected`, `OutcomeUnknown` |
 | Instances | singleton |
@@ -155,9 +184,9 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Exchange | call — one request, response outputs, one typed call `exit` |
 | Ports | `in: T` request body, `out: T` every usable response body including non-2xx, `exit: HttpClientExit`; no implicit `err` |
 | Payload type | required `codec`: `json → variant`, `text → text`, `bytes → bytes`; no line delimiter is added |
-| Populates | response `meta.ext.content_type`, `http_headers`, `http_status: int`, and `http_version` |
+| Populates | response canonical `meta.ext.content_type: media_type` when valid, lossless `http_headers`, `http_status: int`, and `http_version` |
 | effect / behavior | **both mandatory on each node; plan-evaluated** |
-| Attributes | required invocation `url: text`; invocation `method: text = "GET"`, optional lossless `headers`, `auth_bearer`, `idempotency_key`; required plan `codec`; plan `max_body: ByteSize = "8MiB"` bounds request and response bodies; required positive instance `timeout`; optional instance `tls_ca`, plus paired `tls_certificate`/`tls_private_key`; ordered plan `versions = ["http/3", "http/2", "http/1.1"]`; `zero_rtt = disabled` |
+| Attributes | required invocation `url: text`; invocation `method: text = "GET"`, optional typed `headers`, open `custom_headers`, `auth_bearer`, `idempotency_key`; required plan `codec`; plan `max_body: ByteSize = "8MiB"` bounds request and response bodies; required positive instance `timeout`; optional instance `tls_ca`, plus paired `tls_certificate`/`tls_private_key`; ordered plan `versions = ["http/3", "http/2", "http/1.1"]`; `zero_rtt = disabled` |
 | Correlator | protocol-native: HTTP request ↔ response |
 | Outcome cases | `Completed { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Instances | singleton by default; the common Node attribute `instances.key` may key the Connector |
@@ -483,7 +512,7 @@ deletion, overflow, resynchronization and acknowledgement semantics.
 | Payload type | `codec = json` → `variant`; `text` → `text`; `bytes` → `bytes`; text/binary mismatch is a protocol refusal, never coercion |
 | Populates | `meta.ext.session_id: text` on every `out` and `exit`, plus `http_headers`, `http_uri`, `http_version`, `websocket_origin`, and selected `websocket_subprotocol` from the admitted handshake |
 | effect / behavior | `none` / `deterministic` for admission; graph-to-peer message effects remain journaled session writes |
-| Attributes | required instance `listen: text` and positive `handshake_timeout: duration`; plan `path: text = "/"`, required `codec`, `max_message: ByteSize = "8MiB"`, ordered `versions = ["http/3", "http/2", "http/1.1"]`, `zero_rtt = disabled`; optional instance lossless `headers`, `auth_bearer`, `allowed_origins: array<text>`, `subprotocols: array<text>`, paired certificate/key bytes; optional invocation `correlate: text` |
+| Attributes | required instance `listen: text` and positive `handshake_timeout: duration`; plan `path: text = "/"`, required `codec`, `max_message: ByteSize = "8MiB"`, ordered `versions = ["http/3", "http/2", "http/1.1"]`, `zero_rtt = disabled`; optional instance typed `headers`, open `custom_headers`, `auth_bearer`, `allowed_origins: array<text>`, `subprotocols: array<text>`, paired certificate/key bytes; optional invocation `correlate: text` |
 | Correlator | direct descendants reply by session lineage; root-mixing, stored or spontaneous paths use explicit `correlate`, normally `meta.ext.session_id` |
 | Outcome cases | `WebSocketExit`: `Closed { code: int, reason: text }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `HandshakeRejected { status: int }`, `ProtocolFailed`, `TransportLost`, `TimeoutExpired`, `MessageTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Instances | one listener per Node instance may own many sessions; each session has one placement-neutral logical `SessionRef` |
@@ -518,7 +547,7 @@ orphan write, discarded-and-journaled without misrouting or a second exit.
 | Ports | `in: T`, `out: T`, `exit: WebSocketExit`; types follow the same required codec table as WebSocketServer; no implicit `err` |
 | Populates | `meta.ext.session_id: text`, `http_headers`, `http_uri`, `http_version`, and selected `websocket_subprotocol` |
 | effect / behavior | both mandatory on each node and plan-evaluated, as for an external client boundary |
-| Attributes | required instance `url: text` and positive `handshake_timeout: duration`; required plan `codec`; plan `max_message: ByteSize = "8MiB"`, ordered `versions = ["http/3", "http/2", "http/1.1"]`, `zero_rtt = disabled`; optional instance lossless `headers`, `auth_bearer`, `subprotocols: array<text>`, `tls_ca`, and paired certificate/key bytes |
+| Attributes | required instance `url: text` and positive `handshake_timeout: duration`; required plan `codec`; plan `max_message: ByteSize = "8MiB"`, ordered `versions = ["http/3", "http/2", "http/1.1"]`, `zero_rtt = disabled`; optional instance typed `headers`, open `custom_headers`, `auth_bearer`, `subprotocols: array<text>`, `tls_ca`, and paired certificate/key bytes |
 | Correlator | v1 permits at most one live remote session per logical Node instance; no message-level request/reply correlation is invented |
 | Outcome cases | the same closed `WebSocketExit` authority as the server; an opening failure is the sole terminal of the attempted session |
 | Instances | singleton by default; `instances.key` creates independent client sessions; input after a terminal opens the successor session under explicit lifecycle policy |

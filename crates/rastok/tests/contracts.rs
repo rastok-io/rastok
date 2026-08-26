@@ -56,10 +56,11 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
     let cases = [
         (
             "HttpClient",
-            "    url = \"https://example.test/v1\"\n    headers = { \"content-type\": [data] }\n    tls_certificate = base64! { Y2VydA== }\n    tls_private_key = base64! { a2V5 }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+            "    url = \"https://example.test/v1\"\n    headers = { content_type = media_type(\"application/octet-stream\") }\n    custom_headers = { \"X-Trace-Id\": [\"one\"] }\n    tls_certificate = base64! { Y2VydA== }\n    tls_private_key = base64! { a2V5 }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
             "  . -> network -> .",
             rastok::connector::HTTP_CLIENT_CONNECTOR_ID,
             rastok::connector::ConnectorExchange::Call,
+            "c66bd9da56411bd1caf557c1bd3816dbe1533c971ccc43392c5e2dc4aa9fea53",
         ),
         (
             "HttpServer",
@@ -67,6 +68,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
             "  network -> .",
             rastok::connector::HTTP_SERVER_CONNECTOR_ID,
             rastok::connector::ConnectorExchange::Call,
+            "63a257e28d323d812aafe121e4df6449a7dc47ed8f9dd7baf776a20b19d0601d",
         ),
         (
             "WebSocketClient",
@@ -74,6 +76,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
             "  . -> network -> .",
             rastok::connector::WEBSOCKET_CLIENT_CONNECTOR_ID,
             rastok::connector::ConnectorExchange::Session,
+            "d4f92e1503d73c72caf3cc48fe7400fdf6b61dc9eb3e5ad4497a4ca05b98de89",
         ),
         (
             "WebSocketServer",
@@ -81,9 +84,10 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
             "  . -> network -> .",
             rastok::connector::WEBSOCKET_SERVER_CONNECTOR_ID,
             rastok::connector::ConnectorExchange::Session,
+            "d36bcbf490173a9ddca14e04ae4559f102e79609f2ab303742057c052503b8d8",
         ),
     ];
-    for (kind, body, wiring, expected_id, expected_exchange) in cases {
+    for (kind, body, wiring, expected_id, expected_exchange, expected_hash) in cases {
         let source = network_graph(kind, body, wiring);
         let compilation =
             compile_one(&source).unwrap_or_else(|bag| panic!("{kind} should compile: {bag:#?}"));
@@ -104,10 +108,46 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
         assert!(spec.attribute("versions").is_some());
         let package = rastok::plan::encode(&compilation.plan, &compilation.hash);
         let (decoded, hash) = rastok::plan::decode(&package)
-            .unwrap_or_else(|error| panic!("the {kind} v11 package must decode: {error}"));
+            .unwrap_or_else(|error| panic!("the {kind} v12 package must decode: {error}"));
         assert_eq!(hash, compilation.hash);
         assert_eq!(*decoded, *compilation.plan);
+        assert_eq!(
+            compilation.hash.to_string(),
+            expected_hash,
+            "the representative H4.1 identity of each network family is pinned"
+        );
     }
+}
+
+#[test]
+fn typed_http_headers_keep_known_fields_precise_and_extensions_open() {
+    let source = network_graph(
+        "HttpClient",
+        "    url = \"https://example.test/v1\"\n    headers = { content_type = media_type(\"Application/Problem+JSON; Charset=UTF-8\") }\n    custom_headers = { \"X-Trace-ID\": [\"one\", \"two\"] }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+        "  . -> network -> .",
+    );
+    compile_one(&source).expect("typed and extension request fields compile together");
+
+    let wrong_known = network_graph(
+        "HttpClient",
+        "    url = \"https://example.test/v1\"\n    headers = { content_type = \"not/a media type with spaces\" }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+        "  . -> network -> .",
+    );
+    refusal_with(&wrong_known, "E-CONTRACT-ATTR", "TypedHttpHeaders");
+
+    let managed_custom = network_graph(
+        "HttpClient",
+        "    url = \"https://example.test/v1\"\n    custom_headers = { \"Content-Type\": [\"application/json\"] }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+        "  . -> network -> .",
+    );
+    refusal_with(&managed_custom, "E-CONTRACT-ATTR", "CustomHttpHeaders");
+
+    let colliding_custom = network_graph(
+        "HttpClient",
+        "    url = \"https://example.test/v1\"\n    custom_headers = { \"X-Trace\": [\"one\"], \"x-trace\": [\"two\"] }\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic",
+        "  . -> network -> .",
+    );
+    refusal_with(&colliding_custom, "E-CONTRACT-ATTR", "CustomHttpHeaders");
 }
 
 #[test]
@@ -124,6 +164,11 @@ fn network_defaults_are_effective_before_identity() {
     );
     let omitted = compile_one(&omitted).expect("the omitted defaults compile");
     let explicit = compile_one(&explicit).expect("the exact defaults compile");
+    assert_eq!(
+        omitted.hash.to_string(),
+        "481662aa8c8ded0972c26609b0afc45878a408e5c503154d37eb1c5a3516245a",
+        "an HttpClient without newly typed fields keeps its pre-H4.1 identity"
+    );
     assert_eq!(omitted.hash, explicit.hash);
     assert_eq!(*omitted.plan, *explicit.plan);
 }

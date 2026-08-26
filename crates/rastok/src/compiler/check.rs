@@ -594,7 +594,10 @@ impl Checker<'_, '_> {
                 };
                 let path = literal(self, path_arg)?;
                 let content_type = match args.get(1) {
-                    Some(value) => Some(literal(self, value)?),
+                    Some(value) => {
+                        let written = literal(self, value)?;
+                        Some(self.content_type(&written, at, "asset")?)
+                    }
                     None => None,
                 };
                 if content_type.is_some() && !allow_content_type {
@@ -2411,18 +2414,32 @@ impl Checker<'_, '_> {
             for (field, ty) in &ext_fields {
                 signature = signature.with(format!("meta.ext.{field}"), ty.clone());
             }
-            let Some(expected) = pending.domain.expression_type() else {
-                continue;
-            };
+            let expected = pending.domain.expression_type();
             let Some(tree) = self.typed_value_tree(
                 &pending.value,
                 &signature,
-                Some(&expected),
+                expected.as_ref(),
                 pending.span,
                 &pending.name,
             ) else {
                 continue;
             };
+            if !pending.domain.admits_type(&tree.ty) {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONTRACT_ATTR,
+                        Phase::Check,
+                        format!(
+                            "`{}` has type {}, outside the {:?} contract domain",
+                            pending.name, tree.ty, pending.domain
+                        ),
+                    )
+                    .with_span(pending.span)
+                    .with_field("attribute", pending.name.clone())
+                    .with_field("detail", "attribute expression type"),
+                );
+                continue;
+            }
             let site = expression_evaluation_site(&tree.root);
             if !pending.latest_site.admits(site) {
                 self.bag.push(
@@ -3010,7 +3027,8 @@ impl Checker<'_, '_> {
                     | contract::ValueDomain::ChoiceList(_)
                     | contract::ValueDomain::Duration
                     | contract::ValueDomain::TextMap
-                    | contract::ValueDomain::HeaderMap,
+                    | contract::ValueDomain::TypedHttpHeaders
+                    | contract::ValueDomain::CustomHttpHeaders,
                     AttrValue::Word(word),
                 ) => Some(format!(
                     "expected a Rastok expression fitting the {:?} domain; `{word}` is a bare word",
@@ -3210,7 +3228,8 @@ impl Checker<'_, '_> {
             .find(|spec| {
                 spec.name == name
                     && spec.latest_site == crate::plan::EvaluationSite::Invocation
-                    && spec.domain.expression_type().is_some()
+                    && spec.domain.implemented()
+                    && !matches!(spec.domain, contract::ValueDomain::Choice(_))
             })
             .map(|spec| (spec.domain.clone(), spec.latest_site))
     }
@@ -3762,6 +3781,7 @@ impl Checker<'_, '_> {
             BaseType::Scalar(ScalarType::Number) => DataType::Number,
             BaseType::Scalar(ScalarType::Bytes) => DataType::BYTES,
             BaseType::Scalar(ScalarType::Text) => DataType::Text,
+            BaseType::Scalar(ScalarType::MediaType) => DataType::MediaType,
             BaseType::Scalar(ScalarType::Null) => DataType::Null,
             BaseType::Scalar(ScalarType::Decimal { precision, scale }) => {
                 let scale = match i32::try_from(*scale) {
@@ -4517,9 +4537,16 @@ impl Checker<'_, '_> {
                 }
                 match frontend.args.as_slice() {
                     [] => Some(FrontendCall::Base64 { content_type: None }),
-                    [only] => Some(FrontendCall::Base64 {
-                        content_type: Some(string_arg(self, only)?),
-                    }),
+                    [only] => {
+                        let written = string_arg(self, only)?;
+                        Some(FrontendCall::Base64 {
+                            content_type: Some(self.content_type(
+                                &written,
+                                frontend.name.span,
+                                "base64",
+                            )?),
+                        })
+                    }
                     _ => {
                         refuse(
                             self,
@@ -4533,6 +4560,24 @@ impl Checker<'_, '_> {
             }
             crate::contract::FrontendReader::Deferred { construct, .. } => {
                 self.deferred(construct, frontend.name.span);
+                None
+            }
+        }
+    }
+
+    fn content_type(&mut self, written: &str, at: Span, construct: &str) -> Option<String> {
+        match crate::datatype::canonical_media_type(written) {
+            Ok(canonical) => Some(canonical),
+            Err(error) => {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONTENT_TYPE,
+                        Phase::Check,
+                        format!("`{written}` is not a concrete media type: {error}"),
+                    )
+                    .with_span(at)
+                    .with_field("tag", construct.to_string()),
+                );
                 None
             }
         }
@@ -4991,10 +5036,11 @@ impl Checker<'_, '_> {
         )
     }
 
-    /// Applies the one implicit conversion allowed by typed construction:
-    /// selecting and recording the unique branch of the destination
-    /// structural union. The conversion is explicit in HIR as `As`; the VM
-    /// evaluates it but never guesses or repairs a branch.
+    /// Applies the two contextual conversions allowed by typed construction:
+    /// a written text literal is sealed as a canonical `media_type`, and an
+    /// unwrapped value selects the unique branch of a destination structural
+    /// union. Dynamic media-type conversion remains explicit; union selection
+    /// is recorded in HIR as `As`, so the VM never guesses or repairs either.
     fn contextualize_tree(
         &mut self,
         tree: expr::Tree,
@@ -5004,6 +5050,26 @@ impl Checker<'_, '_> {
     ) -> Option<expr::Tree> {
         if tree.ty == *expected {
             return Some(tree);
+        }
+        if expected == &DataType::MediaType
+            && let expr::Expr::Literal(crate::value::Value::Text(written)) = &tree.root
+        {
+            return match crate::datatype::canonical_media_type(written) {
+                Ok(canonical) => Some(expr::Tree {
+                    root: expr::Expr::Literal(crate::value::Value::Text(canonical)),
+                    ty: DataType::MediaType,
+                }),
+                Err(error) => {
+                    self.port_type_refusal(
+                        span,
+                        place,
+                        expected,
+                        &tree.ty,
+                        &format!("the literal is not a concrete media type: {error}"),
+                    );
+                    None
+                }
+            };
         }
         if let DataType::StructuralUnion(target) = expected {
             if matches!(tree.ty, DataType::StructuralUnion(_)) {
@@ -5842,7 +5908,7 @@ impl Checker<'_, '_> {
                             target: crate::envelope::WriteTarget::Ext(String::from("content_type")),
                             value: literal_tree(
                                 crate::value::Value::Text(content_type),
-                                DataType::Text,
+                                DataType::MediaType,
                             ),
                         },
                     ]),
@@ -5891,7 +5957,7 @@ impl Checker<'_, '_> {
                             target: crate::envelope::WriteTarget::Ext(String::from("content_type")),
                             value: literal_tree(
                                 crate::value::Value::Text(content_type),
-                                DataType::Text,
+                                DataType::MediaType,
                             ),
                         },
                     ]),
@@ -6047,20 +6113,20 @@ impl Checker<'_, '_> {
                                 self.expr(expr, signature).map(|tree| (tree, None))
                             };
                             if let Some((tree, content_type)) = compiled {
-                                if matches!(&target, crate::envelope::WriteTarget::Ext(field) if field == "content_type")
-                                    && !tree.ty.is_assignable_to(&DataType::Text)
+                                let tree = if matches!(&target, crate::envelope::WriteTarget::Ext(field) if field == "content_type")
                                 {
-                                    self.bag.push(
-                                        Diagnostic::new(
-                                            E_EXPR,
-                                            Phase::Check,
-                                            "content_type takes text",
-                                        )
-                                        .with_span(key.span)
-                                        .with_field("detail", "the value type is not text"),
-                                    );
-                                    continue;
-                                }
+                                    let Some(tree) = self.contextualize_tree(
+                                        tree,
+                                        &DataType::MediaType,
+                                        key.span,
+                                        "meta.ext.content_type",
+                                    ) else {
+                                        continue;
+                                    };
+                                    tree
+                                } else {
+                                    tree
+                                };
                                 if matches!(
                                     &target,
                                     crate::envelope::WriteTarget::App(_)
@@ -6090,7 +6156,7 @@ impl Checker<'_, '_> {
                                         )),
                                         value: literal_tree(
                                             crate::value::Value::Text(content_type),
-                                            DataType::Text,
+                                            DataType::MediaType,
                                         ),
                                     });
                                 }
@@ -6160,7 +6226,7 @@ impl Checker<'_, '_> {
                                     )),
                                     value: literal_tree(
                                         crate::value::Value::Text(content_type),
-                                        DataType::Text,
+                                        DataType::MediaType,
                                     ),
                                 });
                             }
@@ -7013,7 +7079,7 @@ fn meta_type_refusal(ty: &DataType) -> Option<&'static str> {
     let leaf_scalar = |candidate: &DataType| {
         matches!(
             candidate,
-            DataType::Bool | DataType::Text | DataType::Variant
+            DataType::Bool | DataType::Text | DataType::MediaType | DataType::Variant
         ) || candidate == &DataType::INT
             || candidate == &DataType::DOUBLE
             || candidate == &DataType::BYTES

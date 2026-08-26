@@ -15,6 +15,7 @@ use crate::value::Value;
 pub mod arrow;
 pub mod avro;
 pub mod json_schema;
+pub mod openapi;
 
 /// Stable reason why an external schema cannot cross a projection boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

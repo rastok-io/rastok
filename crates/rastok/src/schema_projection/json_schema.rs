@@ -509,6 +509,12 @@ fn reverse_type(ty: &DataType, path: &str, root: bool) -> Result<Value, Projecti
         DataType::Null => typed("null"),
         DataType::Bool => typed("boolean"),
         DataType::Text => typed("string"),
+        DataType::MediaType => {
+            return unsupported_target(
+                path,
+                "standard JSON Schema has no exact concrete-media-type scalar",
+            );
+        }
         DataType::Number => typed("number"),
         DataType::Integer(integer) => reverse_integer(*integer)?,
         DataType::Enum(enumeration) => object([

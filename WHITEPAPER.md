@@ -1501,6 +1501,23 @@ All usable statuses return an ordinary typed body plus status/header/version
 observations and one terminal exit. Finite local saturation leaves the
 journaled call pending; it is pacing, never a fabricated network failure.
 
+HTTP schema intent remains typed without pretending the registry of media
+types is closed. `media_type` is an open logical scalar with a canonical text
+carrier; standard request fields live in a sparse typed `headers` struct,
+while uncommon extension fields live in `custom_headers`. Driver-owned and
+managed fields cannot be overridden through that extension map. Responses
+retain every header byte in `meta.ext.http_headers` and additionally project
+valid standard facts such as canonical `meta.ext.content_type` for ordinary
+typed graph logic.
+
+OpenAPI is a build-tool input, not a second runtime type system. The project
+resolver discovers static HttpClient/HttpServer endpoints, projects selected
+OpenAPI 3.0/3.1 component schemas through Rastok's one `DataType` algebra, and
+writes one deterministic generated Rastok source. Unsupported or lossy schema
+features refuse by path instead of becoming `variant`; authored files are
+never rewritten. This makes the normal LLM-assisted workflow resolve, inspect,
+check and commit generated types while preserving a textual review boundary.
+
 The Lab follows the same rule. A mock Driver binds under the same id and roles,
 uses the same family request protocol and resolved result types, and replaces
 only the post-journal external interaction. It never replaces the VM or its
@@ -2777,7 +2794,7 @@ simulations designed to become executable evidence as the runtime
 lands. The current evidence gates are listed in
 [ROADMAP.md](ROADMAP.md).
 
-As of M1.6 H4, the one-worker reference executes canonical keyed/lifetime
+As of M1.6 H4.1, the one-worker reference executes canonical keyed/lifetime
 instances, bounded Closing, nested Graph composition, and instance-local
 bounded joins from source through package validation and public Lab scenarios.
 The closure audit also proves that moving a stable virtual shard between
@@ -2790,7 +2807,7 @@ families through one exact-id/role registry and one VM boundary; the Lab
 composes both through the same binding and protocol. Static Driver selection is
 implemented. A data-only capability manifest proves the future discovery seam,
 but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
-contracts now cross source, checked v11 plan, Registry-free validation and
+contracts now cross source, checked v12 plan, Registry-free validation and
 family-owned Lab binding with codec-selected ports, lossless protocol metadata
 and typed terminal unions. H3 pins one bounded private hosted
 pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
@@ -2799,6 +2816,9 @@ h3/Quinn on real UDP and proves bounded WebSocket framing plus HTTP/1.1
 Upgrade. H4 now executes HttpClient over all three versions, including exact
 pre-open request sealing, visibility-safe fallback, bounded bodies, lossless
 response observations, generic Call conformance and outbound backpressure.
+H4.1 adds the open `media_type` scalar, typed standard/custom request-header
+separation, typed response metadata and strict project-wide OpenAPI type
+resolution without changing the runtime's one type algebra.
 H5-H6 still own server acknowledgement, live WebSocket sessions and both
 Extended CONNECT adapters.
 

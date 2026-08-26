@@ -14,6 +14,7 @@ path = "src/lib.rs"
 # The workspace baseline is already no_std (default features off);
 # a bare-metal build of this crate alone gets the portable path.
 blake3.workspace = true
+mediatype.workspace = true
 
 [dev-dependencies]
 # The differential ORACLE for the house JSON reader

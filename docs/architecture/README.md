@@ -35,9 +35,10 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   data forms, interfaces, dependency direction, and current status;
 - [`spec-to-code.md`](spec-to-code.md) for the map from normative
   documents to implementation responsibilities;
-- [`plan-package.md`](plan-package.md) for current categorical v11, its retained
+- [`plan-package.md`](plan-package.md) for current categorical v12, its retained
   v9 owner/instance and v7 type/value/expression registries, stable Connector
-  identities/roles/exchange lifecycles, and the validation boundary;
+  identities/roles/exchange lifecycles, H4.1 `media_type` extension, and the
+  validation boundary;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
 - [`spike-rp2350-emulated.md`](spike-rp2350-emulated.md) for the measured

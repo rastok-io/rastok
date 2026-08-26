@@ -1512,9 +1512,20 @@ fn network_setting_holds(name: &str, setting: &crate::plan::AttrSetting) -> bool
             setting_has_type(setting, &DataType::array(DataType::Text))
         }
         "headers" => match setting {
-            crate::plan::AttrSetting::Value(value) => crate::plan::http_headers_value_holds(value),
+            crate::plan::AttrSetting::Value(value) => {
+                crate::plan::typed_http_headers_value_holds(value)
+            }
             crate::plan::AttrSetting::Expr { expr, .. } => {
-                expr.ty == crate::plan::http_headers_type()
+                crate::plan::typed_http_headers_type_holds(&expr.ty)
+            }
+            crate::plan::AttrSetting::Word(_) => false,
+        },
+        "custom_headers" => match setting {
+            crate::plan::AttrSetting::Value(value) => {
+                crate::plan::custom_http_headers_value_holds(value)
+            }
+            crate::plan::AttrSetting::Expr { expr, .. } => {
+                expr.ty == crate::plan::custom_http_headers_type()
             }
             crate::plan::AttrSetting::Word(_) => false,
         },
@@ -1548,6 +1559,7 @@ fn validate_network_connector(
             allowed: &[
                 "auth_bearer",
                 "codec",
+                "custom_headers",
                 "headers",
                 "idempotency_key",
                 "max_body",
@@ -1575,6 +1587,7 @@ fn validate_network_connector(
             allowed: &[
                 "auth_bearer",
                 "codec",
+                "custom_headers",
                 "headers",
                 "listen",
                 "max_body",
@@ -1605,6 +1618,7 @@ fn validate_network_connector(
             allowed: &[
                 "auth_bearer",
                 "codec",
+                "custom_headers",
                 "handshake_timeout",
                 "headers",
                 "max_message",
@@ -1639,6 +1653,7 @@ fn validate_network_connector(
                 "auth_bearer",
                 "codec",
                 "correlate",
+                "custom_headers",
                 "handshake_timeout",
                 "headers",
                 "listen",
@@ -1742,7 +1757,7 @@ fn validate_network_connector(
 }
 
 /// Every type-bearing plan position passes this audit before the infallible
-/// v11 encoder can observe the plan.
+/// v12 encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     for (field, ty) in &plan.app_schema {
         data_type_at(ty, format!("meta.app.{field}"))?;
@@ -2923,7 +2938,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             validate_network_connector(node, spec)?;
             // Built-in sheets above retain their more specific missing-row
             // diagnostics. Foreign families still cannot bypass the generic
-            // exchange lifecycle carried by v11.
+            // exchange lifecycle carried by v12.
             let exits = node
                 .ports
                 .iter()

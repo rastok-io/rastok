@@ -5,7 +5,8 @@
 //! while the catalogue grows without returning to one monolithic file.
 
 mod file;
-mod http;
+mod http_client;
+mod http_server;
 mod manifest;
 #[cfg(any(
     feature = "hosted-http12",
@@ -15,11 +16,13 @@ mod manifest;
 mod network;
 mod process;
 mod registry;
-mod websocket;
+mod websocket_client;
+mod websocket_protocol;
+mod websocket_server;
 
 pub use file::{File, FileBindError, FileFactory, FileSettingsError};
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
-pub use http::{HttpClientConfig, HttpClientFactory};
+pub use http_client::{HttpClientConfig, HttpClientFactory};
 pub use manifest::{DriverManifest, DriverManifestEntry, DriverManifestError};
 #[cfg(test)]
 pub(crate) use process::ProcessRequestBindings;
@@ -67,7 +70,7 @@ pub(crate) fn scripted_protocol_binders() -> [(&'static str, ScriptedProtocolBin
         ),
         (
             crate::connector::HTTP_CLIENT_CONNECTOR_ID,
-            http::bind_scripted_protocol,
+            http_client::bind_scripted_protocol,
         ),
     ]
 }
@@ -76,7 +79,8 @@ pub(crate) fn scripted_protocol_binders() -> [(&'static str, ScriptedProtocolBin
 /// network contracts in the Lab before hosted socket implementations land.
 pub(crate) fn passive_lab_factories()
 -> Result<Vec<Box<dyn ConnectorDriverFactory>>, DriverFactoryError> {
-    let mut factories = http::lab_factories()?;
-    factories.extend(websocket::lab_factories()?);
+    let mut factories = vec![http_server::lab_factory()?];
+    factories.push(websocket_client::lab_factory()?);
+    factories.push(websocket_server::lab_factory()?);
     Ok(factories)
 }

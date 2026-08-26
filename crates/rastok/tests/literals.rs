@@ -122,6 +122,11 @@ fn base64_with_a_content_type_is_whole_payload() {
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
+    assert_eq!(
+        compilation.hash.to_string(),
+        "ee1dab9e3c3fd1924534c5709983f4e4d7c0d80140760f55520ebeafb3262f36",
+        "typing the frontend content type is one declared H4.1 identity move"
+    );
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
     vm.inject(
@@ -673,18 +678,19 @@ fn a_non_meta_typed_app_write_refuses_or_converts() {
     )
     .expect("array<scalar> is legal meta");
     // …and an explicitly dynamic value cannot silently enter the precise
-    // `text` field. B2 uses the same assignability relation for metadata
+    // `media_type` field. The metadata and port gates use the same
+    // assignability relation,
     // and ports, so the refusal is static rather than a runtime surprise.
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = { data = \"x\", meta.ext.content_type = data } }\n  }\n  . -> o -> .\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
-    .expect_err("variant must be narrowed before a text write");
+    .expect_err("variant must be narrowed before a media-type write");
     assert!(
         bag.diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.code().as_str() == "E-EXPR"),
+            .any(|diagnostic| diagnostic.code().as_str() == "E-PORT-TYPE"),
         "{bag:?}"
     );
 }
@@ -711,7 +717,7 @@ fn the_meta_type_grid_is_closed_end_to_end() {
             "`{what}`: {bag:?}"
         );
     }
-    // And the ingress holds content_type to TEXT, name and type.
+    // And the ingress holds content_type to MEDIA_TYPE, name and type.
     use rastok::boundary::{
         Draft, InboundEnvelopeProvenance, InboundSubmission, SubmissionSequence,
     };

@@ -81,11 +81,12 @@ impl WebSocketLabDriver {
             return Err(crate::boundary::WebSocketExit::ProtocolFailed);
         }
         let (codec, initial_message) = self.message_bytes(connector, data)?;
-        let headers =
-            Self::value(spec, resolved, "headers").unwrap_or_else(|| Value::Map(BTreeMap::new()));
-        if !crate::plan::http_headers_value_holds(&headers) {
-            return Err(crate::boundary::WebSocketExit::ProtocolFailed);
-        }
+        let typed_headers =
+            Self::value(spec, resolved, "headers").unwrap_or_else(|| Value::Struct(Vec::new()));
+        let custom_headers = Self::value(spec, resolved, "custom_headers")
+            .unwrap_or_else(|| Value::Map(BTreeMap::new()));
+        let headers = crate::plan::canonical_request_headers(&typed_headers, &custom_headers)
+            .ok_or(crate::boundary::WebSocketExit::ProtocolFailed)?;
         let Some(Value::Text(url)) = Self::value(spec, resolved, "url") else {
             return Err(crate::boundary::WebSocketExit::ProtocolFailed);
         };
@@ -250,19 +251,10 @@ impl super::ConnectorDriverFactory for WebSocketLabFactory {
     }
 }
 
-pub(crate) fn lab_factories()
--> Result<Vec<Box<dyn super::ConnectorDriverFactory>>, super::DriverFactoryError> {
-    [
-        crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID,
-        crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID,
-    ]
-    .into_iter()
-    .map(|spelling| {
-        ConnectorId::parse(spelling)
-            .map(|id| {
-                Box::new(WebSocketLabFactory { id }) as Box<dyn super::ConnectorDriverFactory>
-            })
-            .map_err(|error| super::DriverFactoryError::new(error.to_string()))
-    })
-    .collect()
+pub(crate) fn lab_factory(
+    spelling: &str,
+) -> Result<Box<dyn super::ConnectorDriverFactory>, super::DriverFactoryError> {
+    ConnectorId::parse(spelling)
+        .map(|id| Box::new(WebSocketLabFactory { id }) as Box<dyn super::ConnectorDriverFactory>)
+        .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }
