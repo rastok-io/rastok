@@ -17,34 +17,8 @@ use std::collections::BTreeMap;
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
 pub use crate::connectors::network::http_client::{HttpClientConfig, HttpClientFactory};
 
-/// One HTTP version selected from the semantic ordered preference.
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HttpVersion {
-    Http1,
-    Http2,
-    Http3,
-}
-
-#[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
-impl HttpVersion {
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value {
-            "http/1.1" => Some(Self::Http1),
-            "http/2" => Some(Self::Http2),
-            "http/3" => Some(Self::Http3),
-            _ => None,
-        }
-    }
-
-    pub(crate) const fn observation(self) -> &'static str {
-        match self {
-            Self::Http1 => "http/1.1",
-            Self::Http2 => "http/2",
-            Self::Http3 => "http/3",
-        }
-    }
-}
+use super::http_shared::HttpVersion;
 
 /// The exact request descriptor recovered from [`PreparedRequest`] bytes.
 ///

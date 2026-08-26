@@ -11,7 +11,8 @@
 > concrete HTTP/WebSocket sheets and Lab bindings. H3 selects the private
 > bounded hosted-engine seam; H4 executes HttpClient with pre-visible-only
 > fallback and generic outbound backpressure. D-2026-08-26-5 lands H5's
-> generic inbound Call fold; live server wire I/O and Session I/O remain gated
+> generic inbound Call fold; H5.1 binds ack-mode HTTP/1.1–2 to it with bounded
+> admission pressure. HTTP/3 server, respond mode and Session I/O remain gated
 > by the rest of H5–H6.
 
 The question this doc answers : **what survives — a crash, a redelivery, a
@@ -332,8 +333,10 @@ OUTBOUND record. The journal requires its owner and generation to equal the
 opening source, refuses `l:reply` without the open reference, and closes the
 reference once. Invalid, crossed, duplicate and late Driver observations are
 non-causal. The generic fold counts the Call as open work for instance
-Closing; H5 must add bounded live-server cancellation/timeout before admitting
-a listener that can retain a response indefinitely.
+Closing. H5.1 admits only fixed `ack`: the hosted Driver retains byte permits
+until admission and then queues its terminal 202 observation without an
+unbounded response wait. H5 must still add explicit cancellation/timeout
+before admitting `respond`, which can retain a graph response indefinitely.
 
 ### 4.5 Sessions — one resource lifecycle, many message effects
 

@@ -1,7 +1,8 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.6 H4.1's live HTTP/1.1–3
-> HttpClient; HttpServer and WebSocket network I/O remain gated by H5–H6.**
+> **Status: normative and executable through M1.6 H5.1: HttpClient is live
+> over HTTP/1.1–3 and HttpServer `ack` is live over HTTP/1.1–2. HTTP/3 server,
+> `respond`, and WebSocket network I/O remain gated by H5–H6.**
 > B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
@@ -166,14 +167,26 @@ There is no parallel `mime_type` spelling.
 | Instances | singleton |
 | Journal / sim | two-phase INBOUND proposal; commit precedes 202/response; the H2 Lab binding is effectless and uses scenario injection rather than a fake socket |
 
-- **`ack`** (webhook): 202 immediately — "received", not "processed";
+- **`ack`** (webhook): 202 immediately after the accepting commit —
+  "received", not "processed";
   replies to the user travel through an outbound Connector.
 - **`respond`** (API): the request stays open; correlation by lineage;
   timeout → 504; bounded → 503. Exposing an API is first-class.
 - The async HTTP library is the **runtime's** choice — the contract is
   lib-agnostic. The H4 hosted HttpClient uses Hyper for HTTP/1.1-2 and quiche
-  for HTTP/3 behind one bounded private pump; this is a Driver choice and is
-  absent from plan identity. HttpServer remains gated by H5.
+  for HTTP/3 behind one bounded private pump. H5.1's hosted HttpServer uses
+  Hyper for HTTP/1.1-2 `ack` on that same pump shape: connection, stream,
+  request, fact and byte capacities are finite; request bytes remain charged
+  while the proposal awaits causal admission; and 202 follows the accepted
+  commit. These are Driver choices and are absent from plan identity. HTTP/3,
+  `respond`, bounded request deadlines and independent server interop remain
+  in H5.
+
+Malformed framing, failed bearer authentication and body refusal can occur
+before a request has a typed `out` value. H5.1 returns an HTTP refusal without
+minting a root or fake Call. The corresponding published `HttpServerExit`
+cases are therefore a named H2 contract debt to remove or reclassify at final
+H5; an `l:reply` is legal only for an admitted request.
 
 ### 3.2 `HttpClient` — outbound HTTP
 

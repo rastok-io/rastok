@@ -82,15 +82,15 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (974-byte v12 package; re-measured after the generic M1.6 H5 Call seam on 2026-08-26) | 16 841 | 842.1 k | 5.61 ms |
+| `plan::decode` (974-byte v12 package; re-measured after the M1.6 H5.1 live-ack checkpoint on 2026-08-26) | 16 841 | 842.1 k | 5.61 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-26 after the generic H5 Call seam) | 2 640 (min 2 554 / max 2 898) | **132.0 k avg / 144.9 k max** | **0.880 ms avg / 0.966 ms max** |
+| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-26 after the H5.1 live-ack checkpoint) | 2 640 (min 2 554 / max 2 898) | **132.0 k avg / 144.9 k max** | **0.880 ms avg / 0.966 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 91.0 | 4.6 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-26 after the generic H5 Call seam) | 128 124 B (125.1 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 514 636 + 50 488 = 565 124 B (551.9 KiB; re-measured 2026-08-26 after the generic H5 Call seam) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-26 after the H5.1 live-ack checkpoint) | 128 124 B (125.1 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 514 636 + 50 488 = 565 124 B (551.9 KiB; re-measured 2026-08-26 after the H5.1 live-ack checkpoint) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
@@ -323,8 +323,8 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-26 after the generic M1.6 H5
-Call seam.**
+instrumentation and last re-measured 2026-08-26 after the M1.6 H5.1 live-ack
+checkpoint.**
 These measurements price complete hierarchical routing, causal instance
 references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four

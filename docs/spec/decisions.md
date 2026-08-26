@@ -5,6 +5,59 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-26-6 — A live ack listener holds bytes and acknowledgement until admission
+
+The first physical HttpServer checkpoint binds the already-published
+`rastok/http-server@1` sheet to Hyper's HTTP/1.1 and HTTP/2 server engine. It
+does not create version-specific contracts and it does not put an async or
+Hyper type in the Driver boundary. `HttpServerFactory` is a statically
+selectable inbound factory; binding resolves every listener, route, codec,
+body bound, response header, bearer digest and optional Rustls identity before
+the hosted runtime thread starts.
+
+The listener owns finite connection, request-stream, event-count and shared
+byte capacities. HTTP/2 advertises the same finite concurrent-stream bound.
+Before copying each request-body chunk, the hosted pump acquires its byte
+permits; the permits travel with the retained proposal and are released only
+when the runtime accepts or rejects it. A full causal mailbox therefore leaves
+the proposal and its transport response pending under the same finite
+capacities. It never creates an unbounded side queue or a detached task per
+terminal observation. The Driver drains proposals and terminal observations
+from the common bounded lane independently, so a later pending request cannot
+strand an earlier `exit`.
+
+`mode = ack` returns 202 only after `admit_inbound` committed the root, exact
+source instance and `InboundCallRef`. The local protocol terminal then enters
+the same bounded event lane as `Completed { status: 202 }`; the VM alone
+commits the close-once `l:reply`. Cleartext HTTP/1.1 and prior-knowledge HTTP/2
+exercise this path through real loopback peers. Optional in-plan certificate
+and key bytes select the already-vetted Rustls server assembly. Authentication
+uses a precomputed digest and constant-time digest equality. The configured
+bearer and library errors do not enter terminal payloads; an admitted peer
+header remains subject to the existing lossless `http_headers` contract.
+
+Server binding is the fail-fast provisioning boundary: it may reserve every
+passive listener of the family before returning, but it may not acknowledge a
+request, mint a causal fact or perform an outbound effect. A request that
+arrives before the Worker begins pumping remains held under the same finite
+connection/request/byte capacities and observes no acceptance.
+
+HTTP framing/authentication/body refusals that occur before a typed proposal
+has been admitted return their portable HTTP status without minting a root or
+an `InboundCallRef`. Consequently they cannot truthfully become an
+`l:reply`. This exposes an H2 contract debt rather than papering it over:
+`MalformedRequest`, `AuthFailed`, and pre-admission `Overloaded` are currently
+published in `HttpServerExit` although no admitted Call can produce them. The
+final H5 contract pass must remove or reclassify those cases; it must not
+invent a fake Call merely to make them reachable.
+
+This is H5.1, not H5 closure. HTTP/3 listener integration, `respond`, bounded
+pre-admission/request deadlines, disconnect/write races, standalone-runner
+polling and independent Caddy/NGINX/curl/nghttp2/ngtcp2 evidence remain H5
+gates. No plan field, package byte, semantic hash, existing causal trace or
+root recipe changes here. New wire requests use keys 27, 28 and 52 already
+allocated by D-2026-08-26-4/-5.
+
 ## D-2026-08-26-5 — An inbound Call opens at its source and closes once
 
 The generic inbound proposal protocol now carries the whole Call lifecycle,

@@ -1,9 +1,9 @@
 # Contributing a Connector Driver
 
-> Current contributor path through the first M1.6 H5 checkpoint. The
+> Current contributor path through the M1.6 H5.1 live-ack checkpoint. The
 > normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
-> [D-2026-08-22-1 and D-2026-08-26-5](../spec/decisions.md). This guide
+> [D-2026-08-22-1 and D-2026-08-26-5/-6](../spec/decisions.md). This guide
 > explains how the pieces meet in the implementation; it does not define a
 > second Connector model.
 
@@ -15,6 +15,12 @@
 - A **Driver** is physical code that performs the external interaction.
 - A **Binding** proves, before the VM and journal exist, which Driver object
   serves each active Connector Node.
+
+An inbound binding may reserve every passive listener of its family so a
+partial bind cannot expose a half-live service. This is fail-fast host
+provisioning, not causal execution: it cannot acknowledge a request, mint a
+fact, or perform an outbound effect. Any arrival in the short pre-Worker gap
+remains pending under the Driver's ordinary finite capacities.
 
 No Rust crate name, Cargo feature, library path, Host, Worker or concrete
 Driver version enters the semantic plan. The meeting key is the canonical
@@ -90,8 +96,10 @@ Session    : one open ──▶ messages in both directions* ──▶ one typed
 H1 makes all three exchange shapes explicit and lands the generic Session
 fold plus two-phase accepted/pending/rejected admission. H5 completes the
 generic inbound Call half with its source-instance opening and close-once
-terminal transaction before any live server listener is claimed. Neither
-adds `DuplexConnectorDriver` or makes the VM aware of WebSocket.
+terminal transaction. H5.1's live HttpServer then retains each H1/H2 request
+and its byte permits until that same admission decision, and queues the fixed
+ack terminal through the bounded fact lane. Neither adds
+`DuplexConnectorDriver` or makes the VM aware of WebSocket.
 
 ## The hosted network seam
 
@@ -118,10 +126,13 @@ interface; each bound engine owns its current-thread runtime:
 The control lane is separate so saturation by calls/messages cannot starve a
 cancel. Queue slots and bytes are both finite. Work bytes remain charged while
 queued and while the runtime owns the work; fact bytes remain charged until
-the synchronous side drains them. Protocol receive windows must not exceed the
-same per-engine physical budget. Dropping the synchronous handle cancels and
-joins its pump. These rules apply equally to inbound and outbound Drivers; they
-do not change the two semantic roles.
+the synchronous side drains them. An inbound Driver that retains a proposal
+after that drain must move the reservation into the retained proposal, as
+HttpServer does, so a pending causal admission cannot make memory appear free.
+Protocol receive windows must not exceed the same per-engine physical budget.
+Dropping the synchronous handle cancels and joins its pump. These rules apply
+equally to inbound and outbound Drivers; they do not change the two semantic
+roles.
 
 For Call Drivers, finite outbound pressure is expressed by the closed
 `CallStart::Pending` verdict. The already-journaled intent stays open, no
@@ -145,6 +156,15 @@ shape. Request/response bodies and headers are finite, and the selected wire
 version appears only in `meta.ext.http_version`. The flat family module
 `connectors::http_client` owns semantic request binding; the private
 `connectors::network::http_client` owns sockets and protocol engines.
+
+H5.1 is the first live inbound consumer. The flat
+`connectors::http_server` module resolves the complete ack-mode listener and
+route family before a socket opens; private `network::http_server` owns Hyper,
+Rustls, connection/stream permits and byte reservations. HTTP/1.1 and HTTP/2
+both retain the request until the VM answers the same proposal. Only an
+accepted-after-commit decision permits 202, and the fixed terminal observation
+returns through the bounded fact lane rather than a detached task. HTTP/3 and
+graph-driven `respond` remain separate H5 gates.
 
 H4.1 makes the header boundary contributor-facing and typed. A family sheet
 declares well-known request fields in the sparse `headers` struct and leaves

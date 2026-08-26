@@ -82,7 +82,7 @@ impl Error for EngineStartError {}
 #[derive(Debug)]
 pub(super) struct Budgeted<T> {
     value: T,
-    _permit: OwnedSemaphorePermit,
+    _permits: Vec<OwnedSemaphorePermit>,
 }
 
 impl<T> Budgeted<T> {
@@ -93,6 +93,30 @@ impl<T> Budgeted<T> {
     pub(super) fn into_inner(self) -> T {
         self.value
     }
+}
+
+/// Byte permits acquired before an inbound protocol copies payload bytes.
+///
+/// A server cannot first allocate a complete request and only then discover
+/// that the shared pump budget is exhausted. Reservations therefore grow one
+/// observed chunk at a time and move into the event lane on success.
+#[derive(Debug, Default)]
+pub(super) struct EventReservation {
+    permits: Vec<OwnedSemaphorePermit>,
+}
+
+impl EventReservation {
+    pub(super) fn append(&mut self, mut other: Self) {
+        self.permits.append(&mut other.permits);
+    }
+}
+
+/// A byte reservation could not be made without exceeding the physical pump
+/// boundary or after shutdown.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ReserveError {
+    Oversized { bytes: usize, limit: usize },
+    Stopped,
 }
 
 /// One item selected by the async side of the pump.
@@ -173,12 +197,15 @@ impl<E> Clone for EventSender<E> {
 }
 
 impl<E> EventSender<E> {
-    pub(super) async fn emit(&mut self, event: E, bytes: usize) -> Result<(), EmitError<E>> {
+    /// Reserves bytes before an inbound protocol copies them into an event.
+    pub(super) async fn reserve(&mut self, bytes: usize) -> Result<EventReservation, ReserveError> {
+        if bytes == 0 {
+            return Ok(EventReservation::default());
+        }
         let permits = match u32::try_from(bytes) {
             Ok(permits) if permits <= self.max_buffered_bytes => permits,
             _ => {
-                return Err(EmitError::Oversized {
-                    value: event,
+                return Err(ReserveError::Oversized {
                     bytes,
                     limit: self.max_buffered_bytes as usize,
                 });
@@ -188,16 +215,42 @@ impl<E> EventSender<E> {
         let permit = tokio::select! {
             changed = self.shutdown.changed() => {
                 let _ = changed;
-                return Err(EmitError::Stopped(event));
+                return Err(ReserveError::Stopped);
             }
             acquired = budget.acquire_many_owned(permits) => match acquired {
                 Ok(permit) => permit,
-                Err(_) => return Err(EmitError::Stopped(event)),
+                Err(_) => return Err(ReserveError::Stopped),
             }
         };
+        Ok(EventReservation {
+            permits: vec![permit],
+        })
+    }
+
+    pub(super) async fn emit(&mut self, event: E, bytes: usize) -> Result<(), EmitError<E>> {
+        let reservation = match self.reserve(bytes).await {
+            Ok(reservation) => reservation,
+            Err(ReserveError::Oversized { bytes, limit }) => {
+                return Err(EmitError::Oversized {
+                    value: event,
+                    bytes,
+                    limit,
+                });
+            }
+            Err(ReserveError::Stopped) => return Err(EmitError::Stopped(event)),
+        };
+        self.emit_reserved(event, reservation).await
+    }
+
+    /// Moves an already charged inbound value onto the finite event lane.
+    pub(super) async fn emit_reserved(
+        &mut self,
+        event: E,
+        reservation: EventReservation,
+    ) -> Result<(), EmitError<E>> {
         let buffered = Budgeted {
             value: event,
-            _permit: permit,
+            _permits: reservation.permits,
         };
         match self.events.send(buffered).await {
             Ok(()) => Ok(()),
@@ -373,7 +426,7 @@ where
         };
         let buffered = Budgeted {
             value,
-            _permit: permit,
+            _permits: vec![permit],
         };
         work.try_send(buffered).map_err(|error| match error {
             mpsc::error::TrySendError::Full(item) => SubmitError::Full(item.value),
@@ -623,6 +676,53 @@ mod tests {
         assert_eq!(wait_for_event(&mut engine), "second");
         let drained = engine.drain_events(1);
         assert!(drained.events.is_empty());
+    }
+
+    #[test]
+    fn inbound_bytes_are_charged_before_copy_and_until_event_drain() {
+        let reserved = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&reserved);
+        let mut engine = HostedNetworkEngine::<&'static str, _, _>::start(
+            "rastok-network-reserved-intake",
+            limits(),
+            move |mut runtime| async move {
+                let mut events = runtime.event_sender();
+                let reservation = events.reserve(8).await.expect("the request fits");
+                observed.store(true, Ordering::SeqCst);
+                assert_eq!(runtime.recv_control().await, Some(Control::Release));
+                events
+                    .emit_reserved("first", reservation)
+                    .await
+                    .expect("the reservation moves into the event");
+                let reservation = events
+                    .reserve(8)
+                    .await
+                    .expect("draining the first event releases its bytes");
+                events
+                    .emit_reserved("second", reservation)
+                    .await
+                    .expect("the second reserved event fits");
+            },
+        )
+        .expect("the reservation pump starts");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !reserved.load(Ordering::SeqCst) {
+            assert!(
+                Instant::now() < deadline,
+                "the network side did not reserve its intake"
+            );
+            std::thread::yield_now();
+        }
+        assert!(matches!(
+            engine.try_submit("would-copy", 1),
+            Err(SubmitError::ByteBudget("would-copy"))
+        ));
+        engine
+            .try_control(Control::Release)
+            .expect("the control lane remains independent");
+        assert_eq!(wait_for_event(&mut engine), "first");
+        assert_eq!(wait_for_event(&mut engine), "second");
     }
 
     #[test]

@@ -17,8 +17,9 @@
 > bounded hosted-engine seam, H4 executes HttpClient through the ordinary
 > Call lifecycle over H1/H2/H3, and H4.1 types its schema/header boundary
 > without changing that lifecycle. D-2026-08-26-5 makes the generic inbound
-> Call lifecycle executable; live server wire execution and Session execution
-> remain gated by the rest of H5–H6.
+> Call lifecycle executable; H5.1 binds ack-mode HTTP/1.1–2 to it with bounded
+> listener/stream/body pressure. HTTP/3 server, respond-mode retention and
+> Session execution remain gated by the rest of H5–H6.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -456,8 +457,11 @@ fence.
 The obligation participates in stability, finite capacity and instance
 Closing exactly like other admitted work. Closing cannot reach `l:stop` while
 an inbound Call remains unresolved. The generic seam deliberately provides no
-hidden grace period: a live HttpServer Driver is not admitted until H5 adds
-its explicit bounded response/cancellation policy.
+hidden grace period. H5.1's live `ack` Driver retains no graph response
+obligation: after admission it queues the fixed terminal acknowledgement
+through the same bounded lane. A proposal that cannot yet commit retains its
+transport and byte permits outside the causal fold. `respond` remains refused
+until H5 adds its explicit bounded response/cancellation policy.
 
 
 ## 7. Join abandonment — `JoinExpired`

@@ -3,8 +3,9 @@ use crate::boundary::{
     OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::connectors::http_client::{
-    HttpClientPlanBinding, HttpClientRequestBindings, HttpRequest, HttpVersion, decode_request,
+    HttpClientPlanBinding, HttpClientRequestBindings, HttpRequest, decode_request,
 };
+use crate::connectors::http_shared::{HttpVersion, decode_body};
 use crate::connectors::network::pump::{
     EngineInput, EngineLimits, HostedNetworkEngine, NetworkRuntime, SubmitError,
 };
@@ -667,25 +668,6 @@ fn completion_for(result: CallResult, request: &HttpRequest) -> Option<(Completi
                 observed_bytes,
             ))
         }
-    }
-}
-
-fn decode_body(codec: &str, body: Vec<u8>) -> Option<Data> {
-    match codec {
-        "bytes" => Some(Data::materialized(Value::Bytes(body))),
-        "text" => String::from_utf8(body)
-            .ok()
-            .map(Value::Text)
-            .map(Data::materialized),
-        "json" => {
-            let text = String::from_utf8(body).ok()?;
-            let (value, used) = rastok_core::json::parse_value(&text).ok()?;
-            text.get(used..)?
-                .chars()
-                .all(|character| character.is_ascii_whitespace())
-                .then_some(Data::materialized(value))
-        }
-        _ => None,
     }
 }
 

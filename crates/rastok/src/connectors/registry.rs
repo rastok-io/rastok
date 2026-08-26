@@ -43,14 +43,18 @@ pub trait ConnectorDriverFactory {
     fn roles(&self) -> ConnectorRoles;
 
     /// Binds all selected plan Nodes of this contract into one implementation
-    /// object. C2's global binder is the sole caller.
+    /// object. C2's global binder is the sole caller. Binding may reserve
+    /// passive host resources whose availability must be proved atomically
+    /// for the family (for example, all listener sockets of an inbound
+    /// server). It must not acknowledge input, mint causal facts, or perform
+    /// an outbound effect; those actions remain behind the bound role views.
     ///
     /// # Errors
     ///
     /// Returns a factory-specific refusal before a VM or journal exists.
-    /// Binding may validate plan facts and allocate local state, but it must
-    /// not observe or mutate the external world or launch Driver work. Those
-    /// effects begin only through the bound role methods.
+    /// Binding may validate plan facts, allocate local state, and fail while
+    /// reserving passive host resources. A reservation must remain bounded
+    /// and externally unacknowledged until the runtime admits its input.
     fn bind<'plan>(
         &self,
         plan: &'plan ValidatedExecutionPlan,

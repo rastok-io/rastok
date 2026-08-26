@@ -16,8 +16,9 @@
 > `WebSocketServer` exact H2 sheets from source through validated plan and
 > Lab binding. H3 selects their private hosted-engine seam and H4 executes the
 > HttpClient sheet over H1/H2/H3. Server and Session Drivers remain gated by
-> H5–H6; `HttpServer(mode = respond)`
-> is a named H5 deferral rather than a nearby executable behavior.
+> H5.1 executes `HttpServer(mode = ack)` over hosted HTTP/1.1–2. HTTP/3
+> server binding and H6's Session Drivers remain gated; `HttpServer(mode =
+> respond)` is a named H5 deferral rather than a nearby executable behavior.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -1154,7 +1155,7 @@ does not claim implementation or release status.
 
 | DSL node / concept | Role | Spec status / next step |
 |---|---|---|
-| `HttpServer` | Connector node | exact H2 inbound-Call sheet; `ack` admitted, `respond` deferred to H5 |
+| `HttpServer` | Connector node | exact inbound-Call sheet; H5.1 executes `ack` over HTTP/1.1–2, while HTTP/3 and `respond` remain H5 gates |
 | `HttpClient` | Connector node | exact H2 outbound-Call sheet; live HTTP versions execute at H4 |
 | `Process` | Connector node | specified in the initial stdlib catalog ; codec/protocol matrix must remain narrow |
 | `File` | Connector node | executable C3 sheet: explicit one-file `read` / atomic `replace`; `watch` and directory operations are named deferrals |
@@ -1181,7 +1182,7 @@ does not claim implementation or release status.
 | `WebSocketServer` | Connector node | exact H2 both-role Session sheet; accepted duplex network execution at H6 |
 | `WebSocketClient` | Connector node | exact H2 both-role Session sheet; opened duplex network execution at H6 |
 | `Tcp` | Connector node | planned |
-| HTTP/1.1, HTTP/2, HTTP/3 | Binding options, not nodes | H2 sheet vocabulary; HttpClient negotiation executes physically at H4, server/session bindings at H5–H6 |
+| HTTP/1.1, HTTP/2, HTTP/3 | Binding options, not nodes | H2 sheet vocabulary; HttpClient executes all three at H4, HttpServer `ack` executes H1–2 at H5.1, and the server-H3/session remainder stays in H5–H6 |
 
 Rule for DSL evolution : do not add a new node name to an `.rkg` example
 without adding it here and marking whether it is specified, design intent, or

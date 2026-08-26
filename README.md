@@ -84,8 +84,12 @@ typed struct, extensions live in `custom_headers`, and response protocol facts
 are projected into `meta.ext`. H5 now also has its generic inbound Call seam:
 acceptance follows one bounded root/source-instance commit, and one typed
 `l:reply` transaction closes the retained request without inventing an
-outbound call. H5–H6 still own the live server and WebSocket Drivers and
-separately prove Extended CONNECT.
+outbound call. H5.1 now binds that seam to a real bounded Hyper listener:
+HTTP/1.1 and HTTP/2 `ack` requests retain their byte permits and withhold 202
+until causal admission commits. HTTP/3 server binding, graph-driven
+`respond`, bounded request deadlines, independent server interop and all
+WebSocket Drivers remain H5–H6 work; Extended CONNECT is still a separate
+proof.
 
 The standalone runner links the Process Driver by default and also links the
 HttpClient Driver when either hosted HTTP feature is selected. Pass

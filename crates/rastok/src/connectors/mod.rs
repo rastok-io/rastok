@@ -7,6 +7,8 @@
 mod file;
 mod http_client;
 mod http_server;
+#[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
+mod http_shared;
 mod manifest;
 #[cfg(any(
     feature = "hosted-http12",
@@ -23,6 +25,8 @@ mod websocket_server;
 pub use file::{File, FileBindError, FileFactory, FileSettingsError};
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
 pub use http_client::{HttpClientConfig, HttpClientFactory};
+#[cfg(feature = "hosted-http12")]
+pub use http_server::{HttpServerConfig, HttpServerFactory};
 pub use manifest::{DriverManifest, DriverManifestEntry, DriverManifestError};
 #[cfg(test)]
 pub(crate) use process::ProcessRequestBindings;

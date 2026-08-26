@@ -7,6 +7,26 @@
 > An erratum is not a license to improvise — until the fix lands, the
 > designated home is the contract.
 
+## E-2026-08-26-1 — pre-admission HTTP refusals cannot be Call exits
+
+- **Where:** [stdlib.md §3.1](stdlib.md) publishes `MalformedRequest`,
+  `AuthFailed`, and `Overloaded` in `HttpServerExit`, while
+  [delivery-semantics.md](delivery-semantics.md) permits an `l:reply` only
+  after an inbound request has committed a root and an `InboundCallRef`.
+- **Contradiction:** malformed framing, failed authentication, body refusal,
+  and listener pressure can reject a request before a typed proposal exists.
+  Such a refusal has no Call to close and therefore cannot truthfully emit
+  any `HttpServerExit`. Minting a fake root would corrupt provenance merely
+  to make the published cases reachable.
+- **Interim behavior (H5.1):** the live HTTP/1.1-2 `ack` listener returns the
+  portable HTTP refusal directly and commits no causal fact. Only an admitted
+  request may emit `Completed` and close through `l:reply`.
+- **Resolution direction:** the final H5 contract pass removes or reclassifies
+  every pre-admission case, retaining only terminal observations of admitted
+  Calls in `HttpServerExit`. D-2026-08-26-6 records the exposed debt.
+- **Found by:** implementation of the first live HttpServer admission seam,
+  2026-08-26.
+
 ## E-2026-08-07-1 — Tag 3 was reused for the CEL uint domain — RESOLVED
 
 Found by the 2026-08-07 adversarial review, with an executable

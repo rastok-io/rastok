@@ -160,10 +160,13 @@ The repository opens publicly with this milestone (15 October 2026).
   backpressure and the generic Call conformance battery. H5's generic inbound
   Call seam is now landed: bounded commit-before-accept opens the Call on its
   exact source instance, and one typed `l:reply` transaction closes it without
-  an OUTBOUND record. Listener I/O, `ack`/`respond` policy and all-version
-  interop remain open; H5-H6 still own the live HttpServer, WebSocket Drivers
-  and Codex gateway. H3's successful HTTP/1.1 Upgrade is explicitly not an
-  Extended CONNECT claim.
+  an OUTBOUND record. H5.1 now executes `ack` through a live bounded Hyper
+  HTTP/1.1–2 listener: body memory remains charged through admission, mailbox
+  pressure withholds 202, and both versions close the same Call shape. H5
+  still owns HTTP/3, `respond`, bounded request deadlines, race/interop
+  closure and runner polling; H6 owns the WebSocket Drivers and Codex gateway.
+  H3's successful HTTP/1.1 Upgrade is explicitly not an Extended CONNECT
+  claim.
   H4.1 has now landed the schema-facing HTTP contract: canonical open
   `media_type`, typed standard request headers plus an open custom-header map,
   typed response metadata, strict OpenAPI 3.0/3.1 projection, and the

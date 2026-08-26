@@ -26,8 +26,9 @@
 > Connector semantic hashes and every package to v11, and leaves pre-session
 > causal records byte-identical because the new session keys are omitted.
 > H5 first adds source Connector key 27, then the generic inbound Call fold
-> under D-2026-08-26-5 with INBOUND key 28 and TRANSACTION key 52. All three
-> keys are omitted from older facts, so no existing causal record moves.
+> under D-2026-08-26-5 with INBOUND key 28 and TRANSACTION key 52. H5.1 binds
+> live H1–2 ack traffic without allocating another form. All three keys are
+> omitted from older facts, so no existing causal record moves.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -229,6 +230,13 @@ Connector-origin facts, so every existing package, semantic hash and causal
 trace remains byte-identical; no golden is re-blessed. The new fake-HttpServer
 proof pins keys 28/52 directly and keeps the connector-free gauge as the scope
 witness.
+
+**M1.6 H5.1 live-ack checkpoint (2026-08-26).**
+D-2026-08-26-6 maps real HTTP/1.1 and HTTP/2 requests onto the already
+allocated source/Call/terminal forms. Listener addresses, negotiated version,
+Hyper/Rustls state and physical capacity are observations or deployment
+material, never plan or causal identity. No package, semantic hash, existing
+trace, root recipe or golden moves.
 
 ## 2. `graph_version` and the manifest
 

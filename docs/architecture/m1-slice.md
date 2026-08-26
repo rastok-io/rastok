@@ -62,8 +62,11 @@ projection and the deterministic project resolver now share the one Rastok
 type algebra. H5's generic inbound Call seam is landed under
 D-2026-08-26-4/-5: source-aware root admission and one close-once `l:reply`
 transaction are executable without an outbound record or moving any existing
-identity. The remaining [ordered backlog](m1.6-http-websocket-backlog.md)
-continues with H5's live HttpServer Driver.
+identity. H5.1 is landed under D-2026-08-26-6: a real bounded Hyper
+HTTP/1.1–2 listener retains request bytes through causal admission, withholds
+202 under pressure and closes the same Call exactly once. The remaining
+[ordered backlog](m1.6-http-websocket-backlog.md) continues with server
+HTTP/3, `respond`, deadline/race/interop closure and H6.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now

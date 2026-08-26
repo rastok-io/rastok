@@ -109,7 +109,10 @@ open. The server and session factories are effectless role/exchange twins;
 scenario injection still enters through the production VM admission path.
 H3's private hosted-engine adoption changes none of these simulation rules.
 H4 proves the real HttpClient against the same Call battery and request binder;
-HTTP server and WebSocket wire conformance remain H5–H6 evidence.
+H5.1 proves real HTTP/1.1–2 server `ack` against the same two-phase inbound
+Call fold. The Lab still replaces the listener rather than opening a fake
+socket. HTTP/3 server, respond races and WebSocket wire conformance remain
+H5–H6 evidence.
 
 Two-mode equivalence, stated journal-relative : *same world-half in →
 byte-identical **causal cores** out*
