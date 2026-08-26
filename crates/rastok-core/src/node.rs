@@ -260,6 +260,9 @@ pub enum Lifecycle {
     /// Durable request that enters bounded Closing. This is an internal
     /// runtime trigger, never a source handler activation.
     Closing,
+    /// Terminal observation of an admitted inbound Call. This is an internal
+    /// Connector transaction trigger, never a source handler activation.
+    Reply,
     /// Saga compensation transaction.
     Compensate,
     /// Loop continuation transaction.
@@ -278,6 +281,7 @@ impl fmt::Display for Lifecycle {
             Self::Start => "start",
             Self::Stop => "stop",
             Self::Closing => "closing",
+            Self::Reply => "reply",
             Self::Compensate => "compensate",
             Self::Next => "next",
             Self::Timeout => "timeout",

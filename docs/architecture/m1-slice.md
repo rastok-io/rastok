@@ -59,9 +59,11 @@ or causal identity. H4.1 is landed under D-2026-08-26-3: categorical package
 v12 adds the open `media_type` logical scalar and constructor; typed standard
 and custom request headers, response metadata projection, strict OpenAPI
 projection and the deterministic project resolver now share the one Rastok
-type algebra. The remaining
-[ordered backlog](m1.6-http-websocket-backlog.md) starts at H5's live
-HttpServer Driver.
+type algebra. H5's generic inbound Call seam is landed under
+D-2026-08-26-4/-5: source-aware root admission and one close-once `l:reply`
+transaction are executable without an outbound record or moving any existing
+identity. The remaining [ordered backlog](m1.6-http-websocket-backlog.md)
+continues with H5's live HttpServer Driver.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now

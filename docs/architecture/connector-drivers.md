@@ -3,8 +3,9 @@
 > Current contributor path through the first M1.6 H5 checkpoint. The
 > normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
-> [D-2026-08-22-1](../spec/decisions.md). This guide explains how the pieces
-> meet in the implementation; it does not define a second Connector model.
+> [D-2026-08-22-1 and D-2026-08-26-5](../spec/decisions.md). This guide
+> explains how the pieces meet in the implementation; it does not define a
+> second Connector model.
 
 ## The four objects
 
@@ -57,6 +58,14 @@ Registry binding proves that path belongs to the family; the VM proves the
 output row. An App-boundary injection remains a separate explicit API
 category, never a provenance-string heuristic.
 
+For a Call-shaped inbound contract, the same bound object also exposes
+`InboundCallConnectorDriver`. The accepting INBOUND fact returns an
+`InboundCallRef` only after it has committed the root and exact source
+instance. The terminal view later reports one correlated `Completion`; the VM
+validates it and commits one `l:reply` Connector transaction with exactly one
+final `exit`. It is not an outbound Call, and the Driver never manufactures a
+mailbox delivery or writes a causal record itself.
+
 `OutboundConnectorDriver` exposes exactly one exchange-specific outbound view:
 `CallConnectorDriver` prepares/starts calls and reports correlated typed
 completions; `SessionConnectorDriver` prepares/starts an opening and its
@@ -78,11 +87,11 @@ Call       : one admitted request ──▶ ordered outputs ──▶ one typed 
 Session    : one open ──▶ messages in both directions* ──▶ one typed exit
 ```
 
-H1 makes all three exchange shapes explicit and executable at the generic
-Driver/journal boundary. It replaces the pull-only inbound proposal with a
-two-phase accepted/pending/rejected protocol before any live network Driver is
-claimed. It does not add `DuplexConnectorDriver` or make the VM aware of
-WebSocket.
+H1 makes all three exchange shapes explicit and lands the generic Session
+fold plus two-phase accepted/pending/rejected admission. H5 completes the
+generic inbound Call half with its source-instance opening and close-once
+terminal transaction before any live server listener is claimed. Neither
+adds `DuplexConnectorDriver` or makes the VM aware of WebSocket.
 
 ## The hosted network seam
 
@@ -199,13 +208,14 @@ socket handles, Hyper/quiche/Tungstenite values and TLS contexts remain below
 that module. The Driver-facing side is synchronous and exchanges owned Rastok
 facts because queued or asynchronous boundaries must own their data.
 
-The Driver answers, proposes a session fact, or stays silent. The runtime owns
-envelope birth, backpressure, journal ordering, timeout, close-once, bounded
-Closing and typed port validation. An HTTP response, successful upgrade or
-explicit application acknowledgement cannot precede the runtime's acceptance
-callback. Transport ACK/window progress is only pacing and stays within the
-Driver's bounded intake; WebSocket has no built-in per-message application
-acknowledgement.
+The Driver answers an outbound Call, proposes an inbound fact, reports an
+inbound Call terminal or Session observation, or stays silent. The runtime
+owns envelope birth, backpressure, journal ordering, timeout, close-once,
+bounded Closing and typed port validation. An HTTP response, successful
+upgrade or explicit application acknowledgement cannot precede the runtime's
+acceptance callback. Transport ACK/window progress is only pacing and stays
+within the Driver's bounded intake; WebSocket has no built-in per-message
+application acknowledgement.
 
 ### 4. Register one factory
 

@@ -85,6 +85,36 @@ impl fmt::Display for CallRef {
     }
 }
 
+/// Placement-neutral identity of one admitted inbound Call.
+///
+/// Unlike [`CallRef`], this is not a digest of an outbound request intent. An
+/// inbound Call is born as a root envelope, so its root id is already the
+/// unique causal reference. The newtype prevents the two directions from
+/// being crossed accidentally while keeping the recipe free of a redundant
+/// hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InboundCallRef(envelope::Id);
+
+impl InboundCallRef {
+    /// Names the Call opened by one committed root envelope.
+    #[must_use]
+    pub const fn from_root(root: envelope::Id) -> Self {
+        Self(root)
+    }
+
+    /// The root identity carried by canonical causal encodings.
+    #[must_use]
+    pub const fn id(self) -> envelope::Id {
+        self.0
+    }
+}
+
+impl fmt::Display for InboundCallRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 /// Placement-neutral identity of one committed Connector session.
 ///
 /// The value is derived from the opening fact by the journal. It never wraps
@@ -1430,6 +1460,8 @@ pub enum DriverRouteError {
     UnavailableSession(node::Path),
     /// An inbound role view proven at bind time disappeared later.
     UnavailableInbound(crate::connector::ConnectorId),
+    /// An inbound Call view proven at bind time disappeared later.
+    UnavailableInboundCall(crate::connector::ConnectorId),
     /// A caller attempted to decide a proposal other than the one retained
     /// by that Connector family.
     UnknownInboundProposal {
@@ -1462,6 +1494,18 @@ pub enum DriverRouteError {
         /// Family that answered it.
         actual: crate::connector::ConnectorId,
     },
+    /// One Driver reported a terminal fact for an inbound Call admitted by
+    /// another Connector family.
+    CrossFamilyInboundCall {
+        /// Correlated inbound Call.
+        call_ref: InboundCallRef,
+        /// Family that admitted it.
+        expected: crate::connector::ConnectorId,
+        /// Family that reported the observation.
+        actual: crate::connector::ConnectorId,
+    },
+    /// A Driver reported a terminal fact for no admitted inbound Call.
+    UncorrelatedInboundCall(InboundCallRef),
     /// One Driver reported an event for a session owned by another family.
     CrossFamilySession {
         /// Correlated logical session.
@@ -1500,6 +1544,10 @@ impl fmt::Display for DriverRouteError {
                 formatter,
                 "the inbound Driver role bound for `{id}` is no longer available"
             ),
+            Self::UnavailableInboundCall(id) => write!(
+                formatter,
+                "the inbound Call Driver bound for `{id}` is no longer available"
+            ),
             Self::UnknownInboundProposal {
                 connector,
                 reference,
@@ -1527,6 +1575,17 @@ impl fmt::Display for DriverRouteError {
                 formatter,
                 "Driver `{actual}` answered call {call_ref} started by `{expected}`"
             ),
+            Self::CrossFamilyInboundCall {
+                call_ref,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "Driver `{actual}` terminated inbound call {call_ref} admitted by `{expected}`"
+            ),
+            Self::UncorrelatedInboundCall(call_ref) => {
+                write!(formatter, "no bound Driver owns inbound call {call_ref}")
+            }
             Self::CrossFamilySession {
                 session,
                 expected,
@@ -1621,7 +1680,7 @@ pub enum InboundSession {
 ///
 /// This value is deliberately non-causal: the Driver retains the proposal
 /// until the runtime decides it, while the accepting journal transaction
-/// mints the envelope and any [`SessionRef`].
+/// mints the envelope and any Call or Session reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InboundProposalRef(u64);
 
@@ -1658,8 +1717,18 @@ pub struct InboundProposal {
 pub struct InboundAcceptance {
     /// Id of the committed root envelope.
     pub envelope: envelope::Id,
-    /// Newly opened or existing session, when this was a session fact.
-    pub session: Option<SessionRef>,
+    /// Exchange-specific reference created by the accepting fact. Event
+    /// ingress has none; Call and Session are mutually exclusive.
+    pub exchange: Option<InboundExchangeRef>,
+}
+
+/// Exchange-specific identity returned by a committed inbound admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundExchangeRef {
+    /// The root opened one bounded Call obligation.
+    Call(InboundCallRef),
+    /// The root opened or addressed one logical Session.
+    Session(SessionRef),
 }
 
 /// Portable contract-level reasons why a proposed fact was not accepted.
@@ -1825,6 +1894,34 @@ pub trait InboundConnectorDriver {
     /// Releases one retained proposal after a committed acceptance or a
     /// contract rejection. Pending admission deliberately makes no callback.
     fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision);
+
+    /// Inbound Call completion view, when this bound contract is Call-shaped.
+    /// Event and Session Drivers leave the default absent.
+    fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
+        None
+    }
+}
+
+/// One terminal observation for an admitted inbound Call.
+///
+/// The Driver never commits this fact directly. The runtime correlates it,
+/// validates the typed completion and commits the Connector transaction; a
+/// duplicate or late observation cannot create a second `exit`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InboundCallEvent {
+    /// Admitted root Call this observation terminates.
+    pub call_ref: InboundCallRef,
+    /// Ordinary ordered outputs with exactly one terminal `exit` last.
+    pub completion: Completion,
+}
+
+/// Terminal-observation half of an inbound Call Driver.
+///
+/// Admission itself remains on [`InboundConnectorDriver`]. Keeping this as a
+/// categorical view makes an Event source unable to manufacture Call exits.
+pub trait InboundCallConnectorDriver {
+    /// Terminal facts observed since the previous bounded drain.
+    fn events(&mut self) -> Vec<InboundCallEvent>;
 }
 
 /// The outbound world role. Its exchange view is categorical: a bound object

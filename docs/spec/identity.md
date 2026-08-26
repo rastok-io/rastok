@@ -25,6 +25,9 @@
 > unchanged. M1.6 H1 adds the closed Event/Call/Session exchange tag, moves
 > Connector semantic hashes and every package to v11, and leaves pre-session
 > causal records byte-identical because the new session keys are omitted.
+> H5 first adds source Connector key 27, then the generic inbound Call fold
+> under D-2026-08-26-5 with INBOUND key 28 and TRANSACTION key 52. All three
+> keys are omitted from older facts, so no existing causal record moves.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -218,6 +221,15 @@ WebSocketClient `d4f92e15…`, and WebSocketServer `d36bcbf4…`. Compiler probe
 1 018 B, gauge 313 B — plus the spike's binary echo copy change only their
 v11→v12 envelope version and checksum; no stored causal trace moves.
 
+**M1.6 H5 generic inbound-Call checkpoint (2026-08-26).**
+D-2026-08-26-4/-5 allocate optional INBOUND source key 27, inbound-Call key
+28, ordinary TRANSACTION terminal key 52, and internal lifecycle tag 9
+(`reply`). No source handler may carry that tag. The fields occur only for new
+Connector-origin facts, so every existing package, semantic hash and causal
+trace remains byte-identical; no golden is re-blessed. The new fake-HttpServer
+proof pins keys 28/52 directly and keeps the connector-free gauge as the scope
+witness.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -345,7 +357,7 @@ travels inside the sealed `instance_address` below. That is a journaled routing
 fact derived once at admission, not a general license to seal wall-clock or
 timer fields.
 
-**INBOUND** (kind 1 — an envelope entered) — keys `20–27` :
+**INBOUND** (kind 1 — an envelope entered) — keys `20–28` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -357,10 +369,11 @@ timer fields.
 | 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INBOUND record. |
 | 26 | session_ingress | array | present only for Session ingress: `[1, session_ref (bytes16)]` opens a session and `[2, session_ref (bytes16)]` admits one message into an already-open session. Omitted for Event and Call facts, preserving every pre-H1 record byte. |
 | 27 | source_connector_path | array | lexical UTF-8 path segments of the inbound Connector whose output introduced this root. Omitted exactly for an explicit App-boundary injection. Derived from the proposal's single `InboundEnvelopeProvenance` authority at acceptance; its presence and structural spelling are the replay-routing fact. |
+| 28 | inbound_call | array | present exactly when this Connector-origin root opens an inbound Call: `[inbound_call_ref (bytes16), source_instance_ref]`. The reference is the root id behind a direction-specific type; the instance is selected and reserved before this same INBOUND commit. Omitted for Event, Session and App-boundary facts. |
 
 **TRANSACTION** (kind 2 — one Node firing or one Graph-owner lifecycle fact;
 the commit packet of
-execution-model §1) — keys `30–39` and `48–50` :
+execution-model §1) — keys `30–39`, `48–50` and `52` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -377,6 +390,7 @@ execution-model §1) — keys `30–39` and `48–50` :
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
 | 49 | close_scope_ref | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
 | 50 | session_exit_ref | bytes(16) | present exactly on the Connector transaction that terminates a Session. That transaction emits exactly one conventional `exit`, last; its envelope projects the same reference as `meta.ext.session_id`. The fold refuses a second exit, an exit with an open write, or any later message/write. |
+| 52 | inbound_call_exit_ref | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INBOUND key 28. Its cause is the root request, consumed is empty, owner/instance equal the opening source, and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
 
 **OUTBOUND / Call** (kind 3 — one external call's WAL record ;
 delivery-semantics §4) — keys `40–47` :
@@ -406,7 +420,9 @@ delivery-semantics §4.5) — key `51` only. The value is one closed array form:
 Call and Session subforms are distinguishable without inspecting a contract:
 a Call record carries keys 40–47 and never key 51; a Session record carries
 key 51 and none of keys 40–47. An inbound Session terminal is represented by
-the ordinary Connector TRANSACTION key 50, never by a fourth record kind.
+the ordinary Connector TRANSACTION key 50. An inbound Call uses INBOUND key
+28 plus ordinary Connector TRANSACTION key 52 and **never** an OUTBOUND Call
+record. Neither exchange adds a fourth record kind.
 
 Key 44's `status` is the internal state of the OUTBOUND WAL record, not a
 graph port and not a payload union. M1.3's conventional `exit` port therefore

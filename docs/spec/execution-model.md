@@ -16,8 +16,9 @@
 > H2 publishes their concrete sheets and Lab bindings, H3 selects the private
 > bounded hosted-engine seam, H4 executes HttpClient through the ordinary
 > Call lifecycle over H1/H2/H3, and H4.1 types its schema/header boundary
-> without changing that lifecycle. Server and Session execution remain gated by
-> H5–H6.
+> without changing that lifecycle. D-2026-08-26-5 makes the generic inbound
+> Call lifecycle executable; live server wire execution and Session execution
+> remain gated by the rest of H5–H6.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -442,6 +443,22 @@ Application-message acknowledgement, retry and reconnection remain graph
 protocol. A transport write alone never proves that the peer application
 processed a message.
 
+### 6.7 Inbound Call supervision (generic H5 fold)
+
+An accepted inbound Call is direct work of the exact source Connector
+instance. Its committed root opens the obligation; a Driver terminal fact can
+run only after that instance's lazy `l:start`, and it commits as `l:reply`
+with no consumed mailbox position. The transaction may publish ordinary typed
+outputs and must publish exactly one final `exit`. The root id is the Call
+reference and causal parent, while the source `InstanceRef` is the generation
+fence.
+
+The obligation participates in stability, finite capacity and instance
+Closing exactly like other admitted work. Closing cannot reach `l:stop` while
+an inbound Call remains unresolved. The generic seam deliberately provides no
+hidden grace period: a live HttpServer Driver is not admitted until H5 adds
+its explicit bounded response/cancellation policy.
+
 
 ## 7. Join abandonment — `JoinExpired`
 
@@ -587,15 +604,16 @@ select several instances and therefore requires explicit one-to-many routing.
 
 ## 10. Trigger vocabulary
 
-Two lifecycle triggers belong to the `l:` registry
+Three lifecycle triggers owned by this execution slice belong to the `l:` registry
 ([envelope.md](envelope.md) §1.1/§3.1):
 
 | Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
 |---|---|---|---|
 | Call-timeout expiry | `l:timeout` | the timed-out request envelope | the Connector node |
 | Join-buffer eviction | `l:evict` | the evicted envelope | the Operator node |
+| Inbound Call terminal | `l:reply` | the committed root request | the inbound Connector node |
 
-Both follow the aspect-carrier principle generalized : the supervision plane
+All follow the aspect-carrier principle generalized : the supervision plane
 never emits in its own name — emissions are attributed to the graph node they
 concern. The recipe keeps zero out-of-graph emitters.
 

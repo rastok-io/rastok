@@ -291,6 +291,7 @@ fn key_name(key: u64) -> String {
         25 => "routes",
         26 => "session_ingress",
         27 => "source_connector_path",
+        28 => "inbound_call",
         30 => "node_path",
         31 => "instance_ref",
         32 => "trigger",
@@ -313,6 +314,7 @@ fn key_name(key: u64) -> String {
         49 => "close_scope_ref",
         50 => "session_exit_ref",
         51 => "session_fact",
+        52 => "inbound_call_exit_ref",
         _ => return format!("key {key}"),
     };
     format!("{name}({key})")
@@ -354,18 +356,31 @@ fn record_tree(record: &Record) -> Cbor {
                     ),
                 );
             }
-            if let Some(session) = inbound.session.as_deref().copied() {
-                let (kind, reference) = match session {
-                    SessionIngressRecord::Open(reference) => (1, reference),
-                    SessionIngressRecord::Message(reference) => (2, reference),
-                };
-                pairs.insert(
-                    26,
-                    Cbor::Array(vec![
-                        Cbor::Uint(kind),
-                        Cbor::Bytes(reference.id().as_bytes().to_vec()),
-                    ]),
-                );
+            if let Some(exchange) = inbound.exchange.as_deref() {
+                match exchange {
+                    crate::journal::InboundExchangeRecord::Call(call) => {
+                        pairs.insert(
+                            28,
+                            Cbor::Array(vec![
+                                Cbor::Bytes(call.reference.id().as_bytes().to_vec()),
+                                call.instance.tree(),
+                            ]),
+                        );
+                    }
+                    crate::journal::InboundExchangeRecord::Session(session) => {
+                        let (kind, reference) = match session {
+                            SessionIngressRecord::Open(reference) => (1, reference),
+                            SessionIngressRecord::Message(reference) => (2, reference),
+                        };
+                        pairs.insert(
+                            26,
+                            Cbor::Array(vec![
+                                Cbor::Uint(kind),
+                                Cbor::Bytes(reference.id().as_bytes().to_vec()),
+                            ]),
+                        );
+                    }
+                }
             }
             if let Some(connector) = &inbound.connector_path {
                 pairs.insert(
@@ -395,8 +410,14 @@ fn record_tree(record: &Record) -> Cbor {
             if let Some(scope) = &transaction.close_scope {
                 pairs.insert(49, scope.tree());
             }
-            if let Some(session) = transaction.session_exit {
-                pairs.insert(50, Cbor::Bytes(session.id().as_bytes().to_vec()));
+            match transaction.exchange_exit.as_deref() {
+                Some(crate::journal::InboundExchangeExitRecord::Session(session)) => {
+                    pairs.insert(50, Cbor::Bytes(session.id().as_bytes().to_vec()));
+                }
+                Some(crate::journal::InboundExchangeExitRecord::Call(call)) => {
+                    pairs.insert(52, Cbor::Bytes(call.id().as_bytes().to_vec()));
+                }
+                None => {}
             }
             if let Some(cause) = transaction.cause {
                 pairs.insert(39, Cbor::Bytes(cause.as_bytes().to_vec()));
@@ -684,7 +705,7 @@ mod tests {
                 Data::materialized(crate::value::Value::Null),
             ),
             routes: Vec::new(),
-            session: None,
+            exchange: None,
         });
 
         let Cbor::Map(tree) = record_tree(&record) else {

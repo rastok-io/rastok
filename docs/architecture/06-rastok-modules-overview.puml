@@ -253,6 +253,10 @@ package "stdlib — standard catalogue instances" as P_STD {
 package "boundary — contracts with the external world" as P_BND {
   interface InboundConnectorDriver <<trait>>
   InboundConnectorDriver : retains proposals until accepted-after-commit or rejected
+  interface InboundCallConnectorDriver <<trait>>
+  InboundCallConnectorDriver : reports one correlated terminal completion after admission
+  class InboundCallRef <<struct>>
+  InboundCallRef : committed request-root identity for one inbound Call
   interface OutboundConnectorDriver <<trait>>
   OutboundConnectorDriver : exposes exactly one Call or Session protocol view
   interface CallConnectorDriver <<trait>>
@@ -378,7 +382,7 @@ package "connectors — concrete external-effect Drivers" as P_CONN {
   class HttpClient <<struct>>
   HttpClient : typed request binding and live H1-H3 Call Driver
   class HttpServer <<struct>>
-  HttpServer : family binding; live Driver remains H5
+  HttpServer : generic inbound Call binding; live listener remains H5
   class WebSocketClient <<struct>>
   class WebSocketServer <<struct>>
   class WebSocketProtocol <<private>>
@@ -471,7 +475,7 @@ P_CONF ..> P_CONN : binds through DriverRegistry
 P_LAB ..> P_COMP : uses
 P_LAB ..> P_RT : drives the Vm
 P_LAB ..> P_CONN : registers mock factories
-P_LAB ..> P_BND : mocks Call; probes Event / Session
+P_LAB ..> P_BND : mocks outbound Call; probes inbound Event / Call / Session
 P_LAB ..> P_J : uses
 P_CLI ..> P_COMP : uses
 P_CLI ..> P_RT : uses

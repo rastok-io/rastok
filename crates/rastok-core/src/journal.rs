@@ -19,8 +19,9 @@
 //! [`identity.md`]: https://github.com/rastok/rastok/blob/main/docs/spec/identity.md
 
 use crate::boundary::{
-    CallRef, Completion, InboundEnvelopeProvenance, InboundSession, InboundSubmission, Intent,
-    SessionOpenIntent, SessionRef, SessionWriteIntent, SessionWriteRef, SubmissionSequence,
+    CallRef, Completion, InboundCallRef, InboundEnvelopeProvenance, InboundSession,
+    InboundSubmission, Intent, SessionOpenIntent, SessionRef, SessionWriteIntent, SessionWriteRef,
+    SubmissionSequence,
 };
 use crate::envelope::{Envelope, Id, Meta, MetaSys};
 use crate::identity::{InstanceAddress, InstanceRef};
@@ -242,7 +243,7 @@ pub enum Record {
 }
 
 /// An accepted inbound envelope and its record (`identity.md` §3,
-/// keys 20–27). The record autonomously reconstructs its root id from
+/// keys 20–28). The record autonomously reconstructs its root id from
 /// `(connector_path, replica, seq)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundRecord {
@@ -264,8 +265,40 @@ pub struct InboundRecord {
     /// Singleton owners are explicit because generation is never derivable
     /// from a route's static endpoint alone.
     pub routes: Vec<RouteTarget>,
-    /// Session opening/message fact, omitted for Event and Call ingress.
-    pub session: Option<Box<SessionIngressRecord>>,
+    /// Exchange-specific opening/message fact. Omitted for Event ingress;
+    /// boxed so the ordinary record does not pay for the larger Call payload.
+    pub exchange: Option<Box<InboundExchangeRecord>>,
+}
+
+/// Exchange-specific meaning of one committed Connector-origin root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InboundExchangeRecord {
+    /// One bounded inbound Call opened at the exact source instance.
+    Call(InboundCallIngressRecord),
+    /// One Session opening or message.
+    Session(SessionIngressRecord),
+}
+
+/// Causal opening of one inbound Call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundCallIngressRecord {
+    /// Root-derived Call reference.
+    pub reference: InboundCallRef,
+    /// Exact Connector generation that owns the request and its terminal exit.
+    pub instance: InstanceRef,
+}
+
+/// Exchange-specific terminal reference carried by one Connector transaction.
+///
+/// Call and Session termination are categorically exclusive. The extension is
+/// boxed because ordinary Operator and outbound-Call transactions carry
+/// neither; adding a rare exchange must not widen every retained record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundExchangeExitRecord {
+    /// Terminal transaction of one admitted inbound Call.
+    Call(InboundCallRef),
+    /// Terminal transaction of one inbound Session.
+    Session(SessionRef),
 }
 
 /// Resolved session meaning of one committed inbound fact.
@@ -311,7 +344,7 @@ pub struct Emission {
 }
 
 /// The atomic commit packet of one node firing (`identity.md` §3,
-/// keys 30–37): consumed input, state delta, and emissions commit
+/// keys 30–39, 48–50 and 52): consumed input, state delta, and emissions commit
 /// together or not at all. [`Journal::commit`] canonicalizes the
 /// sorted collections; emission order is text order and stays as
 /// given.
@@ -338,11 +371,11 @@ pub struct TransactionRecord {
     /// cursor. Port-triggered and call-completion transactions derive their
     /// cause from `consumed` and omit this field.
     pub cause: Option<crate::envelope::Id>,
-    /// The logical session terminated by this Connector transaction. Omitted
-    /// on every non-session firing. Kept beside the other optional 16-byte
-    /// causal reference so the 32-bit kernel does not pay two padding gaps.
-    /// The transaction's last emission must be the sole conventional `exit`.
-    pub session_exit: Option<SessionRef>,
+    /// Inbound exchange terminated by this Connector transaction. The rare
+    /// extension is boxed so its absence does not widen every retained
+    /// transaction. The transaction's last emission must be the sole
+    /// conventional `exit`.
+    pub exchange_exit: Option<Box<InboundExchangeExitRecord>>,
     /// The consumed input positions; canonically sorted at commit.
     pub consumed: Vec<ConsumedPosition>,
     /// Envelope ids contributing to a presence-completing join, in the
@@ -483,7 +516,7 @@ pub struct PreparedInbound {
     connector_path: Option<node::Path>,
     seq: u64,
     envelope: Envelope,
-    session: Option<SessionIngressRecord>,
+    exchange: Option<InboundExchangeRecord>,
 }
 
 impl PreparedInbound {
@@ -502,7 +535,27 @@ impl PreparedInbound {
     /// Resolved session fact, including the ref derived for an opening.
     #[must_use]
     pub const fn session(&self) -> Option<SessionIngressRecord> {
-        self.session
+        match &self.exchange {
+            Some(InboundExchangeRecord::Session(session)) => Some(*session),
+            Some(InboundExchangeRecord::Call(_)) | None => None,
+        }
+    }
+
+    /// Marks a Connector-origin prepared root as one bounded inbound Call.
+    /// The root id is the Call ref; `instance` is selected before commit.
+    ///
+    /// # Errors
+    ///
+    /// A boundary root, Session fact, or second Call marker is contradictory.
+    pub(crate) fn into_call(mut self, instance: InstanceRef) -> Result<Self, Error> {
+        if self.connector_path.is_none() || self.exchange.is_some() {
+            return Err(Error::CorruptInboundCall);
+        }
+        self.exchange = Some(InboundExchangeRecord::Call(InboundCallIngressRecord {
+            reference: InboundCallRef::from_root(self.envelope.meta().sys().id()),
+            instance,
+        }));
+        Ok(self)
     }
 }
 
@@ -580,6 +633,15 @@ pub enum Error {
     },
     /// A call ref matching no journaled call.
     UnknownCall,
+    /// An inbound Call marker contradicts its root or source instance.
+    CorruptInboundCall,
+    /// The same inbound Call root was opened more than once.
+    DuplicateInboundCall,
+    /// A transaction names no open inbound Call.
+    UnknownInboundCall,
+    /// An inbound Call terminal transaction omitted, repeated, or followed
+    /// its conventional `exit` emission.
+    InvalidInboundCallExit,
     /// An intent whose call ref is already journaled.
     DuplicateOpen,
     /// An intent whose call ref does not derive from its own
@@ -671,6 +733,16 @@ impl fmt::Display for Error {
                 instance.address().owner()
             ),
             Self::UnknownCall => f.write_str("no outbound record for this call"),
+            Self::CorruptInboundCall => {
+                f.write_str("the inbound Call marker contradicts its committed root or source")
+            }
+            Self::DuplicateInboundCall => {
+                f.write_str("the inbound Call is already present in the journal fold")
+            }
+            Self::UnknownInboundCall => f.write_str("no open inbound Call has this reference"),
+            Self::InvalidInboundCallExit => f.write_str(
+                "an inbound Call terminal transaction requires exactly one final `exit` emission",
+            ),
             Self::DuplicateOpen => f.write_str("this call is already journaled"),
             Self::CorruptIntent => {
                 f.write_str("the call ref does not derive from the intent's canonical fields")
@@ -872,6 +944,10 @@ pub trait Journal {
     /// order.
     fn open_calls(&self) -> Vec<Intent>;
 
+    /// Admitted inbound Calls whose terminal Connector transaction has not
+    /// committed, in canonical reference order.
+    fn open_inbound_calls(&self) -> Vec<InboundCallIngressRecord>;
+
     /// Live sessions in canonical reference order.
     fn live_sessions(&self) -> Vec<SessionRef>;
 
@@ -896,6 +972,16 @@ pub struct MemJournal {
     /// Replay-derived Session fold. It is an index over the three ordinary
     /// causal record kinds, never a fourth record stream.
     sessions: BTreeMap<SessionRef, SessionLifecycle>,
+    /// Replay-derived inbound Call fold. The opening INBOUND fact and terminal
+    /// TRANSACTION remain the only authorities.
+    inbound_calls: BTreeMap<InboundCallRef, InboundCallLifecycle>,
+}
+
+#[derive(Debug, Clone)]
+struct InboundCallLifecycle {
+    connector_path: node::Path,
+    instance: InstanceRef,
+    open: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -933,6 +1019,7 @@ impl MemJournal {
             instance_lifecycles: BTreeMap::new(),
             active_close_roots: BTreeSet::new(),
             sessions: BTreeMap::new(),
+            inbound_calls: BTreeMap::new(),
         }
     }
 
@@ -1038,7 +1125,13 @@ impl MemJournal {
 
     fn route_was_reserved(&self, target: &InstanceRef) -> bool {
         self.records.iter().any(|record| match record {
-            Record::Inbound(inbound) => inbound.routes.iter().any(|route| &route.target == target),
+            Record::Inbound(inbound) => {
+                inbound.routes.iter().any(|route| &route.target == target)
+                    || matches!(
+                        inbound.exchange.as_deref(),
+                        Some(InboundExchangeRecord::Call(call)) if &call.instance == target
+                    )
+            }
             Record::Transaction(transaction) => transaction
                 .routes
                 .iter()
@@ -1070,14 +1163,16 @@ impl MemJournal {
         };
         seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
         let id = ids::root_id(&submission.provenance, seq);
-        let resolved_session = match session {
+        let resolved_exchange = match session {
             None => None,
             Some(InboundSession::Open) => {
                 let reference = ids::inbound_session_ref(&submission.provenance, id);
                 if self.sessions.contains_key(&reference) {
                     return Err(Error::DuplicateSessionOpen);
                 }
-                Some(SessionIngressRecord::Open(reference))
+                Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(
+                    reference,
+                )))
             }
             Some(InboundSession::Message(reference)) => {
                 let Some(lifecycle) = self.sessions.get(&reference) else {
@@ -1088,12 +1183,14 @@ impl MemJournal {
                 {
                     return Err(Error::UnknownSession);
                 }
-                Some(SessionIngressRecord::Message(reference))
+                Some(InboundExchangeRecord::Session(
+                    SessionIngressRecord::Message(reference),
+                ))
             }
         };
         let mut ext = submission.draft.ext.clone();
-        if let Some(session) = resolved_session {
-            let reference = match session {
+        if let Some(InboundExchangeRecord::Session(session)) = &resolved_exchange {
+            let reference = match *session {
                 SessionIngressRecord::Open(reference)
                 | SessionIngressRecord::Message(reference) => reference,
             };
@@ -1111,7 +1208,7 @@ impl MemJournal {
             connector_path,
             seq,
             envelope,
-            session: resolved_session,
+            exchange: resolved_exchange,
         })
     }
 }
@@ -1155,20 +1252,41 @@ impl Journal for MemJournal {
             });
         }
         let following = prepared.seq.checked_add(1).ok_or(Error::SequenceOverflow)?;
-        match prepared.session {
-            Some(SessionIngressRecord::Open(reference)) => {
-                if self.sessions.contains_key(&reference) {
+        match prepared.exchange.as_ref() {
+            Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(reference))) => {
+                if self.sessions.contains_key(reference) {
                     return Err(Error::DuplicateSessionOpen);
                 }
             }
-            Some(SessionIngressRecord::Message(reference)) => {
-                let Some(lifecycle) = self.sessions.get(&reference) else {
+            Some(InboundExchangeRecord::Session(SessionIngressRecord::Message(reference))) => {
+                let Some(lifecycle) = self.sessions.get(reference) else {
                     return Err(Error::UnknownSession);
                 };
                 if lifecycle.phase != SessionPhase::Open
                     || lifecycle.connector_path != *prepared.submission.provenance.connector_path()
                 {
                     return Err(Error::UnknownSession);
+                }
+            }
+            Some(InboundExchangeRecord::Call(call)) => {
+                let root = prepared.envelope.meta().sys().id();
+                let Some(connector_path) = prepared.connector_path.as_ref() else {
+                    return Err(Error::CorruptInboundCall);
+                };
+                if call.reference != InboundCallRef::from_root(root)
+                    || call.instance.address().owner().segments() != connector_path.segments()
+                {
+                    return Err(Error::CorruptInboundCall);
+                }
+                if self.inbound_calls.contains_key(&call.reference) {
+                    return Err(Error::DuplicateInboundCall);
+                }
+                let expected = self.instance_ref_for_admission(call.instance.address())?;
+                if call.instance != expected {
+                    return Err(Error::InstanceGenerationMismatch {
+                        expected,
+                        got: call.instance.clone(),
+                    });
                 }
             }
             None => {}
@@ -1190,20 +1308,33 @@ impl Journal for MemJournal {
             seq: prepared.seq,
             envelope: prepared.envelope.clone(),
             routes,
-            // Session framing is absent on the overwhelmingly common Event
-            // and Call records. Box the rare extension so `None` does not
-            // widen every causal `Record` retained by an embedded journal.
-            session: prepared.session.map(Box::new),
+            // Exchange framing is absent on Event records. Box the extension
+            // so `None` does not widen every causal `Record` retained by an
+            // embedded journal.
+            exchange: prepared.exchange.clone().map(Box::new),
         };
-        if let Some(SessionIngressRecord::Open(reference)) = prepared.session {
-            self.sessions.insert(
-                reference,
-                SessionLifecycle {
-                    connector_path: prepared.submission.provenance.connector_path().clone(),
-                    phase: SessionPhase::Open,
-                    writes: BTreeMap::new(),
-                },
-            );
+        match prepared.exchange {
+            Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(reference))) => {
+                self.sessions.insert(
+                    reference,
+                    SessionLifecycle {
+                        connector_path: prepared.submission.provenance.connector_path().clone(),
+                        phase: SessionPhase::Open,
+                        writes: BTreeMap::new(),
+                    },
+                );
+            }
+            Some(InboundExchangeRecord::Call(call)) => {
+                self.inbound_calls.insert(
+                    call.reference,
+                    InboundCallLifecycle {
+                        connector_path: prepared.submission.provenance.connector_path().clone(),
+                        instance: call.instance,
+                        open: true,
+                    },
+                );
+            }
+            Some(InboundExchangeRecord::Session(SessionIngressRecord::Message(_))) | None => {}
         }
         self.next_seq
             .insert(prepared.submission.provenance, following);
@@ -1231,6 +1362,18 @@ impl Journal for MemJournal {
             transaction.trigger,
             node::Trigger::Lifecycle(node::Lifecycle::Stop)
         );
+        let is_reply = matches!(
+            transaction.trigger,
+            node::Trigger::Lifecycle(node::Lifecycle::Reply)
+        );
+        if is_reply
+            != matches!(
+                transaction.exchange_exit.as_deref(),
+                Some(InboundExchangeExitRecord::Call(_))
+            )
+        {
+            return Err(Error::InvalidInboundCallExit);
+        }
         let mut lifecycle = self.instance_lifecycle(transaction.instance.address());
         let expected = if is_start {
             InstanceRef::new(transaction.instance.address().clone(), lifecycle.starts)
@@ -1333,7 +1476,9 @@ impl Journal for MemJournal {
                 });
             }
         }
-        if let Some(session_ref) = transaction.session_exit {
+        if let Some(InboundExchangeExitRecord::Session(session_ref)) =
+            transaction.exchange_exit.as_deref().copied()
+        {
             let Some(session) = self.sessions.get(&session_ref) else {
                 return Err(Error::UnknownSession);
             };
@@ -1371,6 +1516,38 @@ impl Journal for MemJournal {
                 return Err(Error::SessionProjectionMismatch);
             }
         }
+        if let Some(InboundExchangeExitRecord::Call(call_ref)) =
+            transaction.exchange_exit.as_deref().copied()
+        {
+            let Some(call) = self.inbound_calls.get(&call_ref) else {
+                return Err(Error::UnknownInboundCall);
+            };
+            if !call.open
+                || call.connector_path.segments() != transaction.owner_path.segments()
+                || call.instance != transaction.instance
+            {
+                return Err(Error::UnknownInboundCall);
+            }
+            if transaction.trigger != node::Trigger::Lifecycle(node::Lifecycle::Reply)
+                || transaction.cause != Some(call_ref.id())
+                || !transaction.consumed.is_empty()
+            {
+                return Err(Error::InvalidInboundCallExit);
+            }
+            let exits = transaction
+                .emissions
+                .iter()
+                .filter(|emission| emission.port.name() == "exit")
+                .count();
+            if exits != 1
+                || transaction
+                    .emissions
+                    .last()
+                    .is_none_or(|emission| emission.port.name() != "exit")
+            {
+                return Err(Error::InvalidInboundCallExit);
+            }
+        }
         // Canonicalize the declaratively sorted collections so an
         // invalid ordering is not constructible through the journal.
         transaction.consumed.sort();
@@ -1395,13 +1572,18 @@ impl Journal for MemJournal {
             lifecycle.closing = true;
         }
         let address = transaction.instance.address().clone();
-        let session_exit = transaction.session_exit;
+        let exchange_exit = transaction.exchange_exit.as_deref().copied();
         self.records.push(Record::Transaction(transaction));
         self.instance_lifecycles.insert(address, lifecycle);
-        if let Some(session_ref) = session_exit
+        if let Some(InboundExchangeExitRecord::Session(session_ref)) = exchange_exit
             && let Some(session) = self.sessions.get_mut(&session_ref)
         {
             session.phase = SessionPhase::Exited;
+        }
+        if let Some(InboundExchangeExitRecord::Call(call_ref)) = exchange_exit
+            && let Some(call) = self.inbound_calls.get_mut(&call_ref)
+        {
+            call.open = false;
         }
         Ok(())
     }
@@ -1658,6 +1840,17 @@ impl Journal for MemJournal {
         open
     }
 
+    fn open_inbound_calls(&self) -> Vec<InboundCallIngressRecord> {
+        self.inbound_calls
+            .iter()
+            .filter(|(_, lifecycle)| lifecycle.open)
+            .map(|(reference, lifecycle)| InboundCallIngressRecord {
+                reference: *reference,
+                instance: lifecycle.instance.clone(),
+            })
+            .collect()
+    }
+
     fn live_sessions(&self) -> Vec<SessionRef> {
         self.sessions
             .iter()
@@ -1803,7 +1996,7 @@ mod tests {
             instance,
             parent_instance,
             close_scope: None,
-            session_exit: None,
+            exchange_exit: None,
             trigger: node::Trigger::Lifecycle(lifecycle),
             cause: None,
             consumed: vec![],
@@ -2301,7 +2494,7 @@ mod tests {
                 instance: instance("shout", 0),
                 parent_instance: None,
                 close_scope: None,
-                session_exit: None,
+                exchange_exit: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![
@@ -2351,7 +2544,7 @@ mod tests {
                 instance: instance("shout", 0),
                 parent_instance: None,
                 close_scope: None,
-                session_exit: None,
+                exchange_exit: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
                 cause: None,
                 consumed: vec![ConsumedPosition {
@@ -2402,7 +2595,8 @@ mod tests {
             )
             .unwrap();
         let first = journal.commit_inbound(first, vec![]).unwrap();
-        let Some(SessionIngressRecord::Open(first_ref)) = first.record.session.as_deref().copied()
+        let Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(first_ref))) =
+            first.record.exchange.as_deref().cloned()
         else {
             panic!("the opening commit carries its session ref")
         };
@@ -2421,8 +2615,8 @@ mod tests {
             )
             .unwrap();
         let second = journal.commit_inbound(second, vec![]).unwrap();
-        let Some(SessionIngressRecord::Open(second_ref)) =
-            second.record.session.as_deref().copied()
+        let Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(second_ref))) =
+            second.record.exchange.as_deref().cloned()
         else {
             panic!("the second opening carries its session ref")
         };
@@ -2436,8 +2630,10 @@ mod tests {
             .unwrap();
         let message = journal.commit_inbound(message, vec![]).unwrap();
         assert_eq!(
-            message.record.session.as_deref().copied(),
-            Some(SessionIngressRecord::Message(first_ref))
+            message.record.exchange.as_deref().cloned(),
+            Some(InboundExchangeRecord::Session(
+                SessionIngressRecord::Message(first_ref)
+            ))
         );
         assert_eq!(
             message.envelope.meta().ext().get("session_id"),
@@ -2450,7 +2646,7 @@ mod tests {
         activate(&mut journal, instance("socket", 0));
         let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Closing);
         terminal.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
-        terminal.session_exit = Some(first_ref);
+        terminal.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Session(first_ref)));
         terminal.emissions.push(Emission {
             port: node::Port::conventional_exit(),
             index: 0,
@@ -2465,6 +2661,63 @@ mod tests {
             ),
             Err(Error::UnknownSession),
             "a terminal session can never speak again"
+        );
+    }
+
+    #[test]
+    fn an_inbound_call_opens_on_its_source_instance_and_closes_once() {
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let source = instance("server", 0);
+        let prepared = journal
+            .prepare_connector_inbound(submission("server", SubmissionSequence::Next), None)
+            .unwrap()
+            .into_call(source.clone())
+            .unwrap();
+        let root = prepared.envelope().meta().sys().id();
+        let call_ref = InboundCallRef::from_root(root);
+        let committed = journal.commit_inbound(prepared, vec![]).unwrap();
+        assert_eq!(
+            journal.open_inbound_calls(),
+            [InboundCallIngressRecord {
+                reference: call_ref,
+                instance: source.clone(),
+            }]
+        );
+        assert_eq!(
+            committed.record.exchange.as_deref(),
+            Some(&InboundExchangeRecord::Call(InboundCallIngressRecord {
+                reference: call_ref,
+                instance: source.clone(),
+            }))
+        );
+
+        activate(&mut journal, source.clone());
+        let unmatched_reply = lifecycle_transaction(source.clone(), node::Lifecycle::Reply);
+        assert_eq!(
+            journal.commit(unmatched_reply).unwrap_err(),
+            Error::InvalidInboundCallExit
+        );
+        let mut missing_exit = lifecycle_transaction(source.clone(), node::Lifecycle::Reply);
+        missing_exit.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Call(call_ref)));
+        missing_exit.cause = Some(root);
+        assert_eq!(
+            journal.commit(missing_exit).unwrap_err(),
+            Error::InvalidInboundCallExit
+        );
+
+        let mut terminal = lifecycle_transaction(source.clone(), node::Lifecycle::Reply);
+        terminal.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Call(call_ref)));
+        terminal.cause = Some(root);
+        terminal.emissions.push(Emission {
+            port: node::Port::conventional_exit(),
+            index: 0,
+            envelope: committed.envelope,
+        });
+        journal.commit(terminal.clone()).unwrap();
+        assert!(journal.open_inbound_calls().is_empty());
+        assert_eq!(
+            journal.commit(terminal).unwrap_err(),
+            Error::UnknownInboundCall
         );
     }
 
@@ -2508,7 +2761,7 @@ mod tests {
             .envelope;
         let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Closing);
         terminal.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
-        terminal.session_exit = Some(session);
+        terminal.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Session(session)));
         terminal.emissions.push(Emission {
             port: node::Port::conventional_exit(),
             index: 0,

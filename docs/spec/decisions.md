@@ -5,6 +5,43 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-26-5 — An inbound Call opens at its source and closes once
+
+The generic inbound proposal protocol now carries the whole Call lifecycle,
+without pretending that an inbound request is an outbound invocation. Before
+acceptance, the runtime selects the exact source Connector instance and every
+downstream route in one pure preparation. The accepting INBOUND commit opens
+the Call on that instance; only then does the Driver receive
+`Accepted(InboundCallRef)`. `InboundCallRef` is the committed root-envelope id
+behind a direction-specific newtype, not a second digest and not a socket or
+stream id.
+
+INBOUND key 28 seals `[inbound_call_ref, source_instance_ref]`. The source
+instance is a real route reservation even when no downstream edge exists, so
+its lazy `l:start`, state, Closing and replay generation use the same authority
+as every ordinary destination. Pending Calls are bounded per source instance
+by the Worker mailbox capacity; admission that cannot reserve all required
+capacity commits nothing and sends no acceptance callback.
+
+An inbound Call Driver has one categorical terminal-observation view. The
+registry proves that the reporting family admitted the reference, the
+resolved port gate validates its `Completion`, and the VM commits an ordinary
+Connector TRANSACTION with trigger `l:reply`, cause equal to the root request,
+no consumed mailbox cursor, and key 52 naming the Call. It may emit ordinary
+typed outputs, but exactly one conventional `exit` must be last. The journal
+refuses an unmatched `l:reply`, a missing/repeated/non-final `exit`, a crossed
+source instance, and any second terminal transaction. A late Driver fact is a
+non-causal observation. No OUTBOUND record and no synthetic input delivery are
+created.
+
+Keys 28 and 52 are extend-only and omitted from every pre-H5 record. No plan
+package, semantic hash, existing causal trace or root-id recipe moves in this
+checkpoint. A fake retained HttpServer request proves commit-before-accept,
+source-instance routing through an Operator, and one typed terminal exit.
+This is the generic H5 Call seam, not the live listener claim: protocol accept
+loops, fixed `ack` bytes, graph-driven `respond`, cancellation/timeout,
+HTTP/1.1–3 flow control and independent interop remain in H5.
+
 ## D-2026-08-26-4 — A Connector-origin root names its source endpoint
 
 H5 closes an ambiguity left by the generic inbound proposal seam. A retained
@@ -22,12 +59,11 @@ records remain byte-identical, while new live Event/Call/Session sources can
 replay from `connector.out` without guessing from provenance text. The root id
 recipe remains `(connector_path, replica, inbound_seq)` and does not move.
 
-This is the first H5 checkpoint, not a claim that an HTTP listener already
-executes. The remaining server-Call seam is categorical: accepted request,
-journal-before-response write, correlated close-once terminal `exit`. It is
-not lowered into a second outbound Call. HTTP/1.1 connections, HTTP/2 streams
-and HTTP/3 streams must all implement that one protocol before their wire
-drivers are admitted.
+This was the first H5 checkpoint, not a claim that an HTTP listener already
+executes. D-2026-08-26-5 subsequently lands the generic accepted-request and
+close-once terminal seam without lowering it into a second outbound Call.
+HTTP/1.1 connections, HTTP/2 streams and HTTP/3 streams must all implement
+that one protocol before their wire Drivers are admitted.
 
 Hosted interoperability evidence is split by purpose. The H5/H6 blocking
 gates will use pinned independent local peers (Caddy and NGINX for server

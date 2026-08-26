@@ -81,8 +81,11 @@ versions with exact pre-open requests, visibility-safe fallback, bounded
 bodies and typed response observations. H4.1 makes HTTP schema intent
 explicit: `media_type` is an open logical scalar, known request headers are a
 typed struct, extensions live in `custom_headers`, and response protocol facts
-are projected into `meta.ext`. H5–H6 still own the server and WebSocket
-Drivers and separately prove Extended CONNECT.
+are projected into `meta.ext`. H5 now also has its generic inbound Call seam:
+acceptance follows one bounded root/source-instance commit, and one typed
+`l:reply` transaction closes the retained request without inventing an
+outbound call. H5–H6 still own the live server and WebSocket Drivers and
+separately prove Extended CONNECT.
 
 The standalone runner links the Process Driver by default and also links the
 HttpClient Driver when either hosted HTTP feature is selected. Pass

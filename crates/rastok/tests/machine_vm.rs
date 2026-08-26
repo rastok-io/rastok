@@ -3102,6 +3102,9 @@ impl Journal for FlakyJournal {
     fn open_calls(&self) -> Vec<Intent> {
         self.inner.open_calls()
     }
+    fn open_inbound_calls(&self) -> Vec<rastok::journal::InboundCallIngressRecord> {
+        self.inner.open_inbound_calls()
+    }
     fn live_sessions(&self) -> Vec<SessionRef> {
         self.inner.live_sessions()
     }

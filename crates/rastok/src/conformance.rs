@@ -353,10 +353,10 @@ pub fn verify_event(profile: &EventProfile<'_>, drivers: &DriverRegistry) -> Rep
             .push(format!("the Event proposal did not commit: {admission:?}"));
         return report;
     };
-    if accepted.session.is_some() {
+    if accepted.exchange.is_some() {
         report
             .violations
-            .push("an Event acceptance invented a SessionRef".into());
+            .push("an Event acceptance invented an exchange reference".into());
     }
     if journal.find_envelope(accepted.envelope).is_none() {
         report

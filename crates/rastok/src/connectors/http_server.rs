@@ -6,7 +6,8 @@
 use std::collections::BTreeSet;
 
 use crate::boundary::{
-    InboundConnectorDriver, InboundDecision, InboundProposal, InboundProposalRef,
+    InboundCallConnectorDriver, InboundCallEvent, InboundConnectorDriver, InboundDecision,
+    InboundProposal, InboundProposalRef,
 };
 use crate::connector::{ConnectorId, ConnectorRoles};
 use crate::plan::ValidatedExecutionPlan;
@@ -20,6 +21,16 @@ impl InboundConnectorDriver for PassiveInbound {
     }
 
     fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {}
+
+    fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
+        Some(self)
+    }
+}
+
+impl InboundCallConnectorDriver for PassiveInbound {
+    fn events(&mut self) -> Vec<InboundCallEvent> {
+        Vec::new()
+    }
 }
 
 struct HttpServerLabFactory {

@@ -1537,7 +1537,10 @@ session  open ──▶ messages in both directions* ──▶ exactly one exit
 ```
 
 Clock ticks and calendar instants are events. Every call has a causal
-call identity. Every session has a causal
+call identity. For a world-originated Call, the committed request root itself
+is that identity and opens the obligation on the exact source Connector
+instance; its sole terminal fact is an ordinary `l:reply` transaction, not a
+second outbound call. Every session has a causal
 logical session reference independent of its socket, negotiated transport and
 physical placement. A Process job or database operation is a call; a
 WebSocket connection and the future Process service profile are sessions.
@@ -2818,9 +2821,10 @@ pre-open request sealing, visibility-safe fallback, bounded bodies, lossless
 response observations, generic Call conformance and outbound backpressure.
 H4.1 adds the open `media_type` scalar, typed standard/custom request-header
 separation, typed response metadata and strict project-wide OpenAPI type
-resolution without changing the runtime's one type algebra.
-H5-H6 still own server acknowledgement, live WebSocket sessions and both
-Extended CONNECT adapters.
+resolution without changing the runtime's one type algebra. H5's generic
+inbound Call seam now proves bounded commit-before-accept at the exact source
+instance and close-once typed `l:reply`; H5-H6 still own live server
+acknowledgement, live WebSocket sessions and both Extended CONNECT adapters.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

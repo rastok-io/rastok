@@ -6,15 +6,16 @@
 
 use crate::boundary::{
     CallConnectorDriver, CallRef, CallStart, Completion, DriverRouteError, InboundConnectorDriver,
-    InboundDecision, InboundProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
-    RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
-    SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent, SessionRef, SessionWriteIntent,
+    InboundDecision, InboundExchangeRef, InboundProposal, Intent, OutboundConnectorBindings,
+    OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
+    SessionConnectorBindings, SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent,
+    SessionRef, SessionWriteIntent,
 };
 use crate::connector::{ConnectorExchange, ConnectorId, ConnectorRoles};
 use crate::envelope::{Data, Envelope};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
-use crate::runtime::vm::{Vm, VmError};
+use crate::runtime::vm::{InboundCallPumpReport, Vm, VmError};
 use crate::{boundary::InboundAdmission, journal::Journal};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -218,6 +219,7 @@ pub struct RuntimeBindings<'plan> {
     inbound_cursor: Option<ConnectorId>,
     outbound: BTreeMap<node::Path, ConnectorId>,
     calls: BTreeMap<CallRef, ConnectorId>,
+    inbound_calls: BTreeMap<crate::boundary::InboundCallRef, ConnectorId>,
     session_outbound: BTreeMap<node::Path, ConnectorId>,
     sessions: BTreeMap<SessionRef, ConnectorId>,
 }
@@ -230,6 +232,7 @@ impl core::fmt::Debug for RuntimeBindings<'_> {
             .field("inbound_cursor", &self.inbound_cursor)
             .field("outbound", &self.outbound)
             .field("calls", &self.calls)
+            .field("inbound_calls", &self.inbound_calls)
             .field("session_outbound", &self.session_outbound)
             .field("sessions", &self.sessions)
             .finish()
@@ -324,6 +327,19 @@ impl<'plan> RuntimeBindings<'plan> {
                     });
                 }
             }
+            if requirement.required.has_inbound() && exchange == ConnectorExchange::Call {
+                let has_call_view = driver
+                    .inbound()
+                    .and_then(InboundConnectorDriver::call)
+                    .is_some();
+                if !has_call_view {
+                    return Err(DriverBindingError::BoundExchangeMismatch {
+                        id,
+                        required: ConnectorExchange::Call,
+                        actual: None,
+                    });
+                }
+            }
 
             let uses_inbound = requirement.required.has_inbound();
             let inbound_paths = requirement
@@ -360,6 +376,7 @@ impl<'plan> RuntimeBindings<'plan> {
             inbound_cursor: None,
             outbound,
             calls: BTreeMap::new(),
+            inbound_calls: BTreeMap::new(),
             session_outbound,
             sessions: BTreeMap::new(),
         })
@@ -459,19 +476,35 @@ impl<'plan> RuntimeBindings<'plan> {
                 reference: routed.proposal.reference,
             });
         }
-        if let InboundDecision::Accepted(accepted) = decision
-            && let Some(session) = accepted.session
-        {
-            if let Some(expected) = self.sessions.get(&session)
-                && expected != &routed.connector
-            {
-                return Err(DriverRouteError::CrossFamilySession {
-                    session,
-                    expected: expected.clone(),
-                    actual: routed.connector.clone(),
-                });
+        if let InboundDecision::Accepted(accepted) = decision {
+            match accepted.exchange {
+                Some(InboundExchangeRef::Call(call_ref)) => {
+                    if let Some(expected) = self.inbound_calls.get(&call_ref)
+                        && expected != &routed.connector
+                    {
+                        return Err(DriverRouteError::CrossFamilyInboundCall {
+                            call_ref,
+                            expected: expected.clone(),
+                            actual: routed.connector.clone(),
+                        });
+                    }
+                    self.inbound_calls
+                        .insert(call_ref, routed.connector.clone());
+                }
+                Some(InboundExchangeRef::Session(session)) => {
+                    if let Some(expected) = self.sessions.get(&session)
+                        && expected != &routed.connector
+                    {
+                        return Err(DriverRouteError::CrossFamilySession {
+                            session,
+                            expected: expected.clone(),
+                            actual: routed.connector.clone(),
+                        });
+                    }
+                    self.sessions.insert(session, routed.connector.clone());
+                }
+                None => {}
             }
-            self.sessions.insert(session, routed.connector.clone());
         }
         let Some(driver) = family.driver.inbound() else {
             return Err(DriverRouteError::UnavailableInbound(
@@ -514,6 +547,66 @@ impl<'plan> RuntimeBindings<'plan> {
             InboundAdmission::Pending => {}
         }
         Ok(Some(admission))
+    }
+
+    /// Drains terminal observations from every inbound Call family and
+    /// offers them to the VM's typed, close-once queue. Family correlation is
+    /// checked before the VM sees an event; invalid facts remain non-causal.
+    ///
+    /// # Errors
+    ///
+    /// A bound Call view disappeared or a family reported another family's
+    /// Call reference.
+    pub fn pump_inbound_call_events(
+        &mut self,
+        vm: &mut Vm<'plan>,
+    ) -> Result<InboundCallPumpReport, DriverRouteError> {
+        let ids: Vec<_> = self
+            .families
+            .iter()
+            .filter_map(|(id, family)| {
+                (family.uses_inbound && family.exchange == ConnectorExchange::Call)
+                    .then_some(id.clone())
+            })
+            .collect();
+        let mut report = InboundCallPumpReport::default();
+        for id in ids {
+            let events = {
+                let Some(family) = self.families.get_mut(&id) else {
+                    continue;
+                };
+                let driver = family
+                    .driver
+                    .inbound()
+                    .ok_or_else(|| DriverRouteError::UnavailableInbound(id.clone()))?
+                    .call()
+                    .ok_or_else(|| DriverRouteError::UnavailableInboundCall(id.clone()))?;
+                driver.events()
+            };
+            for event in events {
+                let Some(expected) = self.inbound_calls.get(&event.call_ref).cloned() else {
+                    report.uncorrelated.push(event);
+                    continue;
+                };
+                if expected != id {
+                    return Err(DriverRouteError::CrossFamilyInboundCall {
+                        call_ref: event.call_ref,
+                        expected,
+                        actual: id,
+                    });
+                }
+                let call_ref = event.call_ref;
+                let mut observed = vm.queue_inbound_call_events(core::iter::once(event));
+                if observed.queued == 1 || !observed.uncorrelated.is_empty() {
+                    self.inbound_calls.remove(&call_ref);
+                }
+                report.queued = report.queued.saturating_add(observed.queued);
+                report.discarded.append(&mut observed.discarded);
+                report.uncorrelated.append(&mut observed.uncorrelated);
+                report.rejected.append(&mut observed.rejected);
+            }
+        }
+        Ok(report)
     }
 
     fn outbound_driver(
@@ -919,8 +1012,9 @@ mod tests {
         DriverRegistrationError, DriverRegistry, RuntimeBindings,
     };
     use crate::boundary::{
-        CallConnectorDriver, CallStart, Completion, Draft, InboundDecision,
-        InboundEnvelopeProvenance, InboundProposal, InboundProposalRef, InboundSubmission, Intent,
+        CallConnectorDriver, CallStart, Completion, Draft, HttpServerExit,
+        InboundCallConnectorDriver, InboundCallEvent, InboundDecision, InboundEnvelopeProvenance,
+        InboundExchangeRef, InboundProposal, InboundProposalRef, InboundSubmission, Intent,
         OutboundConnectorBindings, OutboundConnectorDriver, ProcessExit, RequestPreparation,
         Response, SchedulerCompletion, SessionConnectorBindings, SessionConnectorDriver,
         SessionDriverEvent, SessionOpenIntent, SessionRef, SessionWriteIntent, SubmissionSequence,
@@ -1245,6 +1339,16 @@ graph inbound : App {
         }
 
         fn decide(&mut self, _: InboundProposalRef, _: InboundDecision) {}
+
+        fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
+            Some(self)
+        }
+    }
+
+    impl InboundCallConnectorDriver for DuplexDriver {
+        fn events(&mut self) -> Vec<InboundCallEvent> {
+            Vec::new()
+        }
     }
 
     impl CallConnectorDriver for DuplexDriver {
@@ -1671,6 +1775,89 @@ graph inbound : App {
         state: Arc<Mutex<InboundQueueState>>,
     }
 
+    #[derive(Default)]
+    struct RetainedCallState {
+        proposals: VecDeque<InboundProposal>,
+        decisions: Vec<(InboundProposalRef, InboundDecision)>,
+        events: Vec<InboundCallEvent>,
+    }
+
+    struct RetainedCallDriver {
+        state: Arc<Mutex<RetainedCallState>>,
+    }
+
+    impl crate::boundary::InboundConnectorDriver for RetainedCallDriver {
+        fn proposal(&mut self) -> Option<InboundProposal> {
+            self.state.lock().unwrap().proposals.front().cloned()
+        }
+
+        fn decide(&mut self, reference: InboundProposalRef, decision: InboundDecision) {
+            let mut state = self.state.lock().unwrap();
+            let retained = state
+                .proposals
+                .pop_front()
+                .expect("a decision follows a retained proposal");
+            assert_eq!(retained.reference, reference);
+            if let InboundDecision::Accepted(accepted) = decision {
+                let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+                    panic!("an inbound Call acceptance carries its Call ref")
+                };
+                state.events.push(InboundCallEvent {
+                    call_ref,
+                    completion: Completion::http_server_exit(HttpServerExit::Completed {
+                        status: 202,
+                    }),
+                });
+            }
+            state.decisions.push((reference, decision));
+        }
+
+        fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
+            Some(self)
+        }
+    }
+
+    impl InboundCallConnectorDriver for RetainedCallDriver {
+        fn events(&mut self) -> Vec<InboundCallEvent> {
+            core::mem::take(&mut self.state.lock().unwrap().events)
+        }
+    }
+
+    impl BoundConnectorDriver for RetainedCallDriver {
+        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+            Some(self)
+        }
+
+        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+            None
+        }
+    }
+
+    struct RetainedCallFactory {
+        id: ConnectorId,
+        state: Arc<Mutex<RetainedCallState>>,
+    }
+
+    impl ConnectorDriverFactory for RetainedCallFactory {
+        fn connector_id(&self) -> &ConnectorId {
+            &self.id
+        }
+
+        fn roles(&self) -> ConnectorRoles {
+            ConnectorRoles::Inbound
+        }
+
+        fn bind<'plan>(
+            &self,
+            _: &'plan ValidatedExecutionPlan,
+            _: &[node::Path],
+        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+            Ok(Box::new(RetainedCallDriver {
+                state: Arc::clone(&self.state),
+            }))
+        }
+    }
+
     impl ConnectorDriverFactory for RetainedInboundFactory {
         fn connector_id(&self) -> &ConnectorId {
             &self.id
@@ -1705,6 +1892,168 @@ graph inbound : App {
             },
             session: None,
         }
+    }
+
+    #[test]
+    fn an_inbound_call_is_accepted_before_its_single_typed_exit_commits() {
+        let source = r#"
+graph api : App {
+  connector server : HttpServer {
+    listen = "127.0.0.1:8080"
+    codec = text
+  }
+  operator relay { input in: text ; on in { out = data } }
+  server -> relay -> .
+}
+"#;
+        let plan = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the ack-mode source checks")
+        .plan;
+        let event_only_registry = DriverRegistry::default()
+            .try_with(Box::new(RetainedInboundFactory {
+                id: ConnectorId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID).unwrap(),
+                state: Arc::new(Mutex::new(InboundQueueState::default())),
+            }))
+            .unwrap();
+        assert!(matches!(
+            RuntimeBindings::try_new(&plan, &event_only_registry),
+            Err(DriverBindingError::BoundExchangeMismatch {
+                required: ConnectorExchange::Call,
+                actual: None,
+                ..
+            })
+        ));
+        let state = Arc::new(Mutex::new(RetainedCallState {
+            proposals: VecDeque::from([InboundProposal {
+                reference: InboundProposalRef::new(1),
+                submission: InboundSubmission {
+                    provenance: InboundEnvelopeProvenance::single(
+                        node::Path::new(["server"]).unwrap(),
+                    ),
+                    port: node::Port::conventional_out(),
+                    draft: Draft {
+                        data: Data::materialized(Value::Text(String::from("request"))),
+                        ext: Namespace::new(),
+                    },
+                    sequence: SubmissionSequence::Next,
+                },
+                session: None,
+            }]),
+            ..RetainedCallState::default()
+        }));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(RetainedCallFactory {
+                id: ConnectorId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID).unwrap(),
+                state: Arc::clone(&state),
+            }))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+
+        let Some(crate::boundary::InboundAdmission::Accepted(accepted)) = bindings
+            .pump_inbound(&mut vm, &mut journal)
+            .expect("the proposal reaches atomic admission")
+        else {
+            panic!("the request must be accepted")
+        };
+        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+            panic!("the accepting fact opens a Call")
+        };
+        assert_eq!(journal.open_inbound_calls()[0].reference, call_ref);
+        assert!(journal.find_envelope(accepted.envelope).is_some());
+        assert_eq!(state.lock().unwrap().decisions.len(), 1);
+
+        let report = bindings.pump_inbound_call_events(&mut vm).unwrap();
+        assert_eq!(report.queued, 1);
+        assert!(report.rejected.is_empty());
+        vm.drain_with_bindings(&mut journal, &mut bindings)
+            .expect("start then reply commit in causal order");
+        assert!(journal.open_inbound_calls().is_empty());
+        let terminals = journal
+            .records()
+            .iter()
+            .filter_map(|record| match record {
+                crate::journal::Record::Transaction(transaction)
+                    if transaction.exchange_exit.as_deref()
+                        == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref)) =>
+                {
+                    Some(transaction)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(terminals.len(), 1);
+        assert_eq!(
+            terminals[0].trigger,
+            node::Trigger::Lifecycle(node::Lifecycle::Reply)
+        );
+        assert_eq!(terminals[0].emissions.len(), 1);
+        assert_eq!(terminals[0].emissions[0].port.name(), "exit");
+        let trace = crate::golden::project(journal.records());
+        let inbound_index = journal
+            .records()
+            .iter()
+            .position(|record| {
+                matches!(
+                    record,
+                    crate::journal::Record::Inbound(inbound)
+                        if matches!(
+                            inbound.exchange.as_deref(),
+                            Some(crate::journal::InboundExchangeRecord::Call(call))
+                                if call.reference == call_ref
+                        )
+                )
+            })
+            .expect("the opening INBOUND fact is present");
+        let terminal_index = journal
+            .records()
+            .iter()
+            .position(|record| {
+                matches!(
+                    record,
+                    crate::journal::Record::Transaction(transaction)
+                        if transaction.exchange_exit.as_deref()
+                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref))
+                )
+            })
+            .expect("the terminal TRANSACTION fact is present");
+        for (index, key) in [(inbound_index, 28), (terminal_index, 52)] {
+            let bytes = trace
+                .record_bytes(index)
+                .expect("the canonical trace retains every causal record");
+            let (crate::canonical_cbor::Value::Map(tree), used) =
+                crate::canonical_cbor::decode(bytes).expect("canonical trace bytes decode")
+            else {
+                panic!("a causal record projects as a map")
+            };
+            assert_eq!(used, bytes.len());
+            assert!(tree.contains_key(&key), "canonical key {key} is present");
+        }
+
+        state.lock().unwrap().events.push(InboundCallEvent {
+            call_ref,
+            completion: Completion::http_server_exit(HttpServerExit::Completed { status: 202 }),
+        });
+        let duplicate = bindings.pump_inbound_call_events(&mut vm).unwrap();
+        assert_eq!(duplicate.uncorrelated.len(), 1);
+        assert_eq!(
+            journal
+                .records()
+                .iter()
+                .filter(|record| matches!(
+                    record,
+                    crate::journal::Record::Transaction(transaction)
+                        if transaction.exchange_exit.as_deref()
+                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref))
+                ))
+                .count(),
+            1,
+            "a late Driver observation cannot create a second exit"
+        );
     }
 
     #[test]

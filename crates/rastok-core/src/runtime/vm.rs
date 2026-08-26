@@ -18,11 +18,12 @@
 //! the commit, nothing can fail.
 
 use crate::boundary::{
-    BoundaryEvent, CallRef, ClosingDeadline, Completion, DatedPayload, Dispatcher,
-    InboundAcceptance, InboundAdmission, InboundProposal, InboundRejection, InboundSession,
-    InboundSubmission, InstanceDeadline, Intent, OutboundConnectorBindings, RequestPreparation,
-    Response, SchedulerCompletion,
+    BoundaryEvent, CallRef, ClosingDeadline, Completion, CompletionGate, DatedPayload, Dispatcher,
+    InboundAcceptance, InboundAdmission, InboundCallEvent, InboundCallRef, InboundProposal,
+    InboundRejection, InboundSession, InboundSubmission, InstanceDeadline, Intent,
+    OutboundConnectorBindings, RequestPreparation, Response, SchedulerCompletion,
 };
+use crate::connector::ConnectorExchange;
 use crate::envelope::{Data, Envelope, Id};
 use crate::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use crate::journal::{Journal, RouteTarget, RoutedDelivery, ids};
@@ -234,6 +235,20 @@ pub struct PumpReport {
     pub rejected: Vec<(Response, String)>,
 }
 
+/// Non-causal observations from one inbound-Call Driver drain.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct InboundCallPumpReport {
+    /// Valid terminal events retained for a Connector transaction.
+    pub queued: usize,
+    /// Duplicate terminal events observed after one was already retained.
+    pub discarded: Vec<InboundCallEvent>,
+    /// Events matching no admitted Call in this VM.
+    pub uncorrelated: Vec<InboundCallEvent>,
+    /// Events refused by the resolved Connector output table. The Call stays
+    /// open so the Driver or a later timeout may still terminate it.
+    pub rejected: Vec<(InboundCallEvent, String)>,
+}
+
 impl PumpReport {
     fn append(&mut self, mut other: Self) {
         self.settled = self.settled.saturating_add(other.settled);
@@ -251,6 +266,16 @@ impl PumpReport {
 struct PendingCall {
     slot: Slot,
     delivery: Delivery,
+    instance: InstanceRef,
+}
+
+/// One accepted inbound Call held until its Driver reports the sole terminal
+/// completion. Unlike an outbound call, no input cursor is claimed: the root
+/// itself opened this obligation.
+#[derive(Debug, Clone, PartialEq)]
+struct PendingInboundCall {
+    slot: Slot,
+    request: Envelope,
     instance: InstanceRef,
 }
 
@@ -576,6 +601,8 @@ struct SettledEntry {
     trigger: node::Trigger,
 }
 
+const WORKER_MAILBOX_CAPACITY: usize = 1024;
+
 /// The run-to-completion scheduler: it owns the mailboxes and picks
 /// the next work deterministically — the same journal always replays
 /// to the same order.
@@ -639,6 +666,12 @@ pub struct Vm<'plan> {
     /// settles: the completion transaction consumes this cursor, and the
     /// connector's mailbox stays claimed the whole time.
     pending: BTreeMap<CallRef, PendingCall>,
+    /// Accepted inbound Calls, bounded per Connector instance by the same
+    /// Worker capacity as ordinary mailboxes.
+    inbound_calls: BTreeMap<InboundCallRef, PendingInboundCall>,
+    /// Driver terminal observations waiting for their atomic Connector
+    /// transaction. A reference appears at most once.
+    settled_inbound_calls: VecDeque<InboundCallEvent>,
     /// Live keyed/singleton instances whose lifecycle is observable.
     instances: BTreeMap<InstanceRef, Instance>,
     /// Selected successor generations not yet allowed to start.
@@ -693,10 +726,12 @@ impl<'plan> Vm<'plan> {
                 .iter()
                 .any(|handler| matches!(&handler.activation, node::HandlerActivation::Join { .. })),
             graph_version,
-            scheduler: Scheduler::new(1024),
+            scheduler: Scheduler::new(WORKER_MAILBOX_CAPACITY),
             state: InstanceState::new(),
             dispatcher: Dispatcher::new(),
             pending: BTreeMap::new(),
+            inbound_calls: BTreeMap::new(),
+            settled_inbound_calls: VecDeque::new(),
             instances: BTreeMap::new(),
             waiting: BTreeMap::new(),
             closing: BTreeSet::new(),
@@ -773,6 +808,41 @@ impl<'plan> Vm<'plan> {
         }
     }
 
+    /// Retains terminal observations for admitted inbound Calls after judging
+    /// them against the resolved Connector output table. No journal mutation
+    /// occurs here; [`Self::step`] commits each accepted completion exactly
+    /// once as an ordinary Connector transaction.
+    #[must_use]
+    pub fn queue_inbound_call_events(
+        &mut self,
+        events: impl IntoIterator<Item = InboundCallEvent>,
+    ) -> InboundCallPumpReport {
+        let gate = PlanGate { plan: self.plan };
+        let mut report = InboundCallPumpReport::default();
+        for event in events {
+            let Some(pending) = self.inbound_calls.get(&event.call_ref) else {
+                report.uncorrelated.push(event);
+                continue;
+            };
+            if self
+                .settled_inbound_calls
+                .iter()
+                .any(|queued| queued.call_ref == event.call_ref)
+            {
+                report.discarded.push(event);
+                continue;
+            }
+            let connector = &self.plan.nodes[pending.slot.index()].path;
+            if let Err(reason) = gate.admit(connector, &event.completion) {
+                report.rejected.push((event, reason));
+                continue;
+            }
+            self.settled_inbound_calls.push_back(event);
+            report.queued = report.queued.saturating_add(1);
+        }
+        report
+    }
+
     fn inject_submission(
         &mut self,
         journal: &mut dyn Journal,
@@ -783,6 +853,7 @@ impl<'plan> Vm<'plan> {
         // Boundary injection and Connector-origin roots are distinct causal
         // sources. The caller chooses the category; the validated plan proves
         // the exact endpoint before the journal reserves a sequence.
+        let mut inbound_source = None;
         let from = if let Some(connector) = connector_path.as_ref() {
             let source = self
                 .plan
@@ -795,21 +866,24 @@ impl<'plan> Vm<'plan> {
                     let output = planned.ports.iter().any(|decl| {
                         decl.port == submission.port && decl.direction == node::Direction::Output
                     });
-                    (spec.roles.has_inbound() && output).then_some(index)
+                    (spec.roles.has_inbound() && output).then_some((index, spec.exchange))
                 });
-            let Some(source) = source else {
+            let Some((source, exchange)) = source else {
                 return Err(VmError::UnknownInboundSource {
                     connector: connector.clone(),
                     port: submission.port.clone(),
                 });
             };
-            EndpointRef {
-                node: Some(Slot::new(u32::try_from(source).map_err(|_| {
-                    VmError::UnknownInboundSource {
+            let source =
+                Slot::new(
+                    u32::try_from(source).map_err(|_| VmError::UnknownInboundSource {
                         connector: connector.clone(),
                         port: submission.port.clone(),
-                    }
-                })?)),
+                    })?,
+                );
+            inbound_source = Some((source, exchange));
+            EndpointRef {
+                node: Some(source),
                 port: submission.port.clone(),
             }
         } else {
@@ -880,34 +954,103 @@ impl<'plan> Vm<'plan> {
         // zero-id provisional envelope would be a semantic lie. Destination
         // admission and the accepting record commit only after this complete
         // envelope has selected every route.
-        let inbound = match (connector_path, session) {
+        let mut inbound = match (connector_path, session) {
             (Some(_), session) => journal.prepare_connector_inbound(submission, session),
             (None, Some(session)) => journal.prepare_session_inbound(submission, session),
             (None, None) => journal.prepare_inbound(submission),
         }
         .map_err(VmError::Journal)?;
         let mut candidates = BTreeMap::new();
-        let prepared =
-            self.prepare_routes(journal, &from, None, inbound.envelope(), &mut candidates)?;
+        // A Call root opens an obligation on the exact source Connector
+        // generation. Select that instance in the same pure preparation as
+        // downstream routing; the accepting INBOUND record seals both before
+        // either bundle or delivery becomes visible.
+        let source_target = match inbound_source {
+            Some((source, ConnectorExchange::Call)) => {
+                let owner = self.plan.nodes[source.index()].owner;
+                let scope = self.owner_chain(owner)?.first().copied().ok_or_else(|| {
+                    VmError::PlanInvariant {
+                        node: self.plan.nodes[source.index()].path.clone(),
+                        reason: "an inbound Call source has no owner chain",
+                    }
+                })?;
+                let target = self.prepare_target(
+                    journal,
+                    scope,
+                    None,
+                    source,
+                    inbound.envelope(),
+                    &mut candidates,
+                )?;
+                let held = self
+                    .inbound_calls
+                    .values()
+                    .filter(|pending| {
+                        pending.slot == source && pending.instance == target.reference
+                    })
+                    .count();
+                if held >= WORKER_MAILBOX_CAPACITY {
+                    return Err(VmError::MailboxFull {
+                        node: self.plan.nodes[source.index()].path.clone(),
+                    });
+                }
+                inbound = inbound
+                    .into_call(target.reference.clone())
+                    .map_err(VmError::Journal)?;
+                Some((source, target))
+            }
+            Some((_, ConnectorExchange::Event | ConnectorExchange::Session)) | None => None,
+        };
+        let source_instance = source_target.as_ref().map(|(_, target)| &target.reference);
+        let prepared = self.prepare_routes(
+            journal,
+            &from,
+            // The source bundle is still a pure candidate, not an installed
+            // live instance. Re-selecting through the shared candidate map
+            // reuses every common owner reference without making the VM
+            // state visible before the INBOUND commit.
+            None,
+            inbound.envelope(),
+            &mut candidates,
+        )?;
         self.check_room_for_routes(core::iter::once(prepared.as_slice()))?;
         let recorded_routes = self.inbound_route_targets(&prepared);
         let committed = journal
             .commit_inbound(inbound, recorded_routes)
             .map_err(VmError::Journal)?;
         let id = committed.envelope.meta().sys().id();
-        let session = committed
+        let exchange = committed
             .record
-            .session
+            .exchange
             .as_deref()
-            .copied()
-            .map(|session| match session {
-                crate::journal::SessionIngressRecord::Open(reference)
-                | crate::journal::SessionIngressRecord::Message(reference) => reference,
+            .map(|exchange| match exchange {
+                crate::journal::InboundExchangeRecord::Call(call) => {
+                    crate::boundary::InboundExchangeRef::Call(call.reference)
+                }
+                crate::journal::InboundExchangeRecord::Session(session) => {
+                    let reference = match session {
+                        crate::journal::SessionIngressRecord::Open(reference)
+                        | crate::journal::SessionIngressRecord::Message(reference) => *reference,
+                    };
+                    crate::boundary::InboundExchangeRef::Session(reference)
+                }
             });
-        self.route_prepared(prepared, &candidates, &committed.envelope, None);
+        if let Some((source, target)) = &source_target {
+            self.install_target(target, &candidates, &committed.envelope);
+            let call_ref = InboundCallRef::from_root(id);
+            self.inbound_calls.insert(
+                call_ref,
+                PendingInboundCall {
+                    slot: *source,
+                    request: committed.envelope.clone(),
+                    instance: target.reference.clone(),
+                },
+            );
+        }
+        self.route_prepared(prepared, &candidates, &committed.envelope, source_instance);
         Ok(InboundAcceptance {
             envelope: id,
-            session,
+            exchange,
         })
     }
 
@@ -937,6 +1080,20 @@ impl<'plan> Vm<'plan> {
         self.progress_closures();
         if !self.lifecycle.is_empty() {
             self.fire_lifecycle_next(journal)?;
+            return Ok(true);
+        }
+        let inbound_ready =
+            self.settled_inbound_calls
+                .iter()
+                .enumerate()
+                .find_map(|(index, event)| {
+                    let pending = self.inbound_calls.get(&event.call_ref)?;
+                    self.instances
+                        .contains_key(&pending.instance)
+                        .then(|| (index, event.clone(), pending.clone()))
+                });
+        if let Some((index, event, pending)) = inbound_ready {
+            self.settle_inbound_call_next(journal, index, event, pending)?;
             return Ok(true);
         }
         if let Some(index) = self.settled.iter().position(|entry| {
@@ -1545,7 +1702,12 @@ impl<'plan> Vm<'plan> {
     /// matching arrival or its dated/count eviction makes progress possible.
     #[must_use]
     pub fn is_stable(&self) -> bool {
-        if !self.lifecycle.is_empty() || !self.settled.is_empty() || !self.pending.is_empty() {
+        if !self.lifecycle.is_empty()
+            || !self.settled.is_empty()
+            || !self.pending.is_empty()
+            || !self.settled_inbound_calls.is_empty()
+            || !self.inbound_calls.is_empty()
+        {
             return false;
         }
         if !self.has_join_activations {
@@ -1594,7 +1756,7 @@ impl<'plan> Vm<'plan> {
     /// cannot finish alone.
     #[must_use]
     pub fn has_open_obligations(&self) -> bool {
-        !self.pending.is_empty()
+        !self.pending.is_empty() || !self.inbound_calls.is_empty()
     }
 
     fn instance_has_direct_work(&self, reference: &InstanceRef) -> bool {
@@ -1607,6 +1769,10 @@ impl<'plan> Vm<'plan> {
                 self.scheduler.mailboxes.has_work(slot, reference)
                     || self
                         .pending
+                        .values()
+                        .any(|pending| pending.slot == slot && pending.instance == *reference)
+                    || self
+                        .inbound_calls
                         .values()
                         .any(|pending| pending.slot == slot && pending.instance == *reference)
             }
@@ -1715,7 +1881,7 @@ impl<'plan> Vm<'plan> {
             instance: reference.clone(),
             parent_instance: None,
             close_scope: Some(reference.clone()),
-            session_exit: None,
+            exchange_exit: None,
             trigger: node::Trigger::Lifecycle(node::Lifecycle::Closing),
             cause: Some(cause.meta().sys().id()),
             consumed: vec![],
@@ -1983,7 +2149,7 @@ impl<'plan> Vm<'plan> {
                     instance: work.instance.clone(),
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
-                    session_exit: None,
+                    exchange_exit: None,
                     trigger: node::Trigger::Lifecycle(work.lifecycle),
                     cause: Some(work.cause.meta().sys().id()),
                     consumed: vec![],
@@ -2254,6 +2420,41 @@ impl<'plan> Vm<'plan> {
             self.scheduler.mailboxes.release(slot, &request.instance);
         }
         self.route_emissions(slot, &request.instance, prepared);
+        self.progress_closures();
+        Ok(())
+    }
+
+    /// Commits one retained inbound-Call terminal observation. The Call root
+    /// is its causal input; there is no outbound record and no mailbox cursor
+    /// to consume.
+    fn settle_inbound_call_next(
+        &mut self,
+        journal: &mut dyn Journal,
+        index: usize,
+        event: InboundCallEvent,
+        pending: PendingInboundCall,
+    ) -> Result<(), VmError> {
+        let executor = TransactionExecutor::new(self.plan, self.graph_version);
+        let mut outcome = executor
+            .inbound_call_completion(
+                pending.slot,
+                &pending.instance,
+                &pending.request,
+                event.call_ref,
+                &event.completion,
+            )
+            .map_err(VmError::Fault)?;
+        let prepared = self.validate_and_prepare_emissions(
+            journal,
+            pending.slot,
+            &pending.instance,
+            &outcome.record,
+        )?;
+        outcome.record.routes = self.routed_deliveries(&prepared);
+        journal.commit(outcome.record).map_err(VmError::Journal)?;
+        self.settled_inbound_calls.remove(index);
+        self.inbound_calls.remove(&event.call_ref);
+        self.route_emissions(pending.slot, &pending.instance, prepared);
         self.progress_closures();
         Ok(())
     }

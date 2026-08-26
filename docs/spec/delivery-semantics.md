@@ -10,8 +10,9 @@
 > subforms and two-phase Driver decision API executable. H2 publishes the
 > concrete HTTP/WebSocket sheets and Lab bindings. H3 selects the private
 > bounded hosted-engine seam; H4 executes HttpClient with pre-visible-only
-> fallback and generic outbound backpressure. Server and Session I/O remain
-> gated by H5–H6.
+> fallback and generic outbound backpressure. D-2026-08-26-5 lands H5's
+> generic inbound Call fold; live server wire I/O and Session I/O remain gated
+> by the rest of H5–H6.
 
 The question this doc answers : **what survives — a crash, a redelivery, a
 slow consumer, a dead process — and what exactly is promised at each
@@ -307,6 +308,33 @@ per-attempt** (who called what, when, with which key, how many times —
 journal, not reconstruction), and a fixture can write an unresolved `open`
 record to test this table — the crash becomes an ordinary simulation case.
 
+### 4.4.1 Inbound Calls — commit the root, then close it once
+
+An inbound Call is not an OUTBOUND call pointed backwards. The world retains
+one proposal while the runtime validates the source endpoint, selects the
+exact source instance and all downstream routes, and reserves bounded
+capacity. The accepting INBOUND record atomically commits the root, its
+`InboundCallRef` and source `InstanceRef`; only after that commit may the
+Driver observe acceptance or send a fixed application acknowledgement.
+
+The root itself opens the obligation. A terminal Driver observation is judged
+against the resolved Connector output table and becomes one ordinary
+Connector transaction:
+
+```text
+INBOUND(root, call_ref, source_instance)     // opens after bounded admission
+        ... graph work ...
+TRANSACTION(l:reply, cause = root, call_ref) // outputs*, exactly one exit last
+```
+
+The terminal transaction consumes no synthetic mailbox cursor and creates no
+OUTBOUND record. The journal requires its owner and generation to equal the
+opening source, refuses `l:reply` without the open reference, and closes the
+reference once. Invalid, crossed, duplicate and late Driver observations are
+non-causal. The generic fold counts the Call as open work for instance
+Closing; H5 must add bounded live-server cancellation/timeout before admitting
+a listener that can retain a response indefinitely.
+
 ### 4.5 Sessions — one resource lifecycle, many message effects
 
 A call and a session share journal-before-effect, but not cardinality:
@@ -531,8 +559,9 @@ never doubling — a near-stateless dev router is legitimate).
 | Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
 |---|---|---|---|
 | Recovery resolution of an unknown outbound (no key) | `l:recover` | the request envelope whose outcome is unknown | the Connector node |
+| Inbound Call terminal | `l:reply` | the committed root request | the inbound Connector node |
 
-This trigger belongs to the `l:` registry
+These triggers belong to the `l:` registry
 ([envelope.md](envelope.md) §1.1/§3.1).
 
 

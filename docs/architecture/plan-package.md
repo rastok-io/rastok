@@ -415,10 +415,11 @@ activation := [1, port (text)]
               // A bound requires exact typed output `expired`; `where` lives
               // in handler key 3 and no second correlation key is transported.
 lifecycle  := uint: 1 start · 2 stop · 3 compensate · 4 next ·
-                    5 timeout · 6 evict · 7 recover · 8 closing
+                    5 timeout · 6 evict · 7 recover · 8 closing · 9 reply
               // registry is closed and extend-only; M1.4 instance lifecycle
-              // activates start/stop, while aspect/supervision rows remain
-              // governed by their own feature gates
+              // activates start/stop. `reply` is an internal inbound-Call
+              // transaction and is never admitted as a source handler;
+              // aspect/supervision rows remain governed by their gates
 step       := [1, name (text), tree]              — let
             | [2, port (text), emission]          — emit
             | [3, name (text), tree]              — set var

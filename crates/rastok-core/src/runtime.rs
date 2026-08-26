@@ -13,7 +13,7 @@
 
 pub mod vm;
 
-use crate::boundary::Completion;
+use crate::boundary::{Completion, InboundCallRef};
 use crate::datatype::DataType;
 use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue, Scalar};
 use crate::expr;
@@ -742,7 +742,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
-                session_exit: None,
+                exchange_exit: None,
                 trigger,
                 cause: Some(delivery.envelope.meta().sys().id()),
                 consumed: vec![ConsumedPosition {
@@ -835,7 +835,7 @@ impl<'plan> TransactionExecutor<'plan> {
                     instance: instance.clone(),
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
-                    session_exit: None,
+                    exchange_exit: None,
                     trigger: trigger.clone(),
                     cause,
                     consumed,
@@ -895,7 +895,7 @@ impl<'plan> TransactionExecutor<'plan> {
                             instance: instance.clone(),
                             parent_instance: parent_instance.cloned(),
                             close_scope: None,
-                            session_exit: None,
+                            exchange_exit: None,
                             trigger: trigger.clone(),
                             cause,
                             consumed,
@@ -1030,7 +1030,7 @@ impl<'plan> TransactionExecutor<'plan> {
                 instance: instance.clone(),
                 parent_instance: parent_instance.cloned(),
                 close_scope: close_requested.then(|| instance.clone()),
-                session_exit: None,
+                exchange_exit: None,
                 trigger: trigger.clone(),
                 cause,
                 consumed,
@@ -1119,11 +1119,84 @@ impl<'plan> TransactionExecutor<'plan> {
             return Err(Fault::UnknownSlot(slot));
         };
         let connector_path = &planned.path;
-        let emitting_id = delivery.envelope.meta().sys().id();
-        let request_meta = delivery.envelope.meta();
+        let emissions =
+            self.completion_emissions(connector_path, &delivery.envelope, trigger, completion);
+        Ok(TransactionOutcome {
+            record: TransactionRecord {
+                owner_path: crate::plan::OwnerPath::from(connector_path),
+                instance: instance.clone(),
+                parent_instance: None,
+                close_scope: None,
+                exchange_exit: None,
+                trigger: trigger.clone(),
+                cause: None,
+                consumed: vec![ConsumedPosition {
+                    edge: delivery.edge.clone(),
+                    source: delivery.source_instance.clone(),
+                    seq: delivery.seq,
+                }],
+                join_inputs: vec![],
+                state_delta: vec![],
+                timers: vec![],
+                emissions,
+                routes: vec![],
+            },
+        })
+    }
+
+    /// Builds the terminal Connector transaction of one admitted inbound
+    /// Call. The root opened the obligation, so no mailbox cursor is consumed;
+    /// the transaction instead closes the Call reference carried by INBOUND.
+    ///
+    /// # Errors
+    ///
+    /// [`Fault::UnknownSlot`] when `slot` is outside the validated plan.
+    pub fn inbound_call_completion(
+        &self,
+        slot: Slot,
+        instance: &InstanceRef,
+        request: &Envelope,
+        call_ref: InboundCallRef,
+        completion: &Completion,
+    ) -> Result<TransactionOutcome, Fault> {
+        let Some(planned) = self.plan.nodes.get(slot.index()) else {
+            return Err(Fault::UnknownSlot(slot));
+        };
+        let trigger = node::Trigger::Lifecycle(node::Lifecycle::Reply);
+        let emissions = self.completion_emissions(&planned.path, request, &trigger, completion);
+        Ok(TransactionOutcome {
+            record: TransactionRecord {
+                owner_path: crate::plan::OwnerPath::from(&planned.path),
+                instance: instance.clone(),
+                parent_instance: None,
+                close_scope: None,
+                exchange_exit: Some(Box::new(crate::journal::InboundExchangeExitRecord::Call(
+                    call_ref,
+                ))),
+                trigger,
+                cause: Some(request.meta().sys().id()),
+                consumed: vec![],
+                join_inputs: vec![],
+                state_delta: vec![],
+                timers: vec![],
+                emissions,
+                routes: vec![],
+            },
+        })
+    }
+
+    fn completion_emissions(
+        &self,
+        connector_path: &node::Path,
+        request: &Envelope,
+        trigger: &node::Trigger,
+        completion: &Completion,
+    ) -> Vec<Emission> {
+        let emitting_id = request.meta().sys().id();
+        let request_meta = request.meta();
         let request_sys = request_meta.sys();
         let mut next_index: BTreeMap<node::Port, u32> = BTreeMap::new();
-        let emissions = completion
+        completion
             .outputs()
             .iter()
             .map(|output| {
@@ -1147,35 +1220,13 @@ impl<'plan> TransactionExecutor<'plan> {
                     ext.extend(output.ext.clone());
                     meta = meta.with_ext(ext);
                 }
-                let envelope = Envelope::new(meta, output.data.clone());
                 Emission {
                     port: output.port.clone(),
                     index: emission_index,
-                    envelope,
+                    envelope: Envelope::new(meta, output.data.clone()),
                 }
             })
-            .collect();
-        Ok(TransactionOutcome {
-            record: TransactionRecord {
-                owner_path: crate::plan::OwnerPath::from(connector_path),
-                instance: instance.clone(),
-                parent_instance: None,
-                close_scope: None,
-                session_exit: None,
-                trigger: trigger.clone(),
-                cause: None,
-                consumed: vec![ConsumedPosition {
-                    edge: delivery.edge.clone(),
-                    source: delivery.source_instance.clone(),
-                    seq: delivery.seq,
-                }],
-                join_inputs: vec![],
-                state_delta: vec![],
-                timers: vec![],
-                emissions,
-                routes: vec![],
-            },
-        })
+            .collect()
     }
 
     /// The handler registered for an activation pattern, if any — the
