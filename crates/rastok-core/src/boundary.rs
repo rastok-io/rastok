@@ -634,9 +634,9 @@ pub enum HttpClientExit {
     ProtocolFailed,
     /// The scheduler's call budget won the close race.
     TimeoutExpired,
-    /// The declared response-body bound was exceeded.
+    /// The declared request- or response-body bound was exceeded.
     BodyTooLarge {
-        /// Declared response-body limit.
+        /// Declared body limit.
         limit: u64,
     },
     /// A complete body did not inhabit the selected codec.
@@ -1173,6 +1173,11 @@ pub struct PortOutput {
     pub port: node::Port,
     /// Payload representation returned by the driver.
     pub data: envelope::Data,
+    /// External observations owned by this exact boundary output.
+    ///
+    /// The VM validates and overlays these fields after ordinary request-zone
+    /// inheritance. Drivers never mint `meta.sys` or write `meta.app`.
+    pub ext: envelope::Namespace,
 }
 
 /// One admitted invocation's ordered boundary completion.
@@ -1236,14 +1241,17 @@ impl Completion {
         outputs.extend(out.into_iter().map(|data| PortOutput {
             port: node::Port::conventional_out(),
             data,
+            ext: envelope::Namespace::new(),
         }));
         outputs.extend(err.into_iter().map(|data| PortOutput {
             port: node::Port::conventional_err(),
             data,
+            ext: envelope::Namespace::new(),
         }));
         outputs.push(PortOutput {
             port: node::Port::conventional_exit(),
             data: envelope::Data::materialized(exit.into_value()),
+            ext: envelope::Namespace::new(),
         });
         Self { outputs }
     }
@@ -1263,11 +1271,13 @@ impl Completion {
             outputs.push(PortOutput {
                 port: node::Port::conventional_out(),
                 data,
+                ext: envelope::Namespace::new(),
             });
         }
         outputs.push(PortOutput {
             port: node::Port::conventional_exit(),
             data: envelope::Data::materialized(exit.into_value()),
+            ext: envelope::Namespace::new(),
         });
         Self { outputs }
     }
@@ -1283,7 +1293,31 @@ impl Completion {
             outputs: alloc::vec![PortOutput {
                 port: node::Port::conventional_exit(),
                 data: envelope::Data::materialized(value),
+                ext: envelope::Namespace::new(),
             }],
+        }
+    }
+
+    /// Builds one usable HTTP response followed by its sole terminal fact.
+    #[must_use]
+    pub fn http_client(
+        out: envelope::Data,
+        ext: envelope::Namespace,
+        exit: HttpClientExit,
+    ) -> Self {
+        Self {
+            outputs: alloc::vec![
+                PortOutput {
+                    port: node::Port::conventional_out(),
+                    data: out,
+                    ext,
+                },
+                PortOutput {
+                    port: node::Port::conventional_exit(),
+                    data: envelope::Data::materialized(exit.into_value()),
+                    ext: envelope::Namespace::new(),
+                },
+            ],
         }
     }
 
@@ -1786,6 +1820,16 @@ pub trait OutboundConnectorDriver {
     fn session(&mut self) -> Option<&mut dyn SessionConnectorDriver>;
 }
 
+/// Result of offering one already-journaled call to its bounded Driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallStart {
+    /// The Driver owns the effect and must eventually answer or be cancelled.
+    Started,
+    /// No effect started; bounded local capacity kept the call pending.
+    /// The dispatcher will offer the same journaled intent again.
+    Pending,
+}
+
 /// Starts external calls and supplies their answers. A Call driver
 /// answers or stays silent — never a timeout and never an unknown
 /// outcome: budgets belong to the scheduler, triage to the recovery
@@ -1817,10 +1861,11 @@ pub trait CallConnectorDriver {
         let _ = call_ref;
     }
 
-    /// Executes the effect of an already-journaled open call. The
-    /// request envelope rides along because the intent seals only the
-    /// digest of the request, not its bytes.
-    fn start(&mut self, intent: &Intent, request: &Envelope);
+    /// Offers an already-journaled open call for execution. A bounded Driver
+    /// may leave it pending without starting an effect; the same intent is
+    /// then offered again. The request envelope rides along because the
+    /// intent seals only the digest of the request, not its bytes.
+    fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart;
 
     /// The answers that arrived since the last drain.
     fn events(&mut self) -> Vec<Response>;
@@ -1989,7 +2034,8 @@ pub trait OutboundConnectorBindings {
     /// # Errors
     ///
     /// The planned path has no stable outbound route.
-    fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError>;
+    fn start(&mut self, intent: &Intent, request: &Envelope)
+    -> Result<CallStart, DriverRouteError>;
 
     /// Collects all answers since the previous round.
     ///
@@ -2036,9 +2082,12 @@ where
         Ok(())
     }
 
-    fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError> {
-        CallConnectorDriver::start(self, intent, request);
-        Ok(())
+    fn start(
+        &mut self,
+        intent: &Intent,
+        request: &Envelope,
+    ) -> Result<CallStart, DriverRouteError> {
+        Ok(CallConnectorDriver::start(self, intent, request))
     }
 
     fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
@@ -2106,9 +2155,9 @@ impl fmt::Display for DispatchError {
 
 impl core::error::Error for DispatchError {}
 
-/// The loop between the journal and the outbound drivers. It starts every
-/// journaled open call exactly once — journal-before-effect: the
-/// record always exists before the driver hears — and settles
+/// The loop between the journal and the outbound drivers. It lets a Driver
+/// take ownership of every journaled open call exactly once — journal-before-
+/// effect: the record always exists before the driver hears — and settles
 /// closures through the journal's close-once race into routable
 /// [`BoundaryEvent`]s. The VM owns everything after: the connector's
 /// transaction builds the output envelopes; the dispatcher never
@@ -2174,10 +2223,12 @@ impl Dispatcher {
             let request = journal
                 .find_envelope(intent.emitting_id)
                 .ok_or(DispatchError::MissingRequest(intent.call_ref))?;
-            bindings
+            let start = bindings
                 .start(intent, &request)
                 .map_err(DispatchError::Driver)?;
-            self.started.insert(intent.call_ref);
+            if start == CallStart::Started {
+                self.started.insert(intent.call_ref);
+            }
         }
         // Settle phase: won closures become routable events; losers
         // and strays stay visible.
@@ -2345,8 +2396,9 @@ mod tests {
             })
         }
 
-        fn start(&mut self, intent: &Intent, request: &Envelope) {
+        fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart {
             self.started.push((intent.clone(), request.clone()));
+            CallStart::Started
         }
 
         fn events(&mut self) -> Vec<Response> {
@@ -2356,6 +2408,7 @@ mod tests {
 
     struct StartRefusal {
         refuse: bool,
+        pending: bool,
         attempts: usize,
     }
 
@@ -2381,14 +2434,17 @@ mod tests {
             Ok(())
         }
 
-        fn start(&mut self, intent: &Intent, _: &Envelope) -> Result<(), DriverRouteError> {
+        fn start(&mut self, intent: &Intent, _: &Envelope) -> Result<CallStart, DriverRouteError> {
             self.attempts += 1;
             if self.refuse {
                 return Err(DriverRouteError::UnboundOutbound(
                     intent.connector_path.clone(),
                 ));
             }
-            Ok(())
+            if self.pending {
+                return Ok(CallStart::Pending);
+            }
+            Ok(CallStart::Started)
         }
 
         fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
@@ -2451,6 +2507,7 @@ mod tests {
         let (mut journal, _) = seeded_journal();
         let mut bindings = StartRefusal {
             refuse: true,
+            pending: false,
             attempts: 0,
         };
         let mut dispatcher = Dispatcher::new();
@@ -2465,6 +2522,33 @@ mod tests {
             .pump(&mut journal, &mut bindings, &OpenGate)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "the open call was retried");
+    }
+
+    #[test]
+    fn a_backpressured_start_remains_open_and_is_offered_again() {
+        let (mut journal, _) = seeded_journal();
+        let mut bindings = StartRefusal {
+            refuse: false,
+            pending: true,
+            attempts: 0,
+        };
+        let mut dispatcher = Dispatcher::new();
+
+        dispatcher
+            .pump(&mut journal, &mut bindings, &OpenGate)
+            .unwrap();
+        assert_eq!(bindings.attempts, 1);
+        assert_eq!(journal.open_calls().len(), 1);
+
+        bindings.pending = false;
+        dispatcher
+            .pump(&mut journal, &mut bindings, &OpenGate)
+            .unwrap();
+        assert_eq!(bindings.attempts, 2, "capacity recovery retries the call");
+        dispatcher
+            .pump(&mut journal, &mut bindings, &OpenGate)
+            .unwrap();
+        assert_eq!(bindings.attempts, 2, "a started call is never duplicated");
     }
 
     #[test]
@@ -2612,10 +2696,12 @@ mod tests {
         let out = PortOutput {
             port: node::Port::conventional_out(),
             data: Data::materialized(crate::value::Value::Int(1)),
+            ext: envelope::Namespace::new(),
         };
         let exit = PortOutput {
             port: node::Port::conventional_exit(),
             data: Data::materialized(ProcessExit::TimeoutExpired.into_value()),
+            ext: envelope::Namespace::new(),
         };
         assert_eq!(
             Completion::try_new(vec![out.clone()]),

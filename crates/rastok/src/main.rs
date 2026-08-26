@@ -187,6 +187,24 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
             }
         };
     }
+    #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
+    {
+        let http_factory =
+            match connectors::HttpClientFactory::try_new(connectors::HttpClientConfig::default()) {
+                Ok(factory) => factory,
+                Err(error) => {
+                    eprintln!("error: the built-in HttpClient Driver id is invalid: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+        registry = match registry.try_with(Box::new(http_factory)) {
+            Ok(registry) => registry,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+    }
     let mut world = match connectors::RuntimeBindings::try_new(&compilation.plan, &registry) {
         Ok(bindings) => bindings,
         Err(error) => {

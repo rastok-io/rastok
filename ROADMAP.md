@@ -154,9 +154,12 @@ The repository opens publicly with this milestone (15 October 2026).
   bounded hosted pump plus Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for
   HTTP/3, and Tungstenite, with a real-UDP
   [h3 + Quinn comparison](spikes/h3-quinn-http3/README.md), one shared trust
-  corpus and no async/core leakage. H4-H6 still own every live HTTP Driver and
-  the Codex WebSocket gateway; H3's successful HTTP/1.1 Upgrade is explicitly
-  not an Extended CONNECT claim.
+  corpus and no async/core leakage. H4 now executes the same HttpClient sheet
+  over all three versions, with pre-open exact requests, visibility-safe
+  fallback, bounded bodies, lossless response metadata, outbound
+  backpressure and the generic Call conformance battery. H5-H6 still own the
+  live HttpServer, WebSocket Drivers and Codex gateway; H3's successful
+  HTTP/1.1 Upgrade is explicitly not an Extended CONNECT claim.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected
   typed exit case rather than a privileged error channel.
 - Per-flow cost counters, carried by the journal.

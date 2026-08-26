@@ -430,7 +430,7 @@ impl OutboundConnectorBindings for NoOutboundBindings {
         &mut self,
         intent: &Intent,
         _: &Envelope,
-    ) -> Result<(), crate::boundary::DriverRouteError> {
+    ) -> Result<crate::boundary::CallStart, crate::boundary::DriverRouteError> {
         Err(crate::boundary::DriverRouteError::UnboundOutbound(
             intent.connector_path.clone(),
         ))
@@ -502,6 +502,26 @@ impl crate::boundary::CompletionGate for PlanGate<'_> {
                 };
                 crate::runtime::crossing_pins_hold(self.plan, &from, value)
                     .map_err(|refused| refused.into_fault().to_string())?;
+            }
+            for (field, value) in &output.ext {
+                let expected = crate::plan::standard_ext_field_type(field).or_else(|| {
+                    self.plan
+                        .plan()
+                        .ext_schema
+                        .iter()
+                        .find(|(known, _)| known == field)
+                        .map(|(_, ty)| ty.clone())
+                });
+                let Some(expected) = expected else {
+                    return Err(format!(
+                        "`{connector}` returned undeclared metadata `meta.ext.{field}`"
+                    ));
+                };
+                if !crate::runtime::meta_conforms(value, &expected) {
+                    return Err(format!(
+                        "`{connector}` returned invalid metadata `meta.ext.{field}`"
+                    ));
+                }
             }
         }
         Ok(())

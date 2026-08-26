@@ -51,9 +51,13 @@ cross source → validated plan without adopting a product network dependency.
 H3 is landed under D-2026-08-26-1: one bounded private pump interface hosts
 the statically selectable Hyper/Rustls H1-H2, quiche/BoringSSL H3 and
 Tungstenite machinery without entering the core or changing package, semantic
+or causal identity. H4 is landed under D-2026-08-26-2: one live HttpClient
+Driver consumes the H2 sheet over all three HTTP versions, stops fallback at
+request visibility, bounds both body directions, publishes lossless response
+metadata and passes the generic Call battery without moving package, semantic
 or causal identity. The remaining
-[ordered backlog](m1.6-http-websocket-backlog.md) starts at H4's live
-HttpClient Driver.
+[ordered backlog](m1.6-http-websocket-backlog.md) starts at H5's live
+HttpServer Driver.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -388,7 +392,9 @@ step touches `vm.rs` once.
    real-UDP [quiche spike](../../spikes/quiche-http3/README.md) and
    [h3 + Quinn comparison](../../spikes/h3-quinn-http3/README.md) prove the
    adoption and substitution paths without moving package, semantic or causal
-   identity; H4 remains the first live network Driver.
+   identity. H4 now supplies the first live network Driver: HttpClient over
+   H1/H2/H3 with exact pre-open request bytes, bounded response projection and
+   visibility-safe fallback.
 8. **The Loop aspect** — the bounded-iteration primitive, alive on a
    graph.
 9. **Cost counters** — the `cost` map (stdlib §6.4) accumulated

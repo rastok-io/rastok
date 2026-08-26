@@ -8,9 +8,10 @@
 > compensation × crash recovery.
 > D-2026-08-25-1 adds sessions in §4.5. H1 makes their generic causal
 > subforms and two-phase Driver decision API executable. H2 publishes the
-> concrete HTTP/WebSocket sheets and Lab bindings. H3 selects only a private
-> bounded hosted-engine seam; contract-bound network I/O remains gated by
-> H4–H6.
+> concrete HTTP/WebSocket sheets and Lab bindings. H3 selects the private
+> bounded hosted-engine seam; H4 executes HttpClient with pre-visible-only
+> fallback and generic outbound backpressure. Server and Session I/O remain
+> gated by H5–H6.
 
 The question this doc answers : **what survives — a crash, a redelivery, a
 slow consumer, a dead process — and what exactly is promised at each
@@ -188,6 +189,13 @@ share a request digest merely because their trigger payloads are equal. The
 resolved setting map is an execution carrier, not a new causal record field:
 the outbound record retains the canonical digest authority.
 
+Offering that open record to an outbound Driver is itself bounded. A
+`CallStart::Pending` verdict means no effect started: the record remains open
+and the dispatcher offers the same intent again after local capacity returns.
+Only `Started` transfers ownership and enters the local exactly-once start
+fold. Consequently queue or byte pressure changes pacing but can never be
+reported as an external domain fact.
+
 For `rastok/file@1`, the post-open worker decodes and executes that descriptor
 itself; it never re-reads the plan settings. Cooperative cancellation before a
 complete read or atomic-rename commit emits nothing from the Driver, leaving
@@ -195,6 +203,13 @@ the scheduler's won closure authoritative. A completion observed after another
 closure won is handled by the same discarded-response rule as every outbound
 protocol. `Dispatcher::resume` starts no existing open call: filesystem recall
 is a future recovery-fold decision, not replay behavior.
+
+For `rastok/http-client@1`, the descriptor additionally seals method,
+absolute URL, lossless ordered headers, exact codec body, authentication and
+idempotency material. The live Driver may try another declared HTTP version
+only while no request byte can have become visible. Once visibility is
+possible, an error closes through the ordinary typed result; automatic recall
+would be an ambiguous second external operation.
 
 One call = exactly one closure. The recall rows of §4.4 need no new closure
 kind — a recall is *the same call* re-attempted, and its reply (or timeout)

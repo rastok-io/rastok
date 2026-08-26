@@ -72,8 +72,14 @@
 > **M1.6 H3 also uses v11 unchanged.** Its Cargo features, hosted pump,
 > HTTP/QUIC/TLS libraries and WebSocket message machine are physical Driver
 > assembly only. None enters a Connector row or package. H3 therefore moves no
-> package, semantic hash or causal trace; live H4-H6 Drivers must continue to
+> package, semantic hash or causal trace; live H4-H6 Drivers continue to
 > consume the already-typed H2 rows rather than adding backend facts.
+>
+> **M1.6 H4 also uses v11 unchanged.** HttpClient's exact prepared bytes seal
+> through the existing Call digest; HTTP version, status and headers are
+> response-envelope observations, not plan fields. `CallStart::Pending` is
+> local pacing and adds no record. No package, semantic hash or existing trace
+> moves.
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and

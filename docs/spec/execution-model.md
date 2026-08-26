@@ -13,9 +13,10 @@
 > R7 closes the one-worker slice and proves physical Worker assignment is not
 > a causal input. D-2026-08-25-1 adds the M1.6 distinction between Event,
 > Call and Session exchanges; H1 makes §6.6's generic session fold executable,
-> H2 publishes their concrete sheets and Lab bindings, and H3 selects the
-> private bounded hosted-engine seam; live network execution remains gated by
-> H4–H6.
+> H2 publishes their concrete sheets and Lab bindings, H3 selects the private
+> bounded hosted-engine seam, and H4 executes HttpClient through the ordinary
+> Call lifecycle over H1/H2/H3. Server and Session execution remain gated by
+> H5–H6.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the

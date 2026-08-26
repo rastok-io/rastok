@@ -181,9 +181,17 @@ connector-free gauge remains the negative scope witness.
 **M1.6 H3 hosted-engine checkpoint (2026-08-26).** Cargo features select the
 bounded pump and private HTTP/QUIC/TLS/WebSocket libraries; none is a semantic
 or causal fact. Every pre-H3 hash, package and trace remains byte-identical and
-the connector-free gauge remains the negative scope witness. Future H4–H6
-network facts use H1's already allocated Call/Session forms rather than
+the connector-free gauge remains the negative scope witness. H4–H6 network
+facts use H1's already allocated Call/Session forms rather than
 extending a package merely to name a library or negotiated wire version.
+
+**M1.6 H4 live-HttpClient checkpoint (2026-08-26).** The live Driver consumes
+the exact H2 sheet and H1 Call forms. Prepared request bytes already own the
+OUTBOUND digest; selected HTTP version and response headers/status are external
+observations on newly minted output envelopes. The new metadata-map carrier
+reuses value tags 18/19/8 and existing scalar tags, so no old metadata value
+changes bytes. H4 therefore moves no package, semantic hash or pre-existing
+causal trace; all goldens and the gauge witness remain byte-identical.
 
 ## 2. `graph_version` and the manifest
 

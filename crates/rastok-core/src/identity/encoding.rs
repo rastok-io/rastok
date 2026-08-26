@@ -126,6 +126,27 @@ pub fn meta_tagged(value: &crate::envelope::MetaValue) -> Cbor {
             Cbor::Uint(19),
             Cbor::Array(items.iter().map(scalar_tagged).collect()),
         ]),
+        crate::envelope::MetaValue::Map(entries) => {
+            let mut pairs: Vec<(Vec<u8>, Cbor)> = entries
+                .iter()
+                .map(|(key, values)| {
+                    let tagged_key = Cbor::Array(vec![Cbor::Uint(8), Cbor::Text(key.clone())]);
+                    let tagged_values = Cbor::Array(vec![
+                        Cbor::Uint(19),
+                        Cbor::Array(values.iter().map(scalar_tagged).collect()),
+                    ]);
+                    (
+                        encode(&tagged_key),
+                        Cbor::Array(vec![tagged_key, tagged_values]),
+                    )
+                })
+                .collect();
+            pairs.sort_by(|left, right| left.0.cmp(&right.0));
+            Cbor::Array(vec![
+                Cbor::Uint(18),
+                Cbor::Array(pairs.into_iter().map(|(_, pair)| pair).collect()),
+            ])
+        }
     }
 }
 
@@ -193,6 +214,7 @@ fn int_cbor(value: i64) -> Cbor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::collections::BTreeMap;
     use alloc::string::String;
 
     /// Map keys sort by their canonical tagged bytes — CBOR text
@@ -220,6 +242,39 @@ mod tests {
             Cbor::Text(String::from("b")),
             "shorter text is byte-smaller"
         );
+    }
+
+    #[test]
+    fn lossless_header_metadata_reuses_the_canonical_map_and_array_tags() {
+        let headers = crate::envelope::MetaValue::Map(BTreeMap::from([
+            (
+                String::from("aa"),
+                alloc::vec![crate::envelope::Scalar::Bytes(alloc::vec![2])],
+            ),
+            (
+                String::from("b"),
+                alloc::vec![
+                    crate::envelope::Scalar::Bytes(alloc::vec![3]),
+                    crate::envelope::Scalar::Bytes(alloc::vec![4]),
+                ],
+            ),
+        ]));
+        let Cbor::Array(tagged) = meta_tagged(&headers) else {
+            panic!("metadata map has one tagged form");
+        };
+        assert_eq!(tagged[0], Cbor::Uint(18));
+        let Cbor::Array(entries) = &tagged[1] else {
+            panic!("metadata map contains canonical pairs");
+        };
+        let Cbor::Array(first) = &entries[0] else {
+            panic!("metadata map entry is a pair");
+        };
+        assert_eq!(
+            first[0],
+            Cbor::Array(alloc::vec![Cbor::Uint(8), Cbor::Text(String::from("b"))]),
+            "canonical bytes, rather than Rust string order, own map ordering",
+        );
+        assert!(matches!(first[1], Cbor::Array(ref value) if value[0] == Cbor::Uint(19)));
     }
 
     #[test]

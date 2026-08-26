@@ -18,6 +18,8 @@ mod registry;
 mod websocket;
 
 pub use file::{File, FileBindError, FileFactory, FileSettingsError};
+#[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
+pub use http::{HttpClientConfig, HttpClientFactory};
 pub use manifest::{DriverManifest, DriverManifestEntry, DriverManifestError};
 #[cfg(test)]
 pub(crate) use process::ProcessRequestBindings;
@@ -30,7 +32,7 @@ pub use registry::{
 /// The family-owned, effectless half of a scripted Driver.
 ///
 /// Real and Lab Drivers share request framing and scheduler projections; only
-/// observation of the external world is replaced. Two shipped families make
+/// observation of the external world is replaced. Three shipped families make
 /// this a real substitution seam rather than a decorative trait.
 pub(crate) trait ScriptedConnectorProtocol {
     fn prepare_request(

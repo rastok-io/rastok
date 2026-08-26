@@ -41,8 +41,10 @@ nested projection) — refused at check and re-verified by the
 package validator. `ext`'s vocabulary belongs to
 connector contract sheets (their `Populates` row, stdlib.md) plus
 the standard protocol leaves (§5.2–5.4); handlers may rewrite declared
-ext fields, never invent one. Each zone's leaves are
-`scalar | array<scalar>` (flat — nested/heavy data goes in `data`);
+ext fields, never invent one. Each zone's leaves use the closed metadata
+carrier `scalar | array<scalar> | map<text,array<scalar>>`. The map form is
+one leaf, not a nested namespace; it exists for lossless repeated protocol
+fields such as `meta.ext.http_headers`. Other nested/heavy data goes in `data`;
 physically a field is ONE dotted string key inside its zone
 (`"app.audit.origin"`), and the expression/guest projections nest by
 splitting on dots. Propagation is uniform on a single-input

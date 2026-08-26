@@ -1,8 +1,8 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.6 H3's network contracts,
-> Lab bindings and private hosted-engine seam; live network I/O remains gated
-> by H4–H6.** B5 removed the
+> **Status: normative and executable through M1.6 H4's live H1/H2/H3
+> HttpClient; HttpServer and WebSocket network I/O remain gated by H5–H6.**
+> B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
 > completions now carry ordered ordinary outputs plus one final typed `exit`.
@@ -142,9 +142,9 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 - **`respond`** (API): the request stays open; correlation by lineage;
   timeout → 504; bounded → 503. Exposing an API is first-class.
 - The async HTTP library is the **runtime's** choice — the contract is
-  lib-agnostic. The H3 hosted assembly currently uses Hyper for HTTP/1.1-2
-  and quiche for HTTP/3 behind one bounded private pump; this is a Driver
-  choice and is absent from plan identity.
+  lib-agnostic. The H4 hosted HttpClient uses Hyper for HTTP/1.1-2 and quiche
+  for HTTP/3 behind one bounded private pump; this is a Driver choice and is
+  absent from plan identity. HttpServer remains gated by H5.
 
 ### 3.2 `HttpClient` — outbound HTTP
 
@@ -157,11 +157,21 @@ is the token-spend surface (§6.4), the MCP tool annotation derives from it
 | Payload type | required `codec`: `json → variant`, `text → text`, `bytes → bytes`; no line delimiter is added |
 | Populates | response `meta.ext.content_type`, `http_headers`, `http_status: int`, and `http_version` |
 | effect / behavior | **both mandatory on each node; plan-evaluated** |
-| Attributes | required invocation `url: text`; invocation `method: text = "GET"`, optional lossless `headers`, `auth_bearer`, `idempotency_key`; required plan `codec`; plan `max_body: ByteSize = "8MiB"`; required positive instance `timeout`; optional instance `tls_ca`, plus paired `tls_certificate`/`tls_private_key`; ordered plan `versions = ["http/3", "http/2", "http/1.1"]`; `zero_rtt = disabled` |
+| Attributes | required invocation `url: text`; invocation `method: text = "GET"`, optional lossless `headers`, `auth_bearer`, `idempotency_key`; required plan `codec`; plan `max_body: ByteSize = "8MiB"` bounds request and response bodies; required positive instance `timeout`; optional instance `tls_ca`, plus paired `tls_certificate`/`tls_private_key`; ordered plan `versions = ["http/3", "http/2", "http/1.1"]`; `zero_rtt = disabled` |
 | Correlator | protocol-native: HTTP request ↔ response |
 | Outcome cases | `Completed { status: int }`, `DnsFailed`, `ConnectFailed`, `TlsFailed`, `ProtocolFailed`, `TimeoutExpired`, `BodyTooLarge { limit: uint }`, `DecodeFailed`, `OutcomeUnknown` |
 | Instances | singleton by default; the common Node attribute `instances.key` may key the Connector |
 | Journal / sim | method, resolved URL, canonical headers, exact body and idempotency material seal before OUTBOUND open; the family Lab twin scripts only the post-open outcome |
+
+The hosted H4 Driver attempts declared versions in order, skipping backends
+not compiled into the runtime. It may fall back only before request bytes can
+have become visible. Once visible, failure is terminal for that call; redirects
+and status retries are graph policy. Local work/byte saturation leaves the
+open call pending and starts no effect. HTTP/1.1 uses origin-form plus a
+Driver-owned Host field, HTTP/2 multiplexes by origin/TLS identity, and HTTP/3
+requires verified HTTPS. Every valid status, including non-2xx, publishes its
+body on `out`; the wire version is observation in `meta.ext.http_version`, not
+payload or identity.
 
 For hosted clients, absent `tls_ca` selects Rastok's compiled exact Mozilla
 root corpus. Present `tls_ca` replaces it with a PEM certificate bundle or one

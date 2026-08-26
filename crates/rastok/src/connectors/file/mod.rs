@@ -9,8 +9,8 @@
 //! worker that may observe or mutate the filesystem.
 
 use crate::boundary::{
-    CallConnectorDriver, Completion, FileExit, Intent, OutboundConnectorDriver, PreparedRequest,
-    RequestPreparation, Response, SchedulerCompletion,
+    CallConnectorDriver, CallStart, Completion, FileExit, Intent, OutboundConnectorDriver,
+    PreparedRequest, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Encoding, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
@@ -398,13 +398,13 @@ impl CallConnectorDriver for File<'_> {
         }
     }
 
-    fn start(&mut self, intent: &Intent, _request: &Envelope) {
+    fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
         let Some(binding) = self.bindings.get(&intent.connector_path) else {
             self.answers.push(Response {
                 call_ref: intent.call_ref,
                 completion: Completion::file_exit(FileExit::IoFailed),
             });
-            return;
+            return CallStart::Started;
         };
         let operation = match FileOperation::decode(intent.prepared.bytes()) {
             Some(operation) => operation,
@@ -413,7 +413,7 @@ impl CallConnectorDriver for File<'_> {
                     call_ref: intent.call_ref,
                     completion: Completion::file_exit(FileExit::IoFailed),
                 });
-                return;
+                return CallStart::Started;
             }
         };
         if validate_logical_path(operation.path()).is_err() {
@@ -421,14 +421,14 @@ impl CallConnectorDriver for File<'_> {
                 call_ref: intent.call_ref,
                 completion: Completion::file_exit(FileExit::InvalidPath),
             });
-            return;
+            return CallStart::Started;
         }
         if !binding.admits(&operation, &intent.resolved_settings) {
             self.answers.push(Response {
                 call_ref: intent.call_ref,
                 completion: Completion::file_exit(FileExit::IoFailed),
             });
-            return;
+            return CallStart::Started;
         }
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
@@ -452,6 +452,7 @@ impl CallConnectorDriver for File<'_> {
         } else {
             self.runs.insert(call_ref, cancelled);
         }
+        CallStart::Started
     }
 
     fn events(&mut self) -> Vec<Response> {

@@ -1141,10 +1141,13 @@ impl<'plan> TransactionExecutor<'plan> {
                 // Uniform propagation (D-2026-08-10-2): every completion
                 // output inherits the REQUEST zones. Each payload came from
                 // the world, so stale content_type is struck.
-                let envelope = Envelope::new(
-                    inherit_zones(Meta::new(sys), request_meta),
-                    output.data.clone(),
-                );
+                let mut meta = inherit_zones(Meta::new(sys), request_meta);
+                if !output.ext.is_empty() {
+                    let mut ext = meta.ext().clone();
+                    ext.extend(output.ext.clone());
+                    meta = meta.with_ext(ext);
+                }
+                let envelope = Envelope::new(meta, output.data.clone());
                 Emission {
                     port: output.port.clone(),
                     index: emission_index,
@@ -2077,6 +2080,17 @@ fn from_meta_value(value: &MetaValue) -> Value {
     match value {
         MetaValue::Scalar(scalar) => from_scalar(scalar),
         MetaValue::Array(items) => Value::Array(items.iter().map(from_scalar).collect()),
+        MetaValue::Map(entries) => Value::Map(
+            entries
+                .iter()
+                .map(|(key, values)| {
+                    (
+                        key.clone(),
+                        Value::Array(values.iter().map(from_scalar).collect()),
+                    )
+                })
+                .collect(),
+        ),
     }
 }
 
@@ -2112,12 +2126,35 @@ pub fn to_meta_value(value: &Value) -> Result<MetaValue, Fault> {
                 .iter()
                 .map(|item| match to_meta_value(item)? {
                     MetaValue::Scalar(scalar) => Ok(scalar),
-                    MetaValue::Array(_) => Err(Fault::Unrepresentable(String::from(
-                        "a nested array in a flat meta zone",
-                    ))),
+                    MetaValue::Array(_) | MetaValue::Map(_) => Err(Fault::Unrepresentable(
+                        String::from("a nested array in a flat meta zone"),
+                    )),
                 })
                 .collect::<Result<alloc::vec::Vec<_>, _>>()?;
             MetaValue::Array(scalars)
+        }
+        Value::Map(entries) => {
+            let entries = entries
+                .iter()
+                .map(|(key, value)| {
+                    let Value::Array(values) = value else {
+                        return Err(Fault::Unrepresentable(String::from(
+                            "a metadata map value is not an array",
+                        )));
+                    };
+                    let values = values
+                        .iter()
+                        .map(|value| match to_meta_value(value)? {
+                            MetaValue::Scalar(scalar) => Ok(scalar),
+                            MetaValue::Array(_) | MetaValue::Map(_) => Err(Fault::Unrepresentable(
+                                String::from("a metadata map contains a nested value"),
+                            )),
+                        })
+                        .collect::<Result<alloc::vec::Vec<_>, _>>()?;
+                    Ok((key.clone(), values))
+                })
+                .collect::<Result<alloc::collections::BTreeMap<_, _>, _>>()?;
+            MetaValue::Map(entries)
         }
         other => {
             return Err(Fault::Unrepresentable(format!(
@@ -2145,6 +2182,19 @@ mod metadata_conformance_tests {
         assert!(
             !meta_conforms(&malformed_decimal, &DataType::Variant),
             "variant is dynamic, not an escape from value well-formedness"
+        );
+
+        let headers = MetaValue::Map(alloc::collections::BTreeMap::from([(
+            String::from("set-cookie"),
+            alloc::vec![
+                Scalar::Bytes(alloc::vec![0xff]),
+                Scalar::Bytes(alloc::vec![0x00]),
+            ],
+        )]));
+        assert!(meta_conforms(&headers, &crate::plan::http_headers_type()));
+        assert_eq!(
+            to_meta_value(&from_meta_value(&headers)).expect("the closed carrier round-trips"),
+            headers,
         );
     }
 }

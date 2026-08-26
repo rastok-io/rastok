@@ -8,8 +8,8 @@
 //! battery itself bites.
 
 use rastok::boundary::{
-    CallConnectorDriver, Completion, Intent, OutboundConnectorDriver, PortOutput, ProcessExit,
-    RequestPreparation, Response, SchedulerCompletion,
+    CallConnectorDriver, CallStart, Completion, Intent, OutboundConnectorDriver, PortOutput,
+    ProcessExit, RequestPreparation, Response, SchedulerCompletion,
 };
 use rastok::conformance::{
     InterleaveExpectation, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
@@ -276,7 +276,7 @@ impl CallConnectorDriver for Liar {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, _request: &Envelope) {
+    fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
         self.pending.push(Response {
             call_ref: intent.call_ref,
             completion: Completion::try_new(vec![PortOutput {
@@ -287,9 +287,11 @@ impl CallConnectorDriver for Liar {
                         payload: vec![],
                     },
                 ))),
+                ext: rastok::envelope::Namespace::new(),
             }])
             .expect("the structural terminal barrier holds"),
         });
+        CallStart::Started
     }
 
     fn events(&mut self) -> Vec<Response> {
@@ -387,7 +389,7 @@ impl CallConnectorDriver for Swapper {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, _request: &Envelope) {
+    fn start(&mut self, intent: &Intent, _request: &Envelope) -> CallStart {
         let framed = String::from_utf8_lossy(intent.prepared.bytes());
         let echoed = framed.strip_suffix('\n').unwrap_or(&framed).to_owned();
         self.pending.push(Response {
@@ -401,6 +403,7 @@ impl CallConnectorDriver for Swapper {
                 },
             ),
         });
+        CallStart::Started
     }
 
     fn events(&mut self) -> Vec<Response> {

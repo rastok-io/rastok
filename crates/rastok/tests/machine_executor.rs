@@ -7,8 +7,8 @@
 // correct report is a panic.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use rastok::boundary::{Completion, ProcessExit};
-use rastok::envelope::{Data, Envelope, Meta, MetaSys};
+use rastok::boundary::{Completion, PortOutput, ProcessExit};
+use rastok::envelope::{Data, Envelope, Meta, MetaSys, MetaValue, Namespace, Scalar};
 use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
 use rastok::journal::ids;
 use rastok::plan::{GraphVersion, OwnerPath, Slot, ValidatedExecutionPlan};
@@ -694,6 +694,79 @@ fn the_connector_completion_matches_the_reference_trace() {
     assert_eq!(
         emission.envelope.meta().sys().origin_id(),
         request.envelope.meta().sys().origin_id()
+    );
+}
+
+#[test]
+fn a_connector_output_overlays_only_its_external_observations() {
+    let (plan, _) = probe();
+    let executor = TransactionExecutor::new(&plan, GraphVersion(1));
+    let mut request = input("salut");
+    let mut app = Namespace::new();
+    app.insert(
+        String::from("tenant"),
+        MetaValue::Scalar(Scalar::Text(String::from("alice"))),
+    );
+    let mut inherited_ext = Namespace::new();
+    inherited_ext.insert(
+        String::from("content_type"),
+        MetaValue::Scalar(Scalar::Text(String::from("application/old"))),
+    );
+    request.envelope = Envelope::new(
+        Meta::new(request.envelope.meta().sys().clone())
+            .with_app(app.clone())
+            .with_ext(inherited_ext),
+        request.envelope.data().clone(),
+    );
+    let connector_path = node::Path::new(["echo"]).unwrap();
+    let connector_slot = Slot::new(
+        u32::try_from(
+            plan.nodes
+                .iter()
+                .position(|planned| planned.path == connector_path)
+                .expect("the probe contains its Process connector"),
+        )
+        .expect("the tiny probe slot is representable"),
+    );
+    let mut observed_ext = Namespace::new();
+    observed_ext.insert(
+        String::from("content_type"),
+        MetaValue::Scalar(Scalar::Text(String::from("application/new"))),
+    );
+    let completion = Completion::try_new(vec![
+        PortOutput {
+            port: node::Port::conventional_out(),
+            data: Data::materialized(envelope::Value::Text(String::from("response"))),
+            ext: observed_ext.clone(),
+        },
+        PortOutput {
+            port: node::Port::conventional_exit(),
+            data: Data::materialized(
+                ProcessExit::Exited {
+                    exit_code: 0,
+                    signal: None,
+                }
+                .into_value(),
+            ),
+            ext: Namespace::new(),
+        },
+    ])
+    .expect("the completion has one terminal exit");
+    let outcome = executor
+        .connector_completion(
+            connector_slot,
+            &singleton(),
+            &request,
+            &trigger_in(),
+            &completion,
+        )
+        .expect("the validated connector slot settles");
+    let emitted = &outcome.record.emissions[0].envelope;
+    assert_eq!(emitted.meta().app(), &app);
+    assert_eq!(emitted.meta().ext(), &observed_ext);
+    assert_eq!(
+        emitted.meta().sys().parent_id(),
+        Some(request.envelope.meta().sys().id()),
     );
 }
 

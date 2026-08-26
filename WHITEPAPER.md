@@ -1475,8 +1475,9 @@ register an ordinary factory through the same boundary. Rastok does not yet
 freeze a native plugin ABI, artifact format, trust policy or hot-reload
 lifecycle. Discovery is physical assembly, not a second execution model.
 The reference CLI makes that assembly visible: Process is linked by default,
-while an explicit `--file-root` adds File and supplies deployment data that
-never enters the graph or plan identity.
+an explicit `--file-root` adds File and supplies deployment data that never
+enters the graph or plan identity, and a hosted-HTTP build links HttpClient
+without changing its contract id.
 
 Hosted network Drivers use the same separation. The synchronous Driver/VM
 edge feeds one bounded private pump: finite work and result queues, a separate
@@ -1489,6 +1490,16 @@ stacks deliberately consume one exact compiled root corpus and the same
 in-memory identity encodings. A minimal or embedded build omits them without
 changing a plan. HTTP/1.1 Upgrade is not evidence for the distinct HTTP/2 or
 HTTP/3 Extended CONNECT adapters.
+
+The live HttpClient demonstrates the boundary end to end. One canonical
+descriptor seals method, URL, lossless ordered headers, exact body and
+idempotency material before the call opens. HTTP versions are attempted in
+declared order only until request bytes may be visible; after that point a
+failure is terminal rather than an unsafe implicit retry. H1 uses origin-form,
+H2 multiplexes calls on a pooled connection, and H3 uses verified quiche TLS.
+All usable statuses return an ordinary typed body plus status/header/version
+observations and one terminal exit. Finite local saturation leaves the
+journaled call pending; it is pacing, never a fabricated network failure.
 
 The Lab follows the same rule. A mock Driver binds under the same id and roles,
 uses the same family request protocol and resolved result types, and replaces
@@ -2766,7 +2777,7 @@ simulations designed to become executable evidence as the runtime
 lands. The current evidence gates are listed in
 [ROADMAP.md](ROADMAP.md).
 
-As of M1.6 H3, the one-worker reference executes canonical keyed/lifetime
+As of M1.6 H4, the one-worker reference executes canonical keyed/lifetime
 instances, bounded Closing, nested Graph composition, and instance-local
 bounded joins from source through package validation and public Lab scenarios.
 The closure audit also proves that moving a stable virtual shard between
@@ -2781,13 +2792,15 @@ implemented. A data-only capability manifest proves the future discovery seam,
 but no plugin loader or native ABI is claimed. Four exact HTTP/WebSocket
 contracts now cross source, checked v11 plan, Registry-free validation and
 family-owned Lab binding with codec-selected ports, lossless protocol metadata
-and typed terminal unions. H3 additionally pins one bounded private hosted
+and typed terminal unions. H3 pins one bounded private hosted
 pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
 for WebSocket framing. It proves all three HTTP engines coexist, compares
 h3/Quinn on real UDP and proves bounded WebSocket framing plus HTTP/1.1
-Upgrade. This is deliberately an engine checkpoint: H4-H6 still own live
-contract Drivers, protocol fallback, server acknowledgement and both Extended
-CONNECT adapters.
+Upgrade. H4 now executes HttpClient over all three versions, including exact
+pre-open request sealing, visibility-safe fallback, bounded bodies, lossless
+response observations, generic Call conformance and outbound backpressure.
+H5-H6 still own server acknowledgement, live WebSocket sessions and both
+Extended CONNECT adapters.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

@@ -5,6 +5,106 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-26-2 — One live HttpClient contract over HTTP/1.1, HTTP/2 and HTTP/3
+
+M1.6 H4 binds the already-published `rastok/http-client@1` contract to the
+private hosted engine selected by H3. It does not introduce one Connector per
+HTTP version. The ordered `versions` row selects physical attempts among
+HTTP/3, HTTP/2 and HTTP/1.1 implementations compiled into the runtime. A
+version may be skipped or another attempted only before request bytes can have
+become externally visible. Once visibility is possible, every failure is the
+terminal portable fact for that call; Rastok never retries an ambiguous write.
+Redirects and status-based retries likewise remain explicit graph policy.
+
+The family binder constructs one canonical request descriptor before the
+OUTBOUND open: method, resolved absolute URL, lossless ordered headers, exact
+codec body, bearer token and idempotency key. The journal seals its exact
+digest and the live Driver decodes those bytes after open; it does not rebuild
+the request from mutable envelope or environment state. `max_body` bounds both
+directions. An oversized request yields `BodyTooLarge { limit }` before open in
+both the live and scripted Drivers. A response is accumulated only up to the
+same bound, with checked reservation before every copy. Header parsing and
+projection are separately bounded by the physical Driver configuration.
+
+Every syntactically and protocol-valid response, including non-2xx status,
+emits one `out` followed by exactly one `Completed { status }` on `exit`.
+`out` carries `meta.ext.http_status`, `http_version`, lossless
+`http_headers: map<text,array<bytes>>`, and UTF-8 `content_type` when present.
+The selected wire version is observation only: equal bodies decode to equal
+payload values and never move semantic identity. Invalid body content maps to
+`DecodeFailed`; DNS, connection, verified TLS, protocol and body-limit facts
+map to their closed `HttpClientExit` cases. Scheduler timeout and bounded
+Closing remain the sole authorities for `TimeoutExpired` and
+`OutcomeUnknown`; OS and library strings never enter causal payloads.
+
+HTTP/1.1 uses origin-form targets plus a Driver-owned `Host` field. HTTP/2
+uses one pooled sender per origin and TLS-material identity, so concurrent
+streams may complete in reverse order without crossing calls. HTTP/3 uses
+quiche over verified TLS and bounded QUIC/H3 flow control; H4 opens one bounded
+connection per call, while the H3 adoption spike remains the multiplexed
+backend proof. HTTP/3 requires HTTPS. H1/H2 use Rustls, H3 uses BoringSSL, and
+both parse the same optional CA/client-identity bytes before DNS or socket
+creation. User `host`, `content-length`, hop-by-hop and duplicate synthesized
+authorization/idempotency fields refuse as `ProtocolFailed` rather than
+silently overriding Driver protocol state.
+
+Outbound local saturation is pacing, not an external failure. The generic
+Call start handshake is therefore `CallStart::Started | Pending`. `Pending`
+starts no effect, leaves the already-journaled call open and causes the
+dispatcher to offer the same intent again after capacity returns. Only
+`Started` enters the dispatcher's exactly-once local start set and the
+family-correlation table. This is the outbound twin of two-phase inbound
+admission; it does not add a queue or causal record.
+
+The H3 pump's work permit remains charged while the network task owns the
+request, and is released before the completed response enters the same finite
+event budget. Work, event and control lanes stay bounded; cancellation has an
+independent priority lane. Per-call body storage is bounded by `max_body` and
+the number of concurrent tasks by the physical `max_in_flight` limit. A
+stopped engine is `ConnectFailed`; saturation is always `Pending`.
+
+H4 also makes the H2 lossless header schema representable in envelope
+metadata. A metadata leaf now admits the closed carrier
+`scalar | array<scalar> | map<text,array<scalar>>`; namespace paths remain
+flat and prefix-free. The new map reuses canonical value tags 18 (map), 19
+(array), 8 (text) and the existing scalar tags. No old value changes bytes.
+This narrowly supersedes D-2026-08-10-1's scalar/array-only leaf sentence.
+
+The direct `http 1.5.0` dependency exposes the request/header/URI vocabulary
+already present transitively through Hyper and quiche; it adds no locked
+package. Its MIT/Apache-2.0 license and Rust 1.57 floor are below the selected
+hosted stack. It stays optional behind `hosted-http12` or `hosted-http3`, no
+third-party type crosses the private network module, and removing or replacing
+a backend preserves the semantic sheet and Driver boundary.
+
+The hosted cost was measured rather than inferred. On 2026-08-26, with Rust
+1.97.1 on an Apple M5 Pro (`arm64`, macOS 26.6.2), the standard release binary
+was 4,835,168 bytes before stripping and 3,951,728 bytes (3.769 MiB) after
+`strip -x`. The all-feature image containing the H1/H2/H3 hosted stack was
+10,328,592 bytes before stripping and 8,608,448 bytes (8.210 MiB) afterwards:
+a marginal 4,656,720 bytes (4.441 MiB, +117.8%). Its dynamic dependencies were
+only macOS `libc++`, `libiconv` and `libSystem`; BoringSSL is part of the image.
+This is a physical-build observation, never semantic identity or a portable
+size promise.
+
+Evidence includes real loopback H1 status/header/body streaming, one verified
+TLS H2 connection with two reversed concurrent streams, real-UDP verified H3,
+fallback before request visibility, refusal to fall back afterwards, one
+graph-value matrix across all wire versions, finite-bound tests, and the
+connector-neutral Call conformance battery. The battery proves Completed,
+ConnectFailed, TlsFailed, ProtocolFailed, BodyTooLarge, DecodeFailed and
+TimeoutExpired. `DnsFailed` remains explicitly unprovable without replacing
+the public host resolver; `OutcomeUnknown` is proved by the generic Closing
+model rather than fabricated by a Driver test.
+
+H4 changes no plan/package format, semantic identity recipe or causal record.
+Existing package, hash and trace goldens remain byte-identical. New response
+metadata is a world observation on newly executed network calls, not a change
+to any pre-H4 program. Rejected alternatives are version-specific Connector
+ids, fallback after a possibly visible request, unbounded queues or response
+bodies, library errors in exit payloads, making the VM async, and reporting
+local queue pressure as `ConnectFailed`.
+
 ## D-2026-08-26-1 — One bounded hosted pump, Hyper/Rustls for H1-H2, quiche for H3
 
 M1.6 H3 adopts the physical networking substrate without attaching a live
@@ -2093,7 +2193,9 @@ connectors — incompatible declarations refuse naming the connectors
 and types) plus the standard reserved field `content_type`
 (D-2026-08-10-4); handlers may REWRITE declared ext fields, never
 invent one — the application's own vocabulary belongs to `app`.
-Leaves stay `scalar | array<scalar>`; composites live in `data`. The
+Leaves use the closed
+`scalar | array<scalar> | map<text,array<scalar>>` carrier after the narrow
+H4 amendment in D-2026-08-26-2; other composites live in `data`. The
 physical form is FLAT — one dotted string key per field within its
 zone (`"app.audit.origin"`, `"ext.content_type"`); the projections
 NEST by splitting on dots, so CEL reads `meta.app.audit.origin` and

@@ -152,6 +152,60 @@ pub(super) enum EmitError<T> {
     Stopped(T),
 }
 
+/// Cloneable async-to-synchronous event capability for concurrent protocol
+/// streams. Every clone shares the same finite lane and byte budget.
+pub(super) struct EventSender<E> {
+    events: mpsc::Sender<Budgeted<E>>,
+    byte_budget: std::sync::Arc<Semaphore>,
+    shutdown: watch::Receiver<bool>,
+    max_buffered_bytes: u32,
+}
+
+impl<E> Clone for EventSender<E> {
+    fn clone(&self) -> Self {
+        Self {
+            events: self.events.clone(),
+            byte_budget: self.byte_budget.clone(),
+            shutdown: self.shutdown.clone(),
+            max_buffered_bytes: self.max_buffered_bytes,
+        }
+    }
+}
+
+impl<E> EventSender<E> {
+    pub(super) async fn emit(&mut self, event: E, bytes: usize) -> Result<(), EmitError<E>> {
+        let permits = match u32::try_from(bytes) {
+            Ok(permits) if permits <= self.max_buffered_bytes => permits,
+            _ => {
+                return Err(EmitError::Oversized {
+                    value: event,
+                    bytes,
+                    limit: self.max_buffered_bytes as usize,
+                });
+            }
+        };
+        let budget = self.byte_budget.clone();
+        let permit = tokio::select! {
+            changed = self.shutdown.changed() => {
+                let _ = changed;
+                return Err(EmitError::Stopped(event));
+            }
+            acquired = budget.acquire_many_owned(permits) => match acquired {
+                Ok(permit) => permit,
+                Err(_) => return Err(EmitError::Stopped(event)),
+            }
+        };
+        let buffered = Budgeted {
+            value: event,
+            _permit: permit,
+        };
+        match self.events.send(buffered).await {
+            Ok(()) => Ok(()),
+            Err(error) => Err(EmitError::Stopped(error.0.value)),
+        }
+    }
+}
+
 impl<T> EmitError<T> {
     pub(super) fn into_inner(self) -> T {
         match self {
@@ -204,34 +258,15 @@ impl<W, C, E> NetworkRuntime<W, C, E> {
     }
 
     pub(super) async fn emit(&mut self, event: E, bytes: usize) -> Result<(), EmitError<E>> {
-        let permits = match u32::try_from(bytes) {
-            Ok(permits) if permits <= self.max_buffered_bytes => permits,
-            _ => {
-                return Err(EmitError::Oversized {
-                    value: event,
-                    bytes,
-                    limit: self.max_buffered_bytes as usize,
-                });
-            }
-        };
-        let budget = self.byte_budget.clone();
-        let permit = tokio::select! {
-            changed = self.shutdown.changed() => {
-                let _ = changed;
-                return Err(EmitError::Stopped(event));
-            }
-            acquired = budget.acquire_many_owned(permits) => match acquired {
-                Ok(permit) => permit,
-                Err(_) => return Err(EmitError::Stopped(event)),
-            }
-        };
-        let buffered = Budgeted {
-            value: event,
-            _permit: permit,
-        };
-        match self.events.send(buffered).await {
-            Ok(()) => Ok(()),
-            Err(error) => Err(EmitError::Stopped(error.0.value)),
+        self.event_sender().emit(event, bytes).await
+    }
+
+    pub(super) fn event_sender(&self) -> EventSender<E> {
+        EventSender {
+            events: self.events.clone(),
+            byte_budget: self.byte_budget.clone(),
+            shutdown: self.shutdown.clone(),
+            max_buffered_bytes: self.max_buffered_bytes,
         }
     }
 

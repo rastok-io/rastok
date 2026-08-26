@@ -109,6 +109,13 @@ same per-engine physical budget. Dropping the synchronous handle cancels and
 joins its pump. These rules apply equally to inbound and outbound Drivers; they
 do not change the two semantic roles.
 
+For Call Drivers, finite outbound pressure is expressed by the closed
+`CallStart::Pending` verdict. The already-journaled intent stays open, no
+effect starts and the dispatcher offers it again after capacity returns.
+`Started` transfers ownership exactly once. A Driver must never translate a
+full local queue or byte semaphore into a domain result such as
+`ConnectFailed`; backpressure changes pacing only.
+
 Static features select physical code only: `hosted-http12` supplies
 Hyper/Rustls, `hosted-http3` supplies quiche/BoringSSL,
 `hosted-websocket` supplies Tungstenite, and `hosted-network` combines them.
@@ -116,6 +123,12 @@ No library type leaves `connectors/network`, enters a plan, or enters
 `rastok-core`. HTTP/1.1 WebSocket Upgrade is proved; HTTP/2 and HTTP/3
 Extended CONNECT remain separate H6 adapters and must not be inferred from
 the shared message codec.
+
+H4 is the first live consumer of this seam. The hosted HttpClient uses H1
+origin-form requests, a pooled multiplexed H2 sender and verified quiche H3
+while preserving one semantic request descriptor and one Call completion
+shape. Request/response bodies and headers are finite, and the selected wire
+version appears only in `meta.ext.http_version`.
 
 The model covers the intended catalogue without new role kinds:
 

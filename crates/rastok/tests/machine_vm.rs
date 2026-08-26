@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::boundary::{
-    CallConnectorDriver, DriverRouteError, InboundSession, InboundSubmission, Intent,
+    CallConnectorDriver, CallStart, DriverRouteError, InboundSession, InboundSubmission, Intent,
     OutboundConnectorBindings, SessionOpenIntent, SessionRef, SessionWriteIntent, SessionWriteRef,
 };
 use rastok::envelope::{Data, Envelope};
@@ -118,9 +118,12 @@ impl OutboundConnectorBindings for ProjectionRefusal {
         Ok(())
     }
 
-    fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError> {
-        CallConnectorDriver::start(&mut self.inner, intent, request);
-        Ok(())
+    fn start(
+        &mut self,
+        intent: &Intent,
+        request: &Envelope,
+    ) -> Result<CallStart, DriverRouteError> {
+        Ok(CallConnectorDriver::start(&mut self.inner, intent, request))
     }
 
     fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
@@ -157,8 +160,9 @@ impl CallConnectorDriver for ClosingWorld {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, _: &Envelope) {
+    fn start(&mut self, intent: &Intent, _: &Envelope) -> CallStart {
         self.started.push(intent.call_ref);
+        CallStart::Started
     }
 
     fn cancel(&mut self, call_ref: &rastok::boundary::CallRef) {
@@ -223,9 +227,10 @@ impl CallConnectorDriver for EchoWorld {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, request: &Envelope) {
+    fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart {
         let _ = request;
         self.seen.push(intent.clone());
+        CallStart::Started
     }
 
     fn events(&mut self) -> Vec<Response> {
@@ -282,11 +287,14 @@ impl CallConnectorDriver for FileSettingsWorld {
                     payload: Vec::new(),
                 },
             ))),
+            ext: rastok::envelope::Namespace::new(),
         }])
         .expect("the File terminal fact is structurally complete")
     }
 
-    fn start(&mut self, _: &Intent, _: &Envelope) {}
+    fn start(&mut self, _: &Intent, _: &Envelope) -> CallStart {
+        CallStart::Started
+    }
 
     fn events(&mut self) -> Vec<Response> {
         Vec::new()
@@ -2873,6 +2881,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
                             payload: vec![],
                         },
                     ))),
+                    ext: rastok::envelope::Namespace::new(),
                 }])
                 .unwrap(),
             },
@@ -2881,6 +2890,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
                 completion: Completion::try_new(vec![PortOutput {
                     port: node::Port::conventional_exit(),
                     data: Data::encoded(rastok::envelope::Encoding::Raw, b"not a union"),
+                    ext: rastok::envelope::Namespace::new(),
                 }])
                 .unwrap(),
             },
@@ -2922,7 +2932,9 @@ impl CallConnectorDriver for ScriptedWorld {
         rastok::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, _: &Intent, _: &Envelope) {}
+    fn start(&mut self, _: &Intent, _: &Envelope) -> CallStart {
+        CallStart::Started
+    }
     fn events(&mut self) -> Vec<Response> {
         std::mem::take(&mut self.answers)
     }

@@ -8,9 +8,9 @@
 //! test double.
 
 use crate::boundary::{
-    CallConnectorDriver, Completion, Draft, InboundEnvelopeProvenance, InboundSubmission, Intent,
-    OutboundConnectorDriver, PortOutput, RequestPreparation, Response, SchedulerCompletion,
-    SubmissionSequence,
+    CallConnectorDriver, CallStart, Completion, Draft, InboundEnvelopeProvenance,
+    InboundSubmission, Intent, OutboundConnectorDriver, PortOutput, RequestPreparation, Response,
+    SchedulerCompletion, SubmissionSequence,
 };
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, Lab, Mock, Quantifier, Scenario, ScenarioStep,
@@ -562,6 +562,7 @@ impl MockOutboundConnectorDriver {
                         Ok(Some(data)) => outputs.push(PortOutput {
                             port: port.clone(),
                             data,
+                            ext: crate::envelope::Namespace::new(),
                         }),
                         Ok(None) => {}
                         Err(message) => {
@@ -686,13 +687,14 @@ impl CallConnectorDriver for MockOutboundConnectorDriver {
         self.protocol.scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, request: &Envelope) {
+    fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart {
         if let Some(completion) = self.answer(intent, request) {
             self.pending.push(Response {
                 call_ref: intent.call_ref,
                 completion,
             });
         }
+        CallStart::Started
     }
 
     fn events(&mut self) -> Vec<Response> {

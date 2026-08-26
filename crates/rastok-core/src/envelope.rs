@@ -80,8 +80,8 @@ impl fmt::Display for Id {
 /// Scalar leaf admitted by a metadata namespace.
 ///
 /// Payload values use [`Value`] directly. Metadata deliberately remains a
-/// smaller domain (`scalar | array<scalar>`), so this type records that
-/// boundary rather than duplicating the payload value algebra.
+/// smaller domain; [`MetaValue`] closes the few supported containers around
+/// this scalar rather than duplicating the payload value algebra.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scalar {
     /// Boolean.
@@ -336,14 +336,21 @@ impl MetaSys {
     }
 }
 
-/// Leaf of a writable `meta` namespace: flat by type — a scalar or an
-/// array of scalars, never nested (`envelope.md` preamble).
+/// Leaf of a writable `meta` namespace: flat by namespace, with a closed
+/// value carrier (`scalar | array<scalar> | map<text,array<scalar>>`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum MetaValue {
     /// Scalar leaf.
     Scalar(Scalar),
     /// Array-of-scalar leaf.
     Array(Vec<Scalar>),
+    /// Text-keyed map whose values are ordered scalar arrays.
+    ///
+    /// HTTP's lossless header projection is the first standard metadata
+    /// field that needs this shape. Keeping the carrier closed to this one
+    /// level preserves the flat namespace rule: the map is the value of one
+    /// leaf, never another metadata namespace.
+    Map(BTreeMap<String, Vec<Scalar>>),
 }
 
 /// One writable, flat `meta` namespace.

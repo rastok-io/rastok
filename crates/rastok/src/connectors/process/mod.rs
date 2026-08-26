@@ -11,8 +11,8 @@
 //! exactly the machinery a run does, minus this file.
 
 use crate::boundary::{
-    CallConnectorDriver, Completion, Intent, OutboundConnectorDriver, OutputOverflowReason,
-    ProcessExit, RequestPreparation, Response, SchedulerCompletion,
+    CallConnectorDriver, CallStart, Completion, Intent, OutboundConnectorDriver,
+    OutputOverflowReason, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
@@ -1050,7 +1050,7 @@ impl CallConnectorDriver for Process<'_> {
         crate::boundary::process_scheduler_completion(completion)
     }
 
-    fn start(&mut self, intent: &Intent, request: &Envelope) {
+    fn start(&mut self, intent: &Intent, request: &Envelope) -> CallStart {
         match self.launch(intent, request) {
             Ok(run) => self.runs.push(run),
             Err(completion) => self.answers.push(Response {
@@ -1058,6 +1058,7 @@ impl CallConnectorDriver for Process<'_> {
                 completion,
             }),
         }
+        CallStart::Started
     }
 
     fn events(&mut self) -> Vec<Response> {

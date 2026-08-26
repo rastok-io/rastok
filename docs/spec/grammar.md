@@ -14,8 +14,9 @@
 > and `last`; `having` remains a named gate.
 > D-2026-08-25-2 makes `HttpClient`, `HttpServer`, `WebSocketClient`, and
 > `WebSocketServer` exact H2 sheets from source through validated plan and
-> Lab binding. H3 selects only their private hosted-engine seam. Live Drivers
-> remain gated by H4–H6; `HttpServer(mode = respond)`
+> Lab binding. H3 selects their private hosted-engine seam and H4 executes the
+> HttpClient sheet over H1/H2/H3. Server and Session Drivers remain gated by
+> H5–H6; `HttpServer(mode = respond)`
 > is a named H5 deferral rather than a nearby executable behavior.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
@@ -1000,8 +1001,10 @@ scope. All ids are blake3-derived 128-bit values.)
 `meta` has exactly THREE zones (D-2026-08-10-1): `sys` (runtime,
 read-only), `app` (application, read-write, inferred from the deployed
 graph's writes), and `ext` (external-boundary context, read-write,
-sheet-declared). Each zone is a flat struct whose leaves are scalars or
-`array<scalar>`; nested composites belong in `data`. There is no bare
+sheet-declared). Each zone is a flat struct whose leaves use the closed
+`scalar | array<scalar> | map<text,array<scalar>>` metadata carrier; the map
+form serves lossless protocol fields such as `http_headers`, while other
+nested composites belong in `data`. There is no bare
 form: `meta.customer_id` is invalid. Types unify across all writers of an
 `app` field; `ext` fields come from Connector contracts plus the standard
 `content_type`. `meta.sys` is the fixed five-field Tier 1 plus
@@ -1165,7 +1168,7 @@ does not claim implementation or release status.
 | `WebSocketServer` | Connector node | exact H2 both-role Session sheet; accepted duplex network execution at H6 |
 | `WebSocketClient` | Connector node | exact H2 both-role Session sheet; opened duplex network execution at H6 |
 | `Tcp` | Connector node | planned |
-| HTTP/1.1, HTTP/2, HTTP/3 | Binding options, not nodes | H2 sheet vocabulary; live negotiation remains physical and lands in H4–H6 |
+| HTTP/1.1, HTTP/2, HTTP/3 | Binding options, not nodes | H2 sheet vocabulary; HttpClient negotiation executes physically at H4, server/session bindings at H5–H6 |
 
 Rule for DSL evolution : do not add a new node name to an `.rkg` example
 without adding it here and marking whether it is specified, design intent, or

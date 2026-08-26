@@ -5,7 +5,7 @@
 //! meet only at binding; registration order is never selection policy.
 
 use crate::boundary::{
-    CallConnectorDriver, CallRef, Completion, DriverRouteError, InboundConnectorDriver,
+    CallConnectorDriver, CallRef, CallStart, Completion, DriverRouteError, InboundConnectorDriver,
     InboundDecision, InboundProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
     RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
     SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent, SessionRef, SessionWriteIntent,
@@ -579,14 +579,20 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         Ok(())
     }
 
-    fn start(&mut self, intent: &Intent, request: &Envelope) -> Result<(), DriverRouteError> {
+    fn start(
+        &mut self,
+        intent: &Intent,
+        request: &Envelope,
+    ) -> Result<CallStart, DriverRouteError> {
         let connector = &intent.connector_path;
         let Some(id) = self.outbound.get(connector).cloned() else {
             return Err(DriverRouteError::UnboundOutbound(connector.clone()));
         };
-        self.outbound_driver(connector)?.start(intent, request);
-        self.calls.insert(intent.call_ref, id);
-        Ok(())
+        let start = self.outbound_driver(connector)?.start(intent, request);
+        if start == CallStart::Started {
+            self.calls.insert(intent.call_ref, id);
+        }
+        Ok(start)
     }
 
     fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
@@ -899,11 +905,11 @@ mod tests {
         DriverRegistrationError, DriverRegistry, RuntimeBindings,
     };
     use crate::boundary::{
-        CallConnectorDriver, Completion, Draft, InboundDecision, InboundEnvelopeProvenance,
-        InboundProposal, InboundProposalRef, InboundSubmission, Intent, OutboundConnectorBindings,
-        OutboundConnectorDriver, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
-        SessionConnectorBindings, SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent,
-        SessionRef, SessionWriteIntent, SubmissionSequence,
+        CallConnectorDriver, CallStart, Completion, Draft, InboundDecision,
+        InboundEnvelopeProvenance, InboundProposal, InboundProposalRef, InboundSubmission, Intent,
+        OutboundConnectorBindings, OutboundConnectorDriver, ProcessExit, RequestPreparation,
+        Response, SchedulerCompletion, SessionConnectorBindings, SessionConnectorDriver,
+        SessionDriverEvent, SessionOpenIntent, SessionRef, SessionWriteIntent, SubmissionSequence,
     };
     use crate::compiler::compile;
     use crate::connector::{ConnectorExchange, ConnectorId, ConnectorRoles};
@@ -1022,7 +1028,7 @@ mod tests {
             crate::boundary::process_scheduler_completion(completion)
         }
 
-        fn start(&mut self, intent: &Intent, _: &Envelope) {
+        fn start(&mut self, intent: &Intent, _: &Envelope) -> CallStart {
             self.starts
                 .lock()
                 .unwrap()
@@ -1038,6 +1044,7 @@ mod tests {
                     },
                 ),
             });
+            CallStart::Started
         }
 
         fn events(&mut self) -> Vec<Response> {
@@ -1245,7 +1252,9 @@ graph inbound : App {
             crate::boundary::process_scheduler_completion(completion)
         }
 
-        fn start(&mut self, _: &Intent, _: &Envelope) {}
+        fn start(&mut self, _: &Intent, _: &Envelope) -> CallStart {
+            CallStart::Started
+        }
 
         fn events(&mut self) -> Vec<Response> {
             Vec::new()
@@ -1389,6 +1398,7 @@ graph inbound : App {
                                 }
                                 .into_value(),
                             ),
+                            ext: crate::envelope::Namespace::new(),
                         },
                     },
                 );
