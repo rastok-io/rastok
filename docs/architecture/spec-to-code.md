@@ -1,7 +1,7 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-26 for the M1.6 H5.1 live
-> HTTP/1.1–2 acknowledgement listener.** The former named-partition P1-P3 implementation is superseded.
+> Planning aid — non-normative. **Updated 2026-08-27 for the M1.6 H5.2 generic
+> graph-response return.** The former named-partition P1-P3 implementation is superseded.
 > Categorical v12 transport retains v9's owner model, stable Connector
 > identities/roles/exchange lifecycles; hierarchical route/journal instance
 > references are executable; all five lifetime profiles and explicitly bounded
@@ -76,12 +76,14 @@ they are not promised crate names.
 | M1.6 H4.1 HTTP schema boundary | `media_type` is one open canonical logical scalar; standard request headers are a typed struct, custom headers are an open extension map, response protocol facts project to typed `meta.ext`, and OpenAPI remains a strict build-tool projection into `DataType` rather than a runtime type system. | core `datatype`/`expr`/plan v12; std `contract`/`stdlib`, `schema_projection::openapi`, `openapi`, flat network family modules | media-type canonical/refusal/key matrices, sheet/core request-header product, live response projection, deterministic generated source reparsed by the real compiler, stale/ambiguous/lossy OpenAPI refusals, v12 identity ledger |
 | M1.6 H5 generic inbound Call seam | One bounded Connector-origin commit opens a root-derived Call on its exact source instance; a categorical Driver terminal observation becomes one typed `l:reply` transaction and never an OUTBOUND call. | core `boundary`/`journal`/`runtime::vm`; std `connectors::registry` and HttpServer fake | commit-before-accept through one Operator, exact source generation, keys 28/52, one final exit, duplicate silence, unchanged existing package/hash/trace |
 | M1.6 H5.1 live HttpServer ack | The exact ack sheet binds to bounded Hyper HTTP/1.1–2 listeners; retained proposals own body permits, 202 follows commit and both versions close the same Call form. | `connectors::http_server`; private `connectors::network::http_server`; shared bounded pump | real H1/H2 commit-before-202, retained-byte pressure, no side queue, proposal/terminal non-starvation, pre-admission refusals and unchanged identity registers |
+| M1.6 H5.2 generic graph response | A graph delivery to an inbound-only Call Connector is the return half of its retained request. Direct lineage selects the exact opening instance before producer commit; `Pending` retains the real cursor, `Started` transfers the bounded write, and terminal `l:reply` consumes it without an OUTBOUND record. | core `boundary`/`journal`/`runtime::vm`; std `connectors::registry`; any inbound Call Driver | keyed-source transformed-payload routing, journal-before-Driver, pending/started handoff, one-cursor terminal, consume-only late response, no identity move |
 | M1.6 H5 remainder and H6 hosted sessions | H5 adds server HTTP/3, respond policy, deadlines/race closure and independent interop; H6 binds live WebSocket sessions so complete messages map onto one generic Session and one terminal exit. | `connectors::{http_server,websocket_client,websocket_server,websocket_protocol}` using private `connectors::network` | all-version server integration, RFC 6455/8441/9220 behavior, event/call/session conformance and Codex gateway |
 
 The ordered evidence and dependency decision are in
 [`m1.6-http-websocket-backlog.md`](m1.6-http-websocket-backlog.md). H1 through
-H4.1, H5's generic Call seam and H5.1's live H1–2 ack listener are landed; the
-remaining H5 and H6 stay planned rows until their gates are executable.
+H4.1, H5's generic Call seam, H5.1's live H1–2 ack listener and H5.2's generic
+response return are landed; the remaining H5 and H6 stay planned rows until
+their gates are executable.
 
 ## M1.3 foundation (landed in ordered gates)
 

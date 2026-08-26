@@ -27,8 +27,10 @@
 > causal records byte-identical because the new session keys are omitted.
 > H5 first adds source Connector key 27, then the generic inbound Call fold
 > under D-2026-08-26-5 with INBOUND key 28 and TRANSACTION key 52. H5.1 binds
-> live H1–2 ack traffic without allocating another form. All three keys are
-> omitted from older facts, so no existing causal record moves.
+> live H1–2 ack traffic without allocating another form. H5.2 permits the
+> existing consumed-position key 33 beside cause key 39 and Call-exit key 52
+> for a graph response; no key or recipe is added. All three allocated H5 keys
+> are omitted from older facts, so no existing causal record moves.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -238,6 +240,14 @@ Hyper/Rustls state and physical capacity are observations or deployment
 material, never plan or causal identity. No package, semantic hash, existing
 trace, root recipe or golden moves.
 
+**M1.6 H5.2 graph-response checkpoint (2026-08-27).**
+D-2026-08-26-7 allocates no field. A direct response uses the existing route
+key 38 on its producer, then the existing consumed-position key 33 and root
+cause key 39 beside inbound-Call exit key 52. Fixed ack retains the zero-cursor
+form. The keyed-source proof pins the response route to the opening
+`InstanceRef` even when transformed response data would derive another key.
+No existing package, semantic hash, causal trace or golden moves.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -394,11 +404,11 @@ execution-model §1) — keys `30–39`, `48–50` and `52` :
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
 | 37 | timers | array | dated obligations armed by this firing — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`, `6 = instance drain`, `7 = instance settlement`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind so the two Closing phases cannot collide. The due µs is NOT sealed (derivable and re-armed by the fold). |
 | 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instances.key` and never substitutes a later generation. |
-| 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction with no consumed mailbox cursor (`l:start`, `l:stop`, later `l:evict`); omitted when key 33 already identifies the cause. This keeps an empty lifecycle hook causally autonomous rather than relying on record order. |
+| 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction. Normally key 33 identifies the same cause and this field is omitted; `l:start`, `l:stop` and later `l:evict` have no consumed cursor, while a graph-response `l:reply` deliberately carries both: key 33 names the response delivery and key 39 preserves the distinct opening root as causal parent. This keeps lifecycle causality autonomous rather than relying on record order. |
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
 | 49 | close_scope_ref | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
 | 50 | session_exit_ref | bytes(16) | present exactly on the Connector transaction that terminates a Session. That transaction emits exactly one conventional `exit`, last; its envelope projects the same reference as `meta.ext.session_id`. The fold refuses a second exit, an exit with an open write, or any later message/write. |
-| 52 | inbound_call_exit_ref | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INBOUND key 28. Its cause is the root request, consumed is empty, owner/instance equal the opening source, and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
+| 52 | inbound_call_exit_ref | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INBOUND key 28. Its cause is the root request; fixed ack consumes zero positions, while a graph response consumes exactly its one real delivery position. Owner/instance equal the opening source and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
 
 **OUTBOUND / Call** (kind 3 — one external call's WAL record ;
 delivery-semantics §4) — keys `40–47` :

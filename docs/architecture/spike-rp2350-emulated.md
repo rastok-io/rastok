@@ -82,20 +82,20 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (974-byte v12 package; re-measured after the M1.6 H5.1 live-ack checkpoint on 2026-08-26) | 16 841 | 842.1 k | 5.61 ms |
+| `plan::decode` (974-byte v12 package; re-measured after the M1.6 H5.2 graph-response checkpoint on 2026-08-27) | 16 838 | 841.9 k | 5.61 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-26 after the H5.1 live-ack checkpoint) | 2 640 (min 2 554 / max 2 898) | **132.0 k avg / 144.9 k max** | **0.880 ms avg / 0.966 ms max** |
+| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-27 after the H5.2 graph-response checkpoint) | 2 647 (min 2 561 / max 2 906) | **132.4 k avg / 145.3 k max** | **0.882 ms avg / 0.969 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 91.0 | 4.6 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-26 after the H5.1 live-ack checkpoint) | 128 124 B (125.1 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 514 636 + 50 488 = 565 124 B (551.9 KiB; re-measured 2026-08-26 after the H5.1 live-ack checkpoint) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-27 after the H5.2 graph-response checkpoint) | 128 124 B (125.1 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 519 596 + 51 264 = 570 860 B (557.5 KiB; re-measured 2026-08-27 after the H5.2 graph-response checkpoint) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
 
-- The slowest measured relay transaction meets its criterion with a **1.041× margin**,
+- The slowest measured relay transaction meets its criterion with a **1.032× margin**,
   not the 3× the withdrawn verdict claimed. The claim shrank; the
   fact held.
 - Package decode grew from v1's 1 468 ticks to 15 334 across the
@@ -323,14 +323,14 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-26 after the M1.6 H5.1 live-ack
+instrumentation and last re-measured 2026-08-27 after the M1.6 H5.2 graph-response
 checkpoint.**
 These measurements price complete hierarchical routing, causal instance
 references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four
-criteria of record hold: no patched dependencies, 144.9 k instructions for
-the slowest measured relay transaction against the 150 k bound (1.035×), a
-125.1 KiB true high-water mark against 128 KiB, and 551.9 KiB of flash against
+criteria of record hold: no patched dependencies, 145.3 k instructions for
+the slowest measured relay transaction against the 150 k bound (1.032×), a
+125.1 KiB true high-water mark against 128 KiB, and 557.5 KiB of flash against
 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as

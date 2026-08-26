@@ -5,11 +5,11 @@
 //! meet only at binding; registration order is never selection policy.
 
 use crate::boundary::{
-    CallConnectorDriver, CallRef, CallStart, Completion, DriverRouteError, InboundConnectorDriver,
-    InboundDecision, InboundExchangeRef, InboundProposal, Intent, OutboundConnectorBindings,
-    OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
-    SessionConnectorBindings, SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent,
-    SessionRef, SessionWriteIntent,
+    CallConnectorDriver, CallRef, CallStart, Completion, DriverRouteError,
+    InboundCallResponseStart, InboundConnectorDriver, InboundDecision, InboundExchangeRef,
+    InboundProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
+    RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
+    SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent, SessionRef, SessionWriteIntent,
 };
 use crate::connector::{ConnectorExchange, ConnectorId, ConnectorRoles};
 use crate::envelope::{Data, Envelope};
@@ -183,6 +183,17 @@ pub enum InboundPumpError {
     Driver(DriverRouteError),
     /// The VM or journal raised a fail-stop integrity fault.
     Machine(VmError),
+}
+
+/// One bounded pass offering already-journaled graph responses to inbound
+/// Call Drivers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InboundCallResponsePumpReport {
+    /// Responses whose protocol write is now Driver-owned.
+    pub started: usize,
+    /// Responses retained by the VM because the Driver's finite capacity is
+    /// currently full.
+    pub pending: usize,
 }
 
 impl core::fmt::Display for InboundPumpError {
@@ -551,6 +562,53 @@ impl<'plan> RuntimeBindings<'plan> {
             InboundAdmission::Pending => {}
         }
         Ok(Some(admission))
+    }
+
+    /// Offers every ready graph response to the Driver family that admitted
+    /// its inbound Call. The response stays retained and its Connector
+    /// mailbox stays claimed while a bounded Driver reports `Pending`.
+    ///
+    /// # Errors
+    ///
+    /// A missing/crossed family or a Call view that disappeared after
+    /// binding is an integrity fault.
+    pub fn pump_inbound_call_responses(
+        &mut self,
+        vm: &mut Vm<'plan>,
+    ) -> Result<InboundCallResponsePumpReport, DriverRouteError> {
+        let mut report = InboundCallResponsePumpReport::default();
+        for response in vm.ready_inbound_call_responses() {
+            let Some(id) = self.inbound_calls.get(&response.call_ref).cloned() else {
+                return Err(DriverRouteError::UncorrelatedInboundCall(response.call_ref));
+            };
+            let Some(family) = self.families.get_mut(&id) else {
+                return Err(DriverRouteError::UncorrelatedInboundCall(response.call_ref));
+            };
+            if !family.inbound_paths.contains(&response.connector_path) {
+                return Err(DriverRouteError::InboundSourceMismatch {
+                    connector: id,
+                    source: response.connector_path,
+                });
+            }
+            let driver = family
+                .driver
+                .inbound()
+                .ok_or_else(|| DriverRouteError::UnavailableInbound(id.clone()))?
+                .call()
+                .ok_or_else(|| DriverRouteError::UnavailableInboundCall(id.clone()))?;
+            match driver.start_response(&response) {
+                InboundCallResponseStart::Started => {
+                    if !vm.mark_inbound_call_response_started(&response) {
+                        return Err(DriverRouteError::UncorrelatedInboundCall(response.call_ref));
+                    }
+                    report.started = report.started.saturating_add(1);
+                }
+                InboundCallResponseStart::Pending => {
+                    report.pending = report.pending.saturating_add(1);
+                }
+            }
+        }
+        Ok(report)
     }
 
     /// Drains terminal observations from every inbound Call family and
@@ -1017,11 +1075,12 @@ mod tests {
     };
     use crate::boundary::{
         CallConnectorDriver, CallStart, Completion, Draft, HttpServerExit,
-        InboundCallConnectorDriver, InboundCallEvent, InboundDecision, InboundEnvelopeProvenance,
-        InboundExchangeRef, InboundProposal, InboundProposalRef, InboundSubmission, Intent,
-        OutboundConnectorBindings, OutboundConnectorDriver, ProcessExit, RequestPreparation,
-        Response, SchedulerCompletion, SessionConnectorBindings, SessionConnectorDriver,
-        SessionDriverEvent, SessionOpenIntent, SessionRef, SessionWriteIntent, SubmissionSequence,
+        InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse,
+        InboundCallResponseStart, InboundDecision, InboundEnvelopeProvenance, InboundExchangeRef,
+        InboundProposal, InboundProposalRef, InboundSubmission, Intent, OutboundConnectorBindings,
+        OutboundConnectorDriver, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
+        SessionConnectorBindings, SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent,
+        SessionRef, SessionWriteIntent, SubmissionSequence,
     };
     use crate::compiler::compile;
     use crate::connector::{ConnectorExchange, ConnectorId, ConnectorRoles};
@@ -1350,6 +1409,10 @@ graph inbound : App {
     }
 
     impl InboundCallConnectorDriver for DuplexDriver {
+        fn start_response(&mut self, _: &InboundCallResponse) -> InboundCallResponseStart {
+            InboundCallResponseStart::Pending
+        }
+
         fn events(&mut self) -> Vec<InboundCallEvent> {
             Vec::new()
         }
@@ -1784,6 +1847,9 @@ graph inbound : App {
         proposals: VecDeque<InboundProposal>,
         decisions: Vec<(InboundProposalRef, InboundDecision)>,
         events: Vec<InboundCallEvent>,
+        responses: Vec<InboundCallResponse>,
+        acknowledge_on_accept: bool,
+        hold_first_response: bool,
     }
 
     struct RetainedCallDriver {
@@ -1802,7 +1868,9 @@ graph inbound : App {
                 .pop_front()
                 .expect("a decision follows a retained proposal");
             assert_eq!(retained.reference, reference);
-            if let InboundDecision::Accepted(accepted) = decision {
+            if state.acknowledge_on_accept
+                && let InboundDecision::Accepted(accepted) = decision
+            {
                 let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
                     panic!("an inbound Call acceptance carries its Call ref")
                 };
@@ -1822,6 +1890,20 @@ graph inbound : App {
     }
 
     impl InboundCallConnectorDriver for RetainedCallDriver {
+        fn start_response(&mut self, response: &InboundCallResponse) -> InboundCallResponseStart {
+            let mut state = self.state.lock().unwrap();
+            if state.hold_first_response {
+                state.hold_first_response = false;
+                return InboundCallResponseStart::Pending;
+            }
+            state.responses.push(response.clone());
+            state.events.push(InboundCallEvent {
+                call_ref: response.call_ref,
+                completion: Completion::http_server_exit(HttpServerExit::Completed { status: 200 }),
+            });
+            InboundCallResponseStart::Started
+        }
+
         fn events(&mut self) -> Vec<InboundCallEvent> {
             core::mem::take(&mut self.state.lock().unwrap().events)
         }
@@ -1898,6 +1980,66 @@ graph inbound : App {
         }
     }
 
+    fn inbound_call_response_plan() -> ValidatedExecutionPlan {
+        let source = r#"
+graph api : App {
+  connector server : HttpServer {
+    listen = "127.0.0.1:8080"
+    codec = text
+    instances = { key = data }
+  }
+  operator relay { input in: text ; on in { out = "response" } }
+  server -> relay -> .
+}
+"#;
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the ack-mode source checks");
+        let mut raw = compilation.plan.plan().clone();
+        let server_slot = raw
+            .nodes
+            .iter()
+            .position(|planned| planned.path.to_string() == "server")
+            .and_then(|index| u32::try_from(index).ok())
+            .map(crate::plan::Slot::new)
+            .expect("the server slot is representable");
+        let relay_slot = raw
+            .nodes
+            .iter()
+            .position(|planned| planned.path.to_string() == "relay")
+            .and_then(|index| u32::try_from(index).ok())
+            .map(crate::plan::Slot::new)
+            .expect("the relay slot is representable");
+        let server = raw
+            .nodes
+            .get_mut(server_slot.index())
+            .expect("the server node exists");
+        let crate::plan::NodeKind::Connector(spec) = &mut server.kind else {
+            panic!("the server node is a connector")
+        };
+        spec.contract = ConnectorId::parse("test/inbound-call@1").unwrap();
+
+        let response = raw
+            .edges
+            .iter_mut()
+            .find(|edge| {
+                edge.from.node == Some(relay_slot)
+                    && edge.to.as_ref().is_some_and(|to| to.node.is_none())
+            })
+            .expect("the relay boundary response exists");
+        response.to = Some(crate::plan::EndpointRef {
+            node: Some(server_slot),
+            port: node::Port::new("in").expect("the conventional input name is valid"),
+        });
+        raw.boundary.retain(|decl| decl.port.name() != "out");
+        let mut edges = core::mem::take(&mut raw.edges);
+        edges.sort_by_key(|edge| raw.edge_text(edge));
+        raw.edges = edges;
+        ValidatedExecutionPlan::try_new(raw).expect("the foreign inbound Call is structural")
+    }
+
     #[test]
     fn an_inbound_call_is_accepted_before_its_single_typed_exit_commits() {
         let source = r#"
@@ -1946,6 +2088,7 @@ graph api : App {
                 },
                 session: None,
             }]),
+            acknowledge_on_accept: true,
             ..RetainedCallState::default()
         }));
         let registry = DriverRegistry::default()
@@ -1995,6 +2138,7 @@ graph api : App {
             terminals[0].trigger,
             node::Trigger::Lifecycle(node::Lifecycle::Reply)
         );
+        assert!(terminals[0].consumed.is_empty());
         assert_eq!(terminals[0].emissions.len(), 1);
         assert_eq!(terminals[0].emissions[0].port.name(), "exit");
         let trace = crate::golden::project(journal.records());
@@ -2058,6 +2202,224 @@ graph api : App {
             1,
             "a late Driver observation cannot create a second exit"
         );
+    }
+
+    #[test]
+    fn a_graph_response_closes_its_original_inbound_call_without_an_outbound_call() {
+        let plan = inbound_call_response_plan();
+        let state = Arc::new(Mutex::new(RetainedCallState {
+            proposals: VecDeque::from([InboundProposal {
+                reference: InboundProposalRef::new(1),
+                submission: InboundSubmission {
+                    provenance: InboundEnvelopeProvenance::single(
+                        node::Path::new(["server"]).unwrap(),
+                    ),
+                    port: node::Port::conventional_out(),
+                    draft: Draft {
+                        data: Data::materialized(Value::Text(String::from("request"))),
+                        ext: Namespace::new(),
+                    },
+                    sequence: SubmissionSequence::Next,
+                },
+                session: None,
+            }]),
+            hold_first_response: true,
+            ..RetainedCallState::default()
+        }));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(RetainedCallFactory {
+                id: ConnectorId::parse("test/inbound-call@1").unwrap(),
+                state: Arc::clone(&state),
+            }))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+
+        let Some(crate::boundary::InboundAdmission::Accepted(accepted)) = bindings
+            .pump_inbound(&mut vm, &mut journal)
+            .expect("the request reaches atomic admission")
+        else {
+            panic!("the request must be accepted")
+        };
+        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+            panic!("the accepted request opens one inbound Call")
+        };
+        let opening_instance =
+            journal
+                .records()
+                .iter()
+                .find_map(|record| match record {
+                    crate::journal::Record::Inbound(inbound) => inbound
+                        .exchange
+                        .as_deref()
+                        .and_then(|exchange| match exchange {
+                            crate::journal::InboundExchangeRecord::Call(call)
+                                if call.reference == call_ref =>
+                            {
+                                Some(call.instance.clone())
+                            }
+                            crate::journal::InboundExchangeRecord::Call(_)
+                            | crate::journal::InboundExchangeRecord::Session(_) => None,
+                        }),
+                    crate::journal::Record::Transaction(_)
+                    | crate::journal::Record::Outbound(_) => None,
+                })
+                .expect("the accepted Call records its exact source instance");
+        vm.drain_with_bindings(&mut journal, &mut bindings)
+            .expect("the graph response reaches the retained connector cursor");
+        let response_target = journal
+            .records()
+            .iter()
+            .find_map(|record| match record {
+                crate::journal::Record::Transaction(transaction)
+                    if transaction.owner_path.to_string() == "relay" =>
+                {
+                    transaction.routes.first().map(|route| route.target.clone())
+                }
+                crate::journal::Record::Inbound(_)
+                | crate::journal::Record::Transaction(_)
+                | crate::journal::Record::Outbound(_) => None,
+            })
+            .expect("the response-producing transaction seals its route");
+        assert_eq!(response_target, opening_instance);
+
+        state.lock().unwrap().events.push(InboundCallEvent {
+            call_ref,
+            completion: Completion::http_server_exit(HttpServerExit::Completed { status: 200 }),
+        });
+        let premature = bindings.pump_inbound_call_events(&mut vm).unwrap();
+        assert_eq!(premature.queued, 0);
+        assert_eq!(premature.rejected.len(), 1);
+
+        let first = bindings.pump_inbound_call_responses(&mut vm).unwrap();
+        assert_eq!((first.started, first.pending), (0, 1));
+        assert!(state.lock().unwrap().responses.is_empty());
+        let second = bindings.pump_inbound_call_responses(&mut vm).unwrap();
+        assert_eq!((second.started, second.pending), (1, 0));
+        {
+            let state = state.lock().unwrap();
+            assert_eq!(state.responses.len(), 1);
+            assert_eq!(state.responses[0].call_ref, call_ref);
+            assert_eq!(
+                state.responses[0].response.data(),
+                &Data::materialized(Value::Text(String::from("response")))
+            );
+        }
+        let report = bindings.pump_inbound_call_events(&mut vm).unwrap();
+        assert_eq!(report.queued, 1);
+        assert!(report.rejected.is_empty());
+        vm.drain_with_bindings(&mut journal, &mut bindings)
+            .expect("the observed protocol completion closes the original Call");
+
+        let terminals = journal
+            .records()
+            .iter()
+            .filter_map(|record| match record {
+                crate::journal::Record::Transaction(transaction)
+                    if transaction.exchange_exit.as_deref()
+                        == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref)) =>
+                {
+                    Some(transaction)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(terminals.len(), 1);
+        assert_eq!(terminals[0].consumed.len(), 1);
+        assert_eq!(
+            terminals[0].trigger,
+            node::Trigger::Lifecycle(node::Lifecycle::Reply)
+        );
+        assert!(journal.open_inbound_calls().is_empty());
+        assert!(
+            journal
+                .records()
+                .iter()
+                .all(|record| !matches!(record, crate::journal::Record::Outbound(_))),
+            "respond is the return half of the inbound Call, never a new outbound Call"
+        );
+    }
+
+    #[test]
+    fn a_response_after_the_inbound_call_closed_is_discarded_and_journaled() {
+        let plan = inbound_call_response_plan();
+        let state = Arc::new(Mutex::new(RetainedCallState {
+            proposals: VecDeque::from([InboundProposal {
+                reference: InboundProposalRef::new(1),
+                submission: InboundSubmission {
+                    provenance: InboundEnvelopeProvenance::single(
+                        node::Path::new(["server"]).unwrap(),
+                    ),
+                    port: node::Port::conventional_out(),
+                    draft: Draft {
+                        data: Data::materialized(Value::Text(String::from("late"))),
+                        ext: Namespace::new(),
+                    },
+                    sequence: SubmissionSequence::Next,
+                },
+                session: None,
+            }]),
+            acknowledge_on_accept: true,
+            ..RetainedCallState::default()
+        }));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(RetainedCallFactory {
+                id: ConnectorId::parse("test/inbound-call@1").unwrap(),
+                state: Arc::clone(&state),
+            }))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+
+        let Some(crate::boundary::InboundAdmission::Accepted(accepted)) = bindings
+            .pump_inbound(&mut vm, &mut journal)
+            .expect("the request reaches atomic admission")
+        else {
+            panic!("the request must be accepted")
+        };
+        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+            panic!("the accepted request opens one inbound Call")
+        };
+        assert_eq!(
+            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            1
+        );
+        vm.drain_with_bindings(&mut journal, &mut bindings)
+            .expect("the accepted terminal and late graph response settle deterministically");
+
+        let response_report = bindings.pump_inbound_call_responses(&mut vm).unwrap();
+        assert_eq!((response_report.started, response_report.pending), (0, 0));
+        assert!(state.lock().unwrap().responses.is_empty());
+        let terminals = journal
+            .records()
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record,
+                    crate::journal::Record::Transaction(transaction)
+                        if transaction.exchange_exit.as_deref()
+                            == Some(&crate::journal::InboundExchangeExitRecord::Call(call_ref))
+                )
+            })
+            .count();
+        assert_eq!(terminals, 1);
+        let orphan = journal.records().iter().find_map(|record| match record {
+            crate::journal::Record::Transaction(transaction)
+                if transaction.owner_path.to_string() == "server"
+                    && transaction.trigger
+                        == node::Trigger::Port(node::Port::new("in").unwrap())
+                    && transaction.exchange_exit.is_none() =>
+            {
+                Some(transaction)
+            }
+            _ => None,
+        });
+        let orphan = orphan.expect("the late response has one observable consume-only record");
+        assert_eq!(orphan.consumed.len(), 1);
+        assert!(orphan.emissions.is_empty());
+        assert!(journal.open_inbound_calls().is_empty());
     }
 
     #[test]

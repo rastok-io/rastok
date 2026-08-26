@@ -12,7 +12,8 @@
 > bounded hosted-engine seam; H4 executes HttpClient with pre-visible-only
 > fallback and generic outbound backpressure. D-2026-08-26-5 lands H5's
 > generic inbound Call fold; H5.1 binds ack-mode HTTP/1.1–2 to it with bounded
-> admission pressure. HTTP/3 server, respond mode and Session I/O remain gated
+> admission pressure; H5.2 adds the generic direct-lineage graph-response
+> return. HTTP/3 server, the live respond policy and Session I/O remain gated
 > by the rest of H5–H6.
 
 The question this doc answers : **what survives — a crash, a redelivery, a
@@ -323,20 +324,32 @@ against the resolved Connector output table and becomes one ordinary
 Connector transaction:
 
 ```text
-INBOUND(root, call_ref, source_instance)     // opens after bounded admission
+INBOUND(root, call_ref, source_instance)        // opens after bounded admission
         ... graph work ...
-TRANSACTION(l:reply, cause = root, call_ref) // outputs*, exactly one exit last
+TRANSACTION(response producer, route=source)   // commits before response bytes
+TRANSACTION(l:reply, cause=root, call_ref)      // outputs*, exactly one exit last
 ```
 
-The terminal transaction consumes no synthetic mailbox cursor and creates no
-OUTBOUND record. The journal requires its owner and generation to equal the
-opening source, refuses `l:reply` without the open reference, and closes the
-reference once. Invalid, crossed, duplicate and late Driver observations are
-non-causal. The generic fold counts the Call as open work for instance
-Closing. H5.1 admits only fixed `ack`: the hosted Driver retains byte permits
-until admission and then queues its terminal 202 observation without an
-unbounded response wait. H5 must still add explicit cancellation/timeout
-before admitting `respond`, which can retain a graph response indefinitely.
+The terminal transaction creates no synthetic mailbox cursor and no OUTBOUND
+record. Fixed acknowledgement consumes zero cursors. A graph response consumes
+exactly the real delivery cursor already sealed by its producer, atomically
+with Call closure. Direct lineage (`response.origin_id == root.id`) selects
+the exact opening source instance during route preparation; transformed
+response data never re-keys the return. Only after the producer commit may
+the Driver receive that envelope. A bounded `Pending` result writes no bytes
+and leaves the same delivery retained behind the ordinary claimed mailbox;
+`Started` transfers the attempt and requires one later terminal observation.
+
+The journal requires owner and generation to equal the opening source,
+refuses `l:reply` without the open reference, and closes the reference once.
+Crossed Driver facts are non-causal. A response that is late, duplicate or
+has no open direct lineage is instead consumed by an ordinary empty
+transaction: the discard is replay-visible and cannot write protocol bytes or
+create a second exit. The generic fold counts the Call and any retained
+response as open work for instance Closing. H5.1 admits only fixed `ack` on
+the real HttpServer. H5.2 lands the generic direct-lineage return seam; the
+live `respond` Driver, explicit correlation and bounded cancellation/deadline
+policy remain refused until the rest of H5 lands them together.
 
 ### 4.5 Sessions — one resource lifecycle, many message effects
 

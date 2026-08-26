@@ -1530,7 +1530,7 @@ impl Journal for MemJournal {
             }
             if transaction.trigger != node::Trigger::Lifecycle(node::Lifecycle::Reply)
                 || transaction.cause != Some(call_ref.id())
-                || !transaction.consumed.is_empty()
+                || transaction.consumed.len() > 1
             {
                 return Err(Error::InvalidInboundCallExit);
             }
@@ -2713,6 +2713,18 @@ mod tests {
             index: 0,
             envelope: committed.envelope,
         });
+        let response_position = ConsumedPosition {
+            edge: String::from("relay.out->server.in"),
+            source: instance("relay", 0),
+            seq: 0,
+        };
+        let mut two_responses = terminal.clone();
+        two_responses.consumed = vec![response_position.clone(), response_position];
+        assert_eq!(
+            journal.commit(two_responses).unwrap_err(),
+            Error::InvalidInboundCallExit,
+            "one inbound Call can consume at most one graph response"
+        );
         journal.commit(terminal.clone()).unwrap();
         assert!(journal.open_inbound_calls().is_empty());
         assert_eq!(

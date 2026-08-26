@@ -1,7 +1,8 @@
 use crate::boundary::{
     Draft, HttpServerExit, InboundAcceptance, InboundCallConnectorDriver, InboundCallEvent,
-    InboundConnectorDriver, InboundDecision, InboundEnvelopeProvenance, InboundExchangeRef,
-    InboundProposal, InboundProposalRef, InboundRejection, InboundSubmission, SubmissionSequence,
+    InboundCallResponse, InboundCallResponseStart, InboundConnectorDriver, InboundDecision,
+    InboundEnvelopeProvenance, InboundExchangeRef, InboundProposal, InboundProposalRef,
+    InboundRejection, InboundSubmission, SubmissionSequence,
 };
 use crate::connectors::http_server::bind_routes;
 use crate::connectors::http_shared::{HttpVersion, decode_body};
@@ -444,6 +445,12 @@ impl InboundConnectorDriver for HttpServer<'_> {
 }
 
 impl InboundCallConnectorDriver for HttpServer<'_> {
+    fn start_response(&mut self, _: &InboundCallResponse) -> InboundCallResponseStart {
+        // H5.1 binds only the fixed-ack profile; a validated respond plan is
+        // refused by this factory before the listener starts.
+        InboundCallResponseStart::Pending
+    }
+
     fn events(&mut self) -> Vec<InboundCallEvent> {
         self.poll_events();
         self.terminals.sort_by_key(|event| event.call_ref);

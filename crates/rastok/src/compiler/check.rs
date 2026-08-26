@@ -1652,6 +1652,9 @@ impl Checker<'_, '_> {
                     );
                     continue;
                 }
+                if self.reject_ack_response_edge(&graph, &candidate, edge.span) {
+                    continue;
+                }
                 graph.edges.push(candidate);
             }
         }
@@ -1660,6 +1663,49 @@ impl Checker<'_, '_> {
         self.reject_cycles(&graph, decl.span);
         self.warn_unwired_outputs(&graph);
         graph
+    }
+
+    /// `ack` deliberately has no graph-response half. Refuse that spelling at
+    /// the source edge rather than letting Registry-free plan validation turn
+    /// it into an internal-plan diagnostic after cycle analysis has correctly
+    /// split the inbound Call boundary.
+    fn reject_ack_response_edge(&mut self, graph: &Graph, edge: &Edge, span: Span) -> bool {
+        let EdgeTarget::Port(target) = &edge.to else {
+            return false;
+        };
+        let EndpointOwner::Node(path) = &target.owner else {
+            return false;
+        };
+        let Some(target) = graph.nodes.iter().find(|node| &node.path == path) else {
+            return false;
+        };
+        let NodeRole::Connector {
+            contract_id,
+            attributes,
+            ..
+        } = &target.role
+        else {
+            return false;
+        };
+        let ack = contract_id == crate::connector::HTTP_SERVER_CONNECTOR_ID
+            && attributes.iter().any(|attribute| {
+                attribute.name == "mode"
+                    && matches!(&attribute.value, AttrValue::Word(word) if word == "ack")
+            });
+        if !ack {
+            return false;
+        }
+        self.bag.push(
+            Diagnostic::new(
+                E_CONTRACT_ATTR,
+                Phase::Check,
+                "`HttpServer(mode = ack)` has no graph-response input; `mode = respond` is a named H5 deferral",
+            )
+            .with_span(span)
+            .with_field("connector", path.to_string())
+            .with_field("mode", "ack"),
+        );
+        true
     }
 
     /// Every output requiring a wire either reaches an edge or is discarded
@@ -1800,6 +1846,20 @@ impl Checker<'_, '_> {
                     index_of(to),
                 )
             {
+                let target_is_inbound_boundary = matches!(
+                    &graph.nodes[to].role,
+                    NodeRole::Connector {
+                        roles,
+                        exchange: crate::connector::ConnectorExchange::Call,
+                        ..
+                    } if roles.has_inbound() && !roles.has_outbound()
+                );
+                if target_is_inbound_boundary {
+                    // The response input and spontaneous request output are
+                    // independent halves of one external boundary. There is
+                    // no hidden `in -> out` execution edge through this Node.
+                    continue;
+                }
                 successors[from].push(to);
             }
         }

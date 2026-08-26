@@ -19,8 +19,8 @@
 
 use crate::boundary::{
     BoundaryEvent, CallRef, ClosingDeadline, Completion, CompletionGate, DatedPayload, Dispatcher,
-    InboundAcceptance, InboundAdmission, InboundCallEvent, InboundCallRef, InboundProposal,
-    InboundRejection, InboundSession, InboundSubmission, InstanceDeadline, Intent,
+    InboundAcceptance, InboundAdmission, InboundCallEvent, InboundCallRef, InboundCallResponse,
+    InboundProposal, InboundRejection, InboundSession, InboundSubmission, InstanceDeadline, Intent,
     OutboundConnectorBindings, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::connector::ConnectorExchange;
@@ -277,6 +277,15 @@ struct PendingInboundCall {
     slot: Slot,
     request: Envelope,
     instance: InstanceRef,
+    response: Option<PendingInboundCallResponse>,
+}
+
+/// One graph response held behind the source Connector's claimed mailbox
+/// until its protocol terminal observation commits `l:reply`.
+#[derive(Debug, Clone, PartialEq)]
+struct PendingInboundCallResponse {
+    delivery: Delivery,
+    started: bool,
 }
 
 /// One selected owner generation and its immutable instance bundle.
@@ -832,6 +841,19 @@ impl<'plan> Vm<'plan> {
                 report.discarded.push(event);
                 continue;
             }
+            if pending
+                .response
+                .as_ref()
+                .is_some_and(|response| !response.started)
+            {
+                report.rejected.push((
+                    event,
+                    String::from(
+                        "the inbound Call Driver reported a response terminal before accepting the journaled response",
+                    ),
+                ));
+                continue;
+            }
             let connector = &self.plan.nodes[pending.slot.index()].path;
             if let Err(reason) = gate.admit(connector, &event.completion) {
                 report.rejected.push((event, reason));
@@ -841,6 +863,50 @@ impl<'plan> Vm<'plan> {
             report.queued = report.queued.saturating_add(1);
         }
         report
+    }
+
+    /// Returns graph responses that have committed and are waiting for their
+    /// owning inbound Call Driver. The order is the canonical Call-reference
+    /// order; repeated reads return the same envelopes until the Driver
+    /// confirms ownership with [`Self::mark_inbound_call_response_started`].
+    #[must_use]
+    pub fn ready_inbound_call_responses(&self) -> Vec<InboundCallResponse> {
+        self.inbound_calls
+            .iter()
+            .filter_map(|(call_ref, pending)| {
+                let response = pending
+                    .response
+                    .as_ref()
+                    .filter(|response| !response.started)?;
+                Some(InboundCallResponse {
+                    call_ref: *call_ref,
+                    connector_path: self.plan.nodes[pending.slot.index()].path.clone(),
+                    response: response.delivery.envelope.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Marks the exact retained response as Driver-owned after a successful
+    /// non-blocking start. A stale or crossed acknowledgement changes
+    /// nothing and returns `false`.
+    pub fn mark_inbound_call_response_started(&mut self, response: &InboundCallResponse) -> bool {
+        let Some(pending) = self.inbound_calls.get_mut(&response.call_ref) else {
+            return false;
+        };
+        if self.plan.nodes[pending.slot.index()].path != response.connector_path {
+            return false;
+        }
+        let Some(retained) = &mut pending.response else {
+            return false;
+        };
+        if retained.started
+            || retained.delivery.envelope.meta().sys().id() != response.response.meta().sys().id()
+        {
+            return false;
+        }
+        retained.started = true;
+        true
     }
 
     fn inject_submission(
@@ -1044,6 +1110,7 @@ impl<'plan> Vm<'plan> {
                     slot: *source,
                     request: committed.envelope.clone(),
                     instance: target.reference.clone(),
+                    response: None,
                 },
             );
         }
@@ -1131,8 +1198,12 @@ impl<'plan> Vm<'plan> {
             };
             match &self.plan.nodes[slot.index()].kind {
                 NodeKind::Operator => self.fire_operator(journal, slot, &instance, &delivery)?,
-                NodeKind::Connector(_) => {
-                    self.open_call(journal, bindings, slot, &instance, &delivery)?
+                NodeKind::Connector(spec) => {
+                    if spec.roles.has_outbound() {
+                        self.open_call(journal, bindings, slot, &instance, &delivery)?
+                    } else {
+                        self.open_inbound_call_response(journal, slot, &instance, &delivery)?
+                    }
                 }
             }
             return Ok(true);
@@ -1172,8 +1243,12 @@ impl<'plan> Vm<'plan> {
         {
             after = Some((slot, instance.clone()));
             match &self.plan.nodes[slot.index()].kind {
-                NodeKind::Connector(_) => {
-                    self.open_call(journal, bindings, slot, &instance, &delivery)?;
+                NodeKind::Connector(spec) => {
+                    if spec.roles.has_outbound() {
+                        self.open_call(journal, bindings, slot, &instance, &delivery)?;
+                    } else {
+                        self.open_inbound_call_response(journal, slot, &instance, &delivery)?;
+                    }
                     return Ok(true);
                 }
                 NodeKind::Operator => {
@@ -2424,9 +2499,10 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    /// Commits one retained inbound-Call terminal observation. The Call root
-    /// is its causal input; there is no outbound record and no mailbox cursor
-    /// to consume.
+    /// Commits one retained inbound-Call terminal observation. Fixed
+    /// acknowledgements consume no mailbox cursor; a graph-driven response
+    /// atomically consumes its real response delivery. Neither form creates
+    /// an outbound record.
     fn settle_inbound_call_next(
         &mut self,
         journal: &mut dyn Journal,
@@ -2435,15 +2511,24 @@ impl<'plan> Vm<'plan> {
         pending: PendingInboundCall,
     ) -> Result<(), VmError> {
         let executor = TransactionExecutor::new(self.plan, self.graph_version);
-        let mut outcome = executor
-            .inbound_call_completion(
+        let mut outcome = match pending.response.as_ref() {
+            Some(response) => executor.inbound_call_response_completion(
+                pending.slot,
+                &pending.instance,
+                &pending.request,
+                &response.delivery,
+                event.call_ref,
+                &event.completion,
+            ),
+            None => executor.inbound_call_completion(
                 pending.slot,
                 &pending.instance,
                 &pending.request,
                 event.call_ref,
                 &event.completion,
-            )
-            .map_err(VmError::Fault)?;
+            ),
+        }
+        .map_err(VmError::Fault)?;
         let prepared = self.validate_and_prepare_emissions(
             journal,
             pending.slot,
@@ -2454,6 +2539,11 @@ impl<'plan> Vm<'plan> {
         journal.commit(outcome.record).map_err(VmError::Journal)?;
         self.settled_inbound_calls.remove(index);
         self.inbound_calls.remove(&event.call_ref);
+        if pending.response.is_some() {
+            self.scheduler
+                .mailboxes
+                .release(pending.slot, &pending.instance);
+        }
         self.route_emissions(pending.slot, &pending.instance, prepared);
         self.progress_closures();
         Ok(())
@@ -2781,6 +2871,114 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
+    /// Reserves one graph-produced response for the admitted inbound Call it
+    /// names. The producing transaction already journaled the response
+    /// envelope and route, so this step performs no external effect. The
+    /// Driver receives the retained response through the registry and the
+    /// eventual `l:reply` transaction consumes this real mailbox cursor.
+    fn open_inbound_call_response(
+        &mut self,
+        journal: &mut dyn Journal,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+    ) -> Result<(), VmError> {
+        let planned = &self.plan.nodes[slot.index()];
+        let NodeKind::Connector(spec) = &planned.kind else {
+            return Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "an inbound-Call response was routed to a non-connector",
+            });
+        };
+        if !spec.roles.has_inbound()
+            || spec.roles.has_outbound()
+            || spec.exchange != ConnectorExchange::Call
+        {
+            return Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "a delivery reached a connector with neither an outbound Call nor an inbound-Call response role",
+            });
+        }
+
+        // This generic checkpoint closes the direct-lineage path only. The
+        // HttpServer `correlate` profile remains categorically deferred until
+        // H5 can select the opening instance before the response route commits.
+        let call_ref = InboundCallRef::from_root(delivery.envelope.meta().sys().origin_id());
+        let matches_open_call = self.inbound_calls.get(&call_ref).is_some_and(|call| {
+            call.slot == slot
+                && call.instance == *instance
+                && call.response.is_none()
+                && !self
+                    .settled_inbound_calls
+                    .iter()
+                    .any(|event| event.call_ref == call_ref)
+        });
+        if !matches_open_call {
+            return self.discard_inbound_call_response(journal, slot, instance, delivery);
+        }
+        let response = self
+            .scheduler
+            .mailboxes
+            .pop(slot, instance)
+            .ok_or_else(|| VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "an inbound-Call response disappeared before reservation",
+            })?;
+        let Some(call) = self.inbound_calls.get_mut(&call_ref) else {
+            return Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "an inbound-Call response lost its admitted request",
+            });
+        };
+        call.response = Some(PendingInboundCallResponse {
+            delivery: response,
+            started: false,
+        });
+        self.scheduler.mailboxes.claim(slot, instance);
+        Ok(())
+    }
+
+    /// Commits the observable orphan-response discard. A late or malformed
+    /// correlation consumes exactly the already-journaled delivery and can
+    /// never create protocol bytes or a second Call exit.
+    fn discard_inbound_call_response(
+        &mut self,
+        journal: &mut dyn Journal,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+    ) -> Result<(), VmError> {
+        let planned = &self.plan.nodes[slot.index()];
+        let record = crate::journal::TransactionRecord {
+            owner_path: OwnerPath::from(&planned.path),
+            instance: instance.clone(),
+            parent_instance: None,
+            close_scope: None,
+            trigger: node::Trigger::Port(delivery.port.clone()),
+            cause: Some(delivery.envelope.meta().sys().id()),
+            exchange_exit: None,
+            consumed: vec![crate::journal::ConsumedPosition {
+                edge: delivery.edge.clone(),
+                source: delivery.source_instance.clone(),
+                seq: delivery.seq,
+            }],
+            join_inputs: vec![],
+            state_delta: vec![],
+            emissions: vec![],
+            routes: vec![],
+            timers: vec![],
+        };
+        journal.commit(record).map_err(VmError::Journal)?;
+        if self.scheduler.mailboxes.pop(slot, instance).is_none() {
+            return Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "a committed orphan response lost its mailbox delivery",
+            });
+        }
+        self.progress_closures();
+        Ok(())
+    }
+
     /// A delivery reaching a connector opens its outbound call:
     /// journal-before-effect — the open fact exists before any
     /// driver hears — and the request is held until the call
@@ -2965,19 +3163,132 @@ impl<'plan> Vm<'plan> {
             .cloned()
         {
             let target = match edge.to.as_ref().and_then(|to| to.node) {
-                Some(target) => Some(self.prepare_target(
-                    journal,
-                    edge.scope,
-                    source_instance,
-                    target,
-                    envelope,
-                    candidates,
-                )?),
+                Some(target) => Some(
+                    if let Some(target) = self.prepare_direct_inbound_call_response_target(
+                        edge.scope,
+                        source_instance,
+                        target,
+                        envelope,
+                    )? {
+                        target
+                    } else {
+                        self.prepare_target(
+                            journal,
+                            edge.scope,
+                            source_instance,
+                            target,
+                            envelope,
+                            candidates,
+                        )?
+                    },
+                ),
                 None => None,
             };
             prepared.push(PreparedEdge { edge, target });
         }
         Ok(prepared)
+    }
+
+    /// A direct response returns to the exact Connector generation that
+    /// admitted its root Call. Selecting that destination here, before the
+    /// producer commits, is essential: re-evaluating a keyed Connector from
+    /// transformed response data could otherwise migrate the response to a
+    /// different instance and make the recorded route a lie.
+    fn prepare_direct_inbound_call_response_target(
+        &self,
+        edge_scope: OwnerSlot,
+        source_instance: Option<&InstanceRef>,
+        target: Slot,
+        envelope: &Envelope,
+    ) -> Result<Option<PreparedTarget>, VmError> {
+        let Some(spec) = self.plan.nodes[target.index()].connector() else {
+            return Ok(None);
+        };
+        if !spec.roles.has_inbound()
+            || spec.roles.has_outbound()
+            || spec.exchange != ConnectorExchange::Call
+        {
+            return Ok(None);
+        }
+
+        let call_ref = InboundCallRef::from_root(envelope.meta().sys().origin_id());
+        let Some(pending) = self.inbound_calls.get(&call_ref) else {
+            return Ok(None);
+        };
+        if pending.slot != target
+            || pending.response.is_some()
+            || self
+                .settled_inbound_calls
+                .iter()
+                .any(|event| event.call_ref == call_ref)
+        {
+            return Ok(None);
+        }
+
+        let owner_chain = self.owner_chain(self.plan.nodes[target.index()].owner)?;
+        let Some(scope_index) = owner_chain.iter().position(|owner| *owner == edge_scope) else {
+            return Err(VmError::PlanInvariant {
+                node: self.plan.nodes[target.index()].path.clone(),
+                reason: "the response edge scope is not an ancestor of its inbound Call target",
+            });
+        };
+        let mut selected = Vec::with_capacity(owner_chain.len());
+        let mut cursor = Some(pending.instance.clone());
+        while let Some(reference) = cursor {
+            let instance =
+                self.instances
+                    .get(&reference)
+                    .ok_or_else(|| VmError::PlanInvariant {
+                        node: self.plan.nodes[target.index()].path.clone(),
+                        reason: "an open inbound Call lost its installed instance chain",
+                    })?;
+            selected.push((instance.owner, reference));
+            cursor = instance.parent.clone();
+        }
+        selected.reverse();
+        if selected.len() != owner_chain.len()
+            || selected
+                .iter()
+                .zip(owner_chain)
+                .any(|((actual, _), expected)| actual != expected)
+        {
+            return Err(VmError::PlanInvariant {
+                node: self.plan.nodes[target.index()].path.clone(),
+                reason: "an open inbound Call has an instance chain inconsistent with its owner",
+            });
+        }
+        let chain: Vec<InstanceRef> = selected
+            .into_iter()
+            .map(|(_, reference)| reference)
+            .collect();
+        let reference = chain
+            .last()
+            .cloned()
+            .ok_or_else(|| VmError::PlanInvariant {
+                node: self.plan.nodes[target.index()].path.clone(),
+                reason: "an inbound Call target has no instance",
+            })?;
+        let scope = chain
+            .get(scope_index)
+            .cloned()
+            .ok_or_else(|| VmError::PlanInvariant {
+                node: self.plan.nodes[target.index()].path.clone(),
+                reason: "the direct response route lost its edge scope instance",
+            })?;
+        let Some(source_scope) = self.source_instance_for_owner(source_instance, edge_scope)?
+        else {
+            return Ok(None);
+        };
+        if source_scope != scope {
+            return Ok(None);
+        }
+        let admitted = chain.iter().skip(scope_index + 1).cloned().collect();
+        Ok(Some(PreparedTarget {
+            reference,
+            scope,
+            chain,
+            admitted,
+        }))
     }
 
     /// Every route decision sealed by an inbound record. The envelope id is

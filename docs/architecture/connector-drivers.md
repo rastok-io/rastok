@@ -1,9 +1,9 @@
 # Contributing a Connector Driver
 
-> Current contributor path through the M1.6 H5.1 live-ack checkpoint. The
+> Current contributor path through the M1.6 H5.2 graph-response checkpoint. The
 > normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
-> [D-2026-08-22-1 and D-2026-08-26-5/-6](../spec/decisions.md). This guide
+> [D-2026-08-22-1 and D-2026-08-26-5/-7](../spec/decisions.md). This guide
 > explains how the pieces meet in the implementation; it does not define a
 > second Connector model.
 
@@ -67,10 +67,18 @@ category, never a provenance-string heuristic.
 For a Call-shaped inbound contract, the same bound object also exposes
 `InboundCallConnectorDriver`. The accepting INBOUND fact returns an
 `InboundCallRef` only after it has committed the root and exact source
-instance. The terminal view later reports one correlated `Completion`; the VM
-validates it and commits one `l:reply` Connector transaction with exactly one
-final `exit`. It is not an outbound Call, and the Driver never manufactures a
-mailbox delivery or writes a causal record itself.
+instance. For fixed acknowledgement, the terminal view later reports one
+correlated `Completion`; the VM validates it and commits one zero-cursor
+`l:reply` Connector transaction with exactly one final `exit`.
+
+For a graph response, the same view first receives an `InboundCallResponse`
+through `start_response`. Its envelope and destination were already committed
+by the producing graph transaction. `Pending` means no protocol bytes were
+written and leaves the exact response behind the Connector's ordinary claimed
+mailbox; `Started` transfers the bounded attempt and obliges the Driver to
+report its one terminal event through `events`. The resulting `l:reply`
+consumes that real delivery cursor. Neither form is an outbound Call, and the
+Driver never manufactures a mailbox delivery or writes a causal record.
 
 `OutboundConnectorDriver` exposes exactly one exchange-specific outbound view:
 `CallConnectorDriver` prepares/starts calls and reports correlated typed
@@ -98,7 +106,10 @@ fold plus two-phase accepted/pending/rejected admission. H5 completes the
 generic inbound Call half with its source-instance opening and close-once
 terminal transaction. H5.1's live HttpServer then retains each H1/H2 request
 and its byte permits until that same admission decision, and queues the fixed
-ack terminal through the bounded fact lane. Neither adds
+ack terminal through the bounded fact lane. H5.2 adds the generic
+direct-lineage response return, including exact pre-commit selection for a
+keyed source and consume-only orphan handling; the public HttpServer remains
+ack-only until its response writer, correlator and deadlines land. None adds
 `DuplexConnectorDriver` or makes the VM aware of WebSocket.
 
 ## The hosted network seam
@@ -164,7 +175,9 @@ Rustls, connection/stream permits and byte reservations. HTTP/1.1 and HTTP/2
 both retain the request until the VM answers the same proposal. Only an
 accepted-after-commit decision permits 202, and the fixed terminal observation
 returns through the bounded fact lane rather than a detached task. HTTP/3 and
-graph-driven `respond` remain separate H5 gates.
+the live graph-driven `respond` profile remain separate H5 gates; H5.2 has
+already landed their generic direct-lineage response handoff beneath the
+family policy.
 
 H4.1 makes the header boundary contributor-facing and typed. A family sheet
 declares well-known request fields in the sparse `headers` struct and leaves

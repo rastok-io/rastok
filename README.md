@@ -86,8 +86,12 @@ acceptance follows one bounded root/source-instance commit, and one typed
 `l:reply` transaction closes the retained request without inventing an
 outbound call. H5.1 now binds that seam to a real bounded Hyper listener:
 HTTP/1.1 and HTTP/2 `ack` requests retain their byte permits and withhold 202
-until causal admission commits. HTTP/3 server binding, graph-driven
-`respond`, bounded request deadlines, independent server interop and all
+until causal admission commits. H5.2 adds the generic graph-response half:
+the producing transaction seals a direct-lineage route to the exact opening
+instance before commit, bounded Driver capacity may leave that real delivery
+pending, and the eventual `l:reply` consumes its cursor without an OUTBOUND
+record. The live HttpServer `respond` profile, explicit correlation, bounded
+request deadlines, HTTP/3 server binding, independent server interop and all
 WebSocket Drivers remain H5–H6 work; Extended CONNECT is still a separate
 proof.
 

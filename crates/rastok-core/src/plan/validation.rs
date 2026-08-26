@@ -176,16 +176,15 @@ pub enum PlanValidationError {
         /// The declaring node.
         node: node::Path,
     },
-    /// A connector some edge DELIVERS TO declares `Effect::None` —
-    /// a delivery opens a call, and a call needs an effect class.
-    /// (A source connector with no incoming edge may honestly be
-    /// effectless.)
+    /// An outbound connector some edge delivers to declares `Effect::None` —
+    /// opening an external call requires an effect class. An inbound-only
+    /// Call response sink remains honestly effectless.
     EffectlessCallee {
         /// The declaring node.
         node: node::Path,
     },
-    /// A connector some edge delivers to does not expose the outbound role
-    /// required to execute that call.
+    /// A connector some edge delivers to exposes neither the outbound role
+    /// nor the inbound-Call response protocol required to consume it.
     CallableConnectorWithoutOutboundRole {
         /// The declaring node.
         node: node::Path,
@@ -689,12 +688,12 @@ impl core::fmt::Display for PlanValidationError {
             Self::EffectlessCallee { node } => {
                 write!(
                     f,
-                    "invalid plan: `{node}` receives deliveries but declares no effect class — a call cannot open without one"
+                    "invalid plan: outbound connector `{node}` receives deliveries but declares no effect class — a call cannot open without one"
                 )
             }
             Self::CallableConnectorWithoutOutboundRole { node } => write!(
                 f,
-                "invalid plan: `{node}` receives deliveries but its contract has no outbound role"
+                "invalid plan: `{node}` receives deliveries but its contract exposes neither an outbound call nor an inbound-Call response sink"
             ),
             Self::DuplicateHandler { node, activation } => {
                 write!(
@@ -2498,32 +2497,41 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             // ValidatedExecutionPlan and quietly run as `lines`
             // (D-2026-08-11-1, second amendment). Another sheet
             // spelling its own `codec` vocabulary is untouched.
-            // The REAL effect invariant (D-2026-08-12-1, review
-            // round): any connector a delivery can reach opens a
-            // call, and the machine dispatches on its effect CLASS —
-            // `Effect::None` there would be a machine fault, so it
-            // never validates. A pure source (no incoming edge)
-            // stays free to be effectless.
+            // A delivery into an outbound Connector opens an effectful Call.
+            // A delivery into an inbound-only Call Connector is instead an
+            // already-journaled response to its retained external request;
+            // it must stay effectless and never masquerade as an outbound
+            // Call merely because both use an input port.
             let slot = crate::plan::Slot::new(u32::try_from(node_index).unwrap_or(u32::MAX));
             let receives = plan
                 .edges
                 .iter()
                 .any(|edge| edge.to.as_ref().is_some_and(|to| to.node == Some(slot)));
-            let has_family_role_gate = matches!(
-                spec.contract.as_str(),
-                crate::connector::PROCESS_CONNECTOR_ID | crate::connector::FILE_CONNECTOR_ID
-            );
-            if receives && !spec.roles.has_outbound() && !has_family_role_gate {
+            let receives_inbound_call_response = receives
+                && spec.roles.has_inbound()
+                && !spec.roles.has_outbound()
+                && spec.exchange == crate::connector::ConnectorExchange::Call;
+            if receives && !spec.roles.has_outbound() && !receives_inbound_call_response {
                 return Err(PlanValidationError::CallableConnectorWithoutOutboundRole {
                     node: node.path.clone(),
                 });
             }
             if receives
+                && spec.roles.has_outbound()
                 && spec.exchange == crate::connector::ConnectorExchange::Call
                 && spec.effect == node::Effect::None
             {
                 return Err(PlanValidationError::EffectlessCallee {
                     node: node.path.clone(),
+                });
+            }
+            if receives_inbound_call_response
+                && spec.contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
+                && !matches!(spec.attribute("mode"), Some(crate::plan::AttrSetting::Word(mode)) if mode == "respond")
+            {
+                return Err(PlanValidationError::ContractAttributeMismatch {
+                    node: node.path.clone(),
+                    attribute: String::from("mode"),
                 });
             }
             if spec.contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID {
@@ -3088,6 +3096,21 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     let mut successors = vec![Vec::new(); plan.nodes.len()];
     for edge in &plan.edges {
         if let (Some(from), Some(to)) = (edge.from.node, edge.to.as_ref().and_then(|to| to.node)) {
+            let target_is_inbound_boundary =
+                plan.nodes[to.index()].connector().is_some_and(|spec| {
+                    spec.roles.has_inbound()
+                        && !spec.roles.has_outbound()
+                        && matches!(spec.exchange, crate::connector::ConnectorExchange::Call)
+                });
+            if target_is_inbound_boundary {
+                // An inbound Call node has two boundary halves, not an
+                // implicit `in -> out` execution arc. A response terminates
+                // at `in`; a later request is a fresh external root at `out`.
+                // Treating the node as one opaque vertex would report a
+                // spatial cycle where the executable dependency graph has
+                // none.
+                continue;
+            }
             successors[from.index()].push(to.index());
         }
     }

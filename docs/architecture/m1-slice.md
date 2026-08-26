@@ -64,9 +64,13 @@ D-2026-08-26-4/-5: source-aware root admission and one close-once `l:reply`
 transaction are executable without an outbound record or moving any existing
 identity. H5.1 is landed under D-2026-08-26-6: a real bounded Hyper
 HTTP/1.1–2 listener retains request bytes through causal admission, withholds
-202 under pressure and closes the same Call exactly once. The remaining
-[ordered backlog](m1.6-http-websocket-backlog.md) continues with server
-HTTP/3, `respond`, deadline/race/interop closure and H6.
+202 under pressure and closes the same Call exactly once. H5.2 is landed under
+D-2026-08-26-7: a graph response is routed by direct lineage to the exact
+opening instance before commit, offered through a bounded pending/started
+Driver handoff, and consumed by `l:reply` without an OUTBOUND record. The
+remaining [ordered backlog](m1.6-http-websocket-backlog.md) continues with the
+live server `respond` profile, explicit correlation, HTTP/3,
+deadline/race/interop closure and H6.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now

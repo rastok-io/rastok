@@ -1,8 +1,9 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.6 H5.1: HttpClient is live
+> **Status: normative and executable through M1.6 H5.2: HttpClient is live
 > over HTTP/1.1–3 and HttpServer `ack` is live over HTTP/1.1–2. HTTP/3 server,
-> `respond`, and WebSocket network I/O remain gated by H5–H6.**
+> the live `respond` profile, and WebSocket network I/O remain gated by H5–H6.
+> The generic direct-lineage response-return seam is executable.**
 > B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
@@ -179,8 +180,11 @@ There is no parallel `mime_type` spelling.
   request, fact and byte capacities are finite; request bytes remain charged
   while the proposal awaits causal admission; and 202 follows the accepted
   commit. These are Driver choices and are absent from plan identity. HTTP/3,
-  `respond`, bounded request deadlines and independent server interop remain
-  in H5.
+  the live `respond` Driver, explicit correlation, bounded request deadlines
+  and independent server interop remain in H5. H5.2 already proves the generic
+  direct-lineage return beneath that policy: the producing transaction seals
+  the exact opening instance, Driver saturation leaves the real response
+  pending without bytes, and `l:reply` consumes its cursor.
 
 Malformed framing, failed bearer authentication and body refusal can occur
 before a request has a typed `out` value. H5.1 returns an HTTP refusal without

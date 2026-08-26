@@ -5,6 +5,45 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-26-7 — A graph response is the return half of its inbound Call
+
+The generic inbound-Call protocol now accepts one already-journaled graph
+response without turning it into a second outbound Call. An inbound-only Call
+Connector has two independent boundary halves: an external request creates a
+fresh root at its output, while a graph delivery to its input terminates at
+the retained external request. There is no implicit input-to-output execution
+edge through the Connector. The strict DAG is therefore checked over actual
+execution dependencies; an edge ending at this response sink does not create
+a spatial cycle back to a later external request.
+
+The response-producing transaction selects and seals the destination before
+commit. Only after that commit may `RuntimeBindings` offer the retained
+envelope to `InboundCallConnectorDriver::start_response`. `Pending` means no
+protocol byte was written and leaves the same delivery behind the Connector's
+ordinary claimed mailbox; `Started` transfers the bounded write attempt to
+the Driver, which must later report one typed terminal observation. The VM
+then commits the existing `l:reply` transaction with the opening root as its
+causal parent and the response delivery's real cursor in `consumed`. Fixed
+`ack` continues to consume zero cursors. Neither form writes an OUTBOUND
+record or invents a synthetic delivery.
+
+This checkpoint executes direct lineage only: the response `origin_id` must
+name the open request. A response arriving after closure, a second response,
+or an unmatched lineage is consumed by an ordinary empty transaction, so the
+discard is journaled and can never create protocol bytes or a second `exit`.
+Explicit `correlate` remains part of the deferred HttpServer target contract;
+it must select the opening source instance during pre-commit route
+preparation, not repair a route after commit. Bounded request deadlines,
+protocol cancellation, the live respond Driver and HTTP/3 remain later H5
+work. Consequently the public HttpServer sheet and real factory still admit
+only `mode = ack`.
+
+This is H5.2's generic response-return checkpoint. It allocates no plan field,
+format tag, semantic recipe or causal key. It only permits a new combination
+of existing transaction keys 33, 39 and 52 on new response facts. Every
+existing package, semantic hash, causal trace and golden remains
+byte-identical.
+
 ## D-2026-08-26-6 — A live ack listener holds bytes and acknowledgement until admission
 
 The first physical HttpServer checkpoint binds the already-published
@@ -91,6 +130,9 @@ Keys 28 and 52 are extend-only and omitted from every pre-H5 record. No plan
 package, semantic hash, existing causal trace or root-id recipe moves in this
 checkpoint. A fake retained HttpServer request proves commit-before-accept,
 source-instance routing through an Operator, and one typed terminal exit.
+D-2026-08-26-7 later extends the same `l:reply` form from fixed
+acknowledgement's zero cursors to exactly one already-journaled response
+cursor; it does not reinterpret the opening fact or manufacture an input.
 This is the generic H5 Call seam, not the live listener claim: protocol accept
 loops, fixed `ack` bytes, graph-driven `respond`, cancellation/timeout,
 HTTP/1.1–3 flow control and independent interop remain in H5.

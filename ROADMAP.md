@@ -162,9 +162,13 @@ The repository opens publicly with this milestone (15 October 2026).
   exact source instance, and one typed `l:reply` transaction closes it without
   an OUTBOUND record. H5.1 now executes `ack` through a live bounded Hyper
   HTTP/1.1–2 listener: body memory remains charged through admission, mailbox
-  pressure withholds 202, and both versions close the same Call shape. H5
-  still owns HTTP/3, `respond`, bounded request deadlines, race/interop
-  closure and runner polling; H6 owns the WebSocket Drivers and Codex gateway.
+  pressure withholds 202, and both versions close the same Call shape. H5.2
+  adds the generic direct-lineage response return: the graph seals the exact
+  opening instance before commit, bounded Driver admission may remain pending,
+  and the terminal consumes the real response cursor without an OUTBOUND
+  record. H5 still owns HTTP/3, the live `respond` Driver, explicit
+  correlation, bounded request deadlines, race/interop closure and runner
+  polling; H6 owns the WebSocket Drivers and Codex gateway.
   H3's successful HTTP/1.1 Upgrade is explicitly not an Extended CONNECT
   claim.
   H4.1 has now landed the schema-facing HTTP contract: canonical open

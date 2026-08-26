@@ -1915,11 +1915,45 @@ pub struct InboundCallEvent {
     pub completion: Completion,
 }
 
+/// One graph-produced response offered to the Driver that owns an admitted
+/// inbound Call.
+///
+/// The response envelope already exists in a committed graph transaction;
+/// this value is therefore a delivery capability, not a second causal
+/// request or an outbound Call. The Driver may start the protocol write only
+/// after receiving this value from the runtime.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InboundCallResponse {
+    /// Admitted root Call selected by lineage or the contract correlator.
+    pub call_ref: InboundCallRef,
+    /// Exact inbound Connector endpoint that owns the open request.
+    pub connector_path: node::Path,
+    /// Already-journaled response envelope delivered to that endpoint.
+    pub response: envelope::Envelope,
+}
+
+/// Result of offering one already-journaled inbound-Call response to its
+/// bounded Driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundCallResponseStart {
+    /// The Driver owns the response attempt and must report one terminal
+    /// observation through [`InboundCallConnectorDriver::events`].
+    Started,
+    /// No protocol bytes were written; finite local capacity kept the same
+    /// response pending for a later offer.
+    Pending,
+}
+
 /// Terminal-observation half of an inbound Call Driver.
 ///
 /// Admission itself remains on [`InboundConnectorDriver`]. Keeping this as a
 /// categorical view makes an Event source unable to manufacture Call exits.
 pub trait InboundCallConnectorDriver {
+    /// Starts one graph response whose producing transaction is already
+    /// durable. Ack-only Drivers return [`InboundCallResponseStart::Pending`]
+    /// only on plans that should have been rejected before binding.
+    fn start_response(&mut self, response: &InboundCallResponse) -> InboundCallResponseStart;
+
     /// Terminal facts observed since the previous bounded drain.
     fn events(&mut self) -> Vec<InboundCallEvent>;
 }

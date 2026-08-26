@@ -186,6 +186,22 @@ fn unfinished_network_features_refuse_instead_of_selecting_a_nearby_behavior() {
         "the HttpServer respond mode (M1.6 H5)",
     );
 
+    let response_to_ack = r#"
+graph g : App {
+  connector server : HttpServer {
+    listen = "127.0.0.1:8080"
+    codec = text
+  }
+  operator relay { input in: text ; on in { out = data } }
+  server -> relay -> server
+}
+"#;
+    refusal_with(
+        response_to_ack,
+        "E-CONTRACT-ATTR",
+        "has no graph-response input",
+    );
+
     let bad_tls = network_graph(
         "HttpClient",
         "    url = \"https://example.test\"\n    timeout = duration(\"5s\")\n    codec = bytes\n    effect = idempotent ; behavior = deterministic\n    tls_certificate = base64! { Y2VydA== }",
@@ -1582,7 +1598,7 @@ fn an_effectless_callee_never_validates() {
 }
 
 #[test]
-fn a_callable_connector_requires_the_outbound_role() {
+fn a_delivery_target_requires_outbound_or_an_inbound_call_response_role() {
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
     for node in &mut plan.nodes {
@@ -1590,6 +1606,7 @@ fn a_callable_connector_requires_the_outbound_role() {
             spec.contract = rastok::connector::ConnectorId::parse("test/inbound-only@1")
                 .expect("the test id is canonical");
             spec.roles = rastok::connector::ConnectorRoles::Inbound;
+            spec.exchange = rastok::connector::ConnectorExchange::Event;
         }
     }
     assert!(matches!(

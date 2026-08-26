@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use crate::boundary::{
-    InboundCallConnectorDriver, InboundCallEvent, InboundConnectorDriver, InboundDecision,
-    InboundProposal, InboundProposalRef,
+    InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse, InboundCallResponseStart,
+    InboundConnectorDriver, InboundDecision, InboundProposal, InboundProposalRef,
 };
 use crate::connector::{ConnectorId, ConnectorRoles};
 use crate::plan::ValidatedExecutionPlan;
@@ -250,6 +250,10 @@ impl InboundConnectorDriver for PassiveInbound {
 }
 
 impl InboundCallConnectorDriver for PassiveInbound {
+    fn start_response(&mut self, _: &InboundCallResponse) -> InboundCallResponseStart {
+        InboundCallResponseStart::Pending
+    }
+
     fn events(&mut self) -> Vec<InboundCallEvent> {
         Vec::new()
     }

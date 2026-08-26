@@ -2797,7 +2797,7 @@ simulations designed to become executable evidence as the runtime
 lands. The current evidence gates are listed in
 [ROADMAP.md](ROADMAP.md).
 
-As of M1.6 H5.1, the one-worker reference executes canonical keyed/lifetime
+As of M1.6 H5.2, the one-worker reference executes canonical keyed/lifetime
 instances, bounded Closing, nested Graph composition, and instance-local
 bounded joins from source through package validation and public Lab scenarios.
 The closure audit also proves that moving a stable virtual shard between
@@ -2826,8 +2826,12 @@ inbound Call seam proves bounded commit-before-accept at the exact source
 instance and close-once typed `l:reply`. H5.1 attaches that seam to a real
 bounded Hyper listener: HTTP/1.1 and HTTP/2 ack requests keep body memory
 charged through admission and cannot expose 202 before the causal root
-commits. HTTP/3 server binding, graph-driven responses and independent server
-interop remain H5 work; H6 still owns live WebSocket sessions and both
+commits. H5.2 adds the generic graph-response return: direct lineage seals the
+exact opening instance before the producing transaction commits, bounded
+Driver capacity can leave the real response cursor pending without bytes, and
+the final `l:reply` consumes it without an OUTBOUND record. HTTP/3 server
+binding, the live `respond` policy, explicit correlation and independent
+server interop remain H5 work; H6 still owns live WebSocket sessions and both
 Extended CONNECT adapters.
 
 This white paper is designed to outlive individual releases. The DSL

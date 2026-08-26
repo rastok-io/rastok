@@ -1185,6 +1185,33 @@ impl<'plan> TransactionExecutor<'plan> {
         })
     }
 
+    /// Builds the terminal transaction of an inbound Call whose response was
+    /// produced by the graph. Unlike fixed acknowledgement, this form closes
+    /// the Call and consumes the real response delivery atomically; it still
+    /// creates no OUTBOUND record or synthetic cursor.
+    ///
+    /// # Errors
+    ///
+    /// [`Fault::UnknownSlot`] when `slot` is outside the validated plan.
+    pub fn inbound_call_response_completion(
+        &self,
+        slot: Slot,
+        instance: &InstanceRef,
+        request: &Envelope,
+        response: &Delivery,
+        call_ref: InboundCallRef,
+        completion: &Completion,
+    ) -> Result<TransactionOutcome, Fault> {
+        let mut outcome =
+            self.inbound_call_completion(slot, instance, request, call_ref, completion)?;
+        outcome.record.consumed.push(ConsumedPosition {
+            edge: response.edge.clone(),
+            source: response.source_instance.clone(),
+            seq: response.seq,
+        });
+        Ok(outcome)
+    }
+
     fn completion_emissions(
         &self,
         connector_path: &node::Path,

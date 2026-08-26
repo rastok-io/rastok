@@ -18,8 +18,9 @@
 > Call lifecycle over H1/H2/H3, and H4.1 types its schema/header boundary
 > without changing that lifecycle. D-2026-08-26-5 makes the generic inbound
 > Call lifecycle executable; H5.1 binds ack-mode HTTP/1.1–2 to it with bounded
-> listener/stream/body pressure. HTTP/3 server, respond-mode retention and
-> Session execution remain gated by the rest of H5–H6.
+> listener/stream/body pressure; H5.2 adds the generic direct-lineage response
+> return with one real consumed cursor. HTTP/3 server, the live respond policy
+> and Session execution remain gated by the rest of H5–H6.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -449,10 +450,13 @@ processed a message.
 An accepted inbound Call is direct work of the exact source Connector
 instance. Its committed root opens the obligation; a Driver terminal fact can
 run only after that instance's lazy `l:start`, and it commits as `l:reply`
-with no consumed mailbox position. The transaction may publish ordinary typed
-outputs and must publish exactly one final `exit`. The root id is the Call
-reference and causal parent, while the source `InstanceRef` is the generation
-fence.
+with no synthetic mailbox position. Fixed acknowledgement consumes zero
+positions. A graph-produced response is first committed and routed to the
+exact opening instance, then retained as one real Connector delivery; its
+terminal `l:reply` consumes that position atomically. The transaction may
+publish ordinary typed outputs and must publish exactly one final `exit`. The
+root id remains the Call reference and causal parent, while the source
+`InstanceRef` is the generation fence.
 
 The obligation participates in stability, finite capacity and instance
 Closing exactly like other admitted work. Closing cannot reach `l:stop` while
@@ -460,8 +464,12 @@ an inbound Call remains unresolved. The generic seam deliberately provides no
 hidden grace period. H5.1's live `ack` Driver retains no graph response
 obligation: after admission it queues the fixed terminal acknowledgement
 through the same bounded lane. A proposal that cannot yet commit retains its
-transport and byte permits outside the causal fold. `respond` remains refused
-until H5 adds its explicit bounded response/cancellation policy.
+transport and byte permits outside the causal fold. H5.2's generic direct
+response path similarly leaves a committed response in the ordinary claimed
+mailbox while the Driver says `Pending`; no protocol bytes exist yet. Late,
+duplicate or unmatched response deliveries commit a consume-only discard.
+The live HttpServer `respond` profile remains refused until H5 adds explicit
+correlation plus its bounded response/cancellation policy.
 
 
 ## 7. Join abandonment — `JoinExpired`
