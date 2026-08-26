@@ -1,6 +1,7 @@
 # Contributing a Connector Driver
 
-> Current contributor path through M1.6 H4.1. The normative contract lives in
+> Current contributor path through the first M1.6 H5 checkpoint. The
+> normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
 > [D-2026-08-22-1](../spec/decisions.md). This guide explains how the pieces
 > meet in the implementation; it does not define a second Connector model.
@@ -50,7 +51,11 @@ contract id, for example `rastok/file@1`.
 a time. It does not mint root envelopes: sequencing, routing, admission,
 identity and journal commit remain runtime authorities. The runtime answers
 accepted only after commit, pending without a callback under pressure, or a
-portable rejection.
+portable rejection. A proposal also names the exact Connector Node that owns
+its source output through its single `InboundEnvelopeProvenance` authority.
+Registry binding proves that path belongs to the family; the VM proves the
+output row. An App-boundary injection remains a separate explicit API
+category, never a provenance-string heuristic.
 
 `OutboundConnectorDriver` exposes exactly one exchange-specific outbound view:
 `CallConnectorDriver` prepares/starts calls and reports correlated typed

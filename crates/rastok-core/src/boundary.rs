@@ -1446,6 +1446,13 @@ pub enum DriverRouteError {
         /// Exchange required by the validated plan.
         exchange: crate::connector::ConnectorExchange,
     },
+    /// A family proposed a root from a Connector node it did not bind.
+    InboundSourceMismatch {
+        /// Driver family that made the proposal.
+        connector: crate::connector::ConnectorId,
+        /// Proposed Connector node.
+        source: node::Path,
+    },
     /// One Driver answered a call started through another Connector family.
     CrossFamilyResponse {
         /// Correlated call.
@@ -1507,6 +1514,10 @@ impl fmt::Display for DriverRouteError {
             } => write!(
                 formatter,
                 "Driver `{connector}` proposed inbound framing outside its {exchange} exchange"
+            ),
+            Self::InboundSourceMismatch { connector, source } => write!(
+                formatter,
+                "Driver `{connector}` proposed an inbound root from unbound source `{source}`"
             ),
             Self::CrossFamilyResponse {
                 call_ref,
@@ -1587,9 +1598,9 @@ pub enum SubmissionSequence {
 pub struct InboundSubmission {
     /// Stable external origin shared by roots from this logical replica.
     pub provenance: InboundEnvelopeProvenance,
-    /// The graph input the draft enters — `in` or a declared
-    /// boundary input. Journaled with the record: replay must
-    /// re-route from the same port, so the port is a causal fact.
+    /// Source port of the draft. Direct App injection uses `in` or another
+    /// boundary input; a Driver proposal uses one output of the Connector
+    /// named by [`Self::provenance`]. Journaled for exact replay.
     pub port: node::Port,
     /// The payload and birth metadata.
     pub draft: Draft,
@@ -1633,7 +1644,9 @@ impl InboundProposalRef {
 pub struct InboundProposal {
     /// Stable while the proposal remains pending in the Driver.
     pub reference: InboundProposalRef,
-    /// Draft and provenance to commit if admission succeeds.
+    /// Draft and provenance to commit if admission succeeds. The provenance
+    /// names the exact Connector node whose output introduces the root; the
+    /// runtime verifies it against the bound family before committing.
     pub submission: InboundSubmission,
     /// Session framing when this fact opens or belongs to a session. `None`
     /// is an Event or Call ingress.

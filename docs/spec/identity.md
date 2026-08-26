@@ -345,7 +345,7 @@ travels inside the sealed `instance_address` below. That is a journaled routing
 fact derived once at admission, not a general license to seal wall-clock or
 timer fields.
 
-**INBOUND** (kind 1 — an envelope entered) — keys `20–26` :
+**INBOUND** (kind 1 — an envelope entered) — keys `20–27` :
 
 | Key | Field | CBOR type | Notes |
 |---|---|---|---|
@@ -353,9 +353,10 @@ timer fields.
 | 21 | connector_path | text | the ingress node's root-relative path (root recipe input, envelope.md §2) |
 | 22 | inbound_seq | uint | the atomic sequence for `(connector_path, replica)` — minted by the owning shard's leader ; root recipe input |
 | 23 | replica | uint | the logical inbound Connector replica in `InboundEnvelopeProvenance`; sealed so the record autonomously reconstructs `(connector_path, replica, inbound_seq)`. It may be allocated by the leader responsible for that inbound Connector, but is never the target-routing shard and never changes when a destination moves Workers. |
-| 24 | ingress_port | text | the graph input the envelope entered — a causal fact : replay re-routes from this port ; **omitted for the default `in`** (absent = omitted), so pre-multiport records are byte-identical (D-2026-08-08-2) |
+| 24 | ingress_port | text | the source port the envelope entered through: an App input when key 27 is absent, otherwise the named Connector output; **omitted for the conventional `in`** (absent = omitted), so pre-multiport records remain byte-identical (D-2026-08-08-2) |
 | 25 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_ref]`, sorted by canonical `(edge, target_instance_ref)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INBOUND record. |
 | 26 | session_ingress | array | present only for Session ingress: `[1, session_ref (bytes16)]` opens a session and `[2, session_ref (bytes16)]` admits one message into an already-open session. Omitted for Event and Call facts, preserving every pre-H1 record byte. |
+| 27 | source_connector_path | array | lexical UTF-8 path segments of the inbound Connector whose output introduced this root. Omitted exactly for an explicit App-boundary injection. Derived from the proposal's single `InboundEnvelopeProvenance` authority at acceptance; its presence and structural spelling are the replay-routing fact. |
 
 **TRANSACTION** (kind 2 — one Node firing or one Graph-owner lifecycle fact;
 the commit packet of

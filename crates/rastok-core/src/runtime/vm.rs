@@ -92,6 +92,14 @@ pub enum VmError {
     /// Checked sources always materialize conventional `in`; the raw API is
     /// verified, not trusted.
     UnknownIngress(node::Port),
+    /// A Driver proposal names no inbound Connector output in the validated
+    /// plan.
+    UnknownInboundSource {
+        /// Proposed Connector node.
+        connector: node::Path,
+        /// Proposed output port.
+        port: node::Port,
+    },
     /// An ingress draft carries metadata outside the declared vocabulary or
     /// outside a declared field's type.
     IngressMetadataViolation {
@@ -188,6 +196,10 @@ impl fmt::Display for VmError {
             Self::UnknownIngress(port) => {
                 write!(f, "`{port}` is not an input of this graph")
             }
+            Self::UnknownInboundSource { connector, port } => write!(
+                f,
+                "`{connector}.{port}` is not an inbound Connector output of this graph"
+            ),
             Self::IngressMetadataViolation { field, reason } => {
                 write!(
                     f,
@@ -717,7 +729,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         submission: InboundSubmission,
     ) -> Result<Id, VmError> {
-        self.inject_submission(journal, submission, None)
+        self.inject_submission(journal, submission, None, None)
             .map(|accepted| accepted.envelope)
     }
 
@@ -734,12 +746,18 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         proposal: &InboundProposal,
     ) -> Result<InboundAdmission, VmError> {
-        match self.inject_submission(journal, proposal.submission.clone(), proposal.session) {
+        let connector_path = proposal.submission.provenance.connector_path().clone();
+        match self.inject_submission(
+            journal,
+            proposal.submission.clone(),
+            proposal.session,
+            Some(connector_path),
+        ) {
             Ok(accepted) => Ok(InboundAdmission::Accepted(accepted)),
             Err(VmError::MailboxFull { .. } | VmError::InstanceClosing { .. }) => {
                 Ok(InboundAdmission::Pending)
             }
-            Err(VmError::UnknownIngress(_)) => {
+            Err(VmError::UnknownIngress(_) | VmError::UnknownInboundSource { .. }) => {
                 Ok(InboundAdmission::Rejected(InboundRejection::UnknownPort))
             }
             Err(VmError::IngressPinViolation { .. }) => {
@@ -760,20 +778,51 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         submission: InboundSubmission,
         session: Option<InboundSession>,
+        connector_path: Option<node::Path>,
     ) -> Result<InboundAcceptance, VmError> {
-        // The submission's port is verified against the materialized graph
-        // table. Source sugar may spell `.`, but no runtime string creates an
-        // implicit ingress.
-        let ingress_ok =
-            self.plan.boundary.iter().any(|decl| {
+        // Boundary injection and Connector-origin roots are distinct causal
+        // sources. The caller chooses the category; the validated plan proves
+        // the exact endpoint before the journal reserves a sequence.
+        let from = if let Some(connector) = connector_path.as_ref() {
+            let source = self
+                .plan
+                .nodes
+                .iter()
+                .enumerate()
+                .find(|(_, planned)| &planned.path == connector)
+                .and_then(|(index, planned)| {
+                    let spec = planned.connector()?;
+                    let output = planned.ports.iter().any(|decl| {
+                        decl.port == submission.port && decl.direction == node::Direction::Output
+                    });
+                    (spec.roles.has_inbound() && output).then_some(index)
+                });
+            let Some(source) = source else {
+                return Err(VmError::UnknownInboundSource {
+                    connector: connector.clone(),
+                    port: submission.port.clone(),
+                });
+            };
+            EndpointRef {
+                node: Some(Slot::new(u32::try_from(source).map_err(|_| {
+                    VmError::UnknownInboundSource {
+                        connector: connector.clone(),
+                        port: submission.port.clone(),
+                    }
+                })?)),
+                port: submission.port.clone(),
+            }
+        } else {
+            let ingress_ok = self.plan.boundary.iter().any(|decl| {
                 decl.port == submission.port && decl.direction == node::Direction::Input
             });
-        if !ingress_ok {
-            return Err(VmError::UnknownIngress(submission.port.clone()));
-        }
-        let from = EndpointRef {
-            node: None,
-            port: submission.port.clone(),
+            if !ingress_ok {
+                return Err(VmError::UnknownIngress(submission.port.clone()));
+            }
+            EndpointRef {
+                node: None,
+                port: submission.port.clone(),
+            }
         };
         // The ext zone, held to the travelling schema BEFORE any
         // append (D-2026-08-10-1): an external caller cannot seed a
@@ -831,9 +880,10 @@ impl<'plan> Vm<'plan> {
         // zero-id provisional envelope would be a semantic lie. Destination
         // admission and the accepting record commit only after this complete
         // envelope has selected every route.
-        let inbound = match session {
-            Some(session) => journal.prepare_session_inbound(submission, session),
-            None => journal.prepare_inbound(submission),
+        let inbound = match (connector_path, session) {
+            (Some(_), session) => journal.prepare_connector_inbound(submission, session),
+            (None, Some(session)) => journal.prepare_session_inbound(submission, session),
+            (None, None) => journal.prepare_inbound(submission),
         }
         .map_err(VmError::Journal)?;
         let mut candidates = BTreeMap::new();

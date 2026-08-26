@@ -242,17 +242,20 @@ pub enum Record {
 }
 
 /// An accepted inbound envelope and its record (`identity.md` §3,
-/// keys 20–24). The record autonomously reconstructs its root id from
+/// keys 20–27). The record autonomously reconstructs its root id from
 /// `(connector_path, replica, seq)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundRecord {
     /// Stable provenance of the external root stream.
     pub provenance: InboundEnvelopeProvenance,
-    /// The graph input the envelope entered — a causal fact: replay
-    /// re-routes from this port. Projects as key 24, omitted for the
-    /// default `in` (absent = omitted, so pre-multiport traces are
-    /// byte-identical).
+    /// Source port of the root: an App input when [`Self::connector_path`] is
+    /// absent, otherwise that Connector's output. Replay re-routes from this
+    /// causal fact. Projects as key 24, omitted for conventional `in`.
     pub port: node::Port,
+    /// Connector output which introduced this root. `None` is an explicit
+    /// App-boundary injection. Replay therefore never guesses the source
+    /// endpoint from provenance text.
+    pub connector_path: Option<node::Path>,
     /// The atomic per-provenance sequence.
     pub seq: u64,
     /// The envelope born here.
@@ -477,6 +480,7 @@ pub struct CommittedInbound {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedInbound {
     submission: InboundSubmission,
+    connector_path: Option<node::Path>,
     seq: u64,
     envelope: Envelope,
     session: Option<SessionIngressRecord>,
@@ -711,6 +715,20 @@ pub trait Journal {
     ///
     /// Sequence mismatch or exhaustion, as for [`Self::append_inbound`].
     fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error>;
+
+    /// Mints a Connector-origin root without committing it. The source node
+    /// is derived from the typed provenance and recorded separately so replay
+    /// can route from the same output endpoint.
+    ///
+    /// # Errors
+    ///
+    /// The same sequence failures as [`Self::prepare_inbound`], plus Session
+    /// lifecycle refusals when `session` carries framing.
+    fn prepare_connector_inbound(
+        &self,
+        submission: InboundSubmission,
+        session: Option<InboundSession>,
+    ) -> Result<PreparedInbound, Error>;
 
     /// Mints one session opening/message envelope without committing it. The
     /// journal derives or verifies the logical session ref and overwrites the
@@ -1033,6 +1051,7 @@ impl MemJournal {
         &self,
         submission: InboundSubmission,
         session: Option<InboundSession>,
+        connector_path: Option<node::Path>,
     ) -> Result<PreparedInbound, Error> {
         let next = self
             .next_seq
@@ -1089,6 +1108,7 @@ impl MemJournal {
         let envelope = Envelope::new(Meta::new(sys).with_ext(ext), submission.draft.data.clone());
         Ok(PreparedInbound {
             submission,
+            connector_path,
             seq,
             envelope,
             session: resolved_session,
@@ -1098,7 +1118,16 @@ impl MemJournal {
 
 impl Journal for MemJournal {
     fn prepare_inbound(&self, submission: InboundSubmission) -> Result<PreparedInbound, Error> {
-        self.prepare_inbound_fact(submission, None)
+        self.prepare_inbound_fact(submission, None, None)
+    }
+
+    fn prepare_connector_inbound(
+        &self,
+        submission: InboundSubmission,
+        session: Option<InboundSession>,
+    ) -> Result<PreparedInbound, Error> {
+        let connector_path = submission.provenance.connector_path().clone();
+        self.prepare_inbound_fact(submission, session, Some(connector_path))
     }
 
     fn prepare_session_inbound(
@@ -1106,7 +1135,7 @@ impl Journal for MemJournal {
         submission: InboundSubmission,
         session: InboundSession,
     ) -> Result<PreparedInbound, Error> {
-        self.prepare_inbound_fact(submission, Some(session))
+        self.prepare_inbound_fact(submission, Some(session), None)
     }
 
     fn commit_inbound(
@@ -1157,6 +1186,7 @@ impl Journal for MemJournal {
         let record = InboundRecord {
             provenance: prepared.submission.provenance.clone(),
             port: prepared.submission.port,
+            connector_path: prepared.connector_path,
             seq: prepared.seq,
             envelope: prepared.envelope.clone(),
             routes,

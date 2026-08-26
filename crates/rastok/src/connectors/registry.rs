@@ -16,7 +16,7 @@ use crate::node;
 use crate::plan::ValidatedExecutionPlan;
 use crate::runtime::vm::{Vm, VmError};
 use crate::{boundary::InboundAdmission, journal::Journal};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One bound implementation object, potentially exposing both roles over the
 /// same state.
@@ -157,6 +157,7 @@ struct FamilyRequirement {
 struct BoundFamily<'plan> {
     driver: Box<dyn BoundConnectorDriver + 'plan>,
     uses_inbound: bool,
+    inbound_paths: BTreeSet<node::Path>,
     exchange: ConnectorExchange,
     pending_inbound: Option<InboundProposal>,
     outbound_path: Option<node::Path>,
@@ -325,6 +326,11 @@ impl<'plan> RuntimeBindings<'plan> {
             }
 
             let uses_inbound = requirement.required.has_inbound();
+            let inbound_paths = requirement
+                .nodes
+                .iter()
+                .filter_map(|(path, roles, _)| roles.has_inbound().then_some(path.clone()))
+                .collect();
             let mut outbound_path = None;
             let mut session_path = None;
             for (path, roles, _) in requirement.nodes {
@@ -341,6 +347,7 @@ impl<'plan> RuntimeBindings<'plan> {
                 BoundFamily {
                     driver,
                     uses_inbound,
+                    inbound_paths,
                     exchange,
                     pending_inbound: None,
                     outbound_path,
@@ -393,6 +400,13 @@ impl<'plan> RuntimeBindings<'plan> {
                 return Err(DriverRouteError::UnavailableInbound(id.clone()));
             };
             if let Some(proposal) = driver.proposal() {
+                let source = proposal.submission.provenance.connector_path();
+                if !family.inbound_paths.contains(source) {
+                    return Err(DriverRouteError::InboundSourceMismatch {
+                        connector: id.clone(),
+                        source: source.clone(),
+                    });
+                }
                 let framing_matches = match family.exchange {
                     ConnectorExchange::Event | ConnectorExchange::Call => {
                         proposal.session.is_none()
@@ -1195,8 +1209,8 @@ graph inbound : App {
     effect = idempotent ; behavior = deterministic
   }
   operator relay { input in: text ; on in { out = data } }
-  . -> relay -> .
-  source.out -> nothing ; source.err -> nothing
+  . -> nothing
+  source.out -> relay -> . ; source.err -> nothing
 }
 "#;
         let compilation = compile(
@@ -1698,7 +1712,7 @@ graph inbound : App {
         let plan = inbound_event_plan();
         let state = Arc::new(Mutex::new(InboundQueueState {
             proposals: (0..=1024)
-                .map(|reference| inbound_proposal(reference, "in"))
+                .map(|reference| inbound_proposal(reference, "out"))
                 .collect(),
             decisions: Vec::new(),
         }));
@@ -1728,6 +1742,20 @@ graph inbound : App {
             ));
             assert!(journal.find_envelope(accepted.envelope).is_some());
         }
+        let connector_roots = journal
+            .records()
+            .iter()
+            .filter_map(|record| match record {
+                crate::journal::Record::Inbound(inbound) => inbound.connector_path.as_ref(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(connector_roots.len(), 1024);
+        assert!(
+            connector_roots
+                .iter()
+                .all(|path| path.to_string() == "source")
+        );
 
         let records_before = journal.records().len();
         assert_eq!(
@@ -1782,7 +1810,7 @@ graph inbound : App {
     #[test]
     fn inbound_session_framing_cannot_contradict_the_exchange_fact() {
         let plan = inbound_event_plan();
-        let mut proposal = inbound_proposal(9, "in");
+        let mut proposal = inbound_proposal(9, "out");
         proposal.session = Some(crate::boundary::InboundSession::Open);
         let state = Arc::new(Mutex::new(InboundQueueState {
             proposals: VecDeque::from([proposal]),
@@ -1806,10 +1834,37 @@ graph inbound : App {
     }
 
     #[test]
+    fn an_inbound_family_cannot_forge_another_connector_as_its_source() {
+        let plan = inbound_event_plan();
+        let mut proposal = inbound_proposal(11, "out");
+        proposal.submission.provenance =
+            InboundEnvelopeProvenance::single(node::Path::new(["other"]).unwrap());
+        let state = Arc::new(Mutex::new(InboundQueueState {
+            proposals: VecDeque::from([proposal]),
+            decisions: Vec::new(),
+        }));
+        let registry = DriverRegistry::default()
+            .try_with(Box::new(RetainedInboundFactory {
+                id: ConnectorId::parse("test/event-source@1").unwrap(),
+                state,
+            }))
+            .unwrap();
+        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+
+        assert!(matches!(
+            bindings.next_inbound(),
+            Err(crate::boundary::DriverRouteError::InboundSourceMismatch {
+                source,
+                ..
+            }) if source.to_string() == "other"
+        ));
+    }
+
+    #[test]
     fn an_event_driver_passes_the_exchange_specific_conformance_profile() {
         let plan = inbound_event_plan();
         let state = Arc::new(Mutex::new(InboundQueueState {
-            proposals: VecDeque::from([inbound_proposal(4, "in")]),
+            proposals: VecDeque::from([inbound_proposal(4, "out")]),
             decisions: Vec::new(),
         }));
         let registry = DriverRegistry::default()

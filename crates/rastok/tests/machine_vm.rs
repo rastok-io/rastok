@@ -3007,6 +3007,13 @@ impl Journal for FlakyJournal {
     ) -> Result<rastok::journal::PreparedInbound, rastok::journal::Error> {
         self.inner.prepare_inbound(submission)
     }
+    fn prepare_connector_inbound(
+        &self,
+        submission: InboundSubmission,
+        session: Option<InboundSession>,
+    ) -> Result<rastok::journal::PreparedInbound, rastok::journal::Error> {
+        self.inner.prepare_connector_inbound(submission, session)
+    }
     fn prepare_session_inbound(
         &self,
         submission: InboundSubmission,

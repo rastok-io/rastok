@@ -5,6 +5,37 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-26-4 — A Connector-origin root names its source endpoint
+
+H5 closes an ambiguity left by the generic inbound proposal seam. A retained
+Driver proposal's `InboundEnvelopeProvenance` names the exact Connector Node
+whose output introduces the root. The bound family proves ownership of that
+path, and the validated plan proves that the selected port is an output of an
+inbound-capable Connector. There is no second source-path claim to reconcile.
+Every check happens before sequence reservation or journal mutation.
+
+The distinction between an App-boundary injection and a Connector-origin root
+is causal, not a runtime convention. INBOUND key 27 carries the source
+Connector path as an array of lexical path segments; its absence means the App
+boundary. Key 24 remains the selected port in both cases. Existing boundary
+records remain byte-identical, while new live Event/Call/Session sources can
+replay from `connector.out` without guessing from provenance text. The root id
+recipe remains `(connector_path, replica, inbound_seq)` and does not move.
+
+This is the first H5 checkpoint, not a claim that an HTTP listener already
+executes. The remaining server-Call seam is categorical: accepted request,
+journal-before-response write, correlated close-once terminal `exit`. It is
+not lowered into a second outbound Call. HTTP/1.1 connections, HTTP/2 streams
+and HTTP/3 streams must all implement that one protocol before their wire
+drivers are admitted.
+
+Hosted interoperability evidence is split by purpose. The H5/H6 blocking
+gates will use pinned independent local peers (Caddy and NGINX for server
+behavior; curl/nghttp2/ngtcp2 for client behavior; Autobahn plus an independent
+WebSocket implementation for H6). Scheduled public canaries will exercise
+Cloudflare/Google endpoints but will never be the deterministic release
+oracle. No test may silently depend on the public Internet.
+
 ## D-2026-08-26-3 — Type the HTTP schema boundary and resolve OpenAPI losslessly
 
 HTTP content types are no longer anonymous `text`. Rastok adds the open logical

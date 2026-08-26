@@ -290,6 +290,7 @@ fn key_name(key: u64) -> String {
         24 => "ingress_port",
         25 => "routes",
         26 => "session_ingress",
+        27 => "source_connector_path",
         30 => "node_path",
         31 => "instance_ref",
         32 => "trigger",
@@ -332,9 +333,9 @@ fn record_tree(record: &Record) -> Cbor {
                 (22, Cbor::Uint(inbound.seq)),
                 (23, Cbor::Uint(inbound.provenance.replica())),
             ]);
-            // Key 24: the ingress port — a causal fact since named
-            // boundary inputs, omitted for the default `in` (absent
-            // = omitted), so pre-multiport traces are byte-identical.
+            // Key 24: the source port — boundary input without key 27,
+            // Connector output with it. Conventional `in` remains omitted,
+            // so every existing boundary trace stays byte-identical.
             if inbound.port.name() != "in" {
                 pairs.insert(24, Cbor::Text(inbound.port.name().to_string()));
             }
@@ -364,6 +365,19 @@ fn record_tree(record: &Record) -> Cbor {
                         Cbor::Uint(kind),
                         Cbor::Bytes(reference.id().as_bytes().to_vec()),
                     ]),
+                );
+            }
+            if let Some(connector) = &inbound.connector_path {
+                pairs.insert(
+                    27,
+                    Cbor::Array(
+                        connector
+                            .segments()
+                            .iter()
+                            .cloned()
+                            .map(Cbor::Text)
+                            .collect(),
+                    ),
                 );
             }
             Cbor::Map(pairs)
@@ -655,6 +669,35 @@ fn completion_spine(completion: &crate::boundary::Completion) -> Cbor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_connector_root_seals_its_structural_source_path_under_key_27() {
+        let source = crate::node::Path::new(["api", "listener"]).unwrap();
+        let id = crate::envelope::Id::from_bytes([7; 16]);
+        let record = Record::Inbound(crate::journal::InboundRecord {
+            provenance: crate::boundary::InboundEnvelopeProvenance::single(source.clone()),
+            port: crate::node::Port::new("out").unwrap(),
+            connector_path: Some(source),
+            seq: 0,
+            envelope: Envelope::new(
+                crate::envelope::Meta::new(crate::envelope::MetaSys::root(id, 1)),
+                Data::materialized(crate::value::Value::Null),
+            ),
+            routes: Vec::new(),
+            session: None,
+        });
+
+        let Cbor::Map(tree) = record_tree(&record) else {
+            panic!("an inbound record projects as a canonical map")
+        };
+        assert_eq!(
+            tree.get(&27),
+            Some(&Cbor::Array(vec![
+                Cbor::Text(String::from("api")),
+                Cbor::Text(String::from("listener")),
+            ]))
+        );
+    }
 
     /// The diff must descend TO the float: `-0.0` and `+0.0` differ
     /// in bytes and now differ as VALUES too (bit equality), so
