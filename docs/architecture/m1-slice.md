@@ -6,7 +6,7 @@
 > real systems** — compiled, simulated against mocks, golden-traced,
 > watched live.
 
-**Current checkpoint (2026-08-26): items 1, 2 and the replacement item 3 are landed, as are
+**Current checkpoint (2026-08-27): items 1, 2 and the replacement item 3 are landed, as are
 the contract and parser/compiler interludes recorded under item 2.
 M1.4 has been normatively rebased by D-2026-08-18-1 before public release.
 The executable P0–P3 named-`partition` / `per` draft is not the target source
@@ -67,10 +67,13 @@ HTTP/1.1–2 listener retains request bytes through causal admission, withholds
 202 under pressure and closes the same Call exactly once. H5.2 is landed under
 D-2026-08-26-7: a graph response is routed by direct lineage to the exact
 opening instance before commit, offered through a bounded pending/started
-Driver handoff, and consumed by `l:reply` without an OUTBOUND record. The
-remaining [ordered backlog](m1.6-http-websocket-backlog.md) continues with the
-live server `respond` profile, explicit correlation, HTTP/3,
-deadline/race/interop closure and H6.
+Driver handoff, and consumed by `l:reply` without an OUTBOUND record. Final H5
+executes `ack` and `respond` over HTTP/1.1–3 with explicit correlation,
+bounded deadlines and close-once races. H6 executes WebSocket Client/Server
+over HTTP/1.1 Upgrade and HTTP/2–3 Extended CONNECT through the generic
+Session fold. H7 closes static registry assembly, feature/no-std matrices,
+independent interop, QEMU evidence and the
+[M1.6 exit report](m1.6-exit-report.md). M1.6 is closed.
 The original item 3 was replaced before public
 release by the logical payload-type and uniform-port foundation in
 [`m1.3-type-system-backlog.md`](m1.3-type-system-backlog.md). Item 4 now
@@ -408,8 +411,10 @@ step touches `vm.rs` once.
    identity. H4 now supplies the first live network Driver: HttpClient over
    H1/H2/H3 with exact pre-open request bytes, bounded response projection and
    visibility-safe fallback. H4.1 adds typed HTTP schema intent and the
-   project-wide OpenAPI generated-source resolver before H5/H6 execute server
-   and WebSocket traffic.
+   project-wide OpenAPI generated-source resolver. H5 executes retained Calls
+   over all three HTTP versions; H6 executes complete-message Sessions over
+   all three WebSocket handshakes; H7 closes static assembly and portability
+   evidence. See the [exit report](m1.6-exit-report.md).
 8. **The Loop aspect** — the bounded-iteration primitive, alive on a
    graph.
 9. **Cost counters** — the `cost` map (stdlib §6.4) accumulated

@@ -3191,13 +3191,18 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             let target_is_inbound_boundary =
                 plan.nodes[to.index()].connector().is_some_and(|spec| {
                     spec.roles.has_inbound()
-                        && !spec.roles.has_outbound()
-                        && matches!(spec.exchange, crate::connector::ConnectorExchange::Call)
+                        && (matches!(spec.exchange, crate::connector::ConnectorExchange::Session)
+                            || (!spec.roles.has_outbound()
+                                && matches!(
+                                    spec.exchange,
+                                    crate::connector::ConnectorExchange::Call
+                                )))
                 });
             if target_is_inbound_boundary {
-                // An inbound Call node has two boundary halves, not an
-                // implicit `in -> out` execution arc. A response terminates
-                // at `in`; a later request is a fresh external root at `out`.
+                // An inbound Call or duplex Session node has two boundary
+                // halves, not an implicit `in -> out` execution arc. A
+                // response/message terminates at `in`; a later world message
+                // is a fresh external root at `out`.
                 // Treating the node as one opaque vertex would report a
                 // spatial cycle where the executable dependency graph has
                 // none.

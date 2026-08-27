@@ -586,6 +586,7 @@ const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
         node::Lifecycle::Recover => 7,
         node::Lifecycle::Closing => 8,
         node::Lifecycle::Reply => 9,
+        node::Lifecycle::Exit => 10,
     }
 }
 
@@ -1711,6 +1712,7 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
                 7 => node::Lifecycle::Recover,
                 8 => node::Lifecycle::Closing,
                 9 => node::Lifecycle::Reply,
+                10 => node::Lifecycle::Exit,
                 _ => return Err(err("activation lifecycle")),
             })
         }

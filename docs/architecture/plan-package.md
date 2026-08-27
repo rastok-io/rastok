@@ -72,8 +72,8 @@
 > **M1.6 H3 also uses v11 unchanged.** Its Cargo features, hosted pump,
 > HTTP/QUIC/TLS libraries and WebSocket message machine are physical Driver
 > assembly only. None enters a Connector row or package. H3 therefore moves no
-> package, semantic hash or causal trace; live H4-H6 Drivers continue to
-> consume the already-typed H2 rows rather than adding backend facts.
+> package, semantic hash or causal trace; the landed H4-H6 Drivers consume the
+> already-typed H2 rows rather than adding backend facts.
 >
 > **M1.6 H4 also uses v11 unchanged.** HttpClient's exact prepared bytes seal
 > through the existing Call digest; HTTP version, status and headers are
@@ -88,6 +88,14 @@
 > the materialized carrier, so no journal value tag is added. Typed/custom
 > header attributes otherwise reuse the existing struct/map/array expression
 > and phased-setting rows.
+>
+> **M1.6 H5–H7 retain v12 unchanged.** HttpServer's retained-Call response,
+> deadline and protocol observations use causal forms rather than plan fields;
+> H6 executes the Session lifecycle already made categorical at H1; H7's Cargo
+> capabilities and static Driver registry are physical assembly only. The H5
+> correction to `HttpServerExit` changes the resolved type and semantic/package
+> body of affected graphs without changing the format. H6/H7 move no existing
+> semantic hash, package or causal trace.
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and

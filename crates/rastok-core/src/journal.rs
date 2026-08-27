@@ -230,6 +230,8 @@ pub mod timer_kind {
     pub const INSTANCE_SETTLEMENT: u8 = 7;
     /// One admitted inbound Call response deadline.
     pub const INBOUND_CALL_TIMEOUT: u8 = 8;
+    /// One client Session opening-handshake deadline.
+    pub const SESSION_HANDSHAKE: u8 = 9;
 }
 
 /// One causal record.
@@ -1382,6 +1384,10 @@ impl Journal for MemJournal {
             transaction.trigger,
             node::Trigger::Lifecycle(node::Lifecycle::Reply)
         );
+        let is_session_exit = matches!(
+            transaction.trigger,
+            node::Trigger::Lifecycle(node::Lifecycle::Exit)
+        );
         if is_reply
             != matches!(
                 transaction.exchange_exit.as_deref(),
@@ -1389,6 +1395,14 @@ impl Journal for MemJournal {
             )
         {
             return Err(Error::InvalidInboundCallExit);
+        }
+        if is_session_exit
+            != matches!(
+                transaction.exchange_exit.as_deref(),
+                Some(InboundExchangeExitRecord::Session(_))
+            )
+        {
+            return Err(Error::InvalidSessionExit);
         }
         let mut lifecycle = self.instance_lifecycle(transaction.instance.address());
         let expected = if is_start {
@@ -2661,8 +2675,7 @@ mod tests {
         assert_eq!(journal.live_sessions(), vec![first_ref, second_ref]);
 
         activate(&mut journal, instance("socket", 0));
-        let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Closing);
-        terminal.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
+        let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Exit);
         terminal.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Session(first_ref)));
         terminal.emissions.push(Emission {
             port: node::Port::conventional_exit(),
@@ -2790,8 +2803,7 @@ mod tests {
             .append_inbound(submission("world", SubmissionSequence::Next))
             .unwrap()
             .envelope;
-        let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Closing);
-        terminal.trigger = node::Trigger::Port(node::Port::new("in").unwrap());
+        let mut terminal = lifecycle_transaction(instance("socket", 0), node::Lifecycle::Exit);
         terminal.exchange_exit = Some(Box::new(InboundExchangeExitRecord::Session(session)));
         terminal.emissions.push(Emission {
             port: node::Port::conventional_exit(),

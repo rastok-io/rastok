@@ -26,6 +26,8 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`m1.6-http-websocket-backlog.md`](m1.6-http-websocket-backlog.md) for the
   ordered Event/Call/Session foundation, HTTP/1.1-3 Drivers and
   WebSocket Codex gateway gates;
+- [`m1.6-exit-report.md`](m1.6-exit-report.md) for H7 static assembly,
+  interoperability, identity, binary-size, no-std and QEMU closure evidence;
 - [`connector-drivers.md`](connector-drivers.md) for the current contribution
   path from semantic Contract through real/Lab Driver conformance and static
   composition, plus the deliberately narrow future-plugin seam;

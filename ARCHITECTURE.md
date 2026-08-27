@@ -37,7 +37,7 @@ second engine:
   → parsed and checked program
   → categorical validated plan with logical instances and resolved port types
   → synchronous one-worker execution over a causal journal
-  → exact-id/role binding of real Process, File and HttpClient Driver families
+  → exact-id/role binding of Process, File and four live network Driver families
   → deterministic multi-family Lab scenarios and useful golden diffs
 ```
 
@@ -180,6 +180,14 @@ only resolved `DataType` trees and categorical v12 plan data cross toward the
 core. Connector modules are flat by contract family; a shared module is named
 for its real responsibility (`websocket_protocol` or private `network`) rather
 than becoming a generic utility bucket.
+
+M1.6 H7 closes the hosted boundary without widening the core interface. One
+feature-selected `hosted_registry` composes Process, optional File and the
+linked HTTP/WebSocket families. HttpClient/HttpServer remain Calls;
+WebSocketClient/WebSocketServer use the generic Session fold over H1 Upgrade
+and H2/H3 Extended CONNECT. Tokio and every protocol-library type remain
+private to `rastok::connectors::network`; the same core still builds for the
+three established no-std targets.
 
 ## Views
 

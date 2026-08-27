@@ -1,0 +1,8 @@
+{
+  "name": "rastok-websocket-interop",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "ws": "8.21.3"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "outdir": "/reports/rastok-server",
+  "servers": [
+    {
+      "agent": "Rastok WebSocketServer",
+      "url": "ws://host.docker.internal:19081/echo"
+    }
+  ],
+  "cases": ["*"],
+  "exclude-cases": ["12.*", "13.*"],
+  "exclude-agent-cases": {}
+}

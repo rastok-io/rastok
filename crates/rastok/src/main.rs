@@ -197,73 +197,13 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
     };
-    let process_factory = match connectors::ProcessFactory::try_new() {
-        Ok(factory) => factory,
+    let registry = match connectors::hosted_registry(file_root) {
+        Ok(registry) => registry,
         Err(error) => {
-            eprintln!("error: the built-in Process Driver id is invalid: {error}");
+            eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
-    let mut registry =
-        match connectors::DriverRegistry::default().try_with(Box::new(process_factory)) {
-            Ok(registry) => registry,
-            Err(error) => {
-                eprintln!("error: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
-    if let Some(root) = file_root {
-        let file_factory = match connectors::FileFactory::try_new(root) {
-            Ok(factory) => factory,
-            Err(error) => {
-                eprintln!("error: the built-in File Driver id is invalid: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
-        registry = match registry.try_with(Box::new(file_factory)) {
-            Ok(registry) => registry,
-            Err(error) => {
-                eprintln!("error: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
-    }
-    #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
-    {
-        let http_factory =
-            match connectors::HttpClientFactory::try_new(connectors::HttpClientConfig::default()) {
-                Ok(factory) => factory,
-                Err(error) => {
-                    eprintln!("error: the built-in HttpClient Driver id is invalid: {error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-        registry = match registry.try_with(Box::new(http_factory)) {
-            Ok(registry) => registry,
-            Err(error) => {
-                eprintln!("error: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
-    }
-    #[cfg(feature = "hosted-http12")]
-    {
-        let server_factory =
-            match connectors::HttpServerFactory::try_new(connectors::HttpServerConfig::default()) {
-                Ok(factory) => factory,
-                Err(error) => {
-                    eprintln!("error: the built-in HttpServer Driver id is invalid: {error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-        registry = match registry.try_with(Box::new(server_factory)) {
-            Ok(registry) => registry,
-            Err(error) => {
-                eprintln!("error: {error}");
-                return ExitCode::FAILURE;
-            }
-        };
-    }
     let mut world = match connectors::RuntimeBindings::try_new(&compilation.plan, &registry) {
         Ok(bindings) => bindings,
         Err(error) => {

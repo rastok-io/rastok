@@ -1,7 +1,7 @@
 # Specification-to-implementation map
 
-> Planning aid — non-normative. **Updated 2026-08-27 for the M1.6 H5.2 generic
-> graph-response return.** The former named-partition P1-P3 implementation is superseded.
+> Planning aid — non-normative. **Updated 2026-08-27 for the M1.6 H7
+> closure.** The former named-partition P1-P3 implementation is superseded.
 > Categorical v12 transport retains v9's owner model, stable Connector
 > identities/roles/exchange lifecycles; hierarchical route/journal instance
 > references are executable; all five lifetime profiles and explicitly bounded
@@ -77,13 +77,15 @@ they are not promised crate names.
 | M1.6 H5 generic inbound Call seam | One bounded Connector-origin commit opens a root-derived Call on its exact source instance; a categorical Driver terminal observation becomes one typed `l:reply` transaction and never an OUTBOUND call. | core `boundary`/`journal`/`runtime::vm`; std `connectors::registry` and HttpServer fake | commit-before-accept through one Operator, exact source generation, keys 28/52, one final exit, duplicate silence, unchanged existing package/hash/trace |
 | M1.6 H5.1 live HttpServer ack | The exact ack sheet binds to bounded Hyper HTTP/1.1–2 listeners; retained proposals own body permits, 202 follows commit and both versions close the same Call form. | `connectors::http_server`; private `connectors::network::http_server`; shared bounded pump | real H1/H2 commit-before-202, retained-byte pressure, no side queue, proposal/terminal non-starvation, pre-admission refusals and unchanged identity registers |
 | M1.6 H5.2 generic graph response | A graph delivery to an inbound-only Call Connector is the return half of its retained request. Direct lineage selects the exact opening instance before producer commit; `Pending` retains the real cursor, `Started` transfers the bounded write, and terminal `l:reply` consumes it without an OUTBOUND record. | core `boundary`/`journal`/`runtime::vm`; std `connectors::registry`; any inbound Call Driver | keyed-source transformed-payload routing, journal-before-Driver, pending/started handoff, one-cursor terminal, consume-only late response, no identity move |
-| M1.6 H5 remainder and H6 hosted sessions | H5 adds server HTTP/3, respond policy, deadlines/race closure and independent interop; H6 binds live WebSocket sessions so complete messages map onto one generic Session and one terminal exit. | `connectors::{http_server,websocket_client,websocket_server,websocket_protocol}` using private `connectors::network` | all-version server integration, RFC 6455/8441/9220 behavior, event/call/session conformance and Codex gateway |
+| M1.6 H5 live HttpServer closure | One retained Call protocol executes `ack` and `respond` over HTTP/1.1–3 with explicit correlation, bounded deadlines and close-once races. | `connectors::http_server`; private `connectors::network::http_server`; core inbound-Call fold | all-version integrations, response/timeout races, orphan and backpressure proofs |
+| M1.6 H6 hosted WebSocket Sessions | HTTP/1.1 Upgrade and HTTP/2–3 Extended CONNECT map complete messages onto one generic Session, durable writes and sole typed `l:exit`. | `connectors::{websocket_client,websocket_server,websocket_protocol}`; private `connectors::network::websocket`; core Session fold | Session battery, RFC 6455/8441/9220 tests, bounded slow-peer proof, multiple peers, Codex gateway and independent probes |
+| M1.6 H7 static closure | One feature-selected hosted assembly composes Process, optional File and every linked network family; missing Drivers refuse before VM creation and the manifest is the exact data-only projection. | `connectors::assembly`, `DriverRegistry`, CLI | five feature builds, full/reduced composition, 838 all-feature tests, three no-std targets, QEMU spike and identity audit |
 
 The ordered evidence and dependency decision are in
 [`m1.6-http-websocket-backlog.md`](m1.6-http-websocket-backlog.md). H1 through
 H4.1, H5's generic Call seam, H5.1's live H1–2 ack listener and H5.2's generic
-response return are landed; the remaining H5 and H6 stay planned rows until
-their gates are executable.
+response return, final H5, H6 and H7 are landed. The
+[exit report](m1.6-exit-report.md) owns the closure ledger.
 
 ## M1.3 foundation (landed in ordered gates)
 

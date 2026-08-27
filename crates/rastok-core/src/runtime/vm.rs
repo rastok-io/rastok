@@ -22,7 +22,8 @@ use crate::boundary::{
     InboundAcceptance, InboundAdmission, InboundCallEvent, InboundCallRef, InboundCallResponse,
     InboundCallTimeout, InboundProposal, InboundRejection, InboundSession, InboundSubmission,
     InstanceDeadline, Intent, OutboundConnectorBindings, RequestPreparation, Response,
-    SchedulerCompletion,
+    SchedulerCompletion, SessionDriverEvent, SessionOpenIntent, SessionRef, SessionStart,
+    SessionWriteIntent, SessionWriteRef,
 };
 use crate::connector::ConnectorExchange;
 use crate::envelope::{Data, Envelope, Id};
@@ -234,6 +235,12 @@ pub struct PumpReport {
     /// Answers the contract refused before closure, with reasons —
     /// the call stays open for the timeout machinery.
     pub rejected: Vec<(Response, String)>,
+    /// Duplicate or post-terminal Session observations.
+    pub discarded_sessions: Vec<SessionDriverEvent>,
+    /// Session observations matching no live logical Session.
+    pub uncorrelated_sessions: Vec<SessionDriverEvent>,
+    /// Session terminal observations refused by the resolved output table.
+    pub rejected_sessions: Vec<(SessionDriverEvent, String)>,
 }
 
 /// Non-causal observations from one inbound-Call Driver drain.
@@ -256,6 +263,11 @@ impl PumpReport {
         self.discarded.append(&mut other.discarded);
         self.uncorrelated.append(&mut other.uncorrelated);
         self.rejected.append(&mut other.rejected);
+        self.discarded_sessions
+            .append(&mut other.discarded_sessions);
+        self.uncorrelated_sessions
+            .append(&mut other.uncorrelated_sessions);
+        self.rejected_sessions.append(&mut other.rejected_sessions);
     }
 }
 
@@ -297,6 +309,57 @@ struct PendingInboundCallResponse {
 struct PendingInboundCallTimeout {
     requested: bool,
     started: bool,
+}
+
+/// One journaled logical Session owned by a Connector instance.
+#[derive(Debug, Clone, PartialEq)]
+struct PendingSession {
+    slot: Slot,
+    instance: InstanceRef,
+    opening: Envelope,
+    /// Present only for an outbound opening whose exact prepared bytes may
+    /// need to be re-offered after bounded Driver pressure.
+    open_intent: Option<SessionOpenIntent>,
+    /// Outbound client openings retain their graph cursor through the sole
+    /// terminal Session transaction. Inbound peer openings are roots and
+    /// therefore carry no consumed cursor.
+    opening_delivery: Option<Delivery>,
+    opened: bool,
+    opening_started: bool,
+    opening_claimed: bool,
+    close_started: bool,
+}
+
+/// One graph-to-world write retained until the Driver accepts its bounded
+/// action and later reports local settlement.
+#[derive(Debug, Clone, PartialEq)]
+struct PendingSessionWrite {
+    intent: SessionWriteIntent,
+    slot: Slot,
+    instance: InstanceRef,
+    delivery: Delivery,
+    started: bool,
+}
+
+/// One mailbox delivery being dispatched to an already-selected Session.
+/// Keeping its three routing facts together prevents a write from being
+/// prepared for one instance and retained from another.
+struct SessionDispatch<'a> {
+    slot: Slot,
+    instance: &'a InstanceRef,
+    delivery: &'a Delivery,
+}
+
+/// One accepted terminal observation waiting for its atomic Connector
+/// transaction.
+#[derive(Debug, Clone, PartialEq)]
+struct SettledSession {
+    session: SessionRef,
+    completion: Completion,
+    /// A preparation refusal can terminate a Session before a write intent
+    /// opens. Its causing graph cursor is consumed by the terminal
+    /// transaction together with the opening cursor.
+    terminal_delivery: Option<Delivery>,
 }
 
 /// One selected owner generation and its immutable instance bundle.
@@ -692,6 +755,13 @@ pub struct Vm<'plan> {
     /// Driver terminal observations waiting for their atomic Connector
     /// transaction. A reference appears at most once.
     settled_inbound_calls: VecDeque<InboundCallEvent>,
+    /// Open inbound and outbound Sessions, keyed only by the journal-derived
+    /// logical reference.
+    sessions: BTreeMap<SessionRef, PendingSession>,
+    /// Session writes whose journal-before-effect intent is already durable.
+    session_writes: BTreeMap<SessionWriteRef, PendingSessionWrite>,
+    /// Session terminal observations waiting for their causal transaction.
+    settled_sessions: VecDeque<SettledSession>,
     /// Live keyed/singleton instances whose lifecycle is observable.
     instances: BTreeMap<InstanceRef, Instance>,
     /// Selected successor generations not yet allowed to start.
@@ -752,6 +822,9 @@ impl<'plan> Vm<'plan> {
             pending: BTreeMap::new(),
             inbound_calls: BTreeMap::new(),
             settled_inbound_calls: VecDeque::new(),
+            sessions: BTreeMap::new(),
+            session_writes: BTreeMap::new(),
+            settled_sessions: VecDeque::new(),
             instances: BTreeMap::new(),
             waiting: BTreeMap::new(),
             closing: BTreeSet::new(),
@@ -969,6 +1042,7 @@ impl<'plan> Vm<'plan> {
         session: Option<InboundSession>,
         connector_path: Option<node::Path>,
     ) -> Result<InboundAcceptance, VmError> {
+        let session_admission = session;
         // Boundary injection and Connector-origin roots are distinct causal
         // sources. The caller chooses the category; the validated plan proves
         // the exact endpoint before the journal reserves a sequence.
@@ -1073,7 +1147,7 @@ impl<'plan> Vm<'plan> {
         // zero-id provisional envelope would be a semantic lie. Destination
         // admission and the accepting record commit only after this complete
         // envelope has selected every route.
-        let mut inbound = match (connector_path, session) {
+        let mut inbound = match (connector_path, session_admission) {
             (Some(_), session) => journal.prepare_connector_inbound(submission, session),
             (None, Some(session)) => journal.prepare_session_inbound(submission, session),
             (None, None) => journal.prepare_inbound(submission),
@@ -1180,20 +1254,128 @@ impl<'plan> Vm<'plan> {
             }
             Some((_, ConnectorExchange::Event | ConnectorExchange::Session)) | None => None,
         };
+        // Session roots obey the same source-instance rule as Calls. The
+        // opening selects and installs the Connector owner exactly once;
+        // every later message reuses that journal-derived logical Session
+        // instead of re-evaluating a key from mutable metadata.
+        let session_target = match (inbound_source, session_admission) {
+            (Some((source, ConnectorExchange::Session)), Some(InboundSession::Open)) => {
+                if !matches!(
+                    self.plan.nodes[source.index()]
+                        .connector()
+                        .map(|spec| spec.effect),
+                    Some(node::Effect::None)
+                ) {
+                    return Err(VmError::PlanInvariant {
+                        node: self.plan.nodes[source.index()].path.clone(),
+                        reason: "an effectful Session Connector cannot accept a peer opening",
+                    });
+                }
+                let owner = self.plan.nodes[source.index()].owner;
+                let scope = self.owner_chain(owner)?.first().copied().ok_or_else(|| {
+                    VmError::PlanInvariant {
+                        node: self.plan.nodes[source.index()].path.clone(),
+                        reason: "an inbound Session source has no owner chain",
+                    }
+                })?;
+                let target = self.prepare_target(
+                    journal,
+                    scope,
+                    None,
+                    source,
+                    inbound.envelope(),
+                    &mut candidates,
+                )?;
+                let held = self
+                    .sessions
+                    .values()
+                    .filter(|pending| {
+                        pending.slot == source && pending.instance == target.reference
+                    })
+                    .count();
+                if held >= WORKER_MAILBOX_CAPACITY {
+                    return Err(VmError::MailboxFull {
+                        node: self.plan.nodes[source.index()].path.clone(),
+                    });
+                }
+                Some((source, target, true))
+            }
+            (
+                Some((source, ConnectorExchange::Session)),
+                Some(InboundSession::Message(session_ref)),
+            ) => {
+                let Some(pending) = self.sessions.get(&session_ref) else {
+                    return Err(VmError::PlanInvariant {
+                        node: self.plan.nodes[source.index()].path.clone(),
+                        reason: "an inbound Session message has no installed logical session",
+                    });
+                };
+                if pending.slot != source || !pending.opened {
+                    return Err(VmError::PlanInvariant {
+                        node: self.plan.nodes[source.index()].path.clone(),
+                        reason: "an inbound Session message crossed its bound source",
+                    });
+                }
+                Some((
+                    source,
+                    PreparedTarget {
+                        reference: pending.instance.clone(),
+                        scope: pending.instance.clone(),
+                        chain: Vec::new(),
+                        admitted: Vec::new(),
+                    },
+                    false,
+                ))
+            }
+            (Some((source, ConnectorExchange::Session)), None) => {
+                return Err(VmError::PlanInvariant {
+                    node: self.plan.nodes[source.index()].path.clone(),
+                    reason: "a Session source arrived without Session framing",
+                });
+            }
+            (Some((source, ConnectorExchange::Event | ConnectorExchange::Call)), Some(_)) => {
+                return Err(VmError::PlanInvariant {
+                    node: self.plan.nodes[source.index()].path.clone(),
+                    reason: "Session framing reached a non-Session source",
+                });
+            }
+            (Some((_, ConnectorExchange::Event | ConnectorExchange::Call)), None) => None,
+            (None, _) => None,
+        };
         let source_instance = source_target
             .as_ref()
-            .map(|(_, target, _)| &target.reference);
-        let prepared = self.prepare_routes(
-            journal,
-            &from,
-            // The source bundle is still a pure candidate, not an installed
-            // live instance. Re-selecting through the shared candidate map
-            // reuses every common owner reference without making the VM
-            // state visible before the INBOUND commit.
-            None,
-            inbound.envelope(),
-            &mut candidates,
-        )?;
+            .map(|(_, target, _)| &target.reference)
+            .or_else(|| {
+                session_target
+                    .as_ref()
+                    .map(|(_, target, _)| &target.reference)
+            });
+        let opening_only = matches!(
+            (inbound_source, session_admission),
+            (
+                Some((_, ConnectorExchange::Session)),
+                Some(InboundSession::Open)
+            )
+        );
+        let prepared = if opening_only {
+            // The upgrade commit creates the logical Session but is not a
+            // peer message. WebSocket sheets expose complete messages on
+            // `out`; routing the handshake's causal seed there would invent
+            // an empty application payload.
+            Vec::new()
+        } else {
+            self.prepare_routes(
+                journal,
+                &from,
+                // The source bundle is still a pure candidate, not an
+                // installed live instance. Re-selecting through the shared
+                // candidate map reuses every common owner reference without
+                // making VM state visible before the INBOUND commit.
+                None,
+                inbound.envelope(),
+                &mut candidates,
+            )?
+        };
         self.check_room_for_routes(core::iter::once(prepared.as_slice()))?;
         let recorded_routes = self.inbound_route_targets(&prepared);
         let committed = journal
@@ -1239,6 +1421,31 @@ impl<'plan> Vm<'plan> {
                         requested: false,
                         started: false,
                     }),
+                },
+            );
+        }
+        if let Some((source, target, opening)) = &session_target
+            && *opening
+        {
+            self.install_target(target, &candidates, &committed.envelope);
+            let Some(crate::boundary::InboundExchangeRef::Session(session_ref)) = exchange else {
+                return Err(VmError::PlanInvariant {
+                    node: self.plan.nodes[source.index()].path.clone(),
+                    reason: "a committed Session opening lost its logical reference",
+                });
+            };
+            self.sessions.insert(
+                session_ref,
+                PendingSession {
+                    slot: *source,
+                    instance: target.reference.clone(),
+                    opening: committed.envelope.clone(),
+                    open_intent: None,
+                    opening_delivery: None,
+                    opened: true,
+                    opening_started: true,
+                    opening_claimed: false,
+                    close_started: false,
                 },
             );
         }
@@ -1291,6 +1498,18 @@ impl<'plan> Vm<'plan> {
             self.settle_inbound_call_next(journal, index, event, pending)?;
             return Ok(true);
         }
+        if let Some(index) = self.settled_sessions.iter().position(|settled| {
+            self.sessions.get(&settled.session).is_some_and(|session| {
+                self.instances.contains_key(&session.instance)
+                    && !self
+                        .session_writes
+                        .values()
+                        .any(|write| write.intent.session_ref == settled.session)
+            })
+        }) {
+            self.settle_session_next(journal, bindings, index)?;
+            return Ok(true);
+        }
         if let Some(index) = self.settled.iter().position(|entry| {
             self.pending
                 .get(&entry.event.call_ref)
@@ -1326,12 +1545,8 @@ impl<'plan> Vm<'plan> {
             };
             match &self.plan.nodes[slot.index()].kind {
                 NodeKind::Operator => self.fire_operator(journal, slot, &instance, &delivery)?,
-                NodeKind::Connector(spec) => {
-                    if spec.roles.has_outbound() {
-                        self.open_call(journal, bindings, slot, &instance, &delivery)?
-                    } else {
-                        self.open_inbound_call_response(journal, slot, &instance, &delivery)?
-                    }
+                NodeKind::Connector(_) => {
+                    self.fire_connector(journal, bindings, slot, &instance, &delivery)?
                 }
             }
             return Ok(true);
@@ -1371,12 +1586,8 @@ impl<'plan> Vm<'plan> {
         {
             after = Some((slot, instance.clone()));
             match &self.plan.nodes[slot.index()].kind {
-                NodeKind::Connector(spec) => {
-                    if spec.roles.has_outbound() {
-                        self.open_call(journal, bindings, slot, &instance, &delivery)?;
-                    } else {
-                        self.open_inbound_call_response(journal, slot, &instance, &delivery)?;
-                    }
+                NodeKind::Connector(_) => {
+                    self.fire_connector(journal, bindings, slot, &instance, &delivery)?;
                     return Ok(true);
                 }
                 NodeKind::Operator => {
@@ -1482,6 +1693,8 @@ impl<'plan> Vm<'plan> {
             .dispatcher
             .pump(journal, bindings, &gate)
             .map_err(VmError::Dispatch)?;
+        self.retry_session_actions(bindings)?;
+        self.retry_session_closes(bindings)?;
         let settled = batch.events.len();
         let in_port =
             node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port"));
@@ -1490,12 +1703,286 @@ impl<'plan> Vm<'plan> {
                 event,
                 trigger: node::Trigger::Port(in_port.clone()),
             }));
-        Ok(PumpReport {
+        let mut report = PumpReport {
             settled,
             discarded: batch.discarded,
             uncorrelated: batch.uncorrelated,
             rejected: batch.rejected,
-        })
+            discarded_sessions: Vec::new(),
+            uncorrelated_sessions: Vec::new(),
+            rejected_sessions: Vec::new(),
+        };
+        let session_events = bindings
+            .session_events()
+            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(VmError::Dispatch)?;
+        for event in session_events {
+            match event.clone() {
+                SessionDriverEvent::Opened(session_ref) => {
+                    let Some(session) = self.sessions.get_mut(&session_ref) else {
+                        report.uncorrelated_sessions.push(event);
+                        continue;
+                    };
+                    if session.opened {
+                        report.discarded_sessions.push(event);
+                        continue;
+                    }
+                    match journal
+                        .confirm_session_open(&session_ref)
+                        .map_err(VmError::Journal)?
+                    {
+                        crate::journal::CloseVerdict::AlreadyClosed => {
+                            report.discarded_sessions.push(event);
+                        }
+                        crate::journal::CloseVerdict::Won => {
+                            session.opened = true;
+                            if session.opening_claimed {
+                                self.scheduler
+                                    .mailboxes
+                                    .release(session.slot, &session.instance);
+                                session.opening_claimed = false;
+                            }
+                            report.settled = report.settled.saturating_add(1);
+                        }
+                    }
+                }
+                SessionDriverEvent::WriteSettled {
+                    session: session_ref,
+                    write,
+                } => {
+                    if !self.sessions.contains_key(&session_ref) {
+                        report.uncorrelated_sessions.push(event);
+                        continue;
+                    }
+                    let Some(pending) = self.session_writes.get(&write) else {
+                        report.discarded_sessions.push(event);
+                        continue;
+                    };
+                    if pending.intent.session_ref != session_ref || !pending.started {
+                        report.discarded_sessions.push(event);
+                        continue;
+                    }
+                    let slot = pending.slot;
+                    let instance = pending.instance.clone();
+                    match journal
+                        .settle_session_write(&write, false)
+                        .map_err(VmError::Journal)?
+                    {
+                        crate::journal::CloseVerdict::AlreadyClosed => {
+                            report.discarded_sessions.push(event);
+                        }
+                        crate::journal::CloseVerdict::Won => {
+                            self.session_writes.remove(&write);
+                            let held = self
+                                .session_writes
+                                .values()
+                                .filter(|pending| {
+                                    pending.slot == slot && pending.instance == instance
+                                })
+                                .count();
+                            if held < WORKER_MAILBOX_CAPACITY {
+                                self.scheduler.mailboxes.release(slot, &instance);
+                            }
+                            report.settled = report.settled.saturating_add(1);
+                        }
+                    }
+                }
+                SessionDriverEvent::Exited {
+                    session: session_ref,
+                    mut exit,
+                } => {
+                    let Some(session) = self.sessions.get(&session_ref) else {
+                        report.uncorrelated_sessions.push(event);
+                        continue;
+                    };
+                    if self
+                        .settled_sessions
+                        .iter()
+                        .any(|settled| settled.session == session_ref)
+                    {
+                        report.discarded_sessions.push(event);
+                        continue;
+                    }
+                    exit.ext.insert(
+                        String::from("session_id"),
+                        crate::envelope::MetaValue::Scalar(crate::envelope::Scalar::Text(
+                            session_ref.to_string(),
+                        )),
+                    );
+                    let completion = Completion::try_new(vec![exit]).map_err(|error| {
+                        VmError::PlanInvariant {
+                            node: self.plan.nodes[session.slot.index()].path.clone(),
+                            reason: match error {
+                                crate::boundary::CompletionError::MissingExit => {
+                                    "a Session Driver omitted its exit"
+                                }
+                                crate::boundary::CompletionError::MultipleExits(_) => {
+                                    "a Session Driver repeated its exit"
+                                }
+                                crate::boundary::CompletionError::OutputAfterExit => {
+                                    "a Session Driver emitted after exit"
+                                }
+                            },
+                        }
+                    })?;
+                    let connector = &self.plan.nodes[session.slot.index()].path;
+                    if let Err(reason) = gate.admit(connector, &completion) {
+                        report.rejected_sessions.push((event, reason));
+                        continue;
+                    }
+                    let writes = self
+                        .session_writes
+                        .iter()
+                        .filter_map(|(reference, write)| {
+                            (write.intent.session_ref == session_ref).then_some(*reference)
+                        })
+                        .collect::<Vec<_>>();
+                    for write in writes {
+                        match journal
+                            .settle_session_write(&write, true)
+                            .map_err(VmError::Journal)?
+                        {
+                            crate::journal::CloseVerdict::Won
+                            | crate::journal::CloseVerdict::AlreadyClosed => {
+                                self.session_writes.remove(&write);
+                            }
+                        }
+                    }
+                    self.settled_sessions.push_back(SettledSession {
+                        session: session_ref,
+                        completion,
+                        terminal_delivery: None,
+                    });
+                    report.settled = report.settled.saturating_add(1);
+                }
+            }
+        }
+        self.progress_closures();
+        Ok(report)
+    }
+
+    /// Re-offers bounded Session actions only from the boundary pump. A
+    /// `Pending` result therefore cannot leave the same mailbox head runnable
+    /// and spin the deterministic transaction drain.
+    fn retry_session_actions<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        bindings: &mut B,
+    ) -> Result<(), VmError> {
+        let openings = self
+            .sessions
+            .iter()
+            .filter_map(|(reference, session)| {
+                (!session.opening_started
+                    && session.open_intent.is_some()
+                    && !self
+                        .settled_sessions
+                        .iter()
+                        .any(|settled| settled.session == *reference))
+                .then_some(*reference)
+            })
+            .collect::<Vec<_>>();
+        for reference in openings {
+            let session =
+                self.sessions
+                    .get(&reference)
+                    .cloned()
+                    .ok_or_else(|| VmError::PlanInvariant {
+                        node: node::Path::new(["session"])
+                            .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                        reason: "a pending Session opening disappeared before retry",
+                    })?;
+            let intent = session
+                .open_intent
+                .as_ref()
+                .ok_or_else(|| VmError::PlanInvariant {
+                    node: self.plan.nodes[session.slot.index()].path.clone(),
+                    reason: "a retryable Session opening lost its sealed intent",
+                })?;
+            if bindings
+                .open_session(intent, &session.opening)
+                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(VmError::Dispatch)?
+                == SessionStart::Started
+                && let Some(session) = self.sessions.get_mut(&reference)
+            {
+                session.opening_started = true;
+            }
+        }
+
+        let writes = self
+            .session_writes
+            .iter()
+            .filter_map(|(reference, write)| (!write.started).then_some(*reference))
+            .collect::<Vec<_>>();
+        for reference in writes {
+            let write = self
+                .session_writes
+                .get(&reference)
+                .cloned()
+                .ok_or_else(|| VmError::PlanInvariant {
+                    node: node::Path::new(["session"])
+                        .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                    reason: "a pending Session write disappeared before retry",
+                })?;
+            if bindings
+                .write_session(&write.intent, &write.delivery.envelope)
+                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(VmError::Dispatch)?
+                == SessionStart::Started
+                && let Some(write) = self.session_writes.get_mut(&reference)
+            {
+                write.started = true;
+            }
+        }
+        Ok(())
+    }
+
+    fn retry_session_closes<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        bindings: &mut B,
+    ) -> Result<(), VmError> {
+        let pending: Vec<SessionRef> = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| {
+                !session.close_started
+                    && self
+                        .instances
+                        .get(&session.instance)
+                        .is_some_and(|instance| {
+                            matches!(
+                                instance.phase,
+                                InstancePhase::Closing {
+                                    stage: ClosingStage::Settling,
+                                    ..
+                                }
+                            )
+                        })
+            })
+            .map(|(reference, _)| *reference)
+            .collect();
+        for reference in pending {
+            let session =
+                self.sessions
+                    .get(&reference)
+                    .cloned()
+                    .ok_or_else(|| VmError::PlanInvariant {
+                        node: node::Path::new(["session"])
+                            .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                        reason: "a pending Session close lost its logical session",
+                    })?;
+            let connector = self.plan.nodes[session.slot.index()].path.clone();
+            if bindings
+                .close_session(&connector, reference)
+                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(VmError::Dispatch)?
+                == SessionStart::Started
+                && let Some(session) = self.sessions.get_mut(&reference)
+            {
+                session.close_started = true;
+            }
+        }
+        Ok(())
     }
 
     /// Advances the virtual date to `target`, firing each armed
@@ -1659,6 +2146,14 @@ impl<'plan> Vm<'plan> {
                 return Ok(());
             }
         };
+        let slot = self.slot_of(&connector);
+        if self.plan.nodes[slot.index()]
+            .connector()
+            .is_some_and(|spec| spec.exchange == ConnectorExchange::Session)
+        {
+            return self
+                .expire_session_handshake(journal, bindings, slot, instance, &edge, delivery);
+        }
         // An open call for THIS obligation — the delivered edge and
         // envelope both: a fan-out of one envelope arms one budget
         // per receiving edge, and each expires its own call.
@@ -1714,7 +2209,6 @@ impl<'plan> Vm<'plan> {
         // fires under `l:timeout` — the same causality as any expiry.
         // Journal facts come first; the mailbox is touched only after
         // they hold, so a refusal loses nothing.
-        let slot = self.slot_of(&connector);
         let queued_intent = {
             let Some(queued) = self
                 .scheduler
@@ -1860,6 +2354,164 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
+    fn expire_session_handshake<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+        slot: Slot,
+        instance: InstanceRef,
+        edge: &str,
+        delivery: Id,
+    ) -> Result<(), VmError> {
+        let connector = self.plan.nodes[slot.index()].path.clone();
+        if let Some(session_ref) = self
+            .sessions
+            .iter()
+            .find(|(_, session)| {
+                session.slot == slot
+                    && session.instance == instance
+                    && session.opening.meta().sys().id() == delivery
+            })
+            .map(|(reference, _)| *reference)
+        {
+            let session =
+                self.sessions
+                    .get(&session_ref)
+                    .cloned()
+                    .ok_or_else(|| VmError::PlanInvariant {
+                        node: connector.clone(),
+                        reason: "a due Session handshake lost its logical session",
+                    })?;
+            if session.opened
+                || self
+                    .settled_sessions
+                    .iter()
+                    .any(|settled| settled.session == session_ref)
+            {
+                return Ok(());
+            }
+            let completion = bindings
+                .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
+                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(VmError::Dispatch)?;
+            if session.opening_started {
+                let _ = bindings
+                    .close_session(&connector, session_ref)
+                    .map_err(crate::boundary::DispatchError::Driver)
+                    .map_err(VmError::Dispatch)?;
+            } else if !session.opening_claimed {
+                let retained = self
+                    .scheduler
+                    .mailboxes
+                    .remove_by_ref(slot, &instance, edge, delivery)
+                    .ok_or_else(|| VmError::PlanInvariant {
+                        node: connector.clone(),
+                        reason: "a due pending Session opening lost its mailbox delivery",
+                    })?;
+                if let Some(session) = self.sessions.get_mut(&session_ref) {
+                    session.opening_delivery = Some(retained);
+                }
+            }
+            self.settled_sessions.push_back(SettledSession {
+                session: session_ref,
+                completion,
+                terminal_delivery: None,
+            });
+            return Ok(());
+        }
+        if self
+            .sessions
+            .values()
+            .any(|session| session.slot == slot && session.instance == instance)
+        {
+            // Every routed client delivery carries the statically derivable
+            // handshake timer. Once this instance owns an opening, later
+            // message timers are intentionally stale rather than a second
+            // opening authority.
+            return Ok(());
+        }
+
+        let Some(queued) = self
+            .scheduler
+            .mailboxes
+            .find_by_ref(slot, &instance, edge, delivery)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        let spec =
+            self.plan.nodes[slot.index()]
+                .connector()
+                .ok_or_else(|| VmError::PlanInvariant {
+                    node: connector.clone(),
+                    reason: "a Session handshake deadline names a non-connector",
+                })?;
+        let settings =
+            self.resolve_invocation_settings(&instance, spec, &connector, &queued.envelope)?;
+        let preparation = bindings
+            .prepare_session_open(&connector, queued.envelope.data(), &settings)
+            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(VmError::Dispatch)?;
+        let prepared = match preparation {
+            RequestPreparation::Rejected(completion) => {
+                return self.commit_pre_session_refusal(
+                    journal,
+                    slot,
+                    &instance,
+                    &queued,
+                    &completion,
+                );
+            }
+            RequestPreparation::Prepared(prepared) => prepared,
+        };
+        let session_ref = ids::outbound_session_ref(
+            &connector,
+            queued.envelope.meta().sys().id(),
+            prepared.digest(),
+        );
+        let intent = SessionOpenIntent {
+            session_ref,
+            emitting_id: queued.envelope.meta().sys().id(),
+            connector_path: connector.clone(),
+            prepared,
+        };
+        journal
+            .open_outbound_session(intent)
+            .map_err(VmError::Journal)?;
+        let retained = self
+            .scheduler
+            .mailboxes
+            .remove_by_ref(slot, &instance, edge, delivery)
+            .ok_or_else(|| VmError::PlanInvariant {
+                node: connector.clone(),
+                reason: "a due queued Session opening disappeared after its WAL fact",
+            })?;
+        self.sessions.insert(
+            session_ref,
+            PendingSession {
+                slot,
+                instance,
+                opening: retained.envelope.clone(),
+                open_intent: None,
+                opening_delivery: Some(retained),
+                opened: false,
+                opening_started: false,
+                opening_claimed: false,
+                close_started: false,
+            },
+        );
+        let completion = bindings
+            .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
+            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(VmError::Dispatch)?;
+        self.settled_sessions.push_back(SettledSession {
+            session: session_ref,
+            completion,
+            terminal_delivery: None,
+        });
+        Ok(())
+    }
+
     /// Resolves one generation-fenced lifetime deadline. Only idle deadlines
     /// are superseded by later admission; fixed and tumbling stay anchored to
     /// their creating start/box. Missing references are stale observations.
@@ -1933,6 +2585,9 @@ impl<'plan> Vm<'plan> {
             || !self.pending.is_empty()
             || !self.settled_inbound_calls.is_empty()
             || !self.inbound_calls.is_empty()
+            || !self.sessions.is_empty()
+            || !self.session_writes.is_empty()
+            || !self.settled_sessions.is_empty()
         {
             return false;
         }
@@ -1982,7 +2637,10 @@ impl<'plan> Vm<'plan> {
     /// cannot finish alone.
     #[must_use]
     pub fn has_open_obligations(&self) -> bool {
-        !self.pending.is_empty() || !self.inbound_calls.is_empty()
+        !self.pending.is_empty()
+            || !self.inbound_calls.is_empty()
+            || !self.sessions.is_empty()
+            || !self.session_writes.is_empty()
     }
 
     fn instance_has_direct_work(&self, reference: &InstanceRef) -> bool {
@@ -1999,6 +2657,14 @@ impl<'plan> Vm<'plan> {
                         .any(|pending| pending.slot == slot && pending.instance == *reference)
                     || self
                         .inbound_calls
+                        .values()
+                        .any(|pending| pending.slot == slot && pending.instance == *reference)
+                    || self
+                        .sessions
+                        .values()
+                        .any(|pending| pending.slot == slot && pending.instance == *reference)
+                    || self
+                        .session_writes
                         .values()
                         .any(|pending| pending.slot == slot && pending.instance == *reference)
             }
@@ -2290,6 +2956,34 @@ impl<'plan> Vm<'plan> {
                         .map_err(crate::boundary::DispatchError::Driver)
                         .map_err(VmError::Dispatch)?;
                 }
+                // Session closure is requested in canonical logical-reference
+                // order. A bounded Driver may defer the handoff; the next
+                // boundary pump retries the same already-live session.
+                let sessions: Vec<SessionRef> = self
+                    .sessions
+                    .iter()
+                    .filter(|(_, session)| self.is_within_instance(&session.instance, reference))
+                    .map(|(session, _)| *session)
+                    .collect();
+                for session_ref in sessions {
+                    let session = self.sessions.get(&session_ref).cloned().ok_or_else(|| {
+                        VmError::PlanInvariant {
+                            node: node::Path::new(["session"])
+                                .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                            reason: "a Closing Session vanished before close handoff",
+                        }
+                    })?;
+                    let connector = self.plan.nodes[session.slot.index()].path.clone();
+                    if bindings
+                        .close_session(&connector, session_ref)
+                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(VmError::Dispatch)?
+                        == SessionStart::Started
+                        && let Some(session) = self.sessions.get_mut(&session_ref)
+                    {
+                        session.close_started = true;
+                    }
+                }
             }
             ClosingDeadline::Settlement => {
                 self.residualize_scope(reference);
@@ -2326,6 +3020,59 @@ impl<'plan> Vm<'plan> {
                             });
                         }
                     }
+                }
+                let writes: Vec<SessionWriteRef> = self
+                    .session_writes
+                    .iter()
+                    .filter(|(_, write)| self.is_within_instance(&write.instance, reference))
+                    .map(|(write, _)| *write)
+                    .collect();
+                for write in writes {
+                    match journal
+                        .settle_session_write(&write, true)
+                        .map_err(VmError::Journal)?
+                    {
+                        crate::journal::CloseVerdict::AlreadyClosed => {}
+                        crate::journal::CloseVerdict::Won => {
+                            self.session_writes.remove(&write);
+                        }
+                    }
+                }
+                let sessions: Vec<SessionRef> = self
+                    .sessions
+                    .iter()
+                    .filter(|(_, session)| self.is_within_instance(&session.instance, reference))
+                    .map(|(session, _)| *session)
+                    .collect();
+                for session_ref in sessions {
+                    if self
+                        .settled_sessions
+                        .iter()
+                        .any(|settled| settled.session == session_ref)
+                    {
+                        continue;
+                    }
+                    let session =
+                        self.sessions
+                            .get(&session_ref)
+                            .ok_or_else(|| VmError::PlanInvariant {
+                                node: node::Path::new(["session"])
+                                    .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                                reason: "a settling Session lost its logical record",
+                            })?;
+                    let connector = self.plan.nodes[session.slot.index()].path.clone();
+                    let completion = bindings
+                        .scheduler_session_completion(
+                            &connector,
+                            SchedulerCompletion::OutcomeUnknown,
+                        )
+                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(VmError::Dispatch)?;
+                    self.settled_sessions.push_back(SettledSession {
+                        session: session_ref,
+                        completion,
+                        terminal_delivery: None,
+                    });
                 }
             }
             ClosingDeadline::Drain => {}
@@ -2700,6 +3447,63 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
+    /// Commits the sole terminal transaction of one logical Session. The
+    /// opening cursor (client) and an optional locally rejected write cursor
+    /// are consumed atomically with the typed `exit`; inbound peer openings
+    /// are roots and therefore consume neither.
+    fn settle_session_next<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+        index: usize,
+    ) -> Result<(), VmError> {
+        let settled = self
+            .settled_sessions
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| unreachable!("guarded by the caller"));
+        let Some(session) = self.sessions.get(&settled.session).cloned() else {
+            return Err(VmError::PlanInvariant {
+                node: node::Path::new(["session"])
+                    .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                reason: "a terminal Session observation lost its logical session",
+            });
+        };
+        let executor = TransactionExecutor::new(self.plan, self.graph_version);
+        let consumed = session
+            .opening_delivery
+            .iter()
+            .chain(settled.terminal_delivery.iter())
+            .collect::<Vec<_>>();
+        let mut outcome = executor
+            .session_completion(
+                session.slot,
+                &session.instance,
+                &session.opening,
+                settled.session,
+                &settled.completion,
+                &consumed,
+            )
+            .map_err(VmError::Fault)?;
+        let prepared = self.validate_and_prepare_emissions(
+            journal,
+            session.slot,
+            &session.instance,
+            &outcome.record,
+        )?;
+        outcome.record.routes = self.routed_deliveries(&prepared);
+        journal.commit(outcome.record).map_err(VmError::Journal)?;
+        self.settled_sessions.remove(index);
+        self.sessions.remove(&settled.session);
+        bindings.forget_session(settled.session);
+        self.scheduler
+            .mailboxes
+            .release(session.slot, &session.instance);
+        self.route_emissions(session.slot, &session.instance, prepared);
+        self.progress_closures();
+        Ok(())
+    }
+
     /// Selects the earliest runnable fact in one Operator mailbox. Partial
     /// join arrivals are logically buffered and therefore do not block a
     /// later ready activation; ordering is by the arrival that made the work
@@ -2907,6 +3711,41 @@ impl<'plan> Vm<'plan> {
         self.route_emissions(slot, instance, prepared);
         self.progress_closures();
         Ok(())
+    }
+
+    /// Routes a Connector delivery by its validated exchange cardinality.
+    /// Roles decide direction; the exchange decides whether the retained
+    /// obligation is one Call or one long-lived Session.
+    fn fire_connector<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+    ) -> Result<(), VmError> {
+        let planned = &self.plan.nodes[slot.index()];
+        let NodeKind::Connector(spec) = &planned.kind else {
+            return Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "connector dispatch reached a non-connector node",
+            });
+        };
+        match spec.exchange {
+            ConnectorExchange::Call if spec.roles.has_outbound() => {
+                self.open_call(journal, bindings, slot, instance, delivery)
+            }
+            ConnectorExchange::Call if spec.roles.has_inbound() => {
+                self.open_inbound_call_response(journal, slot, instance, delivery)
+            }
+            ConnectorExchange::Session => {
+                self.progress_session(journal, bindings, slot, instance, delivery)
+            }
+            ConnectorExchange::Event | ConnectorExchange::Call => Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "a delivery reached a Connector without a compatible world role",
+            }),
+        }
     }
 
     fn fire_join_operator(
@@ -3127,6 +3966,364 @@ impl<'plan> Vm<'plan> {
         }
         self.progress_closures();
         Ok(())
+    }
+
+    /// Starts or writes one Session without ever using arrival order as a
+    /// correlator. Server-like Connectors require a logical reference from
+    /// lineage or their explicit `correlate` expression; client-like
+    /// Connectors may open one session and thereafter reuse that sole live
+    /// session for their instance.
+    fn progress_session<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+    ) -> Result<(), VmError> {
+        let planned = &self.plan.nodes[slot.index()];
+        let NodeKind::Connector(spec) = &planned.kind else {
+            return Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "Session dispatch reached a non-connector",
+            });
+        };
+        if spec.exchange != ConnectorExchange::Session || !spec.roles.has_outbound() {
+            return Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "a Session delivery reached a Connector without an outbound Session role",
+            });
+        }
+        let settings =
+            self.resolve_invocation_settings(instance, spec, &planned.path, &delivery.envelope)?;
+        let selected = self.select_session_ref(spec, &delivery.envelope, &settings)?;
+        if let Some(session_ref) = selected {
+            return if self.sessions.get(&session_ref).is_some_and(|session| {
+                session.slot == slot && session.instance == *instance && session.opened
+            }) {
+                self.write_session(
+                    journal,
+                    bindings,
+                    SessionDispatch {
+                        slot,
+                        instance,
+                        delivery,
+                    },
+                    session_ref,
+                    &settings,
+                )
+            } else {
+                self.discard_session_write(journal, slot, instance, delivery)
+            };
+        }
+
+        let live: Vec<SessionRef> = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.slot == slot && session.instance == *instance)
+            .map(|(reference, _)| *reference)
+            .collect();
+        if matches!(spec.effect, node::Effect::None) {
+            // A server never guesses which peer to address. The ordinary
+            // consume-only discard is observable and prevents an orphan from
+            // becoming a new client opening by accident.
+            return self.discard_session_write(journal, slot, instance, delivery);
+        }
+        match live.as_slice() {
+            [] => self.open_session(journal, bindings, slot, instance, delivery, &settings),
+            [session_ref] => {
+                let pending_open = self.sessions.get(session_ref).is_some_and(|session| {
+                    !session.opened
+                        && !session.opening_claimed
+                        && session.opening.meta().sys().id() == delivery.envelope.meta().sys().id()
+                });
+                if pending_open {
+                    self.open_session(journal, bindings, slot, instance, delivery, &settings)
+                } else if self.sessions[session_ref].opened {
+                    self.write_session(
+                        journal,
+                        bindings,
+                        SessionDispatch {
+                            slot,
+                            instance,
+                            delivery,
+                        },
+                        *session_ref,
+                        &settings,
+                    )
+                } else {
+                    Err(VmError::PlanInvariant {
+                        node: planned.path.clone(),
+                        reason: "a client Session opening lost its claimed mailbox",
+                    })
+                }
+            }
+            _ => Err(VmError::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "a client Connector owns more than one live Session in one instance",
+            }),
+        }
+    }
+
+    fn select_session_ref(
+        &self,
+        spec: &crate::plan::ConnectorSpec,
+        envelope: &Envelope,
+        settings: &BTreeMap<String, crate::value::Value>,
+    ) -> Result<Option<SessionRef>, VmError> {
+        if spec.attribute("correlate").is_some() {
+            let Some(crate::value::Value::Text(value)) = settings.get("correlate") else {
+                return Err(VmError::PlanInvariant {
+                    node: node::Path::new(["session"])
+                        .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                    reason: "a Session correlator did not resolve to text",
+                });
+            };
+            return Ok(SessionRef::parse_projection(value));
+        }
+        Ok(envelope
+            .meta()
+            .ext()
+            .get("session_id")
+            .and_then(|value| match value {
+                crate::envelope::MetaValue::Scalar(crate::envelope::Scalar::Text(value)) => {
+                    SessionRef::parse_projection(value)
+                }
+                crate::envelope::MetaValue::Scalar(
+                    crate::envelope::Scalar::Bool(_)
+                    | crate::envelope::Scalar::Int(_)
+                    | crate::envelope::Scalar::Double(_)
+                    | crate::envelope::Scalar::Bytes(_)
+                    | crate::envelope::Scalar::Decimal { .. },
+                )
+                | crate::envelope::MetaValue::Array(_)
+                | crate::envelope::MetaValue::Map(_) => None,
+            }))
+    }
+
+    fn open_session<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+        settings: &BTreeMap<String, crate::value::Value>,
+    ) -> Result<(), VmError> {
+        let planned = &self.plan.nodes[slot.index()];
+        let preparation = bindings
+            .prepare_session_open(&planned.path, delivery.envelope.data(), settings)
+            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(VmError::Dispatch)?;
+        let prepared = match preparation {
+            RequestPreparation::Prepared(prepared) => prepared,
+            RequestPreparation::Rejected(completion) => {
+                return self.commit_pre_session_refusal(
+                    journal,
+                    slot,
+                    instance,
+                    delivery,
+                    &completion,
+                );
+            }
+        };
+        let session_ref = ids::outbound_session_ref(
+            &planned.path,
+            delivery.envelope.meta().sys().id(),
+            prepared.digest(),
+        );
+        let intent = SessionOpenIntent {
+            session_ref,
+            emitting_id: delivery.envelope.meta().sys().id(),
+            connector_path: planned.path.clone(),
+            prepared,
+        };
+        if let alloc::collections::btree_map::Entry::Vacant(entry) =
+            self.sessions.entry(session_ref)
+        {
+            journal
+                .open_outbound_session(intent.clone())
+                .map_err(VmError::Journal)?;
+            let retained = self
+                .scheduler
+                .mailboxes
+                .pop(slot, instance)
+                .ok_or_else(|| VmError::PlanInvariant {
+                    node: planned.path.clone(),
+                    reason: "a journaled Session opening lost its mailbox delivery",
+                })?;
+            entry.insert(PendingSession {
+                slot,
+                instance: instance.clone(),
+                opening: delivery.envelope.clone(),
+                open_intent: Some(intent.clone()),
+                opening_delivery: Some(retained),
+                opened: false,
+                opening_started: false,
+                opening_claimed: true,
+                close_started: false,
+            });
+            self.scheduler.mailboxes.claim(slot, instance);
+        }
+        match bindings
+            .open_session(&intent, &delivery.envelope)
+            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(VmError::Dispatch)?
+        {
+            SessionStart::Pending => Ok(()),
+            SessionStart::Started => {
+                let session =
+                    self.sessions
+                        .get_mut(&session_ref)
+                        .ok_or_else(|| VmError::PlanInvariant {
+                            node: planned.path.clone(),
+                            reason: "a started Session opening lost its logical record",
+                        })?;
+                session.opening_started = true;
+                Ok(())
+            }
+        }
+    }
+
+    fn write_session<B: OutboundConnectorBindings + ?Sized>(
+        &mut self,
+        journal: &mut dyn Journal,
+        bindings: &mut B,
+        dispatch: SessionDispatch<'_>,
+        session_ref: SessionRef,
+        settings: &BTreeMap<String, crate::value::Value>,
+    ) -> Result<(), VmError> {
+        let SessionDispatch {
+            slot,
+            instance,
+            delivery,
+        } = dispatch;
+        let planned = &self.plan.nodes[slot.index()];
+        let preparation = bindings
+            .prepare_session_write(
+                &planned.path,
+                session_ref,
+                delivery.envelope.data(),
+                settings,
+            )
+            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(VmError::Dispatch)?;
+        let prepared = match preparation {
+            RequestPreparation::Prepared(prepared) => prepared,
+            RequestPreparation::Rejected(completion) => {
+                let terminal = self
+                    .scheduler
+                    .mailboxes
+                    .pop(slot, instance)
+                    .ok_or_else(|| VmError::PlanInvariant {
+                        node: planned.path.clone(),
+                        reason: "a rejected Session write lost its mailbox delivery",
+                    })?;
+                self.scheduler.mailboxes.claim(slot, instance);
+                self.settled_sessions.push_back(SettledSession {
+                    session: session_ref,
+                    completion,
+                    terminal_delivery: Some(terminal),
+                });
+                return Ok(());
+            }
+        };
+        let write_ref = ids::session_write_ref(
+            session_ref,
+            delivery.envelope.meta().sys().id(),
+            prepared.digest(),
+        );
+        let intent = SessionWriteIntent {
+            write_ref,
+            session_ref,
+            emitting_id: delivery.envelope.meta().sys().id(),
+            connector_path: planned.path.clone(),
+            prepared,
+        };
+        if let alloc::collections::btree_map::Entry::Vacant(entry) =
+            self.session_writes.entry(write_ref)
+        {
+            journal
+                .open_session_write(intent.clone())
+                .map_err(VmError::Journal)?;
+            let retained = self
+                .scheduler
+                .mailboxes
+                .pop(slot, instance)
+                .ok_or_else(|| VmError::PlanInvariant {
+                    node: planned.path.clone(),
+                    reason: "a journaled Session write lost its mailbox delivery",
+                })?;
+            entry.insert(PendingSessionWrite {
+                intent: intent.clone(),
+                slot,
+                instance: instance.clone(),
+                delivery: retained,
+                started: false,
+            });
+            let held = self
+                .session_writes
+                .values()
+                .filter(|pending| pending.slot == slot && pending.instance == *instance)
+                .count();
+            if held >= WORKER_MAILBOX_CAPACITY {
+                // Moving an effect from the bounded mailbox into the durable
+                // Session-write fold must not create an unbounded side queue.
+                // At the shared Worker bound, keep this mailbox claimed until
+                // a local write settlement releases one slot.
+                self.scheduler.mailboxes.claim(slot, instance);
+            }
+        }
+        match bindings
+            .write_session(&intent, &delivery.envelope)
+            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(VmError::Dispatch)?
+        {
+            SessionStart::Pending => Ok(()),
+            SessionStart::Started => {
+                let write = self.session_writes.get_mut(&write_ref).ok_or_else(|| {
+                    VmError::PlanInvariant {
+                        node: planned.path.clone(),
+                        reason: "a started Session write lost its journaled intent",
+                    }
+                })?;
+                write.started = true;
+                Ok(())
+            }
+        }
+    }
+
+    fn commit_pre_session_refusal(
+        &mut self,
+        journal: &mut dyn Journal,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+        completion: &Completion,
+    ) -> Result<(), VmError> {
+        let executor = TransactionExecutor::new(self.plan, self.graph_version);
+        let trigger = node::Trigger::Port(delivery.port.clone());
+        let mut outcome = executor
+            .connector_completion(slot, instance, delivery, &trigger, completion)
+            .map_err(VmError::Fault)?;
+        let prepared =
+            self.validate_and_prepare_emissions(journal, slot, instance, &outcome.record)?;
+        outcome.record.routes = self.routed_deliveries(&prepared);
+        journal.commit(outcome.record).map_err(VmError::Journal)?;
+        self.scheduler.mailboxes.pop(slot, instance);
+        self.route_emissions(slot, instance, prepared);
+        self.progress_closures();
+        Ok(())
+    }
+
+    fn discard_session_write(
+        &mut self,
+        journal: &mut dyn Journal,
+        slot: Slot,
+        instance: &InstanceRef,
+        delivery: &Delivery,
+    ) -> Result<(), VmError> {
+        self.discard_inbound_call_response(journal, slot, instance, delivery)
     }
 
     /// A delivery reaching a connector opens its outbound call:
@@ -4307,14 +5504,21 @@ impl<'plan> Vm<'plan> {
                                             .map(|waiting| &waiting.candidate.settings)
                                     })
                             })
-                            .and_then(|settings| settings.get("timeout"))
+                            .and_then(|settings| {
+                                settings
+                                    .get("timeout")
+                                    .or_else(|| settings.get("handshake_timeout"))
+                            })
                             .and_then(|value| match value {
                                 crate::value::Value::Duration(budget) => Some(*budget),
                                 _ => None,
                             });
                         let static_budget = self.plan.nodes[target.index()]
                             .connector()
-                            .and_then(|spec| spec.attribute("timeout"))
+                            .and_then(|spec| {
+                                spec.attribute("timeout")
+                                    .or_else(|| spec.attribute("handshake_timeout"))
+                            })
                             .and_then(|setting| match setting {
                                 crate::plan::AttrSetting::Value(crate::value::Value::Duration(
                                     budget,

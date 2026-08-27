@@ -4,6 +4,7 @@
 //! The public re-export keeps the pre-M1.5 `connectors::Process` path stable
 //! while the catalogue grows without returning to one monolithic file.
 
+mod assembly;
 mod file;
 mod http_client;
 mod http_server;
@@ -22,6 +23,7 @@ mod websocket_client;
 mod websocket_protocol;
 mod websocket_server;
 
+pub use assembly::{HostedAssemblyError, hosted_registry};
 pub use file::{File, FileBindError, FileFactory, FileSettingsError};
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
 pub use http_client::{HttpClientConfig, HttpClientFactory};
@@ -35,6 +37,10 @@ pub use registry::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverBindingError, DriverFactoryError,
     DriverRegistrationError, DriverRegistry, RuntimeBindings,
 };
+#[cfg(feature = "hosted-websocket")]
+pub use websocket_client::WebSocketClientFactory;
+#[cfg(feature = "hosted-websocket")]
+pub use websocket_server::{WebSocketConfig, WebSocketConfigError, WebSocketServerFactory};
 
 /// The family-owned, effectless half of a scripted Driver.
 ///

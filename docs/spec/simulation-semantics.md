@@ -113,9 +113,11 @@ H5.1 proves real HTTP/1.1–2 server `ack` against the same two-phase inbound
 Call fold. H5.2's family fake also proves that a transformed direct-lineage
 response seals the exact keyed opening instance before commit, may remain
 pending without protocol bytes, and closes by consuming its real delivery.
-The Lab still replaces the listener rather than opening a fake socket.
-HTTP/3 server, the live respond races and WebSocket wire conformance remain
-H5–H6 evidence.
+Final H5 applies that fold to `ack`/`respond` over H1/H2/H3. H6 runs the same
+generic Session battery against both WebSocket family fakes and then proves
+their wire bindings independently. The Lab still replaces the listener or
+peer rather than opening a fake socket, while retaining the same SessionRefs,
+write obligations and sole terminal exit as production.
 
 Two-mode equivalence, stated journal-relative : *same world-half in →
 byte-identical **causal cores** out*

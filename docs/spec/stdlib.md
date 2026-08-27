@@ -1,8 +1,9 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.6 H5: HttpClient and
-> HttpServer are live over HTTP/1.1–3, including bounded `ack` and `respond`.
-> WebSocket network I/O remains gated by H6.**
+> **Status: normative and executable through M1.6 H7. HttpClient and
+> HttpServer are live over HTTP/1.1–3, including bounded `ack` and `respond`;
+> WebSocketClient and WebSocketServer are live over HTTP/1.1 Upgrade and
+> HTTP/2–3 Extended CONNECT.**
 > B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
@@ -540,15 +541,18 @@ is one envelope. Fragmentation, ping/pong and close-handshake frames remain
 inside the Driver. A message does not manufacture an invocation `exit`; only
 the session terminal does. No `out` may follow that terminal.
 
-H3 proves the bounded Tungstenite message machine on a synthetic stream and
-through Hyper's HTTP/1.1 Upgrade. RFC 8441 and RFC 9220 remain H6 gates: the
-common codec is not evidence that either Extended CONNECT adapter exists.
+H3 proved the bounded Tungstenite message machine on a synthetic stream and
+through Hyper's HTTP/1.1 Upgrade. H6 separately proves RFC 8441 and RFC 9220;
+all three handshakes feed the same generic Session fold, but no shared codec
+test is counted as transport evidence.
 
-`meta.ext.session_id` is the textual projection of the journal-derived
-logical `SessionRef`, not a socket descriptor, address, Worker id or library
-handle. It allows a graph to key a child scope or explicitly correlate a
-response without exposing physical placement. It is external-context data and
-may be copied deliberately; the runtime's causal route remains authoritative.
+For an established session, `meta.ext.session_id` is the textual projection
+of the journal-derived logical `SessionRef`, not a socket descriptor, address,
+Worker id or library handle. A pre-open failure has no invented session id: no
+Session existed. The field allows a graph to key a child scope or explicitly
+correlate a response without exposing physical placement. It is
+external-context data and may be copied deliberately; the runtime's causal
+route remains authoritative.
 The Driver overwrites any peer-supplied field at ingress. Correlation is scoped
 to this Connector's live session table; an unknown or closed target is an
 orphan write, discarded-and-journaled without misrouting or a second exit.

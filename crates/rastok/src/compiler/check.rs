@@ -1850,12 +1850,15 @@ impl Checker<'_, '_> {
                     &graph.nodes[to].role,
                     NodeRole::Connector {
                         roles,
-                        exchange: crate::connector::ConnectorExchange::Call,
+                        exchange,
                         ..
-                    } if roles.has_inbound() && !roles.has_outbound()
+                    } if roles.has_inbound()
+                        && (matches!(exchange, crate::connector::ConnectorExchange::Session)
+                            || (!roles.has_outbound()
+                                && matches!(exchange, crate::connector::ConnectorExchange::Call)))
                 );
                 if target_is_inbound_boundary {
-                    // The response input and spontaneous request output are
+                    // A response/message input and a world-origin output are
                     // independent halves of one external boundary. There is
                     // no hidden `in -> out` execution edge through this Node.
                     continue;
@@ -8338,6 +8341,26 @@ graph g : App {
         let chain = "graph g : App {\n  operator a { on in { out = . } }\n  operator b { on in { out = . } }\n  . -> a -> b -> .\n}\n";
         let (_, bag) = check_source(chain);
         assert!(!diagnostic_codes(&bag).contains(&E_GRAPH_CYCLE));
+
+        let session = r#"
+graph session_echo : App {
+  connector socket : WebSocketServer {
+    listen = "127.0.0.1:8080"
+    codec = json
+    handshake_timeout = duration("5s")
+  }
+  operator echo { on in { out = . } }
+  socket.out -> echo.in
+  echo.out -> socket.in
+  socket.exit -> nothing
+}
+"#;
+        let (_, bag) = check_source(session);
+        assert!(
+            !diagnostic_codes(&bag).contains(&E_GRAPH_CYCLE),
+            "the inbound and outbound halves of one Session are a causal boundary: {:#?}",
+            bag.diagnostics()
+        );
     }
 
     #[test]

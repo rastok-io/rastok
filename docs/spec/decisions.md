@@ -5,6 +5,78 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-27-3 — Hosted capability selection is static registry assembly
+
+The shipped standalone image has one explicit assembly function and one
+ordinary `DriverRegistry`. `Process` is always present, `File` is added only
+when deployment supplies a physical root, and the hosted protocol stacks are
+selected by the additive Cargo capabilities `hosted-http12`, `hosted-http3`,
+`hosted-websocket`, or their `hosted-network` union. The full preset binds
+Process, File, HttpClient, HttpServer, WebSocketClient, and WebSocketServer in
+one VM. A reduced image that encounters an omitted contract refuses during
+global binding, before VM construction, journal mutation, listener activity,
+or an external effect.
+
+The plan continues to carry only the stable semantic Connector id, roles, and
+exchange. A Cargo feature, crate, TLS backend, library path, Host, Worker, and
+physical protocol version never enter plan or causal identity. The registry's
+data-only manifest is the exact projection of the statically linked image; it
+does not load code and is not an authorization to execute. Future native,
+Wasm, or out-of-process plugin hosts must produce the same ordinary factories
+and pass the same pre-VM binder. M1.6 deliberately freezes no Rust/native ABI,
+serialized plugin manifest, artifact locator, trust model, or hot-reload
+protocol.
+
+This is physical assembly only. Existing semantic hashes, package bytes, and
+causal traces do not move. The connector-free gauge remains the negative scope
+witness.
+
+## D-2026-08-27-2 — One causal Session serves WebSocket over HTTP/1–3
+
+H6 binds `rastok/websocket-client@1` and `rastok/websocket-server@1` to the
+generic Session exchange without inventing a call per message. HTTP/1.1
+Upgrade, RFC 8441 HTTP/2 Extended CONNECT, and RFC 9220 HTTP/3 Extended CONNECT
+are interchangeable physical openings of the same contract. Physical
+capability selection and any version fallback occur before a peer can observe
+CONNECT/Upgrade bytes; after that visibility boundary, failure is one portable
+terminal observation and never a retry through another version.
+
+The accepting INBOUND fact opens the placement-neutral `SessionRef` before a
+server reports handshake success. An outbound opening and every graph-to-peer
+message have an OUTBOUND Session intent before protocol bytes. The Driver
+reports opening confirmation and local write settlement, while the VM alone
+commits the sole terminal Connector transaction under `l:exit`. That
+transaction carries key 50, emits exactly one final `exit`, waits until every
+open write is settled or abandoned, projects the same reference as
+`meta.ext.session_id`, and makes later messages, writes, and exits non-causal
+observations. A preparation refusal before the opening intent is an ordinary
+typed completion of the causing delivery and has no `session_id`: no logical
+Session existed to name.
+
+The WebSocket Driver owns fragmentation, ping/pong, UTF-8 and the close
+handshake. One complete text or binary message is one envelope. Codec mismatch,
+oversize input, handshake refusal, protocol failure, transport loss, timeout,
+and ambiguous settlement remain distinct portable `WebSocketExit` cases.
+Inbound body/event capacity, active sessions, per-session command lanes,
+physical message size, and the VM's pending Session-write table are finite.
+When the latter reaches the Worker mailbox bound, the mailbox remains claimed
+until a settlement frees capacity; moving a write from the mailbox into the
+durable fold can therefore never create an unbounded side queue.
+
+Session routing is a real execution boundary for DAG validation. A server
+message and a later graph reply are different temporal facts even though the
+same both-role Driver owns them; the validated spatial graph does not add a
+fictional in-to-out edge through the Connector. A server may own many
+concurrent logical sessions and a client at most one per Node instance.
+Correlation is always by `SessionRef`, never a socket, stream, QUIC connection
+id, or arrival order.
+
+This gate allocates the extend-only lifecycle spelling `l:exit` (tag 10) and
+timer kind 9 for the outbound opening deadline. The existing v12 package,
+semantic recipes, and all prior causal facts remain byte-identical: only new
+Session executions can contain these new forms. The connector-free gauge and
+all existing package/trace goldens remain unchanged.
+
 ## D-2026-08-27-1 — One bounded HttpServer Call serves HTTP/1–3
 
 H5 closes `rastok/http-server@1` without introducing a version-specific

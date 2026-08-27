@@ -189,6 +189,98 @@ fn run_polls_an_inbound_http_server_without_a_stdin_submission() {
     std::fs::remove_dir_all(root).expect("the HTTP CLI fixture is removable");
 }
 
+#[cfg(feature = "hosted-websocket")]
+#[test]
+fn run_composes_a_live_websocket_gateway_with_process() {
+    let reserved =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("a local WebSocket port is available");
+    let address = reserved
+        .local_addr()
+        .expect("the local WebSocket port has an address");
+    drop(reserved);
+    let root = std::env::temp_dir().join(format!(
+        "rastok-cli-websocket-gateway-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("the WebSocket fixture directory is writable");
+    let source = root.join("gateway.rkg");
+    std::fs::write(
+        &source,
+        format!(
+            r#"graph websocket_cli : App {{
+  connector echo : Process {{
+    command = "cat"
+    mode = job
+    codec = lines
+    timeout = duration("5s")
+    max_output = "1MiB"
+    effect = idempotent ; behavior = deterministic
+  }}
+  connector socket : WebSocketServer {{
+    listen = "{address}"
+    path = "/echo"
+    codec = text
+    handshake_timeout = duration("5s")
+    max_message = "1MiB"
+    correlate = meta.ext.session_id
+    versions = ["http/1.1"]
+  }}
+  socket.out -> echo.in
+  echo.out -> socket.in
+  socket.exit -> nothing
+  echo.err -> nothing
+  echo.exit -> nothing
+}}
+"#,
+        ),
+    )
+    .expect("the WebSocket gateway source writes");
+    let mut child = rastok()
+        .arg("run")
+        .arg(&source)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the hosted binary starts");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let stream = loop {
+        match std::net::TcpStream::connect(address) {
+            Ok(stream) => break stream,
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("the standalone WebSocketServer never started: {error}"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .expect("the WebSocket peer read is bounded");
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_secs(5)))
+        .expect("the WebSocket peer write is bounded");
+    let request = format!("ws://{address}/echo");
+    let (mut peer, response) = tungstenite::client::client(request, stream)
+        .expect("an independent peer completes HTTP/1.1 Upgrade");
+    assert_eq!(
+        response.status(),
+        tungstenite::http::StatusCode::SWITCHING_PROTOCOLS
+    );
+    peer.send(tungstenite::Message::text("hello"))
+        .expect("the peer sends one complete text message");
+    assert_eq!(
+        peer.read().expect("the gateway returns one message"),
+        tungstenite::Message::text("hello")
+    );
+    peer.close(None).expect("the peer closes cleanly");
+
+    child.kill().expect("the long-lived gateway can be stopped");
+    let _ = child.wait();
+    std::fs::remove_dir_all(root).expect("the WebSocket fixture is removable");
+}
+
 #[test]
 fn simulate_runs_the_lab_and_reports_every_scenario() {
     let output = rastok()

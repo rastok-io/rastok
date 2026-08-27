@@ -19,8 +19,9 @@
 > without changing that lifecycle. D-2026-08-26-5 makes the generic inbound
 > Call lifecycle executable; H5.1 binds ack-mode HTTP/1.1–2 to it with bounded
 > listener/stream/body pressure; H5.2 adds the generic direct-lineage response
-> return with one real consumed cursor. HTTP/3 server, the live respond policy
-> and Session execution remain gated by the rest of H5–H6.
+> return with one real consumed cursor. Final H5 executes server Calls over
+> HTTP/1.1–3; H6 executes WebSocket Sessions over all three handshakes; H7
+> closes static assembly and portability evidence.
 > Companion to
 > [envelope.md](envelope.md) (identity, journal-relative contract) — this doc
 > pins the rules envelope.md deferred to the execution model : the
@@ -418,7 +419,7 @@ The rule is symmetric (either side can be qualified) ; the common
 no-collision case stays terse. The general namespace and collision rules are
 defined in [aspects.md](aspects.md) §6.
 
-### 6.6 Session supervision (generic H1 fold; network integration H2–H6)
+### 6.6 Session supervision (executable through M1.6 H6)
 
 A session is not a long call and its messages are not short calls. It is one
 resource scope nested inside the owning Node instance:
@@ -444,6 +445,15 @@ Handshake timeout and whole-session lifetime are contract/session facts.
 Application-message acknowledgement, retry and reconnection remain graph
 protocol. A transport write alone never proves that the peer application
 processed a message.
+
+The landed scheduler treats opening and every write as distinct durable
+obligations. `Pending` means no protocol ownership transferred and the
+ordinary bounded mailbox remains claimed; only the pump retries it. `Started`
+transfers exactly once. The Driver then reports correlated opened,
+write-settled, inbound-message and terminal facts. The terminal projects as
+`l:exit`, after which the fold accepts neither another message nor another
+exit. Handshake timeout uses timer kind 9 and is fenced by the logical
+`SessionRef`, never a socket or task handle.
 
 ### 6.7 Inbound Call supervision (generic H5 fold)
 

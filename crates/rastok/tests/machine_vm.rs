@@ -8,8 +8,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::boundary::{
-    CallConnectorDriver, CallStart, DriverRouteError, InboundSession, InboundSubmission, Intent,
-    OutboundConnectorBindings, SessionOpenIntent, SessionRef, SessionWriteIntent, SessionWriteRef,
+    CallConnectorDriver, CallStart, DriverRouteError, InboundAdmission, InboundExchangeRef,
+    InboundProposal, InboundProposalRef, InboundSession, InboundSubmission, Intent,
+    OutboundConnectorBindings, PreparedRequest, SessionDriverEvent, SessionOpenIntent, SessionRef,
+    SessionStart, SessionWriteIntent, SessionWriteRef, WebSocketExit,
 };
 use rastok::envelope::{Data, Envelope};
 use rastok::identity::{InstanceAddress, InstanceFrame, InstanceRef};
@@ -323,6 +325,24 @@ fn text_submission(text: &str) -> InboundSubmission {
             ext: Namespace::new(),
         },
         sequence: SubmissionSequence::Next,
+    }
+}
+
+fn websocket_proposal(reference: u64, text: &str, session: InboundSession) -> InboundProposal {
+    InboundProposal {
+        reference: InboundProposalRef::new(reference),
+        submission: InboundSubmission {
+            provenance: InboundEnvelopeProvenance::single(
+                node::Path::new(["socket"]).expect("the fixture path is valid"),
+            ),
+            port: node::Port::conventional_out(),
+            draft: Draft {
+                data: Data::materialized(Value::Text(String::from(text))),
+                ext: Namespace::new(),
+            },
+            sequence: SubmissionSequence::Next,
+        },
+        session: Some(session),
     }
 }
 
@@ -2938,6 +2958,401 @@ impl CallConnectorDriver for ScriptedWorld {
     fn events(&mut self) -> Vec<Response> {
         std::mem::take(&mut self.answers)
     }
+}
+
+#[derive(Default)]
+struct SessionWorld {
+    events: Vec<SessionDriverEvent>,
+    opened: Vec<SessionRef>,
+    pending_opens: bool,
+    hold_writes: bool,
+    writes: Vec<(SessionRef, SessionWriteRef)>,
+}
+
+impl SessionWorld {
+    fn close(&mut self, session: SessionRef) {
+        self.events.push(SessionDriverEvent::Exited {
+            session,
+            exit: Completion::websocket_exit(WebSocketExit::Closed {
+                code: 1000,
+                reason: String::from("done"),
+            })
+            .outputs()[0]
+                .clone(),
+        });
+    }
+
+    fn settle_write(&mut self, index: usize) {
+        let (session, write) = self.writes[index];
+        self.events
+            .push(SessionDriverEvent::WriteSettled { session, write });
+    }
+}
+
+impl OutboundConnectorBindings for SessionWorld {
+    fn prepare_request(
+        &mut self,
+        connector: &node::Path,
+        _: &Data,
+        _: &std::collections::BTreeMap<String, rastok::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        Err(DriverRouteError::UnboundOutbound(connector.clone()))
+    }
+
+    fn scheduler_completion(
+        &mut self,
+        connector: &node::Path,
+        _: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError> {
+        Err(DriverRouteError::UnboundOutbound(connector.clone()))
+    }
+
+    fn cancel(
+        &mut self,
+        connector: &node::Path,
+        _: &rastok::boundary::CallRef,
+    ) -> Result<(), DriverRouteError> {
+        Err(DriverRouteError::UnboundOutbound(connector.clone()))
+    }
+
+    fn start(&mut self, intent: &Intent, _: &Envelope) -> Result<CallStart, DriverRouteError> {
+        Err(DriverRouteError::UnboundOutbound(
+            intent.connector_path.clone(),
+        ))
+    }
+
+    fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
+        Ok(Vec::new())
+    }
+
+    fn prepare_session_open(
+        &mut self,
+        _: &node::Path,
+        data: &Data,
+        _: &std::collections::BTreeMap<String, rastok::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        let bytes = match data {
+            Data::Materialized(Value::Text(value)) => value.as_bytes().to_vec(),
+            Data::Encoded { bytes, .. } => bytes.clone(),
+            Data::Materialized(_) => Vec::new(),
+        };
+        Ok(RequestPreparation::Prepared(PreparedRequest::seal(bytes)))
+    }
+
+    fn scheduler_session_completion(
+        &mut self,
+        _: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError> {
+        Ok(Completion::websocket_exit(match completion {
+            SchedulerCompletion::TimeoutExpired => WebSocketExit::TimeoutExpired,
+            SchedulerCompletion::OutcomeUnknown => WebSocketExit::OutcomeUnknown,
+        }))
+    }
+
+    fn open_session(
+        &mut self,
+        intent: &SessionOpenIntent,
+        _: &Envelope,
+    ) -> Result<SessionStart, DriverRouteError> {
+        self.opened.push(intent.session_ref);
+        if self.pending_opens {
+            Ok(SessionStart::Pending)
+        } else {
+            self.events
+                .push(SessionDriverEvent::Opened(intent.session_ref));
+            Ok(SessionStart::Started)
+        }
+    }
+
+    fn prepare_session_write(
+        &mut self,
+        _: &node::Path,
+        _: SessionRef,
+        data: &Data,
+        _: &std::collections::BTreeMap<String, rastok::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        self.prepare_session_open(
+            &node::Path::new(["session"]).unwrap(),
+            data,
+            &std::collections::BTreeMap::new(),
+        )
+    }
+
+    fn write_session(
+        &mut self,
+        intent: &SessionWriteIntent,
+        _: &Envelope,
+    ) -> Result<SessionStart, DriverRouteError> {
+        self.writes.push((intent.session_ref, intent.write_ref));
+        if !self.hold_writes {
+            self.events.push(SessionDriverEvent::WriteSettled {
+                session: intent.session_ref,
+                write: intent.write_ref,
+            });
+        }
+        Ok(SessionStart::Started)
+    }
+
+    fn close_session(
+        &mut self,
+        _: &node::Path,
+        session: SessionRef,
+    ) -> Result<SessionStart, DriverRouteError> {
+        self.close(session);
+        Ok(SessionStart::Started)
+    }
+
+    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
+        Ok(std::mem::take(&mut self.events))
+    }
+}
+
+#[test]
+fn a_websocket_client_session_opens_writes_and_exits_once() {
+    let source = r#"
+graph websocket : App {
+  input in: text
+  connector socket : WebSocketClient {
+    url = "ws://example.test/socket"
+    handshake_timeout = duration("5s")
+    codec = text
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> socket -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the WebSocket session probe checks");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = SessionWorld::default();
+
+    vm.inject(&mut journal, text_submission("hello")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    assert_eq!(world.opened.len(), 1);
+    assert!(
+        journal.live_sessions().is_empty(),
+        "the opening is not confirmed yet"
+    );
+    vm.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(journal.live_sessions().len(), 1);
+
+    vm.inject(&mut journal, text_submission("again")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    assert_eq!(world.writes.len(), 1);
+    assert_eq!(world.writes[0].0, world.opened[0]);
+    vm.pump(&mut journal, &mut world).unwrap();
+    assert!(journal.open_session_writes().is_empty());
+
+    world.close(world.opened[0]);
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    assert!(journal.live_sessions().is_empty());
+    assert!(vm.is_stable());
+    assert_eq!(root_exit_cases(&vm), ["Closed"]);
+    let exits = journal
+        .records()
+        .iter()
+        .filter(|record| {
+            matches!(
+                record,
+                Record::Transaction(transaction)
+                    if transaction.trigger
+                        == node::Trigger::Lifecycle(node::Lifecycle::Exit)
+            )
+        })
+        .count();
+    assert_eq!(exits, 1);
+}
+
+#[test]
+fn a_slow_session_write_cannot_escape_the_worker_mailbox_bound() {
+    let source = r#"
+graph websocket : App {
+  input in: text
+  connector socket : WebSocketClient {
+    url = "ws://example.test/socket"
+    handshake_timeout = duration("5s")
+    codec = text
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> socket -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the bounded Session probe checks");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = SessionWorld {
+        hold_writes: true,
+        ..SessionWorld::default()
+    };
+
+    vm.inject(&mut journal, text_submission("open")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    vm.pump(&mut journal, &mut world).unwrap();
+
+    for _ in 0..1_024 {
+        vm.inject(&mut journal, text_submission("held")).unwrap();
+        vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    }
+    assert_eq!(world.writes.len(), 1_024);
+
+    vm.inject(&mut journal, text_submission("still-bounded"))
+        .unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    assert_eq!(
+        world.writes.len(),
+        1_024,
+        "the durable write table cannot become an unbounded side queue"
+    );
+
+    world.settle_write(0);
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    assert_eq!(world.writes.len(), 1_025);
+}
+
+#[test]
+fn a_pending_websocket_handshake_times_out_without_spinning_or_replaying() {
+    let source = r#"
+graph websocket : App {
+  input in: text
+  connector socket : WebSocketClient {
+    url = "ws://example.test/socket"
+    handshake_timeout = duration("5s")
+    codec = text
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> socket -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the WebSocket timeout probe checks");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = SessionWorld {
+        pending_opens: true,
+        ..SessionWorld::default()
+    };
+
+    vm.inject(&mut journal, text_submission("hello")).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    assert_eq!(world.opened.len(), 1);
+    assert_eq!(journal.open_session_writes().len(), 0);
+    vm.pump(&mut journal, &mut world).unwrap();
+    assert_eq!(world.opened.len(), 2, "one pump makes one bounded retry");
+
+    vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
+    assert!(journal.live_sessions().is_empty());
+    assert!(vm.is_stable());
+    assert_eq!(root_exit_cases(&vm), ["TimeoutExpired"]);
+}
+
+#[test]
+fn concurrent_inbound_websocket_sessions_never_cross_messages_or_exits() {
+    let source = r#"
+graph websocket : App {
+  input in: text
+  connector socket : WebSocketServer {
+    listen = "127.0.0.1:0"
+    path = "/socket"
+    handshake_timeout = duration("5s")
+    codec = text
+  }
+  . -> socket -> .
+}
+"#;
+    let compilation = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the inbound WebSocket session probe checks");
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut world = SessionWorld::default();
+
+    let open = |vm: &mut Vm<'_>, journal: &mut MemJournal, reference| {
+        let InboundAdmission::Accepted(accepted) = vm
+            .admit_inbound(
+                journal,
+                &websocket_proposal(reference, "", InboundSession::Open),
+            )
+            .expect("the bounded opening admits")
+        else {
+            panic!("the uncongested opening must commit")
+        };
+        let Some(InboundExchangeRef::Session(session)) = accepted.exchange else {
+            panic!("an opening must mint a SessionRef")
+        };
+        session
+    };
+    let first = open(&mut vm, &mut journal, 1);
+    let second = open(&mut vm, &mut journal, 2);
+    assert!(
+        vm.outputs().is_empty(),
+        "a handshake is causal session state, not an empty peer message"
+    );
+
+    for (reference, text, session) in [(3, "alice", first), (4, "bob", second)] {
+        assert!(matches!(
+            vm.admit_inbound(
+                &mut journal,
+                &websocket_proposal(reference, text, InboundSession::Message(session)),
+            )
+            .expect("the message admission is healthy"),
+            InboundAdmission::Accepted(_)
+        ));
+    }
+    assert_eq!(vm.outputs().len(), 2);
+    for (output, (text, expected)) in vm.outputs().iter().zip([("alice", first), ("bob", second)]) {
+        assert_eq!(
+            output.envelope.data(),
+            &Data::materialized(Value::Text(String::from(text)))
+        );
+        assert_eq!(
+            output.envelope.meta().ext().get("session_id"),
+            Some(&rastok::envelope::MetaValue::Scalar(
+                rastok::envelope::Scalar::Text(expected.to_string())
+            ))
+        );
+    }
+
+    world.close(second);
+    world.close(first);
+    vm.pump(&mut journal, &mut world).unwrap();
+    vm.drain_with_bindings(&mut journal, &mut world).unwrap();
+    assert!(vm.is_stable());
+    assert_eq!(root_exit_cases(&vm), ["Closed", "Closed"]);
+    let exit_sessions = vm
+        .observations()
+        .iter()
+        .filter(|observed| observed.node.is_none() && observed.port.name() == "exit")
+        .filter_map(
+            |observed| match observed.envelope.meta().ext().get("session_id") {
+                Some(rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(
+                    value,
+                ))) => Some(value.clone()),
+                _ => None,
+            },
+        )
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        exit_sessions,
+        [first.to_string(), second.to_string()]
+            .into_iter()
+            .collect()
+    );
 }
 
 #[test]

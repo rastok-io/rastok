@@ -141,7 +141,7 @@ The repository opens publicly with this milestone (15 October 2026).
   repository-wide vocabulary/diagram audit. It freezes no serialized plugin
   manifest syntax or native plugin ABI. The evidence and identity ledger are
   in the [M1.5 exit report](docs/architecture/m1.5-exit-report.md).
-- M1.6 opens the hosted network boundary with four contracts:
+- M1.6 closes the hosted network boundary with four contracts:
   `HttpClient`, `HttpServer`, `WebSocketClient`, and `WebSocketServer`.
   HTTP/1.1, HTTP/2 and HTTP/3 are physical bindings of the same HTTP
   contracts; WebSocket is a long-lived session with many messages and one
@@ -169,16 +169,18 @@ The repository opens publicly with this milestone (15 October 2026).
   record. Final H5 now runs HTTP/1.1–3 through the same bounded retained Call,
   executes `respond`, checks explicit direct-path correlation where roots
   mix, arms bounded request deadlines, closes response/timeout races once,
-  and keeps the standalone runner polling without stdin. H6 owns the
-  WebSocket Drivers and Codex gateway.
-  H3's successful HTTP/1.1 Upgrade is explicitly not an Extended CONNECT
-  claim.
+  and keeps the standalone runner polling without stdin. H6 executes the
+  WebSocket Drivers over HTTP/1.1 Upgrade plus HTTP/2 and HTTP/3 Extended
+  CONNECT, with one bounded generic Session fold and the executable Codex
+  gateway. H7 closes static reduced/full registry assembly, feature and
+  no-std matrices, independent interop and QEMU evidence. The full ledger is
+  in the [M1.6 exit report](docs/architecture/m1.6-exit-report.md).
   H4.1 has now landed the schema-facing HTTP contract: canonical open
   `media_type`, typed standard request headers plus an open custom-header map,
   typed response metadata, strict OpenAPI 3.0/3.1 projection, and the
   project-wide `--resolve-open-api` generated-source workflow. Its categorical
-  v12 package move is isolated from the still-pending H5 server and H6
-  WebSocket execution gates.
+  v12 package move is isolated from the later H5/H6 physical execution, which
+  introduced no further package-format move.
 - Governed retry: the `Loop` aspect, driven by an explicitly selected
   typed exit case rather than a privileged error channel.
 - Per-flow cost counters, carried by the journal.

@@ -72,31 +72,22 @@ model. A future plugin host can use the same registry boundary, but Rastok does
 not yet ship a plugin loader or freeze a native ABI. Contributors follow the
 [Connector Driver guide](docs/architecture/connector-drivers.md).
 
-The four M1.6 HTTP/WebSocket contracts compile through exact sheets,
-Registry-free plan validation and family-owned Lab bindings. The hosted
-physical seam is also selected: one bounded private pump, Hyper/Rustls for
-HTTP/1.1–2, quiche/BoringSSL for HTTP/3, and Tungstenite for WebSocket
-messages. H4 now attaches the live HttpClient to that seam over all three HTTP
-versions with exact pre-open requests, visibility-safe fallback, bounded
-bodies and typed response observations. H4.1 makes HTTP schema intent
-explicit: `media_type` is an open logical scalar, known request headers are a
-typed struct, extensions live in `custom_headers`, and response protocol facts
-are projected into `meta.ext`. H5 now also has its generic inbound Call seam:
-acceptance follows one bounded root/source-instance commit, and one typed
-`l:reply` transaction closes the retained request without inventing an
-outbound call. H5.1 now binds that seam to a real bounded Hyper listener:
-HTTP/1.1 and HTTP/2 `ack` requests retain their byte permits and withhold 202
-until causal admission commits. H5.2 adds the generic graph-response half:
-the producing transaction seals a direct-lineage route to the exact opening
-instance before commit, bounded Driver capacity may leave that real delivery
-pending, and the eventual `l:reply` consumes its cursor without an OUTBOUND
-record. The live HttpServer `respond` profile, explicit correlation, bounded
-request deadlines, HTTP/3 server binding, independent server interop and all
-WebSocket Drivers remain H5–H6 work; Extended CONNECT is still a separate
-proof.
+M1.6 is closed. Four exact HTTP/WebSocket sheets cross source, Registry-free
+plan validation, Lab and live Drivers. HttpClient and HttpServer execute the
+same Call contracts over HTTP/1.1, HTTP/2 and HTTP/3. WebSocketClient and
+WebSocketServer execute one generic Session over HTTP/1.1 Upgrade, HTTP/2
+Extended CONNECT and HTTP/3 Extended CONNECT: complete messages travel in
+either direction and one typed `exit` closes the connection. All hosted I/O
+runs behind one bounded private pump using Hyper/Rustls, quiche/BoringSSL and
+Tungstenite; none of those dependencies enters `rastok-core` or a no-std
+build. Static feature presets compose reduced or full Driver registries
+without changing plan semantics. The executable
+[Codex WebSocket gateway](docs/examples/codex-websocket-gateway.rkg) and the
+[M1.6 exit report](docs/architecture/m1.6-exit-report.md) record the complete
+proof and its remaining external Autobahn qualification.
 
-The standalone runner links the Process Driver by default and also links the
-HttpClient Driver when either hosted HTTP feature is selected. Pass
+The standalone runner links Process by default. Hosted features add the
+selected HTTP/WebSocket families through one registry assembly. Pass
 `--file-root <dir>` to `rastok run` to add the real File Driver with an
 explicit deployment root; that root is neither inferred from the graph nor
 part of plan identity.

@@ -1,9 +1,9 @@
 # Contributing a Connector Driver
 
-> Current contributor path through the M1.6 H5.2 graph-response checkpoint. The
+> Current contributor path through the M1.6 H7 closure. The
 > normative contract lives in
 > [`../spec/stdlib.md`](../spec/stdlib.md) and
-> [D-2026-08-22-1 and D-2026-08-26-5/-7](../spec/decisions.md). This guide
+> [D-2026-08-22-1 through D-2026-08-27-3](../spec/decisions.md). This guide
 > explains how the pieces meet in the implementation; it does not define a
 > second Connector model.
 
@@ -104,13 +104,11 @@ Session    : one open ──▶ messages in both directions* ──▶ one typed
 H1 makes all three exchange shapes explicit and lands the generic Session
 fold plus two-phase accepted/pending/rejected admission. H5 completes the
 generic inbound Call half with its source-instance opening and close-once
-terminal transaction. H5.1's live HttpServer then retains each H1/H2 request
-and its byte permits until that same admission decision, and queues the fixed
-ack terminal through the bounded fact lane. H5.2 adds the generic
-direct-lineage response return, including exact pre-commit selection for a
-keyed source and consume-only orphan handling; the public HttpServer remains
-ack-only until its response writer, correlator and deadlines land. None adds
-`DuplexConnectorDriver` or makes the VM aware of WebSocket.
+terminal transaction, then attaches ack/respond H1/H2/H3 Drivers. H5.2's
+direct-lineage response return includes exact pre-commit selection for a keyed
+source and consume-only orphan handling. H6 attaches both WebSocket families
+to the existing Session view. None adds `DuplexConnectorDriver` or makes the
+VM aware of HTTP or WebSocket.
 
 ## The hosted network seam
 
@@ -154,11 +152,15 @@ full local queue or byte semaphore into a domain result such as
 
 Static features select physical code only: `hosted-http12` supplies
 Hyper/Rustls, `hosted-http3` supplies quiche/BoringSSL,
-`hosted-websocket` supplies Tungstenite, and `hosted-network` combines them.
-No library type leaves `connectors/network`, enters a plan, or enters
-`rastok-core`. HTTP/1.1 WebSocket Upgrade is proved; HTTP/2 and HTTP/3
-Extended CONNECT remain separate H6 adapters and must not be inferred from
-the shared message codec.
+`hosted-websocket` supplies Tungstenite plus its H1/H2 transport, and
+`hosted-network` combines them. `connectors::assembly::hosted_registry` is the
+one shipped composition function: Process is always present, File requires an
+explicit physical root, and each network family follows those linked
+capabilities. A missing family refuses during global binding before VM or
+journal construction. No library type leaves `connectors/network`, enters a
+plan, or enters `rastok-core`. HTTP/1.1 Upgrade and HTTP/2–3 Extended CONNECT
+are separately proved physical adapters over the same Session protocol; the
+shared message codec alone is never transport evidence.
 
 H4 is the first live consumer of this seam. The hosted HttpClient uses H1
 origin-form requests, a pooled multiplexed H2 sender and verified quiche H3
@@ -174,10 +176,19 @@ route family before a socket opens; private `network::http_server` owns Hyper,
 Rustls, connection/stream permits and byte reservations. HTTP/1.1 and HTTP/2
 both retain the request until the VM answers the same proposal. Only an
 accepted-after-commit decision permits 202, and the fixed terminal observation
-returns through the bounded fact lane rather than a detached task. HTTP/3 and
-the live graph-driven `respond` profile remain separate H5 gates; H5.2 has
-already landed their generic direct-lineage response handoff beneath the
-family policy.
+returns through the bounded fact lane rather than a detached task. Final H5
+adds HTTP/3 and the live graph-driven `respond` profile above H5.2's generic
+direct-lineage response handoff. All three versions retain the same Call and
+bounded close-once rules.
+
+H6 is the live Session consumer. WebSocketClient and WebSocketServer use the
+same `SessionConnectorDriver` fold over H1 Upgrade, RFC 8441 and RFC 9220.
+Opening, each write and terminal publication are separately correlated by
+journal-derived `SessionRef`/`SessionWriteRef`; pending work stays within the
+ordinary mailbox bound. A server object owns a multi-session table, while a
+client Node instance owns at most one active connection. The family modules
+own settings and portable outcomes; private `network::websocket` owns sockets,
+handshakes, fragmentation, control frames and transport progress.
 
 H4.1 makes the header boundary contributor-facing and typed. A family sheet
 declares well-known request fields in the sparse `headers` struct and leaves

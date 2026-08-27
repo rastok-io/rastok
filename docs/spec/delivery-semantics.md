@@ -13,8 +13,9 @@
 > fallback and generic outbound backpressure. D-2026-08-26-5 lands H5's
 > generic inbound Call fold; H5.1 binds ack-mode HTTP/1.1–2 to it with bounded
 > admission pressure; H5.2 adds the generic direct-lineage graph-response
-> return. HTTP/3 server, the live respond policy and Session I/O remain gated
-> by the rest of H5–H6.
+> return. Final H5 executes ack/respond over HTTP/1.1–3. H6 executes Session
+> I/O over all three WebSocket handshakes; H7 closes static assembly and
+> portability evidence.
 
 The question this doc answers : **what survives — a crash, a redelivery, a
 slow consumer, a dead process — and what exactly is promised at each
@@ -403,6 +404,15 @@ and HTTP/2-3 receive-window updates are pacing, not processing claims; they may
 advance within the Driver's finite intake but cannot create an unbounded
 shadow queue. A pending proposal remains in that bounded protocol state until
 the runtime decides it.
+
+H6 makes this fold executable for both WebSocket contracts. Session opening,
+each durable write and the terminal are offered independently through the
+bounded Driver pump. A full Driver returns `Pending`; the already-journaled
+obligation remains claimed by the ordinary Worker mailbox and is retried only
+by the runtime pump. The terminal is one `l:exit` Connector transaction;
+subsequent Driver observations and graph writes are silent/orphaned rather
+than creating a second terminal. HTTP/1.1 Upgrade, RFC 8441 and RFC 9220 differ
+only below this fold.
 
 
 ## 5. Unwired ports — one typed model, explicit policy

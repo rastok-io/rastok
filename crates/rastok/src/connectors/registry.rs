@@ -128,6 +128,21 @@ impl DriverRegistry {
         Ok(self)
     }
 
+    /// Projects the exact linked capabilities without loading or executing a
+    /// second implementation path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if the registry's unique-id invariant is ever
+    /// contradicted internally.
+    pub fn manifest(&self) -> Result<super::DriverManifest, super::DriverManifestError> {
+        super::DriverManifest::try_new(
+            self.factories
+                .iter()
+                .map(|(id, factory)| super::DriverManifestEntry::new(id.clone(), factory.roles())),
+        )
+    }
+
     /// Resolves one exact id and proves that all required roles exist.
     ///
     /// # Errors
@@ -855,6 +870,71 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         }
         Ok(responses)
     }
+
+    fn prepare_session_open(
+        &mut self,
+        connector: &node::Path,
+        data: &Data,
+        resolved_settings: &BTreeMap<String, crate::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        SessionConnectorBindings::prepare_session_open(self, connector, data, resolved_settings)
+    }
+
+    fn scheduler_session_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError> {
+        SessionConnectorBindings::scheduler_session_completion(self, connector, completion)
+    }
+
+    fn open_session(
+        &mut self,
+        intent: &SessionOpenIntent,
+        request: &Envelope,
+    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
+        SessionConnectorBindings::open_session(self, intent, request)
+    }
+
+    fn prepare_session_write(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+        data: &Data,
+        resolved_settings: &BTreeMap<String, crate::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        SessionConnectorBindings::prepare_session_write(
+            self,
+            connector,
+            session,
+            data,
+            resolved_settings,
+        )
+    }
+
+    fn write_session(
+        &mut self,
+        intent: &SessionWriteIntent,
+        message: &Envelope,
+    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
+        SessionConnectorBindings::write_session(self, intent, message)
+    }
+
+    fn close_session(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
+        SessionConnectorBindings::close_session(self, connector, session)
+    }
+
+    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
+        SessionConnectorBindings::session_events(self)
+    }
+
+    fn forget_session(&mut self, session: SessionRef) {
+        SessionConnectorBindings::forget_session(self, session);
+    }
 }
 
 impl SessionConnectorBindings for RuntimeBindings<'_> {
@@ -875,11 +955,24 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         &mut self,
         intent: &SessionOpenIntent,
         request: &Envelope,
-    ) -> Result<(), DriverRouteError> {
+    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         let (id, driver) = self.session_driver(&intent.connector_path)?;
-        driver.open_session(intent, request);
-        self.sessions.insert(intent.session_ref, id);
-        Ok(())
+        let start = driver.open_session(intent, request);
+        if start == crate::boundary::SessionStart::Started {
+            self.sessions.insert(intent.session_ref, id);
+        }
+        Ok(start)
+    }
+
+    fn scheduler_session_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: crate::boundary::SchedulerCompletion,
+    ) -> Result<crate::boundary::Completion, DriverRouteError> {
+        Ok(self
+            .session_driver(connector)?
+            .1
+            .scheduler_session_completion(connector, completion))
     }
 
     fn prepare_session_write(
@@ -907,7 +1000,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         &mut self,
         intent: &SessionWriteIntent,
         message: &Envelope,
-    ) -> Result<(), DriverRouteError> {
+    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         let actual = self.session_family(&intent.connector_path)?;
         let Some(expected) = self.sessions.get(&intent.session_ref) else {
             return Err(DriverRouteError::UncorrelatedSession(intent.session_ref));
@@ -920,15 +1013,14 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
             });
         }
         let (_, driver) = self.session_driver(&intent.connector_path)?;
-        driver.write_session(intent, message);
-        Ok(())
+        Ok(driver.write_session(intent, message))
     }
 
     fn close_session(
         &mut self,
         connector: &node::Path,
         session: SessionRef,
-    ) -> Result<(), DriverRouteError> {
+    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
         let actual = self.session_family(connector)?;
         let Some(expected) = self.sessions.get(&session) else {
             return Err(DriverRouteError::UncorrelatedSession(session));
@@ -941,8 +1033,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
             });
         }
         let (_, driver) = self.session_driver(connector)?;
-        driver.close_session(session);
-        Ok(())
+        Ok(driver.close_session(session))
     }
 
     fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
@@ -977,6 +1068,10 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
             }
         }
         Ok(events)
+    }
+
+    fn forget_session(&mut self, session: SessionRef) {
+        self.sessions.remove(&session);
     }
 }
 
@@ -1610,10 +1705,26 @@ graph inbound : App {
             crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
         }
 
-        fn open_session(&mut self, intent: &SessionOpenIntent, _: &Envelope) {
+        fn scheduler_session_completion(
+            &mut self,
+            _: &node::Path,
+            completion: SchedulerCompletion,
+        ) -> Completion {
+            Completion::process_exit(match completion {
+                SchedulerCompletion::TimeoutExpired => ProcessExit::TimeoutExpired,
+                SchedulerCompletion::OutcomeUnknown => ProcessExit::OutcomeUnknown,
+            })
+        }
+
+        fn open_session(
+            &mut self,
+            intent: &SessionOpenIntent,
+            _: &Envelope,
+        ) -> crate::boundary::SessionStart {
             self.observations.lock().unwrap().push("open");
             self.events
                 .insert(0, SessionDriverEvent::Opened(intent.session_ref));
+            crate::boundary::SessionStart::Started
         }
 
         fn prepare_session_write(
@@ -1626,7 +1737,11 @@ graph inbound : App {
             crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
         }
 
-        fn write_session(&mut self, intent: &SessionWriteIntent, _: &Envelope) {
+        fn write_session(
+            &mut self,
+            intent: &SessionWriteIntent,
+            _: &Envelope,
+        ) -> crate::boundary::SessionStart {
             self.observations.lock().unwrap().push("write");
             self.events.insert(
                 0,
@@ -1635,9 +1750,10 @@ graph inbound : App {
                     write: intent.write_ref,
                 },
             );
+            crate::boundary::SessionStart::Started
         }
 
-        fn close_session(&mut self, session: SessionRef) {
+        fn close_session(&mut self, session: SessionRef) -> crate::boundary::SessionStart {
             if self.closed.insert(session) {
                 self.observations.lock().unwrap().push("close");
                 self.events.insert(
@@ -1658,6 +1774,7 @@ graph inbound : App {
                     },
                 );
             }
+            crate::boundary::SessionStart::Started
         }
 
         fn session_events(&mut self) -> Vec<SessionDriverEvent> {

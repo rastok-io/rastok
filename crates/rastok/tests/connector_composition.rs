@@ -1,7 +1,7 @@
 //! Static build composition and production/mock parity for M1.5 C5.
 
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
 use rastok::connectors::{DriverRegistry, FileFactory, ProcessFactory, RuntimeBindings};
@@ -228,5 +228,32 @@ fn a_file_mock_cannot_bypass_its_typed_output_contract() {
     assert!(
         codes.contains("E-PORT-TYPE"),
         "the pin refusal is typed: {codes:?}"
+    );
+}
+
+#[test]
+fn a_reduced_image_refuses_an_omitted_network_family_before_vm_creation() {
+    let source = r#"
+graph websocket_only : App {
+  input in: text
+  connector socket : WebSocketClient {
+    url = "ws://example.test/socket"
+    codec = text
+    handshake_timeout = duration("5s")
+    effect = idempotent ; behavior = deterministic
+    versions = ["http/1.1"]
+  }
+  . -> socket
+  socket.out -> nothing
+  socket.exit -> nothing
+}
+"#;
+    let compilation = compile_one(source);
+    let Err(error) = RuntimeBindings::try_new(&compilation.plan, &process_registry()) else {
+        panic!("a Process-only image cannot create bindings for WebSocketClient")
+    };
+    assert!(
+        error.to_string().contains("rastok/websocket-client@1"),
+        "the omitted semantic capability is named before any VM exists: {error}"
     );
 }

@@ -165,7 +165,7 @@ The five components :
     `on (a, b)`, the port of the **triggering** envelope (the one that
     completed presence under mailbox-FIFO order).
   - `l:<lifecycle>` — `l:start`, `l:closing`, `l:stop`, `l:reply`,
-    `l:compensate`, `l:next`, `l:timeout`, `l:evict`, `l:recover` for transactions not triggered by a
+    `l:exit`, `l:compensate`, `l:next`, `l:timeout`, `l:evict`, `l:recover` for transactions not triggered by a
     port arrival
     (§3.1 ; the last two are defined by
     [execution-model.md](execution-model.md) §6-§7).
@@ -356,6 +356,7 @@ transactions that no port arrival triggers :
 | `on stop` via the `stop` action | `l:stop` | the envelope being processed when `stop` ran | the node itself |
 | `on stop` via lifetime expiry | `l:stop` | **the envelope that armed the deadline** — the last admitted envelope (`idle`), creator (`fixed`), or creating admission of the processing-time box (`tumbling`). Always exists; there is no phantom tick | the node itself |
 | Inbound Call terminal | `l:reply` | the committed root request that opened the Call | the inbound Connector instance that admitted it |
+| Session terminal | `l:exit` | the envelope that opened the logical Session | the Connector instance that owns the Session |
 | Loop re-injection | `l:next` | the previous call's output — the chain *is* the iteration history | **the `: Loop`-carrying node** |
 | Saga compensation envelope | `l:compensate` | **the envelope explicitly routed to `Saga.rollback`** (or the saga's `SagaExpired` timeout event); for compensations 2..n: the previous compensation's ack (the chain IS the reverse rollback order) | **the `: Saga`-carrying node**, port `compensate` (reserved), index 0 |
 | Budget expiry (call `timeout`, `Saga.timeout`) | `l:timeout` | **the envelope that ARMED the budget** — the request (call) ; the instance-creating envelope (saga) | the Connector node / the `: Saga` node |

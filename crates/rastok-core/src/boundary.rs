@@ -134,6 +134,29 @@ impl SessionRef {
     pub const fn id(self) -> envelope::Id {
         self.0
     }
+
+    /// Parses the sole lowercase hexadecimal `meta.ext.session_id` spelling.
+    ///
+    /// Causal records still carry the raw id. This parser exists only at the
+    /// graph-to-Driver correlation boundary and rejects every non-canonical
+    /// spelling instead of normalizing it.
+    #[must_use]
+    pub fn parse_projection(value: &str) -> Option<Self> {
+        if value.len() != 32
+            || value
+                .bytes()
+                .any(|byte| !byte.is_ascii_hexdigit() || byte.is_ascii_uppercase())
+        {
+            return None;
+        }
+        let mut bytes = [0u8; 16];
+        for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+            let high = (pair[0] as char).to_digit(16)? as u8;
+            let low = (pair[1] as char).to_digit(16)? as u8;
+            bytes[index] = (high << 4) | low;
+        }
+        Some(Self(envelope::Id::from_bytes(bytes)))
+    }
 }
 
 impl fmt::Display for SessionRef {
@@ -2009,6 +2032,16 @@ pub enum CallStart {
     Pending,
 }
 
+/// Result of offering one journaled Session action to its bounded Driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionStart {
+    /// The Driver owns the opening or write and must report its observation.
+    Started,
+    /// No protocol bytes became visible; bounded capacity kept the action
+    /// pending and the machine may offer the same intent again.
+    Pending,
+}
+
 /// Starts external calls and supplies their answers. A Call driver
 /// answers or stays silent — never a timeout and never an unknown
 /// outcome: budgets belong to the scheduler, triage to the recovery
@@ -2099,8 +2132,15 @@ pub trait SessionConnectorDriver {
         resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
     ) -> RequestPreparation;
 
+    /// Projects one machine-decided session terminal through this contract.
+    fn scheduler_session_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Completion;
+
     /// Executes an already-journaled opening intent.
-    fn open_session(&mut self, intent: &SessionOpenIntent, request: &Envelope);
+    fn open_session(&mut self, intent: &SessionOpenIntent, request: &Envelope) -> SessionStart;
 
     /// Frames one complete graph-to-world session message.
     fn prepare_session_write(
@@ -2112,11 +2152,12 @@ pub trait SessionConnectorDriver {
     ) -> RequestPreparation;
 
     /// Offers one already-journaled complete message to the protocol stack.
-    fn write_session(&mut self, intent: &SessionWriteIntent, message: &Envelope);
+    fn write_session(&mut self, intent: &SessionWriteIntent, message: &Envelope) -> SessionStart;
 
-    /// Requests protocol closure. Default: no local action.
-    fn close_session(&mut self, session: SessionRef) {
+    /// Requests protocol closure. Default: no local action is needed.
+    fn close_session(&mut self, session: SessionRef) -> SessionStart {
         let _ = session;
+        SessionStart::Started
     }
 
     /// Session observations accumulated since the previous drain.
@@ -2133,12 +2174,19 @@ pub trait SessionConnectorBindings {
         resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError>;
 
+    /// Projects a scheduler-owned session terminal through the bound Driver.
+    fn scheduler_session_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError>;
+
     /// Executes an already-journaled opening intent.
     fn open_session(
         &mut self,
         intent: &SessionOpenIntent,
         request: &Envelope,
-    ) -> Result<(), DriverRouteError>;
+    ) -> Result<SessionStart, DriverRouteError>;
 
     /// Frames one outbound message for an existing logical session.
     fn prepare_session_write(
@@ -2154,17 +2202,22 @@ pub trait SessionConnectorBindings {
         &mut self,
         intent: &SessionWriteIntent,
         message: &Envelope,
-    ) -> Result<(), DriverRouteError>;
+    ) -> Result<SessionStart, DriverRouteError>;
 
     /// Requests closure through the owning Driver.
     fn close_session(
         &mut self,
         connector: &node::Path,
         session: SessionRef,
-    ) -> Result<(), DriverRouteError>;
+    ) -> Result<SessionStart, DriverRouteError>;
 
     /// Collects Session observations from every bound Session family.
     fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError>;
+
+    /// Releases the routing-table ownership after the terminal Session
+    /// transaction commits. Drivers learn termination through their own
+    /// protocol event; this operation only bounds registry correlation state.
+    fn forget_session(&mut self, session: SessionRef);
 }
 
 /// The verified outbound routing table consumed by the core VM.
@@ -2222,6 +2275,83 @@ pub trait OutboundConnectorBindings {
     ///
     /// A binding invariant was contradicted while polling.
     fn events(&mut self) -> Result<Vec<Response>, DriverRouteError>;
+
+    /// Frames one Session opening through the exchange-specific binding.
+    fn prepare_session_open(
+        &mut self,
+        connector: &node::Path,
+        data: &envelope::Data,
+        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        let _ = (data, resolved_settings);
+        Err(DriverRouteError::UnboundSession(connector.clone()))
+    }
+
+    /// Projects a scheduler-owned Session terminal through its contract.
+    fn scheduler_session_completion(
+        &mut self,
+        connector: &node::Path,
+        completion: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError> {
+        let _ = completion;
+        Err(DriverRouteError::UnboundSession(connector.clone()))
+    }
+
+    /// Offers one already-journaled Session opening.
+    fn open_session(
+        &mut self,
+        intent: &SessionOpenIntent,
+        request: &Envelope,
+    ) -> Result<SessionStart, DriverRouteError> {
+        let _ = request;
+        Err(DriverRouteError::UnboundSession(
+            intent.connector_path.clone(),
+        ))
+    }
+
+    /// Frames one complete Session message.
+    fn prepare_session_write(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+        data: &envelope::Data,
+        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
+    ) -> Result<RequestPreparation, DriverRouteError> {
+        let _ = (session, data, resolved_settings);
+        Err(DriverRouteError::UnboundSession(connector.clone()))
+    }
+
+    /// Offers one already-journaled Session write.
+    fn write_session(
+        &mut self,
+        intent: &SessionWriteIntent,
+        message: &Envelope,
+    ) -> Result<SessionStart, DriverRouteError> {
+        let _ = message;
+        Err(DriverRouteError::UnboundSession(
+            intent.connector_path.clone(),
+        ))
+    }
+
+    /// Requests closure of one live Session.
+    fn close_session(
+        &mut self,
+        connector: &node::Path,
+        session: SessionRef,
+    ) -> Result<SessionStart, DriverRouteError> {
+        let _ = session;
+        Err(DriverRouteError::UnboundSession(connector.clone()))
+    }
+
+    /// Collects Session observations from every bound family.
+    fn session_events(&mut self) -> Result<Vec<SessionDriverEvent>, DriverRouteError> {
+        Ok(Vec::new())
+    }
+
+    /// Releases one terminal Session from binding-local routing state.
+    fn forget_session(&mut self, session: SessionRef) {
+        let _ = session;
+    }
 }
 
 impl<T> OutboundConnectorBindings for T

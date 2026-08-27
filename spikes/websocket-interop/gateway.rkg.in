@@ -1,0 +1,24 @@
+graph websocket_interop : App {
+  connector echo : Process {
+    command = "cat"
+    mode = job
+    codec = lines
+    timeout = duration("5s")
+    max_output = "1MiB"
+    effect = idempotent ; behavior = deterministic
+  }
+  connector socket : WebSocketServer {
+    listen = "127.0.0.1:__PORT__"
+    path = "/echo"
+    codec = text
+    handshake_timeout = duration("5s")
+    max_message = "1MiB"
+    correlate = meta.ext.session_id
+    versions = ["http/2", "http/1.1"]
+  }
+  socket.out -> echo.in
+  echo.out -> socket.in
+  socket.exit -> nothing
+  echo.err -> nothing
+  echo.exit -> nothing
+}

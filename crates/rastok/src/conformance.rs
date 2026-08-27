@@ -515,12 +515,22 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
             ));
             return report;
         }
-        if let Err(error) = SessionConnectorBindings::open_session(&mut bindings, &intent, &seed) {
-            report.violations.push(format!(
-                "Session opening {} could not start: {error}",
-                index + 1
-            ));
-            return report;
+        match SessionConnectorBindings::open_session(&mut bindings, &intent, &seed) {
+            Ok(crate::boundary::SessionStart::Started) => {}
+            Ok(crate::boundary::SessionStart::Pending) => {
+                report.violations.push(format!(
+                    "Session opening {} remained pending in the uncongested battery",
+                    index + 1
+                ));
+                return report;
+            }
+            Err(error) => {
+                report.violations.push(format!(
+                    "Session opening {} could not start: {error}",
+                    index + 1
+                ));
+                return report;
+            }
         }
         sessions.push(intent.session_ref);
     }
@@ -596,12 +606,22 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
             ));
             return report;
         }
-        if let Err(error) = SessionConnectorBindings::write_session(&mut bindings, &intent, &seed) {
-            report.violations.push(format!(
-                "Session write {} could not start: {error}",
-                index + 1
-            ));
-            return report;
+        match SessionConnectorBindings::write_session(&mut bindings, &intent, &seed) {
+            Ok(crate::boundary::SessionStart::Started) => {}
+            Ok(crate::boundary::SessionStart::Pending) => {
+                report.violations.push(format!(
+                    "Session write {} remained pending in the uncongested battery",
+                    index + 1
+                ));
+                return report;
+            }
+            Err(error) => {
+                report.violations.push(format!(
+                    "Session write {} could not start: {error}",
+                    index + 1
+                ));
+                return report;
+            }
         }
         expected_writes.insert((*session, intent.write_ref));
     }
@@ -670,13 +690,20 @@ pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) ->
     }
 
     for session in &sessions {
-        if let Err(error) =
-            SessionConnectorBindings::close_session(&mut bindings, &profile.connector, *session)
-        {
-            report
-                .violations
-                .push(format!("Session {session} could not close: {error}"));
-            return report;
+        match SessionConnectorBindings::close_session(&mut bindings, &profile.connector, *session) {
+            Ok(crate::boundary::SessionStart::Started) => {}
+            Ok(crate::boundary::SessionStart::Pending) => {
+                report.violations.push(format!(
+                    "Session {session} close remained pending in the uncongested battery"
+                ));
+                return report;
+            }
+            Err(error) => {
+                report
+                    .violations
+                    .push(format!("Session {session} could not close: {error}"));
+                return report;
+            }
         }
     }
     let exits = match SessionConnectorBindings::session_events(&mut bindings) {

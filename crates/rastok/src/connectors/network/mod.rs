@@ -21,8 +21,10 @@ pub(crate) mod http_server;
 pub(super) mod tls;
 
 #[cfg(feature = "hosted-websocket")]
-#[allow(dead_code)]
-mod websocket_codec;
+pub(super) mod websocket_codec;
+
+#[cfg(feature = "hosted-websocket")]
+pub(crate) mod websocket;
 
 #[cfg(all(
     test,

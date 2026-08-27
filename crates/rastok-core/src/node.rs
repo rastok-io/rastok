@@ -263,6 +263,9 @@ pub enum Lifecycle {
     /// Terminal observation of an admitted inbound Call. This is an internal
     /// Connector transaction trigger, never a source handler activation.
     Reply,
+    /// Sole terminal observation of one Session. This is an internal
+    /// Connector transaction trigger, never a source handler activation.
+    Exit,
     /// Saga compensation transaction.
     Compensate,
     /// Loop continuation transaction.
@@ -282,6 +285,7 @@ impl fmt::Display for Lifecycle {
             Self::Stop => "stop",
             Self::Closing => "closing",
             Self::Reply => "reply",
+            Self::Exit => "exit",
             Self::Compensate => "compensate",
             Self::Next => "next",
             Self::Timeout => "timeout",

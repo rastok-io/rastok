@@ -1476,8 +1476,10 @@ freeze a native plugin ABI, artifact format, trust policy or hot-reload
 lifecycle. Discovery is physical assembly, not a second execution model.
 The reference CLI makes that assembly visible: Process is linked by default,
 an explicit `--file-root` adds File and supplies deployment data that never
-enters the graph or plan identity, and a hosted-HTTP build links HttpClient
-without changing its contract id.
+enters the graph or plan identity, and hosted feature presets add the selected
+HTTP/WebSocket families without changing their contract ids. The full hosted
+image registers all six implemented families exactly once; a reduced image
+refuses a missing required Driver before VM construction.
 
 Hosted network Drivers use the same separation. The synchronous Driver/VM
 edge feeds one bounded private pump: finite work and result queues, a separate
@@ -1488,8 +1490,9 @@ semantic Node types. They are enabled by static build features and all async,
 socket, TLS and library values remain below the Connector module. The two TLS
 stacks deliberately consume one exact compiled root corpus and the same
 in-memory identity encodings. A minimal or embedded build omits them without
-changing a plan. HTTP/1.1 Upgrade is not evidence for the distinct HTTP/2 or
-HTTP/3 Extended CONNECT adapters.
+changing a plan. HTTP/1.1 Upgrade, HTTP/2 Extended CONNECT and HTTP/3 Extended
+CONNECT are proved separately, then project onto the same generic Session
+fold; a framing test for one transport is never evidence for another.
 
 The live HttpClient demonstrates the boundary end to end. One canonical
 descriptor seals method, URL, lossless ordered headers, exact body and
@@ -1545,6 +1548,14 @@ logical session reference independent of its socket, negotiated transport and
 physical placement. A Process job or database operation is a call; a
 WebSocket connection and the future Process service profile are sessions.
 Neither automatically invents a Node-instance key.
+
+For WebSocket, one server Driver owns many logical SessionRefs and one client
+Node instance owns at most one live Session. Each complete inbound message is
+a bounded two-phase proposal; each graph-to-peer message is a durable write
+before bytes. Fragmentation and control frames remain physical protocol state.
+A full pump leaves the ordinary Worker mailbox claimed rather than creating a
+second queue. The sole terminal is `l:exit`; no message or duplicate terminal
+may follow it.
 
 `stop` and `exit` name the two distinct boundaries. `stop` closes the current
 Node instance; `exit` reports the observed termination of
@@ -2797,7 +2808,7 @@ simulations designed to become executable evidence as the runtime
 lands. The current evidence gates are listed in
 [ROADMAP.md](ROADMAP.md).
 
-As of M1.6 H5.2, the one-worker reference executes canonical keyed/lifetime
+As of the M1.6 H7 closure, the one-worker reference executes canonical keyed/lifetime
 instances, bounded Closing, nested Graph composition, and instance-local
 bounded joins from source through package validation and public Lab scenarios.
 The closure audit also proves that moving a stable virtual shard between
@@ -2814,9 +2825,8 @@ contracts now cross source, checked v12 plan, Registry-free validation and
 family-owned Lab binding with codec-selected ports, lossless protocol metadata
 and typed terminal unions. H3 pins one bounded private hosted
 pump, Hyper/Rustls for HTTP/1.1-2, quiche/BoringSSL for HTTP/3 and Tungstenite
-for WebSocket framing. It proves all three HTTP engines coexist, compares
-h3/Quinn on real UDP and proves bounded WebSocket framing plus HTTP/1.1
-Upgrade. H4 now executes HttpClient over all three versions, including exact
+for WebSocket framing. It proves all three HTTP engines coexist and compares
+h3/Quinn on real UDP. H4 executes HttpClient over all three versions, including exact
 pre-open request sealing, visibility-safe fallback, bounded bodies, lossless
 response observations, generic Call conformance and outbound backpressure.
 H4.1 adds the open `media_type` scalar, typed standard/custom request-header
@@ -2829,10 +2839,16 @@ charged through admission and cannot expose 202 before the causal root
 commits. H5.2 adds the generic graph-response return: direct lineage seals the
 exact opening instance before the producing transaction commits, bounded
 Driver capacity can leave the real response cursor pending without bytes, and
-the final `l:reply` consumes it without an OUTBOUND record. HTTP/3 server
-binding, the live `respond` policy, explicit correlation and independent
-server interop remain H5 work; H6 still owns live WebSocket sessions and both
-Extended CONNECT adapters.
+the final `l:reply` consumes it without an OUTBOUND record. Final H5 executes
+`ack` and `respond` over H1/H2/H3 with bounded deadlines and close-once races.
+H6 executes WebSocket Client and Server through HTTP/1.1 Upgrade, RFC 8441 and
+RFC 9220 using one bounded Session fold, durable message writes and one typed
+terminal. The Codex gateway runs through the real CLI; independent Node `ws`
+and hyper-h2/wsproto probes exercise two non-Rastok peers. H7 closes feature
+assembly, all-feature/no-std gates, identity audit and Cortex-M33 evidence.
+The official Autobahn report remains a named external qualification because
+the reference host has no container engine; M1.6 does not substitute an
+unmaintained runner or convert that missing report into a production claim.
 
 This white paper is designed to outlive individual releases. The DSL
 grammar, runtime traits, and feature set will evolve; the conceptual

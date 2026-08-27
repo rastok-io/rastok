@@ -161,6 +161,9 @@ fn exercise_http_inside_the_hosted_pump() -> EvidenceResult<Vec<(HostedHttpProbe
 }
 
 async fn exercise_synthetic_websocket() -> EvidenceResult<()> {
+    use tungstenite::protocol::frame::Frame;
+    use tungstenite::protocol::frame::coding::{Data as FrameData, OpCode};
+
     let config = super::websocket_codec::bounded_config(4 * 1024)?;
     let (client_io, server_io) = tokio::io::duplex(8 * 1024);
     let mut client = tokio_tungstenite::WebSocketStream::from_raw_socket(
@@ -177,18 +180,47 @@ async fn exercise_synthetic_websocket() -> EvidenceResult<()> {
     .await;
 
     let server_task = tokio::spawn(async move {
-        for _ in 0..2 {
+        let mut messages = 0usize;
+        let mut ping = false;
+        while messages < 3 || !ping {
             let message = server
                 .next()
                 .await
-                .ok_or("the synthetic WebSocket ended before two messages")??;
-            server.send(message).await?;
+                .ok_or("the synthetic WebSocket ended before three complete messages")??;
+            match message {
+                Message::Text(_) | Message::Binary(_) => {
+                    messages = messages.saturating_add(1);
+                    server.send(message).await?;
+                }
+                Message::Ping(payload) => {
+                    ping = true;
+                    server.send(Message::Pong(payload)).await?;
+                }
+                Message::Pong(_) | Message::Close(_) | Message::Frame(_) => {}
+            }
         }
         EvidenceResult::Ok(())
     });
     client.send(Message::Text("hello".into())).await?;
     client
         .send(Message::Binary(Bytes::from_static(b"bytes")))
+        .await?;
+    client
+        .send(Message::Frame(Frame::message(
+            Bytes::from_static(b"frag"),
+            OpCode::Data(FrameData::Text),
+            false,
+        )))
+        .await?;
+    client
+        .send(Message::Frame(Frame::message(
+            Bytes::from_static(b"mented"),
+            OpCode::Data(FrameData::Continue),
+            true,
+        )))
+        .await?;
+    client
+        .send(Message::Ping(Bytes::from_static(b"probe")))
         .await?;
     assert_eq!(
         client.next().await.transpose()?,
@@ -197,6 +229,14 @@ async fn exercise_synthetic_websocket() -> EvidenceResult<()> {
     assert_eq!(
         client.next().await.transpose()?,
         Some(Message::Binary(Bytes::from_static(b"bytes")))
+    );
+    assert_eq!(
+        client.next().await.transpose()?,
+        Some(Message::Text("fragmented".into()))
+    );
+    assert_eq!(
+        client.next().await.transpose()?,
+        Some(Message::Pong(Bytes::from_static(b"probe")))
     );
     server_task.await??;
     Ok(())

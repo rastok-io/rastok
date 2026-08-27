@@ -1601,6 +1601,32 @@ fn a_forged_executable_cycle_never_earns_the_validated_type() {
 }
 
 #[test]
+fn a_duplex_session_boundary_is_not_an_executable_cycle() {
+    let source = r#"
+graph session_echo : App {
+  connector socket : WebSocketServer {
+    listen = "127.0.0.1:8080"
+    codec = json
+    handshake_timeout = duration("5s")
+  }
+  operator echo { on in { out = . } }
+  socket.out -> echo.in
+  echo.out -> socket.in
+  socket.exit -> nothing
+}
+"#;
+    let raw = compile(
+        &[source],
+        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+    )
+    .expect("the source checker recognizes the Session boundary")
+    .plan
+    .into_inner();
+    ValidatedExecutionPlan::try_new(raw)
+        .expect("Registry-free validation recognizes the same Session boundary");
+}
+
+#[test]
 fn a_foreign_plan_cannot_smuggle_malformed_join_activation_or_bounds() {
     let mut duplicate_port = raw_join(true);
     let rastok::node::HandlerActivation::Join { ports, .. } =

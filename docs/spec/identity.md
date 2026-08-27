@@ -34,7 +34,9 @@
 > Final H5 allocates timer kind 8 for a retained inbound-Call request deadline
 > and narrows `HttpServerExit` to facts possible after admission. Only the
 > representative HttpServer semantic hash moves; plan v12 and prior records
-> remain byte-identical.
+> remain byte-identical. H6 executes the H1 Session forms and optional timer
+> kind 9 without moving an existing artifact; H7's static assembly is wholly
+> physical and likewise moves none.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -263,6 +265,24 @@ format remains v12. New respond-mode INBOUND facts may add timer kind 8 with
 the `InboundCallRef` as reference. It is omitted from ack and every old fact,
 so existing causal traces do not move.
 
+**M1.6 H6 WebSocket-Session checkpoint (2026-08-27).**
+D-2026-08-27-2 executes the H1 Session forms without extending the plan or an
+existing causal record. HTTP/1.1 Upgrade, RFC 8441 and RFC 9220 are physical
+bindings excluded from `SessionRef`, semantic hash and package bytes. New
+Session facts use the H1 reference/write domains, lifecycle `l:exit`, and
+optional timer kind 9 for handshake timeout; those fields are absent from all
+pre-H6 facts. Every existing semantic hash, package golden and causal trace is
+therefore byte-identical. Echo/spike remains `e50026ee…` and connector-free
+gauge remains `0d3ad43d…`.
+
+**M1.6 H7 static-assembly checkpoint (2026-08-27).**
+D-2026-08-27-3 makes Cargo features, linked factories and the physical File
+root inputs to `hosted_registry`, never semantic facts. `DriverManifest` is a
+data-only projection of that registry and does not enter a plan. Reduced and
+full images therefore accept or refuse the same package according to linked
+capability without changing its hash, bytes or history. No identity register
+moves at H7.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -417,7 +437,7 @@ execution-model §1) — keys `30–39`, `48–50` and `52` :
 | 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16), **in the handler's declared port order**; this array is deliberately not lexicographically re-sorted, because tuple order is identity; omitted otherwise |
 | 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
-| 37 | timers | array | dated obligations armed by a transaction or accepting inbound fact — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`. The due instant is NOT sealed (derivable and re-armed by the fold). |
+| 37 | timers | array | dated obligations armed by a transaction or accepting inbound fact — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`, `9 = outbound Session handshake timeout`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`; kind 9 uses the candidate `SessionRef`. The due instant is NOT sealed (derivable and re-armed by the fold). |
 | 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instances.key` and never substitutes a later generation. |
 | 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction. Normally key 33 identifies the same cause and this field is omitted; `l:start`, `l:stop` and later `l:evict` have no consumed cursor, while a graph-response `l:reply` deliberately carries both: key 33 names the response delivery and key 39 preserves the distinct opening root as causal parent. This keeps lifecycle causality autonomous rather than relying on record order. |
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |
@@ -570,7 +590,8 @@ cannot diverge on bytes for the same journal :
 - **`timers` (TX key 37)** = tuples `[timer_kind (uint), ref (bytes 16)]`,
   `timer_kind` from `1 = call_timeout · 2 = join_within ·
   `3 = instance_lifetime · 4 = saga_timeout · 5 = loop_backoff ·
-  6 = instance_drain · 7 = instance_settlement`
+  6 = instance_drain · 7 = instance_settlement ·
+  8 = inbound_call_timeout · 9 = session_handshake`
   (extend-only), `ref` = the obligation's derived 16-byte identity —
   for a call budget, the `delivery_ref` of the arming delivery
   (envelope.md §2); kind 3 derives under domain `0x21` from

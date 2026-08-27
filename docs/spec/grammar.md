@@ -17,8 +17,9 @@
 > Lab binding. H3 selects their private hosted-engine seam and H4 executes the
 > HttpClient sheet over H1/H2/H3. H5 executes
 > `HttpServer(mode = ack | respond)` over the same three versions with bounded
-> retained Calls and direct-path correlation. H6's Session Drivers remain
-> gated.
+> retained Calls and direct-path correlation. H6 executes both WebSocket
+> Session Drivers over H1 Upgrade and H2/H3 Extended CONNECT; H7 closes static
+> hosted assembly.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >
@@ -1155,7 +1156,7 @@ does not claim implementation or release status.
 
 | DSL node / concept | Role | Spec status / next step |
 |---|---|---|
-| `HttpServer` | Connector node | exact inbound-Call sheet; H5.1 executes `ack` over HTTP/1.1–2, while HTTP/3 and `respond` remain H5 gates |
+| `HttpServer` | Connector node | exact inbound-Call sheet; `ack` and `respond` execute over HTTP/1.1–3 |
 | `HttpClient` | Connector node | exact H2 outbound-Call sheet; live HTTP versions execute at H4 |
 | `Process` | Connector node | specified in the initial stdlib catalog ; codec/protocol matrix must remain narrow |
 | `File` | Connector node | executable C3 sheet: explicit one-file `read` / atomic `replace`; `watch` and directory operations are named deferrals |
@@ -1179,10 +1180,10 @@ does not claim implementation or release status.
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
 | `Join` / `Barrier` | Guarded fan-in | the canonical form is an `on (a, b)` join handler (correlated by the owning Operator instance ; bounded by `last`/`within`) |
-| `WebSocketServer` | Connector node | exact H2 both-role Session sheet; accepted duplex network execution at H6 |
-| `WebSocketClient` | Connector node | exact H2 both-role Session sheet; opened duplex network execution at H6 |
+| `WebSocketServer` | Connector node | exact both-role Session sheet; accepted duplex execution over H1/H2/H3 |
+| `WebSocketClient` | Connector node | exact both-role Session sheet; opened duplex execution over H1/H2/H3 |
 | `Tcp` | Connector node | planned |
-| HTTP/1.1, HTTP/2, HTTP/3 | Binding options, not nodes | H2 sheet vocabulary; HttpClient executes all three at H4, HttpServer `ack` executes H1–2 at H5.1, and the server-H3/session remainder stays in H5–H6 |
+| HTTP/1.1, HTTP/2, HTTP/3 | Binding options, not nodes | all three execute for HTTP Calls and WebSocket Sessions; negotiated selection is observation, not node identity |
 
 Rule for DSL evolution : do not add a new node name to an `.rkg` example
 without adding it here and marking whether it is specified, design intent, or

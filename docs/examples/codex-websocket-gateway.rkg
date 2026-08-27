@@ -1,93 +1,73 @@
 // =============================================================================
-// codex-websocket-gateway.rkg
+// Executable M1.6 Codex WebSocket gateway.
 //
-// M1.6 target-surface design reference. The exact WebSocketServer sheet and
-// Lab binding landed at H2; live WebSocket execution and Process(service)
-// remain guarded until H6/their backlog gates. This file is not an executable
-// fixture yet.
-//
-// One accepted WebSocket connection = one logical session. Complete JSON
-// messages cross ordinary ports in both directions; `exit` occurs once when
-// the session terminates, not once per message. HTTP/1.1 Upgrade, HTTP/2
-// Extended CONNECT and HTTP/3 Extended CONNECT are Driver bindings of the
-// same WebSocketServer contract and do not appear in the graph.
+// One accepted socket is one logical Session. Each complete JSON message runs
+// one bounded `codex exec --json -` job; the reply retains the socket's
+// SessionRef through causal lineage. A later Process(service) profile can keep
+// one app-server child alive per keyed Graph instance without changing this
+// WebSocket boundary.
 // =============================================================================
 
-
-// One supervised Codex service per logical WebSocket session.
-graph codex_sessions {
-  instances = { key = meta.ext.session_id }
-  lifetime = { kind = idle; after = duration("2h") }
-  closing = {
-    drain_for = duration("5s")
-    settle_for = duration("2s")
-  }
-
-  val session_id = instance.key
-  val codex_home = "/var/codex/" + session_id
-  val cwd = "/workspace/" + session_id
+graph codex_websocket_gateway : App {
+  input peer: variant
+  output reply: variant
+  output session_exit: variant
+  output process_exit: variant
 
   connector codex : Process {
     command = "codex"
-    args = ["app-server"]
-    mode = service
-    cwd = cwd
-    env = {
-      "CODEX_HOME": codex_home
-      "RUST_LOG": "info"
-    }
+    args = ["exec", "--json", "-"]
+    mode = job
     codec = jsonl
-    protocol = "jsonrpc"
-    correlate = data.id
     timeout = duration("120s")
+    max_output = "8MiB"
     effect = idempotent
     behavior = probabilistic
   }
 
-  // A correlated Process reply already descends from the triggering socket
-  // message. A spontaneous Process notification is a new inbound root, so we
-  // stamp the owning logical session explicitly before it leaves this keyed
-  // graph. The value is a journal-derived token, never a physical socket id.
-  operator to_socket {
-    on in {
-      meta.ext.session_id = instance.key
-      out = .
-    }
-  }
-
-  in -> codex.in
-  codex.out -> to_socket.in
-  to_socket.out -> out
-  codex.err -> nothing
-  codex.exit -> process_exit
-}
-
-
-graph codex_websocket_gateway : App {
   connector clients : WebSocketServer {
-    listen = "0.0.0.0:8443"
+    listen = "127.0.0.1:8443"
     path = "/codex"
     codec = json
     handshake_timeout = duration("10s")
     max_message = "1MiB"
     subprotocols = ["rastok.codex.v1"]
     correlate = meta.ext.session_id
+    versions = ["http/3", "http/2", "http/1.1"]
   }
 
-  // `clients.out` contains one complete peer message and carries the logical
-  // session id. `codex_sessions` therefore creates one clean state/process
-  // scope per connection. The explicit correlator routes its output back to
-  // the same live session even after internal root changes.
-  clients.out -> codex_sessions.in
-  codex_sessions.out -> clients.in
-
-  // Session termination and child-process termination are distinct facts.
-  // Either may happen first; neither is an implicit `err` channel.
+  clients.out -> codex.in
+  .peer -> codex.in
+  codex.out -> clients.in
+  codex.out -> .reply
+  codex.err -> nothing
   clients.exit -> .session_exit
-  codex_sessions.process_exit -> .process_exit
+  codex.exit -> .process_exit
 }
 
+lab codex_websocket_gateway {
+  simulation two_sessions on app {
+    mock codex {
+      on in {
+        out = data
+        exit = Exited { exit_code = 0; signal = null }
+      }
+    }
 
-// H6 adds a Lab session script that opens two peers, interleaves their
-// messages, closes one, and proves that replies never cross and that no output
-// follows either session's terminal `exit`.
+    scenario isolation "two logical sessions cannot cross replies" {
+      app.peer = {
+        meta.ext.session_id = "11111111111111111111111111111111"
+        data = { prompt = "alice" }
+      }
+      expect "alice reply" app.reply count == 1 where (
+        meta.ext.session_id == "11111111111111111111111111111111")
+
+      app.peer = {
+        meta.ext.session_id = "22222222222222222222222222222222"
+        data = { prompt = "bob" }
+      }
+      expect "bob reply" app.reply count == 1 where (
+        meta.ext.session_id == "22222222222222222222222222222222")
+    }
+  }
+}

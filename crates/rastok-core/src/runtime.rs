@@ -13,7 +13,7 @@
 
 pub mod vm;
 
-use crate::boundary::{Completion, InboundCallRef};
+use crate::boundary::{Completion, InboundCallRef, SessionRef};
 use crate::datatype::DataType;
 use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue, Scalar};
 use crate::expr;
@@ -1059,13 +1059,20 @@ impl<'plan> TransactionExecutor<'plan> {
             {
                 let Some(to) = &edge.to else { continue };
                 let Some(target) = to.node else { continue };
-                let budgeted = self.plan.nodes[target.index()]
+                let budget_kind = self.plan.nodes[target.index()]
                     .connector()
-                    .and_then(|spec| spec.attribute("timeout"))
-                    .is_some();
-                if budgeted {
+                    .and_then(|spec| {
+                        if spec.attribute("timeout").is_some() {
+                            Some(crate::journal::timer_kind::CALL_TIMEOUT)
+                        } else if spec.attribute("handshake_timeout").is_some() {
+                            Some(crate::journal::timer_kind::SESSION_HANDSHAKE)
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(kind) = budget_kind {
                     timers.push((
-                        crate::journal::timer_kind::CALL_TIMEOUT,
+                        kind,
                         ids::delivery_ref(
                             &self.plan.edge_text(edge),
                             emission.envelope.meta().sys().id(),
@@ -1210,6 +1217,67 @@ impl<'plan> TransactionExecutor<'plan> {
             seq: response.seq,
         });
         Ok(outcome)
+    }
+
+    /// Builds the sole terminal transaction of one committed Session.
+    ///
+    /// The runtime, not the Driver, projects the opaque logical reference on
+    /// the terminal envelope. The same transaction closes the journal fold,
+    /// so a socket identity can neither select nor forge this correlation.
+    ///
+    /// # Errors
+    ///
+    /// [`Fault::UnknownSlot`] when `slot` is outside the validated plan, or a
+    /// malformed completion contradicts the terminal barrier.
+    pub fn session_completion(
+        &self,
+        slot: Slot,
+        instance: &InstanceRef,
+        opening: &Envelope,
+        session_ref: SessionRef,
+        completion: &Completion,
+        consumed: &[&Delivery],
+    ) -> Result<TransactionOutcome, Fault> {
+        let Some(planned) = self.plan.nodes.get(slot.index()) else {
+            return Err(Fault::UnknownSlot(slot));
+        };
+        let trigger = node::Trigger::Lifecycle(node::Lifecycle::Exit);
+        let mut outputs = completion.outputs().to_vec();
+        for output in &mut outputs {
+            output.ext.insert(
+                String::from("session_id"),
+                MetaValue::Scalar(Scalar::Text(session_ref.to_string())),
+            );
+        }
+        let completion = Completion::try_new(outputs)
+            .map_err(|error| Fault::Unrepresentable(error.to_string()))?;
+        let emissions = self.completion_emissions(&planned.path, opening, &trigger, &completion);
+        Ok(TransactionOutcome {
+            record: TransactionRecord {
+                owner_path: crate::plan::OwnerPath::from(&planned.path),
+                instance: instance.clone(),
+                parent_instance: None,
+                close_scope: None,
+                exchange_exit: Some(Box::new(
+                    crate::journal::InboundExchangeExitRecord::Session(session_ref),
+                )),
+                trigger,
+                cause: Some(opening.meta().sys().id()),
+                consumed: consumed
+                    .iter()
+                    .map(|delivery| crate::journal::ConsumedPosition {
+                        edge: delivery.edge.clone(),
+                        source: delivery.source_instance.clone(),
+                        seq: delivery.seq,
+                    })
+                    .collect(),
+                join_inputs: vec![],
+                state_delta: vec![],
+                timers: vec![],
+                emissions,
+                routes: vec![],
+            },
+        })
     }
 
     fn completion_emissions(
