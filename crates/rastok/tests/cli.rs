@@ -120,6 +120,75 @@ fn run_can_bind_the_real_file_driver_with_an_explicit_root() {
     std::fs::remove_dir_all(root).expect("the File root is removable");
 }
 
+#[cfg(feature = "hosted-http12")]
+#[test]
+fn run_polls_an_inbound_http_server_without_a_stdin_submission() {
+    use std::io::Read as _;
+
+    let reserved = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port is available");
+    let address = reserved
+        .local_addr()
+        .expect("the local port has an address");
+    drop(reserved);
+    let root = std::env::temp_dir().join(format!("rastok-cli-http-server-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("the HTTP CLI fixture directory is writable");
+    let source = root.join("server.rkg");
+    std::fs::write(
+        &source,
+        format!(
+            r#"graph http_cli : App {{
+  connector server : HttpServer {{
+    listen = "{address}"
+    codec = text
+    versions = ["http/1.1"]
+  }}
+  server -> .
+}}
+"#,
+        ),
+    )
+    .expect("the HTTP CLI source writes");
+    let mut child = rastok()
+        .arg("run")
+        .arg(&source)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the hosted binary starts");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut stream = loop {
+        match std::net::TcpStream::connect(address) {
+            Ok(stream) => break stream,
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("the standalone HttpServer never started: {error}"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .expect("the client read is bounded");
+    stream
+        .write_all(
+            b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nping",
+        )
+        .expect("the HTTP request writes");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .expect("the committed acknowledgement returns");
+    assert!(
+        response.starts_with(b"HTTP/1.1 202"),
+        "unexpected standalone response: {:?}",
+        String::from_utf8_lossy(&response)
+    );
+    child.kill().expect("the long-lived server can be stopped");
+    let _ = child.wait();
+    std::fs::remove_dir_all(root).expect("the HTTP CLI fixture is removable");
+}
+
 #[test]
 fn simulate_runs_the_lab_and_reports_every_scenario() {
     let output = rastok()

@@ -152,6 +152,13 @@ pub enum PlanValidationError {
         /// Contradicting attribute.
         attribute: String,
     },
+    /// A default-lineage inbound Call response can be reached through a
+    /// root-mixing join. The trigger root is not a stable request selector;
+    /// the contract therefore requires an explicit correlator.
+    AmbiguousInboundCallCorrelation {
+        /// Inbound Call Connector receiving the response.
+        node: node::Path,
+    },
     /// A `Process` connector's `codec` is outside the runtime's
     /// dispatch domain — accepting it would silently run as
     /// `lines`.
@@ -664,6 +671,10 @@ impl core::fmt::Display for PlanValidationError {
             Self::ContractAttributeMismatch { node, attribute } => write!(
                 f,
                 "connector `{node}` carries an invalid effective `{attribute}` attribute"
+            ),
+            Self::AmbiguousInboundCallCorrelation { node } => write!(
+                f,
+                "connector `{node}` receives a response through a root-mixing join and therefore requires an explicit `correlate` attribute"
             ),
             Self::UnknownCodec { node } => {
                 write!(
@@ -1470,7 +1481,7 @@ fn network_setting_holds(name: &str, setting: &crate::plan::AttrSetting) -> bool
         ),
         "mode" => matches!(
             setting,
-            crate::plan::AttrSetting::Word(word) if word == "ack"
+            crate::plan::AttrSetting::Word(word) if matches!(word.as_str(), "ack" | "respond")
         ),
         "zero_rtt" => matches!(
             setting,
@@ -1586,12 +1597,14 @@ fn validate_network_connector(
             allowed: &[
                 "auth_bearer",
                 "codec",
+                "correlate",
                 "custom_headers",
                 "headers",
                 "listen",
                 "max_body",
                 "mode",
                 "path",
+                "timeout",
                 "tls_certificate",
                 "tls_private_key",
                 "versions",
@@ -1713,6 +1726,47 @@ fn validate_network_connector(
             });
         }
     }
+    if contract == crate::connector::HTTP_SERVER_CONNECTOR_ID {
+        match spec.attribute("mode") {
+            Some(crate::plan::AttrSetting::Word(mode)) if mode == "ack" => {
+                if spec.attribute("correlate").is_some() || spec.attribute("timeout").is_some() {
+                    return Err(PlanValidationError::ContractAttributeMismatch {
+                        node: node.path.clone(),
+                        attribute: String::from("mode/correlate/timeout"),
+                    });
+                }
+            }
+            Some(crate::plan::AttrSetting::Word(mode)) if mode == "respond" => {
+                if spec.attribute("timeout").is_none() {
+                    return Err(PlanValidationError::MissingContractAttribute {
+                        node: node.path.clone(),
+                        attribute: "timeout",
+                    });
+                }
+                if let Some(crate::plan::AttrSetting::Expr { site, expr }) =
+                    spec.attribute("correlate")
+                    && (*site != EvaluationSite::Invocation || expr.ty != DataType::Text)
+                {
+                    return Err(PlanValidationError::ContractAttributeMismatch {
+                        node: node.path.clone(),
+                        attribute: String::from("correlate"),
+                    });
+                }
+            }
+            Some(_) => {
+                return Err(PlanValidationError::ContractAttributeMismatch {
+                    node: node.path.clone(),
+                    attribute: String::from("mode"),
+                });
+            }
+            None => {
+                return Err(PlanValidationError::MissingContractAttribute {
+                    node: node.path.clone(),
+                    attribute: "mode",
+                });
+            }
+        }
+    }
     if spec.attribute("tls_certificate").is_some() != spec.attribute("tls_private_key").is_some() {
         return Err(PlanValidationError::ContractAttributeMismatch {
             node: node.path.clone(),
@@ -1825,6 +1879,35 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         }
     }
     Ok(())
+}
+
+/// Default inbound-Call lineage is sound only while every upstream handler
+/// observes one root. A join deliberately mixes roots and inherits the
+/// trigger's origin, so walking the finite DAG backwards is the exact static
+/// proof that an explicit correlator is required.
+fn response_path_crosses_join(plan: &ExecutionPlan, target: Slot) -> bool {
+    let mut pending = vec![target];
+    let mut visited = BTreeSet::new();
+    while let Some(slot) = pending.pop() {
+        if !visited.insert(slot) {
+            continue;
+        }
+        if plan.handlers.iter().any(|handler| {
+            handler.node == slot
+                && matches!(handler.activation, node::HandlerActivation::Join { .. })
+        }) {
+            return true;
+        }
+        for source in plan.edges.iter().filter_map(|edge| {
+            edge.to
+                .as_ref()
+                .filter(|endpoint| endpoint.node == Some(slot))
+                .and(edge.from.node)
+        }) {
+            pending.push(source);
+        }
+    }
+    false
 }
 
 #[derive(Debug, Clone)]
@@ -2532,6 +2615,15 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 return Err(PlanValidationError::ContractAttributeMismatch {
                     node: node.path.clone(),
                     attribute: String::from("mode"),
+                });
+            }
+            if receives_inbound_call_response
+                && spec.contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
+                && spec.attribute("correlate").is_none()
+                && response_path_crosses_join(plan, slot)
+            {
+                return Err(PlanValidationError::AmbiguousInboundCallCorrelation {
+                    node: node.path.clone(),
                 });
             }
             if spec.contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID {

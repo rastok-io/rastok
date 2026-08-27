@@ -166,9 +166,11 @@ The repository opens publicly with this milestone (15 October 2026).
   adds the generic direct-lineage response return: the graph seals the exact
   opening instance before commit, bounded Driver admission may remain pending,
   and the terminal consumes the real response cursor without an OUTBOUND
-  record. H5 still owns HTTP/3, the live `respond` Driver, explicit
-  correlation, bounded request deadlines, race/interop closure and runner
-  polling; H6 owns the WebSocket Drivers and Codex gateway.
+  record. Final H5 now runs HTTP/1.1–3 through the same bounded retained Call,
+  executes `respond`, checks explicit direct-path correlation where roots
+  mix, arms bounded request deadlines, closes response/timeout races once,
+  and keeps the standalone runner polling without stdin. H6 owns the
+  WebSocket Drivers and Codex gateway.
   H3's successful HTTP/1.1 Upgrade is explicitly not an Extended CONNECT
   claim.
   H4.1 has now landed the schema-facing HTTP contract: canonical open

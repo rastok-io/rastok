@@ -20,8 +20,9 @@
 use crate::boundary::{
     BoundaryEvent, CallRef, ClosingDeadline, Completion, CompletionGate, DatedPayload, Dispatcher,
     InboundAcceptance, InboundAdmission, InboundCallEvent, InboundCallRef, InboundCallResponse,
-    InboundProposal, InboundRejection, InboundSession, InboundSubmission, InstanceDeadline, Intent,
-    OutboundConnectorBindings, RequestPreparation, Response, SchedulerCompletion,
+    InboundCallTimeout, InboundProposal, InboundRejection, InboundSession, InboundSubmission,
+    InstanceDeadline, Intent, OutboundConnectorBindings, RequestPreparation, Response,
+    SchedulerCompletion,
 };
 use crate::connector::ConnectorExchange;
 use crate::envelope::{Data, Envelope, Id};
@@ -278,6 +279,7 @@ struct PendingInboundCall {
     request: Envelope,
     instance: InstanceRef,
     response: Option<PendingInboundCallResponse>,
+    timeout: Option<PendingInboundCallTimeout>,
 }
 
 /// One graph response held behind the source Connector's claimed mailbox
@@ -285,6 +287,15 @@ struct PendingInboundCall {
 #[derive(Debug, Clone, PartialEq)]
 struct PendingInboundCallResponse {
     delivery: Delivery,
+    started: bool,
+}
+
+/// Scheduler-to-Driver handoff for one request deadline. `requested` changes
+/// only when the dated event wins; `started` changes only after the Driver
+/// accepts the bounded protocol attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingInboundCallTimeout {
+    requested: bool,
     started: bool,
 }
 
@@ -845,6 +856,7 @@ impl<'plan> Vm<'plan> {
                 .response
                 .as_ref()
                 .is_some_and(|response| !response.started)
+                && !pending.timeout.is_some_and(|timeout| timeout.started)
             {
                 report.rejected.push((
                     event,
@@ -874,6 +886,9 @@ impl<'plan> Vm<'plan> {
         self.inbound_calls
             .iter()
             .filter_map(|(call_ref, pending)| {
+                if pending.timeout.is_some_and(|timeout| timeout.requested) {
+                    return None;
+                }
                 let response = pending
                     .response
                     .as_ref()
@@ -903,6 +918,44 @@ impl<'plan> Vm<'plan> {
         if retained.started
             || retained.delivery.envelope.meta().sys().id() != response.response.meta().sys().id()
         {
+            return false;
+        }
+        retained.started = true;
+        true
+    }
+
+    /// Returns scheduler-owned inbound request expiries not yet accepted by
+    /// their Driver. Stable Call-reference order makes repeated bounded pump
+    /// rounds deterministic.
+    #[must_use]
+    pub fn ready_inbound_call_timeouts(&self) -> Vec<InboundCallTimeout> {
+        self.inbound_calls
+            .iter()
+            .filter_map(|(call_ref, pending)| {
+                pending
+                    .timeout
+                    .filter(|timeout| timeout.requested && !timeout.started)?;
+                Some(InboundCallTimeout {
+                    call_ref: *call_ref,
+                    connector_path: self.plan.nodes[pending.slot.index()].path.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Confirms that the exact scheduler expiry has transferred to its
+    /// Driver. Stale and crossed acknowledgements are harmless refusals.
+    pub fn mark_inbound_call_timeout_started(&mut self, timeout: &InboundCallTimeout) -> bool {
+        let Some(pending) = self.inbound_calls.get_mut(&timeout.call_ref) else {
+            return false;
+        };
+        if self.plan.nodes[pending.slot.index()].path != timeout.connector_path {
+            return false;
+        }
+        let Some(retained) = &mut pending.timeout else {
+            return false;
+        };
+        if !retained.requested || retained.started {
             return false;
         }
         retained.started = true;
@@ -1060,14 +1113,76 @@ impl<'plan> Vm<'plan> {
                         node: self.plan.nodes[source.index()].path.clone(),
                     });
                 }
+                let spec = self.plan.nodes[source.index()].connector().ok_or_else(|| {
+                    VmError::PlanInvariant {
+                        node: self.plan.nodes[source.index()].path.clone(),
+                        reason: "an inbound Call source lost its connector specification",
+                    }
+                })?;
+                let timeout = match spec.attribute("mode") {
+                    Some(AttrSetting::Word(mode)) if mode == "ack" => None,
+                    Some(AttrSetting::Word(mode)) if mode == "respond" => {
+                        let resolved =
+                            spec.attribute("timeout").and_then(|setting| match setting {
+                                AttrSetting::Value(crate::value::Value::Duration(value)) => {
+                                    Some(*value)
+                                }
+                                AttrSetting::Expr { .. } => candidates
+                                    .get(&target.reference)
+                                    .map(|candidate| &candidate.settings)
+                                    .or_else(|| {
+                                        self.instances
+                                            .get(&target.reference)
+                                            .map(|instance| &instance.settings)
+                                    })
+                                    .or_else(|| {
+                                        self.waiting
+                                            .get(&target.reference)
+                                            .map(|waiting| &waiting.candidate.settings)
+                                    })
+                                    .and_then(|settings| settings.get("timeout"))
+                                    .and_then(|value| match value {
+                                        crate::value::Value::Duration(value) => Some(*value),
+                                        _ => None,
+                                    }),
+                                AttrSetting::Value(_) | AttrSetting::Word(_) => None,
+                            });
+                        match resolved {
+                            Some(value) if value > 0 => Some(value),
+                            _ => {
+                                return Err(VmError::PlanInvariant {
+                                    node: self.plan.nodes[source.index()].path.clone(),
+                                    reason: "a respond-mode inbound Call has no positive resolved timeout",
+                                });
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(VmError::PlanInvariant {
+                            node: self.plan.nodes[source.index()].path.clone(),
+                            reason: "an inbound Call source has no executable mode",
+                        });
+                    }
+                };
+                let call_ref = InboundCallRef::from_root(inbound.envelope().meta().sys().id());
+                let timers = timeout
+                    .map(|_| {
+                        vec![(
+                            crate::journal::timer_kind::INBOUND_CALL_TIMEOUT,
+                            call_ref.id(),
+                        )]
+                    })
+                    .unwrap_or_default();
                 inbound = inbound
-                    .into_call(target.reference.clone())
+                    .into_call(target.reference.clone(), timers)
                     .map_err(VmError::Journal)?;
-                Some((source, target))
+                Some((source, target, timeout))
             }
             Some((_, ConnectorExchange::Event | ConnectorExchange::Session)) | None => None,
         };
-        let source_instance = source_target.as_ref().map(|(_, target)| &target.reference);
+        let source_instance = source_target
+            .as_ref()
+            .map(|(_, target, _)| &target.reference);
         let prepared = self.prepare_routes(
             journal,
             &from,
@@ -1101,9 +1216,18 @@ impl<'plan> Vm<'plan> {
                     crate::boundary::InboundExchangeRef::Session(reference)
                 }
             });
-        if let Some((source, target)) = &source_target {
+        if let Some((source, target, timeout)) = &source_target {
             self.install_target(target, &candidates, &committed.envelope);
             let call_ref = InboundCallRef::from_root(id);
+            if let Some(timeout) = timeout {
+                self.scheduler.arm(
+                    self.now.saturating_add(*timeout),
+                    DatedPayload::InboundCallBudget {
+                        call_ref,
+                        instance: target.reference.clone(),
+                    },
+                );
+            }
             self.inbound_calls.insert(
                 call_ref,
                 PendingInboundCall {
@@ -1111,6 +1235,10 @@ impl<'plan> Vm<'plan> {
                     request: committed.envelope.clone(),
                     instance: target.reference.clone(),
                     response: None,
+                    timeout: timeout.map(|_| PendingInboundCallTimeout {
+                        requested: false,
+                        started: false,
+                    }),
                 },
             );
         }
@@ -1473,6 +1601,29 @@ impl<'plan> Vm<'plan> {
                 delivery,
                 instance,
             } => (connector, edge, delivery, instance),
+            DatedPayload::InboundCallBudget { call_ref, instance } => {
+                if self
+                    .settled_inbound_calls
+                    .iter()
+                    .any(|event| event.call_ref == call_ref)
+                {
+                    return Ok(());
+                }
+                let Some(pending) = self.inbound_calls.get_mut(&call_ref) else {
+                    return Ok(());
+                };
+                if pending.instance != instance {
+                    return Ok(());
+                }
+                let Some(timeout) = &mut pending.timeout else {
+                    return Err(VmError::PlanInvariant {
+                        node: self.plan.nodes[pending.slot.index()].path.clone(),
+                        reason: "an ack-only inbound Call carried a request deadline",
+                    });
+                };
+                timeout.requested = true;
+                return Ok(());
+            }
             DatedPayload::JoinWithin {
                 operator,
                 edge,
@@ -2900,10 +3051,9 @@ impl<'plan> Vm<'plan> {
             });
         }
 
-        // This generic checkpoint closes the direct-lineage path only. The
-        // HttpServer `correlate` profile remains categorically deferred until
-        // H5 can select the opening instance before the response route commits.
-        let call_ref = InboundCallRef::from_root(delivery.envelope.meta().sys().origin_id());
+        let Some(call_ref) = self.select_inbound_call_ref(spec, &delivery.envelope)? else {
+            return self.discard_inbound_call_response(journal, slot, instance, delivery);
+        };
         let matches_open_call = self.inbound_calls.get(&call_ref).is_some_and(|call| {
             call.slot == slot
                 && call.instance == *instance
@@ -3211,7 +3361,9 @@ impl<'plan> Vm<'plan> {
             return Ok(None);
         }
 
-        let call_ref = InboundCallRef::from_root(envelope.meta().sys().origin_id());
+        let Some(call_ref) = self.select_inbound_call_ref(spec, envelope)? else {
+            return Ok(None);
+        };
         let Some(pending) = self.inbound_calls.get(&call_ref) else {
             return Ok(None);
         };
@@ -3289,6 +3441,56 @@ impl<'plan> Vm<'plan> {
             chain,
             admitted,
         }))
+    }
+
+    /// Selects one admitted inbound Call before a response route commits.
+    /// Default lineage uses the immutable origin id. An explicit correlator
+    /// is a checked direct `data`/`meta` path and must yield the textual root
+    /// reference carried by the application through a root-mixing path.
+    fn select_inbound_call_ref(
+        &self,
+        spec: &crate::plan::ConnectorSpec,
+        envelope: &Envelope,
+    ) -> Result<Option<InboundCallRef>, VmError> {
+        let Some(setting) = spec.attribute("correlate") else {
+            return Ok(Some(InboundCallRef::from_root(
+                envelope.meta().sys().origin_id(),
+            )));
+        };
+        let AttrSetting::Expr {
+            site: EvaluationSite::Invocation,
+            expr,
+        } = setting
+        else {
+            return Err(VmError::PlanInvariant {
+                node: node::Path::new(["inbound-call"])
+                    .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                reason: "an inbound Call correlator is not one invocation expression",
+            });
+        };
+        let mut bindings = BTreeMap::new();
+        bindings.insert(
+            String::from("meta"),
+            crate::expr::EvalValue::from(meta_value(envelope.meta())),
+        );
+        let data = DataSlot::new(envelope.data());
+        let selected = resolve_payload(
+            eval_lazy(expr, &bindings, &data, &self.plan.assets).map_err(VmError::Fault)?,
+            &data,
+        )
+        .map_err(VmError::Fault)?;
+        let crate::value::Value::Text(selected) = selected else {
+            return Err(VmError::PlanInvariant {
+                node: node::Path::new(["inbound-call"])
+                    .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                reason: "an inbound Call correlator did not yield text",
+            });
+        };
+        Ok(self
+            .inbound_calls
+            .keys()
+            .copied()
+            .find(|reference| reference.to_string() == selected))
     }
 
     /// Every route decision sealed by an inbound record. The envelope id is

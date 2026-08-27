@@ -228,6 +228,8 @@ pub mod timer_kind {
     pub const INSTANCE_DRAIN: u8 = 6;
     /// End of an instance's cancellation settlement interval.
     pub const INSTANCE_SETTLEMENT: u8 = 7;
+    /// One admitted inbound Call response deadline.
+    pub const INBOUND_CALL_TIMEOUT: u8 = 8;
 }
 
 /// One causal record.
@@ -286,6 +288,9 @@ pub struct InboundCallIngressRecord {
     pub reference: InboundCallRef,
     /// Exact Connector generation that owns the request and its terminal exit.
     pub instance: InstanceRef,
+    /// Dated obligations armed by this Call-opening fact. The tuple registry
+    /// is shared with transaction timers; ack-mode Calls carry none.
+    pub timers: Vec<(u8, Id)>,
 }
 
 /// Exchange-specific terminal reference carried by one Connector transaction.
@@ -547,13 +552,18 @@ impl PreparedInbound {
     /// # Errors
     ///
     /// A boundary root, Session fact, or second Call marker is contradictory.
-    pub(crate) fn into_call(mut self, instance: InstanceRef) -> Result<Self, Error> {
+    pub(crate) fn into_call(
+        mut self,
+        instance: InstanceRef,
+        timers: Vec<(u8, Id)>,
+    ) -> Result<Self, Error> {
         if self.connector_path.is_none() || self.exchange.is_some() {
             return Err(Error::CorruptInboundCall);
         }
         self.exchange = Some(InboundExchangeRecord::Call(InboundCallIngressRecord {
             reference: InboundCallRef::from_root(self.envelope.meta().sys().id()),
             instance,
+            timers,
         }));
         Ok(self)
     }
@@ -981,6 +991,7 @@ pub struct MemJournal {
 struct InboundCallLifecycle {
     connector_path: node::Path,
     instance: InstanceRef,
+    timers: Vec<(u8, Id)>,
     open: bool,
 }
 
@@ -1281,6 +1292,10 @@ impl Journal for MemJournal {
                 if self.inbound_calls.contains_key(&call.reference) {
                     return Err(Error::DuplicateInboundCall);
                 }
+                let expected_timeout = (timer_kind::INBOUND_CALL_TIMEOUT, call.reference.id());
+                if !(call.timers.is_empty() || call.timers.as_slice() == [expected_timeout]) {
+                    return Err(Error::CorruptInboundCall);
+                }
                 let expected = self.instance_ref_for_admission(call.instance.address())?;
                 if call.instance != expected {
                     return Err(Error::InstanceGenerationMismatch {
@@ -1330,6 +1345,7 @@ impl Journal for MemJournal {
                     InboundCallLifecycle {
                         connector_path: prepared.submission.provenance.connector_path().clone(),
                         instance: call.instance,
+                        timers: call.timers,
                         open: true,
                     },
                 );
@@ -1847,6 +1863,7 @@ impl Journal for MemJournal {
             .map(|(reference, lifecycle)| InboundCallIngressRecord {
                 reference: *reference,
                 instance: lifecycle.instance.clone(),
+                timers: lifecycle.timers.clone(),
             })
             .collect()
     }
@@ -2671,7 +2688,7 @@ mod tests {
         let prepared = journal
             .prepare_connector_inbound(submission("server", SubmissionSequence::Next), None)
             .unwrap()
-            .into_call(source.clone())
+            .into_call(source.clone(), vec![])
             .unwrap();
         let root = prepared.envelope().meta().sys().id();
         let call_ref = InboundCallRef::from_root(root);
@@ -2681,6 +2698,7 @@ mod tests {
             [InboundCallIngressRecord {
                 reference: call_ref,
                 instance: source.clone(),
+                timers: vec![],
             }]
         );
         assert_eq!(
@@ -2688,6 +2706,7 @@ mod tests {
             Some(&InboundExchangeRecord::Call(InboundCallIngressRecord {
                 reference: call_ref,
                 instance: source.clone(),
+                timers: vec![],
             }))
         );
 

@@ -359,13 +359,24 @@ fn record_tree(record: &Record) -> Cbor {
             if let Some(exchange) = inbound.exchange.as_deref() {
                 match exchange {
                     crate::journal::InboundExchangeRecord::Call(call) => {
-                        pairs.insert(
-                            28,
-                            Cbor::Array(vec![
-                                Cbor::Bytes(call.reference.id().as_bytes().to_vec()),
-                                call.instance.tree(),
-                            ]),
-                        );
+                        let mut fields = vec![
+                            Cbor::Bytes(call.reference.id().as_bytes().to_vec()),
+                            call.instance.tree(),
+                        ];
+                        if !call.timers.is_empty() {
+                            fields.push(Cbor::Array(
+                                call.timers
+                                    .iter()
+                                    .map(|(kind, reference)| {
+                                        Cbor::Array(vec![
+                                            Cbor::Uint(u64::from(*kind)),
+                                            Cbor::Bytes(reference.as_bytes().to_vec()),
+                                        ])
+                                    })
+                                    .collect(),
+                            ));
+                        }
+                        pairs.insert(28, Cbor::Array(fields));
                     }
                     crate::journal::InboundExchangeRecord::Session(session) => {
                         let (kind, reference) = match session {

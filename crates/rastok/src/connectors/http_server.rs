@@ -10,7 +10,8 @@ use std::collections::BTreeSet;
 
 use crate::boundary::{
     InboundCallConnectorDriver, InboundCallEvent, InboundCallResponse, InboundCallResponseStart,
-    InboundConnectorDriver, InboundDecision, InboundProposal, InboundProposalRef,
+    InboundCallTimeout, InboundCallTimeoutStart, InboundConnectorDriver, InboundDecision,
+    InboundProposal, InboundProposalRef,
 };
 use crate::connector::{ConnectorId, ConnectorRoles};
 use crate::plan::ValidatedExecutionPlan;
@@ -25,6 +26,14 @@ pub use crate::connectors::network::http_server::{HttpServerConfig, HttpServerFa
 #[cfg(feature = "hosted-http12")]
 use super::http_shared::HttpVersion;
 
+/// Protocol behavior selected by the semantic HttpServer profile.
+#[cfg(feature = "hosted-http12")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HttpServerMode {
+    Ack,
+    Respond,
+}
+
 /// One statically bindable route of the hosted server family.
 #[cfg(feature = "hosted-http12")]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,6 +42,7 @@ pub(crate) struct HttpServerRouteBinding {
     pub(crate) codec: String,
     pub(crate) listen: String,
     pub(crate) max_body: u64,
+    pub(crate) mode: HttpServerMode,
     pub(crate) node: crate::node::Path,
     pub(crate) path: String,
     pub(crate) response_headers: BTreeMap<String, Vec<Vec<u8>>>,
@@ -163,11 +173,15 @@ pub(crate) fn bind_routes(
                 spec.contract
             )));
         }
-        if !matches!(spec.attribute("mode"), Some(AttrSetting::Word(mode)) if mode == "ack") {
-            return Err(super::DriverFactoryError::new(format!(
-                "the hosted HttpServer at `{path}` requires the executable `ack` mode"
-            )));
-        }
+        let mode = match spec.attribute("mode") {
+            Some(AttrSetting::Word(mode)) if mode == "ack" => HttpServerMode::Ack,
+            Some(AttrSetting::Word(mode)) if mode == "respond" => HttpServerMode::Respond,
+            _ => {
+                return Err(super::DriverFactoryError::new(format!(
+                    "the hosted HttpServer mode at `{path}` is unresolved"
+                )));
+            }
+        };
         let codec = match spec.attribute("codec") {
             Some(AttrSetting::Word(codec))
                 if matches!(codec.as_str(), "bytes" | "json" | "text") =>
@@ -217,6 +231,7 @@ pub(crate) fn bind_routes(
             codec,
             listen,
             max_body,
+            mode,
             node: path.clone(),
             path: route_path,
             response_headers: response_headers(spec)?,
@@ -252,6 +267,10 @@ impl InboundConnectorDriver for PassiveInbound {
 impl InboundCallConnectorDriver for PassiveInbound {
     fn start_response(&mut self, _: &InboundCallResponse) -> InboundCallResponseStart {
         InboundCallResponseStart::Pending
+    }
+
+    fn start_timeout(&mut self, _: &InboundCallTimeout) -> InboundCallTimeoutStart {
+        InboundCallTimeoutStart::Pending
     }
 
     fn events(&mut self) -> Vec<InboundCallEvent> {

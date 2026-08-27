@@ -1699,7 +1699,7 @@ impl Checker<'_, '_> {
             Diagnostic::new(
                 E_CONTRACT_ATTR,
                 Phase::Check,
-                "`HttpServer(mode = ack)` has no graph-response input; `mode = respond` is a named H5 deferral",
+                "`HttpServer(mode = ack)` has no graph-response input; select `mode = respond` for a retained API response",
             )
             .with_span(span)
             .with_field("connector", path.to_string())
@@ -2484,6 +2484,28 @@ impl Checker<'_, '_> {
             ) else {
                 continue;
             };
+            if pending.domain == contract::ValueDomain::ExprPath
+                && !matches!(
+                    &tree.root,
+                    expr::Expr::Path(path)
+                        if path.first().is_some_and(|root| matches!(root.as_str(), "data" | "meta"))
+                )
+            {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_CONTRACT_ATTR,
+                        Phase::Check,
+                        format!(
+                            "`{}` must be one direct `data` or `meta` path, not a computed expression",
+                            pending.name
+                        ),
+                    )
+                    .with_span(pending.span)
+                    .with_field("attribute", pending.name.clone())
+                    .with_field("detail", "correlation path"),
+                );
+                continue;
+            }
             if !pending.domain.admits_type(&tree.ty) {
                 self.bag.push(
                     Diagnostic::new(
@@ -3269,10 +3291,10 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Returns one common sheet row whose value may legitimately remain open
-    /// until an invocation. Profile-local rows are intentionally excluded:
-    /// the profile must be selected before they can name one unambiguous
-    /// contract. `File.path` is the first executable consumer.
+    /// Returns one sheet row whose value may legitimately remain open until
+    /// an invocation. A profile-local name is admitted here only when every
+    /// occurrence has the same domain and phase ceiling; the later contract
+    /// pass still judges whether it belongs to the selected profile.
     fn invocation_attribute_spec(
         &self,
         node: &Node,
@@ -3282,16 +3304,26 @@ impl Checker<'_, '_> {
         let contract::Availability::Available(sheet) = self.registry.connector(source_name) else {
             return None;
         };
-        sheet
+        let mut matches = sheet
             .common
             .iter()
-            .find(|spec| {
+            .chain(
+                sheet
+                    .selector
+                    .iter()
+                    .flat_map(|selector| selector.profiles.iter())
+                    .flat_map(|profile| profile.attributes.iter()),
+            )
+            .filter(|spec| {
                 spec.name == name
                     && spec.latest_site == crate::plan::EvaluationSite::Invocation
                     && spec.domain.implemented()
                     && !matches!(spec.domain, contract::ValueDomain::Choice(_))
-            })
-            .map(|spec| (spec.domain.clone(), spec.latest_site))
+            });
+        let first = matches.next()?;
+        matches
+            .all(|spec| spec.domain == first.domain && spec.latest_site == first.latest_site)
+            .then(|| (first.domain.clone(), first.latest_site))
     }
 
     fn node_body(

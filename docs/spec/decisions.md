@@ -5,6 +5,41 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-27-1 — One bounded HttpServer Call serves HTTP/1–3
+
+H5 closes `rastok/http-server@1` without introducing a version-specific
+contract. Hyper HTTP/1.1 and HTTP/2 streams and quiche HTTP/3 streams enter
+the same retained `InboundCallRef` protocol. Request-count, stream-count,
+header, body, event and response capacities are finite. The Driver acquires
+body capacity before copying bytes, the VM commits the root before `ack`
+returns 202, and `respond` writes only an already-journaled graph envelope.
+The standalone runner polls inbound Drivers independently of stdin.
+
+`respond` requires a positive instance `timeout`. The VM arms timer kind 8
+in the accepting INBOUND fact; response and timeout are two protocol actions
+competing for one retained request and one `l:reply`. Whichever action the
+Driver starts must report the sole terminal observation. A graph response
+that loses the race is consumed as an orphan and never writes bytes. Direct
+lineage selects the opening root. A path crossing a root-mixing join must
+carry an explicit `correlate = <direct data or meta path>` whose static result
+is text; selection occurs before the producing route commits.
+
+Malformed framing, failed authentication and undecodable/oversized bodies
+remain pre-admission HTTP refusals. They cannot be `HttpServerExit` cases
+because no causal Call exists. H5 therefore removes `MalformedRequest` and
+`AuthFailed`; overload remains `Overloaded` only when an admitted obligation
+cannot be served, while listener/body pressure before admission remains an
+HTTP response with no root. The representative HttpServer semantic identity
+moves from `63a257e2…` to `b83fcf2d…` because the resolved `exit` union is
+identity material. Other network witnesses, Process/JSONL/echo and the
+connector-free gauge `0d3ad43d…` do not move. Existing causal traces and plan
+format v12 do not move; timer kind 8 occurs only on new respond-mode roots.
+
+HTTP/3 keeps TLS mandatory, 0-RTT disabled and the same in-memory identity as
+the other bindings. Wire version, connection ids and stream ids remain
+physical observations. Public-network probes are not release gates; H7 owns
+the pinned independent interoperability ledger.
+
 ## D-2026-08-26-7 — A graph response is the return half of its inbound Call
 
 The generic inbound-Call protocol now accepts one already-journaled graph

@@ -31,6 +31,10 @@
 > existing consumed-position key 33 beside cause key 39 and Call-exit key 52
 > for a graph response; no key or recipe is added. All three allocated H5 keys
 > are omitted from older facts, so no existing causal record moves.
+> Final H5 allocates timer kind 8 for a retained inbound-Call request deadline
+> and narrows `HttpServerExit` to facts possible after admission. Only the
+> representative HttpServer semantic hash moves; plan v12 and prior records
+> remain byte-identical.
 > D-2026-08-14-1
 > transports the canonical `DataType` registry, complete resolved port types
 > and structural/tagged unions together. Decode re-derives the effective table
@@ -248,6 +252,17 @@ form. The keyed-source proof pins the response route to the opening
 `InstanceRef` even when transformed response data would derive another key.
 No existing package, semantic hash, causal trace or golden moves.
 
+**M1.6 H5 closure (2026-08-27).** D-2026-08-27-1 removes the impossible
+pre-admission `MalformedRequest` and `AuthFailed` branches from
+`HttpServerExit`. The representative HttpServer witness therefore moves
+`63a257e2… → b83fcf2d…`; HttpClient `c66bd9da…`, WebSocketClient
+`d4f92e15…`, WebSocketServer `d36bcbf4…`, compiler/echo/JSONL and the gauge
+`0d3ad43d…` remain fixed. This is a semantic and package-body move only for
+graphs whose resolved HttpServer exit type changes; the categorical package
+format remains v12. New respond-mode INBOUND facts may add timer kind 8 with
+the `InboundCallRef` as reference. It is omitted from ack and every old fact,
+so existing causal traces do not move.
+
 ## 2. `graph_version` and the manifest
 
 `meta.sys.graph_version` is a small integer. It is a
@@ -402,7 +417,7 @@ execution-model §1) — keys `30–39`, `48–50` and `52` :
 | 34 | join_inputs | array | for a join trigger, the presence-completing set (envelope.md §3), each a spine-`id` (bytes 16), **in the handler's declared port order**; this array is deliberately not lexicographically re-sorted, because tuple order is identity; omitted otherwise |
 | 35 | state_delta | array | canonical **sorted pair list** `[field_path (text), tagged_value]` of the firing Node's private `var` changes `state → state'` (sub-form below; fields sorted by `field_path`); omitted when empty |
 | 36 | emissions | array | **in text/`emission_index` order** (execution-model §4) ; each entry a fixed tuple `[port (text), emission_index (uint), envelope (spine 1–9)]` |
-| 37 | timers | array | dated obligations armed by this firing — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`, `6 = instance drain`, `7 = instance settlement`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind so the two Closing phases cannot collide. The due µs is NOT sealed (derivable and re-armed by the fold). |
+| 37 | timers | array | dated obligations armed by a transaction or accepting inbound fact — each a fixed tuple `[kind (uint), ref (bytes)]`, sorted by `(kind, ref)`. The extend-only kinds are `1 = call timeout`, `2 = join within`, `3 = instance lifetime`, `4 = Saga timeout`, `5 = Loop backoff`, `6 = instance drain`, `7 = instance settlement`, `8 = inbound Call request timeout`. Kind 3 uses domain `0x21`; kinds 6/7 use domain `0x22` plus their kind; kind 8 uses the already-derived `InboundCallRef`. The due instant is NOT sealed (derivable and re-armed by the fold). |
 | 38 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_ref]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instances.key` and never substitutes a later generation. |
 | 39 | cause_id | bytes(16) | causal envelope of a lifecycle transaction. Normally key 33 identifies the same cause and this field is omitted; `l:start`, `l:stop` and later `l:evict` have no consumed cursor, while a graph-response `l:reply` deliberately carries both: key 33 names the response delivery and key 39 preserves the distinct opening root as causal parent. This keeps lifecycle causality autonomous rather than relying on record order. |
 | 48 | parent_instance_ref | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time frames but not ancestor generations, so this fact is not derivable from key 31. |

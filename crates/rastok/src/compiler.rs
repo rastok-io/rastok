@@ -157,6 +157,7 @@ pub fn compile_with_assets(
             | PlanValidationError::UnresolvedInstanceAdmission { .. }
             | PlanValidationError::MissingClosingPolicy { .. }
             | PlanValidationError::AmbiguousJoinMetadataRead { .. }
+            | PlanValidationError::AmbiguousInboundCallCorrelation { .. }
             | PlanValidationError::WiringCycle { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
@@ -282,6 +283,15 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
         )
         .with_field("field", field)
         .with_field("detail", "required metadata read after CommonOrAbsent"),
+        PlanValidationError::AmbiguousInboundCallCorrelation { node } => Diagnostic::new(
+            check::E_CONTRACT_ATTR,
+            Phase::Check,
+            format!(
+                "`{node}` receives a response through a root-mixing join; add `correlate = <direct data or meta path>`"
+            ),
+        )
+        .with_field("node", node.to_string())
+        .with_field("attribute", "correlate"),
         PlanValidationError::WiringCycle { node } => Diagnostic::new(
             check::E_GRAPH_CYCLE,
             Phase::Check,

@@ -1,14 +1,14 @@
 use crate::boundary::{
     Draft, HttpServerExit, InboundAcceptance, InboundCallConnectorDriver, InboundCallEvent,
-    InboundCallResponse, InboundCallResponseStart, InboundConnectorDriver, InboundDecision,
-    InboundEnvelopeProvenance, InboundExchangeRef, InboundProposal, InboundProposalRef,
-    InboundRejection, InboundSubmission, SubmissionSequence,
+    InboundCallResponse, InboundCallResponseStart, InboundCallTimeout, InboundCallTimeoutStart,
+    InboundConnectorDriver, InboundDecision, InboundEnvelopeProvenance, InboundExchangeRef,
+    InboundProposal, InboundProposalRef, InboundRejection, InboundSubmission, SubmissionSequence,
 };
-use crate::connectors::http_server::bind_routes;
+use crate::connectors::http_server::{HttpServerMode, bind_routes};
 use crate::connectors::http_shared::{HttpVersion, decode_body};
 use crate::connectors::network::pump::{
-    EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine, NetworkRuntime,
-    ReserveError,
+    EngineInput, EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine,
+    NetworkRuntime, ReserveError, SubmitError,
 };
 use crate::envelope::{MetaValue, Namespace, Scalar};
 use bytes::Bytes;
@@ -19,7 +19,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
-#[cfg(test)]
+#[cfg(any(test, feature = "hosted-http3"))]
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::sync::Arc;
@@ -160,6 +160,7 @@ struct BoundRoute {
     auth_bearer: Option<blake3::Hash>,
     codec: String,
     max_body: u64,
+    mode: HttpServerMode,
     node: crate::node::Path,
     path: String,
     response_headers: http::HeaderMap,
@@ -171,6 +172,15 @@ struct ListenerBinding {
     listener: TcpListener,
     routes: Arc<Vec<BoundRoute>>,
     tls: Option<Arc<rustls::ServerConfig>>,
+}
+
+#[cfg(feature = "hosted-http3")]
+#[derive(Debug)]
+struct Http3ListenerBinding {
+    socket: std::net::UdpSocket,
+    routes: Arc<Vec<BoundRoute>>,
+    certificate: Vec<u8>,
+    private_key: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -185,7 +195,22 @@ struct ListenerGroup {
 struct LiveProposal {
     proposal: InboundProposal,
     decision: tokio::sync::oneshot::Sender<ServerDecision>,
+    response: Option<RetainedResponse>,
     _reservation: EventReservation,
+}
+
+#[derive(Debug)]
+struct RetainedResponse {
+    peer: tokio::sync::oneshot::Sender<Response<Full<Bytes>>>,
+    route: BoundRoute,
+}
+
+#[derive(Debug)]
+struct ServerCommand {
+    call_ref: crate::boundary::InboundCallRef,
+    peer: tokio::sync::oneshot::Sender<Response<Full<Bytes>>>,
+    response: Response<Full<Bytes>>,
+    terminal: HttpServerExit,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -196,17 +221,72 @@ enum ServerDecision {
 
 #[derive(Debug)]
 enum ServerEvent {
-    Proposal(LiveProposal),
+    Proposal(Box<LiveProposal>),
     Terminal(InboundCallEvent),
 }
 
-/// Real hosted HTTP/1.1–2 inbound Driver. HTTP/3 is a later H5 checkpoint;
-/// no protocol library type escapes this private module.
+#[cfg(feature = "hosted-http3")]
+struct Http3Request {
+    body: Vec<u8>,
+    headers: BTreeMap<String, Vec<Vec<u8>>>,
+    method: String,
+    path: String,
+    reservation: EventReservation,
+    route: BoundRoute,
+    _request: tokio::sync::OwnedSemaphorePermit,
+}
+
+#[cfg(feature = "hosted-http3")]
+struct Http3Response {
+    connection: Vec<u8>,
+    response: Response<Full<Bytes>>,
+    stream: u64,
+}
+
+#[cfg(feature = "hosted-http3")]
+struct Http3PendingResponse {
+    body: Vec<u8>,
+    headers: Vec<quiche::h3::Header>,
+    offset: usize,
+    started: bool,
+}
+
+#[cfg(feature = "hosted-http3")]
+struct Http3Peer {
+    connection: quiche::Connection,
+    h3: Option<quiche::h3::Connection>,
+    requests: BTreeMap<u64, Http3Request>,
+    responses: BTreeMap<u64, Http3PendingResponse>,
+}
+
+#[cfg(feature = "hosted-http3")]
+struct Http3Ingress<'a> {
+    routes: &'a [BoundRoute],
+    events: &'a mut EventSender<ServerEvent>,
+    requests: &'a Arc<tokio::sync::Semaphore>,
+    references: &'a Arc<AtomicU64>,
+    responses: &'a tokio::sync::mpsc::Sender<Http3Response>,
+    max_header_bytes: usize,
+}
+
+#[cfg(feature = "hosted-http3")]
+struct Http3RequestHead {
+    method: String,
+    path: String,
+    headers: BTreeMap<String, Vec<Vec<u8>>>,
+    byte_len: usize,
+}
+
+/// Real hosted HTTP/1.1–3 inbound Driver.
+///
+/// No protocol-library type escapes this private module.
 #[derive(Debug)]
 struct HttpServer<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
-    engine: HostedNetworkEngine<(), (), ServerEvent>,
+    engine: HostedNetworkEngine<ServerCommand, ServerCommand, ServerEvent>,
     pending: VecDeque<LiveProposal>,
+    retained: BTreeMap<crate::boundary::InboundCallRef, RetainedResponse>,
+    writing: BTreeSet<crate::boundary::InboundCallRef>,
     terminals: Vec<InboundCallEvent>,
     #[cfg(test)]
     local_addresses: Vec<SocketAddr>,
@@ -234,11 +314,8 @@ impl<'plan> HttpServer<'plan> {
             let supported = route
                 .versions
                 .iter()
-                .filter_map(|version| match version {
-                    HttpVersion::Http1 => Some("http/1.1"),
-                    HttpVersion::Http2 => Some("http/2"),
-                    HttpVersion::Http3 => None,
-                })
+                .filter(|version| cfg!(feature = "hosted-http3") || **version != HttpVersion::Http3)
+                .map(|version| version.observation())
                 .collect::<BTreeSet<_>>();
             if supported.is_empty() {
                 return Err(format!(
@@ -297,6 +374,7 @@ impl<'plan> HttpServer<'plan> {
                     .map(|token| blake3::hash(format!("Bearer {token}").as_bytes())),
                 codec: route.codec,
                 max_body: route.max_body,
+                mode: route.mode,
                 node: route.node,
                 path: route.path,
                 response_headers,
@@ -305,46 +383,102 @@ impl<'plan> HttpServer<'plan> {
         }
 
         let mut listeners = Vec::new();
+        #[cfg(feature = "hosted-http3")]
+        let mut http3_listeners = Vec::new();
         let mut local_addresses = Vec::new();
         for (listen, group) in groups {
-            let listener = TcpListener::bind(&listen).map_err(|error| {
-                format!("the HttpServer listener `{listen}` cannot bind: {error}")
-            })?;
-            listener.set_nonblocking(true).map_err(|error| {
-                format!("the HttpServer listener `{listen}` is not async: {error}")
-            })?;
-            local_addresses.push(listener.local_addr().map_err(|error| {
-                format!("the HttpServer listener `{listen}` has no address: {error}")
-            })?);
+            let tcp_enabled =
+                group.versions.contains("http/1.1") || group.versions.contains("http/2");
+            let listener = if tcp_enabled {
+                let listener = TcpListener::bind(&listen).map_err(|error| {
+                    format!("the HttpServer listener `{listen}` cannot bind: {error}")
+                })?;
+                listener.set_nonblocking(true).map_err(|error| {
+                    format!("the HttpServer listener `{listen}` is not async: {error}")
+                })?;
+                Some(listener)
+            } else {
+                None
+            };
+            let physical_address = match &listener {
+                Some(listener) => listener.local_addr().map_err(|error| {
+                    format!("the HttpServer listener `{listen}` has no address: {error}")
+                })?,
+                None => listen.parse().map_err(|error| {
+                    format!("the HttpServer UDP listener `{listen}` has no socket address: {error}")
+                })?,
+            };
+            if listener.is_some() {
+                local_addresses.push(physical_address);
+            }
             let tls = match (group.certificate, group.private_key) {
                 (Some(certificate), Some(private_key)) => {
-                    let mut tls = super::tls::rustls_server(super::tls::TlsIdentity {
-                        certificate_chain: &certificate,
-                        private_key: &private_key,
-                    })
-                    .map_err(|error| error.to_string())?;
-                    tls.alpn_protocols = [
-                        ("http/2", b"h2".as_slice()),
-                        ("http/1.1", b"http/1.1".as_slice()),
-                    ]
-                    .into_iter()
-                    .filter(|(version, _)| group.versions.contains(version))
-                    .map(|(_, protocol)| protocol.to_vec())
-                    .collect();
-                    Some(Arc::new(tls))
+                    let tls = if tcp_enabled {
+                        let mut tls = super::tls::rustls_server(super::tls::TlsIdentity {
+                            certificate_chain: &certificate,
+                            private_key: &private_key,
+                        })
+                        .map_err(|error| error.to_string())?;
+                        tls.alpn_protocols = [
+                            ("http/2", b"h2".as_slice()),
+                            ("http/1.1", b"http/1.1".as_slice()),
+                        ]
+                        .into_iter()
+                        .filter(|(version, _)| group.versions.contains(version))
+                        .map(|(_, protocol)| protocol.to_vec())
+                        .collect();
+                        Some(Arc::new(tls))
+                    } else {
+                        None
+                    };
+                    #[cfg(feature = "hosted-http3")]
+                    if group.versions.contains("http/3") {
+                        let socket = std::net::UdpSocket::bind(physical_address).map_err(|error| {
+                            format!(
+                                "the HttpServer HTTP/3 listener `{physical_address}` cannot bind: {error}"
+                            )
+                        })?;
+                        socket.set_nonblocking(true).map_err(|error| {
+                            format!(
+                                "the HttpServer HTTP/3 listener `{physical_address}` is not async: {error}"
+                            )
+                        })?;
+                        if listener.is_none() {
+                            local_addresses.push(socket.local_addr().map_err(|error| {
+                                format!("the HttpServer HTTP/3 listener has no address: {error}")
+                            })?);
+                        }
+                        http3_listeners.push(Http3ListenerBinding {
+                            socket,
+                            routes: Arc::new(group.routes.clone()),
+                            certificate,
+                            private_key,
+                        });
+                    }
+                    tls
                 }
-                (None, None) => None,
+                (None, None) => {
+                    #[cfg(feature = "hosted-http3")]
+                    if group.versions.contains("http/3") {
+                        return Err(format!(
+                            "the HttpServer HTTP/3 listener `{listen}` requires a TLS identity"
+                        ));
+                    }
+                    None
+                }
                 _ => {
                     return Err(format!(
                         "the HttpServer TLS pair at `{listen}` is incomplete"
                     ));
                 }
             };
-            listeners.push(ListenerBinding {
-                listener,
-                routes: Arc::new(group.routes),
-                tls,
-            });
+            if let Some(listener) = listener {
+                listeners.push(ListenerBinding {
+                    listener,
+                    routes: Arc::new(group.routes),
+                    tls,
+                });
+            }
         }
 
         let limits = config.engine_limits().map_err(|error| error.to_string())?;
@@ -354,7 +488,7 @@ impl<'plan> HttpServer<'plan> {
         let engine = HostedNetworkEngine::start(
             "rastok-http-server",
             limits,
-            move |mut runtime: NetworkRuntime<(), (), ServerEvent>| async move {
+            move |mut runtime: NetworkRuntime<ServerCommand, ServerCommand, ServerEvent>| async move {
                 for binding in listeners {
                     let events = runtime.event_sender();
                     let connections = Arc::clone(&connections);
@@ -373,7 +507,50 @@ impl<'plan> HttpServer<'plan> {
                         .await;
                     });
                 }
-                while runtime.recv().await.is_some() {}
+                #[cfg(feature = "hosted-http3")]
+                for binding in http3_listeners {
+                    let events = runtime.event_sender();
+                    let requests = Arc::clone(&requests);
+                    let references = Arc::clone(&references);
+                    tokio::spawn(async move {
+                        serve_http3_listener(
+                            binding,
+                            events,
+                            requests,
+                            references,
+                            config.max_header_bytes,
+                            config.max_in_flight,
+                            limits,
+                        )
+                        .await;
+                    });
+                }
+                while let Some(input) = runtime.recv().await {
+                    let command = match input {
+                        EngineInput::Work(work) => work.into_inner(),
+                        EngineInput::Control(command) => command,
+                    };
+                    let terminal = if command.peer.send(command.response).is_ok() {
+                        command.terminal
+                    } else {
+                        HttpServerExit::PeerDisconnected
+                    };
+                    if runtime
+                        .emit(
+                            ServerEvent::Terminal(InboundCallEvent {
+                                call_ref: command.call_ref,
+                                completion: crate::boundary::Completion::http_server_exit(
+                                    terminal,
+                                ),
+                            }),
+                            0,
+                        )
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
             },
         )
         .map_err(|error| error.to_string())?;
@@ -381,6 +558,8 @@ impl<'plan> HttpServer<'plan> {
             _plan: plan,
             engine,
             pending: VecDeque::new(),
+            retained: BTreeMap::new(),
+            writing: BTreeSet::new(),
             terminals: Vec::new(),
             #[cfg(test)]
             local_addresses,
@@ -391,9 +570,13 @@ impl<'plan> HttpServer<'plan> {
         loop {
             match self.engine.try_event() {
                 EventPoll::Event(ServerEvent::Proposal(proposal)) => {
-                    self.pending.push_back(proposal);
+                    self.pending.push_back(*proposal);
                 }
-                EventPoll::Event(ServerEvent::Terminal(event)) => self.terminals.push(event),
+                EventPoll::Event(ServerEvent::Terminal(event)) => {
+                    self.retained.remove(&event.call_ref);
+                    self.writing.remove(&event.call_ref);
+                    self.terminals.push(event);
+                }
                 EventPoll::Empty | EventPoll::Stopped => break,
             }
         }
@@ -429,13 +612,23 @@ impl InboundConnectorDriver for HttpServer<'_> {
             InboundDecision::Accepted(_) => ServerDecision::Rejected(InboundRejection::UnknownPort),
             InboundDecision::Rejected(reason) => ServerDecision::Rejected(reason),
         };
-        if let Err(ServerDecision::Accepted(call_ref)) = pending.decision.send(decision) {
-            self.terminals.push(InboundCallEvent {
-                call_ref,
-                completion: crate::boundary::Completion::http_server_exit(
-                    HttpServerExit::PeerDisconnected,
-                ),
-            });
+        match pending.decision.send(decision) {
+            Ok(()) => {
+                if let (ServerDecision::Accepted(call_ref), Some(response)) =
+                    (decision, pending.response)
+                {
+                    self.retained.insert(call_ref, response);
+                }
+            }
+            Err(ServerDecision::Accepted(call_ref)) => {
+                self.terminals.push(InboundCallEvent {
+                    call_ref,
+                    completion: crate::boundary::Completion::http_server_exit(
+                        HttpServerExit::PeerDisconnected,
+                    ),
+                });
+            }
+            Err(ServerDecision::Rejected(_)) => {}
         }
     }
 
@@ -445,16 +638,694 @@ impl InboundConnectorDriver for HttpServer<'_> {
 }
 
 impl InboundCallConnectorDriver for HttpServer<'_> {
-    fn start_response(&mut self, _: &InboundCallResponse) -> InboundCallResponseStart {
-        // H5.1 binds only the fixed-ack profile; a validated respond plan is
-        // refused by this factory before the listener starts.
-        InboundCallResponseStart::Pending
+    fn start_response(&mut self, response: &InboundCallResponse) -> InboundCallResponseStart {
+        self.poll_events();
+        if self.writing.contains(&response.call_ref) {
+            return InboundCallResponseStart::Started;
+        }
+        let Some(retained) = self.retained.remove(&response.call_ref) else {
+            // A peer disconnect may already have queued the sole terminal.
+            return InboundCallResponseStart::Started;
+        };
+        if retained.route.node != response.connector_path {
+            self.retained.insert(response.call_ref, retained);
+            return InboundCallResponseStart::Pending;
+        }
+        let route = retained.route.clone();
+        let framed = graph_response(&route, &response.response);
+        let (protocol_response, terminal, bytes) = match framed {
+            Ok(response) => response,
+            Err(ServerResponseError::Oversized) => (
+                response_with_headers(StatusCode::SERVICE_UNAVAILABLE, &route.response_headers),
+                HttpServerExit::Overloaded,
+                0,
+            ),
+            Err(ServerResponseError::Invalid) => (
+                response_with_headers(StatusCode::INTERNAL_SERVER_ERROR, &route.response_headers),
+                HttpServerExit::OutcomeUnknown,
+                0,
+            ),
+        };
+        let command = ServerCommand {
+            call_ref: response.call_ref,
+            peer: retained.peer,
+            response: protocol_response,
+            terminal,
+        };
+        match self.engine.try_submit(command, bytes) {
+            Ok(()) => {
+                self.writing.insert(response.call_ref);
+                InboundCallResponseStart::Started
+            }
+            Err(SubmitError::Full(command) | SubmitError::ByteBudget(command)) => {
+                self.retained.insert(
+                    response.call_ref,
+                    RetainedResponse {
+                        peer: command.peer,
+                        route,
+                    },
+                );
+                InboundCallResponseStart::Pending
+            }
+            Err(SubmitError::Oversized { value, .. }) => {
+                let overload = ServerCommand {
+                    call_ref: response.call_ref,
+                    peer: value.peer,
+                    response: response_with_headers(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        &route.response_headers,
+                    ),
+                    terminal: HttpServerExit::Overloaded,
+                };
+                match self.start_control(response.call_ref, route, overload) {
+                    InboundCallTimeoutStart::Started => InboundCallResponseStart::Started,
+                    InboundCallTimeoutStart::Pending => InboundCallResponseStart::Pending,
+                }
+            }
+            Err(SubmitError::Stopped(command)) => {
+                self.finish_without_engine(command);
+                InboundCallResponseStart::Started
+            }
+        }
+    }
+
+    fn start_timeout(&mut self, timeout: &InboundCallTimeout) -> InboundCallTimeoutStart {
+        self.poll_events();
+        if self.writing.contains(&timeout.call_ref) {
+            return InboundCallTimeoutStart::Started;
+        }
+        let Some(retained) = self.retained.remove(&timeout.call_ref) else {
+            return InboundCallTimeoutStart::Started;
+        };
+        if retained.route.node != timeout.connector_path {
+            self.retained.insert(timeout.call_ref, retained);
+            return InboundCallTimeoutStart::Pending;
+        }
+        let route = retained.route.clone();
+        let command = ServerCommand {
+            call_ref: timeout.call_ref,
+            peer: retained.peer,
+            response: response_with_headers(StatusCode::GATEWAY_TIMEOUT, &route.response_headers),
+            terminal: HttpServerExit::RequestExpired,
+        };
+        self.start_control(timeout.call_ref, route, command)
     }
 
     fn events(&mut self) -> Vec<InboundCallEvent> {
         self.poll_events();
         self.terminals.sort_by_key(|event| event.call_ref);
         std::mem::take(&mut self.terminals)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServerResponseError {
+    Invalid,
+    Oversized,
+}
+
+impl HttpServer<'_> {
+    fn start_control(
+        &mut self,
+        call_ref: crate::boundary::InboundCallRef,
+        route: BoundRoute,
+        command: ServerCommand,
+    ) -> InboundCallTimeoutStart {
+        match self.engine.try_control(command) {
+            Ok(()) => {
+                self.writing.insert(call_ref);
+                InboundCallTimeoutStart::Started
+            }
+            Err(SubmitError::Full(command) | SubmitError::ByteBudget(command)) => {
+                self.retained.insert(
+                    call_ref,
+                    RetainedResponse {
+                        peer: command.peer,
+                        route,
+                    },
+                );
+                InboundCallTimeoutStart::Pending
+            }
+            Err(SubmitError::Oversized { value, .. } | SubmitError::Stopped(value)) => {
+                self.finish_without_engine(value);
+                InboundCallTimeoutStart::Started
+            }
+        }
+    }
+
+    fn finish_without_engine(&mut self, command: ServerCommand) {
+        let terminal = if command.peer.send(command.response).is_ok() {
+            command.terminal
+        } else {
+            HttpServerExit::PeerDisconnected
+        };
+        self.terminals.push(InboundCallEvent {
+            call_ref: command.call_ref,
+            completion: crate::boundary::Completion::http_server_exit(terminal),
+        });
+    }
+}
+
+fn graph_response(
+    route: &BoundRoute,
+    envelope: &crate::envelope::Envelope,
+) -> Result<(Response<Full<Bytes>>, HttpServerExit, usize), ServerResponseError> {
+    let body = crate::boundary::network_payload_bytes(&route.codec, envelope.data())
+        .map_err(|_| ServerResponseError::Invalid)?;
+    if u64::try_from(body.len()).map_or(true, |length| length > route.max_body) {
+        return Err(ServerResponseError::Oversized);
+    }
+    let status = match envelope.meta().ext().get("http_status") {
+        None => StatusCode::OK,
+        Some(MetaValue::Scalar(Scalar::Int(status))) => u16::try_from(*status)
+            .ok()
+            .and_then(|status| StatusCode::from_u16(status).ok())
+            .ok_or(ServerResponseError::Invalid)?,
+        Some(_) => return Err(ServerResponseError::Invalid),
+    };
+    let bytes = body.len();
+    let mut response = Response::new(Full::new(Bytes::from(body)));
+    *response.status_mut() = status;
+    *response.headers_mut() = route.response_headers.clone();
+    if !response.headers().contains_key(http::header::CONTENT_TYPE)
+        && let Some(MetaValue::Scalar(Scalar::Text(content_type))) =
+            envelope.meta().ext().get("content_type")
+        && let Ok(content_type) = http::HeaderValue::from_str(content_type)
+    {
+        response
+            .headers_mut()
+            .insert(http::header::CONTENT_TYPE, content_type);
+    }
+    Ok((
+        response,
+        HttpServerExit::Completed {
+            status: status.as_u16(),
+        },
+        bytes,
+    ))
+}
+
+#[cfg(feature = "hosted-http3")]
+async fn serve_http3_listener(
+    binding: Http3ListenerBinding,
+    mut events: EventSender<ServerEvent>,
+    requests: Arc<tokio::sync::Semaphore>,
+    references: Arc<AtomicU64>,
+    max_header_bytes: usize,
+    max_in_flight: usize,
+    limits: EngineLimits,
+) {
+    let Ok(socket) = tokio::net::UdpSocket::from_std(binding.socket) else {
+        return;
+    };
+    let local = match socket.local_addr() {
+        Ok(local) => local,
+        Err(_) => return,
+    };
+    let identity = super::tls::TlsIdentity {
+        certificate_chain: &binding.certificate,
+        private_key: &binding.private_key,
+    };
+    let mut config = match super::tls::quiche_server(identity, limits) {
+        Ok(config) => config,
+        Err(_) => return,
+    };
+    let mut h3_config = match quiche::h3::Config::new() {
+        Ok(config) => config,
+        Err(_) => return,
+    };
+    h3_config.set_max_field_section_size(max_header_bytes as u64);
+    h3_config.enable_extended_connect(true);
+    let (responses, mut response_events) =
+        tokio::sync::mpsc::channel::<Http3Response>(max_in_flight);
+    let mut peers = BTreeMap::<Vec<u8>, Http3Peer>::new();
+    let mut packet = vec![0u8; 65_535];
+    let mut output = vec![0u8; 65_535];
+
+    loop {
+        flush_http3_peers(&socket, &mut peers, &mut output).await;
+        peers.retain(|_, peer| !peer.connection.is_closed());
+        let timeout = peers
+            .values()
+            .filter_map(|peer| peer.connection.timeout())
+            .min()
+            .unwrap_or(std::time::Duration::from_millis(100));
+        tokio::select! {
+            response = response_events.recv() => {
+                let Some(response) = response else {
+                    return;
+                };
+                if let Some(peer) = peers.get_mut(&response.connection)
+                    && let Some(pending) = http3_pending_response(response.response).await
+                {
+                    peer.responses.insert(response.stream, pending);
+                }
+            }
+            received = socket.recv_from(&mut packet) => {
+                let Ok((length, from)) = received else {
+                    return;
+                };
+                let bytes = &mut packet[..length];
+                let Ok(header) = quiche::Header::from_slice(bytes, quiche::MAX_CONN_ID_LEN) else {
+                    continue;
+                };
+                let derived = http3_connection_id(&header.dcid, from);
+                let key = if peers.contains_key(header.dcid.as_ref()) {
+                    header.dcid.as_ref().to_vec()
+                } else if peers.contains_key(&derived) {
+                    derived.clone()
+                } else {
+                    if header.ty != quiche::Type::Initial || peers.len() >= max_in_flight {
+                        continue;
+                    }
+                    if !quiche::version_is_supported(header.version) {
+                        if let Ok(written) = quiche::negotiate_version(
+                            &header.scid,
+                            &header.dcid,
+                            &mut output,
+                        ) {
+                            let _ = socket.send_to(&output[..written], from).await;
+                        }
+                        continue;
+                    }
+                    let scid = quiche::ConnectionId::from_ref(&derived);
+                    let Ok(connection) = quiche::accept(
+                        &scid,
+                        Some(&header.dcid),
+                        local,
+                        from,
+                        &mut config,
+                    ) else {
+                        continue;
+                    };
+                    peers.insert(
+                        derived.clone(),
+                        Http3Peer {
+                            connection,
+                            h3: None,
+                            requests: BTreeMap::new(),
+                            responses: BTreeMap::new(),
+                        },
+                    );
+                    derived
+                };
+                let Some(peer) = peers.get_mut(&key) else {
+                    continue;
+                };
+                if peer
+                    .connection
+                    .recv(bytes, quiche::RecvInfo { from, to: local })
+                    .is_err()
+                {
+                    continue;
+                }
+                if peer.connection.is_established() && peer.h3.is_none() {
+                    peer.h3 = quiche::h3::Connection::with_transport(
+                        &mut peer.connection,
+                        &h3_config,
+                    )
+                    .ok();
+                }
+                if poll_http3_requests(&key, peer, Http3Ingress {
+                    routes: &binding.routes,
+                    events: &mut events,
+                    requests: &requests,
+                    references: &references,
+                    responses: &responses,
+                    max_header_bytes,
+                })
+                .await
+                .is_err()
+                {
+                    let _ = peer.connection.close(true, 0x100, b"request refused");
+                }
+            }
+            () = tokio::time::sleep(timeout) => {
+                for peer in peers.values_mut() {
+                    peer.connection.on_timeout();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "hosted-http3")]
+fn http3_connection_id(dcid: &quiche::ConnectionId<'_>, peer: SocketAddr) -> Vec<u8> {
+    let mut material = Vec::with_capacity(dcid.len() + 18);
+    material.extend_from_slice(dcid.as_ref());
+    match peer.ip() {
+        std::net::IpAddr::V4(address) => material.extend_from_slice(&address.octets()),
+        std::net::IpAddr::V6(address) => material.extend_from_slice(&address.octets()),
+    }
+    material.extend_from_slice(&peer.port().to_be_bytes());
+    blake3::hash(&material).as_bytes()[..quiche::MAX_CONN_ID_LEN].to_vec()
+}
+
+#[cfg(feature = "hosted-http3")]
+async fn poll_http3_requests(
+    connection_key: &[u8],
+    peer: &mut Http3Peer,
+    ingress: Http3Ingress<'_>,
+) -> Result<(), ()> {
+    let Some(h3) = peer.h3.as_mut() else {
+        return Ok(());
+    };
+    loop {
+        match h3.poll(&mut peer.connection) {
+            Ok((stream, quiche::h3::Event::Headers { list, .. })) => {
+                if peer.requests.contains_key(&stream) {
+                    append_http3_headers(
+                        &mut peer.requests.get_mut(&stream).ok_or(())?.headers,
+                        &list,
+                    )?;
+                    continue;
+                }
+                let Some(head) = http3_request_head(&list) else {
+                    return Err(());
+                };
+                if head.byte_len > ingress.max_header_bytes {
+                    return Err(());
+                }
+                let Some(route) = ingress
+                    .routes
+                    .iter()
+                    .find(|route| {
+                        route.path == head.path && route.versions.contains(&HttpVersion::Http3)
+                    })
+                    .cloned()
+                else {
+                    return Err(());
+                };
+                if !authorized_headers(&head.headers, route.auth_bearer.as_ref()) {
+                    return Err(());
+                }
+                let request = Arc::clone(ingress.requests)
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| ())?;
+                let reservation = ingress
+                    .events
+                    .reserve(head.byte_len)
+                    .await
+                    .map_err(|_| ())?;
+                peer.requests.insert(
+                    stream,
+                    Http3Request {
+                        body: Vec::new(),
+                        headers: head.headers,
+                        method: head.method,
+                        path: head.path,
+                        reservation,
+                        route,
+                        _request: request,
+                    },
+                );
+            }
+            Ok((stream, quiche::h3::Event::Data)) => {
+                let Some(request) = peer.requests.get_mut(&stream) else {
+                    return Err(());
+                };
+                let mut chunk = [0u8; 16 * 1024];
+                loop {
+                    match h3.recv_body(&mut peer.connection, stream, &mut chunk) {
+                        Ok(0) | Err(quiche::h3::Error::Done) => break,
+                        Ok(read) => {
+                            let length = request.body.len().checked_add(read).ok_or(())?;
+                            if u64::try_from(length)
+                                .map_or(true, |length| length > request.route.max_body)
+                            {
+                                return Err(());
+                            }
+                            let more = ingress.events.reserve(read).await.map_err(|_| ())?;
+                            request.reservation.append(more);
+                            request.body.try_reserve(read).map_err(|_| ())?;
+                            request.body.extend_from_slice(&chunk[..read]);
+                        }
+                        Err(_) => return Err(()),
+                    }
+                }
+            }
+            Ok((stream, quiche::h3::Event::Finished)) => {
+                let Some(request) = peer.requests.remove(&stream) else {
+                    continue;
+                };
+                dispatch_http3_request(
+                    connection_key.to_vec(),
+                    stream,
+                    request,
+                    ingress.events.clone(),
+                    Arc::clone(ingress.references),
+                    ingress.responses.clone(),
+                )
+                .await?;
+            }
+            Ok((stream, quiche::h3::Event::Reset(_))) => {
+                peer.requests.remove(&stream);
+            }
+            Ok((_, quiche::h3::Event::GoAway)) => return Err(()),
+            Ok((_, quiche::h3::Event::PriorityUpdate)) => {}
+            Err(quiche::h3::Error::Done) => break,
+            Err(_) => return Err(()),
+        }
+    }
+    flush_http3_responses(peer);
+    Ok(())
+}
+
+#[cfg(feature = "hosted-http3")]
+fn http3_request_head(headers: &[quiche::h3::Header]) -> Option<Http3RequestHead> {
+    use quiche::h3::NameValue as _;
+    let mut method = None;
+    let mut path = None;
+    let mut values = BTreeMap::<String, Vec<Vec<u8>>>::new();
+    let mut bytes = 0usize;
+    for header in headers {
+        bytes = bytes
+            .checked_add(header.name().len())?
+            .checked_add(header.value().len())?;
+        match header.name() {
+            b":method" => method = String::from_utf8(header.value().to_vec()).ok(),
+            b":path" => path = String::from_utf8(header.value().to_vec()).ok(),
+            name if name.starts_with(b":") => {}
+            name => {
+                let name = String::from_utf8(name.to_vec()).ok()?.to_ascii_lowercase();
+                values
+                    .entry(name)
+                    .or_default()
+                    .push(header.value().to_vec());
+            }
+        }
+    }
+    Some(Http3RequestHead {
+        method: method?,
+        path: path?,
+        headers: values,
+        byte_len: bytes,
+    })
+}
+
+#[cfg(feature = "hosted-http3")]
+fn append_http3_headers(
+    values: &mut BTreeMap<String, Vec<Vec<u8>>>,
+    headers: &[quiche::h3::Header],
+) -> Result<(), ()> {
+    use quiche::h3::NameValue as _;
+    for header in headers {
+        if header.name().starts_with(b":") {
+            return Err(());
+        }
+        let name = String::from_utf8(header.name().to_vec())
+            .map_err(|_| ())?
+            .to_ascii_lowercase();
+        values
+            .entry(name)
+            .or_default()
+            .push(header.value().to_vec());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "hosted-http3")]
+fn authorized_headers(
+    headers: &BTreeMap<String, Vec<Vec<u8>>>,
+    expected: Option<&blake3::Hash>,
+) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    headers
+        .get("authorization")
+        .and_then(|values| values.first())
+        .is_some_and(|value| blake3::hash(value) == *expected)
+}
+
+#[cfg(feature = "hosted-http3")]
+async fn dispatch_http3_request(
+    connection: Vec<u8>,
+    stream: u64,
+    request: Http3Request,
+    mut events: EventSender<ServerEvent>,
+    references: Arc<AtomicU64>,
+    responses: tokio::sync::mpsc::Sender<Http3Response>,
+) -> Result<(), ()> {
+    let Some(data) = decode_body(&request.route.codec, request.body) else {
+        return Err(());
+    };
+    let Some(reference) = next_reference(&references) else {
+        return Err(());
+    };
+    let ext = http_request_metadata(
+        request.headers,
+        request.method,
+        request.path,
+        HttpVersion::Http3,
+    );
+    let proposal = InboundProposal {
+        reference,
+        submission: InboundSubmission {
+            provenance: InboundEnvelopeProvenance::single(request.route.node.clone()),
+            port: crate::node::Port::conventional_out(),
+            draft: Draft { data, ext },
+            sequence: SubmissionSequence::Next,
+        },
+        session: None,
+    };
+    let (decision, accepted) = tokio::sync::oneshot::channel();
+    let (retained, response) = tokio::sync::oneshot::channel();
+    let live = LiveProposal {
+        proposal,
+        decision,
+        response: (request.route.mode == HttpServerMode::Respond).then_some(RetainedResponse {
+            peer: retained,
+            route: request.route.clone(),
+        }),
+        _reservation: request.reservation,
+    };
+    events
+        .emit(ServerEvent::Proposal(Box::new(live)), 0)
+        .await
+        .map_err(|_| ())?;
+    let ServerDecision::Accepted(call_ref) = accepted.await.map_err(|_| ())? else {
+        return Err(());
+    };
+    let response = match request.route.mode {
+        HttpServerMode::Ack => {
+            let response =
+                response_with_headers(StatusCode::ACCEPTED, &request.route.response_headers);
+            let terminal = InboundCallEvent {
+                call_ref,
+                completion: crate::boundary::Completion::http_server_exit(
+                    HttpServerExit::Completed { status: 202 },
+                ),
+            };
+            events
+                .emit(ServerEvent::Terminal(terminal), 0)
+                .await
+                .map_err(|_| ())?;
+            response
+        }
+        HttpServerMode::Respond => response.await.map_err(|_| ())?,
+    };
+    responses
+        .send(Http3Response {
+            connection,
+            response,
+            stream,
+        })
+        .await
+        .map_err(|_| ())
+}
+
+#[cfg(feature = "hosted-http3")]
+async fn http3_pending_response(response: Response<Full<Bytes>>) -> Option<Http3PendingResponse> {
+    let (parts, body) = response.into_parts();
+    let body = body.collect().await.ok()?.to_bytes().to_vec();
+    let mut headers = vec![quiche::h3::Header::new(
+        b":status",
+        parts.status.as_str().as_bytes(),
+    )];
+    for (name, value) in &parts.headers {
+        headers.push(quiche::h3::Header::new(
+            name.as_str().as_bytes(),
+            value.as_bytes(),
+        ));
+    }
+    Some(Http3PendingResponse {
+        body,
+        headers,
+        offset: 0,
+        started: false,
+    })
+}
+
+#[cfg(feature = "hosted-http3")]
+fn flush_http3_responses(peer: &mut Http3Peer) {
+    let Some(h3) = peer.h3.as_mut() else {
+        return;
+    };
+    let streams = peer.responses.keys().copied().collect::<Vec<_>>();
+    for stream in streams {
+        let Some(response) = peer.responses.get_mut(&stream) else {
+            continue;
+        };
+        if !response.started {
+            match h3.send_response(
+                &mut peer.connection,
+                stream,
+                &response.headers,
+                response.body.is_empty(),
+            ) {
+                Ok(()) => response.started = true,
+                Err(quiche::h3::Error::Done) => continue,
+                Err(_) => {
+                    peer.responses.remove(&stream);
+                    continue;
+                }
+            }
+        }
+        while response.offset < response.body.len() {
+            match h3.send_body(
+                &mut peer.connection,
+                stream,
+                &response.body[response.offset..],
+                true,
+            ) {
+                Ok(written) => response.offset += written,
+                Err(quiche::h3::Error::Done) => break,
+                Err(_) => {
+                    response.offset = response.body.len();
+                    break;
+                }
+            }
+        }
+        if response.started && response.offset == response.body.len() {
+            peer.responses.remove(&stream);
+        }
+    }
+}
+
+#[cfg(feature = "hosted-http3")]
+async fn flush_http3_peers(
+    socket: &tokio::net::UdpSocket,
+    peers: &mut BTreeMap<Vec<u8>, Http3Peer>,
+    output: &mut [u8],
+) {
+    for peer in peers.values_mut() {
+        flush_http3_responses(peer);
+        loop {
+            match peer.connection.send(output) {
+                Ok((written, info)) => {
+                    if socket.send_to(&output[..written], info.to).await.is_err() {
+                        break;
+                    }
+                }
+                Err(quiche::Error::Done) => break,
+                Err(_) => {
+                    let _ = peer.connection.close(false, 0x100, b"send failed");
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -666,6 +1537,76 @@ async fn handle_request(
     let Some(reference) = next_reference(&references) else {
         return Ok(simple_response(StatusCode::SERVICE_UNAVAILABLE));
     };
+    let ext = http_request_metadata(
+        headers,
+        parts.method.as_str().to_string(),
+        parts.uri.to_string(),
+        version,
+    );
+    let proposal = InboundProposal {
+        reference,
+        submission: InboundSubmission {
+            provenance: InboundEnvelopeProvenance::single(route.node.clone()),
+            port: crate::node::Port::conventional_out(),
+            draft: Draft { data, ext },
+            sequence: SubmissionSequence::Next,
+        },
+        session: None,
+    };
+    let (decision, accepted) = tokio::sync::oneshot::channel();
+    let (response, peer_response) = match route.mode {
+        HttpServerMode::Ack => (None, None),
+        HttpServerMode::Respond => {
+            let (peer, response) = tokio::sync::oneshot::channel();
+            (
+                Some(RetainedResponse {
+                    peer,
+                    route: route.clone(),
+                }),
+                Some(response),
+            )
+        }
+    };
+    let event = ServerEvent::Proposal(Box::new(LiveProposal {
+        proposal,
+        decision,
+        response,
+        _reservation: reservation,
+    }));
+    if events.emit(event, 0).await.is_err() {
+        return Ok(simple_response(StatusCode::SERVICE_UNAVAILABLE));
+    }
+    match accepted.await {
+        Ok(ServerDecision::Accepted(call_ref)) => match peer_response {
+            None => {
+                let response = response_with_headers(StatusCode::ACCEPTED, &route.response_headers);
+                let event = ServerEvent::Terminal(InboundCallEvent {
+                    call_ref,
+                    completion: crate::boundary::Completion::http_server_exit(
+                        HttpServerExit::Completed { status: 202 },
+                    ),
+                });
+                match events.emit(event, 0).await {
+                    Ok(()) => Ok(response),
+                    Err(_) => Ok(simple_response(StatusCode::SERVICE_UNAVAILABLE)),
+                }
+            }
+            Some(response) => match response.await {
+                Ok(response) => Ok(response),
+                Err(_) => Ok(simple_response(StatusCode::SERVICE_UNAVAILABLE)),
+            },
+        },
+        Ok(ServerDecision::Rejected(reason)) => Ok(simple_response(rejection_status(reason))),
+        Err(_) => Ok(simple_response(StatusCode::SERVICE_UNAVAILABLE)),
+    }
+}
+
+fn http_request_metadata(
+    headers: BTreeMap<String, Vec<Vec<u8>>>,
+    method: String,
+    uri: String,
+    version: HttpVersion,
+) -> Namespace {
     let mut ext = Namespace::new();
     if let Some(content_type) = headers
         .get("content-type")
@@ -697,53 +1638,17 @@ async fn handle_request(
     );
     ext.insert(
         String::from("http_method"),
-        MetaValue::Scalar(Scalar::Text(parts.method.as_str().to_string())),
+        MetaValue::Scalar(Scalar::Text(method)),
     );
     ext.insert(
         String::from("http_uri"),
-        MetaValue::Scalar(Scalar::Text(parts.uri.to_string())),
+        MetaValue::Scalar(Scalar::Text(uri)),
     );
     ext.insert(
         String::from("http_version"),
         MetaValue::Scalar(Scalar::Text(String::from(version.observation()))),
     );
-    let proposal = InboundProposal {
-        reference,
-        submission: InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(route.node.clone()),
-            port: crate::node::Port::conventional_out(),
-            draft: Draft { data, ext },
-            sequence: SubmissionSequence::Next,
-        },
-        session: None,
-    };
-    let (decision, accepted) = tokio::sync::oneshot::channel();
-    let event = ServerEvent::Proposal(LiveProposal {
-        proposal,
-        decision,
-        _reservation: reservation,
-    });
-    if events.emit(event, 0).await.is_err() {
-        return Ok(simple_response(StatusCode::SERVICE_UNAVAILABLE));
-    }
-    match accepted.await {
-        Ok(ServerDecision::Accepted(call_ref)) => {
-            let mut response = simple_response(StatusCode::ACCEPTED);
-            *response.headers_mut() = route.response_headers;
-            let event = ServerEvent::Terminal(InboundCallEvent {
-                call_ref,
-                completion: crate::boundary::Completion::http_server_exit(
-                    HttpServerExit::Completed { status: 202 },
-                ),
-            });
-            match events.emit(event, 0).await {
-                Ok(()) => Ok(response),
-                Err(_) => Ok(simple_response(StatusCode::SERVICE_UNAVAILABLE)),
-            }
-        }
-        Ok(ServerDecision::Rejected(reason)) => Ok(simple_response(rejection_status(reason))),
-        Err(_) => Ok(simple_response(StatusCode::SERVICE_UNAVAILABLE)),
-    }
+    ext
 }
 
 fn next_reference(references: &AtomicU64) -> Option<InboundProposalRef> {
@@ -818,6 +1723,12 @@ fn simple_response(status: StatusCode) -> Response<Full<Bytes>> {
     response
 }
 
+fn response_with_headers(status: StatusCode, headers: &http::HeaderMap) -> Response<Full<Bytes>> {
+    let mut response = simple_response(status);
+    *response.headers_mut() = headers.clone();
+    response
+}
+
 #[cfg(test)]
 // Wall time is only a liveness guard around local hosted sockets. Neither the
 // observed duration nor thread order enters a Rastok fact.
@@ -844,6 +1755,12 @@ mod tests {
     struct ObservedResponse {
         status: u16,
         version: Version,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct ObservedBodyResponse {
+        status: u16,
+        body: Vec<u8>,
     }
 
     fn server_plan_with(codec: &str, extra_settings: &str) -> crate::plan::ValidatedExecutionPlan {
@@ -873,6 +1790,81 @@ graph api : App {{
 
     fn server_plan() -> crate::plan::ValidatedExecutionPlan {
         server_plan_with("text", "")
+    }
+
+    fn respond_plan() -> crate::plan::ValidatedExecutionPlan {
+        let source = r#"
+graph api : App {
+  connector server : HttpServer {
+    mode = respond
+    listen = "127.0.0.1:0"
+    path = "/hook"
+    codec = text
+    timeout = duration("1s")
+    versions = ["http/2", "http/1.1"]
+  }
+  operator relay { input in: text ; on in { out = "response" } }
+  server -> relay -> server
+}
+"#;
+        compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        )
+        .expect("the respond-mode source checks")
+        .plan
+    }
+
+    #[cfg(feature = "hosted-http3")]
+    fn http3_respond_plan() -> crate::plan::ValidatedExecutionPlan {
+        const CERTIFICATE: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../spikes/h3-quinn-http3/certs/server.crt"
+        ));
+        const PRIVATE_KEY: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../spikes/h3-quinn-http3/certs/server.key"
+        ));
+        let mut raw = respond_plan().plan().clone();
+        let server_node = raw
+            .nodes
+            .iter_mut()
+            .find(|node| node.path.to_string() == "server")
+            .expect("the respond plan contains its server");
+        let crate::plan::NodeKind::Connector(server) = &mut server_node.kind else {
+            panic!("the server node is a connector")
+        };
+        let replace = |attributes: &mut Vec<(String, crate::plan::AttrSetting)>,
+                       name: &str,
+                       setting: crate::plan::AttrSetting| {
+            if let Some((_, value)) = attributes.iter_mut().find(|(field, _)| field == name) {
+                *value = setting;
+            } else {
+                attributes.push((name.to_string(), setting));
+            }
+        };
+        replace(
+            &mut server.attributes,
+            "versions",
+            crate::plan::AttrSetting::Value(crate::value::Value::Array(vec![
+                crate::value::Value::Text(String::from("http/3")),
+            ])),
+        );
+        replace(
+            &mut server.attributes,
+            "tls_certificate",
+            crate::plan::AttrSetting::Value(crate::value::Value::Bytes(CERTIFICATE.to_vec())),
+        );
+        replace(
+            &mut server.attributes,
+            "tls_private_key",
+            crate::plan::AttrSetting::Value(crate::value::Value::Bytes(PRIVATE_KEY.to_vec())),
+        );
+        server
+            .attributes
+            .sort_by(|left, right| left.0.cmp(&right.0));
+        crate::plan::ValidatedExecutionPlan::try_new(raw)
+            .expect("the HTTP/3-only respond plan remains Registry-free valid")
     }
 
     fn wait_for_proposal(server: &mut HttpServer<'_>) -> InboundProposal {
@@ -1001,6 +1993,50 @@ graph api : App {{
         spawn_raw_http1(address, "Content-Type: text/plain\r\n", body)
     }
 
+    fn spawn_http1_with_body(
+        address: SocketAddr,
+        body: &'static str,
+    ) -> Receiver<Result<ObservedBodyResponse, String>> {
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| -> Result<ObservedBodyResponse, String> {
+                let mut stream = std::net::TcpStream::connect(address)
+                    .map_err(|error| format!("the HTTP/1.1 client cannot connect: {error}"))?;
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .map_err(|error| format!("the HTTP/1.1 timeout cannot be set: {error}"))?;
+                write!(
+                    stream,
+                    "POST /hook HTTP/1.1\r\nHost: localhost\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .map_err(|error| format!("the HTTP/1.1 request cannot be sent: {error}"))?;
+                let mut bytes = Vec::new();
+                stream
+                    .read_to_end(&mut bytes)
+                    .map_err(|error| format!("the HTTP/1.1 response cannot be read: {error}"))?;
+                let marker = bytes
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .ok_or_else(|| String::from("the HTTP/1.1 response has no header boundary"))?;
+                let head = std::str::from_utf8(&bytes[..marker])
+                    .map_err(|_| String::from("the HTTP/1.1 response head is not text"))?;
+                let status = head
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_ascii_whitespace().nth(1))
+                    .and_then(|status| status.parse().ok())
+                    .ok_or_else(|| format!("unexpected HTTP/1.1 response: {head:?}"))?;
+                Ok(ObservedBodyResponse {
+                    status,
+                    body: bytes[marker + 4..].to_vec(),
+                })
+            })();
+            let _ = sent.send(result);
+        });
+        received
+    }
+
     fn spawn_raw_http1(
         address: SocketAddr,
         headers: &'static str,
@@ -1120,6 +2156,184 @@ graph api : App {{
             Version::HTTP_2,
             "two",
         );
+    }
+
+    #[test]
+    fn respond_returns_the_journaled_graph_body_and_closes_exactly_once() {
+        let plan = respond_plan();
+        let node = crate::node::Path::new(["server"]).expect("the server path is canonical");
+        let mut server = HttpServer::try_bind(&plan, &[node], HttpServerConfig::default())
+            .expect("the respond server binds before execution");
+        let response = spawn_http1_with_body(server.local_addresses()[0], "request");
+        let proposal = wait_for_proposal(&mut server);
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let InboundAdmission::Accepted(accepted) = vm
+            .admit_inbound(&mut journal, &proposal)
+            .expect("the request reaches causal admission")
+        else {
+            panic!("the request must be admitted")
+        };
+        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+            panic!("the admitted request opens one Call")
+        };
+        server.decide(proposal.reference, InboundDecision::Accepted(accepted));
+        assert_eq!(response.try_recv(), Err(TryRecvError::Empty));
+
+        vm.drain(&mut journal)
+            .expect("the graph produces its response");
+        let ready = vm.ready_inbound_call_responses();
+        let [ready] = ready.as_slice() else {
+            panic!("one response must be retained")
+        };
+        let ready = ready.clone();
+        assert_eq!(
+            server.start_response(&ready),
+            InboundCallResponseStart::Started
+        );
+        assert!(vm.mark_inbound_call_response_started(&ready));
+        assert_eq!(
+            response
+                .recv_timeout(Duration::from_secs(3))
+                .expect("the peer receives one response")
+                .expect("the response is valid"),
+            ObservedBodyResponse {
+                status: 200,
+                body: b"response".to_vec(),
+            }
+        );
+        let terminal = wait_for_terminal(&mut server);
+        assert_eq!(terminal.call_ref, call_ref);
+        assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
+        vm.drain(&mut journal)
+            .expect("the one response cursor and Call terminal commit");
+        assert!(journal.open_inbound_calls().is_empty());
+    }
+
+    #[test]
+    fn the_scheduler_timeout_wins_before_an_unstarted_graph_response() {
+        let plan = respond_plan();
+        let node = crate::node::Path::new(["server"]).expect("the server path is canonical");
+        let mut server = HttpServer::try_bind(
+            &plan,
+            core::slice::from_ref(&node),
+            HttpServerConfig::default(),
+        )
+        .expect("the respond server binds before execution");
+        let response = spawn_http1_with_body(server.local_addresses()[0], "request");
+        let proposal = wait_for_proposal(&mut server);
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let InboundAdmission::Accepted(accepted) = vm
+            .admit_inbound(&mut journal, &proposal)
+            .expect("the request reaches causal admission")
+        else {
+            panic!("the request must be admitted")
+        };
+        let Some(InboundExchangeRef::Call(call_ref)) = accepted.exchange else {
+            panic!("the admitted request opens one Call")
+        };
+        server.decide(proposal.reference, InboundDecision::Accepted(accepted));
+
+        let registry = crate::connectors::DriverRegistry::default()
+            .try_with(Box::new(
+                HttpServerFactory::try_new(HttpServerConfig::default())
+                    .expect("the standard server id is valid"),
+            ))
+            .expect("one hosted family registers");
+        let mut bindings = crate::connectors::RuntimeBindings::try_new(&plan, &registry)
+            .expect("the validated server plan binds");
+        vm.advance(&mut journal, &mut bindings, 1_000_000_000)
+            .expect("the request deadline advances deterministically");
+        assert!(vm.ready_inbound_call_responses().is_empty());
+        let timeouts = vm.ready_inbound_call_timeouts();
+        let [timeout] = timeouts.as_slice() else {
+            panic!("exactly one request deadline must be due")
+        };
+        assert_eq!(timeout.call_ref, call_ref);
+        assert_eq!(
+            server.start_timeout(timeout),
+            InboundCallTimeoutStart::Started
+        );
+        assert!(vm.mark_inbound_call_timeout_started(timeout));
+        assert_eq!(
+            response
+                .recv_timeout(Duration::from_secs(3))
+                .expect("the peer receives one timeout response")
+                .expect("the timeout response is valid"),
+            ObservedBodyResponse {
+                status: 504,
+                body: Vec::new(),
+            }
+        );
+        let terminal = wait_for_terminal(&mut server);
+        assert_eq!(terminal.call_ref, call_ref);
+        assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
+        vm.drain(&mut journal)
+            .expect("the timeout closes the retained response cursor once");
+        assert!(journal.open_inbound_calls().is_empty());
+    }
+
+    #[cfg(feature = "hosted-http3")]
+    #[test]
+    fn http3_uses_the_same_retained_call_and_graph_response() {
+        const CA: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../spikes/h3-quinn-http3/certs/ca.crt"
+        ));
+        let plan = http3_respond_plan();
+        let node = crate::node::Path::new(["server"]).expect("the server path is canonical");
+        let mut server = HttpServer::try_bind(&plan, &[node], HttpServerConfig::default())
+            .expect("the HTTP/3 respond server binds before execution");
+        let address = server.local_addresses()[0];
+        let (sent, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("the HTTP/3 client runtime builds");
+            let result =
+                runtime.block_on(crate::connectors::network::http_client::probe_http3_server(
+                    format!("https://localhost:{}/hook", address.port()),
+                    b"request",
+                    CA,
+                ));
+            let _ = sent.send(result);
+        });
+        let proposal = wait_for_proposal(&mut server);
+        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut journal = MemJournal::new(GraphVersion(1));
+        let InboundAdmission::Accepted(accepted) = vm
+            .admit_inbound(&mut journal, &proposal)
+            .expect("the HTTP/3 request reaches causal admission")
+        else {
+            panic!("the HTTP/3 request must be admitted")
+        };
+        server.decide(proposal.reference, InboundDecision::Accepted(accepted));
+        vm.drain(&mut journal)
+            .expect("the graph produces the HTTP/3 response");
+        let ready = vm.ready_inbound_call_responses();
+        let [ready] = ready.as_slice() else {
+            panic!("one HTTP/3 graph response must be retained")
+        };
+        let ready = ready.clone();
+        assert_eq!(
+            server.start_response(&ready),
+            InboundCallResponseStart::Started
+        );
+        assert!(vm.mark_inbound_call_response_started(&ready));
+        assert_eq!(
+            received
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the HTTP/3 client completes")
+                .expect("the HTTP/3 response succeeds"),
+            (200, b"response".to_vec()),
+        );
+        let terminal = wait_for_terminal(&mut server);
+        assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
+        vm.drain(&mut journal)
+            .expect("the HTTP/3 Call closes exactly once");
+        assert!(journal.open_inbound_calls().is_empty());
     }
 
     #[test]

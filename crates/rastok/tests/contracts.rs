@@ -68,7 +68,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
             "  network -> .",
             rastok::connector::HTTP_SERVER_CONNECTOR_ID,
             rastok::connector::ConnectorExchange::Call,
-            "63a257e28d323d812aafe121e4df6449a7dc47ed8f9dd7baf776a20b19d0601d",
+            "b83fcf2d20da4e330e40c2d7c45a69c6dff60b3d13e3859f100453a03824bc47",
         ),
         (
             "WebSocketClient",
@@ -175,17 +175,6 @@ fn network_defaults_are_effective_before_identity() {
 
 #[test]
 fn unfinished_network_features_refuse_instead_of_selecting_a_nearby_behavior() {
-    let respond = network_graph(
-        "HttpServer",
-        "    mode = respond\n    listen = \"127.0.0.1:8080\"\n    timeout = duration(\"5s\")\n    codec = json",
-        "  . -> network -> .",
-    );
-    refusal_with(
-        &respond,
-        "E-CHECK-DEFERRED",
-        "the HttpServer respond mode (M1.6 H5)",
-    );
-
     let response_to_ack = r#"
 graph g : App {
   connector server : HttpServer {
@@ -226,6 +215,72 @@ graph g : App {
         "  . -> network -> .",
     );
     refusal_with(&early_data, "E-CONTRACT-ATTR", "fixed to `disabled`");
+}
+
+#[test]
+fn http_server_respond_requires_one_direct_text_correlator_only_when_roots_mix() {
+    let direct = r#"
+graph direct : App {
+  connector server : HttpServer {
+    listen = "127.0.0.1:8080"
+    codec = text
+    mode = respond
+    timeout = duration("1s")
+  }
+  operator relay { input in: text ; on in { out = data } }
+  server -> relay -> server
+}
+"#;
+    compile_one(direct).expect("direct lineage identifies the retained Call without a correlator");
+
+    for (spelling, code, reason) in [
+        (
+            "correlate = \"constant\"",
+            "E-CONTRACT-ATTR",
+            "direct `data` or `meta` path",
+        ),
+        (
+            "correlate = meta.sys.origin_id + \"\"",
+            "E-CONTRACT-ATTR",
+            "direct `data` or `meta` path",
+        ),
+        ("correlate = size(data)", "E-PORT-TYPE", "requires text"),
+    ] {
+        let malformed = direct.replace(
+            "    timeout = duration(\"1s\")",
+            &format!("    timeout = duration(\"1s\")\n    {spelling}"),
+        );
+        refusal_with(&malformed, code, reason);
+    }
+
+    let mixed = r#"
+graph mixed : App {
+  input other: text
+  connector server : HttpServer {
+    listen = "127.0.0.1:8080"
+    codec = json
+    mode = respond
+    timeout = duration("1s")
+  }
+  operator pair {
+    input request: variant
+    input other: text
+    on (request, other) {
+      out = { data = request.data ; meta.app.request_id = other.data }
+    }
+  }
+  server -> pair.request
+  .other -> pair.other
+  pair -> server
+}
+"#;
+    refusal_with(mixed, "E-CONTRACT-ATTR", "root-mixing join");
+    let attributed = mixed.replace(
+        "    timeout = duration(\"1s\")",
+        "    timeout = duration(\"1s\")\n    correlate = meta.app.request_id",
+    );
+    compile_one(&attributed)
+        .expect("an explicitly attributed join output selects its retained Call by text token");
 }
 
 fn forged_http_client_error(
@@ -1128,20 +1183,17 @@ fn a_duplicate_choice_word_is_a_sheet_defect() {
 }
 
 #[test]
-fn a_deferred_only_domain_needs_a_deferred_profile() {
+fn an_expression_path_is_an_executable_invocation_domain() {
     const RAW: &[AttributeSpec] = &[AttributeSpec {
         name: "correlate",
         presence: Presence::Optional,
         domain: ValueDomain::ExprPath,
         latest_site: EvaluationSite::Invocation,
     }];
-    assert_eq!(
-        ContractCatalog::try_m0()
-            .expect("the standard catalogue holds")
-            .try_with(sheet(RAW, None))
-            .unwrap_err(),
-        SheetDefect::UnimplementedDomain("correlate")
-    );
+    ContractCatalog::try_m0()
+        .expect("the standard catalogue holds")
+        .try_with(sheet(RAW, None))
+        .expect("a direct invocation path is an implemented domain");
 }
 
 // ---------- the dead spellings refuse with their migration ----------

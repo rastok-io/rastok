@@ -468,8 +468,11 @@ transport and byte permits outside the causal fold. H5.2's generic direct
 response path similarly leaves a committed response in the ordinary claimed
 mailbox while the Driver says `Pending`; no protocol bytes exist yet. Late,
 duplicate or unmatched response deliveries commit a consume-only discard.
-The live HttpServer `respond` profile remains refused until H5 adds explicit
-correlation plus its bounded response/cancellation policy.
+Final H5 executes `respond`. A positive request deadline is armed with the
+accepting root, and the retained response and scheduler timeout compete for
+one protocol action and one `l:reply`. A root-mixing return path is rejected
+unless its explicit direct-path correlator selects the opening reference
+before route commit.
 
 
 ## 7. Join abandonment — `JoinExpired`

@@ -346,10 +346,10 @@ Crossed Driver facts are non-causal. A response that is late, duplicate or
 has no open direct lineage is instead consumed by an ordinary empty
 transaction: the discard is replay-visible and cannot write protocol bytes or
 create a second exit. The generic fold counts the Call and any retained
-response as open work for instance Closing. H5.1 admits only fixed `ack` on
-the real HttpServer. H5.2 lands the generic direct-lineage return seam; the
-live `respond` Driver, explicit correlation and bounded cancellation/deadline
-policy remain refused until the rest of H5 lands them together.
+response as open work for instance Closing. Final H5 admits `ack` and
+`respond` over HTTP/1.1–3. A positive request deadline and a retained response
+share one close-once race; explicit direct-path correlation is mandatory when
+a join mixes roots.
 
 ### 4.5 Sessions — one resource lifecycle, many message effects
 

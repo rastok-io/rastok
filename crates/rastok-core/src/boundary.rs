@@ -532,8 +532,6 @@ pub fn http_server_exit_type() -> Result<DataType, TypeError> {
     )?;
     Ok(DataType::TaggedUnion(TaggedUnionType::new(alloc::vec![
         completed,
-        empty_case("MalformedRequest")?,
-        empty_case("AuthFailed")?,
         empty_case("RequestExpired")?,
         empty_case("Overloaded")?,
         empty_case("PeerDisconnected")?,
@@ -687,13 +685,9 @@ pub enum HttpServerExit {
         /// Status returned to the remote caller.
         status: u16,
     },
-    /// The request could not be parsed under the HTTP contract.
-    MalformedRequest,
-    /// Contract authentication rejected the request.
-    AuthFailed,
     /// A held respond-mode request exceeded its budget.
     RequestExpired,
-    /// Bounded admission could not accept the request.
+    /// A committed response could not enter the bounded protocol writer.
     Overloaded,
     /// The peer disappeared before the response became terminal.
     PeerDisconnected,
@@ -781,8 +775,6 @@ impl HttpServerExit {
                 "Completed",
                 alloc::vec![(String::from("status"), Value::Int(i64::from(status)))],
             ),
-            Self::MalformedRequest => tagged_value("MalformedRequest", Vec::new()),
-            Self::AuthFailed => tagged_value("AuthFailed", Vec::new()),
             Self::RequestExpired => tagged_value("RequestExpired", Vec::new()),
             Self::Overloaded => tagged_value("Overloaded", Vec::new()),
             Self::PeerDisconnected => tagged_value("PeerDisconnected", Vec::new()),
@@ -1815,6 +1807,15 @@ pub enum DatedPayload {
         /// Exact connector instance owning the mailbox/call obligation.
         instance: InstanceRef,
     },
+    /// An admitted inbound Call reached the request deadline published by
+    /// its Connector contract. The Driver owns the protocol-side timeout
+    /// response; this event only transfers the scheduler's won request.
+    InboundCallBudget {
+        /// Stable reference of the admitted root Call.
+        call_ref: InboundCallRef,
+        /// Exact source generation retaining the request.
+        instance: InstanceRef,
+    },
     /// One retained join candidate reached its `within` bound. The full
     /// delivery reference makes a consumed candidate's stale event harmless.
     JoinWithin {
@@ -1932,6 +1933,19 @@ pub struct InboundCallResponse {
     pub response: envelope::Envelope,
 }
 
+/// One scheduler-owned expiry request for an admitted inbound Call.
+///
+/// The VM decides that the request budget elapsed; the Driver owns only the
+/// protocol action (normally a 504 response) and reports which terminal fact
+/// the peer-visible race actually produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboundCallTimeout {
+    /// Admitted root Call whose budget expired.
+    pub call_ref: InboundCallRef,
+    /// Exact inbound Connector endpoint retaining the protocol request.
+    pub connector_path: node::Path,
+}
+
 /// Result of offering one already-journaled inbound-Call response to its
 /// bounded Driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1944,6 +1958,18 @@ pub enum InboundCallResponseStart {
     Pending,
 }
 
+/// Result of offering one scheduler-owned inbound-Call timeout to its
+/// bounded Driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboundCallTimeoutStart {
+    /// The Driver owns the timeout attempt and will report the winning
+    /// terminal observation through [`InboundCallConnectorDriver::events`].
+    Started,
+    /// No protocol bytes were written; finite local capacity kept the same
+    /// timeout request pending for a later offer.
+    Pending,
+}
+
 /// Terminal-observation half of an inbound Call Driver.
 ///
 /// Admission itself remains on [`InboundConnectorDriver`]. Keeping this as a
@@ -1953,6 +1979,11 @@ pub trait InboundCallConnectorDriver {
     /// durable. Ack-only Drivers return [`InboundCallResponseStart::Pending`]
     /// only on plans that should have been rejected before binding.
     fn start_response(&mut self, response: &InboundCallResponse) -> InboundCallResponseStart;
+
+    /// Starts the protocol-side timeout action selected by the scheduler.
+    /// A graph response already owned by the Driver may win this race; the
+    /// sole later event states which outcome became terminal.
+    fn start_timeout(&mut self, timeout: &InboundCallTimeout) -> InboundCallTimeoutStart;
 
     /// Terminal facts observed since the previous bounded drain.
     fn events(&mut self) -> Vec<InboundCallEvent>;
@@ -2980,8 +3011,6 @@ mod tests {
         let server_ty = http_server_exit_type().expect("the HttpServerExit type");
         for exit in [
             HttpServerExit::Completed { status: 202 },
-            HttpServerExit::MalformedRequest,
-            HttpServerExit::AuthFailed,
             HttpServerExit::RequestExpired,
             HttpServerExit::Overloaded,
             HttpServerExit::PeerDisconnected,

@@ -246,6 +246,24 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
             }
         };
     }
+    #[cfg(feature = "hosted-http12")]
+    {
+        let server_factory =
+            match connectors::HttpServerFactory::try_new(connectors::HttpServerConfig::default()) {
+                Ok(factory) => factory,
+                Err(error) => {
+                    eprintln!("error: the built-in HttpServer Driver id is invalid: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+        registry = match registry.try_with(Box::new(server_factory)) {
+            Ok(registry) => registry,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+    }
     let mut world = match connectors::RuntimeBindings::try_new(&compilation.plan, &registry) {
         Ok(bindings) => bindings,
         Err(error) => {
@@ -261,95 +279,141 @@ fn run(paths: &[String], file_root: Option<&std::path::Path>) -> ExitCode {
         Ok(path) => path,
         Err(_) => return ExitCode::FAILURE,
     };
-    let stdin = std::io::stdin();
+    let polls_inbound = world.has_runnable_inbound();
+    let (lines, input) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        for line in stdin.lock().lines() {
+            if lines.send(Some(line)).is_err() {
+                return;
+            }
+        }
+        let _ = lines.send(None);
+    });
     let mut printed_outputs = 0;
     let mut printed_errors = 0;
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(line) => line,
-            Err(error) => {
-                eprintln!("error: stdin: {error}");
+    let mut stdin_open = true;
+    loop {
+        let mut progressed = false;
+        while let Ok(message) = input.try_recv() {
+            let Some(line) = message else {
+                stdin_open = false;
+                break;
+            };
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => {
+                    eprintln!("error: stdin: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let submission = InboundSubmission {
+                provenance: InboundEnvelopeProvenance::single(inbound_path.clone()),
+                port: node::Port::new("in")
+                    .unwrap_or_else(|_| unreachable!("`in` is a valid port")),
+                draft: Draft {
+                    data: Data::materialized(Value::Text(line)),
+                    ext: {
+                        let mut ext = Namespace::new();
+                        ext.insert(
+                            String::from("content_type"),
+                            rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(
+                                String::from("text/plain"),
+                            )),
+                        );
+                        ext
+                    },
+                },
+                sequence: SubmissionSequence::Next,
+            };
+            if let Err(error) = vm.inject(&mut journal, submission) {
+                eprintln!("error: the submission was refused: {error}");
                 return ExitCode::FAILURE;
             }
-        };
-        let submission = InboundSubmission {
-            provenance: InboundEnvelopeProvenance::single(inbound_path.clone()),
-            // The line-fed run enters through the implicit input;
-            // named ingress is the Lab's and the future servers'.
-            port: node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port")),
-            draft: Draft {
-                data: Data::materialized(Value::Text(line)),
-                ext: {
-                    let mut ext = Namespace::new();
-                    ext.insert(
-                        String::from("content_type"),
-                        rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(
-                            String::from("text/plain"),
-                        )),
-                    );
-                    ext
-                },
-            },
-            sequence: SubmissionSequence::Next,
-        };
-        if let Err(error) = vm.inject(&mut journal, submission) {
-            eprintln!("error: the submission was refused: {error}");
-            return ExitCode::FAILURE;
+            progressed = true;
         }
-        loop {
-            if let Err(error) = vm.drain_with_bindings(&mut journal, &mut world) {
+
+        match drive_boundary(&mut vm, &mut journal, &mut world) {
+            Ok(boundary_progress) => progressed |= boundary_progress,
+            Err(error) => {
                 eprintln!("error: {error}");
                 return ExitCode::FAILURE;
             }
-            match vm.pump(&mut journal, &mut world) {
-                Ok(report) => {
-                    for (_, reason) in &report.rejected {
-                        eprintln!("err: a reply was refused before closure: {reason}");
-                    }
-                    if report.settled == 0 {
-                        if !vm.has_open_obligations() {
-                            break;
-                        }
-                        // Open calls against real children: the wall
-                        // clock maps onto the virtual clock so
-                        // declared budgets expire for real. Only the
-                        // scheduler mints a timeout.
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                        if let Err(error) =
-                            vm.advance(&mut journal, &mut world, vm.now() + 10_000_000)
-                        {
-                            eprintln!("error: {error}");
-                            return ExitCode::FAILURE;
-                        }
-                    }
-                }
-                Err(error) => {
-                    eprintln!("error: {error}");
-                    return ExitCode::FAILURE;
-                }
+        }
+        print_new_outputs(&vm, &mut printed_outputs, &mut printed_errors);
+
+        if !stdin_open && !polls_inbound && !vm.has_open_obligations() {
+            break;
+        }
+        if !progressed {
+            // Wall time is translated only at this hosted boundary. Timers in
+            // the VM remain deterministic virtual dates and Drivers never
+            // manufacture timeout outcomes themselves.
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if let Err(error) = vm.advance(&mut journal, &mut world, vm.now() + 10_000_000) {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
             }
         }
-        if let Err(error) = vm.drain_with_bindings(&mut journal, &mut world) {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
-        let stdout = std::io::stdout();
-        let mut out = stdout.lock();
-        for output in &vm.outputs()[printed_outputs..] {
-            let _ = writeln!(
-                out,
-                "{}: {}",
-                output.port,
-                render_data(output.envelope.data())
-            );
-        }
-        printed_outputs = vm.outputs().len();
-        for envelope in &vm.errors()[printed_errors..] {
-            eprintln!("err: {}", render_data(envelope.data()));
-        }
-        printed_errors = vm.errors().len();
     }
     ExitCode::SUCCESS
+}
+
+fn drive_boundary<'plan>(
+    vm: &mut Vm<'plan>,
+    journal: &mut MemJournal,
+    world: &mut connectors::RuntimeBindings<'plan>,
+) -> Result<bool, String> {
+    let mut progressed = false;
+    for _ in 0..64 {
+        match world
+            .pump_inbound(vm, journal)
+            .map_err(|error| error.to_string())?
+        {
+            Some(_) => progressed = true,
+            None => break,
+        }
+    }
+    vm.drain_with_bindings(journal, world)
+        .map_err(|error| error.to_string())?;
+    let responses = world
+        .pump_inbound_call_responses(vm)
+        .map_err(|error| error.to_string())?;
+    let timeouts = world
+        .pump_inbound_call_timeouts(vm)
+        .map_err(|error| error.to_string())?;
+    let inbound_events = world
+        .pump_inbound_call_events(vm)
+        .map_err(|error| error.to_string())?;
+    let outbound = vm.pump(journal, world).map_err(|error| error.to_string())?;
+    for (_, reason) in &outbound.rejected {
+        eprintln!("err: a reply was refused before closure: {reason}");
+    }
+    progressed |= responses.started > 0
+        || timeouts.started > 0
+        || inbound_events.queued > 0
+        || outbound.settled > 0;
+    vm.drain_with_bindings(journal, world)
+        .map_err(|error| error.to_string())?;
+    Ok(progressed)
+}
+
+fn print_new_outputs(vm: &Vm<'_>, printed_outputs: &mut usize, printed_errors: &mut usize) {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    for output in &vm.outputs()[*printed_outputs..] {
+        let _ = writeln!(
+            out,
+            "{}: {}",
+            output.port,
+            render_data(output.envelope.data())
+        );
+    }
+    *printed_outputs = vm.outputs().len();
+    for envelope in &vm.errors()[*printed_errors..] {
+        eprintln!("err: {}", render_data(envelope.data()));
+    }
+    *printed_errors = vm.errors().len();
 }
 
 /// Runs every lab of the unit; one line per scenario, non-zero exit

@@ -556,9 +556,9 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
     selector: None,
 };
 
-/// One inbound HTTP request. `ack` is executable without a response-routing
-/// seam; `respond` is part of the same stable contract but remains named and
-/// deferred until H5 can hold and settle the remote request obligation.
+/// One inbound HTTP request. `ack` closes after causal admission; `respond`
+/// retains the protocol request until a graph response or its scheduler-owned
+/// deadline wins the close-once race.
 pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
     id: HTTP_SERVER_CONNECTOR_ID,
     name: "HttpServer",
@@ -678,7 +678,7 @@ pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
             },
             Profile {
                 word: "respond",
-                support: ProfileSupport::Deferred("the HttpServer respond mode (M1.6 H5)"),
+                support: ProfileSupport::Available,
                 attributes: &[
                     AttributeSpec {
                         name: "correlate",
@@ -1311,9 +1311,7 @@ mod tests {
         assert_eq!(
             case_names(server),
             [
-                "AuthFailed",
                 "Completed",
-                "MalformedRequest",
                 "OutcomeUnknown",
                 "Overloaded",
                 "PeerDisconnected",

@@ -467,8 +467,9 @@ pub enum ValueDomain {
     TypedHttpHeaders,
     /// Extension request fields: ordinary-case names to ordered UTF-8 lines.
     CustomHttpHeaders,
-    /// A Rastok expression path over runtime data (`correlate = data.id`) — not a
-    /// boot-phase constant. Deferred-only.
+    /// A text-valued Rastok expression path over invocation data
+    /// (`correlate = data.id`) — never a boot-phase constant or an arbitrary
+    /// computed expression.
     ExprPath,
     /// A typed struct value. Deferred-only.
     Struct,
@@ -494,6 +495,7 @@ impl ValueDomain {
                 | Self::TextMap
                 | Self::TypedHttpHeaders
                 | Self::CustomHttpHeaders
+                | Self::ExprPath
         )
     }
 
@@ -517,7 +519,8 @@ impl ValueDomain {
             )),
             Self::TypedHttpHeaders => None,
             Self::CustomHttpHeaders => Some(crate::plan::custom_http_headers_type()),
-            Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => None,
+            Self::ExprPath => Some(crate::datatype::DataType::Text),
+            Self::Choice(_) | Self::Struct | Self::Map => None,
         }
     }
 
@@ -528,7 +531,7 @@ impl ValueDomain {
     pub fn admits_type(&self, ty: &crate::datatype::DataType) -> bool {
         match self {
             Self::TypedHttpHeaders => crate::plan::typed_http_headers_type_holds(ty),
-            Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => false,
+            Self::Choice(_) | Self::Struct | Self::Map => false,
             _ => self.expression_type().as_ref() == Some(ty),
         }
     }

@@ -6,10 +6,11 @@
 
 use crate::boundary::{
     CallConnectorDriver, CallRef, CallStart, Completion, DriverRouteError,
-    InboundCallResponseStart, InboundConnectorDriver, InboundDecision, InboundExchangeRef,
-    InboundProposal, Intent, OutboundConnectorBindings, OutboundConnectorDriver,
-    RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
-    SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent, SessionRef, SessionWriteIntent,
+    InboundCallResponseStart, InboundCallTimeoutStart, InboundConnectorDriver, InboundDecision,
+    InboundExchangeRef, InboundProposal, Intent, OutboundConnectorBindings,
+    OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
+    SessionConnectorBindings, SessionConnectorDriver, SessionDriverEvent, SessionOpenIntent,
+    SessionRef, SessionWriteIntent,
 };
 use crate::connector::{ConnectorExchange, ConnectorId, ConnectorRoles};
 use crate::envelope::{Data, Envelope};
@@ -196,6 +197,16 @@ pub struct InboundCallResponsePumpReport {
     pub pending: usize,
 }
 
+/// One bounded pass transferring scheduler-owned inbound request expiries to
+/// their exact Driver family.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InboundCallTimeoutPumpReport {
+    /// Timeout attempts whose protocol action is now Driver-owned.
+    pub started: usize,
+    /// Timeout attempts retained by the VM under finite Driver pressure.
+    pub pending: usize,
+}
+
 impl core::fmt::Display for InboundPumpError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -255,6 +266,12 @@ impl core::fmt::Debug for RuntimeBindings<'_> {
 }
 
 impl<'plan> RuntimeBindings<'plan> {
+    /// Whether this statically bound image contains at least one external
+    /// source that must be polled even when no CLI submission is pending.
+    pub fn has_runnable_inbound(&self) -> bool {
+        self.families.values().any(|family| family.uses_inbound)
+    }
+
     /// Binds every runnable inbound Connector and every callable outbound
     /// Connector before a VM or journal exists.
     ///
@@ -604,6 +621,52 @@ impl<'plan> RuntimeBindings<'plan> {
                     report.started = report.started.saturating_add(1);
                 }
                 InboundCallResponseStart::Pending => {
+                    report.pending = report.pending.saturating_add(1);
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    /// Offers every due inbound request deadline to the Driver family that
+    /// admitted the Call. A `Pending` attempt remains scheduler-owned and is
+    /// offered again without creating another queue or terminal fact.
+    ///
+    /// # Errors
+    ///
+    /// Missing or crossed family ownership is a binding-integrity fault.
+    pub fn pump_inbound_call_timeouts(
+        &mut self,
+        vm: &mut Vm<'plan>,
+    ) -> Result<InboundCallTimeoutPumpReport, DriverRouteError> {
+        let mut report = InboundCallTimeoutPumpReport::default();
+        for timeout in vm.ready_inbound_call_timeouts() {
+            let Some(id) = self.inbound_calls.get(&timeout.call_ref).cloned() else {
+                return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_ref));
+            };
+            let Some(family) = self.families.get_mut(&id) else {
+                return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_ref));
+            };
+            if !family.inbound_paths.contains(&timeout.connector_path) {
+                return Err(DriverRouteError::InboundSourceMismatch {
+                    connector: id,
+                    source: timeout.connector_path,
+                });
+            }
+            let driver = family
+                .driver
+                .inbound()
+                .ok_or_else(|| DriverRouteError::UnavailableInbound(id.clone()))?
+                .call()
+                .ok_or_else(|| DriverRouteError::UnavailableInboundCall(id.clone()))?;
+            match driver.start_timeout(&timeout) {
+                InboundCallTimeoutStart::Started => {
+                    if !vm.mark_inbound_call_timeout_started(&timeout) {
+                        return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_ref));
+                    }
+                    report.started = report.started.saturating_add(1);
+                }
+                InboundCallTimeoutStart::Pending => {
                     report.pending = report.pending.saturating_add(1);
                 }
             }
@@ -1413,6 +1476,13 @@ graph inbound : App {
             InboundCallResponseStart::Pending
         }
 
+        fn start_timeout(
+            &mut self,
+            _: &crate::boundary::InboundCallTimeout,
+        ) -> crate::boundary::InboundCallTimeoutStart {
+            crate::boundary::InboundCallTimeoutStart::Pending
+        }
+
         fn events(&mut self) -> Vec<InboundCallEvent> {
             Vec::new()
         }
@@ -1902,6 +1972,13 @@ graph inbound : App {
                 completion: Completion::http_server_exit(HttpServerExit::Completed { status: 200 }),
             });
             InboundCallResponseStart::Started
+        }
+
+        fn start_timeout(
+            &mut self,
+            _: &crate::boundary::InboundCallTimeout,
+        ) -> crate::boundary::InboundCallTimeoutStart {
+            crate::boundary::InboundCallTimeoutStart::Pending
         }
 
         fn events(&mut self) -> Vec<InboundCallEvent> {

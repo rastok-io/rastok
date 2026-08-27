@@ -1,9 +1,8 @@
 # Standard library contracts
 
-> **Status: normative and executable through M1.6 H5.2: HttpClient is live
-> over HTTP/1.1–3 and HttpServer `ack` is live over HTTP/1.1–2. HTTP/3 server,
-> the live `respond` profile, and WebSocket network I/O remain gated by H5–H6.
-> The generic direct-lineage response-return seam is executable.**
+> **Status: normative and executable through M1.6 H5: HttpClient and
+> HttpServer are live over HTTP/1.1–3, including bounded `ack` and `respond`.
+> WebSocket network I/O remains gated by H6.**
 > B5 removed the
 > former draft `error_set` and made the complete resolved port table the
 > executable contract. B7 removed the success/failure boundary seam:
@@ -162,9 +161,9 @@ There is no parallel `mime_type` spelling.
 | Payload type | required `codec`: `json → variant`, `text → text`, `bytes → bytes`; one complete body is one value |
 | Populates | canonical `meta.ext.content_type: media_type`, lossless `http_headers`, `http_method`, `http_uri`, `http_version`; a response carries `http_status` when applicable |
 | effect / behavior | `none` / `deterministic` (pre-declared) |
-| Attributes | common: `listen: text` required (instance), `path: text = "/"` (plan), required `codec` (plan), `max_body: ByteSize = "8MiB"` (plan), optional typed `headers` and open `custom_headers` plus `auth_bearer: text` (instance), optional paired `tls_certificate`/`tls_private_key: bytes` (instance), ordered `versions = ["http/3", "http/2", "http/1.1"]` (plan), `zero_rtt = disabled` (plan); `mode = ack` default, while `respond` adds optional invocation `correlate` and required instance `timeout` but remains deferred to H5 |
+| Attributes | common: `listen: text` required (instance), `path: text = "/"` (plan), required `codec` (plan), `max_body: ByteSize = "8MiB"` (plan), optional typed `headers` and open `custom_headers` plus `auth_bearer: text` (instance), optional paired `tls_certificate`/`tls_private_key: bytes` (instance), ordered `versions = ["http/3", "http/2", "http/1.1"]` (plan), `zero_rtt = disabled` (plan); `mode = ack` default, while `respond` adds optional invocation `correlate` and required positive instance `timeout` |
 | Correlator | mode `respond`: **default = lineage** (`origin_id == R.id`) — valid on join-free return paths ONLY. **A return path crossing a root-mixing join ⇒ explicit `correlate` required (compile error otherwise)**: the join output inherits the TRIGGER's origin, creating a race. The author carries the token (`meta.app.request_id = meta.sys.id`) and attributes it through joins with the explicit-attribution rule; matching = correlate-value == the open request's root id. An orphan response (no open request — it already expired, the 504 went out) is **discarded-and-journaled** (the call-closed rule's cousin). |
-| Outcome cases | `Completed { status: int }`, `MalformedRequest`, `AuthFailed`, `RequestExpired`, `Overloaded`, `PeerDisconnected`, `OutcomeUnknown` |
+| Outcome cases | `Completed { status: int }`, `RequestExpired`, `Overloaded`, `PeerDisconnected`, `OutcomeUnknown` |
 | Instances | singleton |
 | Journal / sim | two-phase INBOUND proposal; commit precedes 202/response; the H2 Lab binding is effectless and uses scenario injection rather than a fake socket |
 
@@ -179,18 +178,18 @@ There is no parallel `mime_type` spelling.
   Hyper for HTTP/1.1-2 `ack` on that same pump shape: connection, stream,
   request, fact and byte capacities are finite; request bytes remain charged
   while the proposal awaits causal admission; and 202 follows the accepted
-  commit. These are Driver choices and are absent from plan identity. HTTP/3,
-  the live `respond` Driver, explicit correlation, bounded request deadlines
-  and independent server interop remain in H5. H5.2 already proves the generic
-  direct-lineage return beneath that policy: the producing transaction seals
-  the exact opening instance, Driver saturation leaves the real response
-  pending without bytes, and `l:reply` consumes its cursor.
+  commit. These are Driver choices and are absent from plan identity. H5 now
+  executes the same bounded protocol over HTTP/3 and executes `respond`: the
+  producing transaction seals the exact opening instance, Driver saturation
+  leaves the real response pending without bytes, and `l:reply` consumes its
+  cursor. Timer kind 8 makes the positive request deadline part of the
+  accepting fact; response and 504 race through one terminal protocol action.
 
 Malformed framing, failed bearer authentication and body refusal can occur
-before a request has a typed `out` value. H5.1 returns an HTTP refusal without
-minting a root or fake Call. The corresponding published `HttpServerExit`
-cases are therefore a named H2 contract debt to remove or reclassify at final
-H5; an `l:reply` is legal only for an admitted request.
+before a request has a typed `out` value. H5 returns an HTTP refusal without
+minting a root or fake Call. Such pre-admission refusals are deliberately
+absent from `HttpServerExit`; an `l:reply` is legal only for an admitted
+request.
 
 ### 3.2 `HttpClient` — outbound HTTP
 

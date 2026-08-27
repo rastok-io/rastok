@@ -15,12 +15,10 @@
 > D-2026-08-25-2 makes `HttpClient`, `HttpServer`, `WebSocketClient`, and
 > `WebSocketServer` exact H2 sheets from source through validated plan and
 > Lab binding. H3 selects their private hosted-engine seam and H4 executes the
-> HttpClient sheet over H1/H2/H3. Server and Session Drivers remain gated by
-> H5.1 executes `HttpServer(mode = ack)` over hosted HTTP/1.1–2. H5.2 executes
-> the contract-neutral direct-lineage response-return seam without admitting
-> that source profile. HTTP/3 server binding and H6's Session Drivers remain
-> gated; `HttpServer(mode = respond)` is a named H5 deferral rather than a
-> nearby executable behavior.
+> HttpClient sheet over H1/H2/H3. H5 executes
+> `HttpServer(mode = ack | respond)` over the same three versions with bounded
+> retained Calls and direct-path correlation. H6's Session Drivers remain
+> gated.
 >
 > **Conceptual basis** : this document assumes the model defined in [WHITEPAPER.md](../../WHITEPAPER.md) and the normative instance contract in [instances.md](instances.md). This document is the grammar ; foundations is the constitution.
 >

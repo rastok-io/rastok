@@ -1214,6 +1214,49 @@ async fn execute_h3(
     }
 }
 
+#[cfg(all(test, feature = "hosted-http3"))]
+pub(super) async fn probe_http3_server(
+    url: String,
+    body: &[u8],
+    ca: &[u8],
+) -> Result<(u16, Vec<u8>), String> {
+    let (_cancel_tx, cancel) = tokio::sync::watch::channel(false);
+    let work = ClientWork {
+        call_ref: CallRef::new(crate::envelope::Id::from_bytes([0x35; 16])),
+        request: HttpRequest {
+            auth_bearer: None,
+            body: body.to_vec(),
+            codec: String::from("bytes"),
+            headers: BTreeMap::new(),
+            idempotency_key: None,
+            method: String::from("POST"),
+            url: url.clone(),
+        },
+        binding: HttpClientPlanBinding {
+            max_body: 1024 * 1024,
+            versions: vec![HttpVersion::Http3],
+        },
+        tls: TlsMaterial {
+            ca: Some(ca.to_vec()),
+            certificate: None,
+            private_key: None,
+        },
+        cancel,
+    };
+    let uri = url
+        .parse()
+        .map_err(|error| format!("the HTTP/3 probe URL is invalid: {error}"))?;
+    let limits = EngineLimits::new(8, 2, 8, 1024 * 1024).map_err(|error| error.to_string())?;
+    match execute_h3(&work, &uri, 64 * 1024, limits)
+        .await
+        .map_err(|error| format!("the HTTP/3 probe failed: {error:?}"))?
+    {
+        CallResult::Response { status, body, .. } => Ok((status, body)),
+        CallResult::Exit(exit) => Err(format!("the HTTP/3 probe exited as {exit:?}")),
+        CallResult::Cancelled => Err(String::from("the HTTP/3 probe was cancelled")),
+    }
+}
+
 #[cfg(feature = "hosted-http3")]
 #[derive(Default)]
 struct H3ResponseState {
