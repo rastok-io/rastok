@@ -1,0 +1,13 @@
+graph http_client_interop : App {
+  connector client : HttpClient {
+    url = "__URL__"
+    method = "GET"
+    timeout = duration("5s")
+    codec = text
+    versions = ["http/1.1"]
+    max_body = "1MiB"
+    effect = idempotent ; behavior = deterministic
+  }
+  . -> client -> .
+  client.exit -> nothing
+}

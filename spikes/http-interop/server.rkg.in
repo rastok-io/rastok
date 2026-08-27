@@ -1,0 +1,8 @@
+graph http_server_interop : App {
+  connector server : HttpServer {
+    listen = "127.0.0.1:__PORT__"
+    codec = text
+    versions = ["http/2", "http/1.1"]
+  }
+  server -> .
+}

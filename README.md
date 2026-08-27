@@ -84,7 +84,10 @@ build. Static feature presets compose reduced or full Driver registries
 without changing plan semantics. The executable
 [Codex WebSocket gateway](docs/examples/codex-websocket-gateway.rkg) and the
 [M1.6 exit report](docs/architecture/m1.6-exit-report.md) record the complete
-proof and its remaining external Autobahn qualification.
+proof. The single
+[release-qualification inventory](docs/architecture/release-qualification.md)
+records executed independent HTTP/WebSocket interop and the remaining
+ngtcp2/Autobahn qualifications without conflating them with workspace tests.
 
 The standalone runner links Process by default. Hosted features add the
 selected HTTP/WebSocket families through one registry assembly. Pass
