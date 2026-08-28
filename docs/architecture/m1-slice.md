@@ -424,12 +424,13 @@ step touches `vm.rs` once.
    preserving the historical identity domain. L1 freezes the protocol and L2
    now carries its closed boundary, plan constants and ordinary Graph handlers
    through categorical v13 with Registry-free validation and a pre-mutation VM
-   refusal. L3–L7 execute
-   one bounded continuation protocol: a
-   journal-folded run and `l:next` chain, Graph traversal with ordinary pure
-   Operator work, typed Connector retry, dated re-entry, Closing/recovery model checks, and
-   final identity/portability evidence. The checker remains fail-closed at
-   every unfinished gate. Ordered work and exit criteria live in the
+   refusal. L3 now proves one finite progress verdict per completed traversal,
+   without privileging `out`: continuation uses one `next`; ordinary outputs
+   or `stop` terminate. L4–L7 execute the resulting bounded protocol through a
+   journal-folded run and `l:next` chain, dated re-entry, the first theorem
+   checker, Closing/recovery model checks, and final identity/portability
+   evidence. The checker remains fail-closed at every unfinished gate. Ordered
+   work and exit criteria live in the
    [M1.7 backlog](m1.7-loop-backlog.md).
 9. **Cost counters** — the `cost` map (stdlib §6.4) accumulated
     from the journal; a subscriber, not a core dependency.

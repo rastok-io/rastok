@@ -1,17 +1,17 @@
 # Loop — finite temporal recursion
 
-> **Status: normative M1.7 contract; executable through L2 transport.** A
+> **Status: normative M1.7 contract; executable through L3 control proof.** A
 > fuel-only `Loop` crosses source, checked HIR and categorical v13 with its
 > exact boundary and ordinary Graph-owned handlers. Registry-free validation
-> re-derives the contract after decode. The VM still refuses the aspect before
-> its first mutation until L3 proves the control decision and L4 installs the
+> re-derives the contract and finite progress decision after decode. The VM
+> still refuses the aspect before its first mutation until L4 installs the
 > journal fold. No accepted program silently executes as an ordinary Graph.
 
 `Loop` applies one Graph repeatedly to an immutable iteration-state envelope.
 It is finite temporal recursion, not a spatial cycle:
 
 ```text
-external in ──▶ body ──▶ out       terminal result
+external in ──▶ body ──▶ result / exit / stop    terminal
                     └──▶ next ─┐
                          l:next│
                     in ◀───────┘
@@ -28,34 +28,47 @@ of three carrier-specific protocols. Direct `Operator + Loop` and
 
 ## 1. Boundary contract
 
-A Loop Graph has four conventional port roles:
+A Loop Graph has exactly one input, `in`, two aspect-owned outputs, and any
+number of ordinary terminal outputs chosen by its domain:
 
 | Port | Direction | Contract |
 |---|---|---|
 | `in` | input | state envelope for the current iteration |
 | `next` | output owned by Loop | next state; its logical type is exactly the type of `in` |
-| `out` | output | terminal business result (`Done`) |
+| any ordinary output (`out`, `exit`, `declined`, …) | output | terminal business result or observation |
 | `expired` | output owned by Loop | `LoopExpired { last_state: In }` |
 
 `next` and `expired` are contributed by the aspect and become ordinary typed
-plan ports after checking. User code emits them like any other port, but they
-cannot be redeclared with another direction or type. `in` and `out` remain
-ordinary Graph boundary declarations so their types stay visible.
+plan ports after checking. They cannot be redeclared with another direction or
+type. User code may emit `next`; `expired` is manager-produced only. `in`
+remains an ordinary Graph boundary declaration so its type stays visible, but
+no second Graph input is admitted: another asynchronous stimulus belongs on
+an ordinary child Connector and must still lead to one proved verdict.
+`out` has no privileged Loop meaning: when declared, it is one terminal output
+among the Graph's ordinary outputs.
 
-Every iteration must make **exactly one control decision**:
+Every completed iteration must make **exactly one progress decision**:
 
 ```text
-next(state) XOR out(result)
+continue:  exactly one next(state), no ordinary output, no stop
+terminate: no next, at least one ordinary output and/or stop
 ```
 
-L3 will prove this over all reachable handler paths. L2 transports the
-ordinary handlers and their exact types but makes no total-decision claim;
-the VM therefore refuses the whole aspect before mutation. Once L3 lands, a
-path that emits neither, both, or more than one of either is rejected, and the
-VM repeats the same check only as defense against a forged or corrupted plan.
-It never guesses a decision from scheduler order. Other diagnostic or audit
-outputs may be emitted atomically, but they do not decide the Loop. Multiple
-business terminal cases use one tagged-union `out` type.
+L3 proves this over all reachable handler paths. Silence, repeated `next`,
+more than one terminal transaction, or continuation mixed with termination
+is rejected. Registry-free validation repeats the same proof after decode as
+defense against a forged or corrupted plan; the runtime never guesses a
+decision from scheduler order. A single terminal transaction may emit several
+ordinary outputs atomically. If an application needs a single result sum, it
+may still use one tagged-union `out`; Loop does not require it.
+
+Bare `stop` is a stronger terminal decision: it closes the current Loop owner
+instance, so every run in that instance follows the ordinary Closing protocol.
+It is not merely a private return from one run. A run that should finish while
+leaving sibling runs alive emits an ordinary terminal output instead. If the
+owner subtree can hold an outbound call, writing `stop` also makes the existing
+`closing = { drain_for; settle_for }` policy required; no grace period is
+invented silently.
 
 `next` is an aspect-owned control port. It may be connected only to the Loop
 manager selected by the checker; source wiring to or from it is rejected. The
@@ -142,8 +155,8 @@ run(0, state) = expired(LoopExpired { last_state = state })
 
 run(N + 1, state) =
   body(state) then
-    out(result)  -> out(result)
-    next(state') -> run(N, state')
+    terminal(outputs and/or stop) -> terminal
+    next(state')                  -> run(N, state')
 ```
 
 Consequently, if the last permitted body application emits `next`, the
@@ -208,22 +221,30 @@ finite body, the verifier must establish:
 
 1. `I(s)` at entry;
 2. one body application terminates;
-3. exactly one of `next(s')` or `out(r)` is emitted;
+3. exactly one progress verdict is produced: one `next(s')`, or explicit
+   termination by ordinary output(s) and/or `stop`;
 4. every `next(s')` preserves `I(s')`;
 5. every `next(s')` strictly decreases `m(s') < m(s)` in a well-founded order.
 
-These obligations prove eventual `out`; no independent `until` predicate is
-needed. An external Connector result is a fresh symbolic typed value. The
+With fuel, these obligations prove a finite number of body applications,
+including a run that exhausts onto `expired`; they do not promise a particular
+terminal port. With a standalone `measure`, strict decrease additionally
+proves that a terminal verdict is eventually reached. No independent `until`
+predicate is needed. An external Connector result is a fresh symbolic typed value. The
 verifier may use explicit guards on that value, but never assumes that a
 remote service progresses merely because it usually does.
 
-The initial automatic fragment is intentionally small: affine integer
-arithmetic, comparisons, boolean connectives, structs and tagged unions over a
-finite spatial DAG. Unsupported guest calls, mutable state interactions,
-opaque functions, open Sessions or unproved nested summaries refuse the proof
-by name. The hosted compiler may search for a proof; a small `no_std` core
-checker validates the certificate. A future Rocq/Coq export is an independent
-oracle, not the runtime authority.
+The L3 automatic fragment is intentionally small: boolean literals and
+connectives; a proposition paired with its syntactic negation; complementary
+`==`/`!=`, `<`/`>=` and `<=`/`>` comparisons over checked expression trees;
+and exhaustive `data is Case` partitions over a closed tagged union. The
+summary follows ordinary Operators through the finite spatial DAG. A bounded
+outbound Call may decide only from its exactly-once typed `exit`; a zero-or-more
+output cannot decide progress. Mutable Graph state, open Event/Session waits,
+unproved nested Graph summaries, or a proof exceeding the finite proposition
+budget refuse by name. The future theorem gate can add affine reasoning and a
+certificate checked by the small `no_std` core. A Rocq/Coq export remains an
+independent oracle, not the runtime authority.
 
 The name `measure` follows Rocq/Coq's well-founded recursion vocabulary
 (`{measure term relation}` / `{wf relation term}`). `variant` remains a data
@@ -265,42 +286,50 @@ graph total : Loop {
 }
 ```
 
-### 7.3 Retry an outbound Call
+### 7.3 Retry a bounded outbound Call
 
 ```rastok
-graph pay : Loop {
-  input in: PaymentRequest
-  output out: union { Receipt, Declined }
+graph retry_job : Loop {
+  input in: text
+  output exit_code: int
 
   Loop.fuel = 5
+  closing = { drain_for = duration("2s"); settle_for = duration("2s") }
   Loop.delay = {
     kind    = exponential
     first   = duration("100ms")
     ceiling = duration("5s")
   }
 
-  connector charge : HttpClient {
-    url      = "https://api.example/pay"
+  connector job : Process {
+    command  = "worker"
+    codec    = lines
     effect   = idempotent
     behavior = probabilistic
     timeout  = duration("10s")
+    max_output = "1 MiB"
   }
 
-  . -> charge
-  on charge.out  { out = Receipt { value = data } }
-  on charge.exit where data is TimeoutExpired {
-    next = Loop.state.data
-  }
-  on charge.exit where data is Exited {
-    out = Declined { status = data }
-  }
+  . -> job
+  job.out -> nothing
+  job.err -> nothing
+  on job.exit where data is TimeoutExpired  { next = Loop.state.data }
+  on job.exit where data is Exited          { exit_code = data.exit_code }
+  on job.exit where data is SpawnFailed     { stop }
+  on job.exit where data is DecodeFailed    { stop }
+  on job.exit where data is CaptureFailed   { stop }
+  on job.exit where data is OutputOverflow  { stop }
+  on job.exit where data is OutcomeUnknown  { stop }
 }
 ```
 
-The retry policy belongs to the Graph, not to `HttpClient`. Stable
-idempotency keys and call close-once remain Connector obligations. A
-`Process(codec = jsonl)` can emit several `out` frames, so it is admitted only
-when the surrounding Graph still proves exactly one control decision.
+The retry policy belongs to the Graph, not to `Process`. Stable idempotency
+keys and call close-once remain Connector obligations. The exactly-once typed
+`exit` union is a finite guard domain: timeout continues, a normal exit emits
+a domain result, and the remaining cases deliberately close this singleton
+Loop instance. A `Process(codec = jsonl)` can emit several `out` frames, so
+those frames cannot each choose Loop progress. They are discarded here; a
+later bounded collector may turn them into one ordinary terminal value.
 
 ## 8. What is not a Loop
 
@@ -330,20 +359,19 @@ Closing; Loop wakeups do not.
 Before a Loop plan becomes executable, Registry-free validation re-derives:
 
 1. carrier is a Graph and the aspect occurs once;
-2. `in` and `out` exist and `next`/`expired` have their exact contributed
-   types;
+2. typed `in` exists and `next`/`expired` have their exact contributed types;
 3. `Loop.fuel` is positive when no checked proof certificate exists;
 4. `Loop.delay` is canonical and all durations are positive;
-5. every reachable iteration path decides exactly one of `next`/`out`;
+5. every reachable iteration path decides exactly one of continuation or
+   termination, independently of terminal-output spelling;
 6. the body is individually terminating under its Connector/guest budgets;
 7. no spatial edge reads or writes `next`;
 8. run identity, fuel and causal parents agree with the journal fold;
 9. instance Closing cannot revive a stale wakeup.
 
 Any unsupported theorem expression, carrier, aspect combination or body
-cardinality refuses before a validated plan is returned. A supported L2
-transport still refuses before the first VM mutation until the remaining
-execution invariants above land.
+cardinality refuses before a validated plan is returned. A supported L3 plan
+still refuses before the first VM mutation until the L4 journal fold lands.
 
 ## 11. Related documents
 

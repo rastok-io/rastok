@@ -13,7 +13,8 @@
 > Graph closure, and bare `stop`. Source production of some dynamic
 > settings/values remains a named R1 gap. R6 makes nested Graphs and
 > instance-local joins public end to end, including Lab and package evidence;
-> M1.7 L2 subsequently transports Graph-owned handlers categorically. R7
+> M1.7 L2 subsequently transports Graph-owned handlers categorically and L3
+> proves their finite Loop progress decision. R7
 > closes the executable instance slice with negative-space and
 > placement-neutrality proofs; it adds no cluster runtime. This document is
 > the single authority for logical instance addressing, key selection,
@@ -457,8 +458,9 @@ runtime commits the `l:start` lifecycle transaction before the port
 transaction or any external resource effect. `on start` and `on stop` are
 ordinary handlers owned by the Node and require a causal input envelope;
 Graph lifecycle facts execute now. Graph-owned handler source and categorical
-transport landed with the Loop L2 gate, but a Graph carrying Loop still
-refuses before its first mutating VM door until the Loop manager lands.
+transport landed with the Loop L2 gate, and L3 proves their finite progress;
+a Graph carrying Loop still refuses before its first mutating VM door until
+the Loop manager lands.
 
 Bare `stop` requests closure of the current Node instance after the current
 transaction commits. There is no `stop <partition>` form. Stopping a Graph

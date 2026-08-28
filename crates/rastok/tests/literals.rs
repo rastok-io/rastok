@@ -1011,25 +1011,12 @@ fn graph_handlers_follow_the_canonical_asset_remap() {
         r#"
 graph app : App {{
   graph g : Loop {{
-    input in: bytes
+    input in: bool
     output out: bytes
     Loop.fuel = 1
 
-    operator first {{
-      input in: bytes
-      output seen: bytes
-      on in {{ seen = data }}
-    }}
-    operator second {{
-      input in: bytes
-      output seen: bytes
-      on in {{ seen = data }}
-    }}
-
-    . -> first
-    . -> second
-    on first.seen {{ out = asset("{first_name}") }}
-    on second.seen {{ next = asset("{second_name}") }}
+    on in where data  {{ out = asset("{first_name}") }}
+    on in where !data {{ out = asset("{second_name}") }}
   }}
 }}
 "#
@@ -1041,34 +1028,29 @@ graph app : App {{
     )
     .expect("Graph-owned asset expressions compile");
 
-    let referenced = |child_name: &str| {
-        let handler = compilation
-            .plan
-            .handlers
-            .iter()
-            .find(|handler| {
-                matches!(handler.owner, HandlerOwner::Graph(_))
-                    && matches!(
-                        &handler.activation,
-                        rastok::node::HandlerActivation::ChildPort { child, .. }
-                            if child.segments().last().map(String::as_str) == Some(child_name)
-                    )
-            })
-            .expect("the Graph handler travels");
-        let Step::Emit {
-            value: Emission::Data(tree),
-            ..
-        } = &handler.body[0]
-        else {
-            panic!("the Graph handler emits one asset");
-        };
-        let rastok::expr::Expr::Asset(index) = &tree.root else {
-            panic!("the asset call lowers to its table index");
-        };
-        compilation.plan.assets[*index as usize].bytes.as_slice()
-    };
-    assert_eq!(referenced("first"), first_bytes);
-    assert_eq!(referenced("second"), second_bytes);
+    let mut referenced: Vec<_> = compilation
+        .plan
+        .handlers
+        .iter()
+        .filter(|handler| matches!(handler.owner, HandlerOwner::Graph(_)))
+        .map(|handler| {
+            let Step::Emit {
+                value: Emission::Data(tree),
+                ..
+            } = &handler.body[0]
+            else {
+                panic!("the Graph handler emits one asset");
+            };
+            let rastok::expr::Expr::Asset(index) = &tree.root else {
+                panic!("the asset call lowers to its table index");
+            };
+            compilation.plan.assets[*index as usize].bytes.as_slice()
+        })
+        .collect();
+    referenced.sort_unstable();
+    let mut expected = vec![first_bytes, second_bytes];
+    expected.sort_unstable();
+    assert_eq!(referenced, expected);
 }
 
 #[test]

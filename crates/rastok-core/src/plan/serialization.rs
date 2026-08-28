@@ -626,6 +626,10 @@ fn handler_tree(handler: &Handler) -> Cbor {
     Cbor::Map(pairs)
 }
 
+pub(super) fn handler_order_key(handler: &Handler) -> Vec<u8> {
+    canonical_cbor::encode(&handler_tree(handler))
+}
+
 const fn lifecycle_tag(lifecycle: node::Lifecycle) -> u64 {
     match lifecycle {
         node::Lifecycle::Start => 1,

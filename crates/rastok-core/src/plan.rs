@@ -376,9 +376,9 @@ pub struct ExecutionPlan {
     /// The wiring, desugared to explicit pairs, in canonical order —
     /// the same order the semantic hash sees.
     pub edges: Vec<Edge>,
-    /// Every handler, in canonical order — (slot, activation key).
-    /// Declaration order between handlers carries no identity; only
-    /// the statements INSIDE a handler are order-sensitive.
+    /// Every handler, in complete canonical transport order. Declaration
+    /// order between mutually exclusive guarded handlers carries no identity;
+    /// only statements INSIDE a handler are order-sensitive.
     pub handlers: Vec<Handler>,
     /// The resolved `meta.app` schema — inferred from the graph's
     /// writes, travelling so the validator answers without a
@@ -853,6 +853,19 @@ pub struct Handler {
     pub guard: Option<expr::Tree>,
     /// The steps, in text order — the order fixing emission indices.
     pub body: Vec<Step>,
+}
+
+impl Handler {
+    /// Complete canonical ordering key for the shipped handler table.
+    ///
+    /// Graph aspects may own several mutually exclusive guarded handlers for
+    /// one activation. The activation alone is therefore no longer a total
+    /// order; the exact transported handler supplies the deterministic
+    /// tie-break without making declaration order semantic.
+    #[must_use]
+    pub fn canonical_order_key(&self) -> Vec<u8> {
+        serialization::handler_order_key(self)
+    }
 }
 
 /// Owner of one ordinary handler body.

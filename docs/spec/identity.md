@@ -158,7 +158,8 @@ fields.
 **M1.4 R6 join checkpoint (2026-08-22).** A join activation seals its ports in
 source-declared order; `(a, b)` and `(b, a)` are different programs. Optional
 `within` and `last` bounds are identity, while declaration order between
-distinct handlers remains erased by canonical activation-key sorting. These
+distinct handlers remains erased by canonical activation key followed, when
+equal, by a key derived from the complete handler. These
 bytes occur only for a join or a newly public nested Graph, so every existing
 semantic hash, package, and causal trace remains fixed. When a join fires,
 transaction key 34 records exactly one contributing envelope id per declared
@@ -300,6 +301,18 @@ semantic source claims. Their v13 packages are respectively 988 B, 1,032 B,
 and 323 B. A new Loop seals its checked `LoopSpec`, contributed
 ports and Graph handlers under `rastok.aspects.r1`. L2 emits no Loop record,
 so all stored causal traces remain byte-identical.
+
+**M1.7 L3 finite-control checkpoint (2026-08-28).** Several guarded Graph
+handlers may now share one activation only when their conditions are proved
+disjoint and exhaustive. Source semantic identity tie-breaks one equal
+activation by the domain-separated BLAKE3 digest of the complete semantic
+handler; the shipped table uses the complete canonical transported handler
+bytes. Both keys are derived from the same already sealed meaning, so source
+declaration order carries no identity and no new claim travels. The proof
+itself is derived from handlers, edges, port types and Connector exchange
+facts. Every pre-L3 program keeps its semantic hash, v13 package bytes and
+causal trace; L3 emits no Loop record. The connector-free gauge remains the
+negative scope witness.
 
 ## 2. `graph_version` and the manifest
 

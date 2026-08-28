@@ -161,6 +161,7 @@ pub fn compile_with_assets(
             | PlanValidationError::MissingClosingPolicy { .. }
             | PlanValidationError::AmbiguousJoinMetadataRead { .. }
             | PlanValidationError::AmbiguousInboundCallCorrelation { .. }
+            | PlanValidationError::InvalidLoopControl { .. }
             | PlanValidationError::WiringCycle { .. }),
         ) => {
             bag.push(type_resolution_diagnostic(&error));
@@ -269,13 +270,13 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
             check::E_INSTANCE,
             Phase::Check,
             format!(
-                "finite owner `{owner}` contains Process `{connector}` and therefore requires `closing = {{ drain_for = <duration>; settle_for = <duration> }}`"
+                "closable owner `{owner}` contains outbound Connector `{connector}` and therefore requires `closing = {{ drain_for = <duration>; settle_for = <duration> }}`"
             ),
         )
         .with_field("name", owner)
         .with_field(
             "detail",
-            format!("Process `{connector}` can remain open during closure"),
+            format!("outbound Connector `{connector}` can remain open during closure"),
         ),
         PlanValidationError::AmbiguousJoinMetadataRead { owner, field } => Diagnostic::new(
             check::E_META_ZONE,
@@ -295,6 +296,18 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
         )
         .with_field("node", node.to_string())
         .with_field("attribute", "correlate"),
+        PlanValidationError::InvalidLoopControl {
+            owner,
+            path,
+            detail,
+        } => Diagnostic::new(
+            check::E_LOOP_CONTROL,
+            Phase::Check,
+            format!("Loop `{owner}` cannot prove finite progress at `{path}`: {detail}"),
+        )
+        .with_field("owner", owner)
+        .with_field("path", path)
+        .with_field("detail", *detail),
         PlanValidationError::WiringCycle { node } => Diagnostic::new(
             check::E_GRAPH_CYCLE,
             Phase::Check,

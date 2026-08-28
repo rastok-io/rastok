@@ -131,6 +131,8 @@ pub const E_PORT_TYPE: Code = Code::new("E-PORT-TYPE");
 pub const E_INSTANCE: Code = Code::new("E-INSTANCE");
 /// A Loop aspect attribute or finite-recursion contract is malformed.
 pub const E_LOOP: Code = Code::new("E-LOOP");
+/// A Loop body cannot prove one finite progress verdict on every traversal.
+pub const E_LOOP_CONTROL: Code = Code::new("E-LOOP-CONTROL");
 
 /// A braced value mixing ordinary data fields with reserved envelope
 /// roots — the classification is one or the other, never a silent
@@ -1815,29 +1817,25 @@ impl Checker<'_, '_> {
                 GraphItem::Error(_) => {}
             }
         }
+        let owns_loop = graph.aspects.contains(&node::Aspect::Loop);
         graph.loop_spec = self.loop_declaration(decl, &graph, &signature, &consts);
-        if graph.loop_spec.is_some() && self.contribute_loop_boundary(&mut graph, decl.span) {
-            let state_type = graph
-                .boundary
-                .iter()
-                .find(|port| port.port.name() == "in" && port.direction == Direction::Input)
-                .and_then(|port| port.ty.clone())
-                .unwrap_or(DataType::Variant);
-            let loop_signature = signature
-                .clone()
-                .with("Loop.state", DataType::Variant)
-                .with("Loop.state.data", state_type)
-                .with_metadata("Loop.state.meta");
-            for handler in handlers {
-                if let Some(checked) = self.graph_handler(handler, &graph, &loop_signature, &consts)
-                {
-                    if graph
-                        .handlers
-                        .iter()
-                        .any(|existing| existing.activation == checked.activation)
+        if owns_loop {
+            if graph.loop_spec.is_some() && self.contribute_loop_boundary(&mut graph, decl.span) {
+                let state_type = graph
+                    .boundary
+                    .iter()
+                    .find(|port| port.port.name() == "in" && port.direction == Direction::Input)
+                    .and_then(|port| port.ty.clone())
+                    .unwrap_or(DataType::Variant);
+                let loop_signature = signature
+                    .clone()
+                    .with("Loop.state", DataType::Variant)
+                    .with("Loop.state.data", state_type)
+                    .with_metadata("Loop.state.meta");
+                for handler in handlers {
+                    if let Some(checked) =
+                        self.graph_handler(handler, &graph, &loop_signature, &consts)
                     {
-                        self.deferred("a second Graph handler for one trigger", handler.span);
-                    } else {
                         graph.handlers.push(checked);
                     }
                 }
@@ -1883,8 +1881,9 @@ impl Checker<'_, '_> {
     }
 
     /// Materializes the Loop-owned half of a Graph boundary after the source
-    /// declarations are known. `in` and `out` remain user-owned, explicit
-    /// pins; `next` and `expired` have exactly one aspect authority.
+    /// declarations are known. `in` remains the user-owned state pin;
+    /// `next` and `expired` have exactly one aspect authority. Ordinary
+    /// outputs keep their domain names and all terminate a Loop run.
     fn contribute_loop_boundary(&mut self, graph: &mut Graph, span: Span) -> bool {
         let input = graph.boundary.iter().find(|port| port.port.name() == "in");
         let Some(state_type) = input.and_then(|port| {
@@ -1898,11 +1897,17 @@ impl Checker<'_, '_> {
             );
             return false;
         };
-        let terminal = graph.boundary.iter().find(|port| port.port.name() == "out");
-        if !terminal.is_some_and(|port| port.direction == Direction::Output && port.ty.is_some()) {
+        if let Some(extra) = graph
+            .boundary
+            .iter()
+            .find(|port| port.direction == Direction::Input && port.port.name() != "in")
+        {
             self.loop_refusal(
                 span,
-                "a `: Loop` Graph declares typed `output out` as its terminal result",
+                &format!(
+                    "a `: Loop` Graph has one iteration input `in`; `{}` cannot be a second input",
+                    extra.port
+                ),
             );
             return false;
         }
@@ -2529,7 +2534,7 @@ impl Checker<'_, '_> {
                 "until" => {
                     self.loop_refusal(
                         attribute.span,
-                        "`until` was removed; terminal paths emit `out`, while recursive paths emit `next`",
+                        "`until` was removed; terminal paths emit an ordinary output or `stop`, while recursive paths emit `next`",
                     );
                     invalid = true;
                     continue;
@@ -8653,7 +8658,7 @@ graph app : App {
             ),
             (
                 "graph retry : Loop { until = data.done }",
-                "terminal paths emit `out`",
+                "terminal paths emit an ordinary output",
             ),
             ("graph retry : Loop { fuel = 3 }", "write `Loop.fuel`"),
             (

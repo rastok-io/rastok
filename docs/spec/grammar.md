@@ -1157,7 +1157,7 @@ does not claim implementation or release status.
 | Fanout pattern | atomic multi-emit statement `(a, b, c) = x` | executable; no NodeType |
 | Dispatch pattern | Graph carrying `instance.key` | executable; no NodeType |
 | `Saga` (aspect) | Saga aspect — opt-in scoping for long-running compensation-based workflows (model in [`effects-and-sagas.md`](effects-and-sagas.md), generic mechanism in [`aspects.md`](aspects.md)) | grammar specified; runtime manager requires effective `durability >= local` |
-| `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | source/check/v13 transport through L2; control proof and runtime manager deferred |
+| `Loop` (aspect) | Loop aspect — bounded tail-recursive iteration (retry / convergent / counted), spec in [`loop.md`](loop.md) | source/check/v13 transport and finite-control proof through L3; runtime manager deferred |
 | `-> nothing` | Discard sink (built-in) | not a node — `nothing` as an edge target ; non-blocking drain |
 | `RequestReply` | Correlated call pattern | design intent ; may lower to Connector + Operator composition |
 | `Metrics` | Sink Connector | future |
@@ -1502,7 +1502,7 @@ graph_body        ::= ( port_decl | operator_decl | connector_decl
                        | defaults_block
                        | graph_decl                            // graphs NEST (effects-and-sagas §7.2)
                        | attribute                             // aspect attributes : Saga.timeout = duration("10m"), name = …
-                       | handler_decl )*                        // graph-level handlers; Loop decisions are ordinary `next` / `out` emissions
+                       | handler_decl )*                        // graph-level handlers; Loop continues through `next` and terminates through ordinary output(s) and/or `stop`
 
 type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL only ; one namespace per unit ; duplicates refuse ;
                                                                   //   recursion refuses (v1) ; budgets: depth ≤ MAX_NESTING, expanded
@@ -1530,8 +1530,9 @@ var_decl          ::= "var" IDENT ":" type_ref ( "=" value )?        // mutable 
 
 handler_decl      ::= "on" trigger guard_clause* handler_body
                     // A handler always has a body. Loop has no body-less base-case
-                    // declaration: every reachable traversal emits exactly one of
-                    // `next` or `out`. The parser retains the removed body-less form
+                    // declaration: every reachable traversal explicitly continues
+                    // once through `next`, or terminates through ordinary output(s)
+                    // and/or `stop`. The parser retains the removed body-less form
                     // only as a recovery node so the checker can issue one migration.
 trigger           ::= "start"
                     | "stop"
@@ -1541,7 +1542,7 @@ trigger           ::= "start"
                     | IDENT                                          // single port
                     // The parser consumes removed `Aspect.start` / `Aspect.stop`
                     // triggers for a named migration; they are not productions.
-                    // Among child-output observations, L2 transports only a
+                    // Among child-output observations, L3 proves only a
                     // direct child. Deeper descendant paths and Graph handlers
                     // without an admitted aspect remain named refusals.
 guard_clause      ::= "where" expr                                   // content predicate (Tier 1 = 1 port, Tier 2 = ≥2)

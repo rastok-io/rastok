@@ -124,15 +124,7 @@ graph app : App {
     input in: text
     output out: text
     Loop.fuel = attempts
-
-    operator relay {
-      input in: text
-      output out: text
-      on in { out = data }
-    }
-
-    . -> relay
-    on relay.out { out = Loop.state.data }
+    on in { out = Loop.state.data }
   }
 }
 "#;
@@ -205,6 +197,24 @@ fn loop_claims_are_rederived_from_the_graph_contract() {
             if detail.contains("Loop.next")
     ));
 
+    let mut second_input = raw_loop();
+    let mut input = second_input
+        .boundary
+        .iter()
+        .find(|port| port.port.name() == "in" && port.direction == Direction::Input)
+        .expect("Loop.in")
+        .clone();
+    input.port = Port::new("interrupt").unwrap();
+    second_input.boundary.push(input);
+    second_input
+        .boundary
+        .sort_by(|left, right| left.key().cmp(&right.key()));
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(second_input),
+        Err(PlanValidationError::InvalidGraphContract { detail, .. })
+            if detail.contains("exactly one Graph input")
+    ));
+
     let mut unbound_asset = raw_loop();
     let graph_handler = unbound_asset
         .handlers
@@ -223,6 +233,41 @@ fn loop_claims_are_rederived_from_the_graph_contract() {
         ValidatedExecutionPlan::try_new(unbound_asset).unwrap_err(),
         PlanValidationError::AssetOutOfBounds { index: 0, count: 0 }
     );
+}
+
+#[test]
+fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
+    let mut silent = raw_loop();
+    let handler = silent
+        .handlers
+        .iter_mut()
+        .find(|handler| handler.owner.graph().is_some())
+        .expect("the fixture has one Graph handler");
+    let Step::Emit { value, .. } = &mut handler.body[0] else {
+        panic!("the Graph handler emits its result")
+    };
+    *value = plan::Emission::Nothing;
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(silent),
+        Err(PlanValidationError::InvalidLoopControl { detail, .. })
+            if detail.contains("finish silently")
+    ));
+
+    let mut mixed = raw_loop();
+    let handler = mixed
+        .handlers
+        .iter_mut()
+        .find(|handler| handler.owner.graph().is_some())
+        .expect("the fixture has one Graph handler");
+    handler.body.push(Step::Emit {
+        port: Port::new("next").unwrap(),
+        value: plan::Emission::Identity,
+    });
+    assert!(matches!(
+        ValidatedExecutionPlan::try_new(mixed),
+        Err(PlanValidationError::InvalidLoopControl { detail, .. })
+            if detail.contains("mixes `next`")
+    ));
 }
 
 #[test]

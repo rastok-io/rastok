@@ -95,12 +95,14 @@ proof. The single
 records executed independent HTTP/WebSocket interop and the remaining
 ngtcp2/Autobahn qualifications without conflating them with workspace tests.
 
-M1.7 L2 is landed. `Loop` is the first aspect with a closed categorical plan
-contract: a fuel-only Loop crosses source, typed HIR and v13 round-trip with
-its exact `in`/`next`/`out`/`expired` boundary and ordinary Graph handlers.
-Registry-free validation re-derives every claim. Execution remains
-deliberately fail-closed before the first VM mutation until the L3 control
-proof and L4 journal fold land.
+M1.7 L3 is landed. `Loop` is the first aspect with a closed categorical plan
+contract and a Registry-free finite-control proof: a fuel-only Loop crosses
+source, typed HIR and v13 round-trip with typed `in`, aspect-owned
+`next`/`expired`, domain terminal outputs and ordinary Graph handlers. Every
+completed body application proves exactly one continuation or explicit
+termination (`out`, `exit`, another ordinary output, or `stop`). Execution
+remains deliberately fail-closed before the first VM mutation until the L4
+journal fold lands.
 
 The standalone runner links Process by default. Hosted features add the
 selected HTTP/WebSocket families through one registry assembly. Pass

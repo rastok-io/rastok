@@ -144,7 +144,15 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
                 }
             }
             let mut handlers: Vec<_> = graph.handlers.iter().collect();
-            handlers.sort_by_key(|handler| handler.activation.canonical_key());
+            handlers.sort_by(|left, right| {
+                left.activation
+                    .canonical_key()
+                    .cmp(&right.activation.canonical_key())
+                    .then_with(|| {
+                        semantic_handler_order_key(left, hir.assets.as_slice())
+                            .cmp(&semantic_handler_order_key(right, hir.assets.as_slice()))
+                    })
+            });
             writer.count(handlers.len());
             for handler in handlers {
                 writer.handler(handler);
@@ -236,6 +244,19 @@ pub fn semantic_hash(hir: &Hir) -> SemanticHash {
     let mut bytes = [0u8; 32];
     writer.hasher.finalize_xof().fill(&mut bytes);
     SemanticHash::from_bytes(bytes)
+}
+
+fn semantic_handler_order_key(
+    handler: &crate::compiler::hir::Handler,
+    assets: &[crate::plan::AssetBlob],
+) -> [u8; 32] {
+    let mut writer = Writer {
+        hasher: blake3::Hasher::new(),
+        assets,
+    };
+    writer.str("rastok.handler.order.r1");
+    writer.handler(handler);
+    *writer.hasher.finalize().as_bytes()
 }
 
 /// Boundary ports in canonical order — by (port, direction); the
@@ -653,10 +674,10 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         })?;
         let constants = graph_constant_environment(hir, &graph.path);
         let subst = |tree: &expr::Tree| substitute_tree(tree, &constants);
-        let mut handlers: Vec<_> = graph.handlers.iter().collect();
-        handlers.sort_by_key(|handler| handler.activation.canonical_key());
-        for handler in handlers {
-            plan.handlers.push(Handler {
+        let mut handlers: Vec<_> = graph
+            .handlers
+            .iter()
+            .map(|handler| Handler {
                 owner: HandlerOwner::Graph(owner),
                 activation: handler.activation.clone(),
                 guard: handler.guard.as_ref().map(&subst),
@@ -665,12 +686,25 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     .iter()
                     .map(|statement| lower_statement(statement, &subst))
                     .collect(),
-            });
-        }
+            })
+            .collect();
+        handlers.sort_by(|left, right| {
+            left.activation
+                .canonical_key()
+                .cmp(&right.activation.canonical_key())
+                .then_with(|| left.canonical_order_key().cmp(&right.canonical_order_key()))
+        });
+        plan.handlers.extend(handlers);
     }
     plan.handlers.sort_by(|left, right| {
-        (left.owner, left.activation.canonical_key())
-            .cmp(&(right.owner, right.activation.canonical_key()))
+        left.owner
+            .cmp(&right.owner)
+            .then_with(|| {
+                left.activation
+                    .canonical_key()
+                    .cmp(&right.activation.canonical_key())
+            })
+            .then_with(|| left.canonical_order_key().cmp(&right.canonical_order_key()))
     });
     for (_, edge) in sorted_edges(hir) {
         let endpoint = |end: &crate::compiler::hir::Endpoint| -> Result<EndpointRef, LowerError> {

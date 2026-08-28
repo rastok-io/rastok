@@ -1409,8 +1409,10 @@ journaled:
   }
   ```
 
-  Exactly one of the conventional control outputs `next` and `out` is
-  selected on every traversal. `next` carries the next value of `in` and the
+  Every traversal makes one progress decision. Exactly one `next` continues;
+  any ordinary Graph output (`out`, `exit`, a domain name, or several outputs
+  atomically) terminates the run, and bare `stop` terminates while closing the
+  whole owner instance. `next` carries the next value of `in` and the
   runtime commits its re-admission as `l:next` — an event, never a back-edge.
   If the final permitted application still chooses `next`, the aspect emits
   `LoopExpired { last_state }` on `expired` instead of silently running again.
@@ -2850,12 +2852,14 @@ The official Autobahn report remains a named external qualification because
 the reference host has no container engine; M1.6 does not substitute an
 unmaintained runner or convert that missing report into a production claim.
 
-M1.7 L2 has made `Loop` the first aspect with categorical transport. A
-fuel-only Loop carries its exact four-port boundary, closed delay policy and
-ordinary Graph-owned handlers from source through v13 and Registry-free
-validation. This is deliberately not yet an execution claim: the VM refuses
-the aspect before mutation until the L3 `next XOR out` proof and L4
-journal-derived run fold land. The distinction preserves the central rule
+M1.7 L3 has made `Loop` the first aspect with categorical transport and a
+Registry-free finite-control proof. A
+fuel-only Loop carries its fixed state/progress boundary, domain-named
+terminal outputs, closed delay policy and ordinary Graph-owned handlers from
+source through v13; every reachable completed traversal proves one `next` or
+explicit termination by ordinary output(s)/`stop`. This is deliberately not
+yet an execution claim: the VM refuses the aspect before mutation until the
+L4 journal-derived run fold lands. The distinction preserves the central rule
 that a recognized orchestration policy can never silently run as a plain
 Graph.
 

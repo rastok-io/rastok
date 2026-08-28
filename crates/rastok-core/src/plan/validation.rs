@@ -2,6 +2,7 @@
 //! the machine dereferences without checking and every canonical
 //! order the plan documents, held once, at a boundary, by a type.
 
+use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -59,6 +60,16 @@ pub enum PlanValidationError {
         /// Static Graph path; `<root>` denotes the App.
         owner: String,
         /// Closed invariant that failed.
+        detail: &'static str,
+    },
+    /// A Loop Graph does not prove one finite progress verdict for every
+    /// completed traversal.
+    InvalidLoopControl {
+        /// Static Graph path; `<root>` denotes the App.
+        owner: String,
+        /// Canonical activation or spatial path that exposes the defect.
+        path: String,
+        /// Closed proof obligation that failed.
         detail: &'static str,
     },
     /// An edge's lexical scope is absent or is not a Graph owner.
@@ -542,7 +553,7 @@ pub enum PlanValidationError {
     /// A finite owner can close while its subtree contains external calls,
     /// but no explicit drain/settlement policy was transported.
     MissingClosingPolicy {
-        /// The Process owner proving that cancellation may be required.
+        /// The outbound Connector proving that cancellation may be required.
         connector: String,
         /// The finite owner whose close governs the subtree.
         owner: String,
@@ -602,6 +613,14 @@ impl core::fmt::Display for PlanValidationError {
             Self::InvalidGraphHandler { owner, detail } => write!(
                 f,
                 "invalid plan: Graph `{owner}` carries an invalid handler: {detail}"
+            ),
+            Self::InvalidLoopControl {
+                owner,
+                path,
+                detail,
+            } => write!(
+                f,
+                "invalid plan: Loop Graph `{owner}` cannot prove progress at `{path}`: {detail}"
             ),
             Self::InvalidEdgeScope { owner } => write!(
                 f,
@@ -2272,14 +2291,13 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                 owner: owner_name.clone(),
                 detail: "Loop requires typed input `in`",
             })?;
-        if !ports.iter().any(|port| {
-            port.port.name() == "out"
-                && port.direction == node::Direction::Output
-                && port.ty.is_some()
-        }) {
+        if ports
+            .iter()
+            .any(|port| port.direction == node::Direction::Input && port.port.name() != "in")
+        {
             return Err(PlanValidationError::InvalidGraphContract {
                 owner: owner_name.clone(),
-                detail: "Loop requires typed output `out`",
+                detail: "Loop admits exactly one Graph input named `in`",
             });
         }
         if !ports.iter().any(|port| {
@@ -2563,7 +2581,17 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         {
             return Err(PlanValidationError::InvalidClosingPolicy { owner: path });
         }
-        if owner.instance.lifetime != InstanceLifetime::Persistent {
+        let explicitly_stoppable = plan.handlers.iter().any(|handler| {
+            let belongs_to_owner = match handler.owner {
+                HandlerOwner::Graph(handler_owner) => handler_owner == slot,
+                HandlerOwner::Node(node_slot) => plan
+                    .nodes
+                    .get(node_slot.index())
+                    .is_some_and(|node| node.owner == slot),
+            };
+            belongs_to_owner && handler.body.iter().any(|step| matches!(step, Step::Stop))
+        });
+        if owner.instance.lifetime != InstanceLifetime::Persistent || explicitly_stoppable {
             for node in &plan.nodes {
                 let Some(spec) = node.connector() else {
                     continue;
@@ -3580,24 +3608,21 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             collection: "edges",
         });
     }
-    // Uniqueness precedes every local judgement: a repeated activation is
-    // one trigger fired twice, whereas sharing one input between two
-    // DIFFERENT activations is the distinct AmbiguousInputActivation defect.
-    let handler_key =
-        |handler: &crate::plan::Handler| (handler.owner, handler.activation.canonical_key());
-    let mut activations = BTreeSet::new();
+    // Node handlers remain one-per-activation. A Graph aspect may instead
+    // own a finite, mutually exclusive guarded family for one activation;
+    // the Loop control proof below establishes coverage and disjointness.
+    let mut node_activations = BTreeSet::new();
     for handler in &plan.handlers {
-        if !activations.insert(handler_key(handler)) {
-            return match handler.owner {
-                HandlerOwner::Node(slot) => Err(PlanValidationError::DuplicateHandler {
+        match handler.owner {
+            HandlerOwner::Node(slot)
+                if !node_activations.insert((slot, handler.activation.canonical_key())) =>
+            {
+                return Err(PlanValidationError::DuplicateHandler {
                     node: node_at(slot)?.path.clone(),
                     activation: handler.activation.clone(),
-                }),
-                HandlerOwner::Graph(owner) => Err(PlanValidationError::InvalidGraphHandler {
-                    owner: graph_owner_name(plan, owner)?,
-                    detail: "one activation is declared twice",
-                }),
-            };
+                });
+            }
+            HandlerOwner::Node(_) | HandlerOwner::Graph(_) => {}
         }
     }
 
@@ -3759,17 +3784,40 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
         }
     }
-    // Handler order is canonical — (slot, activation key), the same
-    // key the lowering and the hash sort by, because declaration
-    // order between handlers carries neither semantics nor identity.
-    // Slot bounds and uniqueness are already proven above.
+    // Preserve the historical owner/activation order. The complete
+    // transported handler is only the tie-break for one guarded Graph family;
+    // declaration order carries neither semantics nor identity.
     for pair in plan.handlers.windows(2) {
-        if handler_key(&pair[0]) >= handler_key(&pair[1]) {
+        let order = pair[0]
+            .owner
+            .cmp(&pair[1].owner)
+            .then_with(|| {
+                pair[0]
+                    .activation
+                    .canonical_key()
+                    .cmp(&pair[1].activation.canonical_key())
+            })
+            .then_with(|| {
+                pair[0]
+                    .canonical_order_key()
+                    .cmp(&pair[1].canonical_order_key())
+            });
+        if order == core::cmp::Ordering::Equal
+            && let HandlerOwner::Graph(owner) = pair[0].owner
+        {
+            return Err(PlanValidationError::InvalidLoopControl {
+                owner: graph_owner_name(plan, owner)?,
+                path: loop_activation_path(&pair[0].activation),
+                detail: "the same guarded handler is declared twice",
+            });
+        }
+        if order != core::cmp::Ordering::Less {
             return Err(PlanValidationError::NonCanonicalOrder {
                 collection: "handlers",
             });
         }
     }
+    loop_control_holds(plan)?;
     join_metadata_presence_holds(plan)?;
     Ok(())
 }
@@ -3905,13 +3953,14 @@ fn validate_graph_handler(
             }
             Ok(actual)
         };
-    if let Some(guard) = &handler.guard
-        && check_tree(guard, &signature)? != DataType::Bool
-    {
-        return Err(PlanValidationError::InvalidGraphHandler {
-            owner: owner_name.clone(),
-            detail: "a guard is not boolean",
-        });
+    if let Some(guard) = &handler.guard {
+        if check_tree(guard, &signature)? != DataType::Bool {
+            return Err(PlanValidationError::InvalidGraphHandler {
+                owner: owner_name.clone(),
+                detail: "a guard is not boolean",
+            });
+        }
+        signature = signature.narrowed_by(&guard.root);
     }
     for step in &handler.body {
         match step {
@@ -3966,6 +4015,691 @@ fn validate_graph_handler(
                 }
             }
         }
+    }
+    Ok(())
+}
+
+const LOOP_GUARD_ATOM_BUDGET: usize = 12;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LoopEffect {
+    next: u8,
+    terminal: u8,
+    user_expired: bool,
+}
+
+impl LoopEffect {
+    fn combine(self, other: Self) -> Self {
+        Self {
+            next: self.next.saturating_add(other.next).min(2),
+            terminal: self.terminal.saturating_add(other.terminal).min(2),
+            user_expired: self.user_expired || other.user_expired,
+        }
+    }
+
+    fn in_same_transaction(self, other: Self) -> Self {
+        Self {
+            next: self.next.saturating_add(other.next).min(2),
+            terminal: u8::from(self.terminal != 0 || other.terminal != 0),
+            user_expired: self.user_expired || other.user_expired,
+        }
+    }
+
+    const fn is_neutral(self) -> bool {
+        self.next == 0 && self.terminal == 0 && !self.user_expired
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoopOutputEffects {
+    direct: LoopEffect,
+    downstream: LoopEffects,
+}
+
+impl LoopOutputEffects {
+    fn total(self) -> LoopEffects {
+        LoopEffects::one(self.direct).combine(self.downstream)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct LoopEffects(Vec<LoopEffect>);
+
+impl LoopEffects {
+    fn neutral() -> Self {
+        Self(vec![LoopEffect::default()])
+    }
+
+    fn one(effect: LoopEffect) -> Self {
+        Self(vec![effect])
+    }
+
+    fn insert(&mut self, effect: LoopEffect) {
+        if !self.0.contains(&effect) {
+            self.0.push(effect);
+        }
+    }
+
+    fn alternatives(&mut self, other: Self) {
+        for effect in other.0 {
+            self.insert(effect);
+        }
+    }
+
+    fn combine(self, other: Self) -> Self {
+        let mut combined = Self::default();
+        for left in self.0 {
+            for right in &other.0 {
+                combined.insert(left.combine(*right));
+            }
+        }
+        combined
+    }
+
+    fn all_neutral(&self) -> bool {
+        self.0.iter().all(|effect| effect.is_neutral())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum LoopGuardAtom {
+    Opaque(expr::Expr),
+    Comparison {
+        relation: LoopComparison,
+        left: expr::Expr,
+        right: expr::Expr,
+    },
+    Case(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopComparison {
+    Equal,
+    Less,
+    LessOrEqual,
+}
+
+#[derive(Debug, Clone)]
+enum LoopGuardFormula {
+    Constant(bool),
+    Atom(usize),
+    Not(Box<Self>),
+    And(Box<Self>, Box<Self>),
+    Or(Box<Self>, Box<Self>),
+}
+
+impl LoopGuardFormula {
+    fn evaluate(&self, assignment: usize) -> bool {
+        match self {
+            Self::Constant(value) => *value,
+            Self::Atom(index) => assignment & (1usize << index) != 0,
+            Self::Not(inner) => !inner.evaluate(assignment),
+            Self::And(left, right) => left.evaluate(assignment) && right.evaluate(assignment),
+            Self::Or(left, right) => left.evaluate(assignment) || right.evaluate(assignment),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum LoopEventKey {
+    Input(usize, String),
+    Output(usize, String),
+}
+
+struct LoopControl<'plan> {
+    plan: &'plan ExecutionPlan,
+    owner: OwnerSlot,
+    owner_name: String,
+    memo: BTreeMap<LoopEventKey, LoopEffects>,
+    output_memo: BTreeMap<LoopEventKey, LoopOutputEffects>,
+    visiting: BTreeSet<LoopEventKey>,
+}
+
+impl<'plan> LoopControl<'plan> {
+    fn error(&self, path: impl Into<String>, detail: &'static str) -> PlanValidationError {
+        PlanValidationError::InvalidLoopControl {
+            owner: self.owner_name.clone(),
+            path: path.into(),
+            detail,
+        }
+    }
+
+    fn prove(mut self) -> Result<(), PlanValidationError> {
+        if self
+            .plan
+            .owners
+            .iter()
+            .any(|owner| owner.parent == Some(self.owner) && matches!(owner.kind, OwnerKind::Graph))
+        {
+            return Err(self.error(
+                "<nested Graph>",
+                "a nested Graph needs a separately proved Loop control summary",
+            ));
+        }
+        let input = node::HandlerActivation::Port(
+            node::Port::new("in")
+                .map_err(|_| self.error("in", "the Loop input name is not representable"))?,
+        );
+        let input_type = self
+            .plan
+            .graph_ports(self.owner)
+            .and_then(|ports| {
+                ports
+                    .iter()
+                    .find(|port| {
+                        port.port.name() == "in" && port.direction == node::Direction::Input
+                    })
+                    .and_then(|port| port.ty.clone())
+            })
+            .ok_or_else(|| self.error("in", "the Loop has no typed input carrier"))?;
+        let handlers = self.graph_activation(&input, &input_type)?;
+        let routes = self.routes_from(
+            None,
+            &node::Port::new("in")
+                .map_err(|_| self.error("in", "the Loop input name is not representable"))?,
+        )?;
+        let effects = handlers.combine(routes);
+        for effect in effects.0 {
+            let detail = if effect.user_expired {
+                Some("`expired` is produced only by the Loop manager when fuel is exhausted")
+            } else if effect.next > 1 {
+                Some("one traversal can emit `next` more than once")
+            } else if effect.terminal > 1 {
+                Some("one traversal can produce more than one terminal transaction")
+            } else if effect.next == 1 && effect.terminal == 1 {
+                Some("one traversal mixes `next` continuation with terminal output or `stop`")
+            } else if effect.next == 0 && effect.terminal == 0 {
+                Some(
+                    "one traversal can finish silently without `next`, a terminal output, or `stop`",
+                )
+            } else {
+                None
+            };
+            if let Some(detail) = detail {
+                return Err(self.error("in", detail));
+            }
+        }
+        Ok(())
+    }
+
+    fn routes_from(
+        &mut self,
+        node: Option<Slot>,
+        port: &node::Port,
+    ) -> Result<LoopEffects, PlanValidationError> {
+        Ok(self.route_effects(node, port)?.total())
+    }
+
+    fn route_effects(
+        &mut self,
+        node: Option<Slot>,
+        port: &node::Port,
+    ) -> Result<LoopOutputEffects, PlanValidationError> {
+        let targets: Vec<_> = self
+            .plan
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.scope == self.owner && edge.from.node == node && edge.from.port == *port
+            })
+            .map(|edge| edge.to.clone())
+            .collect();
+        let mut direct = LoopEffect::default();
+        let mut downstream = LoopEffects::neutral();
+        for target in targets {
+            match &target {
+                None => {}
+                Some(target) => match target.node {
+                    None => {
+                        direct = direct.in_same_transaction(self.boundary_output(&target.port));
+                    }
+                    Some(slot) => {
+                        downstream = downstream.combine(self.node_input(slot, &target.port)?);
+                    }
+                },
+            }
+        }
+        Ok(LoopOutputEffects { direct, downstream })
+    }
+
+    fn boundary_output(&self, port: &node::Port) -> LoopEffect {
+        match port.name() {
+            "next" => LoopEffect {
+                next: 1,
+                ..LoopEffect::default()
+            },
+            "expired" => LoopEffect {
+                user_expired: true,
+                ..LoopEffect::default()
+            },
+            _ => LoopEffect {
+                terminal: 1,
+                ..LoopEffect::default()
+            },
+        }
+    }
+
+    fn node_input(
+        &mut self,
+        slot: Slot,
+        port: &node::Port,
+    ) -> Result<LoopEffects, PlanValidationError> {
+        let key = LoopEventKey::Input(slot.index(), port.name().to_string());
+        if let Some(found) = self.memo.get(&key) {
+            return Ok(found.clone());
+        }
+        if !self.visiting.insert(key.clone()) {
+            return Err(self.error(
+                format!("node {}.{port}", slot.index()),
+                "the Loop control walk encountered a spatial cycle",
+            ));
+        }
+        let node = self.plan.nodes.get(slot.index()).ok_or_else(|| {
+            self.error(
+                format!("node {}.{port}", slot.index()),
+                "the Loop route names no executable Node",
+            )
+        })?;
+        if !self
+            .plan
+            .owner(node.owner)
+            .is_some_and(|owner| owner.parent == Some(self.owner))
+        {
+            return Err(self.error(
+                format!("{}.{port}", node.path),
+                "control crossed an unproved nested Graph boundary",
+            ));
+        }
+        let effects = match &node.execution {
+            NodeExecution::Operator => self.operator_input(slot, port)?,
+            NodeExecution::Connector(spec) => self.connector_input(slot, port, spec)?,
+        };
+        self.visiting.remove(&key);
+        self.memo.insert(key, effects.clone());
+        Ok(effects)
+    }
+
+    fn operator_input(
+        &mut self,
+        slot: Slot,
+        port: &node::Port,
+    ) -> Result<LoopEffects, PlanValidationError> {
+        let activation = node::HandlerActivation::Port(port.clone());
+        let Some(handler) = self.plan.handlers.iter().find(|handler| {
+            handler.owner == HandlerOwner::Node(slot) && handler.activation == activation
+        }) else {
+            return Ok(LoopEffects::neutral());
+        };
+        let body = self.node_body(slot, handler)?;
+        match handler.guard.as_ref().map(|guard| &guard.root) {
+            None | Some(expr::Expr::Literal(crate::value::Value::Bool(true))) => Ok(body),
+            Some(expr::Expr::Literal(crate::value::Value::Bool(false))) => {
+                Ok(LoopEffects::neutral())
+            }
+            Some(_) => {
+                let mut alternatives = body;
+                alternatives.alternatives(LoopEffects::neutral());
+                Ok(alternatives)
+            }
+        }
+    }
+
+    fn node_body(
+        &mut self,
+        slot: Slot,
+        handler: &crate::plan::Handler,
+    ) -> Result<LoopEffects, PlanValidationError> {
+        let mut direct = LoopEffect::default();
+        let mut downstream = LoopEffects::neutral();
+        for step in &handler.body {
+            if let Step::Emit { port, value } = step
+                && !matches!(value, Emission::Nothing)
+            {
+                let output = self.node_output_effects(slot, port)?;
+                direct = direct.in_same_transaction(output.direct);
+                downstream = downstream.combine(output.downstream);
+            }
+        }
+        Ok(LoopEffects::one(direct).combine(downstream))
+    }
+
+    fn node_output(
+        &mut self,
+        slot: Slot,
+        port: &node::Port,
+    ) -> Result<LoopEffects, PlanValidationError> {
+        Ok(self.node_output_effects(slot, port)?.total())
+    }
+
+    fn node_output_effects(
+        &mut self,
+        slot: Slot,
+        port: &node::Port,
+    ) -> Result<LoopOutputEffects, PlanValidationError> {
+        let key = LoopEventKey::Output(slot.index(), port.name().to_string());
+        if let Some(found) = self.output_memo.get(&key) {
+            return Ok(found.clone());
+        }
+        if !self.visiting.insert(key.clone()) {
+            return Err(self.error(
+                format!("node {}.{port}", slot.index()),
+                "the Loop control walk encountered a spatial cycle",
+            ));
+        }
+        let child = self.plan.nodes.get(slot.index()).ok_or_else(|| {
+            self.error(
+                format!("node {}.{port}", slot.index()),
+                "the Loop route names no executable Node",
+            )
+        })?;
+        let activation = node::HandlerActivation::ChildPort {
+            child: child.path.clone(),
+            port: port.clone(),
+        };
+        let output_type = child
+            .ports
+            .iter()
+            .find(|decl| decl.port == *port && decl.direction == node::Direction::Output)
+            .and_then(|decl| decl.ty.clone())
+            .ok_or_else(|| {
+                self.error(
+                    format!("{}.{port}", child.path),
+                    "the observed child output has no resolved type",
+                )
+            })?;
+        let handled = self.graph_activation(&activation, &output_type)?;
+        let routed = self.route_effects(Some(slot), port)?;
+        let effects = LoopOutputEffects {
+            direct: routed.direct,
+            downstream: handled.combine(routed.downstream),
+        };
+        self.visiting.remove(&key);
+        self.output_memo.insert(key, effects.clone());
+        Ok(effects)
+    }
+
+    fn connector_input(
+        &mut self,
+        slot: Slot,
+        port: &node::Port,
+        spec: &crate::plan::ConnectorSpec,
+    ) -> Result<LoopEffects, PlanValidationError> {
+        let node = &self.plan.nodes[slot.index()];
+        let path = format!("{}.{port}", node.path);
+        if spec.roles != crate::connector::ConnectorRoles::Outbound
+            || spec.exchange != crate::connector::ConnectorExchange::Call
+        {
+            return Err(self.error(
+                path,
+                "Loop v1 admits only a bounded outbound Call in its body; Event and Session are open-ended",
+            ));
+        }
+        let finite_timeout = matches!(
+            spec.attribute("timeout"),
+            Some(crate::plan::AttrSetting::Value(crate::value::Value::Duration(value))) if *value > 0
+        );
+        if !finite_timeout {
+            return Err(self.error(
+                path,
+                "an outbound Call in Loop needs a positive plan-constant `timeout`",
+            ));
+        }
+        let mut terminal = None;
+        for output in node
+            .ports
+            .iter()
+            .filter(|decl| decl.direction == node::Direction::Output)
+        {
+            let effects = self.node_output(slot, &output.port)?;
+            if output.port.name() == "exit" {
+                terminal = Some(effects);
+            } else if !effects.all_neutral() {
+                return Err(self.error(
+                    format!("{}.{}", node.path, output.port),
+                    "a zero-or-more Connector output cannot choose Loop progress because it may be absent or repeat",
+                ));
+            }
+        }
+        terminal.ok_or_else(|| {
+            self.error(
+                path,
+                "a bounded Call has no exactly-once `exit` progress path",
+            )
+        })
+    }
+
+    fn graph_activation(
+        &mut self,
+        activation: &node::HandlerActivation,
+        input_type: &DataType,
+    ) -> Result<LoopEffects, PlanValidationError> {
+        let handlers: Vec<_> = self
+            .plan
+            .handlers
+            .iter()
+            .filter(|handler| {
+                handler.owner == HandlerOwner::Graph(self.owner)
+                    && handler.activation == *activation
+            })
+            .collect();
+        if handlers.is_empty() {
+            return Ok(LoopEffects::neutral());
+        }
+        let path = loop_activation_path(activation);
+        let mut atoms = Vec::new();
+        let formulas: Vec<_> = handlers
+            .iter()
+            .map(|handler| match &handler.guard {
+                None => LoopGuardFormula::Constant(true),
+                Some(guard) => loop_guard_formula(&guard.root, input_type, &mut atoms),
+            })
+            .collect();
+        if atoms
+            .iter()
+            .any(|atom| matches!(atom, LoopGuardAtom::Case(_)))
+            && let DataType::TaggedUnion(union) = input_type
+        {
+            for case in union.cases() {
+                let _ = loop_guard_atom(LoopGuardAtom::Case(case.name().to_string()), &mut atoms);
+            }
+        }
+        if atoms.len() > LOOP_GUARD_ATOM_BUDGET {
+            return Err(self.error(
+                path,
+                "the guarded decision exceeds the finite Loop proof budget",
+            ));
+        }
+        let case_indexes: Vec<_> = atoms
+            .iter()
+            .enumerate()
+            .filter_map(|(index, atom)| matches!(atom, LoopGuardAtom::Case(_)).then_some(index))
+            .collect();
+        let mut effects = LoopEffects::default();
+        for assignment in 0..(1usize << atoms.len()) {
+            if !case_indexes.is_empty()
+                && case_indexes
+                    .iter()
+                    .filter(|index| assignment & (1usize << **index) != 0)
+                    .count()
+                    != 1
+            {
+                continue;
+            }
+            let selected: Vec<_> = formulas
+                .iter()
+                .enumerate()
+                .filter_map(|(index, formula)| formula.evaluate(assignment).then_some(index))
+                .collect();
+            match selected.as_slice() {
+                [] => {
+                    return Err(self.error(
+                        path,
+                        "the guarded handlers leave an input value without a progress branch",
+                    ));
+                }
+                [index] => effects.alternatives(self.graph_body(handlers[*index])?),
+                _ => {
+                    return Err(
+                        self.error(path, "two guarded handlers can match the same input value")
+                    );
+                }
+            }
+        }
+        Ok(effects)
+    }
+
+    fn graph_body(
+        &self,
+        handler: &crate::plan::Handler,
+    ) -> Result<LoopEffects, PlanValidationError> {
+        let mut effect = LoopEffect::default();
+        for step in &handler.body {
+            match step {
+                Step::Emit {
+                    value: Emission::Nothing,
+                    ..
+                } => {}
+                Step::Emit { port, .. } => match port.name() {
+                    "next" => effect.next = effect.next.saturating_add(1).min(2),
+                    "expired" => effect.user_expired = true,
+                    _ => effect.terminal = 1,
+                },
+                Step::Stop => effect.terminal = 1,
+                Step::Let { .. } | Step::SetVar { .. } => {}
+            }
+        }
+        Ok(LoopEffects::one(effect))
+    }
+}
+
+fn loop_activation_path(activation: &node::HandlerActivation) -> String {
+    match activation {
+        node::HandlerActivation::Port(port) => port.to_string(),
+        node::HandlerActivation::ChildPort { child, port } => format!("{child}.{port}"),
+        node::HandlerActivation::Join { .. } | node::HandlerActivation::Lifecycle(_) => {
+            activation.to_string()
+        }
+    }
+}
+
+fn loop_guard_atom(atom: LoopGuardAtom, atoms: &mut Vec<LoopGuardAtom>) -> usize {
+    if let Some(index) = atoms.iter().position(|candidate| candidate == &atom) {
+        index
+    } else {
+        let index = atoms.len();
+        atoms.push(atom);
+        index
+    }
+}
+
+fn loop_guard_formula(
+    expression: &expr::Expr,
+    input_type: &DataType,
+    atoms: &mut Vec<LoopGuardAtom>,
+) -> LoopGuardFormula {
+    match expression {
+        expr::Expr::Literal(crate::value::Value::Bool(value)) => LoopGuardFormula::Constant(*value),
+        expr::Expr::Unary {
+            op: expr::UnaryOp::Not,
+            expr,
+        } => LoopGuardFormula::Not(Box::new(loop_guard_formula(expr, input_type, atoms))),
+        expr::Expr::Binary {
+            op: expr::BinaryOp::And,
+            left,
+            right,
+        } => LoopGuardFormula::And(
+            Box::new(loop_guard_formula(left, input_type, atoms)),
+            Box::new(loop_guard_formula(right, input_type, atoms)),
+        ),
+        expr::Expr::Binary {
+            op: expr::BinaryOp::Or,
+            left,
+            right,
+        } => LoopGuardFormula::Or(
+            Box::new(loop_guard_formula(left, input_type, atoms)),
+            Box::new(loop_guard_formula(right, input_type, atoms)),
+        ),
+        expr::Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                expr::BinaryOp::Eq
+                    | expr::BinaryOp::Ne
+                    | expr::BinaryOp::Lt
+                    | expr::BinaryOp::Le
+                    | expr::BinaryOp::Gt
+                    | expr::BinaryOp::Ge
+            ) =>
+        {
+            let Some((relation, negated)) = (match op {
+                expr::BinaryOp::Eq => Some((LoopComparison::Equal, false)),
+                expr::BinaryOp::Ne => Some((LoopComparison::Equal, true)),
+                expr::BinaryOp::Lt => Some((LoopComparison::Less, false)),
+                expr::BinaryOp::Ge => Some((LoopComparison::Less, true)),
+                expr::BinaryOp::Le => Some((LoopComparison::LessOrEqual, false)),
+                expr::BinaryOp::Gt => Some((LoopComparison::LessOrEqual, true)),
+                _ => None,
+            }) else {
+                return LoopGuardFormula::Atom(loop_guard_atom(
+                    LoopGuardAtom::Opaque(expression.clone()),
+                    atoms,
+                ));
+            };
+            let formula = LoopGuardFormula::Atom(loop_guard_atom(
+                LoopGuardAtom::Comparison {
+                    relation,
+                    left: (**left).clone(),
+                    right: (**right).clone(),
+                },
+                atoms,
+            ));
+            if negated {
+                LoopGuardFormula::Not(Box::new(formula))
+            } else {
+                formula
+            }
+        }
+        expr::Expr::Is { expr, target }
+            if matches!(expr.as_ref(), expr::Expr::Path(path) if path.len() == 1 && path[0] == "data")
+                && matches!(input_type, DataType::TaggedUnion(_)) =>
+        {
+            let expr::NarrowTarget::Case { name, .. } = target.as_ref() else {
+                return LoopGuardFormula::Atom(loop_guard_atom(
+                    LoopGuardAtom::Opaque(expression.clone()),
+                    atoms,
+                ));
+            };
+            LoopGuardFormula::Atom(loop_guard_atom(LoopGuardAtom::Case(name.clone()), atoms))
+        }
+        _ => LoopGuardFormula::Atom(loop_guard_atom(
+            LoopGuardAtom::Opaque(expression.clone()),
+            atoms,
+        )),
+    }
+}
+
+fn loop_control_holds(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    for (index, owner) in plan.owners.iter().enumerate() {
+        if !owner
+            .aspects
+            .iter()
+            .any(|aspect| aspect.aspect() == node::Aspect::Loop)
+        {
+            continue;
+        }
+        let owner_name = if owner.path.is_root() {
+            String::from("<root>")
+        } else {
+            owner.path.to_string()
+        };
+        LoopControl {
+            plan,
+            owner: OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX)),
+            owner_name,
+            memo: BTreeMap::new(),
+            output_memo: BTreeMap::new(),
+            visiting: BTreeSet::new(),
+        }
+        .prove()?;
     }
     Ok(())
 }

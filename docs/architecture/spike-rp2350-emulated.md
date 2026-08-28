@@ -39,7 +39,7 @@ ticks-to-instructions ratio cannot drift with compiler optimization.
 
 - Firmware: `spikes/rp2350-emu` — a standalone crate outside the
   product workspace (its embedded runtime dependencies are
-  spike-only). Its current M1.7 L2 measurement embeds the blessed **v13
+  spike-only). Its current M1.7 L3 measurement embeds the blessed **v13
   aspect-capable package** of `examples/echo.rkg` as a `static`, opens it with
   `rastok_core::plan::decode` — which now validates
   structurally and re-encodes for canonicity — boots the `Vm` over a
@@ -82,15 +82,15 @@ peripheral or silicon claim.
 
 | Measure | Ticks | ≈ instructions | ≈ @150 MHz |
 |---|---|---|---|
-| `plan::decode` (988-byte v13 package; re-measured after M1.7 L2 on 2026-08-28) | 17 337 | 866.9 k | 5.78 ms |
+| `plan::decode` (988-byte v13 package; re-measured after M1.7 L3 on 2026-08-28) | 17 363 | 868.2 k | 5.79 ms |
 | — re-measured 2026-08-09, rounds four and five: +109 decode ticks (the pinned-edge audit at validation) and ~14 per relay transaction (the crossing-pin judge at construction + the pre-commit choke point scanning for watching pins; the FINAL gate converts the value only when a pin watches its fan-out — construction-level checks and expression bindings still materialize handler values as they always did) — priced, no criterion near | | | |
-| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-28 after L2) | 2 653 (min 2 568 / max 2 884) | **132.7 k avg / 144.2 k max** | **0.884 ms avg / 0.961 ms max** |
+| relay transaction (avg of 32 exact actor/trigger samples; re-measured 2026-08-28 after L3) | 2 655 (min 2 570 / max 2 886) | **132.8 k avg / 144.3 k max** | **0.885 ms avg / 0.962 ms max** |
 | blake3 id, 64-byte frame (avg of 1000) | 91.0 | 4.6 k | 30 µs |
 
 | Resource | Value | Criterion |
 |---|---|---|
-| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-28 after L2) | 128 252 B (125.2 KiB) | < 128 KiB ✓ |
-| Flash `.text` + `.rodata` (opt-level=z + LTO) | 547 052 + 54 204 = 601 256 B (587.2 KiB; re-measured 2026-08-28 after L2) | < 1 MiB ✓ |
+| Heap high-water mark (allocator-tracked, 32 journaled relay rounds plus their owner lifecycle facts; re-measured 2026-08-28 after L3) | 128 252 B (125.2 KiB) | < 128 KiB ✓ |
+| Flash `.text` + `.rodata` (opt-level=z + LTO) | 562 812 + 55 436 = 618 248 B (603.8 KiB; re-measured 2026-08-28 after L3) | < 1 MiB ✓ |
 | Dependencies patched to build | none | none ✓ |
 
 Notes the numbers carry:
@@ -281,6 +281,12 @@ Notes the numbers carry:
   rises to 17 337 ticks, relay measures 2 653 average / 2 568 minimum / 2 884
   maximum, heap peaks at 128 252 B, and linked `.text + .rodata` is 587.2 KiB.
   `SPIKE_OK` prints the same `e50026ee…` hash.
+- M1.7 L3 derives the finite Loop control proof from the existing v13 plan;
+  echo carries no Loop, so its 988-byte package, semantic hash, 67-record
+  trace and heap peak remain exact. The Registry-free proof code raises decode
+  to 17 363 ticks and linked `.text + .rodata` by 16 992 B to 603.8 KiB;
+  relay layout jitter measures 2 655 average / 2 570 minimum / 2 886 maximum.
+  `SPIKE_OK` prints the same `e50026ee…` hash.
 - Flash grew from 193 KiB to 516.4 KiB (`.text` 481 404 B +
   `.rodata` 47 356 B, re-measured after C1 on 2026-08-22): the consolidated
   reform's decoders, the jsonl codec's canonical writer and now the
@@ -337,13 +343,13 @@ llvm-objdump -d target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 \
 ## Verdict
 
 **GO (provisional), re-issued 2026-08-07 on the corrected
-instrumentation and last re-measured 2026-08-28 after M1.7 L2.**
+instrumentation and last re-measured 2026-08-28 after M1.7 L3.**
 These measurements price complete hierarchical routing, causal instance
 references, the executable lifetime machine, bounded Closing, joins, and the
 R7 closure-only keyed drain. All four
-criteria of record hold: no patched dependencies, 144.2 k instructions for
+criteria of record hold: no patched dependencies, 144.3 k instructions for
 the slowest measured relay transaction against the 150 k bound (1.040×), a
-125.2 KiB true high-water mark against 128 KiB, and 587.2 KiB of flash against
+125.2 KiB true high-water mark against 128 KiB, and 603.8 KiB of flash against
 1 MiB. The
 margins are thinner than first
 claimed and are reported as measured. The option stays dormant as

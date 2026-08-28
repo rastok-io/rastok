@@ -1,8 +1,8 @@
 # Node kinds, types, and aspects
 
 > **Status:** normative taxonomy. `node::Kind` and `node::Type` are executable.
-> `Loop` has categorical v13 transport and Registry-free validation; its
-> runtime manager remains gated until M1.7 L3/L4. `Saga` is recognized but
+> `Loop` has categorical v13 transport and Registry-free finite-control
+> validation; its runtime manager remains gated until M1.7 L4. `Saga` is recognized but
 > remains a named execution gate.
 
 This document defines the common classification model used by Graphs,
@@ -189,9 +189,11 @@ by Saga rather than generalized here.
 
 Bare `on start` / `on stop` address the current Node instance. Aspect protocols
 do not acquire hooks automatically. Loop has no lifecycle hooks: its run opens
-from a root `in` envelope and closes on `out` or `expired`. Instance Closing
-still governs the enclosing mailbox and open Connector obligations; each
-aspect specification states which of its obligations die or survive there.
+from a root `in` envelope and closes on an ordinary Graph output or `expired`;
+bare `stop` instead requests Closing of the complete owner instance. Instance
+Closing still governs the enclosing mailbox and open Connector obligations;
+each aspect specification states which of its obligations die or survive
+there.
 
 For the initial aspects:
 
@@ -237,9 +239,9 @@ transported Loop before mutation until its manager lands.
 
 - User-defined and parameterized aspects are outside the current contract.
 - Every future pair requires a composition matrix entry.
-- M1.7 must still close the Graph boundary decision proof, run identity, fuel,
-  typed exhaustion and source-to-Lab evidence before executing the transported
-  aspect.
+- M1.7 must still close run identity, fuel, typed exhaustion and source-to-Lab
+  evidence before executing the transported aspect; the Graph boundary
+  progress proof landed at L3.
 - Saga remains later than Loop; this document fixes its classification but
   does not claim an executable manager.
 

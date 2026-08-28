@@ -102,8 +102,9 @@
 > handler ownership and direct-child output activation. V12 cannot represent
 > those facts and is refused rather than guessed. Root Graph ports are not
 > mirrored: plan key 2 remains their sole authority, while owner key 6 is
-> populated only for nested Graphs. L2 writes no Loop journal fact and the VM
-> refuses any transported aspect before its first mutation until L3/L4.
+> populated only for nested Graphs. L2 writes no Loop journal fact; L3 adds a
+> derived control proof without changing the container, and the VM refuses
+> any transported aspect before its first mutation until L4.
 >
 > The lifetime rows are one closed transport and executable registry: v9
 > validation admits `persistent`, `idle`, `fixed`, `single_pass`, and
@@ -242,8 +243,9 @@ of the contract, in order:
    path order with a preceding Graph parent, Node port tables sorted and unique with
    untyped conventional rows omitted (a typed `in`/`out`/`err` row is a
    real source constraint), edges by their endpoint text,
-   handlers by (tagged owner, activation key) with one handler per
-   activation, immutable bindings, vars and attributes sorted. Immutable
+   handlers by (tagged owner, activation key, complete canonical handler),
+   with multiple same-activation Graph handlers admitted only under the
+   Loop control proof, immutable bindings, vars and attributes sorted. Immutable
    owner expressions additionally have an acyclic lexical dependency graph,
    one derived earliest phase, and (at Plan) one independently reproduced
    reduction. Attributes are the

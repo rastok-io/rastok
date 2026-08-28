@@ -5,6 +5,37 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-08-28-3 — Loop proves finite progress, not one privileged result port
+
+M1.7 L3 supersedes the `next XOR out` clauses of D-2026-08-28-1 and the
+four-port wording of D-2026-08-28-2. `out` is a convention, not Loop control.
+The fixed contract has exactly one Graph input, typed `in`, aspect-owned `next: In`, and
+manager-produced `expired: LoopExpired<In>`; every other Graph output keeps
+its domain name and is terminal for the current run.
+
+One completed body application produces exactly one **progress verdict**.
+Continuation is exactly one `next` with no ordinary output and no `stop`.
+Termination is no `next` plus at least one ordinary output and/or bare `stop`;
+several ordinary outputs may commit atomically as one terminal transaction.
+Silence, repeated `next`, a user emission on `expired`, and a continuation
+mixed with termination refuse before execution. Bare `stop` is deliberately
+stronger than returning from one run: it closes the Loop owner instance and
+therefore all runs scoped to that instance.
+
+`Loop.fuel = N` proves at most N body applications even when every application
+continues: the final proposed `next` becomes `LoopExpired`, so no theorem may
+claim eventual `out`. A future standalone `Loop.measure` instead proves that
+strict descent eventually reaches *some* explicit terminal verdict. In both
+cases, each body application must itself finish under finite pure work,
+Connector Call timeouts and guest budgets. Terminal spelling carries no
+special authority.
+
+**Rejected:** requiring a port named `out`; encoding every business outcome
+inside one tagged union merely to satisfy Loop; treating arbitrary silence as
+a return; allowing an auxiliary ordinary output beside `next` without an
+explicit port-role distinction; and weakening `stop` into a per-run escape
+that contradicts the existing instance lifecycle.
+
 ## D-2026-08-28-2 — V13 carries one closed Loop contract without executing it early
 
 M1.7 L2 allocates categorical plan-package v13 for the first executable
